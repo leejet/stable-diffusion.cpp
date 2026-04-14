@@ -730,7 +730,7 @@ void ModelLoader::set_wtype_override(ggml_type wtype, std::string tensor_type_ru
     }
 }
 
-void ModelLoader::process_model_files(bool enable_mmap) {
+void ModelLoader::process_model_files(bool enable_mmap, bool writable_mmap) {
 
     if (model_files_processed) {
         return;
@@ -774,9 +774,9 @@ void ModelLoader::process_model_files(bool enable_mmap) {
 
         if (enable_mmap && !is_zip) {
             LOG_DEBUG("using mmap for I/O");
-            std::unique_ptr<MmapWrapper> mmapped = MmapWrapper::create(file_path);
+            std::unique_ptr<MmapWrapper> mmapped = MmapWrapper::create(file_path, writable_mmap);
             if (mmapped) {
-                uint8_t * mmap_data = const_cast<uint8_t*>(mmapped->data());
+                uint8_t * mmap_data = static_cast<uint8_t*>(mmapped->writable_data());
                 ggml_backend_buffer_t buf_mmap = ggml_backend_cpu_buffer_from_ptr(mmap_data, mmapped->size());
                 if (buf_mmap) {
                     fdata.mmbuffer = std::shared_ptr<struct ggml_backend_buffer>(buf_mmap, ggml_backend_buffer_free);
@@ -801,9 +801,9 @@ void ModelLoader::process_model_files(bool enable_mmap) {
 }
 
 std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggml_tensor*>& tensors,
-                                                       std::set<std::string> ignore_tensors)
+                                                       std::set<std::string> ignore_tensors, bool writable_mmap)
 {
-    process_model_files(true);
+    process_model_files(true, writable_mmap);
 
     std::vector<MmapTensorStore> result;
     uint64_t mapped_bytes = 0;
@@ -887,7 +887,7 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
 
 bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads_p, bool enable_mmap) {
 
-    process_model_files(enable_mmap);
+    process_model_files(enable_mmap, false);
 
     std::atomic<int64_t> read_time_ms(0);
     std::atomic<int64_t> memcpy_time_ms(0);

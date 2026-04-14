@@ -364,19 +364,20 @@ public:
         std::map<std::string, ggml_tensor*> mmap_able_tensors;
         bool enable_mmap_tensors = false;
         bool main_backend_mmap   = false;
+        bool needs_writable_mmap = false;
         if (sd_ctx_params->enable_mmap) {
             if (apply_lora_immediately) {
-                LOG_DEBUG("cannot memory-map model weights: only supported with --lora-apply-mode at_runtime");
+                needs_writable_mmap = true;
+                LOG_WARN("in mode 'immediately', LoRAs will cause extra memory usage with mmap");
+            }
+            enable_mmap_tensors = true;
+            if (offload_params_to_cpu) {
+                main_backend_mmap = true;
             } else {
-                enable_mmap_tensors = true;
-                if (offload_params_to_cpu) {
-                    main_backend_mmap = true;
-                } else {
-                    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
-                    struct ggml_backend_dev_props props;
-                    ggml_backend_dev_get_props(dev, &props);
-                    main_backend_mmap = props.caps.buffer_from_host_ptr;
-                }
+                ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+                struct ggml_backend_dev_props props;
+                ggml_backend_dev_get_props(dev, &props);
+                main_backend_mmap = props.caps.buffer_from_host_ptr;
             }
         }
 
@@ -837,7 +838,7 @@ public:
             if (mmap_able_tensors.empty()) {
                 LOG_DEBUG("no tensors could be memory-mapped");
             } else {
-                mmap_tensor_store = model_loader.mmap_tensors(mmap_able_tensors, ignore_tensors);
+                mmap_tensor_store = model_loader.mmap_tensors(mmap_able_tensors, ignore_tensors, needs_writable_mmap);
             }
         }
 
