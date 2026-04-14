@@ -361,6 +361,50 @@ public:
             apply_lora_immediately = false;
         }
 
+        std::map<std::string, ggml_tensor*> mmap_able_tensors;
+        bool enable_mmap_tensors = false;
+        bool main_backend_mmap   = false;
+        if (sd_ctx_params->enable_mmap) {
+            if (apply_lora_immediately) {
+                LOG_DEBUG("cannot memory-map model weights: only supported with --lora-apply-mode at_runtime");
+            } else {
+                enable_mmap_tensors = true;
+                if (offload_params_to_cpu) {
+                    main_backend_mmap = true;
+                } else {
+                    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+                    struct ggml_backend_dev_props props;
+                    ggml_backend_dev_get_props(dev, &props);
+                    main_backend_mmap = props.caps.buffer_from_host_ptr;
+                }
+            }
+        }
+
+        // split definition to avoid msvc choking on the extra parameter handling
+        auto get_param_tensors_p = [&](auto&& model, bool force_cpu, const char* prefix) {
+            std::map<std::string, ggml_tensor*> temp;
+            model->get_param_tensors(temp, prefix);
+            bool do_mmap = enable_mmap_tensors && (main_backend_mmap || force_cpu);
+            for (const auto& [key, tensor] : temp) {
+                tensors[key] = tensor;
+                if (do_mmap) {
+                    mmap_able_tensors[key] = tensor;
+                }
+            }
+        };
+
+        auto get_param_tensors = [&](auto&& model, bool force_cpu = false) {
+            std::map<std::string, ggml_tensor*> temp;
+            model->get_param_tensors(temp);
+            bool do_mmap = enable_mmap_tensors && (main_backend_mmap || force_cpu);
+            for (const auto& [key, tensor] : temp) {
+                tensors[key] = tensor;
+                if (do_mmap) {
+                    mmap_able_tensors[key] = tensor;
+                }
+            }
+        };
+
         if (sd_version_is_control(version)) {
             // Might need vae encode for control cond
             vae_decode_only = false;
@@ -472,7 +516,7 @@ public:
                                                                              offload_params_to_cpu,
                                                                              tensor_storage_map);
                     clip_vision->set_max_graph_vram_bytes(max_graph_vram_bytes);
-                    clip_vision->get_param_tensors(tensors);
+                    get_param_tensors(clip_vision);
                 }
             } else if (sd_version_is_qwen_image(version)) {
                 bool enable_vision = false;
@@ -548,10 +592,10 @@ public:
             }
 
             cond_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
-            cond_stage_model->get_param_tensors(tensors);
+            get_param_tensors(cond_stage_model, clip_on_cpu);
 
             diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
-            diffusion_model->get_param_tensors(tensors);
+            get_param_tensors(diffusion_model);
 
             if (sd_version_is_unet_edit(version)) {
                 vae_decode_only = false;
@@ -559,7 +603,7 @@ public:
 
             if (high_noise_diffusion_model) {
                 high_noise_diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
-                high_noise_diffusion_model->get_param_tensors(tensors);
+                get_param_tensors(high_noise_diffusion_model);
             }
 
             if (sd_ctx_params->keep_vae_on_cpu && !ggml_backend_is_cpu(backend)) {
@@ -622,6 +666,8 @@ public:
                 }
             };
 
+            bool force_vae_cpu = sd_ctx_params->keep_vae_on_cpu;
+
             if (version == VERSION_CHROMA_RADIANCE) {
                 LOG_INFO("using FakeVAE");
                 first_stage_model = std::make_shared<FakeVAE>(version,
@@ -631,17 +677,17 @@ public:
                 LOG_INFO("using TAE for encoding / decoding");
                 first_stage_model = create_tae();
                 first_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
-                first_stage_model->get_param_tensors(tensors, "tae");
+                get_param_tensors_p(first_stage_model, force_vae_cpu, "tae");
             } else {
                 LOG_INFO("using VAE for encoding / decoding");
                 first_stage_model = create_vae();
                 first_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
-                first_stage_model->get_param_tensors(tensors, "first_stage_model");
+                get_param_tensors_p(first_stage_model, force_vae_cpu, "first_stage_model");
                 if (use_tae && tae_preview_only) {
                     LOG_INFO("using TAE for preview");
                     preview_vae = create_tae();
                     preview_vae->set_max_graph_vram_bytes(max_graph_vram_bytes);
-                    preview_vae->get_param_tensors(tensors, "tae");
+                    get_param_tensors_p(first_stage_model, force_vae_cpu, "tae");
                 }
             }
 
@@ -706,7 +752,7 @@ public:
                 }
             }
             if (use_pmid) {
-                pmid_model->get_param_tensors(tensors, "pmid");
+                get_param_tensors_p(pmid_model, false, "pmid");
             }
 
             if (sd_ctx_params->flash_attn) {
@@ -787,13 +833,11 @@ public:
             ignore_tensors.insert("text_encoders.llm.multi_modal_projector.");
         }
 
-        if (sd_ctx_params->enable_mmap) {
-            if (!(offload_params_to_cpu || ggml_backend_is_cpu(backend))) {
-                LOG_DEBUG("cannot memory-map model weights: only supported with CPU or --offload-to-cpu");
-            } else if (apply_lora_immediately) {
-                LOG_DEBUG("cannot memory-map model weights: only supported with --lora-apply-mode at_runtime");
+        if (enable_mmap_tensors) {
+            if (mmap_able_tensors.empty()) {
+                LOG_DEBUG("no tensors could be memory-mapped");
             } else {
-                mmap_tensor_store = model_loader.mmap_tensors(tensors, ignore_tensors);
+                mmap_tensor_store = model_loader.mmap_tensors(mmap_able_tensors, ignore_tensors);
             }
         }
 
