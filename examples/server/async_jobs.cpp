@@ -155,51 +155,10 @@ bool execute_img_gen_job(ServerRuntime& runtime,
                          std::string& error_message) {
     sd_img_gen_params_t params = job.img_gen.to_sd_img_gen_params_t();
 
-    SDImageVec results;
-    int num_results = 0;
-
-    {
-        std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
-        sd_image_t* raw_results = generate_image(runtime.sd_ctx, &params);
-        num_results             = params.batch_count;
-        results.adopt(raw_results, num_results);
-    }
-
-    if (results.empty() || num_results <= 0) {
-        error_message = "generate_image returned no results";
+    output_images = generate_and_encode(runtime, job.img_gen, error_message);
+    if (!error_message.empty()) {
         return false;
     }
-
-    EncodedImageFormat encoded_format = EncodedImageFormat::PNG;
-    if (job.img_gen.output_format == "jpeg") {
-        encoded_format = EncodedImageFormat::JPEG;
-    } else if (job.img_gen.output_format == "webp") {
-        encoded_format = EncodedImageFormat::WEBP;
-    }
-
-    for (int i = 0; i < num_results; ++i) {
-        if (results[i].data == nullptr) {
-            continue;
-        }
-
-        const std::string metadata = job.img_gen.gen_params.embed_image_metadata
-                                         ? get_image_params(*runtime.ctx_params,
-                                                            job.img_gen.gen_params,
-                                                            job.img_gen.gen_params.seed + i)
-                                         : "";
-        auto image_bytes           = encode_image_to_vector(encoded_format,
-                                                            results[i].data,
-                                                            results[i].width,
-                                                            results[i].height,
-                                                            results[i].channel,
-                                                            metadata,
-                                                            job.img_gen.output_compression);
-        if (image_bytes.empty()) {
-            continue;
-        }
-        output_images.push_back(base64_encode(image_bytes));
-    }
-
     if (output_images.empty()) {
         error_message = "generate_image returned empty encoded outputs";
         return false;

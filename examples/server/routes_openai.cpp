@@ -263,8 +263,8 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             LOG_DEBUG("%s\n", request.gen_params.to_string().c_str());
 
-            SDImageVec results;
-            if (!execute_sync_img_gen_request(*runtime, request, results, error_message)) {
+            auto strings = generate_and_encode(*runtime, request, error_message);
+            if (!error_message.empty()) {
                 res.status = 500;
                 res.set_content(json({{"error", error_message}}).dump(), "application/json");
                 return;
@@ -274,35 +274,10 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             out["created"]       = static_cast<long long>(std::time(nullptr));
             out["data"]          = json::array();
             out["output_format"] = request.output_format;
-
-            for (int i = 0; i < request.gen_params.batch_count; ++i) {
-                if (results[i].data == nullptr) {
-                    continue;
-                }
-                std::string params = request.gen_params.embed_image_metadata
-                                         ? get_image_params(*runtime->ctx_params,
-                                                            request.gen_params,
-                                                            request.gen_params.seed + i)
-                                         : "";
-                auto image_bytes   = encode_image_to_vector(request.output_format == "jpeg"
-                                                                ? EncodedImageFormat::JPEG
-                                                            : request.output_format == "webp"
-                                                                ? EncodedImageFormat::WEBP
-                                                                : EncodedImageFormat::PNG,
-                                                          results[i].data,
-                                                          results[i].width,
-                                                          results[i].height,
-                                                          results[i].channel,
-                                                          params,
-                                                          request.output_compression);
-                if (image_bytes.empty()) {
-                    LOG_ERROR("write image to mem failed");
-                    continue;
-                }
-
+            for (auto& str: strings) {
                 json item;
-                item["b64_json"] = base64_encode(image_bytes);
-                out["data"].push_back(item);
+                item["b64_json"] = std::move(str);
+                out["data"].push_back(std::move(item));
             }
 
             res.set_content(out.dump(), "application/json");
@@ -329,8 +304,8 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             LOG_DEBUG("%s\n", request.gen_params.to_string().c_str());
 
-            SDImageVec results;
-            if (!execute_sync_img_gen_request(*runtime, request, results, error_message)) {
+            auto strings = generate_and_encode(*runtime, request, error_message);
+            if (!error_message.empty()) {
                 res.status = 500;
                 res.set_content(json({{"error", error_message}}).dump(), "application/json");
                 return;
@@ -340,26 +315,10 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             out["created"]       = static_cast<long long>(std::time(nullptr));
             out["data"]          = json::array();
             out["output_format"] = request.output_format;
-
-            for (int i = 0; i < request.gen_params.batch_count; ++i) {
-                if (results[i].data == nullptr) {
-                    continue;
-                }
-                std::string params = request.gen_params.embed_image_metadata
-                                         ? get_image_params(*runtime->ctx_params,
-                                                            request.gen_params,
-                                                            request.gen_params.seed + i)
-                                         : "";
-                auto image_bytes   = encode_image_to_vector(request.output_format == "jpeg" ? EncodedImageFormat::JPEG : EncodedImageFormat::PNG,
-                                                          results[i].data,
-                                                          results[i].width,
-                                                          results[i].height,
-                                                          results[i].channel,
-                                                          params,
-                                                          request.output_compression);
+            for (auto& str: strings) {
                 json item;
-                item["b64_json"] = base64_encode(image_bytes);
-                out["data"].push_back(item);
+                item["b64_json"] = std::move(str);
+                out["data"].push_back(std::move(item));
             }
 
             res.set_content(out.dump(), "application/json");
