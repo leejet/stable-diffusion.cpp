@@ -14,6 +14,7 @@ protected:
     std::vector<std::string> special_tokens;
     bool add_bos_token = false;
     bool add_eos_token = false;
+    bool pad_left      = false;
     std::string end_of_word_suffix;
 
     virtual std::string decode_token(int token_id) const = 0;
