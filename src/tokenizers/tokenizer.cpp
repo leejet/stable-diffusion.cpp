@@ -107,13 +107,24 @@ void Tokenizer::pad_tokens(std::vector<int>& tokens,
 
         if (final_length > out_tokens.size()) {
             const size_t pad_count = final_length - out_tokens.size();
-            out_tokens.insert(out_tokens.end(), pad_count, PAD_TOKEN_ID);
+            if (pad_left) {
+                out_tokens.insert(out_tokens.begin(), pad_count, PAD_TOKEN_ID);
 
-            if (use_weights) {
-                out_weights.insert(out_weights.end(), pad_count, 1.0f);
-            }
-            if (use_mask) {
-                out_mask.insert(out_mask.end(), pad_count, 0.0f);
+                if (use_weights) {
+                    out_weights.insert(out_weights.begin(), pad_count, 1.0f);
+                }
+                if (use_mask) {
+                    out_mask.insert(out_mask.begin(), pad_count, 0.0f);
+                }
+            } else {
+                out_tokens.insert(out_tokens.end(), pad_count, PAD_TOKEN_ID);
+
+                if (use_weights) {
+                    out_weights.insert(out_weights.end(), pad_count, 1.0f);
+                }
+                if (use_mask) {
+                    out_mask.insert(out_mask.end(), pad_count, 0.0f);
+                }
             }
         }
     };
