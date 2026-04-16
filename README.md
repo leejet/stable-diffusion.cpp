@@ -57,6 +57,7 @@ API and command-line option may change frequently.***
     - [Z-Image](./docs/z_image.md)
     - [Ovis-Image](./docs/ovis_image.md)
     - [Anima](./docs/anima.md)
+    - [ERNIE-Image](./docs/ernie_image.md)
   - Image Edit Models
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
     - [Qwen Image Edit series](./docs/qwen_image_edit.md)
@@ -144,6 +145,7 @@ If you want to improve performance or reduce VRAM/RAM usage, please refer to [pe
 - [🔥Z-Image](./docs/z_image.md)
 - [Ovis-Image](./docs/ovis_image.md)
 - [Anima](./docs/anima.md)
+- [ERNIE-Image](./docs/ernie_image.md)
 - [LoRA](./docs/lora.md)
 - [LCM/LCM-LoRA](./docs/lcm.md)
 - [Using PhotoMaker to personalize image generation](./docs/photo_maker.md)

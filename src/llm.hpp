@@ -28,6 +28,7 @@ namespace LLM {
         QWEN2_5_VL,
         QWEN3,
         MISTRAL_SMALL_3_2,
+        MINISTRAL_3_3B,
         ARCH_COUNT,
     };
 
@@ -35,6 +36,7 @@ namespace LLM {
         "qwen2.5vl",
         "qwen3",
         "mistral_small3.2",
+        "ministral3.3b",
     };
 
     struct LLMVisionParams {
@@ -419,6 +421,9 @@ namespace LLM {
             if (arch == LLMArch::MISTRAL_SMALL_3_2) {
                 q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NORMAL, 8192, 1000000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
                 k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NORMAL, 8192, 1000000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+            } else if (arch == LLMArch::MINISTRAL_3_3B) {
+                q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 262144, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+                k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 262144, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
             } else if (arch == LLMArch::QWEN3) {
                 q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
                 k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
@@ -634,7 +639,7 @@ namespace LLM {
                   bool enable_vision_ = false)
             : GGMLRunner(backend, offload_params_to_cpu), enable_vision(enable_vision_) {
             params.arch = arch;
-            if (arch == LLMArch::MISTRAL_SMALL_3_2) {
+            if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
                 params.head_dim     = 128;
                 params.num_heads    = 32;
                 params.num_kv_heads = 8;
@@ -746,7 +751,7 @@ namespace LLM {
             }
 
             int64_t n_tokens = input_ids->ne[0];
-            if (params.arch == LLMArch::MISTRAL_SMALL_3_2 || params.arch == LLMArch::QWEN3) {
+            if (params.arch == LLMArch::MISTRAL_SMALL_3_2 || params.arch == LLMArch::MINISTRAL_3_3B || params.arch == LLMArch::QWEN3) {
                 input_pos_vec.resize(n_tokens);
                 for (int i = 0; i < n_tokens; ++i) {
                     input_pos_vec[i] = i;
@@ -982,7 +987,7 @@ namespace LLM {
                     const std::string prefix                       = "",
                     bool enable_vision                             = false)
             : model(arch, backend, offload_params_to_cpu, tensor_storage_map, prefix, enable_vision) {
-            if (arch == LLMArch::MISTRAL_SMALL_3_2) {
+            if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
                 tokenizer = std::make_shared<MistralTokenizer>();
             } else {
                 tokenizer = std::make_shared<Qwen2Tokenizer>();

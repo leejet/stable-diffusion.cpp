@@ -1621,10 +1621,12 @@ struct LLMEmbedder : public Conditioner {
         LLM::LLMArch arch = LLM::LLMArch::QWEN2_5_VL;
         if (version == VERSION_FLUX2) {
             arch = LLM::LLMArch::MISTRAL_SMALL_3_2;
+        } else if (sd_version_is_ernie_image(version)) {
+            arch = LLM::LLMArch::MINISTRAL_3_3B;
         } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
             arch = LLM::LLMArch::QWEN3;
         }
-        if (arch == LLM::LLMArch::MISTRAL_SMALL_3_2) {
+        if (arch == LLM::LLMArch::MISTRAL_SMALL_3_2 || arch == LLM::LLMArch::MINISTRAL_3_3B) {
             tokenizer = std::make_shared<MistralTokenizer>();
         } else {
             tokenizer = std::make_shared<Qwen2Tokenizer>();
@@ -1867,6 +1869,13 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.second = static_cast<int>(prompt.size());
 
             prompt += "[/INST]";
+        } else if (sd_version_is_ernie_image(version)) {
+            prompt_template_encode_start_idx = 0;
+            out_layers                       = {25};  // -2
+
+            prompt_attn_range.first = 0;
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
         } else if (sd_version_is_z_image(version)) {
             prompt_template_encode_start_idx = 0;
             out_layers                       = {35};  // -2
