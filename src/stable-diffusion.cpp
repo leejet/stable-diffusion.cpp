@@ -52,6 +52,7 @@ const char* model_version_to_str[] = {
     "Flux.2 klein",
     "Z-Image",
     "Ovis Image",
+    "Ernie Image",
 };
 
 const char* sampling_methods_str[] = {
@@ -552,6 +553,15 @@ public:
                                                                 tensor_storage_map,
                                                                 "model.diffusion_model",
                                                                 version);
+            } else if (sd_version_is_ernie_image(version)) {
+                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
+                                                                 offload_params_to_cpu,
+                                                                 tensor_storage_map,
+                                                                 version);
+                diffusion_model  = std::make_shared<ErnieImageModel>(backend,
+                                                                    offload_params_to_cpu,
+                                                                    tensor_storage_map,
+                                                                    "model.diffusion_model");
             } else {  // SD1.x SD2.x SDXL
                 std::map<std::string, std::string> embbeding_map;
                 for (uint32_t i = 0; i < sd_ctx_params->embedding_count; i++) {
@@ -820,6 +830,10 @@ public:
         if (version == VERSION_SVD) {
             ignore_tensors.insert("conditioner.embedders.3");
         }
+        if (sd_version_is_ernie_image(version)) {
+            ignore_tensors.insert("text_encoders.llm.vision_tower.");
+            ignore_tensors.insert("text_encoders.llm.multi_modal_projector.");
+        }
         bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap);
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
@@ -923,6 +937,7 @@ public:
                            sd_version_is_wan(version) ||
                            sd_version_is_qwen_image(version) ||
                            sd_version_is_anima(version) ||
+                           sd_version_is_ernie_image(version) ||
                            sd_version_is_z_image(version)) {
                     pred_type = FLOW_PRED;
                     if (sd_version_is_wan(version)) {
@@ -1396,7 +1411,7 @@ public:
             uint32_t dim                     = is_video ? static_cast<uint32_t>(latents.shape()[3]) : static_cast<uint32_t>(latents.shape()[2]);
 
             if (dim == 128) {
-                if (sd_version_is_flux2(version)) {
+                if (sd_version_uses_flux2_vae(version)) {
                     latent_rgb_proj = flux2_latent_rgb_proj;
                     latent_rgb_bias = flux2_latent_rgb_bias;
                     patch_sz        = 2;
@@ -1845,7 +1860,7 @@ public:
                 latent_channel = 48;
             } else if (version == VERSION_CHROMA_RADIANCE) {
                 latent_channel = 3;
-            } else if (sd_version_is_flux2(version)) {
+            } else if (sd_version_uses_flux2_vae(version)) {
                 latent_channel = 128;
             } else {
                 latent_channel = 16;

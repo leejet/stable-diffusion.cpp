@@ -156,8 +156,10 @@ file(GLOB SD_LIB_SOURCES
     "src/*.h"
     "src/*.cpp"
     "src/*.hpp"
-    "src/vocab/*.h"
-    "src/vocab/*.cpp"
+    "src/tokenizers/*.h"
+    "src/tokenizers/*.cpp"
+    "src/tokenizers/vocab/*.h"
+    "src/tokenizers/vocab/*.cpp"
 )
 
 find_program(GIT_EXE NAMES git git.exe NO_CMAKE_FIND_ROOT_PATH)
@@ -250,7 +252,7 @@ endif()
 add_subdirectory(thirdparty)
 
 target_link_libraries(${SD_LIB} PUBLIC ggml zip)
-target_include_directories(${SD_LIB} PUBLIC . include)
+target_include_directories(${SD_LIB} PUBLIC . src include)
 target_include_directories(${SD_LIB} PUBLIC . thirdparty)
 target_compile_features(${SD_LIB} PUBLIC c_std_11 cxx_std_17)
 
