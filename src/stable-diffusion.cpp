@@ -71,6 +71,7 @@ const char* sampling_methods_str[] = {
     "TCD",
     "Res Multistep",
     "Res 2s",
+    "ER-SDE",
 };
 
 /*================================================== Helper Functions ================================================*/
@@ -1991,6 +1992,7 @@ const char* sample_method_to_str[] = {
     "tcd",
     "res_multistep",
     "res_2s",
+    "er_sde",
 };
 
 const char* sd_sample_method_name(enum sample_method_t sample_method) {
@@ -2473,6 +2475,7 @@ static float resolve_eta(sd_ctx_t* sd_ctx,
                 return 0.0f;
             case EULER_A_SAMPLE_METHOD:
             case DPMPP2S_A_SAMPLE_METHOD:
+            case ER_SDE_SAMPLE_METHOD:
                 return 1.0f;
             default:;
         }
