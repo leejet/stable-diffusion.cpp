@@ -1673,14 +1673,18 @@ struct LLMEmbedder : public Conditioner {
                                                                                   size_t max_length = 100000000) {
         std::vector<std::pair<std::string, float>> parsed_attention;
         if (attn_range.first >= 0 && attn_range.second > 0) {
-            parsed_attention.emplace_back(text.substr(0, attn_range.first), 1.f);
+            if (attn_range.first > 0) {
+                parsed_attention.emplace_back(text.substr(0, attn_range.first), 1.f);
+            }
             if (attn_range.second - attn_range.first > 0) {
                 auto new_parsed_attention = parse_prompt_attention(text.substr(attn_range.first, attn_range.second - attn_range.first));
                 parsed_attention.insert(parsed_attention.end(),
                                         new_parsed_attention.begin(),
                                         new_parsed_attention.end());
             }
-            parsed_attention.emplace_back(text.substr(attn_range.second), 1.f);
+            if (attn_range.second < text.size()) {
+                parsed_attention.emplace_back(text.substr(attn_range.second), 1.f);
+            }
         } else {
             parsed_attention.emplace_back(text, 1.f);
         }
