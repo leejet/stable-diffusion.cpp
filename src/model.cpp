@@ -1019,6 +1019,7 @@ SDVersion ModelLoader::get_sd_version() {
     bool has_middle_block_1          = false;
     bool has_output_block_311        = false;
     bool has_output_block_71         = false;
+    bool has_attn_1024               = false;
 
     for (auto& [name, tensor_storage] : tensor_storage_map) {
         if (!(is_xl)) {
@@ -1091,6 +1092,10 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("model.diffusion_model.output_blocks.7.1") != std::string::npos ||
             tensor_storage.name.find("unet.up_blocks.2.attentions.1") != std::string::npos) {
             has_output_block_71 = true;
+            if (tensor_storage.name.find("model.diffusion_model.output_blocks.7.1.transformer_blocks.0.attn1.to_k.weight") != std::string::npos) {
+                if (tensor_storage.ne[0] == 1024)
+                    has_attn_1024 = true;
+            }
         }
         if (tensor_storage.name == "cond_stage_model.transformer.text_model.embeddings.token_embedding.weight" ||
             tensor_storage.name == "cond_stage_model.model.token_embedding.weight" ||
@@ -1164,7 +1169,7 @@ SDVersion ModelLoader::get_sd_version() {
         }
         if (!has_middle_block_1) {
             if (!has_output_block_71) {
-                return VERSION_SDXS;
+                return VERSION_SDXS_512_DS;
             }
             return VERSION_SD1_TINY_UNET;
         }
@@ -1174,7 +1179,7 @@ SDVersion ModelLoader::get_sd_version() {
             return VERSION_SD2_INPAINT;
         }
         if (!has_middle_block_1) {
-            return VERSION_SD2_TINY_UNET;
+            return has_attn_1024 ? VERSION_SDXS_09 : VERSION_SD2_TINY_UNET;
         }
         return VERSION_SD2;
     }

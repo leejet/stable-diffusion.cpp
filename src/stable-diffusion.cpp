@@ -30,7 +30,8 @@ const char* model_version_to_str[] = {
     "SD 2.x",
     "SD 2.x Inpaint",
     "SD 2.x Tiny UNet",
-    "SDXS",
+    "SDXS (512-DS)",
+    "SDXS (09)",
     "SDXL",
     "SDXL Inpaint",
     "SDXL Instruct-Pix2Pix",
@@ -414,7 +415,7 @@ public:
         }
 
         bool tae_preview_only = sd_ctx_params->tae_preview_only;
-        if (version == VERSION_SDXS) {
+        if (version == VERSION_SDXS_512_DS || version == VERSION_SDXS_09) {
             tae_preview_only = false;
             use_tae          = true;
         }
