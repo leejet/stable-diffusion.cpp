@@ -2474,6 +2474,7 @@ static float resolve_eta(sd_ctx_t* sd_ctx,
                 return 0.0f;
             case EULER_A_SAMPLE_METHOD:
             case DPMPP2S_A_SAMPLE_METHOD:
+            case ER_SDE_SAMPLE_METHOD:
                 return 1.0f;
             default:;
         }

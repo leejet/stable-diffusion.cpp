@@ -1316,11 +1316,12 @@ static sd::Tensor<float> sample_er_sde(denoise_cb_t model,
                                        sd::Tensor<float> x,
                                        std::vector<float> sigmas,
                                        std::shared_ptr<RNG> rng,
-                                       bool is_flow_denoiser) {
+                                       bool is_flow_denoiser,
+                                       float eta) {
     constexpr int max_stage                  = 3;
     constexpr int num_integration_points     = 200;
     constexpr float num_integration_points_f = 200.0f;
-    constexpr float s_noise                  = 1.0f;
+    float s_noise                            = eta;
 
     if (is_flow_denoiser) {
         for (size_t i = 0; i + 1 < sigmas.size(); ++i) {
@@ -1580,7 +1581,7 @@ static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
         case RES_2S_SAMPLE_METHOD:
             return sample_res_2s(model, std::move(x), sigmas, rng, eta);
         case ER_SDE_SAMPLE_METHOD:
-            return sample_er_sde(model, std::move(x), sigmas, rng, is_flow_denoiser);
+            return sample_er_sde(model, std::move(x), sigmas, rng, is_flow_denoiser, eta);
         case DDIM_TRAILING_SAMPLE_METHOD:
             return sample_ddim_trailing(model, std::move(x), sigmas, rng, eta);
         case TCD_SAMPLE_METHOD:
