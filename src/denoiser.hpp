@@ -1386,7 +1386,7 @@ static sd::Tensor<float> sample_er_sde(denoise_cb_t model,
 
                 float denom_d = er_lambda_s - er_lambdas[i - 1];
                 if (std::fabs(denom_d) > 1e-12f) {
-                    float coeff_d              = alpha_t * (dt + s * scaled_t);
+                    float coeff_d                = alpha_t * (dt + s * scaled_t);
                     sd::Tensor<float> denoised_d = (denoised - old_denoised) / denom_d;
                     x += coeff_d * denoised_d;
 
@@ -1394,13 +1394,13 @@ static sd::Tensor<float> sample_er_sde(denoise_cb_t model,
                         float denom_u = (er_lambda_s - er_lambdas[i - 2]) * 0.5f;
                         if (std::fabs(denom_u) > 1e-12f) {
                             s_u *= lambda_step_size;
-                            float coeff_u              = alpha_t * (0.5f * dt * dt + s_u * scaled_t);
+                            float coeff_u                = alpha_t * (0.5f * dt * dt + s_u * scaled_t);
                             sd::Tensor<float> denoised_u = (denoised_d - old_denoised_d) / denom_u;
                             x += coeff_u * denoised_u;
                         }
                     }
 
-                    old_denoised_d   = denoised_d;
+                    old_denoised_d      = denoised_d;
                     have_old_denoised_d = true;
                 }
             }
@@ -1412,7 +1412,7 @@ static sd::Tensor<float> sample_er_sde(denoise_cb_t model,
             }
         }
 
-        old_denoised     = denoised;
+        old_denoised      = denoised;
         have_old_denoised = true;
     }
     return x;
