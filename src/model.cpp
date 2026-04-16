@@ -162,43 +162,7 @@ uint16_t f8_e4m3_to_f16(uint8_t f8) {
 }
 
 uint16_t f8_e5m2_to_f16(uint8_t fp8) {
-    uint8_t sign     = (fp8 >> 7) & 0x1;
-    uint8_t exponent = (fp8 >> 2) & 0x1F;
-    uint8_t mantissa = fp8 & 0x3;
-
-    uint16_t fp16_sign = sign << 15;
-    uint16_t fp16_exponent;
-    uint16_t fp16_mantissa;
-
-    if (exponent == 0 && mantissa == 0) {  // zero
-        return fp16_sign;
-    }
-
-    if (exponent == 0x1F) {  // NAN and INF
-        fp16_exponent = 0x1F;
-        fp16_mantissa = mantissa ? (mantissa << 8) : 0;
-        return fp16_sign | (fp16_exponent << 10) | fp16_mantissa;
-    }
-
-    if (exponent == 0) {  // subnormal numbers
-        fp16_mantissa = (mantissa << 8);
-        return fp16_sign | fp16_mantissa;
-    }
-
-    // normal numbers
-    int16_t true_exponent = (int16_t)exponent - 15 + 15;
-    if (true_exponent <= 0) {
-        fp16_exponent = 0;
-        fp16_mantissa = (mantissa << 8);
-    } else if (true_exponent >= 0x1F) {
-        fp16_exponent = 0x1F;
-        fp16_mantissa = 0;
-    } else {
-        fp16_exponent = (uint16_t)true_exponent;
-        fp16_mantissa = mantissa << 8;
-    }
-
-    return fp16_sign | (fp16_exponent << 10) | fp16_mantissa;
+    return static_cast<uint16_t>(fp8) << 8;
 }
 
 void f8_e4m3_to_f16_vec(uint8_t* src, uint16_t* dst, int64_t n) {
@@ -351,8 +315,9 @@ bool is_safetensors_file(const std::string& file_path) {
     if (!file) {
         return false;
     }
-    nlohmann::json header_ = nlohmann::json::parse(header_buf.data());
-    if (header_.is_discarded()) {
+    try {
+        nlohmann::json header_ = nlohmann::json::parse(header_buf.data());
+    } catch (const std::exception&) {
         return false;
     }
     return true;
@@ -547,7 +512,14 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         return false;
     }
 
-    nlohmann::json header_ = nlohmann::json::parse(header_buf.data());
+    nlohmann::json header_;
+    try {
+        header_ = nlohmann::json::parse(header_buf.data());
+    } catch (const std::exception&) {
+        LOG_ERROR("parsing safetensors header failed", file_path.c_str());
+        file_paths_.pop_back();
+        return false;
+    }
 
     for (auto& item : header_.items()) {
         std::string name           = item.key();
@@ -611,24 +583,29 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
 
         size_t tensor_data_size = end - begin;
 
+        bool tensor_size_ok;
         if (dtype == "F8_E4M3") {
             tensor_storage.is_f8_e4m3 = true;
             // f8 -> f16
-            GGML_ASSERT(tensor_storage.nbytes() == tensor_data_size * 2);
+            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size * 2);
         } else if (dtype == "F8_E5M2") {
             tensor_storage.is_f8_e5m2 = true;
             // f8 -> f16
-            GGML_ASSERT(tensor_storage.nbytes() == tensor_data_size * 2);
+            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size * 2);
         } else if (dtype == "F64") {
             tensor_storage.is_f64 = true;
             // f64 -> f32
-            GGML_ASSERT(tensor_storage.nbytes() * 2 == tensor_data_size);
+            tensor_size_ok = (tensor_storage.nbytes() * 2 == tensor_data_size);
         } else if (dtype == "I64") {
             tensor_storage.is_i64 = true;
             // i64 -> i32
-            GGML_ASSERT(tensor_storage.nbytes() * 2 == tensor_data_size);
+            tensor_size_ok = (tensor_storage.nbytes() * 2 == tensor_data_size);
         } else {
-            GGML_ASSERT(tensor_storage.nbytes() == tensor_data_size);
+            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size);
+        }
+        if (!tensor_size_ok) {
+            LOG_ERROR("size mismatch for tensor '%s' (%s)\n", name.c_str(), dtype.c_str());
+            return false;
         }
 
         add_tensor_storage(tensor_storage);
@@ -1073,6 +1050,9 @@ SDVersion ModelLoader::get_sd_version() {
             if (tensor_storage.name.find("model.diffusion_model.cap_embedder.0.weight") != std::string::npos) {
                 return VERSION_Z_IMAGE;
             }
+            if (tensor_storage.name.find("model.diffusion_model.layers.0.adaLN_sa_ln.weight") != std::string::npos) {
+                return VERSION_ERNIE_IMAGE;
+            }
             if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
                 is_wan = true;
             }
@@ -1352,6 +1332,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
     std::atomic<int64_t> memcpy_time_ms(0);
     std::atomic<int64_t> copy_to_backend_time_ms(0);
     std::atomic<int64_t> convert_time_ms(0);
+    std::atomic<uint64_t> bytes_processed(0);
 
     int num_threads_to_use = n_threads_p > 0 ? n_threads_p : sd_get_num_physical_cores();
     LOG_DEBUG("using %d threads for model loading", num_threads_to_use);
@@ -1563,6 +1544,8 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                         t1 = ggml_time_ms();
                         copy_to_backend_time_ms.fetch_add(t1 - t0);
                     }
+
+                    bytes_processed.fetch_add((uint64_t)nbytes_to_read);
                 }
                 if (zip != nullptr) {
                     zip_close(zip);
@@ -1575,8 +1558,12 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
             if (current_idx >= file_tensors.size() || failed) {
                 break;
             }
-            size_t curr_num = total_tensors_processed + current_idx;
-            pretty_progress(static_cast<int>(curr_num), static_cast<int>(total_tensors_to_process), (ggml_time_ms() - t_start) / 1000.0f / (curr_num + 1e-6f));
+            size_t curr_num       = total_tensors_processed + current_idx;
+            float elapsed_seconds = (ggml_time_ms() - t_start) / 1000.0f;
+            pretty_bytes_progress(static_cast<int>(curr_num),
+                                  static_cast<int>(total_tensors_to_process),
+                                  bytes_processed.load(),
+                                  elapsed_seconds);
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
 
@@ -1589,7 +1576,10 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
             break;
         }
         total_tensors_processed += file_tensors.size();
-        pretty_progress(static_cast<int>(total_tensors_processed), static_cast<int>(total_tensors_to_process), (ggml_time_ms() - t_start) / 1000.0f / (total_tensors_processed + 1e-6f));
+        pretty_bytes_progress(static_cast<int>(total_tensors_processed),
+                              static_cast<int>(total_tensors_to_process),
+                              bytes_processed.load(),
+                              (ggml_time_ms() - t_start) / 1000.0f);
         if (total_tensors_processed < total_tensors_to_process) {
             printf("\n");
         }
