@@ -808,33 +808,6 @@ static std::tuple<float, float, float> get_ancestral_step_flow(float sigma_from,
     return {sigma_down, sigma_up, alpha_scale};
 }
 
-static float er_sde_flow_sigma(float sigma) {
-    sigma = std::max(sigma, 1e-6f);
-    sigma = std::min(sigma, 1.0f - 1e-4f);
-    return sigma;
-}
-
-static float sigma_to_er_sde_lambda(float sigma, bool is_flow_denoiser) {
-    if (is_flow_denoiser) {
-        sigma = er_sde_flow_sigma(sigma);
-        return sigma / std::max(1.0f - sigma, 1e-6f);
-    }
-    return std::max(sigma, 1e-6f);
-}
-
-static float sigma_to_er_sde_alpha(float sigma, bool is_flow_denoiser) {
-    if (is_flow_denoiser) {
-        sigma = er_sde_flow_sigma(sigma);
-        return 1.0f - sigma;
-    }
-    return 1.0f;
-}
-
-static float er_sde_noise_scaler(float x) {
-    x = std::max(x, 0.0f);
-    return x * (std::exp(std::pow(x, 0.3f)) + 10.0f);
-}
-
 static sd::Tensor<float> sample_euler_ancestral(denoise_cb_t model,
                                                 sd::Tensor<float> x,
                                                 const std::vector<float>& sigmas,
@@ -1322,6 +1295,33 @@ static sd::Tensor<float> sample_er_sde(denoise_cb_t model,
     constexpr int num_integration_points     = 200;
     constexpr float num_integration_points_f = 200.0f;
     float s_noise                            = eta;
+
+    auto er_sde_flow_sigma = [](float sigma) -> float {
+        sigma = std::max(sigma, 1e-6f);
+        sigma = std::min(sigma, 1.0f - 1e-4f);
+        return sigma;
+    };
+
+    auto sigma_to_er_sde_lambda = [&](float sigma, bool is_flow_denoiser) -> float {
+        if (is_flow_denoiser) {
+            sigma = er_sde_flow_sigma(sigma);
+            return sigma / std::max(1.0f - sigma, 1e-6f);
+        }
+        return std::max(sigma, 1e-6f);
+    };
+
+    auto sigma_to_er_sde_alpha = [&](float sigma, bool is_flow_denoiser) -> float {
+        if (is_flow_denoiser) {
+            sigma = er_sde_flow_sigma(sigma);
+            return 1.0f - sigma;
+        }
+        return 1.0f;
+    };
+
+    auto er_sde_noise_scaler = [](float x) -> float {
+        x = std::max(x, 0.0f);
+        return x * (std::exp(std::pow(x, 0.3f)) + 10.0f);
+    };
 
     if (is_flow_denoiser) {
         for (size_t i = 0; i + 1 < sigmas.size(); ++i) {
