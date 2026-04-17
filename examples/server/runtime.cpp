@@ -10,6 +10,7 @@
 
 #include "common/common.h"
 #include "common/log.h"
+#include "common/media_io.h"
 
 namespace fs = std::filesystem;
 
@@ -183,4 +184,49 @@ int64_t unix_timestamp_now() {
     return std::chrono::duration_cast<std::chrono::seconds>(
                std::chrono::system_clock::now().time_since_epoch())
         .count();
+}
+
+std::vector<std::string> generate_and_encode(ServerRuntime& runtime, ImgGenJobRequest& request, std::string& error_message) {
+    std::vector<std::string> strings;
+
+    sd_img_gen_params_t img_gen_params = request.to_sd_img_gen_params_t();
+    SDImageVec results;
+    int num_results = 0;
+    {
+        std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
+        sd_image_t* raw_results = generate_image(runtime.sd_ctx, &img_gen_params);
+        num_results             = request.gen_params.batch_count;
+        results.adopt(raw_results, num_results);
+    }
+    if (results.empty()) {
+        error_message = "generate_image returned no results";
+    } else {
+        for (int i = 0; i < request.gen_params.batch_count; ++i) {
+            if (results[i].data == nullptr) {
+                continue;
+            }
+            std::string params = request.gen_params.embed_image_metadata
+                                        ? get_image_params(*runtime.ctx_params,
+                                                        request.gen_params,
+                                                        request.gen_params.seed + i)
+                                        : "";
+            auto image_bytes   = encode_image_to_vector(request.output_format == "jpeg"
+                                                            ? EncodedImageFormat::JPEG
+                                                        : request.output_format == "webp"
+                                                            ? EncodedImageFormat::WEBP
+                                                            : EncodedImageFormat::PNG,
+                                                        results[i].data,
+                                                        results[i].width,
+                                                        results[i].height,
+                                                        results[i].channel,
+                                                        params,
+                                                        request.output_compression);
+            if (image_bytes.empty()) {
+                LOG_ERROR("write image to mem failed");
+                continue;
+            }
+            strings.push_back(base64_encode(image_bytes));
+        }
+    }
+    return strings;
 }

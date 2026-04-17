@@ -68,3 +68,5 @@ bool assign_output_options(ImgGenJobRequest& request,
 void refresh_lora_cache(ServerRuntime& rt);
 std::string get_lora_full_path(ServerRuntime& rt, const std::string& path);
 int64_t unix_timestamp_now();
+
+std::vector<std::string> generate_and_encode(ServerRuntime& runtime, ImgGenJobRequest& request, std::string& error_message);
