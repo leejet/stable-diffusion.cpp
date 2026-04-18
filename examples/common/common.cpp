@@ -1589,8 +1589,16 @@ bool SDGenerationParams::from_json_str(
         LOG_ERROR("invalid init_image");
         return false;
     }
+    if (!parse_image_json_field(j, "end_image", 3, width, height, end_image)) {
+        LOG_ERROR("invalid end_image");
+        return false;
+    }
     if (!parse_image_array_json_field(j, "ref_images", 3, width, height, ref_images)) {
         LOG_ERROR("invalid ref_images");
+        return false;
+    }
+    if (!parse_image_array_json_field(j, "control_frames", 3, width, height, control_frames)) {
+        LOG_ERROR("invalid control_frames");
         return false;
     }
     if (!parse_image_json_field(j, "mask_image", 1, width, height, mask_image)) {

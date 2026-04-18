@@ -246,6 +246,11 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 res.set_content(R"({"error":"empty body"})", "application/json");
                 return;
             }
+            if (!runtime_supports_generation_mode(*runtime, IMG_GEN)) {
+                res.status = 400;
+                res.set_content(json({{"error", unsupported_generation_mode_error(IMG_GEN)}}).dump(), "application/json");
+                return;
+            }
 
             json j = json::parse(req.body);
             ImgGenJobRequest request;

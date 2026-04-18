@@ -253,6 +253,12 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
     svr.Post("/v1/images/generations", [runtime](const httplib::Request& req, httplib::Response& res) {
         try {
+            if (!runtime_supports_generation_mode(*runtime, IMG_GEN)) {
+                res.status = 400;
+                res.set_content(json({{"error", unsupported_generation_mode_error(IMG_GEN)}}).dump(), "application/json");
+                return;
+            }
+
             ImgGenJobRequest request;
             std::string error_message;
             if (!build_openai_generation_request(req, *runtime, request, error_message)) {
@@ -319,6 +325,12 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
     svr.Post("/v1/images/edits", [runtime](const httplib::Request& req, httplib::Response& res) {
         try {
+            if (!runtime_supports_generation_mode(*runtime, IMG_GEN)) {
+                res.status = 400;
+                res.set_content(json({{"error", unsupported_generation_mode_error(IMG_GEN)}}).dump(), "application/json");
+                return;
+            }
+
             ImgGenJobRequest request;
             std::string error_message;
             if (!build_openai_edit_request(req, *runtime, request, error_message)) {
