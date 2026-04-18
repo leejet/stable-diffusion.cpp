@@ -953,8 +953,9 @@ static sd::Tensor<float> sample_dpmpp_2s_ancestral(denoise_cb_t model,
             float t_next         = t_fn(sigma_down);
             float h              = t_next - t;
             float s              = t + 0.5f * h;
-            sd::Tensor<float> x2 = (sigma_fn(s) / sigma_fn(t)) * x - (exp(-h * 0.5f) - 1) * denoised;
-            auto denoised2_opt   = model(x2, sigmas[i + 1], i + 1);
+            float sigma_s        = sigma_fn(s);
+            sd::Tensor<float> x2 = (sigma_s / sigma_fn(t)) * x - (exp(-h * 0.5f) - 1) * denoised;
+            auto denoised2_opt   = model(x2, sigma_s, i + 1);
             if (denoised2_opt.empty()) {
                 return {};
             }
