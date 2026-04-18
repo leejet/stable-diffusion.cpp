@@ -970,6 +970,102 @@ static sd::Tensor<float> sample_dpmpp_2s_ancestral(denoise_cb_t model,
     return x;
 }
 
+static sd::Tensor<float> sample_dpmpp_2s_ancestral_flow(denoise_cb_t model,
+                                                        sd::Tensor<float> x,
+                                                        const std::vector<float>& sigmas,
+                                                        std::shared_ptr<RNG> rng,
+                                                        float eta = 1.0f) {
+    int steps = static_cast<int>(sigmas.size()) - 1;
+    for (int i = 0; i < steps; i++) {
+        float sigma = sigmas[i];
+        float sigma_to = sigmas[i + 1];
+
+        bool opt_first_step = (1.0 - sigma < 1e-6);
+
+        auto denoised_opt = model(x, sigma, (opt_first_step ? 1 : -1) * (i + 1));
+        if (denoised_opt.empty()) {
+            return {};
+        }
+        sd::Tensor<float> denoised = std::move(denoised_opt);
+
+        if (sigma_to == 0.0f) {
+            // Euler method (final step, no noise)
+            // sigma_to == 0 --> sigma_down = 0, so:
+            //   x +                       d  * (sigma_down - sigma)
+            // = x + ((x - denoised) / sigma) * (sigma_down - sigma)
+            // = x + ((x - denoised) / sigma) * (         0 - sigma)
+            // = x + ((x - denoised)        ) * -1
+            // = x    -x + denoised
+            x = denoised;
+
+        } else {
+            auto [sigma_down, sigma_up, alpha_scale] = get_ancestral_step_flow(sigma, sigma_to, eta);
+            sd::Tensor<float> D_i;
+
+            if (opt_first_step) {
+                // the reformulated exp_s calc already accounts for this, but we can avoid
+                // a redundant model call for the typical sigma 1 at the first step:
+                // exp_s = sqrt((1-sigma)/sigma * (1-sigma_down)/sigma_down)
+                //       = sqrt((1-    1)/    1 * (1-sigma_down)/sigma_down)
+                //       = 0
+                // so sigma_s = 1 = sigma, and sigma_s_i_ratio = sigma_s / sigma = 1
+                // u = (x*sigma_s_i_ratio)+(denoised*(1.0f-sigma_s_i_ratio))
+                //   = (x*1)+(denoised*0) = x
+                // so D_i = model(u, sigma_s, i + 1)
+                //        = model(x, sigma,   i + 1)
+                //        = denoised
+                D_i = denoised;
+
+            } else {
+                float sigma_s;
+
+                // ref implementation would be:
+                // auto lambda_fn = [](float sigma) -> float {
+                //     return std::log((1.0f - sigma) / sigma); };
+                // auto sigma_fn = [](float lbda) -> float {
+                //     return 1.0f / (std::exp(lbda) + 1.0f); };
+                // t_i     = lambda_fn(sigma);
+                // t_down  = lambda_fn(sigma_down);
+                // float r = 0.5f;
+                // h       = t_down - t_i;
+                // s       = t_i + r * h;
+                // sigma_s = sigma_fn(s);
+
+                // assuming r is constant, we sidestep the singularity at sigma -> 1 by:
+                // s   = 0.5 * (lambda_fn(sigma)     + lambda_fn(sigma_down))
+                //     = 0.5 * (log((1-sigma)/sigma) + log((1-sigma_down)/sigma_down))
+                //     = 0.5 * log(((1-sigma)/sigma) *    ((1-sigma_down)/sigma_down))
+                //     = log(sqrt (((1-sigma)/sigma) *    ((1-sigma_down)/sigma_down)))
+                // so exp(s) = sqrt((1-sigma)/sigma  *     (1-sigma_down)/sigma_down)
+                // and sigma_s = sigma_fn(s) = 1.0f / (exp(s) + 1.0f)
+
+                float exp_s = std::sqrt(((1 - sigma) / sigma) * ((1 - sigma_down) / sigma_down));
+                sigma_s = 1.0f / (exp_s + 1.0f);
+
+                float sigma_s_i_ratio = sigma_s / sigma;
+                sd::Tensor<float> u = (x * sigma_s_i_ratio) + (denoised * (1.0f - sigma_s_i_ratio));
+
+                auto denoised2_opt = model(u, sigma_s, i + 1);
+                if (denoised2_opt.empty()) {
+                    return {};
+                }
+                D_i = std::move(denoised2_opt);
+            }
+
+            float sigma_down_i_ratio = sigma_down / sigma;
+            x = (x * sigma_down_i_ratio) + (D_i * (1.0f - sigma_down_i_ratio));
+
+            if (sigma_to > 0.0f && eta > 0.0f) {
+                x = alpha_scale * x + sd::Tensor<float>::randn_like(x, rng) * sigma_up;
+            }
+        }
+    }
+
+    return x;
+}
+
+
+
 static sd::Tensor<float> sample_dpmpp_2m(denoise_cb_t model,
                                          sd::Tensor<float> x,
                                          const std::vector<float>& sigmas) {
@@ -1566,7 +1662,10 @@ static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
         case DPM2_SAMPLE_METHOD:
             return sample_dpm2(model, std::move(x), sigmas);
         case DPMPP2S_A_SAMPLE_METHOD:
-            return sample_dpmpp_2s_ancestral(model, std::move(x), sigmas, rng, eta);
+            if (is_flow_denoiser)
+                return sample_dpmpp_2s_ancestral_flow(model, std::move(x), sigmas, rng, eta);
+            else
+                return sample_dpmpp_2s_ancestral(model, std::move(x), sigmas, rng, eta);
         case DPMPP2M_SAMPLE_METHOD:
             return sample_dpmpp_2m(model, std::move(x), sigmas);
         case DPMPP2Mv2_SAMPLE_METHOD:
