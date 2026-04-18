@@ -943,6 +943,8 @@ public:
                     pred_type = FLOW_PRED;
                     if (sd_version_is_wan(version)) {
                         default_flow_shift = 5.f;
+                    } else if (sd_version_is_ernie_image(version)) {
+                        default_flow_shift = 4.f;
                     } else {
                         default_flow_shift = 3.f;
                     }
