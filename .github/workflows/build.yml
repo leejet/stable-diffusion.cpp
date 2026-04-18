@@ -176,6 +176,7 @@ jobs:
 
   build-and-push-docker-images:
     name: Build and push container images
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
 
     permissions:
