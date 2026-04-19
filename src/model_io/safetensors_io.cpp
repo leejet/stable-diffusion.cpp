@@ -8,6 +8,7 @@
 
 #include "binary_io.h"
 #include "json.hpp"
+#include "util.h"
 
 static constexpr size_t ST_HEADER_SIZE_LEN = 8;
 
@@ -60,7 +61,7 @@ bool is_safetensors_file(const std::string& file_path) {
     return true;
 }
 
-static ggml_type str_to_ggml_type(const std::string& dtype) {
+static ggml_type safetensors_dtype_to_ggml_type(const std::string& dtype) {
     ggml_type ttype = GGML_TYPE_COUNT;
     if (dtype == "F16") {
         ttype = GGML_TYPE_F16;
@@ -154,7 +155,7 @@ bool read_safetensors_file(const std::string& file_path,
         size_t begin = tensor_info["data_offsets"][0].get<size_t>();
         size_t end   = tensor_info["data_offsets"][1].get<size_t>();
 
-        ggml_type type = str_to_ggml_type(dtype);
+        ggml_type type = safetensors_dtype_to_ggml_type(dtype);
         if (type == GGML_TYPE_COUNT) {
             set_error(error, "unsupported dtype '" + dtype + "' (tensor '" + name + "')");
             return false;
@@ -217,6 +218,98 @@ bool read_safetensors_file(const std::string& file_path,
         tensor_storages.push_back(tensor_storage);
 
         // LOG_DEBUG("%s %s", tensor_storage.to_string().c_str(), dtype.c_str());
+    }
+
+    return true;
+}
+
+static bool ggml_type_to_safetensors_dtype(ggml_type type, std::string* dtype) {
+    switch (type) {
+        case GGML_TYPE_F16:
+            *dtype = "F16";
+            return true;
+        case GGML_TYPE_BF16:
+            *dtype = "BF16";
+            return true;
+        case GGML_TYPE_F32:
+            *dtype = "F32";
+            return true;
+        case GGML_TYPE_I32:
+            *dtype = "I32";
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool write_safetensors_file(const std::string& file_path,
+                            const std::vector<TensorWriteInfo>& tensors,
+                            std::string* error) {
+    nlohmann::ordered_json header = nlohmann::ordered_json::object();
+
+    uint64_t data_offset = 0;
+    for (const TensorWriteInfo& write_tensor : tensors) {
+        ggml_tensor* tensor = write_tensor.tensor;
+        if (tensor == nullptr) {
+            set_error(error, "null tensor cannot be written to safetensors");
+            return false;
+        }
+
+        const std::string name = ggml_get_name(tensor);
+        std::string dtype;
+        if (!ggml_type_to_safetensors_dtype(tensor->type, &dtype)) {
+            set_error(error,
+                      "unsupported safetensors dtype '" + std::string(ggml_type_name(tensor->type)) +
+                          "' for tensor '" + name + "'");
+            return false;
+        }
+
+        const uint64_t tensor_nbytes = ggml_nbytes(tensor);
+
+        nlohmann::ordered_json json_tensor_info = nlohmann::ordered_json::object();
+        json_tensor_info["dtype"]               = dtype;
+
+        nlohmann::ordered_json shape = nlohmann::ordered_json::array();
+        for (int i = 0; i < write_tensor.n_dims; ++i) {
+            shape.push_back(write_tensor.ne[write_tensor.n_dims - 1 - i]);
+        }
+        json_tensor_info["shape"] = shape;
+
+        nlohmann::ordered_json data_offsets = nlohmann::ordered_json::array();
+        data_offsets.push_back(data_offset);
+        data_offsets.push_back(data_offset + tensor_nbytes);
+        json_tensor_info["data_offsets"] = data_offsets;
+
+        header[name] = json_tensor_info;
+        data_offset += tensor_nbytes;
+    }
+
+    const std::string header_str = header.dump();
+
+    std::ofstream file(file_path, std::ios::binary);
+    if (!file.is_open()) {
+        set_error(error, "failed to open '" + file_path + "' for writing");
+        return false;
+    }
+
+    LOG_INFO("trying to save tensors to %s", file_path.c_str());
+    model_io::write_u64(file, header_str.size());
+    file.write(header_str.data(), header_str.size());
+    if (!file) {
+        set_error(error, "failed to write safetensors header to '" + file_path + "'");
+        return false;
+    }
+
+    for (const TensorWriteInfo& write_tensor : tensors) {
+        ggml_tensor* tensor        = write_tensor.tensor;
+        const std::string name     = ggml_get_name(tensor);
+        const size_t tensor_nbytes = ggml_nbytes(tensor);
+        file.write((const char*)tensor->data, tensor_nbytes);
+        if (!file) {
+            set_error(error,
+                      "failed to write tensor '" + name + "' to '" + file_path + "'");
+            return false;
+        }
     }
 
     return true;

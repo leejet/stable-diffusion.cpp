@@ -14,6 +14,9 @@ CLI Options:
   --metadata-format <string>  metadata output format, one of [text, json] (default: text)
   --canny                     apply canny preprocessor (edge detection)
   --convert-name              convert tensor name (for convert mode)
+                              convert mode writes `.gguf` or `.safetensors` based on the output extension.
+                              `.safetensors` export currently supports f16, bf16, f32, and i32 tensor types only.
+                              i32 is passthrough only; no f32 <-> i32 conversion is performed
   -v, --verbose               print extra info
   --color                     colors the logging tags according to level
   --taesd-preview-only        prevents usage of taesd for decoding the final image. (for use with --preview tae)

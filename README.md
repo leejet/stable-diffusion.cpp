@@ -77,9 +77,10 @@ API and command-line option may change frequently.***
   - OpenCL
   - SYCL
 - Supported weight formats
-  - Pytorch checkpoint (`.ckpt` or `.pth`)
+  - Pytorch checkpoint (`.ckpt` or `.pth` or `.pt`)
   - Safetensors (`.safetensors`)
   - GGUF (`.gguf`)
+- Convert mode supports converting model weights to `.gguf` or `.safetensors`
 - Supported platforms
     - Linux
     - Mac OS
