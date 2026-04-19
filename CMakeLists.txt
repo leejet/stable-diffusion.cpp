@@ -156,10 +156,12 @@ endif()
 
 set(SD_LIB stable-diffusion)
 
-file(GLOB SD_LIB_SOURCES
+file(GLOB SD_LIB_SOURCES CONFIGURE_DEPENDS
     "src/*.h"
     "src/*.cpp"
     "src/*.hpp"
+    "src/model_io/*.h"
+    "src/model_io/*.cpp"
     "src/tokenizers/*.h"
     "src/tokenizers/*.cpp"
     "src/tokenizers/vocab/*.h"
