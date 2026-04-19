@@ -977,7 +977,7 @@ static sd::Tensor<float> sample_dpmpp_2s_ancestral_flow(denoise_cb_t model,
                                                         float eta = 1.0f) {
     int steps = static_cast<int>(sigmas.size()) - 1;
     for (int i = 0; i < steps; i++) {
-        float sigma = sigmas[i];
+        float sigma    = sigmas[i];
         float sigma_to = sigmas[i + 1];
 
         bool opt_first_step = (1.0 - sigma < 1e-6);
@@ -1040,10 +1040,10 @@ static sd::Tensor<float> sample_dpmpp_2s_ancestral_flow(denoise_cb_t model,
                 // and sigma_s = sigma_fn(s) = 1.0f / (exp(s) + 1.0f)
 
                 float exp_s = std::sqrt(((1 - sigma) / sigma) * ((1 - sigma_down) / sigma_down));
-                sigma_s = 1.0f / (exp_s + 1.0f);
+                sigma_s     = 1.0f / (exp_s + 1.0f);
 
                 float sigma_s_i_ratio = sigma_s / sigma;
-                sd::Tensor<float> u = (x * sigma_s_i_ratio) + (denoised * (1.0f - sigma_s_i_ratio));
+                sd::Tensor<float> u   = (x * sigma_s_i_ratio) + (denoised * (1.0f - sigma_s_i_ratio));
 
                 auto denoised2_opt = model(u, sigma_s, i + 1);
                 if (denoised2_opt.empty()) {
@@ -1053,7 +1053,7 @@ static sd::Tensor<float> sample_dpmpp_2s_ancestral_flow(denoise_cb_t model,
             }
 
             float sigma_down_i_ratio = sigma_down / sigma;
-            x = (x * sigma_down_i_ratio) + (D_i * (1.0f - sigma_down_i_ratio));
+            x                        = (x * sigma_down_i_ratio) + (D_i * (1.0f - sigma_down_i_ratio));
 
             if (sigma_to > 0.0f && eta > 0.0f) {
                 x = alpha_scale * x + sd::Tensor<float>::randn_like(x, rng) * sigma_up;
@@ -1063,8 +1063,6 @@ static sd::Tensor<float> sample_dpmpp_2s_ancestral_flow(denoise_cb_t model,
 
     return x;
 }
-
-
 
 static sd::Tensor<float> sample_dpmpp_2m(denoise_cb_t model,
                                          sd::Tensor<float> x,
