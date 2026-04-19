@@ -81,7 +81,7 @@ const char* unused_tensors[] = {
     "first_stage_model.bn.",
 };
 
-bool is_unused_tensor(std::string name) {
+bool is_unused_tensor(const std::string& name) {
     for (size_t i = 0; i < sizeof(unused_tensors) / sizeof(const char*); i++) {
         if (starts_with(name, unused_tensors[i])) {
             return true;
@@ -687,8 +687,8 @@ std::map<ggml_type, uint32_t> ModelLoader::get_vae_wtype_stat() {
     return wtype_stat;
 }
 
-static std::vector<std::pair<std::string, ggml_type>> parse_tensor_type_rules(const std::string& tensor_type_rules) {
-    std::vector<std::pair<std::string, ggml_type>> result;
+TensorTypeRules parse_tensor_type_rules(const std::string& tensor_type_rules) {
+    TensorTypeRules result;
     for (const auto& item : split_string(tensor_type_rules, ',')) {
         if (item.size() == 0)
             continue;
@@ -1121,91 +1121,6 @@ bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage
     return false;
 }
 
-bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type, const std::string& tensor_type_rules_str) {
-    auto tensor_type_rules = parse_tensor_type_rules(tensor_type_rules_str);
-    auto get_tensor_type   = [&](const TensorStorage& tensor_storage) -> ggml_type {
-        const std::string& name = tensor_storage.name;
-        ggml_type tensor_type   = tensor_storage.type;
-        ggml_type dst_type      = type;
-
-        for (const auto& tensor_type_rule : tensor_type_rules) {
-            std::regex pattern(tensor_type_rule.first);
-            if (std::regex_search(name, pattern)) {
-                dst_type = tensor_type_rule.second;
-                break;
-            }
-        }
-
-        if (tensor_should_be_converted(tensor_storage, dst_type)) {
-            tensor_type = dst_type;
-        }
-
-        return tensor_type;
-    };
-
-    auto backend    = ggml_backend_cpu_init();
-    size_t mem_size = 1 * 1024 * 1024;  // for padding
-    mem_size += tensor_storage_map.size() * ggml_tensor_overhead();
-    mem_size += get_params_mem_size(backend, type);
-    LOG_INFO("model tensors mem size: %.2fMB", mem_size / 1024.f / 1024.f);
-    ggml_context* ggml_ctx = ggml_init({mem_size, nullptr, false});
-
-    if (ggml_ctx == nullptr) {
-        LOG_ERROR("ggml_init failed for GGUF writer");
-        ggml_backend_free(backend);
-        return false;
-    }
-
-    std::vector<ggml_tensor*> tensors;
-    std::mutex tensor_mutex;
-    auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
-        const std::string& name = tensor_storage.name;
-        ggml_type tensor_type   = get_tensor_type(tensor_storage);
-
-        std::lock_guard<std::mutex> lock(tensor_mutex);
-        ggml_tensor* tensor = ggml_new_tensor(ggml_ctx, tensor_type, tensor_storage.n_dims, tensor_storage.ne);
-        if (tensor == nullptr) {
-            LOG_ERROR("ggml_new_tensor failed");
-            return false;
-        }
-        ggml_set_name(tensor, name.c_str());
-
-        // LOG_DEBUG("%s %d %s %d[%d %d %d %d] %d[%d %d %d %d]", name.c_str(),
-        // ggml_nbytes(tensor), ggml_type_name(tensor_type),
-        // tensor_storage.n_dims,
-        // tensor_storage.ne[0], tensor_storage.ne[1], tensor_storage.ne[2], tensor_storage.ne[3],
-        // tensor->n_dims, tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
-
-        if (!tensor->data) {
-            GGML_ASSERT(ggml_nelements(tensor) == 0);
-            // avoid crashing the gguf writer by setting a dummy pointer for zero-sized tensors
-            LOG_DEBUG("setting dummy pointer for zero-sized tensor %s", name.c_str());
-            tensor->data = ggml_get_mem_buffer(ggml_ctx);
-        }
-
-        *dst_tensor = tensor;
-        tensors.push_back(tensor);
-
-        return true;
-    };
-
-    bool success = load_tensors(on_new_tensor_cb);
-    ggml_backend_free(backend);
-    LOG_INFO("load tensors done");
-
-    std::string error;
-    if (success) {
-        success = write_gguf_file(file_path, tensors, &error);
-    }
-
-    if (!success && !error.empty()) {
-        LOG_ERROR("%s", error.c_str());
-    }
-
-    ggml_free(ggml_ctx);
-    return success;
-}
-
 int64_t ModelLoader::get_params_mem_size(ggml_backend_t backend, ggml_type type) {
     size_t alignment = 128;
     if (backend != nullptr) {
@@ -1224,29 +1139,4 @@ int64_t ModelLoader::get_params_mem_size(ggml_backend_t backend, ggml_type type)
     }
 
     return mem_size;
-}
-
-bool convert(const char* input_path,
-             const char* vae_path,
-             const char* output_path,
-             sd_type_t output_type,
-             const char* tensor_type_rules,
-             bool convert_name) {
-    ModelLoader model_loader;
-
-    if (!model_loader.init_from_file(input_path)) {
-        LOG_ERROR("init model loader from file failed: '%s'", input_path);
-        return false;
-    }
-
-    if (vae_path != nullptr && strlen(vae_path) > 0) {
-        if (!model_loader.init_from_file(vae_path, "vae.")) {
-            LOG_ERROR("init model loader from file failed: '%s'", vae_path);
-            return false;
-        }
-    }
-    if (convert_name) {
-        model_loader.convert_tensors_name();
-    }
-    return model_loader.save_to_gguf_file(output_path, (ggml_type)output_type, tensor_type_rules);
 }

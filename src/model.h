@@ -189,6 +189,9 @@ enum PMVersion {
 };
 
 typedef OrderedMap<std::string, TensorStorage> String2TensorStorage;
+using TensorTypeRules = std::vector<std::pair<std::string, ggml_type>>;
+
+TensorTypeRules parse_tensor_type_rules(const std::string& tensor_type_rules);
 
 class ModelLoader {
 protected:
@@ -231,7 +234,6 @@ public:
         return names;
     }
 
-    bool save_to_gguf_file(const std::string& file_path, ggml_type type, const std::string& tensor_type_rules);
     bool tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type);
     int64_t get_params_mem_size(ggml_backend_t backend, ggml_type type = GGML_TYPE_COUNT);
     ~ModelLoader() = default;

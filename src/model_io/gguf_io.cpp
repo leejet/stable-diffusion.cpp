@@ -95,7 +95,7 @@ bool read_gguf_file(const std::string& file_path,
 }
 
 bool write_gguf_file(const std::string& file_path,
-                     const std::vector<ggml_tensor*>& tensors,
+                     const std::vector<TensorWriteInfo>& tensors,
                      std::string* error) {
     gguf_context* gguf_ctx = gguf_init_empty();
     if (gguf_ctx == nullptr) {
@@ -103,7 +103,8 @@ bool write_gguf_file(const std::string& file_path,
         return false;
     }
 
-    for (ggml_tensor* tensor : tensors) {
+    for (const TensorWriteInfo& write_tensor : tensors) {
+        ggml_tensor* tensor = write_tensor.tensor;
         if (tensor == nullptr) {
             set_error(error, "null tensor cannot be written to GGUF");
             gguf_free(gguf_ctx);

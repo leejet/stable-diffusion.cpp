@@ -121,6 +121,12 @@ struct TensorStorage {
     }
 };
 
+struct TensorWriteInfo {
+    int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1};
+    int n_dims              = 0;
+    ggml_tensor* tensor     = nullptr;
+};
+
 typedef std::function<bool(const TensorStorage&, ggml_tensor**)> on_new_tensor_cb_t;
 
 #endif  // __SD_TENSOR_STORAGE_H__
