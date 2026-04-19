@@ -2,6 +2,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdarg>
+#include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <mutex>
@@ -13,9 +14,10 @@
 #include <vector>
 
 #include "model.h"
-#include "model_io/ckpt_io.h"
 #include "model_io/gguf_io.h"
 #include "model_io/safetensors_io.h"
+#include "model_io/torch_legacy_io.h"
+#include "model_io/torch_zip_io.h"
 #include "stable-diffusion.h"
 #include "util.h"
 
@@ -229,9 +231,12 @@ bool ModelLoader::init_from_file(const std::string& file_path, const std::string
     } else if (is_safetensors_file(file_path)) {
         LOG_INFO("load %s using safetensors format", file_path.c_str());
         return init_from_safetensors_file(file_path, prefix);
-    } else if (is_ckpt_file(file_path)) {
-        LOG_INFO("load %s using checkpoint format", file_path.c_str());
-        return init_from_ckpt_file(file_path, prefix);
+    } else if (is_torch_zip_file(file_path)) {
+        LOG_INFO("load %s using torch zip format", file_path.c_str());
+        return init_from_torch_zip_file(file_path, prefix);
+    } else if (init_from_torch_legacy_file(file_path, prefix)) {
+        LOG_INFO("load %s using torch legacy format", file_path.c_str());
+        return true;
     } else {
         if (file_exists(file_path)) {
             LOG_WARN("unknown format %s", file_path.c_str());
@@ -329,6 +334,68 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
     return true;
 }
 
+/*================================================= TorchLegacyModelLoader ==================================================*/
+
+bool ModelLoader::init_from_torch_legacy_file(const std::string& file_path, const std::string& prefix) {
+    LOG_DEBUG("init from torch legacy '%s'", file_path.c_str());
+
+    std::vector<TensorStorage> tensor_storages;
+    std::string error;
+    if (!read_torch_legacy_file(file_path, tensor_storages, &error)) {
+        if ((!error.empty()) && (ends_with(file_path, ".pt") || ends_with(file_path, ".pth"))) {
+            LOG_WARN("%s", error.c_str());
+        }
+        return false;
+    }
+
+    file_paths_.push_back(file_path);
+    size_t file_index = file_paths_.size() - 1;
+
+    for (auto& tensor_storage : tensor_storages) {
+        if (is_unused_tensor(tensor_storage.name)) {
+            continue;
+        }
+
+        if (!starts_with(tensor_storage.name, prefix)) {
+            tensor_storage.name = prefix + tensor_storage.name;
+        }
+        tensor_storage.file_index = file_index;
+
+        add_tensor_storage(tensor_storage);
+    }
+
+    return true;
+}
+
+/*================================================= TorchZipModelLoader ==================================================*/
+
+bool ModelLoader::init_from_torch_zip_file(const std::string& file_path, const std::string& prefix) {
+    LOG_DEBUG("init from '%s'", file_path.c_str());
+
+    std::vector<TensorStorage> tensor_storages;
+    std::string error;
+    if (!read_torch_zip_file(file_path, tensor_storages, &error)) {
+        LOG_ERROR("%s", error.c_str());
+        return false;
+    }
+
+    file_paths_.push_back(file_path);
+    size_t file_index = file_paths_.size() - 1;
+
+    for (auto& tensor_storage : tensor_storages) {
+        if (!starts_with(tensor_storage.name, prefix)) {
+            tensor_storage.name = prefix + tensor_storage.name;
+        }
+        tensor_storage.file_index = file_index;
+
+        add_tensor_storage(tensor_storage);
+
+        // LOG_DEBUG("%s", tensor_storage.to_string().c_str());
+    }
+
+    return true;
+}
+
 /*================================================= DiffusersModelLoader ==================================================*/
 
 bool ModelLoader::init_from_diffusers_file(const std::string& file_path, const std::string& prefix) {
@@ -352,35 +419,6 @@ bool ModelLoader::init_from_diffusers_file(const std::string& file_path, const s
     if (!init_from_safetensors_file(clip_g_path, "te.1.")) {
         LOG_DEBUG("Couldn't find working second text encoder in %s", file_path.c_str());
     }
-    return true;
-}
-
-/*================================================= CkptModelLoader ==================================================*/
-
-bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::string& prefix) {
-    LOG_DEBUG("init from '%s'", file_path.c_str());
-
-    std::vector<TensorStorage> tensor_storages;
-    std::string error;
-    if (!read_ckpt_file(file_path, tensor_storages, &error)) {
-        LOG_ERROR("%s", error.c_str());
-        return false;
-    }
-
-    file_paths_.push_back(file_path);
-    size_t file_index = file_paths_.size() - 1;
-
-    for (auto& tensor_storage : tensor_storages) {
-        if (!starts_with(tensor_storage.name, prefix)) {
-            tensor_storage.name = prefix + tensor_storage.name;
-        }
-        tensor_storage.file_index = file_index;
-
-        add_tensor_storage(tensor_storage);
-
-        // LOG_DEBUG("%s", tensor_storage.to_string().c_str());
-    }
-
     return true;
 }
 
@@ -1210,6 +1248,5 @@ bool convert(const char* input_path,
     if (convert_name) {
         model_loader.convert_tensors_name();
     }
-    bool success = model_loader.save_to_gguf_file(output_path, (ggml_type)output_type, tensor_type_rules);
-    return success;
+    return model_loader.save_to_gguf_file(output_path, (ggml_type)output_type, tensor_type_rules);
 }

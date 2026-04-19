@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "binary_io.h"
 #include "json.hpp"
 
 static constexpr size_t ST_HEADER_SIZE_LEN = 8;
@@ -14,20 +15,6 @@ static void set_error(std::string* error, const std::string& message) {
     if (error != nullptr) {
         *error = message;
     }
-}
-
-static uint64_t read_u64(const uint8_t* buffer) {
-    // little endian
-    uint64_t value = 0;
-    value |= static_cast<uint64_t>(buffer[7]) << 56;
-    value |= static_cast<uint64_t>(buffer[6]) << 48;
-    value |= static_cast<uint64_t>(buffer[5]) << 40;
-    value |= static_cast<uint64_t>(buffer[4]) << 32;
-    value |= static_cast<uint64_t>(buffer[3]) << 24;
-    value |= static_cast<uint64_t>(buffer[2]) << 16;
-    value |= static_cast<uint64_t>(buffer[1]) << 8;
-    value |= static_cast<uint64_t>(buffer[0]);
-    return value;
 }
 
 bool is_safetensors_file(const std::string& file_path) {
@@ -52,7 +39,7 @@ bool is_safetensors_file(const std::string& file_path) {
         return false;
     }
 
-    size_t header_size_ = read_u64(header_size_buf);
+    size_t header_size_ = model_io::read_u64(header_size_buf);
     if (header_size_ >= file_size_ || header_size_ <= 2) {
         return false;
     }
@@ -123,7 +110,7 @@ bool read_safetensors_file(const std::string& file_path,
         return false;
     }
 
-    size_t header_size_ = read_u64(header_size_buf);
+    size_t header_size_ = model_io::read_u64(header_size_buf);
     if (header_size_ >= file_size_) {
         set_error(error, "invalid safetensor file '" + file_path + "'");
         return false;
