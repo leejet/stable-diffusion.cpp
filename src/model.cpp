@@ -367,31 +367,7 @@ bool ModelLoader::init_from_torch_legacy_file(const std::string& file_path, cons
     return true;
 }
 
-/*================================================= DiffusersModelLoader ==================================================*/
-
-bool ModelLoader::init_from_diffusers_file(const std::string& file_path, const std::string& prefix) {
-    std::string unet_path   = path_join(file_path, "unet/diffusion_pytorch_model.safetensors");
-    std::string vae_path    = path_join(file_path, "vae/diffusion_pytorch_model.safetensors");
-    std::string clip_path   = path_join(file_path, "text_encoder/model.safetensors");
-    std::string clip_g_path = path_join(file_path, "text_encoder_2/model.safetensors");
-
-    if (!init_from_safetensors_file(unet_path, "unet.")) {
-        return false;
-    }
-
-    if (!init_from_safetensors_file(vae_path, "vae.")) {
-        LOG_WARN("Couldn't find working VAE in %s", file_path.c_str());
-        // return false;
-    }
-    if (!init_from_safetensors_file(clip_path, "te.")) {
-        LOG_WARN("Couldn't find working text encoder in %s", file_path.c_str());
-        // return false;
-    }
-    if (!init_from_safetensors_file(clip_g_path, "te.1.")) {
-        LOG_DEBUG("Couldn't find working second text encoder in %s", file_path.c_str());
-    }
-    return true;
-}
+/*================================================= TorchZipModelLoader ==================================================*/
 
 bool ModelLoader::init_from_torch_zip_file(const std::string& file_path, const std::string& prefix) {
     LOG_DEBUG("init from '%s'", file_path.c_str());
@@ -417,6 +393,32 @@ bool ModelLoader::init_from_torch_zip_file(const std::string& file_path, const s
         // LOG_DEBUG("%s", tensor_storage.to_string().c_str());
     }
 
+    return true;
+}
+
+/*================================================= DiffusersModelLoader ==================================================*/
+
+bool ModelLoader::init_from_diffusers_file(const std::string& file_path, const std::string& prefix) {
+    std::string unet_path   = path_join(file_path, "unet/diffusion_pytorch_model.safetensors");
+    std::string vae_path    = path_join(file_path, "vae/diffusion_pytorch_model.safetensors");
+    std::string clip_path   = path_join(file_path, "text_encoder/model.safetensors");
+    std::string clip_g_path = path_join(file_path, "text_encoder_2/model.safetensors");
+
+    if (!init_from_safetensors_file(unet_path, "unet.")) {
+        return false;
+    }
+
+    if (!init_from_safetensors_file(vae_path, "vae.")) {
+        LOG_WARN("Couldn't find working VAE in %s", file_path.c_str());
+        // return false;
+    }
+    if (!init_from_safetensors_file(clip_path, "te.")) {
+        LOG_WARN("Couldn't find working text encoder in %s", file_path.c_str());
+        // return false;
+    }
+    if (!init_from_safetensors_file(clip_g_path, "te.1.")) {
+        LOG_DEBUG("Couldn't find working second text encoder in %s", file_path.c_str());
+    }
     return true;
 }
 
