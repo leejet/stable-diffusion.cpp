@@ -23,8 +23,9 @@
 #include <unistd.h>
 #endif
 
-#include "ggml-cpu.h"
+#include "ggml-backend.h"
 #include "ggml.h"
+#include "ggml_extend_backend.hpp"
 #include "stable-diffusion.h"
 
 bool ends_with(const std::string& str, const std::string& ending) {
@@ -718,3 +719,75 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
 
     return res;
 }
+
+// test if the backend is a specific one, e.g. "CUDA", "ROCm", "Vulkan" etc.
+bool sd_backend_is(ggml_backend_t backend, const std::string& name) {
+    if (!backend) {
+        return false;
+    }
+    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+    if (!dev)
+        return false;
+    std::string dev_name = ggml_backend_dev_name(dev);
+    return dev_name.find(name) != std::string::npos;
+}
+
+ggml_backend_t sd_get_default_backend() {
+    ggml_backend_load_all_once();
+    static std::once_flag once;
+    std::call_once(once, []() {
+        int dev_count = ggml_backend_dev_count();
+        if (dev_count == 0) {
+            LOG_ERROR("No devices found!");
+        } else {
+            LOG_DEBUG("Found %d backend devices:", dev_count);
+            for (int i = 0; i < dev_count; i++) {
+                auto dev = ggml_backend_dev_get(i);
+                LOG_DEBUG("#%d: %s", i, ggml_backend_dev_name(dev));
+            }
+        }
+    });
+    std::string dev_name = get_default_backend_name();
+    ggml_backend_t backend = nullptr;
+    // apply SD_VK_DEVICE only if the main device is Vulkan
+    if (dev_name.rfind("Vulkan", 0) == 0) {
+        const char* SD_VK_DEVICE = getenv("SD_VK_DEVICE");
+        if (SD_VK_DEVICE != nullptr) {
+            std::string sd_vk_device_str = SD_VK_DEVICE;
+            try {
+                unsigned long long device = std::stoull(sd_vk_device_str);
+                std::string vk_device_name = "Vulkan" + std::to_string(device);
+                if (vk_device_name != dev_name) {
+                    LOG_INFO("Selecting %s as main device by env var SD_VK_DEVICE)", vk_device_name.c_str());
+                    backend = init_named_backend(vk_device_name);
+                    if (!backend) {
+                        LOG_WARN("Device %s requested by SD_VK_DEVICE failed to init. Falling back to the default device.", vk_device_name.c_str());
+                    }
+                }
+            } catch (const std::invalid_argument&) {
+                LOG_WARN("SD_VK_DEVICE environment variable is not a valid integer (%s). Falling back to the default device.", SD_VK_DEVICE);
+            } catch (const std::out_of_range&) {
+                LOG_WARN("SD_VK_DEVICE environment variable value is out of range for `unsigned long long` type (%s). Falling back to the default device.", SD_VK_DEVICE);
+            }
+        }
+    }
+
+    if (!backend) {
+        backend = init_named_backend(dev_name);
+        if (!backend) {
+            LOG_WARN("device %s failed to init", dev_name.c_str());
+        }
+    }
+
+    if (!backend) {
+        LOG_WARN("loading CPU backend");
+        backend = ggml_backend_cpu_init();
+    }
+
+    if (ggml_backend_is_cpu(backend)) {
+        LOG_DEBUG("Using CPU backend");
+    }
+
+    return backend;
+}
+

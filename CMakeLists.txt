@@ -72,37 +72,31 @@ option(SD_USE_SYSTEM_GGML            "sd: use system-installed GGML library" OFF
 if(SD_CUDA)
     message("-- Use CUDA as backend stable-diffusion")
     set(GGML_CUDA ON)
-    add_definitions(-DSD_USE_CUDA)
 endif()
 
 if(SD_METAL)
     message("-- Use Metal as backend stable-diffusion")
     set(GGML_METAL ON)
-    add_definitions(-DSD_USE_METAL)
 endif()
 
 if (SD_VULKAN)
     message("-- Use Vulkan as backend stable-diffusion")
     set(GGML_VULKAN ON)
-    add_definitions(-DSD_USE_VULKAN)
 endif ()
 
 if (SD_OPENCL)
     message("-- Use OpenCL as backend stable-diffusion")
     set(GGML_OPENCL ON)
-    add_definitions(-DSD_USE_OPENCL)
 endif ()
 
 if (SD_HIPBLAS)
     message("-- Use HIPBLAS as backend stable-diffusion")
     set(GGML_HIP ON)
-    add_definitions(-DSD_USE_CUDA)
 endif ()
 
 if(SD_MUSA)
     message("-- Use MUSA as backend stable-diffusion")
     set(GGML_MUSA ON)
-    add_definitions(-DSD_USE_CUDA)
 endif()
 
 if(SD_WEBP)
@@ -222,7 +216,6 @@ if(SD_SYCL)
     message("-- Use SYCL as backend stable-diffusion")
     set(GGML_SYCL ON)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-narrowing -fsycl")
-    add_definitions(-DSD_USE_SYCL)
     # disable fast-math on host, see:
     # https://www.intel.com/content/www/us/en/docs/cpp-compiler/developer-guide-reference/2021-10/fp-model-fp.html
     if (WIN32)
