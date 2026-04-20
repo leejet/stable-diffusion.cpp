@@ -10,6 +10,7 @@
 #include "unet.hpp"
 #include "wan.hpp"
 #include "z_image.hpp"
+#include "nucleus_image.hpp"
 
 struct DiffusionParams {
     const sd::Tensor<float>* x                        = nullptr;
@@ -508,6 +509,72 @@ struct ZImageModel : public DiffusionModel {
         GGML_ASSERT(diffusion_params.timesteps != nullptr);
         static const std::vector<sd::Tensor<float>> empty_ref_latents;
         return z_image.compute(n_threads,
+                               *diffusion_params.x,
+                               *diffusion_params.timesteps,
+                               tensor_or_empty(diffusion_params.context),
+                               diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
+                               true);
+    }
+};
+
+struct NucleusImageModel : public DiffusionModel {
+    std::string prefix;
+    NucleusImage::NucleusImageRunner nucleus;
+
+    NucleusImageModel(ggml_backend_t backend,
+                bool offload_params_to_cpu,
+                const String2TensorStorage& tensor_storage_map = {},
+                const std::string prefix                       = "model.diffusion_model",
+                SDVersion version                              = VERSION_NUCLEUS_IMAGE)
+        : prefix(prefix), nucleus(backend, offload_params_to_cpu, tensor_storage_map, prefix, version) {
+    }
+
+    std::string get_desc() override {
+        return nucleus.get_desc();
+    }
+
+    void alloc_params_buffer() override {
+        nucleus.alloc_params_buffer();
+    }
+
+    void free_params_buffer() override {
+        nucleus.free_params_buffer();
+    }
+
+    void free_compute_buffer() override {
+        nucleus.free_compute_buffer();
+    }
+
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        nucleus.get_param_tensors(tensors, prefix);
+    }
+
+    size_t get_params_buffer_size() override {
+        return nucleus.get_params_buffer_size();
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        nucleus.set_weight_adapter(adapter);
+    }
+
+    int64_t get_adm_in_channels() override {
+        return 768;
+    }
+
+    void set_flash_attention_enabled(bool enabled) {
+        nucleus.set_flash_attention_enabled(enabled);
+    }
+
+    void set_circular_axes(bool circular_x, bool circular_y) override {
+        nucleus.set_circular_axes(circular_x, circular_y);
+    }
+
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
+        static const std::vector<sd::Tensor<float>> empty_ref_latents;
+        return nucleus.compute(n_threads,
                                *diffusion_params.x,
                                *diffusion_params.timesteps,
                                tensor_or_empty(diffusion_params.context),

@@ -52,6 +52,7 @@ const char* model_version_to_str[] = {
     "Flux.2 klein",
     "Z-Image",
     "Ovis Image",
+    "Nucleus Image"
 };
 
 const char* sampling_methods_str[] = {
@@ -547,10 +548,20 @@ public:
                                                                  tensor_storage_map,
                                                                  version);
                 diffusion_model  = std::make_shared<ZImageModel>(backend,
-                                                                offload_params_to_cpu,
-                                                                tensor_storage_map,
-                                                                "model.diffusion_model",
-                                                                version);
+                                                                 offload_params_to_cpu,
+                                                                 tensor_storage_map,
+                                                                 "model.diffusion_model",
+                                                                 version);
+            } else if (sd_version_is_nucleus(version)) {
+                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
+                                                                 offload_params_to_cpu,
+                                                                 tensor_storage_map,
+                                                                 version);
+                diffusion_model  = std::make_shared<NucleusImageModel>(backend,
+                                                                 offload_params_to_cpu,
+                                                                 tensor_storage_map,
+                                                                 "model.diffusion_model",
+                                                                 version);
             } else {  // SD1.x SD2.x SDXL
                 std::map<std::string, std::string> embbeding_map;
                 for (uint32_t i = 0; i < sd_ctx_params->embedding_count; i++) {
@@ -605,7 +616,8 @@ public:
             auto create_tae = [&]() -> std::shared_ptr<VAE> {
                 if (sd_version_is_wan(version) ||
                     sd_version_is_qwen_image(version) ||
-                    sd_version_is_anima(version)) {
+                    sd_version_is_anima(version) ||
+                    sd_version_is_nucleus(version)) {
                     return std::make_shared<TinyVideoAutoEncoder>(vae_backend,
                                                                   offload_params_to_cpu,
                                                                   tensor_storage_map,
@@ -627,7 +639,8 @@ public:
             auto create_vae = [&]() -> std::shared_ptr<VAE> {
                 if (sd_version_is_wan(version) ||
                     sd_version_is_qwen_image(version) ||
-                    sd_version_is_anima(version)) {
+                    sd_version_is_anima(version) ||
+                    sd_version_is_nucleus(version)) {
                     return std::make_shared<WAN::WanVAERunner>(vae_backend,
                                                                offload_params_to_cpu,
                                                                tensor_storage_map,
@@ -922,7 +935,8 @@ public:
                            sd_version_is_wan(version) ||
                            sd_version_is_qwen_image(version) ||
                            sd_version_is_anima(version) ||
-                           sd_version_is_z_image(version)) {
+                           sd_version_is_z_image(version)||
+                           sd_version_is_nucleus(version)) {
                     pred_type = FLOW_PRED;
                     if (sd_version_is_wan(version)) {
                         default_flow_shift = 5.f;
@@ -1415,7 +1429,7 @@ public:
                 } else if (sd_version_is_flux(version) || sd_version_is_z_image(version)) {
                     latent_rgb_proj = flux_latent_rgb_proj;
                     latent_rgb_bias = flux_latent_rgb_bias;
-                } else if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_anima(version)) {
+                } else if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_anima(version) || sd_version_is_nucleus(version)) {
                     latent_rgb_proj = wan_21_latent_rgb_proj;
                     latent_rgb_bias = wan_21_latent_rgb_bias;
                 } else {

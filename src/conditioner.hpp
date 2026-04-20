@@ -1621,7 +1621,7 @@ struct LLMEmbedder : public Conditioner {
         LLM::LLMArch arch = LLM::LLMArch::QWEN2_5_VL;
         if (version == VERSION_FLUX2) {
             arch = LLM::LLMArch::MISTRAL_SMALL_3_2;
-        } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
+        } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN || sd_version_is_nucleus(version)) {
             arch = LLM::LLMArch::QWEN3;
         }
         if (arch == LLM::LLMArch::MISTRAL_SMALL_3_2) {
@@ -1787,7 +1787,7 @@ struct LLMEmbedder : public Conditioner {
 
         int64_t t0 = ggml_time_ms();
 
-        if (sd_version_is_qwen_image(version)) {
+        if (sd_version_is_qwen_image(version) || sd_version_is_nucleus(version)) {
             if (llm->enable_vision && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
                 LOG_INFO("QwenImageEditPlusPipeline");
                 prompt_template_encode_start_idx = 64;

@@ -437,6 +437,167 @@ namespace Rope {
         return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
     }
 
+
+    // VIBE-CODED: TODO: Double check
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_nucleus_image_ids(int h,
+                                                                            int w,
+                                                                            int patch_size,
+                                                                            int bs,
+                                                                            int context_len,
+                                                                            bool scale_rope) {
+        // Calculate token dimensions (assuming patch_size applies to h/w)
+        int h_len = (h + (patch_size / 2)) / patch_size;
+        int w_len = (w + (patch_size / 2)) / patch_size;
+
+        // Nucleus uses 3 axes: Frame, Height, Width
+        // Frame is always 1 for image gen, but we include it in the ID structure if axes_dim expects it.
+        // However, looking at Qwen example, gen_flux_img_ids handles the spatial structure.
+        // For Nucleus, we need to handle scale_rope manually to match Python logic (negative indices).
+
+        int axes_dim_num = 3;
+        std::vector<std::vector<float>> img_ids;
+        size_t img_tokens = static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
+
+        // Generate Spatial IDs
+        // If scale_rope is true, we need negative indices for the first half of height/width
+        // Python Logic: freqs_neg[1][-(height - height // 2) :] ... freqs_pos[1][: height // 2]
+        // This maps to indices: -(h_len - h_len/2) ... (h_len/2 - 1)
+
+        for (int i = 0; i < bs; ++i) {
+            for (int y = 0; y < h_len; ++y) {
+                for (int x = 0; x < w_len; ++x) {
+                    std::vector<float> id_vec(3);
+
+                    // Frame ID (0)
+                    id_vec[0] = 0.0f;
+
+                    // Height ID
+                    if (scale_rope) {
+                        int h_half  = h_len / 2;
+                        int h_start = -(h_len - h_half);
+                        id_vec[1]   = static_cast<float>(h_start + y);
+                    } else {
+                        id_vec[1] = static_cast<float>(y);
+                    }
+
+                    // Width ID
+                    if (scale_rope) {
+                        int w_half  = w_len / 2;
+                        int w_start = -(w_len - w_half);
+                        id_vec[2]   = static_cast<float>(w_start + x);
+                    } else {
+                        id_vec[2] = static_cast<float>(x);
+                    }
+
+                    img_ids.push_back(id_vec);
+                }
+            }
+        }
+
+        // Text IDs
+        // Python Logic: txt_freqs = pos_freqs[max_vid_index : max_vid_index + max_txt_seq_len]
+        // max_vid_index = max(height, width) or max(height/2, width/2) if scale_rope
+        int max_vid_index;
+        if (scale_rope) {
+            max_vid_index = std::max(h_len / 2, w_len / 2);
+        } else {
+            max_vid_index = std::max(h_len, w_len);
+        }
+
+        // Text IDs are linear starting from max_vid_index
+        // Note: In Qwen C++, txt_ids are repeated for bs. Here we do the same.
+        std::vector<std::vector<float>> txt_ids_repeated(bs * context_len, std::vector<float>(3));
+
+        // Generate a linear range of IDs for text
+        // txt_id_start = max_vid_index
+        // txt_id_end = max_vid_index + context_len
+        float txt_id_start = static_cast<float>(max_vid_index);
+        float txt_id_end   = static_cast<float>(max_vid_index + context_len);
+
+        // We need context_len values starting from txt_id_start
+        // linspace(start, end, num) usually includes start and end.
+        // We want: start, start+1, ..., start+context_len-1
+        // So we generate context_len points.
+        // Using manual loop to be safe with integer steps matching Python torch.arange
+        for (int i = 0; i < bs; ++i) {
+            for (int j = 0; j < context_len; ++j) {
+                float val = txt_id_start + static_cast<float>(j);
+                // Text IDs typically don't use the spatial dimensions,
+                // but in Qwen example they are repeated {val, val, val}.
+                // Nucleus Python implies text uses pos_freqs which are 3D axes.
+                // We follow Qwen C++ pattern of repeating the value across axes.
+                txt_ids_repeated[i * context_len + j] = {val, val, val};
+            }
+        }
+
+        // Concatenate Spatial + Text
+        // Note: In Qwen C++, concat_ids handles the bs repetition logic.
+        // Here img_ids is already flattened per batch (bs * h * w).
+        // We need to make sure the order is correct.
+        // Qwen: txt_ids_repeated is bs * context_len. img_ids is bs * img_tokens.
+        // Nucleus Python: Returns vid_freqs (image), txt_freqs (text).
+        // C++ embed_nd usually expects a single list of IDs.
+        // Order: Image tokens first, then Text tokens?
+        // Python: vid_freqs (image) returned first, txt_freqs second.
+        // C++ usually concatenates for the transformer input.
+        // Let's follow Qwen C++: concat_ids(txt_ids_repeated, img_ids, bs);
+        // Wait, Qwen C++ does: concat_ids(txt_ids_repeated, img_ids, bs).
+        // This puts Text first then Image?
+        // Let's check Qwen Python: "txt_freqs = ...", "vid_freqs = ...".
+        // Usually Text is prefix.
+        // I will follow Qwen C++ structure: Text then Image.
+        std::vector<std::vector<float>> ids = concat_ids(txt_ids_repeated, img_ids, bs);
+
+        return ids;
+    }
+
+    // VIBE-CODED: TODO: Double check
+    __STATIC_INLINE__ std::vector<float> gen_nucleus_image_pe(int h,
+                                                              int w,
+                                                              int patch_size,
+                                                              int bs,
+                                                              int context_len,
+                                                              int theta,
+                                                              bool scale_rope,
+                                                              bool circular_h,
+                                                              bool circular_w,
+                                                              const std::vector<int>& axes_dim) {
+        std::vector<std::vector<float>> ids = gen_nucleus_image_ids(h, w, patch_size, bs, context_len, scale_rope);
+
+        std::vector<std::vector<int>> wrap_dims;
+        // Handle circular padding/wrapping if enabled (similar to Qwen logic)
+        if ((circular_h || circular_w) && bs > 0 && axes_dim.size() >= 3) {
+            int pad_h = (patch_size - (h % patch_size)) % patch_size;
+            int pad_w = (patch_size - (w % patch_size)) % patch_size;
+            int h_len = (h + pad_h) / patch_size;
+            int w_len = (w + pad_w) / patch_size;
+
+            if (h_len > 0 && w_len > 0) {
+                const size_t total_tokens = ids.size();
+                // Track per-token wrap lengths for the row/column axes
+                wrap_dims.assign(axes_dim.size(), std::vector<int>(total_tokens / bs, 0));
+
+                // In Nucleus, Text tokens are usually at the start (based on concat_ids logic in Qwen C++)
+                // However, Qwen C++ concat_ids(txt, img).
+                // Let's verify cursor.
+                size_t cursor           = static_cast<size_t>(context_len);  // Skip text tokens if they are first
+                const size_t img_tokens = static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
+
+                for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
+                    if (circular_h) {
+                        wrap_dims[1][cursor + token_i] = h_len;
+                    }
+                    if (circular_w) {
+                        wrap_dims[2][cursor + token_i] = w_len;
+                    }
+                }
+                // No reference latents in Nucleus logic provided, so stop here
+            }
+        }
+
+        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
+    }
+
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_vid_ids(int t,
                                                                   int h,
                                                                   int w,

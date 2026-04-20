@@ -1103,6 +1103,9 @@ SDVersion ModelLoader::get_sd_version() {
             tensor_storage.name == "unet.conv_in.weight") {
             input_block_weight = tensor_storage;
         }
+        if(tensor_storage.name.find(".experts.") != std::string::npos){
+            return VERSION_NUCLEUS_IMAGE;
+        }
     }
     if (is_wan) {
         LOG_DEBUG("patch_embedding_channels %d", patch_embedding_channels);
