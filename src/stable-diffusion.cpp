@@ -222,8 +222,17 @@ public:
 #endif
 
         if (!backend) {
+            static bool need_load = true;
+            if (need_load) {
+                ggml_backend_load_all();
+                need_load = false;
+            }
             LOG_DEBUG("Using CPU backend");
-            backend = ggml_backend_cpu_init();
+            backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+            if (!backend) {
+                LOG_ERROR("CPU backend is nullptr!");
+                std::terminate();
+            }
         }
     }
 
@@ -429,9 +438,9 @@ public:
 
         {
             clip_backend = backend;
-            if (clip_on_cpu && !ggml_backend_is_cpu(backend)) {
+            if (clip_on_cpu && !sd_ggml_backend_is_cpu(backend)) {
                 LOG_INFO("CLIP: Using CPU backend");
-                clip_backend = ggml_backend_cpu_init();
+                clip_backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
             }
             if (sd_version_is_sd3(version)) {
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend,
@@ -607,9 +616,9 @@ public:
                 high_noise_diffusion_model->get_param_tensors(tensors);
             }
 
-            if (sd_ctx_params->keep_vae_on_cpu && !ggml_backend_is_cpu(backend)) {
+            if (sd_ctx_params->keep_vae_on_cpu && !sd_ggml_backend_is_cpu(backend)) {
                 LOG_INFO("VAE Autoencoder: Using CPU backend");
-                vae_backend = ggml_backend_cpu_init();
+                vae_backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
             } else {
                 vae_backend = backend;
             }
@@ -700,9 +709,9 @@ public:
 
             if (strlen(SAFE_STR(sd_ctx_params->control_net_path)) > 0) {
                 ggml_backend_t controlnet_backend = nullptr;
-                if (sd_ctx_params->keep_control_net_on_cpu && !ggml_backend_is_cpu(backend)) {
+                if (sd_ctx_params->keep_control_net_on_cpu && !sd_ggml_backend_is_cpu(backend)) {
                     LOG_DEBUG("ControlNet: Using CPU backend");
-                    controlnet_backend = ggml_backend_cpu_init();
+                    controlnet_backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
                 } else {
                     controlnet_backend = backend;
                 }
@@ -869,25 +878,25 @@ public:
 
             size_t total_params_ram_size  = 0;
             size_t total_params_vram_size = 0;
-            if (ggml_backend_is_cpu(clip_backend)) {
+            if (sd_ggml_backend_is_cpu(clip_backend)) {
                 total_params_ram_size += clip_params_mem_size + pmid_params_mem_size;
             } else {
                 total_params_vram_size += clip_params_mem_size + pmid_params_mem_size;
             }
 
-            if (ggml_backend_is_cpu(backend)) {
+            if (sd_ggml_backend_is_cpu(backend)) {
                 total_params_ram_size += unet_params_mem_size;
             } else {
                 total_params_vram_size += unet_params_mem_size;
             }
 
-            if (ggml_backend_is_cpu(vae_backend)) {
+            if (sd_ggml_backend_is_cpu(vae_backend)) {
                 total_params_ram_size += vae_params_mem_size;
             } else {
                 total_params_vram_size += vae_params_mem_size;
             }
 
-            if (ggml_backend_is_cpu(control_net_backend)) {
+            if (sd_ggml_backend_is_cpu(control_net_backend)) {
                 total_params_ram_size += control_net_params_mem_size;
             } else {
                 total_params_vram_size += control_net_params_mem_size;
@@ -901,15 +910,15 @@ public:
                 total_params_vram_size / 1024.0 / 1024.0,
                 total_params_ram_size / 1024.0 / 1024.0,
                 clip_params_mem_size / 1024.0 / 1024.0,
-                ggml_backend_is_cpu(clip_backend) ? "RAM" : "VRAM",
+                sd_ggml_backend_is_cpu(clip_backend) ? "RAM" : "VRAM",
                 unet_params_mem_size / 1024.0 / 1024.0,
-                ggml_backend_is_cpu(backend) ? "RAM" : "VRAM",
+                sd_ggml_backend_is_cpu(backend) ? "RAM" : "VRAM",
                 vae_params_mem_size / 1024.0 / 1024.0,
-                ggml_backend_is_cpu(vae_backend) ? "RAM" : "VRAM",
+                sd_ggml_backend_is_cpu(vae_backend) ? "RAM" : "VRAM",
                 control_net_params_mem_size / 1024.0 / 1024.0,
-                ggml_backend_is_cpu(control_net_backend) ? "RAM" : "VRAM",
+                sd_ggml_backend_is_cpu(control_net_backend) ? "RAM" : "VRAM",
                 pmid_params_mem_size / 1024.0 / 1024.0,
-                ggml_backend_is_cpu(clip_backend) ? "RAM" : "VRAM");
+                sd_ggml_backend_is_cpu(clip_backend) ? "RAM" : "VRAM");
         }
 
         // init denoiser

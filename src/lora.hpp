@@ -767,7 +767,7 @@ struct LoraModel : public GGMLRunner {
             }
 
             ggml_tensor* original_tensor = model_tensor;
-            if (!ggml_backend_is_cpu(runtime_backend) && ggml_backend_buffer_is_host(original_tensor->buffer)) {
+            if (!sd_ggml_backend_is_cpu(runtime_backend) && ggml_backend_buffer_is_host(original_tensor->buffer)) {
                 model_tensor = ggml_dup_tensor(compute_ctx, model_tensor);
                 set_backend_tensor_data(model_tensor, original_tensor->data);
             }
@@ -781,7 +781,7 @@ struct LoraModel : public GGMLRunner {
                 final_tensor = ggml_add_inplace(compute_ctx, model_tensor, diff);
             }
             ggml_build_forward_expand(gf, final_tensor);
-            if (!ggml_backend_is_cpu(runtime_backend) && ggml_backend_buffer_is_host(original_tensor->buffer)) {
+            if (!sd_ggml_backend_is_cpu(runtime_backend) && ggml_backend_buffer_is_host(original_tensor->buffer)) {
                 original_tensor_to_final_tensor[original_tensor] = final_tensor;
             }
         }

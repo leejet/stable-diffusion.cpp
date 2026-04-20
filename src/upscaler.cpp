@@ -52,7 +52,7 @@ struct UpscalerGGML {
         model_loader.set_wtype_override(model_data_type);
         if (!backend) {
             LOG_DEBUG("Using CPU backend");
-            backend = ggml_backend_cpu_init();
+            backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
         }
         LOG_INFO("Upscaler weight type: %s", ggml_type_name(model_data_type));
         esrgan_upscaler = std::make_shared<ESRGAN>(backend, offload_params_to_cpu, tile_size, model_loader.get_tensor_storage_map());

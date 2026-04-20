@@ -1539,7 +1539,7 @@ namespace Flux {
 
         static void load_from_file_and_test(const std::string& file_path) {
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
-            ggml_backend_t backend    = ggml_backend_cpu_init();
+            ggml_backend_t backend    = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
             ggml_type model_data_type = GGML_TYPE_COUNT;
 
             ModelLoader model_loader;
