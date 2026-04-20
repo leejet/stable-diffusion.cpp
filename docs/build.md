@@ -16,15 +16,23 @@ git submodule init
 git submodule update
 ```
 
-## WebP Support in Examples
+## WebP and WebM Support in Examples
 
-The example applications (`examples/cli` and `examples/server`) use `libwebp` to support WebP image I/O. This is enabled by default.
+The example applications (`examples/cli` and `examples/server`) use `libwebp` to support WebP image I/O, and `examples/cli` can also use `libwebm` for `.webm` video output. Both are enabled by default. WebM output currently reuses `libwebp` to encode each frame as VP8 before muxing with `libwebm`.
 
-If you do not want WebP support, you can disable it at configure time:
+If you do not want WebP/WebM support, you can disable them at configure time:
 
 ```shell
 mkdir build && cd build
-cmake .. -DSD_WEBP=OFF
+cmake .. -DSD_WEBP=OFF -DSD_WEBM=OFF
+cmake --build . --config Release
+```
+
+If the submodules are not available, you can also link against system packages instead:
+
+```shell
+mkdir build && cd build
+cmake .. -DSD_USE_SYSTEM_WEBP=ON -DSD_USE_SYSTEM_WEBM=ON
 cmake --build . --config Release
 ```
 

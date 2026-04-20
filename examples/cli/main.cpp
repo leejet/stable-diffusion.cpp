@@ -17,9 +17,12 @@
 // #include "preprocessing.hpp"
 #include "stable-diffusion.h"
 
-#include "common/common.hpp"
+#include "common/common.h"
 #include "common/media_io.h"
+#include "common/resource_owners.hpp"
 #include "image_metadata.h"
+
+namespace fs = std::filesystem;
 
 const char* previews_str[] = {
     "none",
@@ -61,7 +64,7 @@ struct SDCliParams {
         options.string_options = {
             {"-o",
              "--output",
-             "path to write result image to. you can use printf-style %d format specifiers for image sequences (default: ./output.png) (eg. output_%03d.png)",
+             "path to write result image to. you can use printf-style %d format specifiers for image sequences (default: ./output.png) (eg. output_%03d.png). Single-file video outputs support .avi, .webm, and animated .webp",
              &output_path},
             {"",
              "--image",
@@ -73,7 +76,7 @@ struct SDCliParams {
              &metadata_format},
             {"",
              "--preview-path",
-             "path to write preview image to (default: ./preview.png)",
+             "path to write preview image to (default: ./preview.png). Multi-frame previews support .avi, .webm, and animated .webp",
              &preview_path},
         };
 
@@ -221,17 +224,22 @@ struct SDCliParams {
         return options;
     };
 
-    bool process_and_check() {
-        if (mode != METADATA && output_path.length() == 0) {
-            LOG_ERROR("error: the following arguments are required: output_path");
-            return false;
-        }
-
+    bool resolve() {
         if (mode == CONVERT) {
             if (output_path == "output.png") {
                 output_path = "output.gguf";
             }
-        } else if (mode == METADATA) {
+        }
+        return true;
+    }
+
+    bool validate() {
+        if (mode != METADATA) {
+            if (output_path.length() == 0) {
+                LOG_ERROR("error: the following arguments are required: output_path");
+                return false;
+            }
+        } else {
             if (image_path.empty()) {
                 LOG_ERROR("error: metadata mode needs an image path (--image)");
                 return false;
@@ -241,6 +249,16 @@ struct SDCliParams {
                           metadata_format.c_str());
                 return false;
             }
+        }
+        return true;
+    }
+
+    bool resolve_and_validate() {
+        if (!resolve()) {
+            return false;
+        }
+        if (!validate()) {
+            return false;
         }
         return true;
     }
@@ -291,10 +309,10 @@ void parse_args(int argc, const char** argv, SDCliParams& cli_params, SDContextP
         exit(cli_params.normal_exit ? 0 : 1);
     }
 
-    bool valid = cli_params.process_and_check();
+    bool valid = cli_params.resolve_and_validate();
     if (valid && cli_params.mode != METADATA) {
-        valid = ctx_params.process_and_check(cli_params.mode) &&
-                gen_params.process_and_check(cli_params.mode, ctx_params.lora_model_dir);
+        valid = ctx_params.resolve_and_validate(cli_params.mode) &&
+                gen_params.resolve_and_validate(cli_params.mode, ctx_params.lora_model_dir);
     }
 
     if (!valid) {
@@ -309,7 +327,7 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
 }
 
 bool load_images_from_dir(const std::string dir,
-                          std::vector<sd_image_t>& images,
+                          std::vector<SDImageOwner>& images,
                           int expected_width  = 0,
                           int expected_height = 0,
                           int max_image_num   = 0,
@@ -346,12 +364,12 @@ bool load_images_from_dir(const std::string dir,
                 return false;
             }
 
-            images.push_back({(uint32_t)width,
-                              (uint32_t)height,
-                              3,
-                              image_buffer});
+            images.emplace_back(sd_image_t{(uint32_t)width,
+                                           (uint32_t)height,
+                                           3,
+                                           image_buffer});
 
-            if (max_image_num > 0 && images.size() >= max_image_num) {
+            if (max_image_num > 0 && static_cast<int>(images.size()) >= max_image_num) {
                 break;
             }
         }
@@ -430,7 +448,9 @@ bool save_results(const SDCliParams& cli_params,
     if (!ext.empty()) {
         if (output_format == EncodedImageFormat::JPEG ||
             output_format == EncodedImageFormat::PNG ||
-            output_format == EncodedImageFormat::WEBP) {
+            output_format == EncodedImageFormat::WEBP ||
+            ext_lower == ".avi" ||
+            ext_lower == ".webm") {
             base_path.replace_extension();
         }
     }
@@ -472,7 +492,7 @@ bool save_results(const SDCliParams& cli_params,
     }
 
     if (cli_params.mode == VID_GEN && num_results > 1) {
-        if (ext_lower != ".avi" && ext_lower != ".webp")
+        if (ext_lower != ".avi" && ext_lower != ".webp" && ext_lower != ".webm")
             ext = ".avi";
         fs::path video_path = base_path;
         video_path += ext;
@@ -586,39 +606,10 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    bool vae_decode_only     = true;
-    sd_image_t init_image    = {0, 0, 3, nullptr};
-    sd_image_t end_image     = {0, 0, 3, nullptr};
-    sd_image_t control_image = {0, 0, 3, nullptr};
-    sd_image_t mask_image    = {0, 0, 1, nullptr};
-    std::vector<sd_image_t> ref_images;
-    std::vector<sd_image_t> pmid_images;
-    std::vector<sd_image_t> control_frames;
-
-    auto release_all_resources = [&]() {
-        free(init_image.data);
-        free(end_image.data);
-        free(control_image.data);
-        free(mask_image.data);
-        for (auto image : ref_images) {
-            free(image.data);
-            image.data = nullptr;
-        }
-        ref_images.clear();
-        for (auto image : pmid_images) {
-            free(image.data);
-            image.data = nullptr;
-        }
-        pmid_images.clear();
-        for (auto image : control_frames) {
-            free(image.data);
-            image.data = nullptr;
-        }
-        control_frames.clear();
-    };
+    bool vae_decode_only = true;
 
     auto load_image_and_update_size = [&](const std::string& path,
-                                          sd_image_t& image,
+                                          SDImageOwner& image,
                                           bool resize_image    = true,
                                           int expected_channel = 3) -> bool {
         int expected_width  = 0;
@@ -628,74 +619,73 @@ int main(int argc, const char* argv[]) {
             expected_height = gen_params.height;
         }
 
-        if (!load_sd_image_from_file(&image, path.c_str(), expected_width, expected_height, expected_channel)) {
+        if (!load_sd_image_from_file(image.put(), path.c_str(), expected_width, expected_height, expected_channel)) {
             LOG_ERROR("load image from '%s' failed", path.c_str());
-            release_all_resources();
             return false;
         }
 
-        gen_params.set_width_and_height_if_unset(image.width, image.height);
+        gen_params.set_width_and_height_if_unset(image.get().width, image.get().height);
         return true;
     };
 
     if (gen_params.init_image_path.size() > 0) {
         vae_decode_only = false;
-        if (!load_image_and_update_size(gen_params.init_image_path, init_image)) {
+        if (!load_image_and_update_size(gen_params.init_image_path, gen_params.init_image)) {
             return 1;
         }
     }
 
     if (gen_params.end_image_path.size() > 0) {
         vae_decode_only = false;
-        if (!load_image_and_update_size(gen_params.end_image_path, end_image)) {
+        if (!load_image_and_update_size(gen_params.end_image_path, gen_params.end_image)) {
             return 1;
         }
     }
 
     if (gen_params.ref_image_paths.size() > 0) {
         vae_decode_only = false;
+        gen_params.ref_images.clear();
         for (auto& path : gen_params.ref_image_paths) {
-            sd_image_t ref_image = {0, 0, 3, nullptr};
+            SDImageOwner ref_image({0, 0, 3, nullptr});
             if (!load_image_and_update_size(path, ref_image, false)) {
                 return 1;
             }
-            ref_images.push_back(ref_image);
+            gen_params.ref_images.push_back(std::move(ref_image));
         }
     }
 
     if (gen_params.mask_image_path.size() > 0) {
-        if (!load_sd_image_from_file(&mask_image,
+        if (!load_sd_image_from_file(gen_params.mask_image.put(),
                                      gen_params.mask_image_path.c_str(),
                                      gen_params.get_resolved_width(),
                                      gen_params.get_resolved_height(),
                                      1)) {
             LOG_ERROR("load image from '%s' failed", gen_params.mask_image_path.c_str());
-            release_all_resources();
             return 1;
         }
     } else {
-        mask_image.data = (uint8_t*)malloc(gen_params.get_resolved_width() * gen_params.get_resolved_height());
-        if (mask_image.data == nullptr) {
+        sd_image_t generated_mask = {0, 0, 1, nullptr};
+        generated_mask.data       = (uint8_t*)malloc(gen_params.get_resolved_width() * gen_params.get_resolved_height());
+        if (generated_mask.data == nullptr) {
             LOG_ERROR("malloc mask image failed");
-            release_all_resources();
             return 1;
         }
-        mask_image.width  = gen_params.get_resolved_width();
-        mask_image.height = gen_params.get_resolved_height();
-        memset(mask_image.data, 255, gen_params.get_resolved_width() * gen_params.get_resolved_height());
+        generated_mask.width  = gen_params.get_resolved_width();
+        generated_mask.height = gen_params.get_resolved_height();
+        memset(generated_mask.data, 255, gen_params.get_resolved_width() * gen_params.get_resolved_height());
+        gen_params.mask_image.reset(generated_mask);
     }
 
     if (gen_params.control_image_path.size() > 0) {
-        if (!load_sd_image_from_file(&control_image,
+        if (!load_sd_image_from_file(gen_params.control_image.put(),
                                      gen_params.control_image_path.c_str(),
                                      gen_params.get_resolved_width(),
                                      gen_params.get_resolved_height())) {
             LOG_ERROR("load image from '%s' failed", gen_params.control_image_path.c_str());
-            release_all_resources();
             return 1;
         }
         if (cli_params.canny_preprocess) {  // apply preprocessor
-            preprocess_canny(control_image,
+            preprocess_canny(gen_params.control_image.get(),
                              0.08f,
                              0.08f,
                              0.8f,
@@ -705,25 +695,25 @@ int main(int argc, const char* argv[]) {
     }
 
     if (!gen_params.control_video_path.empty()) {
+        gen_params.control_frames.clear();
         if (!load_images_from_dir(gen_params.control_video_path,
-                                  control_frames,
+                                  gen_params.control_frames,
                                   gen_params.get_resolved_width(),
                                   gen_params.get_resolved_height(),
                                   gen_params.video_frames,
                                   cli_params.verbose)) {
-            release_all_resources();
             return 1;
         }
     }
 
     if (!gen_params.pm_id_images_dir.empty()) {
+        gen_params.pm_id_images.clear();
         if (!load_images_from_dir(gen_params.pm_id_images_dir,
-                                  pmid_images,
+                                  gen_params.pm_id_images,
                                   0,
                                   0,
                                   0,
                                   cli_params.verbose)) {
-            release_all_resources();
             return 1;
         }
     }
@@ -734,118 +724,57 @@ int main(int argc, const char* argv[]) {
 
     sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(vae_decode_only, true, cli_params.taesd_preview);
 
-    sd_image_t* results = nullptr;
-    int num_results     = 0;
+    SDImageVec results;
+    int num_results = 0;
 
     if (cli_params.mode == UPSCALE) {
         num_results = 1;
-        results     = (sd_image_t*)calloc(num_results, sizeof(sd_image_t));
-        if (results == nullptr) {
-            LOG_INFO("failed to allocate results array");
-            release_all_resources();
-            return 1;
-        }
-
-        results[0]      = init_image;
-        init_image.data = nullptr;
+        results.push_back(gen_params.init_image.release());
     } else {
-        sd_ctx_t* sd_ctx = new_sd_ctx(&sd_ctx_params);
+        SDCtxPtr sd_ctx(new_sd_ctx(&sd_ctx_params));
 
         if (sd_ctx == nullptr) {
             LOG_INFO("new_sd_ctx_t failed");
-            release_all_resources();
             return 1;
         }
 
         if (gen_params.sample_params.sample_method == SAMPLE_METHOD_COUNT) {
-            gen_params.sample_params.sample_method = sd_get_default_sample_method(sd_ctx);
+            gen_params.sample_params.sample_method = sd_get_default_sample_method(sd_ctx.get());
         }
 
         if (gen_params.high_noise_sample_params.sample_method == SAMPLE_METHOD_COUNT) {
-            gen_params.high_noise_sample_params.sample_method = sd_get_default_sample_method(sd_ctx);
+            gen_params.high_noise_sample_params.sample_method = sd_get_default_sample_method(sd_ctx.get());
         }
 
         if (gen_params.sample_params.scheduler == SCHEDULER_COUNT) {
-            gen_params.sample_params.scheduler = sd_get_default_scheduler(sd_ctx, gen_params.sample_params.sample_method);
+            gen_params.sample_params.scheduler = sd_get_default_scheduler(sd_ctx.get(), gen_params.sample_params.sample_method);
         }
 
         if (cli_params.mode == IMG_GEN) {
-            sd_img_gen_params_t img_gen_params = {
-                gen_params.lora_vec.data(),
-                static_cast<uint32_t>(gen_params.lora_vec.size()),
-                gen_params.prompt.c_str(),
-                gen_params.negative_prompt.c_str(),
-                gen_params.clip_skip,
-                init_image,
-                ref_images.data(),
-                (int)ref_images.size(),
-                gen_params.auto_resize_ref_image,
-                gen_params.increase_ref_index,
-                mask_image,
-                gen_params.get_resolved_width(),
-                gen_params.get_resolved_height(),
-                gen_params.sample_params,
-                gen_params.strength,
-                gen_params.seed,
-                gen_params.batch_count,
-                control_image,
-                gen_params.control_strength,
-                {
-                    pmid_images.data(),
-                    (int)pmid_images.size(),
-                    gen_params.pm_id_embed_path.c_str(),
-                    gen_params.pm_style_strength,
-                },  // pm_params
-                gen_params.vae_tiling_params,
-                gen_params.cache_params,
-            };
+            sd_img_gen_params_t img_gen_params = gen_params.to_sd_img_gen_params_t();
 
-            results     = generate_image(sd_ctx, &img_gen_params);
             num_results = gen_params.batch_count;
+            results.adopt(generate_image(sd_ctx.get(), &img_gen_params), num_results);
         } else if (cli_params.mode == VID_GEN) {
-            sd_vid_gen_params_t vid_gen_params = {
-                gen_params.lora_vec.data(),
-                static_cast<uint32_t>(gen_params.lora_vec.size()),
-                gen_params.prompt.c_str(),
-                gen_params.negative_prompt.c_str(),
-                gen_params.clip_skip,
-                init_image,
-                end_image,
-                control_frames.data(),
-                (int)control_frames.size(),
-                gen_params.get_resolved_width(),
-                gen_params.get_resolved_height(),
-                gen_params.sample_params,
-                gen_params.high_noise_sample_params,
-                gen_params.moe_boundary,
-                gen_params.strength,
-                gen_params.seed,
-                gen_params.video_frames,
-                gen_params.vace_strength,
-                gen_params.vae_tiling_params,
-                gen_params.cache_params,
-            };
-
-            results = generate_video(sd_ctx, &vid_gen_params, &num_results);
+            sd_vid_gen_params_t vid_gen_params = gen_params.to_sd_vid_gen_params_t();
+            sd_image_t* generated_video        = generate_video(sd_ctx.get(), &vid_gen_params, &num_results);
+            results.adopt(generated_video, num_results);
         }
 
-        if (results == nullptr) {
+        if (!results) {
             LOG_ERROR("generate failed");
-            free_sd_ctx(sd_ctx);
             return 1;
         }
-
-        free_sd_ctx(sd_ctx);
     }
 
     int upscale_factor = 4;  // unused for RealESRGAN_x4plus_anime_6B.pth
     if (ctx_params.esrgan_path.size() > 0 && gen_params.upscale_repeats > 0) {
-        upscaler_ctx_t* upscaler_ctx = new_upscaler_ctx(ctx_params.esrgan_path.c_str(),
-                                                        ctx_params.offload_params_to_cpu,
-                                                        ctx_params.diffusion_conv_direct,
-                                                        ctx_params.n_threads,
-                                                        gen_params.upscale_tile_size,
-                                                        ctx_params.upscaler_backend_device.c_str());
+        UpscalerCtxPtr upscaler_ctx(new_upscaler_ctx(ctx_params.esrgan_path.c_str(),
+                                                     ctx_params.offload_params_to_cpu,
+                                                     ctx_params.diffusion_conv_direct,
+                                                     ctx_params.n_threads,
+                             gen_params.upscale_tile_size,
+                             ctx_params.upscaler_backend_device.c_str()));
 
         if (upscaler_ctx == nullptr) {
             LOG_ERROR("new_upscaler_ctx failed");
@@ -854,32 +783,24 @@ int main(int argc, const char* argv[]) {
                 if (results[i].data == nullptr) {
                     continue;
                 }
-                sd_image_t current_image = results[i];
+                SDImageOwner current_image(results[i]);
+                results[i] = {0, 0, 0, nullptr};
                 for (int u = 0; u < gen_params.upscale_repeats; ++u) {
-                    sd_image_t upscaled_image = upscale(upscaler_ctx, current_image, upscale_factor);
-                    if (upscaled_image.data == nullptr) {
+                    SDImageOwner upscaled_image(upscale(upscaler_ctx.get(), current_image.get(), upscale_factor));
+                    if (upscaled_image.get().data == nullptr) {
                         LOG_ERROR("upscale failed");
                         break;
                     }
-                    free(current_image.data);
-                    current_image = upscaled_image;
+                    current_image = std::move(upscaled_image);
                 }
-                results[i] = current_image;  // Set the final upscaled image as the result
+                results[i] = current_image.release();  // Set the final upscaled image as the result
             }
         }
     }
 
-    if (!save_results(cli_params, ctx_params, gen_params, results, num_results)) {
+    if (!save_results(cli_params, ctx_params, gen_params, results.data(), num_results)) {
         return 1;
     }
-
-    for (int i = 0; i < num_results; i++) {
-        free(results[i].data);
-        results[i].data = nullptr;
-    }
-    free(results);
-
-    release_all_resources();
 
     return 0;
 }

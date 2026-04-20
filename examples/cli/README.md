@@ -5,8 +5,8 @@ usage: ./bin/sd-cli  [options]
 
 CLI Options:
   -o, --output <string>       path to write result image to. you can use printf-style %d format specifiers for image sequences (default:
-                              ./output.png) (eg. output_%03d.png). For video generation, single-file outputs support .avi and animated .webp
-  --preview-path <string>     path to write preview image to (default: ./preview.png). Multi-frame previews support .avi and animated .webp
+                              ./output.png) (eg. output_%03d.png). For video generation, single-file outputs support .avi, .webm, and animated .webp
+  --preview-path <string>     path to write preview image to (default: ./preview.png). Multi-frame previews support .avi, .webm, and animated .webp
   --preview-interval <int>    interval in denoising steps between consecutive updates of the image preview file (default is 1, meaning updating at
                               every step)
   --output-begin-idx <int>    starting index for output image sequence, must be non-negative (default 0 if specified %d in output path, 1 otherwise)
@@ -14,6 +14,9 @@ CLI Options:
   --metadata-format <string>  metadata output format, one of [text, json] (default: text)
   --canny                     apply canny preprocessor (edge detection)
   --convert-name              convert tensor name (for convert mode)
+                              convert mode writes `.gguf` or `.safetensors` based on the output extension.
+                              `.safetensors` export currently supports f16, bf16, f32, and i32 tensor types only.
+                              i32 is passthrough only; no f32 <-> i32 conversion is performed
   -v, --verbose               print extra info
   --color                     colors the logging tags according to level
   --taesd-preview-only        prevents usage of taesd for decoding the final image. (for use with --preview tae)
@@ -124,7 +127,7 @@ Generation Options:
                                            medium
   --skip-layer-start <float>               SLG enabling point (default: 0.01)
   --skip-layer-end <float>                 SLG disabling point (default: 0.2)
-  --eta <float>                            noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a and dpm++2s_a)
+  --eta <float>                            noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a, er_sde and dpm++2s_a)
   --flow-shift <float>                     shift value for Flow models like SD3.x or WAN (default: auto)
   --high-noise-cfg-scale <float>           (high noise) unconditional guidance scale: (default: 7.0)
   --high-noise-img-cfg-scale <float>       (high noise) image guidance scale for inpaint or instruct-pix2pix models (default: same as --cfg-scale)
@@ -132,7 +135,7 @@ Generation Options:
   --high-noise-slg-scale <float>           (high noise) skip layer guidance (SLG) scale, only for DiT models: (default: 0)
   --high-noise-skip-layer-start <float>    (high noise) SLG enabling point (default: 0.01)
   --high-noise-skip-layer-end <float>      (high noise) SLG disabling point (default: 0.2)
-  --high-noise-eta <float>                 (high noise) noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a and dpm++2s_a)
+  --high-noise-eta <float>                 (high noise) noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a, er_sde and dpm++2s_a)
   --strength <float>                       strength for noising/unnoising (default: 0.75)
   --pm-style-strength <float>
   --control-strength <float>               strength to apply Control Net (default: 0.9). 1.0 corresponds to full destruction of information in init image
@@ -143,10 +146,10 @@ Generation Options:
   --disable-image-metadata                 do not embed generation metadata on image files
   -s, --seed                               RNG seed (default: 42, use random seed for < 0)
   --sampling-method                        sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing,
-                                           tcd, res_multistep, res_2s] (default: euler for Flux/SD3/Wan, euler_a
+                                           tcd, res_multistep, res_2s, er_sde] (default: euler for Flux/SD3/Wan, euler_a
                                            otherwise)
   --high-noise-sampling-method             (high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm,
-                                           ddim_trailing, tcd, res_multistep, res_2s] default: euler for Flux/SD3/Wan,
+                                           ddim_trailing, tcd, res_multistep, res_2s, er_sde] default: euler for Flux/SD3/Wan,
                                            euler_a otherwise
   --scheduler                              denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple,
                                            kl_optimal, lcm, bong_tangent], default: discrete

@@ -10,9 +10,7 @@ bool is_number(char32_t ch) {
 }
 
 bool is_letter(char32_t ch) {
-    static const struct {
-        char32_t start, end;
-    } ranges[] = {
+    static const struct { char32_t start, end; } ranges[] = {
         {0x41, 0x5A},
         {0x61, 0x7A},
         {0xAA, 0xAA},

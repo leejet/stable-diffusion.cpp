@@ -5,13 +5,21 @@ sd_add_compile_flags()
 #
 
 # stable-diffusion
-file(GLOB SD_SOURCES "*.cpp" "*.hpp" "*.h")
-file(GLOB SD_VOCAB_SOURCES "vocab/*.h" "vocab/*.cpp")
+file(GLOB SD_SOURCES CONFIGURE_DEPENDS
+    "*.cpp"
+    "*.hpp"
+    "*.h"
+    "model_io/*.h"
+    "model_io/*.cpp"
+    "tokenizers/*.h"
+    "tokenizers/*.cpp"
+    "tokenizers/vocab/*.h"
+    "tokenizers/vocab/*.cpp"
+)
 
 add_library(${SD_LIB}
             ../include/stable-diffusion.h
             ${SD_SOURCES}
-            ${SD_VOCAB_SOURCES}
 )
 
 set_target_properties(${SD_LIB} PROPERTIES

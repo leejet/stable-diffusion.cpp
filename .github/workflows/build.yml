@@ -21,6 +21,7 @@ on:
         "**/*.c",
         "**/*.cpp",
         "**/*.cu",
+        "examples/server/frontend",
         "examples/server/frontend/**",
       ]
   pull_request:
@@ -35,6 +36,7 @@ on:
         "**/*.c",
         "**/*.cpp",
         "**/*.cu",
+        "examples/server/frontend",
         "examples/server/frontend/**",
       ]
 
@@ -195,6 +197,7 @@ jobs:
 
   build-and-push-docker-images:
     name: Build and push container images
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
 
     permissions:
@@ -260,6 +263,7 @@ jobs:
         id: build-push
         uses: docker/build-push-action@v6
         with:
+          context: .
           platforms: linux/amd64
           push: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
           file: Dockerfile.${{ matrix.variant }}

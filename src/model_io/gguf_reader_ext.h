@@ -1,5 +1,5 @@
-#ifndef __GGUF_READER_HPP__
-#define __GGUF_READER_HPP__
+#ifndef __SD_MODEL_IO_GGUF_READER_EXT_H__
+#define __SD_MODEL_IO_GGUF_READER_EXT_H__
 
 #include <cstdint>
 #include <fstream>
@@ -57,6 +57,9 @@ private:
     bool read_metadata(std::ifstream& fin) {
         uint64_t key_len = 0;
         if (!safe_read(fin, key_len))
+            return false;
+
+        if (key_len > 4096)
             return false;
 
         std::string key(key_len, '\0');
@@ -228,4 +231,4 @@ public:
     size_t data_offset() const { return data_offset_; }
 };
 
-#endif  // __GGUF_READER_HPP__
+#endif  // __SD_MODEL_IO_GGUF_READER_EXT_H__

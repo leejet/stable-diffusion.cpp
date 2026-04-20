@@ -15,6 +15,9 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
+* **2026/04/11** 🚀 stable-diffusion.cpp now uses a brand-new embedded web UI.  
+  👉 Details: [PR #1408](https://github.com/leejet/stable-diffusion.cpp/pull/1408)
+
 * **2026/01/18** 🚀 stable-diffusion.cpp now supports **FLUX.2-klein**  
   👉 Details: [PR #1193](https://github.com/leejet/stable-diffusion.cpp/pull/1193)
 
@@ -54,6 +57,7 @@ API and command-line option may change frequently.***
     - [Z-Image](./docs/z_image.md)
     - [Ovis-Image](./docs/ovis_image.md)
     - [Anima](./docs/anima.md)
+    - [ERNIE-Image](./docs/ernie_image.md)
   - Image Edit Models
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
     - [Qwen Image Edit series](./docs/qwen_image_edit.md)
@@ -73,9 +77,10 @@ API and command-line option may change frequently.***
   - OpenCL
   - SYCL
 - Supported weight formats
-  - Pytorch checkpoint (`.ckpt` or `.pth`)
+  - Pytorch checkpoint (`.ckpt` or `.pth` or `.pt`)
   - Safetensors (`.safetensors`)
   - GGUF (`.gguf`)
+- Convert mode supports converting model weights to `.gguf` or `.safetensors`
 - Supported platforms
     - Linux
     - Mac OS
@@ -93,6 +98,7 @@ API and command-line option may change frequently.***
     - `DPM++ 2M`
     - [`DPM++ 2M v2`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457)
     - `DPM++ 2S a`
+    - `ER-SDE`
     - [`LCM`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/issues/13952)
 - Cross-platform reproducibility
     - `--rng cuda`, default, consistent with the `stable-diffusion-webui GPU RNG`
@@ -141,6 +147,7 @@ If you want to improve performance or reduce VRAM/RAM usage, please refer to [pe
 - [🔥Z-Image](./docs/z_image.md)
 - [Ovis-Image](./docs/ovis_image.md)
 - [Anima](./docs/anima.md)
+- [ERNIE-Image](./docs/ernie_image.md)
 - [LoRA](./docs/lora.md)
 - [LCM/LCM-LoRA](./docs/lcm.md)
 - [Using PhotoMaker to personalize image generation](./docs/photo_maker.md)

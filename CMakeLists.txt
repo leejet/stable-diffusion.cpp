@@ -13,6 +13,10 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
 if (MSVC)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
     add_compile_definitions(_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING)
+    add_compile_options(
+        $<$<COMPILE_LANGUAGE:C>:/MP>
+        $<$<COMPILE_LANGUAGE:CXX>:/MP>
+    )
 endif()
 
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -25,9 +29,9 @@ else()
 endif()
 
 if (MINGW)
-        set(BUILD_SHARED_LIBS_DEFAULT OFF)
-    else()
-        set(BUILD_SHARED_LIBS_DEFAULT ON)
+    set(BUILD_SHARED_LIBS_DEFAULT OFF)
+else()
+    set(BUILD_SHARED_LIBS_DEFAULT ON)
 endif()
 
 option(BUILD_SHARED_LIBS "build shared libraries" ${BUILD_SHARED_LIBS_DEFAULT})
@@ -49,6 +53,25 @@ if (SD_STANDALONE)
     list(APPEND CMAKE_VS_GLOBALS EnforceProcessCountAcrossBuilds=true)
 endif()
 
+set(SD_SUBMODULE_WEBP FALSE)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libwebp/CMakeLists.txt")
+    set(SD_SUBMODULE_WEBP TRUE)
+endif()
+if(SD_SUBMODULE_WEBP)
+    set(SD_WEBP_DEFAULT ON)
+else()
+    set(SD_WEBP_DEFAULT ${SD_USE_SYSTEM_WEBP})
+endif()
+
+set(SD_SUBMODULE_WEBM FALSE)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libwebm/CMakeLists.txt")
+    set(SD_SUBMODULE_WEBM TRUE)
+endif()
+if(SD_SUBMODULE_WEBM)
+    set(SD_WEBM_DEFAULT ON)
+else()
+    set(SD_WEBM_DEFAULT ${SD_USE_SYSTEM_WEBM})
+endif()
 
 #
 # Option list
@@ -56,7 +79,17 @@ endif()
 # general
 #option(SD_BUILD_TESTS                "sd: build tests"    ${SD_STANDALONE})
 option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
-option(SD_WEBP                       "sd: enable WebP image I/O support" ON)
+option(SD_WEBP                       "sd: enable WebP image I/O support" ${SD_WEBP_DEFAULT})
+option(SD_USE_SYSTEM_WEBP            "sd: link against system libwebp" OFF)
+option(SD_WEBM                       "sd: enable WebM video output support" ${SD_WEBM_DEFAULT})
+option(SD_USE_SYSTEM_WEBM            "sd: link against system libwebm" OFF)
+option(SD_CUDA                       "sd: cuda backend" OFF)
+option(SD_HIPBLAS                    "sd: rocm backend" OFF)
+option(SD_METAL                      "sd: metal backend" OFF)
+option(SD_VULKAN                     "sd: vulkan backend" OFF)
+option(SD_OPENCL                     "sd: opencl backend" OFF)
+option(SD_SYCL                       "sd: sycl backend" OFF)
+option(SD_MUSA                       "sd: musa backend" OFF)
 option(SD_USE_SYSTEM_GGML            "sd: use system-installed GGML library" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
@@ -103,18 +136,103 @@ sd_option_depr(WARNING     SD_VULKAN                GGML_VULKAN)
 sd_option_depr(WARNING     SD_OPENCL                GGML_OPENCL)
 sd_option_depr(WARNING     SD_SYCL                  GGML_SYCL)
 sd_option_depr(WARNING     SD_MUSA                  GGML_MUSA)
+
+if(SD_CUDA)
+    set(GGML_CUDA ON)
+    add_definitions(-DSD_USE_CUDA)
+endif()
+
+if(SD_HIPBLAS)
+    set(GGML_HIP ON)
+    add_definitions(-DSD_USE_CUDA)
+endif()
+
+if(SD_METAL)
+    set(GGML_METAL ON)
+    add_definitions(-DSD_USE_METAL)
+endif()
+
+if(SD_VULKAN)
+    set(GGML_VULKAN ON)
+    add_definitions(-DSD_USE_VULKAN)
+endif()
+
+if(SD_OPENCL)
+    set(GGML_OPENCL ON)
+    add_definitions(-DSD_USE_OPENCL)
+endif()
+
+if(SD_SYCL)
+    set(GGML_SYCL ON)
+    add_definitions(-DSD_USE_SYCL)
+endif()
+
+if(SD_MUSA)
+    set(GGML_MUSA ON)
+    add_definitions(-DSD_USE_CUDA)
+endif()
+
 if(SD_WEBP)
-    add_compile_definitions(SD_USE_WEBP)
+    if(NOT SD_SUBMODULE_WEBP AND NOT SD_USE_SYSTEM_WEBP)
+        message(FATAL_ERROR "WebP support enabled but no source found.
+          Either initialize the submodule:\n  git submodule update --init thirdparty/libwebp\n\n"
+          "Or link against system library:\n  cmake (...) -DSD_USE_SYSTEM_WEBP=ON")
+    endif()
+    if(SD_USE_SYSTEM_WEBP)
+        find_package(WebP REQUIRED)
+        add_library(webp ALIAS WebP::webp)
+        # libwebp CMake target naming is not consistent across versions/distros.
+        # Some export WebP::libwebpmux, others export WebP::webpmux.
+        if(TARGET WebP::libwebpmux)
+            add_library(libwebpmux ALIAS WebP::libwebpmux)
+        elseif(TARGET WebP::webpmux)
+            add_library(libwebpmux ALIAS WebP::webpmux)
+        else()
+            message(FATAL_ERROR
+                "Could not find a compatible webpmux target in system WebP package. "
+                "Expected WebP::libwebpmux or WebP::webpmux."
+            )
+        endif()
+    endif()
+endif()
+
+if(SD_WEBM)
+    if(NOT SD_WEBP)
+        message(FATAL_ERROR "SD_WEBM requires SD_WEBP because WebM output reuses libwebp VP8 encoding.")
+    endif()
+    if(NOT SD_SUBMODULE_WEBM AND NOT SD_USE_SYSTEM_WEBM)
+        message(FATAL_ERROR "WebM support enabled but no source found.
+          Either initialize the submodule:\n  git submodule update --init thirdparty/libwebm\n\n"
+          "Or link against system library:\n  cmake (...) -DSD_USE_SYSTEM_WEBM=ON")
+    endif()
+    if(SD_USE_SYSTEM_WEBM)
+        find_path(WEBM_INCLUDE_DIR
+            NAMES mkvmuxer/mkvmuxer.h mkvparser/mkvparser.h common/webmids.h
+            PATH_SUFFIXES webm
+            REQUIRED)
+        find_library(WEBM_LIBRARY
+            NAMES webm libwebm
+            REQUIRED)
+
+        add_library(webm UNKNOWN IMPORTED)
+        set_target_properties(webm PROPERTIES
+            IMPORTED_LOCATION "${WEBM_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${WEBM_INCLUDE_DIR}")
+    endif()
 endif()
 
 set(SD_LIB stable-diffusion)
 
-file(GLOB SD_LIB_SOURCES
+file(GLOB SD_LIB_SOURCES CONFIGURE_DEPENDS
     "src/*.h"
     "src/*.cpp"
     "src/*.hpp"
-    "src/vocab/*.h"
-    "src/vocab/*.cpp"
+    "src/model_io/*.h"
+    "src/model_io/*.cpp"
+    "src/tokenizers/*.h"
+    "src/tokenizers/*.cpp"
+    "src/tokenizers/vocab/*.h"
+    "src/tokenizers/vocab/*.cpp"
 )
 
 find_program(GIT_EXE NAMES git git.exe NO_CMAKE_FIND_ROOT_PATH)
