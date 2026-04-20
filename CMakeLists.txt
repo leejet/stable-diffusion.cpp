@@ -83,13 +83,6 @@ option(SD_WEBP                       "sd: enable WebP image I/O support" ${SD_WE
 option(SD_USE_SYSTEM_WEBP            "sd: link against system libwebp" OFF)
 option(SD_WEBM                       "sd: enable WebM video output support" ${SD_WEBM_DEFAULT})
 option(SD_USE_SYSTEM_WEBM            "sd: link against system libwebm" OFF)
-option(SD_CUDA                       "sd: cuda backend" OFF)
-option(SD_HIPBLAS                    "sd: rocm backend" OFF)
-option(SD_METAL                      "sd: metal backend" OFF)
-option(SD_VULKAN                     "sd: vulkan backend" OFF)
-option(SD_OPENCL                     "sd: opencl backend" OFF)
-option(SD_SYCL                       "sd: sycl backend" OFF)
-option(SD_MUSA                       "sd: musa backend" OFF)
 option(SD_USE_SYSTEM_GGML            "sd: use system-installed GGML library" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
@@ -136,41 +129,6 @@ sd_option_depr(WARNING     SD_VULKAN                GGML_VULKAN)
 sd_option_depr(WARNING     SD_OPENCL                GGML_OPENCL)
 sd_option_depr(WARNING     SD_SYCL                  GGML_SYCL)
 sd_option_depr(WARNING     SD_MUSA                  GGML_MUSA)
-
-if(SD_CUDA)
-    set(GGML_CUDA ON)
-    add_definitions(-DSD_USE_CUDA)
-endif()
-
-if(SD_HIPBLAS)
-    set(GGML_HIP ON)
-    add_definitions(-DSD_USE_CUDA)
-endif()
-
-if(SD_METAL)
-    set(GGML_METAL ON)
-    add_definitions(-DSD_USE_METAL)
-endif()
-
-if(SD_VULKAN)
-    set(GGML_VULKAN ON)
-    add_definitions(-DSD_USE_VULKAN)
-endif()
-
-if(SD_OPENCL)
-    set(GGML_OPENCL ON)
-    add_definitions(-DSD_USE_OPENCL)
-endif()
-
-if(SD_SYCL)
-    set(GGML_SYCL ON)
-    add_definitions(-DSD_USE_SYCL)
-endif()
-
-if(SD_MUSA)
-    set(GGML_MUSA ON)
-    add_definitions(-DSD_USE_CUDA)
-endif()
 
 if(SD_WEBP)
     if(NOT SD_SUBMODULE_WEBP AND NOT SD_USE_SYSTEM_WEBP)
@@ -222,18 +180,6 @@ if(SD_WEBM)
 endif()
 
 set(SD_LIB stable-diffusion)
-
-file(GLOB SD_LIB_SOURCES CONFIGURE_DEPENDS
-    "src/*.h"
-    "src/*.cpp"
-    "src/*.hpp"
-    "src/model_io/*.h"
-    "src/model_io/*.cpp"
-    "src/tokenizers/*.h"
-    "src/tokenizers/*.cpp"
-    "src/tokenizers/vocab/*.h"
-    "src/tokenizers/vocab/*.cpp"
-)
 
 find_program(GIT_EXE NAMES git git.exe NO_CMAKE_FIND_ROOT_PATH)
 if(GIT_EXE)
