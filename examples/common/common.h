@@ -14,6 +14,7 @@
 
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")
+#define VALID_BREAK_OPT -42
 
 extern const char* const modes_str[];
 #define SD_ALL_MODES_STR "img_gen, vid_gen, convert, upscale, metadata"
@@ -101,6 +102,16 @@ struct SDContextParams {
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string tensor_type_rules;
     std::string lora_model_dir = ".";
+
+    std::string main_backend_device;
+    std::string diffusion_backend_device;
+    std::string clip_backend_device;
+    std::string vae_backend_device;
+    std::string tae_backend_device;
+    std::string control_net_backend_device;
+    std::string upscaler_backend_device;
+    std::string photomaker_backend_device;
+    std::string vision_backend_device;
 
     std::map<std::string, std::string> embedding_map;
     std::vector<sd_embedding_t> embedding_vec;

@@ -10,7 +10,7 @@ WORKDIR /sd.cpp
 COPY . .
 
 ARG CUDACXX=/usr/local/cuda/bin/nvcc
-RUN cmake . -B ./build -DSD_CUDA=ON
+RUN cmake . -B ./build -DGGML_CUDA=ON -DGGML_RPC=ON -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined
 RUN cmake --build ./build --config Release -j$(nproc)
 
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu${UBUNTU_VERSION} AS runtime

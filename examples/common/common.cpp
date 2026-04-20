@@ -257,16 +257,25 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                 }))
                 break;
 
+            bool kill_flow = false;
             if (match_and_apply(options.manual_options, [&](auto& option) {
                     int ret = option.cb(argc, argv, i);
+                    if (ret == VALID_BREAK_OPT) {
+                        kill_flow = true;
+                        return;
+                    }
                     if (ret < 0) {
                         invalid_arg = true;
                         return;
                     }
                     i += ret;
                     found_arg = true;
-                }))
+                })) {
+                if (kill_flow) {
+                    return false;
+                }
                 break;
+            }
         }
 
         if (invalid_arg) {
@@ -363,7 +372,43 @@ ArgOptions SDContextParams::get_options() {
         {"",
          "--upscale-model",
          "path to esrgan model.",
-         &esrgan_path},
+            &esrgan_path},
+           {"",
+            "--main-backend-device",
+            "default device to use for all backends (defaults to main gpu device if hardware acceleration is available, otherwise cpu)",
+            &main_backend_device},
+           {"",
+            "--diffusion-backend-device",
+            "device to use for diffusion (defaults to main-backend-device)",
+            &diffusion_backend_device},
+           {"",
+            "--clip-backend-device",
+            "device to use for clip (defaults to main-backend-device). Can be a comma-separated list of devices for models with multiple encoders",
+            &clip_backend_device},
+           {"",
+            "--vae-backend-device",
+            "device to use for vae (defaults to main-backend-device). Also applies to tae, unless tae-backend-device is specified",
+            &vae_backend_device},
+           {"",
+            "--tae-backend-device",
+            "device to use for tae (defaults to vae-backend-device)",
+            &tae_backend_device},
+           {"",
+            "--control-net-backend-device",
+            "device to use for control net (defaults to main-backend-device)",
+            &control_net_backend_device},
+           {"",
+            "--upscaler-backend-device",
+            "device to use for upscaling models (defaults to main-backend-device)",
+            &upscaler_backend_device},
+           {"",
+            "--photomaker-backend-device",
+            "device to use for photomaker (defaults to main-backend-device)",
+            &photomaker_backend_device},
+           {"",
+            "--vision-backend-device",
+            "device to use for clip-vision model (defaults to main-backend-device)",
+            &vision_backend_device},
     };
 
     options.int_options = {
@@ -650,6 +695,15 @@ std::string SDContextParams::to_string() const {
         << "  tensor_type_rules: \"" << tensor_type_rules << "\",\n"
         << "  lora_model_dir: \"" << lora_model_dir << "\",\n"
         << "  photo_maker_path: \"" << photo_maker_path << "\",\n"
+        << "  main_backend_device: \"" << main_backend_device << "\",\n"
+        << "  diffusion_backend_device: \"" << diffusion_backend_device << "\",\n"
+        << "  clip_backend_device: \"" << clip_backend_device << "\",\n"
+        << "  vae_backend_device: \"" << vae_backend_device << "\",\n"
+        << "  tae_backend_device: \"" << tae_backend_device << "\",\n"
+        << "  control_net_backend_device: \"" << control_net_backend_device << "\",\n"
+        << "  upscaler_backend_device: \"" << upscaler_backend_device << "\",\n"
+        << "  photomaker_backend_device: \"" << photomaker_backend_device << "\",\n"
+        << "  vision_backend_device: \"" << vision_backend_device << "\",\n"
         << "  rng_type: " << sd_rng_type_name(rng_type) << ",\n"
         << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
         << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
@@ -712,9 +766,6 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         lora_apply_mode,
         offload_params_to_cpu,
         enable_mmap,
-        clip_on_cpu,
-        control_net_cpu,
-        vae_on_cpu,
         flash_attn,
         diffusion_flash_attn,
         taesd_preview,
@@ -727,6 +778,14 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         chroma_use_t5_mask,
         chroma_t5_mask_pad,
         qwen_image_zero_cond_t,
+        main_backend_device.c_str(),
+        diffusion_backend_device.c_str(),
+        clip_backend_device.c_str(),
+        vae_backend_device.c_str(),
+        tae_backend_device.c_str(),
+        control_net_backend_device.c_str(),
+        photomaker_backend_device.c_str(),
+        vision_backend_device.c_str(),
     };
     return sd_ctx_params;
 }

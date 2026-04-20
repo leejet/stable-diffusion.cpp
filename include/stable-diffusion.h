@@ -188,9 +188,9 @@ typedef struct {
     enum lora_apply_mode_t lora_apply_mode;
     bool offload_params_to_cpu;
     bool enable_mmap;
-    bool keep_clip_on_cpu;
-    bool keep_control_net_on_cpu;
-    bool keep_vae_on_cpu;
+    // bool keep_clip_on_cpu;
+    // bool keep_control_net_on_cpu;
+    // bool keep_vae_on_cpu;
     bool flash_attn;
     bool diffusion_flash_attn;
     bool tae_preview_only;
@@ -203,6 +203,14 @@ typedef struct {
     bool chroma_use_t5_mask;
     int chroma_t5_mask_pad;
     bool qwen_image_zero_cond_t;
+    const char* main_device;
+    const char* diffusion_device;
+    const char* clip_device;
+    const char* vae_device;
+    const char* tae_device;
+    const char* control_net_device;
+    const char* photomaker_device;
+    const char* vision_device;
 } sd_ctx_params_t;
 
 typedef struct {
@@ -393,7 +401,8 @@ SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
                                         bool offload_params_to_cpu,
                                         bool direct,
                                         int n_threads,
-                                        int tile_size);
+                                        int tile_size,
+                                        const char * device);
 SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 
 SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx,
@@ -418,6 +427,18 @@ SD_API bool preprocess_canny(sd_image_t image,
 
 SD_API const char* sd_commit(void);
 SD_API const char* sd_version(void);
+
+SD_API size_t backend_list_size(void);
+SD_API void list_backends_to_buffer(char* buffer, size_t buffer_size);
+
+SD_API void add_rpc_device(const char* address);
+
+// for C API, caller needs to call free_sd_images to free the memory after use
+// This helps avoid CRT problems on Windows when memory is allocated in the library but freed in the caller, which may use a different CRT.
+SD_API void free_sd_images(sd_image_t* result_images, int num_images);
+
+// free single image data
+SD_API void free_sd_image_data(sd_image_t* image);
 
 #ifdef __cplusplus
 }
