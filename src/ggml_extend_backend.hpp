@@ -31,8 +31,6 @@ inline void ggml_backend_load_all_once() {
     });
 }
 
-#if defined(GGML_BACKEND_DL)
-
 // Do not gate this branch on GGML_CPU or GGML_CPU_ALL_VARIANTS:
 // those are CMake options used to configure ggml itself, but they are not
 // exported as PUBLIC compile definitions to stable-diffusion in backend-DL mode.
@@ -287,7 +285,4 @@ __STATIC_INLINE__ ggml_tensor* ggml_set_f32(struct ggml_tensor* tensor, float va
     return tensor;
 }
 
-#else
-#include "ggml-cpu.h"
-#endif
 #endif

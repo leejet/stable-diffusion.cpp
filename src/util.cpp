@@ -496,26 +496,6 @@ sd_progress_cb_t sd_get_progress_callback() {
 void* sd_get_progress_callback_data() {
     return sd_progress_cb_data;
 }
-const char* sd_get_system_info() {
-    static char buffer[1024];
-    std::stringstream ss;
-    ss << "System Info: \n";
-    ss << "    SSE3 = " << ggml_cpu_has_sse3() << " | ";
-    ss << "    AVX = " << ggml_cpu_has_avx() << " | ";
-    ss << "    AVX2 = " << ggml_cpu_has_avx2() << " | ";
-    ss << "    AVX512 = " << ggml_cpu_has_avx512() << " | ";
-    ss << "    AVX512_VBMI = " << ggml_cpu_has_avx512_vbmi() << " | ";
-    ss << "    AVX512_VNNI = " << ggml_cpu_has_avx512_vnni() << " | ";
-    ss << "    FMA = " << ggml_cpu_has_fma() << " | ";
-    ss << "    NEON = " << ggml_cpu_has_neon() << " | ";
-    ss << "    ARM_FMA = " << ggml_cpu_has_arm_fma() << " | ";
-    ss << "    F16C = " << ggml_cpu_has_f16c() << " | ";
-    ss << "    FP16_VA = " << ggml_cpu_has_fp16_va() << " | ";
-    ss << "    WASM_SIMD = " << ggml_cpu_has_wasm_simd() << " | ";
-    ss << "    VSX = " << ggml_cpu_has_vsx() << " | ";
-    snprintf(buffer, sizeof(buffer), "%s", ss.str().c_str());
-    return buffer;
-}
 
 sd_image_t tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index) {
     const auto& shape = tensor.shape();
@@ -789,5 +769,32 @@ ggml_backend_t sd_get_default_backend() {
     }
 
     return backend;
+}
+
+// namespace is needed to avoid conflicts with ggml_backend_extend.hpp
+namespace ggml_cpu {
+#include "ggml-cpu.h"
+}
+
+const char* sd_get_system_info() {
+    using namespace ggml_cpu;
+    static char buffer[1024];
+    std::stringstream ss;
+    ss << "System Info: \n";
+    ss << "    SSE3 = " << ggml_cpu_has_sse3() << " | ";
+    ss << "    AVX = " << ggml_cpu_has_avx() << " | ";
+    ss << "    AVX2 = " << ggml_cpu_has_avx2() << " | ";
+    ss << "    AVX512 = " << ggml_cpu_has_avx512() << " | ";
+    ss << "    AVX512_VBMI = " << ggml_cpu_has_avx512_vbmi() << " | ";
+    ss << "    AVX512_VNNI = " << ggml_cpu_has_avx512_vnni() << " | ";
+    ss << "    FMA = " << ggml_cpu_has_fma() << " | ";
+    ss << "    NEON = " << ggml_cpu_has_neon() << " | ";
+    ss << "    ARM_FMA = " << ggml_cpu_has_arm_fma() << " | ";
+    ss << "    F16C = " << ggml_cpu_has_f16c() << " | ";
+    ss << "    FP16_VA = " << ggml_cpu_has_fp16_va() << " | ";
+    ss << "    WASM_SIMD = " << ggml_cpu_has_wasm_simd() << " | ";
+    ss << "    VSX = " << ggml_cpu_has_vsx() << " | ";
+    snprintf(buffer, sizeof(buffer), "%s", ss.str().c_str());
+    return buffer;
 }
 
