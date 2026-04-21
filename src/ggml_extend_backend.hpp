@@ -12,10 +12,11 @@
 #endif
 
 inline void ggml_backend_load_all_once() {
-#if defined(GGML_BACKEND_DL)
     // If the host process already preloaded backends explicitly
     // (for example via ggml_backend_load / ggml_backend_load_all_from_path),
     // do not rescan the default paths again.
+    // For static-backend mode, the registry is initialized by a singleton
+    // pattern, so any enabled backend will also cause the scan to be skipped
     if (ggml_backend_dev_count() > 0) {
         return;
     }
@@ -28,7 +29,6 @@ inline void ggml_backend_load_all_once() {
         }
         ggml_backend_load_all();
     });
-#endif
 }
 
 #if defined(GGML_BACKEND_DL)
