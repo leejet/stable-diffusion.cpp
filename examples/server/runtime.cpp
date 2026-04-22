@@ -1,6 +1,7 @@
 #include "runtime.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -12,6 +13,18 @@
 #include "common/log.h"
 
 namespace fs = std::filesystem;
+
+static std::string lower_ascii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value;
+}
+
+static bool is_supported_model_ext(const fs::path& p) {
+    auto ext = lower_ascii(p.extension().string());
+    return ext == ".gguf" || ext == ".pt" || ext == ".pth" || ext == ".safetensors";
+}
 
 static const std::string k_base64_chars =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -241,20 +254,12 @@ void refresh_lora_cache(ServerRuntime& rt) {
 
     fs::path lora_dir = rt.ctx_params->lora_model_dir;
     if (fs::exists(lora_dir) && fs::is_directory(lora_dir)) {
-        auto is_lora_ext = [](const fs::path& p) {
-            auto ext = p.extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
-                return static_cast<char>(std::tolower(c));
-            });
-            return ext == ".gguf" || ext == ".pt" || ext == ".pth" || ext == ".safetensors";
-        };
-
         for (auto& entry : fs::recursive_directory_iterator(lora_dir)) {
             if (!entry.is_regular_file()) {
                 continue;
             }
             const fs::path& p = entry.path();
-            if (!is_lora_ext(p)) {
+            if (!is_supported_model_ext(p)) {
                 continue;
             }
 
@@ -284,6 +289,40 @@ std::string get_lora_full_path(ServerRuntime& rt, const std::string& path) {
     auto it = std::find_if(rt.lora_cache->begin(), rt.lora_cache->end(),
                            [&](const LoraEntry& entry) { return entry.path == path; });
     return it != rt.lora_cache->end() ? it->fullpath : "";
+}
+
+void refresh_upscaler_cache(ServerRuntime& rt) {
+    std::vector<UpscalerEntry> new_cache;
+
+    fs::path upscaler_dir = rt.ctx_params->hires_upscalers_dir;
+    if (fs::exists(upscaler_dir) && fs::is_directory(upscaler_dir)) {
+        for (auto& entry : fs::directory_iterator(upscaler_dir)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            const fs::path& p = entry.path();
+            if (!is_supported_model_ext(p)) {
+                continue;
+            }
+
+            UpscalerEntry upscaler_entry;
+            upscaler_entry.name       = p.stem().u8string();
+            upscaler_entry.fullpath   = fs::absolute(p).lexically_normal().u8string();
+            upscaler_entry.model_name = "ESRGAN_4x";
+            upscaler_entry.path       = p.filename().u8string();
+
+            new_cache.push_back(std::move(upscaler_entry));
+        }
+    }
+
+    std::sort(new_cache.begin(), new_cache.end(), [](const UpscalerEntry& a, const UpscalerEntry& b) {
+        return a.name < b.name;
+    });
+
+    {
+        std::lock_guard<std::mutex> lock(*rt.upscaler_mutex);
+        *rt.upscaler_cache = std::move(new_cache);
+    }
 }
 
 int64_t unix_timestamp_now() {

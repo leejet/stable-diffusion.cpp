@@ -70,7 +70,7 @@ static bool build_openai_generation_request(const httplib::Request& req,
     }
 
     // Intentionally disable prompt-embedded LoRA tag parsing for server APIs.
-    if (!request.gen_params.resolve_and_validate(IMG_GEN, "", true)) {
+    if (!request.gen_params.resolve_and_validate(IMG_GEN, "", runtime.ctx_params->hires_upscalers_dir, true)) {
         error_message = "invalid params";
         return false;
     }
@@ -212,7 +212,7 @@ static bool build_openai_edit_request(const httplib::Request& req,
     }
 
     // Intentionally disable prompt-embedded LoRA tag parsing for server APIs.
-    if (!request.gen_params.resolve_and_validate(IMG_GEN, "", true)) {
+    if (!request.gen_params.resolve_and_validate(IMG_GEN, "", runtime.ctx_params->hires_upscalers_dir, true)) {
         error_message = "invalid params";
         return false;
     }
