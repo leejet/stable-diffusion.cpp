@@ -278,7 +278,9 @@ void parse_args(int argc, const char** argv, SDCliParams& cli_params, SDContextP
     bool valid = cli_params.resolve_and_validate();
     if (valid && cli_params.mode != METADATA) {
         valid = ctx_params.resolve_and_validate(cli_params.mode) &&
-                gen_params.resolve_and_validate(cli_params.mode, ctx_params.lora_model_dir);
+                gen_params.resolve_and_validate(cli_params.mode,
+                                                ctx_params.lora_model_dir,
+                                                ctx_params.hires_upscalers_dir);
     }
 
     if (!valid) {
@@ -685,6 +687,10 @@ int main(int argc, const char* argv[]) {
     }
 
     if (cli_params.mode == VID_GEN) {
+        vae_decode_only = false;
+    }
+
+    if (gen_params.hires_enabled && !gen_params.hires_upscaler_model_path.empty()) {
         vae_decode_only = false;
     }
 

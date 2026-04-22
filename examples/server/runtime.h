@@ -37,6 +37,14 @@ struct LoraEntry {
     std::string fullpath;
 };
 
+struct UpscalerEntry {
+    std::string name;
+    std::string path;
+    std::string fullpath;
+    std::string model_name;
+    int scale = 4;
+};
+
 struct ServerRuntime {
     sd_ctx_t* sd_ctx;
     std::mutex* sd_ctx_mutex;
@@ -45,6 +53,8 @@ struct ServerRuntime {
     const SDGenerationParams* default_gen_params;
     std::vector<LoraEntry>* lora_cache;
     std::mutex* lora_mutex;
+    std::vector<UpscalerEntry>* upscaler_cache;
+    std::mutex* upscaler_mutex;
     AsyncJobManager* async_job_manager;
 };
 
@@ -86,4 +96,5 @@ bool runtime_supports_generation_mode(const ServerRuntime& runtime, SDMode mode)
 std::string unsupported_generation_mode_error(SDMode mode);
 void refresh_lora_cache(ServerRuntime& rt);
 std::string get_lora_full_path(ServerRuntime& rt, const std::string& path);
+void refresh_upscaler_cache(ServerRuntime& rt);
 int64_t unix_timestamp_now();

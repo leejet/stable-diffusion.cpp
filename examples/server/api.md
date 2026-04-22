@@ -38,6 +38,8 @@ Current generation-related endpoints include:
 - `POST /sdapi/v1/txt2img`
 - `POST /sdapi/v1/img2img`
 - `GET /sdapi/v1/loras`
+- `GET /sdapi/v1/upscalers`
+- `GET /sdapi/v1/latent-upscale-modes`
 - `GET /sdapi/v1/samplers`
 - `GET /sdapi/v1/schedulers`
 - `GET /sdapi/v1/sd-models`
@@ -216,6 +218,13 @@ Currently supported request fields:
 | `scheduler` | `string` | Scheduler name |
 | `lora` | `array<object>` | Structured LoRA list |
 | `extra_images` | `array<string>` | Base64 or data URL images |
+| `enable_hr` | `boolean` | Enable highres fix for `txt2img` |
+| `hr_upscaler` | `string` | `Latent (nearest)` or an upscaler model name from `/sdapi/v1/upscalers` |
+| `hr_scale` | `number` | Highres scale when resize target is not set |
+| `hr_resize_x` | `integer` | Highres target width, `0` to use scale |
+| `hr_resize_y` | `integer` | Highres target height, `0` to use scale |
+| `hr_steps` | `integer` | Highres second-pass sample steps, `0` to reuse `steps` |
+| `denoising_strength` | `number` | Highres denoising strength for `txt2img` |
 
 Native extension fields:
 
@@ -241,6 +250,8 @@ Currently supported request fields:
 | `inpainting_mask_invert` | `integer` or `boolean` | Treated as invert flag |
 | `denoising_strength` | `number` | Clamped to `0.0..1.0` |
 
+Highres fix fields are currently handled for `txt2img`; `img2img` uses `denoising_strength` as image-to-image strength.
+
 Native extension fields:
 
 - any `sdcpp API` fields embedded through `sd_cpp_extra_args` inside `prompt`
@@ -258,6 +269,8 @@ Response fields:
 Currently exposed:
 
 - `GET /sdapi/v1/loras`
+- `GET /sdapi/v1/upscalers`
+- `GET /sdapi/v1/latent-upscale-modes`
 - `GET /sdapi/v1/samplers`
 - `GET /sdapi/v1/schedulers`
 - `GET /sdapi/v1/sd-models`
@@ -271,6 +284,24 @@ Response fields:
 | --- | --- | --- |
 | `[].name` | `string` | Display name derived from file stem |
 | `[].path` | `string` | Relative path under the configured LoRA directory |
+
+`GET /sdapi/v1/upscalers`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `[].name` | `string` | Built-in name or model stem |
+| `[].model_name` | `string \| null` | Model family label for model-backed upscalers |
+| `[].model_path` | `string \| null` | Absolute model path for model-backed upscalers |
+| `[].model_url` | `string \| null` | Currently always null |
+| `[].scale` | `integer` | Currently `4` |
+
+Built-in entries include `None`, `Lanczos`, and `Nearest`. Model-backed entries are scanned from the top level of `--hires-upscalers-dir`; subdirectories are not scanned.
+
+`GET /sdapi/v1/latent-upscale-modes`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `[].name` | `string` | WebUI-compatible latent upscale mode name |
 
 `GET /sdapi/v1/samplers`
 
@@ -388,6 +419,7 @@ Top-level fields:
 | `samplers` | `array<string>` | Available sampling methods |
 | `schedulers` | `array<string>` | Available schedulers |
 | `loras` | `array<object>` | Available LoRA entries |
+| `upscalers` | `array<object>` | Available model-backed highres upscalers |
 | `limits` | `object` | Shared queue and size limits |
 
 `model`
@@ -423,6 +455,14 @@ Shared nested fields:
 | --- | --- |
 | `loras[].name` | `string` |
 | `loras[].path` | `string` |
+
+`upscalers`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `upscalers[].name` | `string` | Built-in name or model stem; use this value in `hires.upscaler` |
+
+Built-in entries include `None` and `Latent (nearest)`. Model-backed entries are scanned from the top level of `--hires-upscalers-dir`; subdirectories are not scanned.
 
 `limits`
 
@@ -482,6 +522,15 @@ Shared default fields used by both `img_gen` and `vid_gen`:
 | `auto_resize_ref_image` | `boolean` |
 | `increase_ref_index` | `boolean` |
 | `control_strength` | `number` |
+| `hires` | `object` |
+| `hires.enabled` | `boolean` |
+| `hires.upscaler` | `string` |
+| `hires.scale` | `number` |
+| `hires.target_width` | `integer` |
+| `hires.target_height` | `integer` |
+| `hires.steps` | `integer` |
+| `hires.denoising_strength` | `number` |
+| `hires.upscale_tile_size` | `integer` |
 
 `vid_gen`-specific default fields:
 
@@ -514,6 +563,7 @@ Fields returned in `features_by_mode.img_gen`:
 - `ref_images`
 - `lora`
 - `vae_tiling`
+- `hires`
 - `cache`
 - `cancel_queued`
 - `cancel_generating`
@@ -625,6 +675,16 @@ Example:
   },
 
   "lora": [],
+  "hires": {
+    "enabled": false,
+    "upscaler": "Latent (nearest)",
+    "scale": 2.0,
+    "target_width": 0,
+    "target_height": 0,
+    "steps": 0,
+    "denoising_strength": 0.7,
+    "upscale_tile_size": 128
+  },
 
   "vae_tiling_params": {
     "enabled": false,
@@ -729,11 +789,22 @@ Other native fields:
 
 | Field | Type |
 | --- | --- |
+| `hires` | `object` |
+| `hires.enabled` | `boolean` |
+| `hires.upscaler` | `string` |
+| `hires.scale` | `number` |
+| `hires.target_width` | `integer` |
+| `hires.target_height` | `integer` |
+| `hires.steps` | `integer` |
+| `hires.denoising_strength` | `number` |
+| `hires.upscale_tile_size` | `integer` |
 | `vae_tiling_params` | `object` |
 | `cache_mode` | `string` |
 | `cache_option` | `string` |
 | `scm_mask` | `string` |
 | `scm_policy_dynamic` | `boolean` |
+
+For `hires.upscaler`, use `Latent (nearest)` for latent upscale or an `upscalers[].name` value from `GET /sdcpp/v1/capabilities`. Model-backed upscalers are resolved as `--hires-upscalers-dir / (name + ext)` and must live directly in that directory.
 
 HTTP-only output fields:
 
