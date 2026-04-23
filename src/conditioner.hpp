@@ -96,6 +96,40 @@ public:
     }
 };
 
+// LTX-2.3 conditioner stub.
+//
+// LTX-2.3 uses a custom text encoder that is not shipped with the 22B
+// checkpoint — the checkpoint only contains the `text_embedding_projection`
+// aggregate embedder (2048-dim audio, 4096-dim video). Porting the full
+// text encoder is a follow-up; for now this conditioner returns zero
+// embeddings of the expected shape so the rest of the pipeline can load
+// and the transformer can run its forward pass for shape validation.
+struct LTXV2Conditioner : public Conditioner {
+    int64_t caption_channels;
+    int64_t max_tokens;
+
+    LTXV2Conditioner(int64_t caption_channels = 4096, int64_t max_tokens = 128)
+        : caption_channels(caption_channels), max_tokens(max_tokens) {}
+
+    void alloc_params_buffer() override {}
+    void free_params_buffer() override {}
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {}
+    size_t get_params_buffer_size() override { return 0; }
+    void set_flash_attention_enabled(bool enabled) override {}
+
+    SDCondition get_learned_condition(int n_threads,
+                                       const ConditionerParams& conditioner_params) override {
+        // Return zero embeddings of shape [1, max_tokens, caption_channels].
+        // sd::Tensor<float> shape order is {W, H, C, N} → here we want a
+        // 3-D tensor with ne = [caption_channels, max_tokens, 1] = shape
+        // (1, max_tokens, caption_channels) when interpreted as torch.
+        sd::Tensor<float> emb = sd::zeros<float>({caption_channels, max_tokens, 1});
+        SDCondition cond;
+        cond.c_crossattn = std::move(emb);
+        return cond;
+    }
+};
+
 // ldm.modules.encoders.modules.FrozenCLIPEmbedder
 // Ref: https://github.com/AUTOMATIC1111/stable-diffusion-webui/blob/cad87bf4e3e0b0a759afa94e933527c3123d59bc/modules/sd_hijack_clip.py#L283
 struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {

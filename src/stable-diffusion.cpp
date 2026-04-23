@@ -565,13 +565,10 @@ public:
                                                                     tensor_storage_map,
                                                                     "model.diffusion_model");
             } else if (sd_version_is_ltxv2(version)) {
-                // LTX-Video uses T5-XXL (not UMT5), attention-masked, no padding.
-                cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
-                                                                    offload_params_to_cpu,
-                                                                    tensor_storage_map,
-                                                                    /*use_mask=*/true,
-                                                                    /*mask_pad=*/0,
-                                                                    /*is_umt5=*/false);
+                // LTX-2.3 ships a custom multilingual text encoder that is not
+                // part of the 22B checkpoint — we stub it with a zero-embedding
+                // conditioner for now. Porting the real encoder is follow-up.
+                cond_stage_model = std::make_shared<LTXV2Conditioner>(4096, 128);
                 diffusion_model  = std::make_shared<LTXV2Model>(backend,
                                                                offload_params_to_cpu,
                                                                tensor_storage_map,
@@ -856,6 +853,14 @@ public:
         if (sd_version_is_ernie_image(version)) {
             ignore_tensors.insert("text_encoders.llm.vision_tower.");
             ignore_tensors.insert("text_encoders.llm.multi_modal_projector.");
+        }
+        if (sd_version_is_ltxv2(version)) {
+            // LTX-2.3 single-file checkpoints also contain audio VAE, vocoder,
+            // and a text-aggregate projection that the video-only pipeline does
+            // not consume.
+            ignore_tensors.insert("audio_vae.");
+            ignore_tensors.insert("vocoder.");
+            ignore_tensors.insert("text_embedding_projection.");
         }
         bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap);
         if (!success) {
