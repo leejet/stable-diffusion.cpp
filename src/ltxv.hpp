@@ -84,8 +84,12 @@ namespace LTXV {
         bool bias;
 
         void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+            // Match the checkpoint dtype when available (LTX-2.3 stores Conv3d weights
+            // as BF16; falling back to F16 keeps parity with older sd.cpp Conv3d blocks
+            // that pre-date wide BF16 support).
+            enum ggml_type wtype = get_type(prefix + "conv.weight", tensor_storage_map, GGML_TYPE_F16);
             params["conv.weight"] = ggml_new_tensor_4d(ctx,
-                                                      GGML_TYPE_F16,
+                                                      wtype,
                                                       std::get<2>(kernel_size),
                                                       std::get<1>(kernel_size),
                                                       std::get<0>(kernel_size),
