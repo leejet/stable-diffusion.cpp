@@ -1,6 +1,7 @@
 #include "routes.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <regex>
 #include <string_view>
@@ -35,14 +36,20 @@ static fs::path resolve_display_model_path(const ServerRuntime& runtime) {
     return {};
 }
 
+static std::string lower_ascii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value;
+}
+
 static enum sample_method_t get_sdapi_sample_method(std::string name) {
     enum sample_method_t result = str_to_sample_method(name.c_str());
     if (result != SAMPLE_METHOD_COUNT) {
         return result;
     }
 
-    std::transform(name.begin(), name.end(), name.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    name = lower_ascii(name);
     static const std::unordered_map<std::string_view, sample_method_t> hardcoded{
         {"euler a", EULER_A_SAMPLE_METHOD},
         {"k_euler_a", EULER_A_SAMPLE_METHOD},
@@ -113,6 +120,18 @@ static bool build_sdapi_img_gen_request(const json& j,
     request.gen_params.sample_params.guidance.txt_cfg = cfg_scale;
     request.gen_params.width                          = j.value("width", -1);
     request.gen_params.height                         = j.value("height", -1);
+
+    if (!img2img && j.value("enable_hr", false)) {
+        request.gen_params.hires_enabled = true;
+        request.gen_params.hires_scale   = j.value("hr_scale", request.gen_params.hires_scale);
+        request.gen_params.hires_width   = j.value("hr_resize_x", request.gen_params.hires_width);
+        request.gen_params.hires_height  = j.value("hr_resize_y", request.gen_params.hires_height);
+        request.gen_params.hires_steps   = j.value("hr_steps", request.gen_params.hires_steps);
+        request.gen_params.hires_denoising_strength =
+            j.value("denoising_strength", request.gen_params.hires_denoising_strength);
+
+        request.gen_params.hires_upscaler = j.value("hr_upscaler", request.gen_params.hires_upscaler);
+    }
 
     std::string sd_cpp_extra_args_str = extract_and_remove_sd_cpp_extra_args(request.gen_params.prompt);
     if (!sd_cpp_extra_args_str.empty() && !request.gen_params.from_json_str(sd_cpp_extra_args_str)) {
@@ -228,7 +247,7 @@ static bool build_sdapi_img_gen_request(const json& j,
     }
 
     // Intentionally disable prompt-embedded LoRA tag parsing for server APIs.
-    if (!request.gen_params.resolve_and_validate(IMG_GEN, "", true)) {
+    if (!request.gen_params.resolve_and_validate(IMG_GEN, "", runtime.ctx_params->hires_upscalers_dir, true)) {
         error_message = "invalid params";
         return false;
     }
@@ -244,6 +263,11 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             if (req.body.empty()) {
                 res.status = 400;
                 res.set_content(R"({"error":"empty body"})", "application/json");
+                return;
+            }
+            if (!runtime_supports_generation_mode(*runtime, IMG_GEN)) {
+                res.status = 400;
+                res.set_content(json({{"error", unsupported_generation_mode_error(IMG_GEN)}}).dump(), "application/json");
                 return;
             }
 
@@ -339,6 +363,52 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             }
         }
 
+        res.set_content(result.dump(), "application/json");
+    });
+
+    svr.Get("/sdapi/v1/upscalers", [runtime](const httplib::Request&, httplib::Response& res) {
+        refresh_upscaler_cache(*runtime);
+
+        auto make_builtin = [](const char* name) {
+            json item;
+            item["name"]       = name;
+            item["model_name"] = nullptr;
+            item["model_path"] = nullptr;
+            item["model_url"]  = nullptr;
+            item["scale"]      = 4;
+            return item;
+        };
+
+        json result = json::array();
+        result.push_back(make_builtin("None"));
+        result.push_back(make_builtin("Lanczos"));
+        result.push_back(make_builtin("Nearest"));
+
+        {
+            std::lock_guard<std::mutex> lock(*runtime->upscaler_mutex);
+            for (const auto& e : *runtime->upscaler_cache) {
+                json item;
+                item["name"]       = e.name;
+                item["model_name"] = e.model_name;
+                item["model_path"] = e.fullpath;
+                item["model_url"]  = nullptr;
+                item["scale"]      = e.scale;
+                result.push_back(item);
+            }
+        }
+
+        res.set_content(result.dump(), "application/json");
+    });
+
+    svr.Get("/sdapi/v1/latent-upscale-modes", [](const httplib::Request&, httplib::Response& res) {
+        json result = json::array({
+            {{"name", "Latent"}},
+            {{"name", "Latent (nearest)"}},
+            {{"name", "Latent (nearest-exact)"}},
+            {{"name", "Latent (antialiased)"}},
+            {{"name", "Latent (bicubic)"}},
+            {{"name", "Latent (bicubic antialiased)"}},
+        });
         res.set_content(result.dump(), "application/json");
     });
 
