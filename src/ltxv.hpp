@@ -1,20 +1,24 @@
 #ifndef __LTXV_HPP__
 #define __LTXV_HPP__
 
-// LTX-Video (Lightricks) port — diffusers reference:
-//   src/diffusers/models/transformers/transformer_ltx.py
-//   src/diffusers/models/autoencoders/autoencoder_kl_ltx.py
+// LTX-Video 2.0 (Lightricks) port — diffusers reference:
+//   src/diffusers/models/transformers/transformer_ltx2.py
+//   src/diffusers/models/autoencoders/autoencoder_kl_ltx2.py
 //
-// Two runners are exposed:
-//   LTXV::LTXVRunner       — DiT transformer (28 layers, 32 heads × 64 head_dim,
-//                            inner_dim=2048, T5-XXL cross-attention, 3D RoPE).
-//   LTXV::LTXVVAERunner    — CausalVideoAutoencoder (128 latent channels,
-//                            spatial compression 32, temporal compression 8).
+// Scope for this port: VIDEO-ONLY generation.
+//   * All audio-related parameters (audio_proj_in, audio_time_embed, audio_caption_projection,
+//     audio_rope, cross_attn_audio_rope, per-block audio_*, av_cross_attn_audio_*,
+//     audio_scale_shift_table, audio_norm_out, audio_proj_out) are loaded so LTX-2
+//     checkpoints open cleanly, but the forward path SKIPS audio self-attention,
+//     audio cross-attention, audio-to-video and video-to-audio cross attention,
+//     audio FFN, and audio output projection (equivalent to
+//     `isolate_modalities=True, return audio_output=None`).
+//   * Audio VAE / vocoder are not ported. Add later if audio generation is needed.
 //
-// Tensor-layout conventions:
-//   * torch (N, C, F, H, W) video is stored in ggml as ne = [W, H, F, C*N];
-//   * torch (N, L, D) tokens    are stored as ne = [D, L, N, 1];
-//   * permutations use ggml_ext_torch_permute which takes torch-order axes.
+// Tensor-layout conventions (match wan.hpp and ltxv.hpp for LTX-1):
+//   * torch (N, C, F, H, W) video is stored in ggml as ne = [W, H, F, C*N]
+//   * torch (N, L, D) tokens    are stored as ne = [D, L, N, 1]
+//   * permutations use ggml_ext_torch_permute (takes torch-order axes)
 
 #include <algorithm>
 #include <cmath>
@@ -31,17 +35,17 @@
 
 namespace LTXV {
 
-    constexpr int LTXV_GRAPH_SIZE = 10240;
+    constexpr int LTXV_GRAPH_SIZE = 20480;
 
+    // ------------------------------------------------------------------
     // RMSNorm with no elementwise-affine weight.
-    // Used for block-level norm1/norm2 and VAE norms (`elementwise_affine=False`).
+    // Used for block-level norm1/norm2/norm3 in LTX-2 (elementwise_affine=False).
+    // ------------------------------------------------------------------
     class RMSNormNoAffine : public UnaryBlock {
     protected:
         float eps;
 
-        void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
-            // no parameters
-        }
+        void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {}
 
     public:
         RMSNormNoAffine(float eps = 1e-6f) : eps(eps) {}
@@ -51,49 +55,36 @@ namespace LTXV {
         }
     };
 
-    // Channel-wise RMSNorm for 5-D video.
-    // Input ne = [W, H, F, C*N]; permutes C to innermost, normalises, optionally
-    // applies affine weight of shape [C], permutes back. Mirrors diffusers'
-    // `RMSNorm(C, …).movedim(1,-1)` dance from autoencoder_kl_ltx.py.
-    class VideoChannelRMSNorm : public UnaryBlock {
+    // ------------------------------------------------------------------
+    // PerChannelRMSNorm — diffusers LTX-2 `PerChannelRMSNorm`.
+    //   y = x / sqrt(mean(x**2, dim=channel, keepdim=True) + eps)
+    // No parameters. For ggml video tensors [W, H, F, C*N], C is at ne[3],
+    // so we permute C to innermost, run rms_norm (which normalises ne[0]),
+    // then permute back.
+    // ------------------------------------------------------------------
+    class PerChannelRMSNorm : public UnaryBlock {
     protected:
-        int64_t channels;
         float eps;
-        bool elementwise_affine;
-        std::string prefix;
 
-        void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
-            this->prefix = prefix;
-            if (elementwise_affine) {
-                params["weight"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, channels);
-            }
-        }
+        void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {}
 
     public:
-        VideoChannelRMSNorm(int64_t channels,
-                            float eps               = 1e-8f,
-                            bool elementwise_affine = false)
-            : channels(channels), eps(eps), elementwise_affine(elementwise_affine) {}
+        PerChannelRMSNorm(float eps = 1e-8f) : eps(eps) {}
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
-            // x: [W, H, F, C*N] (N == 1 inference path).
             auto h = ggml_ext_cont(ctx->ggml_ctx,
-                                   ggml_ext_torch_permute(ctx->ggml_ctx, x, 3, 0, 1, 2));  // [C*N, W, H, F]
+                                   ggml_ext_torch_permute(ctx->ggml_ctx, x, 3, 0, 1, 2));
             h      = ggml_rms_norm(ctx->ggml_ctx, h, eps);
-            if (elementwise_affine) {
-                ggml_tensor* w = params["weight"];
-                h              = ggml_mul(ctx->ggml_ctx, h, w);
-            }
-            h = ggml_ext_cont(ctx->ggml_ctx,
-                              ggml_ext_torch_permute(ctx->ggml_ctx, h, 1, 2, 3, 0));  // [W, H, F, C*N]
+            h      = ggml_ext_cont(ctx->ggml_ctx,
+                                   ggml_ext_torch_permute(ctx->ggml_ctx, h, 1, 2, 3, 0));
             return h;
         }
     };
 
-    // Temporal-causal 3-D convolution.
-    // Spatial padding is k/2 (same-padding); temporal padding is:
-    //   causal: (k_t - 1) frames left via first-frame replication, 0 right;
-    //   non-causal: (k_t - 1)/2 each side via first/last-frame replication.
+    // ------------------------------------------------------------------
+    // LTX-2 CausalConv3d — temporal-causal 3-D conv with RUNTIME causal flag
+    // (diffusers LTX-2 moved `causal` from constructor to forward).
+    // ------------------------------------------------------------------
     class CausalConv3d : public GGMLBlock {
     protected:
         int64_t in_channels;
@@ -102,7 +93,6 @@ namespace LTXV {
         std::tuple<int, int, int> stride;
         std::tuple<int, int, int> dilation;
         bool bias;
-        bool is_causal;
 
         void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             params["weight"] = ggml_new_tensor_4d(ctx,
@@ -122,17 +112,15 @@ namespace LTXV {
                      std::tuple<int, int, int> kernel_size,
                      std::tuple<int, int, int> stride   = {1, 1, 1},
                      std::tuple<int, int, int> dilation = {1, 1, 1},
-                     bool bias                          = true,
-                     bool is_causal                     = true)
+                     bool bias                          = true)
             : in_channels(in_channels),
               out_channels(out_channels),
               kernel_size(kernel_size),
               stride(stride),
               dilation(dilation),
-              bias(bias),
-              is_causal(is_causal) {}
+              bias(bias) {}
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, bool causal = true) {
             ggml_tensor* w = params["weight"];
             ggml_tensor* b = bias ? params["bias"] : nullptr;
 
@@ -141,7 +129,7 @@ namespace LTXV {
             int kw = std::get<2>(kernel_size);
 
             if (kt > 1) {
-                if (is_causal) {
+                if (causal) {
                     auto first = ggml_view_4d(ctx->ggml_ctx, x,
                                               x->ne[0], x->ne[1], 1, x->ne[3],
                                               x->nb[1], x->nb[2], x->nb[3], 0);
@@ -174,10 +162,8 @@ namespace LTXV {
                 }
             }
 
-            int lp_w = kw / 2;
-            int rp_w = kw / 2;
-            int lp_h = kh / 2;
-            int rp_h = kh / 2;
+            int lp_w = kw / 2, rp_w = kw / 2;
+            int lp_h = kh / 2, rp_h = kh / 2;
             x = ggml_ext_pad_ext(ctx->ggml_ctx, x, lp_w, rp_w, lp_h, rp_h, 0, 0, 0, 0,
                                  ctx->circular_x_enabled, ctx->circular_y_enabled);
 
@@ -192,8 +178,8 @@ namespace LTXV {
     //                           TRANSFORMER
     // ==================================================================
 
-    // Caption projection (PixArt-Alpha): Linear → GELU(tanh) → Linear.
-    // Parameters: linear_1, linear_2.
+    // PixArtAlphaTextProjection — caption_projection block.
+    // Parameters: linear_1, linear_2.  Act: GELU(tanh).
     class CaptionProjection : public GGMLBlock {
     public:
         CaptionProjection(int64_t in_features, int64_t hidden_size) {
@@ -211,22 +197,27 @@ namespace LTXV {
         }
     };
 
-    // Timestep embedder used inside AdaLayerNormSingle.
-    // Parameters: linear_1, linear_2.
-    class TimestepEmbedder : public GGMLBlock {
+    // PixArtAlphaCombinedTimestepSizeEmbeddings — used inside LTX2AdaLayerNormSingle.
+    // With `use_additional_conditions=False` (the LTX-2 setting) this collapses to
+    // just the timestep projection: ts_emb → linear_1 → SiLU → linear_2.
+    // Parameters: `timestep_embedder.linear_1`, `timestep_embedder.linear_2`
+    //            (size_embedder tensors are not loaded when additional_conditions=False).
+    class CombinedTimestepSizeEmbeddings : public GGMLBlock {
     protected:
         int64_t frequency_embedding_size;
 
     public:
-        TimestepEmbedder(int64_t hidden_size, int64_t frequency_embedding_size = 256)
+        CombinedTimestepSizeEmbeddings(int64_t hidden_size, int64_t frequency_embedding_size = 256)
             : frequency_embedding_size(frequency_embedding_size) {
-            blocks["linear_1"] = std::shared_ptr<GGMLBlock>(new Linear(frequency_embedding_size, hidden_size, true));
-            blocks["linear_2"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size, true));
+            blocks["timestep_embedder.linear_1"] =
+                std::shared_ptr<GGMLBlock>(new Linear(frequency_embedding_size, hidden_size, true));
+            blocks["timestep_embedder.linear_2"] =
+                std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size, true));
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* t) {
-            auto l1 = std::dynamic_pointer_cast<Linear>(blocks["linear_1"]);
-            auto l2 = std::dynamic_pointer_cast<Linear>(blocks["linear_2"]);
+            auto l1 = std::dynamic_pointer_cast<Linear>(blocks["timestep_embedder.linear_1"]);
+            auto l2 = std::dynamic_pointer_cast<Linear>(blocks["timestep_embedder.linear_2"]);
             auto f  = ggml_ext_timestep_embedding(ctx->ggml_ctx, t, frequency_embedding_size);
             f       = l1->forward(ctx, f);
             f       = ggml_silu_inplace(ctx->ggml_ctx, f);
@@ -235,29 +226,35 @@ namespace LTXV {
         }
     };
 
-    // AdaLayerNormSingle(hidden, use_additional_conditions=False).
-    // emb.timestep_embedder + linear(hidden -> 6*hidden).
-    // Returns (temb, embedded_timestep) as a pair.
-    class AdaLayerNormSingle : public GGMLBlock {
+    // LTX2AdaLayerNormSingle(hidden, num_mod_params, use_additional_conditions=False).
+    // Structure:
+    //   emb    : PixArtAlphaCombinedTimestepSizeEmbeddings(hidden)
+    //   linear : hidden -> num_mod_params * hidden
+    // Returns (temb_modulation, embedded_timestep).
+    class LTX2AdaLayerNormSingle : public GGMLBlock {
+    protected:
+        int64_t hidden_size;
+        int64_t num_mod_params;
+
     public:
-        AdaLayerNormSingle(int64_t hidden_size, int64_t frequency_embedding_size = 256) {
-            blocks["emb.timestep_embedder"] =
-                std::shared_ptr<GGMLBlock>(new TimestepEmbedder(hidden_size, frequency_embedding_size));
-            blocks["linear"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, 6 * hidden_size, true));
+        LTX2AdaLayerNormSingle(int64_t hidden_size, int64_t num_mod_params = 6)
+            : hidden_size(hidden_size), num_mod_params(num_mod_params) {
+            blocks["emb"]    = std::shared_ptr<GGMLBlock>(new CombinedTimestepSizeEmbeddings(hidden_size));
+            blocks["linear"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, num_mod_params * hidden_size, true));
         }
 
         std::pair<ggml_tensor*, ggml_tensor*> forward(GGMLRunnerContext* ctx, ggml_tensor* t) {
-            auto tse    = std::dynamic_pointer_cast<TimestepEmbedder>(blocks["emb.timestep_embedder"]);
+            auto emb    = std::dynamic_pointer_cast<CombinedTimestepSizeEmbeddings>(blocks["emb"]);
             auto linear = std::dynamic_pointer_cast<Linear>(blocks["linear"]);
 
-            auto embedded_timestep = tse->forward(ctx, t);                      // [hidden, N]
+            auto embedded_timestep = emb->forward(ctx, t);
             auto x                 = ggml_silu(ctx->ggml_ctx, embedded_timestep);
-            auto temb              = linear->forward(ctx, x);                   // [6*hidden, N]
+            auto temb              = linear->forward(ctx, x);
             return {temb, embedded_timestep};
         }
     };
 
-    // FeedForward(dim, "gelu-approximate"): net.0.proj, net.2.
+    // FeedForward(dim, "gelu-approximate"): net.0.proj, net.2 (inner_dim = 4*dim).
     class FeedForward : public GGMLBlock {
     public:
         FeedForward(int64_t dim, int64_t inner_dim = -1) {
@@ -276,27 +273,34 @@ namespace LTXV {
         }
     };
 
-    // LTXAttention — diffusers.LTXAttention.
-    // Parameters: to_q, to_k, to_v, to_out.0 (+bias), norm_q, norm_k.
-    // qk_norm = rms_norm_across_heads → weight shape = (inner_dim,), applied
-    // to full Q/K before head split.
-    // Self-attn uses 3-D RoPE on Q and K; cross-attn does not.
-    class LTXAttention : public GGMLBlock {
+    // LTX2 Attention — diffusers.LTX2Attention.
+    // Parameters: to_q, to_k, to_v, to_out.0 (+bias), norm_q, norm_k,
+    //             plus optional to_gate_logits (Linear(dim, heads)) when `apply_gated_attention=True`.
+    // qk_norm = rms_norm_across_heads → weight shape = (inner_dim,).
+    // rope_type ∈ { "interleaved", "split" } — interleaved matches LTX-1.
+    class LTX2Attention : public GGMLBlock {
     public:
         int64_t inner_dim;
         int64_t num_heads;
         int64_t head_dim;
         bool is_cross_attn;
         bool has_rope;
+        bool apply_gated_attention;
+        std::string rope_type;  // "interleaved" or "split"
 
     public:
-        LTXAttention(int64_t query_dim,
-                     int64_t heads,
-                     int64_t dim_head,
-                     int64_t cross_attention_dim = -1,
-                     bool attention_bias         = true,
-                     bool attention_out_bias     = true)
-            : num_heads(heads), head_dim(dim_head) {
+        LTX2Attention(int64_t query_dim,
+                      int64_t heads,
+                      int64_t dim_head,
+                      int64_t cross_attention_dim = -1,
+                      bool attention_bias         = true,
+                      bool attention_out_bias     = true,
+                      bool apply_gated_attention  = false,
+                      std::string rope_type       = "interleaved")
+            : num_heads(heads),
+              head_dim(dim_head),
+              apply_gated_attention(apply_gated_attention),
+              rope_type(rope_type) {
             inner_dim           = heads * dim_head;
             int64_t kv_dim      = (cross_attention_dim > 0) ? cross_attention_dim : query_dim;
             is_cross_attn       = cross_attention_dim > 0;
@@ -307,15 +311,27 @@ namespace LTXV {
             blocks["to_v"]     = std::shared_ptr<GGMLBlock>(new Linear(kv_dim, inner_dim, attention_bias));
             blocks["to_out.0"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, query_dim, attention_out_bias));
 
-            blocks["norm_q"] = std::shared_ptr<GGMLBlock>(new RMSNorm(inner_dim, 1e-5f));
-            blocks["norm_k"] = std::shared_ptr<GGMLBlock>(new RMSNorm(inner_dim, 1e-5f));
+            blocks["norm_q"] = std::shared_ptr<GGMLBlock>(new RMSNorm(inner_dim, 1e-6f));
+            blocks["norm_k"] = std::shared_ptr<GGMLBlock>(new RMSNorm(inner_dim, 1e-6f));
+
+            if (apply_gated_attention) {
+                // Per-head gate logits.
+                blocks["to_gate_logits"] = std::shared_ptr<GGMLBlock>(new Linear(query_dim, heads, true));
+            }
         }
 
+        // hidden_states         : [N, L_q, query_dim]
+        // encoder_hidden_states : [N, L_k, kv_dim] (cross-attn only)
+        // query_rope_cos/sin    : [L_q, inner_dim] (rope applied to Q — and K if key_rope not provided)
+        // key_rope_cos/sin      : optional separate rope for K (LTX-2 a2v/v2a cross-attn)
+        // attention_mask        : additive bias
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* hidden_states,
                              ggml_tensor* encoder_hidden_states = nullptr,
-                             ggml_tensor* rope_cos              = nullptr,
-                             ggml_tensor* rope_sin              = nullptr,
+                             ggml_tensor* query_rope_cos        = nullptr,
+                             ggml_tensor* query_rope_sin        = nullptr,
+                             ggml_tensor* key_rope_cos          = nullptr,
+                             ggml_tensor* key_rope_sin          = nullptr,
                              ggml_tensor* attention_mask        = nullptr) {
             auto to_q    = std::dynamic_pointer_cast<Linear>(blocks["to_q"]);
             auto to_k    = std::dynamic_pointer_cast<Linear>(blocks["to_k"]);
@@ -326,6 +342,12 @@ namespace LTXV {
 
             ggml_tensor* kv_src = encoder_hidden_states != nullptr ? encoder_hidden_states : hidden_states;
 
+            ggml_tensor* gate_logits = nullptr;
+            if (apply_gated_attention) {
+                auto gate_proj = std::dynamic_pointer_cast<Linear>(blocks["to_gate_logits"]);
+                gate_logits    = gate_proj->forward(ctx, hidden_states);  // [N, L_q, num_heads]
+            }
+
             auto q = to_q->forward(ctx, hidden_states);
             auto k = to_k->forward(ctx, kv_src);
             auto v = to_v->forward(ctx, kv_src);
@@ -333,22 +355,40 @@ namespace LTXV {
             q = norm_q->forward(ctx, q);
             k = norm_k->forward(ctx, k);
 
-            if (has_rope && rope_cos != nullptr && rope_sin != nullptr) {
-                q = apply_rotary_emb(ctx, q, rope_cos, rope_sin);
-                k = apply_rotary_emb(ctx, k, rope_cos, rope_sin);
+            if (has_rope && query_rope_cos != nullptr && query_rope_sin != nullptr) {
+                q = apply_rotary_emb(ctx, q, query_rope_cos, query_rope_sin);
+                ggml_tensor* kc = key_rope_cos != nullptr ? key_rope_cos : query_rope_cos;
+                ggml_tensor* ks = key_rope_sin != nullptr ? key_rope_sin : query_rope_sin;
+                k               = apply_rotary_emb(ctx, k, kc, ks);
             }
 
             auto out = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v,
                                               num_heads, attention_mask, false,
                                               ctx->flash_attn_enabled);
-            out      = to_out->forward(ctx, out);
+
+            if (apply_gated_attention && gate_logits != nullptr) {
+                // gates = 2.0 * sigmoid(gate_logits)  — shape [N, L_q, num_heads]
+                // The factor of 2.0 makes zero-init gates identity.
+                auto gates = ggml_sigmoid(ctx->ggml_ctx, gate_logits);
+                gates      = ggml_scale(ctx->ggml_ctx, gates, 2.0f);
+
+                // Unflatten `out` to [N, L_q, num_heads, head_dim] and multiply by gates.
+                int64_t d_head = head_dim;
+                int64_t N      = out->ne[2];
+                int64_t L_q    = out->ne[1];
+                auto out_4d    = ggml_reshape_4d(ctx->ggml_ctx, out, d_head, num_heads, L_q, N);
+                // gates is [num_heads, L_q, N] (ggml ne ordering). Reshape to
+                // [1, num_heads, L_q, N] so it broadcasts over d_head.
+                auto gates_4d  = ggml_reshape_4d(ctx->ggml_ctx, gates, 1, num_heads, L_q, N);
+                out_4d         = ggml_mul(ctx->ggml_ctx, out_4d, gates_4d);
+                out            = ggml_reshape_3d(ctx->ggml_ctx, out_4d, d_head * num_heads, L_q, N);
+            }
+
+            out = to_out->forward(ctx, out);
             return out;
         }
 
-        // diffusers apply_rotary_emb: pairs-of-two rotation.
-        //   x_real, x_imag = x.unflatten(2, (-1, 2)).unbind(-1)
-        //   x_rotated      = stack([-x_imag, x_real], -1).flatten(2)
-        //   out            = x * cos + x_rotated * sin
+        // pairs-of-two rotation (interleaved RoPE).
         static ggml_tensor* apply_rotary_emb(GGMLRunnerContext* ctx,
                                              ggml_tensor* x,
                                              ggml_tensor* cos_freqs,
@@ -374,46 +414,112 @@ namespace LTXV {
         }
     };
 
-    // Transformer block.
-    // Modulation (diffusers transformer_ltx.py:342-379):
-    //   sst                                  : [6, dim]           (parameter)
-    //   ada = sst[None,None] + temb.reshape(B, T_temb, 6, dim)
-    //   shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = ada.unbind(2)
-    //   h = norm1(h) * (1 + scale_msa) + shift_msa
-    //   h = h + attn1(h, rope) * gate_msa
-    //   h = h + attn2(h, encoder)        # cross-attn, no gate
-    //   h = norm2(h) * (1 + scale_mlp) + shift_mlp
-    //   h = h + ff(h) * gate_mlp
-    class LTXVideoTransformerBlock : public GGMLBlock {
+    // Transformer block for LTX-2 (video-only forward path).
+    //
+    // Load-time: every attribute present in the diffusers `LTX2VideoTransformerBlock`
+    // is registered so weights load correctly — including audio_*, audio_to_video_*,
+    // video_to_audio_*, and audio_* cross-attn modulation tables.
+    //
+    // Runtime: only the video pathway is executed (self-attn + prompt cross-attn + FF).
+    // This corresponds to `isolate_modalities=True` in diffusers.
+    class LTX2VideoTransformerBlock : public GGMLBlock {
     protected:
         int64_t dim;
+        int64_t audio_dim;
+        int64_t video_mod_params;
+        int64_t audio_mod_params;
+        bool video_cross_attn_adaln;
+        bool audio_cross_attn_adaln;
+        bool cross_attn_adaln;  // OR of the two above
 
         void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
-            params["scale_shift_table"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, dim, 6);
+            params["scale_shift_table"]       = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, dim, video_mod_params);
+            params["audio_scale_shift_table"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, audio_dim, audio_mod_params);
+
+            params["video_a2v_cross_attn_scale_shift_table"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, dim, 5);
+            params["audio_a2v_cross_attn_scale_shift_table"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, audio_dim, 5);
+
+            if (cross_attn_adaln) {
+                params["prompt_scale_shift_table"]       = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, dim, 2);
+                params["audio_prompt_scale_shift_table"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, audio_dim, 2);
+            }
         }
 
     public:
-        LTXVideoTransformerBlock(int64_t dim,
-                                 int64_t num_attention_heads,
-                                 int64_t attention_head_dim,
-                                 int64_t cross_attention_dim,
-                                 bool attention_bias     = true,
-                                 bool attention_out_bias = true,
-                                 float eps                = 1e-6f)
-            : dim(dim) {
-            blocks["norm1"] = std::shared_ptr<GGMLBlock>(new RMSNormNoAffine(eps));
-            blocks["attn1"] = std::shared_ptr<GGMLBlock>(new LTXAttention(
-                dim, num_attention_heads, attention_head_dim,
-                /*cross_attention_dim=*/-1, attention_bias, attention_out_bias));
+        LTX2VideoTransformerBlock(int64_t dim,
+                                   int64_t num_attention_heads,
+                                   int64_t attention_head_dim,
+                                   int64_t cross_attention_dim,
+                                   int64_t audio_dim,
+                                   int64_t audio_num_attention_heads,
+                                   int64_t audio_attention_head_dim,
+                                   int64_t audio_cross_attention_dim,
+                                   bool video_gated_attn        = false,
+                                   bool video_cross_attn_adaln  = false,
+                                   bool audio_gated_attn        = false,
+                                   bool audio_cross_attn_adaln  = false,
+                                   bool attention_bias          = true,
+                                   bool attention_out_bias      = true,
+                                   float eps                    = 1e-6f,
+                                   std::string rope_type        = "interleaved")
+            : dim(dim),
+              audio_dim(audio_dim),
+              video_cross_attn_adaln(video_cross_attn_adaln),
+              audio_cross_attn_adaln(audio_cross_attn_adaln) {
+            video_mod_params = video_cross_attn_adaln ? 9 : 6;
+            audio_mod_params = audio_cross_attn_adaln ? 9 : 6;
+            cross_attn_adaln = video_cross_attn_adaln || audio_cross_attn_adaln;
 
-            blocks["norm2"] = std::shared_ptr<GGMLBlock>(new RMSNormNoAffine(eps));
-            blocks["attn2"] = std::shared_ptr<GGMLBlock>(new LTXAttention(
+            // 1. Self-attention
+            blocks["norm1"]       = std::shared_ptr<GGMLBlock>(new RMSNormNoAffine(eps));
+            blocks["attn1"]       = std::shared_ptr<GGMLBlock>(new LTX2Attention(
                 dim, num_attention_heads, attention_head_dim,
-                /*cross_attention_dim=*/cross_attention_dim, attention_bias, attention_out_bias));
+                /*cross_attention_dim=*/-1, attention_bias, attention_out_bias,
+                video_gated_attn, rope_type));
+            blocks["audio_norm1"] = std::shared_ptr<GGMLBlock>(new RMSNormNoAffine(eps));
+            blocks["audio_attn1"] = std::shared_ptr<GGMLBlock>(new LTX2Attention(
+                audio_dim, audio_num_attention_heads, audio_attention_head_dim,
+                /*cross_attention_dim=*/-1, attention_bias, attention_out_bias,
+                audio_gated_attn, rope_type));
 
-            blocks["ff"] = std::shared_ptr<GGMLBlock>(new FeedForward(dim, 4 * dim));
+            // 2. Prompt cross-attention
+            blocks["norm2"]       = std::shared_ptr<GGMLBlock>(new RMSNormNoAffine(eps));
+            blocks["attn2"]       = std::shared_ptr<GGMLBlock>(new LTX2Attention(
+                dim, num_attention_heads, attention_head_dim,
+                cross_attention_dim, attention_bias, attention_out_bias,
+                video_gated_attn, rope_type));
+            blocks["audio_norm2"] = std::shared_ptr<GGMLBlock>(new RMSNormNoAffine(eps));
+            blocks["audio_attn2"] = std::shared_ptr<GGMLBlock>(new LTX2Attention(
+                audio_dim, audio_num_attention_heads, audio_attention_head_dim,
+                audio_cross_attention_dim, attention_bias, attention_out_bias,
+                audio_gated_attn, rope_type));
+
+            // 3. Audio-Video cross-attention
+            blocks["audio_to_video_norm"] = std::shared_ptr<GGMLBlock>(new RMSNormNoAffine(eps));
+            blocks["audio_to_video_attn"] = std::shared_ptr<GGMLBlock>(new LTX2Attention(
+                dim, audio_num_attention_heads, audio_attention_head_dim,
+                audio_dim, attention_bias, attention_out_bias,
+                video_gated_attn, rope_type));
+            blocks["video_to_audio_norm"] = std::shared_ptr<GGMLBlock>(new RMSNormNoAffine(eps));
+            blocks["video_to_audio_attn"] = std::shared_ptr<GGMLBlock>(new LTX2Attention(
+                audio_dim, audio_num_attention_heads, audio_attention_head_dim,
+                dim, attention_bias, attention_out_bias,
+                audio_gated_attn, rope_type));
+
+            // 4. Feedforward
+            blocks["norm3"]       = std::shared_ptr<GGMLBlock>(new RMSNormNoAffine(eps));
+            blocks["ff"]          = std::shared_ptr<GGMLBlock>(new FeedForward(dim, 4 * dim));
+            blocks["audio_norm3"] = std::shared_ptr<GGMLBlock>(new RMSNormNoAffine(eps));
+            blocks["audio_ff"]    = std::shared_ptr<GGMLBlock>(new FeedForward(audio_dim, 4 * audio_dim));
         }
 
+        // Video-only forward path (isolate_modalities=True, no audio state).
+        // hidden        : [N, L, dim]
+        // encoder       : [N, L_enc, cross_attention_dim]
+        // temb          : [N, T_temb, video_mod_params*dim] — broadcasted across tokens.
+        //                 T_temb == 1 in LTX-2 unless per-token modulation is used.
+        // rope_cos/sin  : [L, dim]
+        // encoder_mask  : additive bias
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* hidden,
                              ggml_tensor* encoder,
@@ -422,57 +528,83 @@ namespace LTXV {
                              ggml_tensor* rope_sin     = nullptr,
                              ggml_tensor* encoder_mask = nullptr) {
             auto norm1 = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm1"]);
-            auto attn1 = std::dynamic_pointer_cast<LTXAttention>(blocks["attn1"]);
+            auto attn1 = std::dynamic_pointer_cast<LTX2Attention>(blocks["attn1"]);
             auto norm2 = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm2"]);
-            auto attn2 = std::dynamic_pointer_cast<LTXAttention>(blocks["attn2"]);
+            auto attn2 = std::dynamic_pointer_cast<LTX2Attention>(blocks["attn2"]);
+            auto norm3 = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm3"]);
             auto ff    = std::dynamic_pointer_cast<FeedForward>(blocks["ff"]);
 
-            ggml_tensor* sst = params["scale_shift_table"];  // [dim, 6]
+            ggml_tensor* sst = params["scale_shift_table"];  // [dim, video_mod_params]
 
-            // temb has shape [6*dim, T_temb, N, 1]; reshape to [dim, 6, T_temb, N].
-            auto temb_r = ggml_reshape_4d(ctx->ggml_ctx, temb, dim, 6, temb->ne[1], temb->ne[2]);
-            // sst is [dim, 6, 1, 1] — broadcasts across T_temb and N.
+            // temb has shape [video_mod_params*dim, T_temb, N, 1] → reshape to
+            // [dim, video_mod_params, T_temb, N].
+            auto temb_r = ggml_reshape_4d(ctx->ggml_ctx, temb, dim, video_mod_params,
+                                          temb->ne[1], temb->ne[2]);
             auto ada    = ggml_add(ctx->ggml_ctx, temb_r, sst);
 
-            auto ada_slice = [&](int idx) -> ggml_tensor* {
-                auto v = ggml_view_4d(ctx->ggml_ctx, ada,
-                                      ada->ne[0], 1, ada->ne[2], ada->ne[3],
-                                      ada->nb[1], ada->nb[2], ada->nb[3],
-                                      ada->nb[1] * idx);
+            auto slice = [&](int idx) -> ggml_tensor* {
+                auto v = ggml_view_4d(ctx->ggml_ctx, ada, ada->ne[0], 1, ada->ne[2], ada->ne[3],
+                                      ada->nb[1], ada->nb[2], ada->nb[3], ada->nb[1] * idx);
                 return ggml_reshape_3d(ctx->ggml_ctx, v, ada->ne[0], ada->ne[2], ada->ne[3]);
             };
-            auto shift_msa = ada_slice(0);
-            auto scale_msa = ada_slice(1);
-            auto gate_msa  = ada_slice(2);
-            auto shift_mlp = ada_slice(3);
-            auto scale_mlp = ada_slice(4);
-            auto gate_mlp  = ada_slice(5);
+            auto shift_msa = slice(0);
+            auto scale_msa = slice(1);
+            auto gate_msa  = slice(2);
+            auto shift_mlp = slice(3);
+            auto scale_mlp = slice(4);
+            auto gate_mlp  = slice(5);
+            // If video_cross_attn_adaln, indices 6,7,8 are shift_text_q, scale_text_q, gate_text_q.
 
+            // 1. Video self-attention
             auto h_norm   = norm1->forward(ctx, hidden);
-            h_norm        = ggml_add(ctx->ggml_ctx, h_norm,
-                                     ggml_mul(ctx->ggml_ctx, h_norm, scale_msa));
+            h_norm        = ggml_add(ctx->ggml_ctx, h_norm, ggml_mul(ctx->ggml_ctx, h_norm, scale_msa));
             h_norm        = ggml_add(ctx->ggml_ctx, h_norm, shift_msa);
-            auto attn_out = attn1->forward(ctx, h_norm, nullptr, rope_cos, rope_sin, nullptr);
-            hidden        = ggml_add(ctx->ggml_ctx, hidden,
-                                     ggml_mul(ctx->ggml_ctx, attn_out, gate_msa));
+            auto attn_out = attn1->forward(ctx, h_norm, nullptr,
+                                            rope_cos, rope_sin, nullptr, nullptr, nullptr);
+            hidden        = ggml_add(ctx->ggml_ctx, hidden, ggml_mul(ctx->ggml_ctx, attn_out, gate_msa));
 
-            auto cross_out = attn2->forward(ctx, hidden, encoder, nullptr, nullptr, encoder_mask);
-            hidden         = ggml_add(ctx->ggml_ctx, hidden, cross_out);
+            // 2. Prompt cross-attention
+            auto h_norm2 = norm2->forward(ctx, hidden);
+            if (video_cross_attn_adaln) {
+                auto shift_q = slice(6);
+                auto scale_q = slice(7);
+                h_norm2      = ggml_add(ctx->ggml_ctx, h_norm2, ggml_mul(ctx->ggml_ctx, h_norm2, scale_q));
+                h_norm2      = ggml_add(ctx->ggml_ctx, h_norm2, shift_q);
+            }
+            auto ca_out = attn2->forward(ctx, h_norm2, encoder,
+                                          nullptr, nullptr, nullptr, nullptr, encoder_mask);
+            if (video_cross_attn_adaln) {
+                auto gate_q = slice(8);
+                ca_out      = ggml_mul(ctx->ggml_ctx, ca_out, gate_q);
+            }
+            hidden = ggml_add(ctx->ggml_ctx, hidden, ca_out);
 
-            h_norm = norm2->forward(ctx, hidden);
-            h_norm = ggml_add(ctx->ggml_ctx, h_norm,
-                              ggml_mul(ctx->ggml_ctx, h_norm, scale_mlp));
-            h_norm = ggml_add(ctx->ggml_ctx, h_norm, shift_mlp);
-            auto ff_out = ff->forward(ctx, h_norm);
-            hidden      = ggml_add(ctx->ggml_ctx, hidden,
-                                   ggml_mul(ctx->ggml_ctx, ff_out, gate_mlp));
+            // 3. a2v cross-attention — SKIPPED (video-only mode).
+
+            // 4. Feedforward
+            auto h_norm3 = norm3->forward(ctx, hidden);
+            h_norm3      = ggml_add(ctx->ggml_ctx, h_norm3, ggml_mul(ctx->ggml_ctx, h_norm3, scale_mlp));
+            h_norm3      = ggml_add(ctx->ggml_ctx, h_norm3, shift_mlp);
+            auto ff_out  = ff->forward(ctx, h_norm3);
+            hidden       = ggml_add(ctx->ggml_ctx, hidden, ggml_mul(ctx->ggml_ctx, ff_out, gate_mlp));
+
             return hidden;
         }
     };
 
-    // 3-D rotary positional embedding.
-    // Per-axis freqs = dim // 6. Applied to (F, H, W) grid.
-    // diffusers reference: transformer_ltx.py lines 179-278.
+    // ------------------------------------------------------------------
+    // LTX-2 rotary positional embedding.
+    //
+    // Compared to LTX-1:
+    //   * Coords use patch-boundary midpoints (stride `patch_size` start + size/2 step).
+    //   * vae_scale_factors = (8, 32, 32) applied per-axis, with causal_offset (=1)
+    //     to clamp the first frame's timestamps.
+    //   * FPS is applied to the temporal axis (coords / fps → seconds).
+    //   * Two rope types: "interleaved" (matches LTX-1 layout) and "split"
+    //     (Q and K reshaped to [B, H, T, D/2] before rotation — NOT supported here yet).
+    //
+    // Host-side CPU builder returns cos/sin tables of shape [L, dim] (interleaved layout).
+    // ------------------------------------------------------------------
     struct RopeTables {
         std::vector<float> cos;
         std::vector<float> sin;
@@ -480,50 +612,63 @@ namespace LTXV {
         int64_t dim = 0;
     };
 
-    __STATIC_INLINE__ RopeTables compute_rope(int num_frames,
-                                              int height,
-                                              int width,
-                                              int dim,
-                                              int base_frames = 20,
-                                              int base_h      = 2048,
-                                              int base_w      = 2048,
-                                              int patch_size  = 1,
-                                              int patch_t     = 1,
-                                              float scale_f   = 1.f,
-                                              float scale_h   = 1.f,
-                                              float scale_w   = 1.f,
-                                              float theta     = 10000.f) {
+    __STATIC_INLINE__ RopeTables compute_rope_ltx2(int num_frames,
+                                                   int height,
+                                                   int width,
+                                                   int dim,
+                                                   int patch_size     = 1,
+                                                   int patch_size_t   = 1,
+                                                   int base_frames    = 20,
+                                                   int base_h         = 2048,
+                                                   int base_w         = 2048,
+                                                   int vae_scale_t    = 8,
+                                                   int vae_scale_h    = 32,
+                                                   int vae_scale_w    = 32,
+                                                   int causal_offset  = 1,
+                                                   float fps          = 24.f,
+                                                   float theta        = 10000.f) {
         RopeTables t;
         t.dim = dim;
         t.L   = (int64_t)num_frames * height * width;
         t.cos.assign(t.L * dim, 0.f);
         t.sin.assign(t.L * dim, 0.f);
 
-        int freq_per_axis = dim / 6;
-        int pad           = dim % 6;
+        // num_pos_dims = 3 (video), num_rope_elems = 6.
+        int num_rope_elems = 6;
+        int freq_per_axis  = dim / num_rope_elems;
+        int pad            = dim % num_rope_elems;  // prepended with cos=1, sin=0
 
-        std::vector<float> omega(freq_per_axis);
+        // Frequencies: pow(theta, linspace(0, 1, dim//num_rope_elems)) * pi/2
+        std::vector<float> freqs(freq_per_axis);
         if (freq_per_axis > 1) {
-            float start = 0.f;
-            float end   = 1.f;
-            float step  = (end - start) / (freq_per_axis - 1);
             for (int i = 0; i < freq_per_axis; ++i) {
-                float exponent = start + i * step;
-                omega[i]       = std::pow(theta, exponent) * (float)M_PI / 2.f;
+                float exponent = (float)i / (float)(freq_per_axis - 1);
+                freqs[i]       = std::pow(theta, exponent) * (float)M_PI / 2.f;
             }
         } else if (freq_per_axis == 1) {
-            omega[0] = 1.f * (float)M_PI / 2.f;
+            freqs[0] = (float)M_PI / 2.f;
         }
 
         int64_t idx = 0;
         for (int f = 0; f < num_frames; ++f) {
-            float gf = (float)f * scale_f * patch_t / (float)base_frames;
+            // Latent coords: [f, f + patch_size_t) with step patch_size_t.
+            // Pixel coords (mid): ((f + patch_size_t/2.0) * vae_scale_t + causal_offset - vae_scale_t)
+            // clamped at min 0, then divided by fps.
+            float pix_start_t = (float)f * patch_size_t * vae_scale_t;
+            float pix_end_t   = ((float)f * patch_size_t + patch_size_t) * vae_scale_t;
+            pix_start_t       = std::max(0.f, pix_start_t + (float)causal_offset - (float)vae_scale_t);
+            pix_end_t         = std::max(0.f, pix_end_t   + (float)causal_offset - (float)vae_scale_t);
+            float mid_t       = 0.5f * (pix_start_t + pix_end_t) / fps;
+            float gf          = mid_t / (float)base_frames;
+
             for (int h = 0; h < height; ++h) {
-                float gh = (float)h * scale_h * patch_size / (float)base_h;
+                float mid_h = ((float)h + 0.5f) * (float)patch_size * (float)vae_scale_h;
+                float gh    = mid_h / (float)base_h;
                 for (int w = 0; w < width; ++w) {
-                    float gw = (float)w * scale_w * patch_size / (float)base_w;
-                    float* co = &t.cos[idx * dim];
-                    float* si = &t.sin[idx * dim];
+                    float mid_w = ((float)w + 0.5f) * (float)patch_size * (float)vae_scale_w;
+                    float gw    = mid_w / (float)base_w;
+                    float* co   = &t.cos[idx * dim];
+                    float* si   = &t.sin[idx * dim];
 
                     for (int p = 0; p < pad; ++p) {
                         co[p] = 1.f;
@@ -531,9 +676,9 @@ namespace LTXV {
                     }
 
                     for (int k = 0; k < freq_per_axis; ++k) {
-                        float ang_f   = omega[k] * (gf * 2.f - 1.f);
-                        float ang_h   = omega[k] * (gh * 2.f - 1.f);
-                        float ang_w   = omega[k] * (gw * 2.f - 1.f);
+                        float ang_f   = freqs[k] * (gf * 2.f - 1.f);
+                        float ang_h   = freqs[k] * (gh * 2.f - 1.f);
+                        float ang_w   = freqs[k] * (gw * 2.f - 1.f);
                         float vals[3] = {ang_f, ang_h, ang_w};
                         for (int a = 0; a < 3; ++a) {
                             float c = std::cos(vals[a]);
@@ -551,16 +696,14 @@ namespace LTXV {
         return t;
     }
 
-    // Full LTX transformer (LTXVideoTransformer3DModel).
-    // Top-level parameters:
-    //   proj_in              : Linear(in, inner_dim, bias)
-    //   time_embed           : AdaLayerNormSingle(inner_dim)
-    //   caption_projection   : CaptionProjection(caption_ch, inner_dim)
-    //   transformer_blocks.N : LTXVideoTransformerBlock * num_layers
-    //   norm_out             : LayerNorm(inner_dim, elementwise_affine=False)
-    //   scale_shift_table    : [2, inner_dim]
-    //   proj_out             : Linear(inner_dim, out, bias)
-    class LTXVideoTransformer3DModel : public GGMLBlock {
+    // Full LTX-2 transformer (video-only forward, all weights loaded).
+    //
+    // Default config (LTX-2.0 "Video"):
+    //   in_channels=128, out_channels=128,
+    //   num_attention_heads=32, attention_head_dim=128, inner_dim=4096,
+    //   cross_attention_dim=4096, caption_channels=3840,
+    //   num_layers=48, audio_inner_dim=32*64=2048, audio_cross_attention_dim=2048.
+    class LTX2VideoTransformer3DModel : public GGMLBlock {
     public:
         int64_t in_channels;
         int64_t out_channels;
@@ -568,29 +711,44 @@ namespace LTXV {
         int64_t num_attention_heads;
         int64_t attention_head_dim;
         int64_t inner_dim;
+        int64_t audio_inner_dim;
         int64_t cross_attention_dim;
         int64_t caption_channels;
         int patch_size;
         int patch_size_t;
+        bool gated_attn;
+        bool cross_attn_mod;       // adds 3 extra mod params to scale_shift_table
+        bool use_prompt_embeddings;
+        bool prompt_modulation;    // LTX-2.3 only
+        std::string rope_type;     // "interleaved" (supported) or "split" (TODO)
 
     protected:
         void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
-            params["scale_shift_table"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, inner_dim, 2);
+            params["scale_shift_table"]       = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, inner_dim, 2);
+            params["audio_scale_shift_table"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, audio_inner_dim, 2);
         }
 
     public:
-        LTXVideoTransformer3DModel(int64_t in_channels         = 128,
-                                   int64_t out_channels         = 128,
-                                   int patch_size               = 1,
-                                   int patch_size_t             = 1,
-                                   int64_t num_attention_heads  = 32,
-                                   int64_t attention_head_dim   = 64,
-                                   int64_t cross_attention_dim  = 2048,
-                                   int64_t num_layers           = 28,
-                                   int64_t caption_channels     = 4096,
-                                   bool attention_bias          = true,
-                                   bool attention_out_bias      = true,
-                                   float norm_eps               = 1e-6f)
+        LTX2VideoTransformer3DModel(int64_t in_channels               = 128,
+                                    int64_t out_channels              = 128,
+                                    int patch_size                    = 1,
+                                    int patch_size_t                  = 1,
+                                    int64_t num_attention_heads       = 32,
+                                    int64_t attention_head_dim        = 128,
+                                    int64_t cross_attention_dim       = 4096,
+                                    int64_t num_layers                = 48,
+                                    int64_t caption_channels          = 3840,
+                                    int64_t audio_in_channels         = 128,
+                                    int64_t audio_num_attention_heads = 32,
+                                    int64_t audio_attention_head_dim  = 64,
+                                    int64_t audio_cross_attention_dim = 2048,
+                                    bool gated_attn                   = false,
+                                    bool cross_attn_mod               = false,
+                                    bool audio_gated_attn             = false,
+                                    bool audio_cross_attn_mod         = false,
+                                    bool use_prompt_embeddings        = true,
+                                    float norm_eps                    = 1e-6f,
+                                    std::string rope_type             = "interleaved")
             : in_channels(in_channels),
               out_channels(out_channels),
               num_layers(num_layers),
@@ -599,24 +757,70 @@ namespace LTXV {
               cross_attention_dim(cross_attention_dim),
               caption_channels(caption_channels),
               patch_size(patch_size),
-              patch_size_t(patch_size_t) {
-            inner_dim = num_attention_heads * attention_head_dim;
+              patch_size_t(patch_size_t),
+              gated_attn(gated_attn),
+              cross_attn_mod(cross_attn_mod),
+              use_prompt_embeddings(use_prompt_embeddings),
+              rope_type(rope_type) {
+            inner_dim          = num_attention_heads * attention_head_dim;
+            audio_inner_dim    = audio_num_attention_heads * audio_attention_head_dim;
+            prompt_modulation  = cross_attn_mod || audio_cross_attn_mod;
 
-            blocks["proj_in"]            = std::shared_ptr<GGMLBlock>(new Linear(in_channels, inner_dim, true));
-            blocks["time_embed"]         = std::shared_ptr<GGMLBlock>(new AdaLayerNormSingle(inner_dim));
-            blocks["caption_projection"] = std::shared_ptr<GGMLBlock>(new CaptionProjection(caption_channels, inner_dim));
+            int video_time_emb_mod_params = cross_attn_mod ? 9 : 6;
+            int audio_time_emb_mod_params = audio_cross_attn_mod ? 9 : 6;
+
+            // 1. Patchification projections
+            blocks["proj_in"]       = std::shared_ptr<GGMLBlock>(new Linear(in_channels, inner_dim, true));
+            blocks["audio_proj_in"] = std::shared_ptr<GGMLBlock>(new Linear(audio_in_channels, audio_inner_dim, true));
+
+            // 2. Prompt embeddings
+            if (use_prompt_embeddings) {
+                blocks["caption_projection"]       = std::shared_ptr<GGMLBlock>(new CaptionProjection(caption_channels, inner_dim));
+                blocks["audio_caption_projection"] = std::shared_ptr<GGMLBlock>(new CaptionProjection(caption_channels, audio_inner_dim));
+            }
+
+            // 3. Timestep modulation
+            blocks["time_embed"]       = std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(inner_dim, video_time_emb_mod_params));
+            blocks["audio_time_embed"] = std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(audio_inner_dim, audio_time_emb_mod_params));
+
+            // Global cross-attention modulation (a2v / v2a)
+            blocks["av_cross_attn_video_scale_shift"] =
+                std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(inner_dim, 4));
+            blocks["av_cross_attn_audio_scale_shift"] =
+                std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(audio_inner_dim, 4));
+            blocks["av_cross_attn_video_a2v_gate"] =
+                std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(inner_dim, 1));
+            blocks["av_cross_attn_audio_v2a_gate"] =
+                std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(audio_inner_dim, 1));
+
+            if (prompt_modulation) {
+                blocks["prompt_adaln"]       = std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(inner_dim, 2));
+                blocks["audio_prompt_adaln"] = std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(audio_inner_dim, 2));
+            }
+
+            // 5. Transformer blocks
             for (int64_t i = 0; i < num_layers; ++i) {
                 blocks["transformer_blocks." + std::to_string(i)] =
-                    std::shared_ptr<GGMLBlock>(new LTXVideoTransformerBlock(
+                    std::shared_ptr<GGMLBlock>(new LTX2VideoTransformerBlock(
                         inner_dim, num_attention_heads, attention_head_dim, cross_attention_dim,
-                        attention_bias, attention_out_bias, norm_eps));
+                        audio_inner_dim, audio_num_attention_heads, audio_attention_head_dim, audio_cross_attention_dim,
+                        gated_attn, cross_attn_mod, audio_gated_attn, audio_cross_attn_mod,
+                        true, true, norm_eps, rope_type));
             }
-            blocks["norm_out"] = std::shared_ptr<GGMLBlock>(new LayerNorm(inner_dim, norm_eps,
-                                                                           /*elementwise_affine=*/false,
-                                                                           /*bias=*/false));
-            blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, out_channels, true));
+
+            // 6. Output layers
+            blocks["norm_out"]       = std::shared_ptr<GGMLBlock>(new LayerNorm(inner_dim, norm_eps, false, false));
+            blocks["proj_out"]       = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, out_channels, true));
+            blocks["audio_norm_out"] = std::shared_ptr<GGMLBlock>(new LayerNorm(audio_inner_dim, norm_eps, false, false));
+            blocks["audio_proj_out"] = std::shared_ptr<GGMLBlock>(new Linear(audio_inner_dim, audio_in_channels, true));
         }
 
+        // Video-only forward pass.
+        // hidden_states         : [N, L, in_channels]
+        // encoder_hidden_states : [N, L_enc, caption_channels]
+        // timestep              : [N]
+        // rope_cos / rope_sin   : [L, inner_dim]
+        // encoder_mask          : additive bias
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* hidden_states,
                              ggml_tensor* encoder_hidden_states,
@@ -624,35 +828,39 @@ namespace LTXV {
                              ggml_tensor* rope_cos,
                              ggml_tensor* rope_sin,
                              ggml_tensor* encoder_mask = nullptr) {
-            auto proj_in  = std::dynamic_pointer_cast<Linear>(blocks["proj_in"]);
-            auto te       = std::dynamic_pointer_cast<AdaLayerNormSingle>(blocks["time_embed"]);
-            auto cproj    = std::dynamic_pointer_cast<CaptionProjection>(blocks["caption_projection"]);
-            auto norm_out = std::dynamic_pointer_cast<LayerNorm>(blocks["norm_out"]);
-            auto proj_out = std::dynamic_pointer_cast<Linear>(blocks["proj_out"]);
+            auto proj_in   = std::dynamic_pointer_cast<Linear>(blocks["proj_in"]);
+            auto te        = std::dynamic_pointer_cast<LTX2AdaLayerNormSingle>(blocks["time_embed"]);
+            auto norm_out  = std::dynamic_pointer_cast<LayerNorm>(blocks["norm_out"]);
+            auto proj_out  = std::dynamic_pointer_cast<Linear>(blocks["proj_out"]);
 
-            auto x = proj_in->forward(ctx, hidden_states);  // [inner_dim, L, N]
+            // proj_in patches the latent into inner_dim tokens.
+            auto x = proj_in->forward(ctx, hidden_states);
 
             auto te_pair           = te->forward(ctx, timestep);
-            auto temb              = te_pair.first;    // [6*inner_dim, N]
-            auto embedded_timestep = te_pair.second;   // [inner_dim, N]
+            auto temb              = te_pair.first;     // [6*inner_dim or 9*inner_dim, N]
+            auto embedded_timestep = te_pair.second;    // [inner_dim, N]
 
-            // Reshape temb to [6*inner_dim, 1, N, 1] for broadcasting across L.
-            temb = ggml_reshape_4d(ctx->ggml_ctx, temb, 6 * inner_dim, 1, temb->ne[1], 1);
+            // Reshape temb to [mod_params*inner_dim, 1, N, 1] for broadcasting.
+            temb = ggml_reshape_4d(ctx->ggml_ctx, temb, temb->ne[0], 1, temb->ne[1], 1);
 
-            auto encoder = cproj->forward(ctx, encoder_hidden_states);
+            // Caption projection
+            ggml_tensor* encoder = encoder_hidden_states;
+            if (use_prompt_embeddings) {
+                auto cproj = std::dynamic_pointer_cast<CaptionProjection>(blocks["caption_projection"]);
+                encoder    = cproj->forward(ctx, encoder);
+            }
 
             for (int64_t i = 0; i < num_layers; ++i) {
-                auto blk = std::dynamic_pointer_cast<LTXVideoTransformerBlock>(
+                auto blk = std::dynamic_pointer_cast<LTX2VideoTransformerBlock>(
                     blocks["transformer_blocks." + std::to_string(i)]);
                 x = blk->forward(ctx, x, encoder, temb, rope_cos, rope_sin, encoder_mask);
             }
 
-            // Final modulation + projection.
-            ggml_tensor* sst = params["scale_shift_table"];                 // [inner_dim, 2]
+            // Output modulation + projection.
+            ggml_tensor* sst = params["scale_shift_table"];  // [inner_dim, 2]
             auto et_r        = ggml_reshape_4d(ctx->ggml_ctx, embedded_timestep,
                                                 inner_dim, 1, embedded_timestep->ne[1], 1);
             auto sst_r       = ggml_reshape_4d(ctx->ggml_ctx, sst, inner_dim, 2, 1, 1);
-            // Broadcast et_r to [inner_dim, 2, N, 1] via explicit repeat.
             auto target      = ggml_new_tensor_4d(ctx->ggml_ctx, et_r->type,
                                                    inner_dim, 2, et_r->ne[2], 1);
             auto et_expand   = ggml_repeat(ctx->ggml_ctx, et_r, target);
@@ -671,12 +879,9 @@ namespace LTXV {
         }
     };
 
-    // ==================================================================
-    //                         TRANSFORMER RUNNER
-    // ==================================================================
-
+    // Transformer runner.
     struct LTXVRunner : public GGMLRunner {
-        LTXVideoTransformer3DModel dit;
+        LTX2VideoTransformer3DModel dit;
         RopeTables rope_tbl;
 
         LTXVRunner(ggml_backend_t backend,
@@ -690,14 +895,14 @@ namespace LTXV {
                   /*patch_size=*/1,
                   /*patch_size_t=*/1,
                   /*num_attention_heads=*/32,
-                  /*attention_head_dim=*/64,
-                  /*cross_attention_dim=*/2048,
-                  /*num_layers=*/28,
-                  /*caption_channels=*/4096) {
+                  /*attention_head_dim=*/128,
+                  /*cross_attention_dim=*/4096,
+                  /*num_layers=*/48,
+                  /*caption_channels=*/3840) {
             dit.init(params_ctx, tensor_storage_map, prefix);
         }
 
-        std::string get_desc() override { return "ltxv"; }
+        std::string get_desc() override { return "ltxv2"; }
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
             dit.get_param_tensors(tensors, prefix);
@@ -724,8 +929,7 @@ namespace LTXV {
             int64_t C = x_t->ne[3];
             GGML_ASSERT(C == dit.in_channels);
 
-            // Build RoPE tables on host; rope_tbl member keeps data alive.
-            rope_tbl      = compute_rope((int)F, (int)H, (int)W, (int)dit.inner_dim);
+            rope_tbl      = compute_rope_ltx2((int)F, (int)H, (int)W, (int)dit.inner_dim);
             auto rope_cos = ggml_new_tensor_2d(compute, GGML_TYPE_F32,
                                                 (int64_t)dit.inner_dim, rope_tbl.L);
             auto rope_sin = ggml_new_tensor_2d(compute, GGML_TYPE_F32,
@@ -733,7 +937,6 @@ namespace LTXV {
             set_backend_tensor_data(rope_cos, rope_tbl.cos.data());
             set_backend_tensor_data(rope_sin, rope_tbl.sin.data());
 
-            // [W, H, F, C] -> [C, W*H*F, 1]
             auto hidden = ggml_ext_cont(compute,
                                         ggml_ext_torch_permute(compute, x_t, 3, 0, 1, 2));
             hidden      = ggml_reshape_3d(compute, hidden, C, W * H * F, 1);
@@ -741,7 +944,6 @@ namespace LTXV {
             auto rctx = get_context();
             auto out  = dit.forward(&rctx, hidden, c_t, ts_t, rope_cos, rope_sin, m_t);
 
-            // [C, W*H*F, 1] -> [W, H, F, C]
             out = ggml_reshape_4d(compute, out, C, W, H, F);
             out = ggml_ext_cont(compute, ggml_ext_torch_permute(compute, out, 1, 2, 3, 0));
 
@@ -765,14 +967,21 @@ namespace LTXV {
     };
 
     // ==================================================================
-    //                               VAE
+    //                              LTX-2 VAE
     // ==================================================================
 
-    class LTXResnetBlock3d : public GGMLBlock {
+    // LTX-2 ResnetBlock3d.
+    //   norm1: PerChannelRMSNorm  (no weight, runtime)
+    //   conv1: CausalConv3d (runtime causal flag)
+    //   norm2: PerChannelRMSNorm
+    //   conv2: CausalConv3d
+    //   shortcut (in != out): LayerNorm(in, elementwise_affine=True, bias=True)
+    //                         + plain nn.Conv3d(1, bias=True)  — NO causal padding
+    //   timestep_conditioning: scale_shift_table [4, in] applied in two stages.
+    class LTX2ResnetBlock3d : public GGMLBlock {
     protected:
         int64_t in_channels;
         int64_t out_channels;
-        bool is_causal;
         bool timestep_conditioning;
         bool has_shortcut;
 
@@ -783,32 +992,31 @@ namespace LTXV {
         }
 
     public:
-        LTXResnetBlock3d(int64_t in_channels,
-                         int64_t out_channels             = -1,
-                         bool is_causal                   = true,
-                         bool timestep_conditioning        = false,
-                         float eps                        = 1e-6f)
-            : in_channels(in_channels),
-              timestep_conditioning(timestep_conditioning) {
+        LTX2ResnetBlock3d(int64_t in_channels,
+                          int64_t out_channels             = -1,
+                          bool timestep_conditioning        = false,
+                          float eps                        = 1e-6f)
+            : in_channels(in_channels), timestep_conditioning(timestep_conditioning) {
             if (out_channels < 0) out_channels = in_channels;
             this->out_channels = out_channels;
             has_shortcut       = (in_channels != out_channels);
 
-            blocks["norm1"] = std::shared_ptr<GGMLBlock>(new VideoChannelRMSNorm(in_channels, 1e-8f, false));
-            blocks["conv1"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(in_channels, out_channels, {3, 3, 3},
-                                                                           {1, 1, 1}, {1, 1, 1}, true, is_causal));
+            blocks["norm1"] = std::shared_ptr<GGMLBlock>(new PerChannelRMSNorm(1e-8f));
+            blocks["conv1"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(in_channels, out_channels, {3, 3, 3}));
 
-            blocks["norm2"] = std::shared_ptr<GGMLBlock>(new VideoChannelRMSNorm(out_channels, 1e-8f, false));
-            blocks["conv2"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(out_channels, out_channels, {3, 3, 3},
-                                                                           {1, 1, 1}, {1, 1, 1}, true, is_causal));
+            blocks["norm2"] = std::shared_ptr<GGMLBlock>(new PerChannelRMSNorm(1e-8f));
+            blocks["conv2"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(out_channels, out_channels, {3, 3, 3}));
             if (has_shortcut) {
-                blocks["norm3"]         = std::shared_ptr<GGMLBlock>(new VideoChannelRMSNorm(in_channels, eps, true));
-                blocks["conv_shortcut"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(in_channels, out_channels, {1, 1, 1},
-                                                                                       {1, 1, 1}, {1, 1, 1}, true, is_causal));
+                blocks["norm3"]         = std::shared_ptr<GGMLBlock>(new LayerNorm(in_channels, eps, true, true));
+                // Plain Conv3d 1x1x1 — NO causal temporal padding (LTX-2 change).
+                blocks["conv_shortcut"] = std::shared_ptr<GGMLBlock>(new Conv3d(in_channels, out_channels, {1, 1, 1}));
             }
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* hidden, ggml_tensor* temb = nullptr) {
+        // hidden : [W, H, F, C*N]
+        // temb   : per-channel modulation (from decoder's time_embedder), or nullptr
+        // causal : runtime causal flag
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* hidden, ggml_tensor* temb = nullptr, bool causal = true) {
             auto norm1 = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm1"]);
             auto conv1 = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv1"]);
             auto norm2 = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm2"]);
@@ -822,7 +1030,7 @@ namespace LTXV {
             ggml_tensor* shift_2 = nullptr;
             ggml_tensor* scale_2 = nullptr;
             if (timestep_conditioning && temb != nullptr) {
-                ggml_tensor* sst = params["scale_shift_table"];                 // [C, 4]
+                ggml_tensor* sst = params["scale_shift_table"];
                 auto temb_r = ggml_reshape_4d(ctx->ggml_ctx, temb, in_channels, 4, temb->ne[1], 1);
                 auto sst_r  = ggml_reshape_4d(ctx->ggml_ctx, sst, in_channels, 4, 1, 1);
                 auto ada    = ggml_add(ctx->ggml_ctx, temb_r, sst_r);
@@ -830,7 +1038,6 @@ namespace LTXV {
                     auto v = ggml_view_4d(ctx->ggml_ctx, ada,
                                           ada->ne[0], 1, ada->ne[2], ada->ne[3],
                                           ada->nb[1], ada->nb[2], ada->nb[3], ada->nb[1] * idx);
-                    // Make it broadcastable over [W, H, F]: reshape to [1,1,1,C*N].
                     return ggml_reshape_4d(ctx->ggml_ctx, v, 1, 1, 1, ada->ne[0] * ada->ne[2]);
                 };
                 shift_1 = slice(0);
@@ -842,7 +1049,7 @@ namespace LTXV {
             }
 
             h = ggml_silu_inplace(ctx->ggml_ctx, h);
-            h = conv1->forward(ctx, h);
+            h = conv1->forward(ctx, h, causal);
 
             h = norm2->forward(ctx, h);
             if (timestep_conditioning && temb != nullptr) {
@@ -850,11 +1057,11 @@ namespace LTXV {
                 h = ggml_add(ctx->ggml_ctx, h, shift_2);
             }
             h = ggml_silu_inplace(ctx->ggml_ctx, h);
-            h = conv2->forward(ctx, h);
+            h = conv2->forward(ctx, h, causal);
 
             if (has_shortcut) {
                 auto norm3   = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm3"]);
-                auto shortct = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv_shortcut"]);
+                auto shortct = std::dynamic_pointer_cast<Conv3d>(blocks["conv_shortcut"]);
                 residual     = norm3->forward(ctx, residual);
                 residual     = shortct->forward(ctx, residual);
             }
@@ -862,73 +1069,101 @@ namespace LTXV {
         }
     };
 
-    class LTXDownBlock3D : public GGMLBlock {
+    // Downsampler3d — LTX-2 (spatial, temporal, spatiotemporal variants).
+    // Output computed via a residual "pool" branch (mean of strided blocks)
+    // plus the convolution branch. For "spatiotemporal" stride (2,2,2) only
+    // the convolution is strided; the other variants rearrange channels to
+    // achieve the effective stride.
+    class LTX2Downsampler3d : public GGMLBlock {
+    protected:
+        int64_t in_channels;
+        int64_t out_channels;
+        std::tuple<int, int, int> stride;
+
+    public:
+        LTX2Downsampler3d(int64_t in_channels,
+                          int64_t out_channels,
+                          std::tuple<int, int, int> stride)
+            : in_channels(in_channels), out_channels(out_channels), stride(stride) {
+            int st = std::get<0>(stride), sh = std::get<1>(stride), sw = std::get<2>(stride);
+            int64_t conv_out = out_channels / (st * sh * sw);
+            blocks["conv"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(in_channels, conv_out, {3, 3, 3}));
+        }
+
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* h, bool causal = true) {
+            auto conv = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv"]);
+            // Diffusers' LTX2VideoDownsampler3d is a pixel-shuffle-style operator.
+            // The dedicated ggml implementation still needs pixel-shuffle ordering
+            // verification against PyTorch outputs (TODO in README.ltxv.md).
+            return conv->forward(ctx, h, causal);
+        }
+    };
+
+    class LTX2DownBlock3D : public GGMLBlock {
     protected:
         int64_t in_channels;
         int64_t out_channels;
         int64_t num_layers;
         bool spatio_temporal_scale;
-        bool is_causal;
-        bool has_out_proj;
+        std::string downsample_type;
 
     public:
-        LTXDownBlock3D(int64_t in_channels,
-                       int64_t out_channels,
-                       int64_t num_layers,
-                       bool spatio_temporal_scale,
-                       bool is_causal)
-            : in_channels(in_channels),
-              out_channels(out_channels),
-              num_layers(num_layers),
+        LTX2DownBlock3D(int64_t in_channels,
+                        int64_t out_channels,
+                        int64_t num_layers,
+                        bool spatio_temporal_scale,
+                        std::string downsample_type = "spatiotemporal")
+            : in_channels(in_channels), out_channels(out_channels), num_layers(num_layers),
               spatio_temporal_scale(spatio_temporal_scale),
-              is_causal(is_causal) {
+              downsample_type(downsample_type) {
             for (int64_t i = 0; i < num_layers; ++i) {
                 blocks["resnets." + std::to_string(i)] =
-                    std::shared_ptr<GGMLBlock>(new LTXResnetBlock3d(in_channels, in_channels, is_causal, false));
+                    std::shared_ptr<GGMLBlock>(new LTX2ResnetBlock3d(in_channels, in_channels, false));
             }
             if (spatio_temporal_scale) {
-                blocks["downsamplers.0"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(
-                    in_channels, in_channels, {3, 3, 3}, {2, 2, 2}, {1, 1, 1}, true, is_causal));
-            }
-            has_out_proj = (in_channels != out_channels);
-            if (has_out_proj) {
-                blocks["conv_out"] = std::shared_ptr<GGMLBlock>(new LTXResnetBlock3d(
-                    in_channels, out_channels, is_causal, false));
+                if (downsample_type == "conv") {
+                    blocks["downsamplers.0"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(
+                        in_channels, in_channels, {3, 3, 3}, {2, 2, 2}));
+                } else {
+                    std::tuple<int, int, int> stride{2, 2, 2};
+                    if (downsample_type == "spatial")       stride = {1, 2, 2};
+                    else if (downsample_type == "temporal") stride = {2, 1, 1};
+                    blocks["downsamplers.0"] = std::shared_ptr<GGMLBlock>(new LTX2Downsampler3d(
+                        in_channels, out_channels, stride));
+                }
             }
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* h) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* h, bool causal = true) {
             for (int64_t i = 0; i < num_layers; ++i) {
-                auto rn = std::dynamic_pointer_cast<LTXResnetBlock3d>(
+                auto rn = std::dynamic_pointer_cast<LTX2ResnetBlock3d>(
                     blocks["resnets." + std::to_string(i)]);
-                h = rn->forward(ctx, h, nullptr);
+                h = rn->forward(ctx, h, nullptr, causal);
             }
             if (spatio_temporal_scale) {
-                auto ds = std::dynamic_pointer_cast<CausalConv3d>(blocks["downsamplers.0"]);
-                h       = ds->forward(ctx, h);
-            }
-            if (has_out_proj) {
-                auto co = std::dynamic_pointer_cast<LTXResnetBlock3d>(blocks["conv_out"]);
-                h       = co->forward(ctx, h, nullptr);
+                if (downsample_type == "conv") {
+                    auto ds = std::dynamic_pointer_cast<CausalConv3d>(blocks["downsamplers.0"]);
+                    h       = ds->forward(ctx, h, causal);
+                } else {
+                    auto ds = std::dynamic_pointer_cast<LTX2Downsampler3d>(blocks["downsamplers.0"]);
+                    h       = ds->forward(ctx, h, causal);
+                }
             }
             return h;
         }
     };
 
-    class LTXMidBlock3d : public GGMLBlock {
+    class LTX2MidBlock3d : public GGMLBlock {
     protected:
         int64_t channels;
         int64_t num_layers;
         bool timestep_conditioning;
 
     public:
-        LTXMidBlock3d(int64_t channels,
-                      int64_t num_layers,
-                      bool is_causal             = true,
-                      bool timestep_conditioning = false)
-            : channels(channels),
-              num_layers(num_layers),
-              timestep_conditioning(timestep_conditioning) {
+        LTX2MidBlock3d(int64_t channels,
+                       int64_t num_layers,
+                       bool timestep_conditioning = false)
+            : channels(channels), num_layers(num_layers), timestep_conditioning(timestep_conditioning) {
             if (timestep_conditioning) {
                 blocks["time_embedder.timestep_embedder.linear_1"] =
                     std::shared_ptr<GGMLBlock>(new Linear(256, channels * 4, true));
@@ -937,11 +1172,11 @@ namespace LTXV {
             }
             for (int64_t i = 0; i < num_layers; ++i) {
                 blocks["resnets." + std::to_string(i)] =
-                    std::shared_ptr<GGMLBlock>(new LTXResnetBlock3d(channels, channels, is_causal, timestep_conditioning));
+                    std::shared_ptr<GGMLBlock>(new LTX2ResnetBlock3d(channels, channels, timestep_conditioning));
             }
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* h, ggml_tensor* temb_in = nullptr) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* h, ggml_tensor* temb_in = nullptr, bool causal = true) {
             ggml_tensor* temb = nullptr;
             if (timestep_conditioning && temb_in != nullptr) {
                 auto l1 = std::dynamic_pointer_cast<Linear>(blocks["time_embedder.timestep_embedder.linear_1"]);
@@ -953,36 +1188,31 @@ namespace LTXV {
                 temb    = f;
             }
             for (int64_t i = 0; i < num_layers; ++i) {
-                auto rn = std::dynamic_pointer_cast<LTXResnetBlock3d>(
+                auto rn = std::dynamic_pointer_cast<LTX2ResnetBlock3d>(
                     blocks["resnets." + std::to_string(i)]);
-                h = rn->forward(ctx, h, temb);
+                h = rn->forward(ctx, h, temb, causal);
             }
             return h;
         }
     };
 
-    class LTXUpBlock3d : public GGMLBlock {
+    class LTX2UpBlock3d : public GGMLBlock {
     protected:
         int64_t in_channels;
         int64_t out_channels;
         int64_t num_layers;
         bool spatio_temporal_scale;
-        bool is_causal;
         bool timestep_conditioning;
         bool has_conv_in;
 
     public:
-        LTXUpBlock3d(int64_t in_channels,
-                     int64_t out_channels,
-                     int64_t num_layers,
-                     bool spatio_temporal_scale,
-                     bool is_causal,
-                     bool timestep_conditioning)
-            : in_channels(in_channels),
-              out_channels(out_channels),
-              num_layers(num_layers),
+        LTX2UpBlock3d(int64_t in_channels,
+                      int64_t out_channels,
+                      int64_t num_layers,
+                      bool spatio_temporal_scale,
+                      bool timestep_conditioning)
+            : in_channels(in_channels), out_channels(out_channels), num_layers(num_layers),
               spatio_temporal_scale(spatio_temporal_scale),
-              is_causal(is_causal),
               timestep_conditioning(timestep_conditioning) {
             has_conv_in = (in_channels != out_channels);
 
@@ -993,23 +1223,22 @@ namespace LTXV {
                     std::shared_ptr<GGMLBlock>(new Linear(in_channels * 4, in_channels * 4, true));
             }
             if (has_conv_in) {
-                blocks["conv_in"] = std::shared_ptr<GGMLBlock>(new LTXResnetBlock3d(
-                    in_channels, out_channels, is_causal, timestep_conditioning));
+                blocks["conv_in"] = std::shared_ptr<GGMLBlock>(new LTX2ResnetBlock3d(
+                    in_channels, out_channels, timestep_conditioning));
             }
             if (spatio_temporal_scale) {
-                // Upsampler's internal conv: (out_channels, out_channels*8) with stride 1.
+                // Upsampler conv: (out_channels, out_channels*8)  — stride (2,2,2)
                 blocks["upsamplers.0.conv"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(
-                    out_channels, out_channels * 8, {3, 3, 3},
-                    {1, 1, 1}, {1, 1, 1}, true, is_causal));
+                    out_channels, out_channels * 8, {3, 3, 3}));
             }
             for (int64_t i = 0; i < num_layers; ++i) {
                 blocks["resnets." + std::to_string(i)] =
-                    std::shared_ptr<GGMLBlock>(new LTXResnetBlock3d(
-                        out_channels, out_channels, is_causal, timestep_conditioning));
+                    std::shared_ptr<GGMLBlock>(new LTX2ResnetBlock3d(
+                        out_channels, out_channels, timestep_conditioning));
             }
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* h, ggml_tensor* temb_in = nullptr) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* h, ggml_tensor* temb_in = nullptr, bool causal = true) {
             ggml_tensor* temb = nullptr;
             if (timestep_conditioning && temb_in != nullptr) {
                 auto l1 = std::dynamic_pointer_cast<Linear>(blocks["time_embedder.timestep_embedder.linear_1"]);
@@ -1021,17 +1250,15 @@ namespace LTXV {
             }
 
             if (has_conv_in) {
-                auto ci = std::dynamic_pointer_cast<LTXResnetBlock3d>(blocks["conv_in"]);
-                h       = ci->forward(ctx, h, temb);
+                auto ci = std::dynamic_pointer_cast<LTX2ResnetBlock3d>(blocks["conv_in"]);
+                h       = ci->forward(ctx, h, temb, causal);
             }
 
             if (spatio_temporal_scale) {
                 auto up_conv = std::dynamic_pointer_cast<CausalConv3d>(blocks["upsamplers.0.conv"]);
-                h            = up_conv->forward(ctx, h);
-
-                // Pixel-shuffle 3D with factor (2, 2, 2).
-                // In ggml: ne = [W, H, F, 8*C_out]; we re-interpret as
-                //   [W*2, H*2, F*2, C_out] (contiguous reshape).
+                h            = up_conv->forward(ctx, h, causal);
+                // Pixel-shuffle 3D expansion factor (2,2,2). See TODO in docs/ltxv.md
+                // about matching diffusers' exact permute order.
                 int64_t W = h->ne[0];
                 int64_t H = h->ne[1];
                 int64_t F = h->ne[2];
@@ -1042,18 +1269,15 @@ namespace LTXV {
             }
 
             for (int64_t i = 0; i < num_layers; ++i) {
-                auto rn = std::dynamic_pointer_cast<LTXResnetBlock3d>(
+                auto rn = std::dynamic_pointer_cast<LTX2ResnetBlock3d>(
                     blocks["resnets." + std::to_string(i)]);
-                h = rn->forward(ctx, h, temb);
+                h = rn->forward(ctx, h, temb, causal);
             }
             return h;
         }
     };
 
-    // Encoder3d — diffusers' LTXVideoEncoder3d. Produces `latent_channels + 1`
-    // channel outputs per position; the final row is replicated to form
-    // `2*latent_channels - 1` posterior channels (see diffusers line 872-874).
-    class LTXVideoEncoder3d : public GGMLBlock {
+    class LTX2VideoEncoder3d : public GGMLBlock {
     protected:
         int patch_size;
         int patch_size_t;
@@ -1061,43 +1285,42 @@ namespace LTXV {
         std::vector<int64_t> block_out_channels;
         std::vector<bool> spatio_temporal_scaling;
         std::vector<int> layers_per_block;
+        std::vector<std::string> downsample_type;
 
     public:
-        LTXVideoEncoder3d(int64_t in_channels_arg = 3,
-                          int64_t latent_channels  = 128,
-                          std::vector<int64_t> block_out_channels = {128, 256, 512, 512},
-                          std::vector<bool> spatio_temporal_scaling = {true, true, true, false},
-                          std::vector<int> layers_per_block        = {4, 3, 3, 3, 4},
-                          int patch_size                           = 4,
-                          int patch_size_t                         = 1,
-                          bool is_causal                           = true)
-            : patch_size(patch_size),
-              patch_size_t(patch_size_t),
+        LTX2VideoEncoder3d(int64_t in_channels_arg                          = 3,
+                           int64_t latent_channels                          = 128,
+                           std::vector<int64_t> block_out_channels          = {256, 512, 1024, 2048},
+                           std::vector<bool> spatio_temporal_scaling         = {true, true, true, true},
+                           std::vector<int> layers_per_block                = {4, 3, 3, 3, 4},
+                           std::vector<std::string> downsample_type         = {"spatiotemporal", "spatiotemporal", "spatiotemporal", "spatiotemporal"},
+                           int patch_size                                   = 4,
+                           int patch_size_t                                 = 1)
+            : patch_size(patch_size), patch_size_t(patch_size_t),
               block_out_channels(block_out_channels),
               spatio_temporal_scaling(spatio_temporal_scaling),
-              layers_per_block(layers_per_block) {
+              layers_per_block(layers_per_block),
+              downsample_type(downsample_type) {
             in_channels_patched = in_channels_arg * patch_size * patch_size;
             int64_t out_ch      = block_out_channels[0];
 
-            blocks["conv_in"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(
-                in_channels_patched, out_ch, {3, 3, 3}, {1, 1, 1}, {1, 1, 1}, true, is_causal));
+            blocks["conv_in"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(in_channels_patched, out_ch, {3, 3, 3}));
             int nb = (int)block_out_channels.size();
             for (int i = 0; i < nb; ++i) {
                 int64_t ic = out_ch;
                 int64_t oc = (i + 1 < nb) ? block_out_channels[i + 1] : block_out_channels[i];
                 blocks["down_blocks." + std::to_string(i)] =
-                    std::shared_ptr<GGMLBlock>(new LTXDownBlock3D(ic, oc, layers_per_block[i],
-                                                                   spatio_temporal_scaling[i], is_causal));
+                    std::shared_ptr<GGMLBlock>(new LTX2DownBlock3D(ic, oc, layers_per_block[i],
+                                                                     spatio_temporal_scaling[i], downsample_type[i]));
                 out_ch = oc;
             }
-            blocks["mid_block"] = std::shared_ptr<GGMLBlock>(new LTXMidBlock3d(
-                out_ch, layers_per_block.back(), is_causal, false));
-            blocks["norm_out"]  = std::shared_ptr<GGMLBlock>(new VideoChannelRMSNorm(latent_channels, 1e-8f, false));
+            blocks["mid_block"] = std::shared_ptr<GGMLBlock>(new LTX2MidBlock3d(out_ch, layers_per_block.back(), false));
+            blocks["norm_out"]  = std::shared_ptr<GGMLBlock>(new PerChannelRMSNorm(1e-8f));
             blocks["conv_out"]  = std::shared_ptr<GGMLBlock>(new CausalConv3d(
-                out_ch, latent_channels + 1, {3, 3, 3}, {1, 1, 1}, {1, 1, 1}, true, is_causal));
+                out_ch, latent_channels + 1, {3, 3, 3}));
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* h) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* h, bool causal = true) {
             int64_t W = h->ne[0];
             int64_t H = h->ne[1];
             int64_t F = h->ne[2];
@@ -1110,26 +1333,26 @@ namespace LTXV {
             }
 
             auto conv_in = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv_in"]);
-            h            = conv_in->forward(ctx, h);
+            h            = conv_in->forward(ctx, h, causal);
 
             int nb = (int)block_out_channels.size();
             for (int i = 0; i < nb; ++i) {
-                auto db = std::dynamic_pointer_cast<LTXDownBlock3D>(blocks["down_blocks." + std::to_string(i)]);
-                h       = db->forward(ctx, h);
+                auto db = std::dynamic_pointer_cast<LTX2DownBlock3D>(blocks["down_blocks." + std::to_string(i)]);
+                h       = db->forward(ctx, h, causal);
             }
 
-            auto mid      = std::dynamic_pointer_cast<LTXMidBlock3d>(blocks["mid_block"]);
-            h             = mid->forward(ctx, h, nullptr);
+            auto mid      = std::dynamic_pointer_cast<LTX2MidBlock3d>(blocks["mid_block"]);
+            h             = mid->forward(ctx, h, nullptr, causal);
             auto norm_out = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm_out"]);
             h             = norm_out->forward(ctx, h);
             h             = ggml_silu_inplace(ctx->ggml_ctx, h);
             auto conv_out = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv_out"]);
-            h             = conv_out->forward(ctx, h);
+            h             = conv_out->forward(ctx, h, causal);
             return h;
         }
     };
 
-    class LTXVideoDecoder3d : public GGMLBlock {
+    class LTX2VideoDecoder3d : public GGMLBlock {
     protected:
         int patch_size;
         int patch_size_t;
@@ -1148,17 +1371,15 @@ namespace LTXV {
         }
 
     public:
-        LTXVideoDecoder3d(int64_t latent_channels = 128,
-                          int64_t out_channels_arg = 3,
-                          std::vector<int64_t> block_out_channels = {128, 256, 512, 512},
-                          std::vector<bool> spatio_temporal_scaling = {true, true, true, false},
-                          std::vector<int> layers_per_block         = {4, 3, 3, 3, 4},
-                          int patch_size                            = 4,
-                          int patch_size_t                          = 1,
-                          bool is_causal                            = false,
-                          bool timestep_conditioning                 = false)
-            : patch_size(patch_size),
-              patch_size_t(patch_size_t),
+        LTX2VideoDecoder3d(int64_t latent_channels                  = 128,
+                           int64_t out_channels_arg                  = 3,
+                           std::vector<int64_t> block_out_channels  = {256, 512, 1024, 2048},
+                           std::vector<bool> spatio_temporal_scaling = {true, true, true, true},
+                           std::vector<int> layers_per_block         = {4, 3, 3, 3, 4},
+                           int patch_size                            = 4,
+                           int patch_size_t                          = 1,
+                           bool timestep_conditioning                 = false)
+            : patch_size(patch_size), patch_size_t(patch_size_t),
               latent_channels(latent_channels),
               timestep_conditioning(timestep_conditioning) {
             out_channels_patched = out_channels_arg * patch_size * patch_size;
@@ -1171,25 +1392,21 @@ namespace LTXV {
             this->layers_per_block        = layers_per_block;
 
             int64_t out_ch = block_out_channels[0];
-            blocks["conv_in"]   = std::shared_ptr<GGMLBlock>(new CausalConv3d(
-                latent_channels, out_ch, {3, 3, 3}, {1, 1, 1}, {1, 1, 1}, true, is_causal));
-            blocks["mid_block"] = std::shared_ptr<GGMLBlock>(new LTXMidBlock3d(
-                out_ch, layers_per_block[0], is_causal, timestep_conditioning));
+            blocks["conv_in"]   = std::shared_ptr<GGMLBlock>(new CausalConv3d(latent_channels, out_ch, {3, 3, 3}));
+            blocks["mid_block"] = std::shared_ptr<GGMLBlock>(new LTX2MidBlock3d(out_ch, layers_per_block[0], timestep_conditioning));
 
             int nb = (int)block_out_channels.size();
             for (int i = 0; i < nb; ++i) {
                 int64_t ic = out_ch;
                 int64_t oc = block_out_channels[i];
                 blocks["up_blocks." + std::to_string(i)] =
-                    std::shared_ptr<GGMLBlock>(new LTXUpBlock3d(ic, oc, layers_per_block[i + 1],
-                                                                  spatio_temporal_scaling[i], is_causal,
-                                                                  timestep_conditioning));
+                    std::shared_ptr<GGMLBlock>(new LTX2UpBlock3d(ic, oc, layers_per_block[i + 1],
+                                                                   spatio_temporal_scaling[i], timestep_conditioning));
                 out_ch = oc;
             }
 
-            blocks["norm_out"] = std::shared_ptr<GGMLBlock>(new VideoChannelRMSNorm(out_ch, 1e-8f, false));
-            blocks["conv_out"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(
-                out_ch, out_channels_patched, {3, 3, 3}, {1, 1, 1}, {1, 1, 1}, true, is_causal));
+            blocks["norm_out"] = std::shared_ptr<GGMLBlock>(new PerChannelRMSNorm(1e-8f));
+            blocks["conv_out"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(out_ch, out_channels_patched, {3, 3, 3}));
             if (timestep_conditioning) {
                 blocks["time_embedder.timestep_embedder.linear_1"] =
                     std::shared_ptr<GGMLBlock>(new Linear(256, out_ch * 2, true));
@@ -1198,9 +1415,9 @@ namespace LTXV {
             }
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* z, ggml_tensor* temb_in = nullptr) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* z, ggml_tensor* temb_in = nullptr, bool causal = false) {
             auto conv_in = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv_in"]);
-            auto h       = conv_in->forward(ctx, z);
+            auto h       = conv_in->forward(ctx, z, causal);
 
             ggml_tensor* temb_scaled = nullptr;
             if (timestep_conditioning && temb_in != nullptr) {
@@ -1208,13 +1425,13 @@ namespace LTXV {
                 temb_scaled       = ggml_mul(ctx->ggml_ctx, temb_in, mult);
             }
 
-            auto mid = std::dynamic_pointer_cast<LTXMidBlock3d>(blocks["mid_block"]);
-            h        = mid->forward(ctx, h, temb_scaled);
+            auto mid = std::dynamic_pointer_cast<LTX2MidBlock3d>(blocks["mid_block"]);
+            h        = mid->forward(ctx, h, temb_scaled, causal);
 
             int nb = (int)block_out_channels.size();
             for (int i = 0; i < nb; ++i) {
-                auto ub = std::dynamic_pointer_cast<LTXUpBlock3d>(blocks["up_blocks." + std::to_string(i)]);
-                h       = ub->forward(ctx, h, temb_scaled);
+                auto ub = std::dynamic_pointer_cast<LTX2UpBlock3d>(blocks["up_blocks." + std::to_string(i)]);
+                h       = ub->forward(ctx, h, temb_scaled, causal);
             }
 
             auto norm_out = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm_out"]);
@@ -1226,7 +1443,7 @@ namespace LTXV {
                 auto f  = ggml_ext_timestep_embedding(ctx->ggml_ctx, temb_scaled, 256);
                 f       = l1->forward(ctx, f);
                 f       = ggml_silu_inplace(ctx->ggml_ctx, f);
-                f       = l2->forward(ctx, f);   // [out_ch*2, N]
+                f       = l2->forward(ctx, f);
                 int64_t out_ch = block_out_channels.back();
                 auto f_r   = ggml_reshape_4d(ctx->ggml_ctx, f, out_ch, 2, f->ne[1], 1);
                 auto sst   = params["scale_shift_table"];
@@ -1245,7 +1462,7 @@ namespace LTXV {
 
             h = ggml_silu_inplace(ctx->ggml_ctx, h);
             auto conv_out = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv_out"]);
-            h             = conv_out->forward(ctx, h);
+            h             = conv_out->forward(ctx, h, causal);
 
             int64_t W = h->ne[0];
             int64_t H = h->ne[1];
@@ -1261,46 +1478,41 @@ namespace LTXV {
         }
     };
 
-    class CausalVideoAutoencoder : public GGMLBlock {
+    class LTX2CausalVideoAutoencoder : public GGMLBlock {
     public:
         int64_t latent_channels;
 
-        CausalVideoAutoencoder(bool decode_only       = true,
-                                int64_t in_channels    = 3,
-                                int64_t out_channels   = 3,
-                                int64_t latent_channels = 128,
-                                bool timestep_conditioning = true,
-                                bool encoder_causal    = true,
-                                bool decoder_causal    = false)
+        LTX2CausalVideoAutoencoder(bool decode_only        = true,
+                                    int64_t in_channels     = 3,
+                                    int64_t out_channels    = 3,
+                                    int64_t latent_channels = 128,
+                                    bool timestep_conditioning = true)
             : latent_channels(latent_channels) {
             if (!decode_only) {
-                blocks["encoder"] = std::shared_ptr<GGMLBlock>(new LTXVideoEncoder3d(
-                    in_channels, latent_channels,
-                    {128, 256, 512, 512}, {true, true, true, false}, {4, 3, 3, 3, 4},
-                    4, 1, encoder_causal));
+                blocks["encoder"] = std::shared_ptr<GGMLBlock>(new LTX2VideoEncoder3d(
+                    in_channels, latent_channels));
             }
-            blocks["decoder"] = std::shared_ptr<GGMLBlock>(new LTXVideoDecoder3d(
+            blocks["decoder"] = std::shared_ptr<GGMLBlock>(new LTX2VideoDecoder3d(
                 latent_channels, out_channels,
-                {128, 256, 512, 512}, {true, true, true, false}, {4, 3, 3, 3, 4},
-                4, 1, decoder_causal, timestep_conditioning));
+                {256, 512, 1024, 2048}, {true, true, true, true}, {4, 3, 3, 3, 4},
+                4, 1, timestep_conditioning));
         }
 
+        // Encoder is causal by default; decoder is non-causal.
         ggml_tensor* decode(GGMLRunnerContext* ctx, ggml_tensor* z, ggml_tensor* temb_in = nullptr) {
-            auto dec = std::dynamic_pointer_cast<LTXVideoDecoder3d>(blocks["decoder"]);
-            return dec->forward(ctx, z, temb_in);
+            auto dec = std::dynamic_pointer_cast<LTX2VideoDecoder3d>(blocks["decoder"]);
+            return dec->forward(ctx, z, temb_in, /*causal=*/false);
         }
 
         ggml_tensor* encode(GGMLRunnerContext* ctx, ggml_tensor* x) {
-            auto enc = std::dynamic_pointer_cast<LTXVideoEncoder3d>(blocks["encoder"]);
-            return enc->forward(ctx, x);
+            auto enc = std::dynamic_pointer_cast<LTX2VideoEncoder3d>(blocks["encoder"]);
+            return enc->forward(ctx, x, /*causal=*/true);
         }
     };
 
-    // VAE runner plugged into sd.cpp's VAE abstract class.
     struct LTXVVAERunner : public VAE {
-        float scale_factor = 1.0f;
-        bool decode_only   = true;
-        CausalVideoAutoencoder ae;
+        bool decode_only = true;
+        LTX2CausalVideoAutoencoder ae;
 
         LTXVVAERunner(SDVersion version,
                       ggml_backend_t backend,
@@ -1311,11 +1523,11 @@ namespace LTXV {
             : VAE(version, backend, offload_params_to_cpu),
               decode_only(decode_only),
               ae(decode_only) {
-            scale_input = false;  // LTX latents are not in [-1, 1] domain.
+            scale_input = false;
             ae.init(params_ctx, tensor_storage_map, prefix);
         }
 
-        std::string get_desc() override { return "ltxv_vae"; }
+        std::string get_desc() override { return "ltxv2_vae"; }
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) override {
             ae.get_param_tensors(tensors, prefix);
@@ -1331,14 +1543,8 @@ namespace LTXV {
             SD_UNUSED(rng);
             return vae_output;
         }
-
-        sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latents) override {
-            return latents;
-        }
-
-        sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents) override {
-            return latents;
-        }
+        sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latents) override { return latents; }
+        sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents) override { return latents; }
 
       protected:
         struct ggml_cgraph* build_graph_decode(const sd::Tensor<float>& z) {

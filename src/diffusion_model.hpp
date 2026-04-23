@@ -518,15 +518,15 @@ struct ZImageModel : public DiffusionModel {
     }
 };
 
-struct LTXVModel : public DiffusionModel {
+struct LTXV2Model : public DiffusionModel {
     std::string prefix;
     LTXV::LTXVRunner ltxv;
 
-    LTXVModel(ggml_backend_t backend,
+    LTXV2Model(ggml_backend_t backend,
               bool offload_params_to_cpu,
               const String2TensorStorage& tensor_storage_map = {},
               const std::string prefix                       = "model.diffusion_model",
-              SDVersion version                              = VERSION_LTXV)
+              SDVersion version                              = VERSION_LTXV2)
         : prefix(prefix), ltxv(backend, offload_params_to_cpu, tensor_storage_map, prefix, version) {
     }
 

@@ -45,7 +45,7 @@ enum SDVersion {
     VERSION_Z_IMAGE,
     VERSION_OVIS_IMAGE,
     VERSION_ERNIE_IMAGE,
-    VERSION_LTXV,
+    VERSION_LTXV2,
     VERSION_COUNT,
 };
 
@@ -140,8 +140,8 @@ static inline bool sd_version_is_ernie_image(SDVersion version) {
     return false;
 }
 
-static inline bool sd_version_is_ltxv(SDVersion version) {
-    if (version == VERSION_LTXV) {
+static inline bool sd_version_is_ltxv2(SDVersion version) {
+    if (version == VERSION_LTXV2) {
         return true;
     }
     return false;
@@ -174,7 +174,7 @@ static inline bool sd_version_is_dit(SDVersion version) {
         sd_version_is_anima(version) ||
         sd_version_is_z_image(version) ||
         sd_version_is_ernie_image(version) ||
-        sd_version_is_ltxv(version)) {
+        sd_version_is_ltxv2(version)) {
         return true;
     }
     return false;

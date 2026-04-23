@@ -450,15 +450,16 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("model.diffusion_model.joint_blocks.") != std::string::npos) {
             return VERSION_SD3;
         }
-        // LTX-Video: unique top-level weights ("scale_shift_table", "adaln_single",
-        // "caption_projection") distinguish it from Qwen-Image / Flux / Wan / SD3.
-        // Matched before Qwen below because Qwen's transformer_blocks.0 uses
-        // `img_mod.1.weight` which LTX does not; these three LTX keys don't
-        // collide with any other family.
-        if (tensor_storage.name == "model.diffusion_model.scale_shift_table" ||
-            tensor_storage.name.find("model.diffusion_model.adaln_single.") != std::string::npos ||
-            tensor_storage.name.find("model.diffusion_model.caption_projection.") != std::string::npos) {
-            return VERSION_LTXV;
+        // LTX-Video 2: unique audio-visual weights distinguish it from every other
+        // DiT family. The transformer has per-block `audio_attn1`, `audio_attn2`,
+        // `audio_to_video_attn`, `video_to_audio_attn` plus top-level
+        // `audio_scale_shift_table`, `av_cross_attn_video_scale_shift.*`.
+        // Key on `audio_scale_shift_table` (the cheapest, unambiguous token).
+        if (tensor_storage.name == "model.diffusion_model.audio_scale_shift_table" ||
+            tensor_storage.name.find("model.diffusion_model.av_cross_attn_video_scale_shift.") != std::string::npos ||
+            tensor_storage.name.find("model.diffusion_model.audio_proj_in.") != std::string::npos ||
+            tensor_storage.name.find("model.diffusion_model.audio_time_embed.") != std::string::npos) {
+            return VERSION_LTXV2;
         }
         if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.img_mod.1.weight") != std::string::npos) {
             return VERSION_QWEN_IMAGE;

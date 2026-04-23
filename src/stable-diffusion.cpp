@@ -564,7 +564,7 @@ public:
                                                                     offload_params_to_cpu,
                                                                     tensor_storage_map,
                                                                     "model.diffusion_model");
-            } else if (sd_version_is_ltxv(version)) {
+            } else if (sd_version_is_ltxv2(version)) {
                 // LTX-Video uses T5-XXL (not UMT5), attention-masked, no padding.
                 cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
                                                                     offload_params_to_cpu,
@@ -572,7 +572,7 @@ public:
                                                                     /*use_mask=*/true,
                                                                     /*mask_pad=*/0,
                                                                     /*is_umt5=*/false);
-                diffusion_model  = std::make_shared<LTXVModel>(backend,
+                diffusion_model  = std::make_shared<LTXV2Model>(backend,
                                                                offload_params_to_cpu,
                                                                tensor_storage_map,
                                                                "model.diffusion_model",
@@ -651,7 +651,7 @@ public:
             };
 
             auto create_vae = [&]() -> std::shared_ptr<VAE> {
-                if (sd_version_is_ltxv(version)) {
+                if (sd_version_is_ltxv2(version)) {
                     return std::make_shared<LTXV::LTXVVAERunner>(version,
                                                                  vae_backend,
                                                                  offload_params_to_cpu,
@@ -962,13 +962,13 @@ public:
                            sd_version_is_anima(version) ||
                            sd_version_is_ernie_image(version) ||
                            sd_version_is_z_image(version) ||
-                           sd_version_is_ltxv(version)) {
+                           sd_version_is_ltxv2(version)) {
                     pred_type = FLOW_PRED;
                     if (sd_version_is_wan(version)) {
                         default_flow_shift = 5.f;
                     } else if (sd_version_is_ernie_image(version)) {
                         default_flow_shift = 4.f;
-                    } else if (sd_version_is_ltxv(version)) {
+                    } else if (sd_version_is_ltxv2(version)) {
                         // LTX uses dynamic shift in diffusers (shape-dependent).
                         // Use a fixed default; tune per hardware-verification run.
                         default_flow_shift = 3.f;
@@ -1892,7 +1892,7 @@ public:
                 latent_channel = 3;
             } else if (sd_version_uses_flux2_vae(version)) {
                 latent_channel = 128;
-            } else if (sd_version_is_ltxv(version)) {
+            } else if (sd_version_is_ltxv2(version)) {
                 latent_channel = 128;
             } else {
                 latent_channel = 16;
@@ -1916,7 +1916,7 @@ public:
         int T                = frames;
         if (sd_version_is_wan(version)) {
             T = ((T - 1) / 4) + 1;
-        } else if (sd_version_is_ltxv(version)) {
+        } else if (sd_version_is_ltxv2(version)) {
             // LTX VAE temporal compression factor = 8
             T = ((T - 1) / 8) + 1;
         }
@@ -2655,7 +2655,7 @@ struct GenerationRequest {
         // LTX temporal compression = 8 → frames must be 8k+1.
         {
             SDVersion ver     = sd_ctx->sd->version;
-            int temporal_grid = sd_version_is_ltxv(ver) ? 8 : 4;
+            int temporal_grid = sd_version_is_ltxv2(ver) ? 8 : 4;
             frames            = (sd_vid_gen_params->video_frames - 1) / temporal_grid * temporal_grid + 1;
         }
         clip_skip                   = sd_vid_gen_params->clip_skip;
