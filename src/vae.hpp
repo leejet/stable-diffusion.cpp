@@ -73,6 +73,9 @@ public:
             scale_factor = 16;
         } else if (version == VERSION_CHROMA_RADIANCE) {
             scale_factor = 1;
+        } else if (sd_version_is_ltxv(version)) {
+            // LTX VAE: patch_size=4 spatial, plus 3 down-blocks (x2 each) → 4 * 2^3 = 32.
+            scale_factor = 32;
         }
         return scale_factor;
     }
