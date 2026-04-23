@@ -229,8 +229,12 @@ namespace LTXV {
         }
     };
 
-    // LTX-2.3 attention: gated, qk_norm_across_heads, interleaved RoPE.
+    // LTX-2.3 attention: gated, qk_norm_across_heads, split or interleaved RoPE.
     // Parameters: to_q, to_k, to_v, to_out.0, q_norm, k_norm, to_gate_logits.
+    // rope_type selects between the two rotation layouts used by LTX-2.3:
+    //   * "interleaved": pair indices (2k, 2k+1) rotate together
+    //   * "split":       pair indices (k, k+r) rotate together (r = D/2)
+    // LTX-2.3 22B uses `rope_type = "split"`.
     class LTXAttention : public GGMLBlock {
     public:
         int64_t query_dim;
@@ -239,6 +243,7 @@ namespace LTXV {
         int64_t num_heads;
         int64_t head_dim;
         bool has_rope;
+        std::string rope_type;
 
         LTXAttention(int64_t query_dim,
                      int64_t heads,
@@ -248,11 +253,13 @@ namespace LTXV {
                      bool attention_out_bias     = true,
                      bool apply_rope             = true,
                      int64_t kv_heads            = -1,
-                     int64_t kv_dim_head         = -1)
+                     int64_t kv_dim_head         = -1,
+                     std::string rope_type       = "split")
             : query_dim(query_dim),
               num_heads(heads),
               head_dim(dim_head),
-              has_rope(apply_rope && cross_attention_dim < 0) {
+              has_rope(apply_rope && cross_attention_dim < 0),
+              rope_type(rope_type) {
             inner_dim    = heads * dim_head;
             if (kv_heads < 0) kv_heads = heads;
             if (kv_dim_head < 0) kv_dim_head = dim_head;
@@ -296,10 +303,17 @@ namespace LTXV {
             k = k_norm->forward(ctx, k);
 
             if (has_rope && query_rope_cos != nullptr && query_rope_sin != nullptr) {
-                q = apply_rotary_emb(ctx, q, query_rope_cos, query_rope_sin);
-                ggml_tensor* kc = key_rope_cos != nullptr ? key_rope_cos : query_rope_cos;
-                ggml_tensor* ks = key_rope_sin != nullptr ? key_rope_sin : query_rope_sin;
-                k               = apply_rotary_emb(ctx, k, kc, ks);
+                if (rope_type == "split") {
+                    q = apply_split_rotary_emb(ctx, q, query_rope_cos, query_rope_sin, num_heads);
+                    ggml_tensor* kc = key_rope_cos != nullptr ? key_rope_cos : query_rope_cos;
+                    ggml_tensor* ks = key_rope_sin != nullptr ? key_rope_sin : query_rope_sin;
+                    k               = apply_split_rotary_emb(ctx, k, kc, ks, num_heads);
+                } else {
+                    q = apply_rotary_emb(ctx, q, query_rope_cos, query_rope_sin);
+                    ggml_tensor* kc = key_rope_cos != nullptr ? key_rope_cos : query_rope_cos;
+                    ggml_tensor* ks = key_rope_sin != nullptr ? key_rope_sin : query_rope_sin;
+                    k               = apply_rotary_emb(ctx, k, kc, ks);
+                }
             }
 
             auto out = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v,
@@ -343,6 +357,57 @@ namespace LTXV {
             auto x_cos = ggml_mul(ctx->ggml_ctx, x, cos_freqs);
             auto x_sin = ggml_mul(ctx->ggml_ctx, rotated, sin_freqs);
             return ggml_add(ctx->ggml_ctx, x_cos, x_sin);
+        }
+
+        // Split-rope: pair is (x[k], x[k+r]) where r = D_per_head/2.
+        //   In diffusers: x.reshape(..., 2, r), [first, second] = x.unbind(-2)
+        //     first_new  = first  * cos - second * sin
+        //     second_new = second * cos + first  * sin
+        //   reshape back.
+        //
+        // cos_freqs / sin_freqs are [inner_dim/2, L] tensors in our layout;
+        // we reshape them per head to [head_dim/2, L] via broadcast.
+        static ggml_tensor* apply_split_rotary_emb(GGMLRunnerContext* ctx,
+                                                    ggml_tensor* x,
+                                                    ggml_tensor* cos_freqs,
+                                                    ggml_tensor* sin_freqs,
+                                                    int64_t num_heads) {
+            int64_t C = x->ne[0];     // inner_dim
+            int64_t L = x->ne[1];
+            int64_t N = x->ne[2];
+            int64_t D = C / num_heads;  // head_dim
+            int64_t r = D / 2;
+
+            // Reshape x from [C, L, N] to [r, 2, num_heads, L*N] so the last dim
+            // of the pair (the "2" axis) is at ggml axis 1.
+            auto x4 = ggml_reshape_4d(ctx->ggml_ctx, x, r, 2, num_heads, L * N);
+            // first  = x4[:, 0, :, :]  (ne = [r, 1, num_heads, L*N])
+            // second = x4[:, 1, :, :]
+            auto first  = ggml_view_4d(ctx->ggml_ctx, x4, r, 1, num_heads, L * N,
+                                       x4->nb[1], x4->nb[2], x4->nb[3], 0);
+            auto second = ggml_view_4d(ctx->ggml_ctx, x4, r, 1, num_heads, L * N,
+                                       x4->nb[1], x4->nb[2], x4->nb[3], x4->nb[1]);
+            first       = ggml_cont(ctx->ggml_ctx, first);
+            second      = ggml_cont(ctx->ggml_ctx, second);
+
+            // cos/sin are [inner_dim/2, L] == [num_heads*r, L]. Reshape to
+            // [r, 1, num_heads, L] so they broadcast over the batch axis (L*N/L).
+            auto cos_v = ggml_reshape_4d(ctx->ggml_ctx, cos_freqs, r, 1, num_heads, L);
+            auto sin_v = ggml_reshape_4d(ctx->ggml_ctx, sin_freqs, r, 1, num_heads, L);
+
+            // first_new  = first * cos - second * sin
+            // second_new = second * cos + first * sin
+            auto first_new  = ggml_sub(ctx->ggml_ctx,
+                                        ggml_mul(ctx->ggml_ctx, first, cos_v),
+                                        ggml_mul(ctx->ggml_ctx, second, sin_v));
+            auto second_new = ggml_add(ctx->ggml_ctx,
+                                        ggml_mul(ctx->ggml_ctx, second, cos_v),
+                                        ggml_mul(ctx->ggml_ctx, first, sin_v));
+
+            // Stack back along axis 1: [r, 2, num_heads, L*N] and reshape to [C, L, N].
+            auto out = ggml_concat(ctx->ggml_ctx, first_new, second_new, 1);
+            out      = ggml_reshape_3d(ctx->ggml_ctx, out, C, L, N);
+            return out;
         }
     };
 
@@ -553,6 +618,7 @@ namespace LTXV {
                                                    int height,
                                                    int width,
                                                    int dim,
+                                                   bool split_rope    = true,
                                                    int patch_size     = 1,
                                                    int patch_size_t   = 1,
                                                    int base_frames    = 20,
@@ -564,15 +630,21 @@ namespace LTXV {
                                                    int causal_offset  = 1,
                                                    float fps          = 24.f,
                                                    float theta        = 10000.f) {
+        // Split-layout  : cos/sin of size dim/2 per position (no duplication).
+        // Interleaved   : cos/sin of size dim   per position (repeat_interleave(2)).
         RopeTables t;
-        t.dim = dim;
-        t.L   = (int64_t)num_frames * height * width;
-        t.cos.assign(t.L * dim, 0.f);
-        t.sin.assign(t.L * dim, 0.f);
+        int64_t pos_dim  = split_rope ? (int64_t)(dim / 2) : (int64_t)dim;
+        t.dim            = pos_dim;
+        t.L              = (int64_t)num_frames * height * width;
+        t.cos.assign(t.L * pos_dim, 0.f);
+        t.sin.assign(t.L * pos_dim, 0.f);
 
-        int num_rope_elems = 6;
-        int freq_per_axis  = dim / num_rope_elems;
-        int pad            = dim % num_rope_elems;
+        // Split: 3 pos-axes, dim/2 total freq slots → freq_per_axis = (dim/2) / 3
+        // Interleaved: 6 rope elems, dim/6 per axis.
+        int num_axes      = 3;
+        int slots         = (int)pos_dim;  // total per-position storage size
+        int freq_per_axis = slots / num_axes;
+        int pad           = slots - num_axes * freq_per_axis;
 
         std::vector<float> freqs(freq_per_axis);
         if (freq_per_axis > 1) {
@@ -599,9 +671,11 @@ namespace LTXV {
                 for (int w = 0; w < width; ++w) {
                     float mid_w = ((float)w + 0.5f) * (float)patch_size * (float)vae_scale_w;
                     float gw    = mid_w / (float)base_w;
-                    float* co   = &t.cos[idx * dim];
-                    float* si   = &t.sin[idx * dim];
+                    float* co   = &t.cos[idx * pos_dim];
+                    float* si   = &t.sin[idx * pos_dim];
 
+                    // Leading pad: cos=1, sin=0. For LTX-2.3 22B with dim=4096 split,
+                    // pad_size = 2048 - 3 * (2048/3) = 2 (matches diffusers).
                     for (int p = 0; p < pad; ++p) {
                         co[p] = 1.f;
                         si[p] = 0.f;
@@ -611,13 +685,22 @@ namespace LTXV {
                         float ang_h   = freqs[k] * (gh * 2.f - 1.f);
                         float ang_w   = freqs[k] * (gw * 2.f - 1.f);
                         float vals[3] = {ang_f, ang_h, ang_w};
-                        for (int a = 0; a < 3; ++a) {
-                            float c = std::cos(vals[a]);
-                            float s = std::sin(vals[a]);
-                            co[pad + 2 * (k * 3 + a) + 0] = c;
-                            co[pad + 2 * (k * 3 + a) + 1] = c;
-                            si[pad + 2 * (k * 3 + a) + 0] = s;
-                            si[pad + 2 * (k * 3 + a) + 1] = s;
+                        if (split_rope) {
+                            // Layout: per-position, values = [pad, (F0,H0,W0), (F1,H1,W1), ...]
+                            for (int a = 0; a < 3; ++a) {
+                                co[pad + k * 3 + a] = std::cos(vals[a]);
+                                si[pad + k * 3 + a] = std::sin(vals[a]);
+                            }
+                        } else {
+                            // Interleaved layout: each (ang) expands to (cos, cos) / (sin, sin).
+                            for (int a = 0; a < 3; ++a) {
+                                float c = std::cos(vals[a]);
+                                float s = std::sin(vals[a]);
+                                co[pad + 2 * (k * 3 + a) + 0] = c;
+                                co[pad + 2 * (k * 3 + a) + 1] = c;
+                                si[pad + 2 * (k * 3 + a) + 0] = s;
+                                si[pad + 2 * (k * 3 + a) + 1] = s;
+                            }
                         }
                     }
                     ++idx;
@@ -822,11 +905,12 @@ namespace LTXV {
             int64_t C = x_t->ne[3];
             GGML_ASSERT(C == dit.in_channels);
 
-            rope_tbl      = compute_rope_ltx2((int)F, (int)H, (int)W, (int)dit.inner_dim);
+            // LTX-2.3 uses split rope → cos/sin is inner_dim/2 per position.
+            rope_tbl      = compute_rope_ltx2((int)F, (int)H, (int)W, (int)dit.inner_dim, /*split_rope=*/true);
             auto rope_cos = ggml_new_tensor_2d(compute, GGML_TYPE_F32,
-                                                (int64_t)dit.inner_dim, rope_tbl.L);
+                                                rope_tbl.dim, rope_tbl.L);
             auto rope_sin = ggml_new_tensor_2d(compute, GGML_TYPE_F32,
-                                                (int64_t)dit.inner_dim, rope_tbl.L);
+                                                rope_tbl.dim, rope_tbl.L);
             set_backend_tensor_data(rope_cos, rope_tbl.cos.data());
             set_backend_tensor_data(rope_sin, rope_tbl.sin.data());
 
