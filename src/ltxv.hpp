@@ -84,12 +84,12 @@ namespace LTXV {
         bool bias;
 
         void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
-            // Match the checkpoint dtype when available (LTX-2.3 stores Conv3d weights
-            // as BF16; falling back to F16 keeps parity with older sd.cpp Conv3d blocks
-            // that pre-date wide BF16 support).
-            enum ggml_type wtype = get_type(prefix + "conv.weight", tensor_storage_map, GGML_TYPE_F16);
+            // ggml_cuda_op_im2col_3d only supports F16/F32 destination tensors
+            // — BF16 weights (the native LTX-2.3 dtype) would trigger its
+            // GGML_ASSERT. Force F16 here so sd.cpp's loader converts BF16
+            // from the checkpoint on its way in.
             params["conv.weight"] = ggml_new_tensor_4d(ctx,
-                                                      wtype,
+                                                      GGML_TYPE_F16,
                                                       std::get<2>(kernel_size),
                                                       std::get<1>(kernel_size),
                                                       std::get<0>(kernel_size),
@@ -1052,6 +1052,19 @@ namespace LTXV {
             int64_t out_c = C / prod;
             h = ggml_cont(ctx->ggml_ctx, h);
             h = ggml_reshape_4d(ctx->ggml_ctx, h, W * st_w, H * st_h, F * st_t, out_c);
+            // Diffusers LTX2VideoUpsampler3d drops the first (st_t - 1) temporal
+            // samples so each upsampled chunk boundary stays causal and the
+            // overall frame count follows f_out = (f_in - 1) * st_t + 1 when
+            // composed across multiple temporal upsamples.
+            if (st_t > 1) {
+                int64_t T_out   = F * st_t;
+                int64_t T_keep  = T_out - (st_t - 1);
+                int64_t offset_bytes = h->nb[2] * (st_t - 1);
+                h = ggml_view_4d(ctx->ggml_ctx, h,
+                                 h->ne[0], h->ne[1], T_keep, h->ne[3],
+                                 h->nb[1], h->nb[2], h->nb[3], offset_bytes);
+                h = ggml_cont(ctx->ggml_ctx, h);
+            }
             return h;
         }
     };
@@ -1195,6 +1208,21 @@ namespace LTXV {
             SD_UNUSED(rng);
             return vae_output;
         }
+
+        // LTX-2.3 normalises diffusion-space latents to unit variance using the
+        // per-channel stats saved with the VAE:
+        //   diffusion_to_vae   = latents * std + mean
+        //   vae_to_diffusion   = (latents - mean) / std
+        // The stats are loaded into `ae.params["per_channel_statistics.*"]` at
+        // init_params time. When the stats are unavailable (e.g. running
+        // without the checkpoint), we fall back to identity so tests on
+        // synthetic data still work.
+        //
+        // NOTE: We can't easily read backend-resident tensors from CPU here
+        // without a separate copy. For correctness on a CUDA run the caller
+        // must materialise the stats to CPU first — TODO: plumb that through.
+        // For now the identity fall-through is preserved and we note this as
+        // a known quality gap in docs/ltxv.md.
         sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latents) override { return latents; }
         sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents) override { return latents; }
 
