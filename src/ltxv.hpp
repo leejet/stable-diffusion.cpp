@@ -1140,8 +1140,19 @@ namespace LTXV {
             }
             h = conv_out->forward(ctx, h, causal);
             int64_t W = h->ne[0], H = h->ne[1], F = h->ne[2], C = h->ne[3];
+            // Un-patchify 4×4 spatial pack: ne [W, H, F, C*16] → [W*4, H*4, F, C]
             h = ggml_cont(ctx->ggml_ctx, h);
             h = ggml_reshape_4d(ctx->ggml_ctx, h, W * 4, H * 4, F, C / 16);
+            // sd.cpp's decode_video_outputs expects the 5-D layout
+            //   [W, H, T, C, N=1]
+            // (batch last, time before channel). Our 4-D result is
+            //   [W, H, T, C] — reinterpret by prepending N=1 to match.
+            h = ggml_reshape_4d(ctx->ggml_ctx, h, h->ne[0], h->ne[1], h->ne[2], h->ne[3]);
+            // NOTE: ggml tensors are 4-D max. sd.cpp's tensor_to_sd_image
+            // reads the dimensionality from the sd::Tensor's shape vector
+            // (not from ggml ne), so we need to ensure the C++ side sees a
+            // 5-D shape. That happens in LTXVVAERunner::_compute by
+            // unsqueezing the resulting sd::Tensor before returning.
             return h;
         }
     };
@@ -1253,7 +1264,16 @@ namespace LTXV {
             };
             auto result = GGMLRunner::compute<float>(get_graph, n_threads, false);
             if (!result.has_value()) return {};
-            return std::move(*result);
+            sd::Tensor<float> out = std::move(*result);
+            // Decoder result arrives as [W, H, T, C] (4-D). sd.cpp's
+            // decode_video_outputs → tensor_to_sd_image dispatches on
+            // shape.size(): for 5-D it reads [W, H, T, C, N], for 4-D it
+            // reads [W, H, C, T] — which is NOT the order we produce.
+            // Add an explicit batch axis so the 5-D branch is taken.
+            if (decode_graph && out.dim() == 4) {
+                out.unsqueeze_(out.dim());  // append N=1
+            }
+            return out;
         }
     };
 
