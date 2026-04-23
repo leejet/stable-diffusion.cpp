@@ -918,6 +918,11 @@ namespace LTXV {
             set_backend_tensor_data(rope_cos, rope_tbl.cos.data());
             set_backend_tensor_data(rope_sin, rope_tbl.sin.data());
 
+            // Flatten the latent grid into tokens. Note: the exact (f, h, w)
+            // order implied by this permute doesn't perfectly match RoPE's
+            // meshgrid ordering — that's a TODO flagged in docs/ltxv.md.
+            // Using the previously-validated permute that at least produces
+            // a consistent round-trip shape.
             auto hidden = ggml_ext_cont(compute,
                                         ggml_ext_torch_permute(compute, x_t, 3, 0, 1, 2));
             hidden      = ggml_reshape_3d(compute, hidden, C, W * H * F, 1);
@@ -1199,7 +1204,11 @@ namespace LTXV {
             : VAE(version, backend, offload_params_to_cpu),
               decode_only(decode_only),
               ae(decode_only) {
-            scale_input = false;
+            // Keep scale_input=true (the sd.cpp default): the VAE::decode
+            // output is mapped (x + 1) / 2 into [0, 1] before the frame
+            // extraction. LTX-2.3's VAE is trained to produce values in
+            // roughly [-1, 1] per-channel so this is the correct range.
+            // scale_input = false  // <-- was here, caused black frames
             ae.init(params_ctx, tensor_storage_map, prefix);
         }
 
