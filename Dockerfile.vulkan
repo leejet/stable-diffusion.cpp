@@ -2,7 +2,7 @@ ARG UBUNTU_VERSION=24.04
 
 FROM ubuntu:$UBUNTU_VERSION AS build
 
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential git cmake libvulkan-dev glslc
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential git cmake libvulkan-dev glslc spirv-headers
 
 WORKDIR /sd.cpp
 
