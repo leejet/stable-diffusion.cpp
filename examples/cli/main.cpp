@@ -690,7 +690,10 @@ int main(int argc, const char* argv[]) {
         vae_decode_only = false;
     }
 
-    if (gen_params.hires_enabled && !gen_params.hires_upscaler_model_path.empty()) {
+    if (gen_params.hires_enabled &&
+        (gen_params.resolved_hires_upscaler == SD_HIRES_UPSCALER_MODEL ||
+         gen_params.resolved_hires_upscaler == SD_HIRES_UPSCALER_LANCZOS ||
+         gen_params.resolved_hires_upscaler == SD_HIRES_UPSCALER_NEAREST)) {
         vae_decode_only = false;
     }
 

@@ -107,47 +107,60 @@ static bool is_absolute_path(const std::string& p) {
 
 std::string ArgOptions::wrap_text(const std::string& text, size_t width, size_t indent) {
     std::ostringstream oss;
-    size_t line_len = 0;
     size_t pos      = 0;
+    size_t line_len = 0;
 
     while (pos < text.size()) {
-        // Preserve manual newlines
         if (text[pos] == '\n') {
             oss << '\n'
                 << std::string(indent, ' ');
-            line_len = indent;
+            line_len = 0;
             ++pos;
             continue;
         }
 
-        // Add the character
-        oss << text[pos];
-        ++line_len;
-        ++pos;
+        if (std::isspace(static_cast<unsigned char>(text[pos]))) {
+            ++pos;
+            continue;
+        }
 
-        // If the current line exceeds width, try to break at the last space
-        if (line_len >= width) {
-            std::string current = oss.str();
-            size_t back         = current.size();
+        size_t word_start = pos;
+        while (pos < text.size() &&
+               text[pos] != '\n' &&
+               !std::isspace(static_cast<unsigned char>(text[pos]))) {
+            ++pos;
+        }
 
-            // Find the last space (for a clean break)
-            while (back > 0 && current[back - 1] != ' ' && current[back - 1] != '\n')
-                --back;
-
-            // If found a space to break on
-            if (back > 0 && current[back - 1] != '\n') {
-                std::string before = current.substr(0, back - 1);
-                std::string after  = current.substr(back);
-                oss.str("");
-                oss.clear();
-                oss << before << "\n"
-                    << std::string(indent, ' ') << after;
-            } else {
-                // If no space found, just break at width
-                oss << "\n"
-                    << std::string(indent, ' ');
+        std::string word = text.substr(word_start, pos - word_start);
+        while (!word.empty()) {
+            size_t separator_len = line_len == 0 ? 0 : 1;
+            if (line_len + separator_len + word.size() <= width) {
+                if (separator_len > 0) {
+                    oss << ' ';
+                    ++line_len;
+                }
+                oss << word;
+                line_len += word.size();
+                word.clear();
+                continue;
             }
-            line_len = indent;
+
+            if (line_len > 0) {
+                oss << '\n'
+                    << std::string(indent, ' ');
+                line_len = 0;
+                continue;
+            }
+
+            size_t chunk_len = std::min(width, word.size());
+            oss << word.substr(0, chunk_len);
+            line_len = chunk_len;
+            word.erase(0, chunk_len);
+            if (!word.empty()) {
+                oss << '\n'
+                    << std::string(indent, ' ');
+                line_len = 0;
+            }
         }
     }
 
@@ -783,7 +796,9 @@ ArgOptions SDGenerationParams::get_options() {
          &pm_id_embed_path},
         {"",
          "--hires-upscaler",
-         "highres fix upscaler, Latent (nearest) or a model name/path under --hires-upscalers-dir (default: Latent (nearest))",
+         "highres fix upscaler, Lanczos, Nearest, Latent, Latent (nearest), Latent (nearest-exact), "
+         "Latent (antialiased), Latent (bicubic), Latent (bicubic antialiased), or a model name "
+         "under --hires-upscalers-dir (default: Latent)",
          &hires_upscaler},
     };
 
@@ -1918,7 +1933,7 @@ bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::s
     hires_upscaler_model_path.clear();
     if (hires_enabled) {
         if (hires_upscaler.empty()) {
-            hires_upscaler = "Latent (nearest)";
+            hires_upscaler = "Latent";
         }
         resolved_hires_upscaler = str_to_sd_hires_upscaler(hires_upscaler.c_str());
         if (resolved_hires_upscaler == SD_HIRES_UPSCALER_NONE) {

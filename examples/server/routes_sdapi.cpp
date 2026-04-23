@@ -381,6 +381,8 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
         json result = json::array();
         result.push_back(make_builtin("None"));
+        result.push_back(make_builtin("Lanczos"));
+        result.push_back(make_builtin("Nearest"));
 
         {
             std::lock_guard<std::mutex> lock(*runtime->upscaler_mutex);
@@ -400,7 +402,12 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
     svr.Get("/sdapi/v1/latent-upscale-modes", [](const httplib::Request&, httplib::Response& res) {
         json result = json::array({
+            {{"name", "Latent"}},
             {{"name", "Latent (nearest)"}},
+            {{"name", "Latent (nearest-exact)"}},
+            {{"name", "Latent (antialiased)"}},
+            {{"name", "Latent (bicubic)"}},
+            {{"name", "Latent (bicubic antialiased)"}},
         });
         res.set_content(result.dump(), "application/json");
     });
