@@ -311,8 +311,8 @@ namespace LTXV {
             blocks["to_v"]     = std::shared_ptr<GGMLBlock>(new Linear(kv_dim, inner_dim, attention_bias));
             blocks["to_out.0"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, query_dim, attention_out_bias));
 
-            blocks["norm_q"] = std::shared_ptr<GGMLBlock>(new RMSNorm(inner_dim, 1e-6f));
-            blocks["norm_k"] = std::shared_ptr<GGMLBlock>(new RMSNorm(inner_dim, 1e-6f));
+            blocks["q_norm"] = std::shared_ptr<GGMLBlock>(new RMSNorm(inner_dim, 1e-6f));
+            blocks["k_norm"] = std::shared_ptr<GGMLBlock>(new RMSNorm(inner_dim, 1e-6f));
 
             if (apply_gated_attention) {
                 // Per-head gate logits.
@@ -337,8 +337,8 @@ namespace LTXV {
             auto to_k    = std::dynamic_pointer_cast<Linear>(blocks["to_k"]);
             auto to_v    = std::dynamic_pointer_cast<Linear>(blocks["to_v"]);
             auto to_out  = std::dynamic_pointer_cast<Linear>(blocks["to_out.0"]);
-            auto norm_q  = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm_q"]);
-            auto norm_k  = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm_k"]);
+            auto norm_q  = std::dynamic_pointer_cast<UnaryBlock>(blocks["q_norm"]);
+            auto norm_k  = std::dynamic_pointer_cast<UnaryBlock>(blocks["k_norm"]);
 
             ggml_tensor* kv_src = encoder_hidden_states != nullptr ? encoder_hidden_states : hidden_states;
 
@@ -770,8 +770,8 @@ namespace LTXV {
             int audio_time_emb_mod_params = audio_cross_attn_mod ? 9 : 6;
 
             // 1. Patchification projections
-            blocks["proj_in"]       = std::shared_ptr<GGMLBlock>(new Linear(in_channels, inner_dim, true));
-            blocks["audio_proj_in"] = std::shared_ptr<GGMLBlock>(new Linear(audio_in_channels, audio_inner_dim, true));
+            blocks["patchify_proj"]       = std::shared_ptr<GGMLBlock>(new Linear(in_channels, inner_dim, true));
+            blocks["audio_patchify_proj"] = std::shared_ptr<GGMLBlock>(new Linear(audio_in_channels, audio_inner_dim, true));
 
             // 2. Prompt embeddings
             if (use_prompt_embeddings) {
@@ -780,22 +780,22 @@ namespace LTXV {
             }
 
             // 3. Timestep modulation
-            blocks["time_embed"]       = std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(inner_dim, video_time_emb_mod_params));
-            blocks["audio_time_embed"] = std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(audio_inner_dim, audio_time_emb_mod_params));
+            blocks["adaln_single"]       = std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(inner_dim, video_time_emb_mod_params));
+            blocks["audio_adaln_single"] = std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(audio_inner_dim, audio_time_emb_mod_params));
 
             // Global cross-attention modulation (a2v / v2a)
-            blocks["av_cross_attn_video_scale_shift"] =
+            blocks["av_ca_video_scale_shift_adaln_single"] =
                 std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(inner_dim, 4));
-            blocks["av_cross_attn_audio_scale_shift"] =
+            blocks["av_ca_audio_scale_shift_adaln_single"] =
                 std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(audio_inner_dim, 4));
-            blocks["av_cross_attn_video_a2v_gate"] =
+            blocks["av_ca_a2v_gate_adaln_single"] =
                 std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(inner_dim, 1));
-            blocks["av_cross_attn_audio_v2a_gate"] =
+            blocks["av_ca_v2a_gate_adaln_single"] =
                 std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(audio_inner_dim, 1));
 
             if (prompt_modulation) {
-                blocks["prompt_adaln"]       = std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(inner_dim, 2));
-                blocks["audio_prompt_adaln"] = std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(audio_inner_dim, 2));
+                blocks["prompt_adaln_single"]       = std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(inner_dim, 2));
+                blocks["audio_prompt_adaln_single"] = std::shared_ptr<GGMLBlock>(new LTX2AdaLayerNormSingle(audio_inner_dim, 2));
             }
 
             // 5. Transformer blocks
@@ -828,8 +828,8 @@ namespace LTXV {
                              ggml_tensor* rope_cos,
                              ggml_tensor* rope_sin,
                              ggml_tensor* encoder_mask = nullptr) {
-            auto proj_in   = std::dynamic_pointer_cast<Linear>(blocks["proj_in"]);
-            auto te        = std::dynamic_pointer_cast<LTX2AdaLayerNormSingle>(blocks["time_embed"]);
+            auto proj_in   = std::dynamic_pointer_cast<Linear>(blocks["patchify_proj"]);
+            auto te        = std::dynamic_pointer_cast<LTX2AdaLayerNormSingle>(blocks["adaln_single"]);
             auto norm_out  = std::dynamic_pointer_cast<LayerNorm>(blocks["norm_out"]);
             auto proj_out  = std::dynamic_pointer_cast<Linear>(blocks["proj_out"]);
 

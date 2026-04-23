@@ -1,119 +1,100 @@
-# LTX-Video 2 support (work in progress)
+# LTX-Video 2.3 support (work in progress)
 
-This document tracks the `feat/ltx-video` branch which ports
-[Lightricks LTX-Video 2](https://huggingface.co/Lightricks/LTX-Video) to
-stable-diffusion.cpp. The port is a 1:1 translation of the diffusers
-reference implementation (video-only path):
+This document tracks the `feat/ltx-video` branch which is pivoting the
+stable-diffusion.cpp port towards
+[Lightricks LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3) (22B
+audio-video foundation model), video-only generation.
 
-- `src/diffusers/models/transformers/transformer_ltx2.py` (LTX-2 joint a/v transformer)
-- `src/diffusers/models/autoencoders/autoencoder_kl_ltx2.py` (LTX-2 video VAE)
-- `src/diffusers/pipelines/ltx2/pipeline_ltx2.py` (scheduler + glue)
+## State of the port
 
-**Scope:** VIDEO generation only. The transformer loads all audio weights so
-checkpoints open cleanly, but the forward path skips the audio self-attention,
-audio cross-attention, audio-to-video and video-to-audio cross attention,
-audio FFN, and audio output projection (equivalent to diffusers'
-`isolate_modalities=True` + discarding the audio output). The audio VAE and
-vocoder are not ported.
+Architecture was initially modelled on diffusers' `transformer_ltx2.py` +
+`autoencoder_kl_ltx2.py`, then rebased onto the actual LTX-2.3 22B
+checkpoint (`ltx-2.3-22b-dev.safetensors`, read via safetensors header
+inspection). The rebase surfaced a lot of divergence — tracking it here.
 
-## Status
+### What matches the checkpoint
 
-| Area | State |
-|---|---|
-| Weight detection (model.cpp) | done — keys on `audio_scale_shift_table` / `av_cross_attn_video_scale_shift` / `audio_proj_in` / `audio_time_embed` |
-| Transformer — video path | implemented; CPU + CUDA builds clean |
-| Transformer — audio branches (weight slots) | registered so LTX-2 checkpoints open cleanly |
-| Transformer — audio forward | intentionally skipped (video-only mode) |
-| PerChannelRMSNorm | implemented |
-| LTX2AdaLayerNormSingle with configurable `num_mod_params` (6 or 9) | implemented |
-| Gated attention (`to_gate_logits` + 2·σ) | implemented |
-| 3-D RoPE "interleaved" | implemented (patch-boundary midpoint, `vae_scale_factors=(8,32,32)`, `causal_offset=1`, fps scaling) |
-| 3-D RoPE "split" | **not yet** — falls back to interleaved layout |
-| `cross_attn_mod` (9-param modulation) | implemented (forward skips text Q modulation gate when off) |
-| `prompt_modulation` (LTX-2.3) | slots registered; forward path does not consume `temb_prompt` yet |
-| Video VAE encoder | implemented |
-| Video VAE decoder (with timestep conditioning) | implemented |
-| VAE runtime `causal` flag | implemented |
-| VAE `conv_shortcut` as plain Conv3d (no temporal padding) | implemented |
-| VAE `PerChannelRMSNorm` | implemented |
-| Downsampler variants (spatial / temporal / spatiotemporal / conv) | implemented |
-| Pixel-shuffle 3D up/downsample exact ordering | **simplified reshape — needs verification** |
-| T5-XXL conditioner | hooked via `T5CLIPEmbedder(use_mask=true, is_umt5=false)` |
-| Flow-match scheduler + `default_flow_shift` | hooked (shift=3; LTX diffusers uses dynamic shift) |
-| Latent shape: 128 channels, spatial/32, temporal/8 | wired |
-| Frame rounding 8k+1 | wired |
-| Audio generation | **not supported** |
-| End-to-end video generation | **pending hardware validation** |
+- 48 transformer blocks, inner_dim=4096 (32 × 128), audio_inner_dim=2048
+  (32 × 64)
+- Gated attention on every attention (video + audio + cross-modal) —
+  `to_gate_logits` weight present with output dim 32 in every attn layer
+- `cross_attn_mod = True` → `scale_shift_table` has 9 mod params
+  (=36864/4096); `audio_cross_attn_mod = True` → 9 audio mod params
+  (=18432/2048)
+- `prompt_modulation = True` (LTX-2.3) — `prompt_adaln_single` /
+  `audio_prompt_adaln_single` present with 2 mod params
+- Block-level names match (`attn1.to_q/k/v`, `attn1.q_norm/k_norm`,
+  `attn1.to_gate_logits`, `to_out.0`, `ff.net.0.proj`, `ff.net.2`)
+- Top-level names match (post-rename): `adaln_single`, `audio_adaln_single`,
+  `patchify_proj`, `audio_patchify_proj`, `proj_out`, `audio_proj_out`,
+  `scale_shift_table`, `audio_scale_shift_table`, `prompt_adaln_single`,
+  `audio_prompt_adaln_single`, `av_ca_video_scale_shift_adaln_single`,
+  `av_ca_audio_scale_shift_adaln_single`, `av_ca_a2v_gate_adaln_single`,
+  `av_ca_v2a_gate_adaln_single`
 
-## Known simplifications and TODOs
+### What is still divergent (TODO)
 
-1. **Pixel-shuffle 3D in the VAE.** The decoder's upsampler produces a tensor
-   with `C_in * 8` channels and diffusers re-interleaves those channels with
-   the (T, H, W) axes in a specific permute order. The current code uses a
-   direct `ggml_reshape_4d` which is equivalent only when the channel groups
-   are laid out the way ggml stores them. This is the most likely place
-   artifacts will appear first. Same issue in the encoder's pixel-unshuffle
-   patchify path (`patch_size=4, patch_size_t=1`).
+**Transformer:**
+1. **`video_embeddings_connector` / `audio_embeddings_connector`** — LTX-2.3
+   replaces the simple `PixArtAlphaTextProjection` with a full prompt
+   re-embedder: 128 learnable registers + 8 self-attention transformer_1d_blocks.
+   The code currently registers `caption_projection` (LTX-2.0 style, 2
+   linear layers) which will FAIL to load on a 2.3 checkpoint. Needs a
+   new `EmbeddingsConnector` block.
+2. **Split RoPE** — not yet implemented; only interleaved is wired.
+3. **Prompt modulation forward path** (`prompt_adaln_single`) — weights
+   load but forward doesn't apply the prompt scale/shift to KV.
 
-2. **Split RoPE.** LTX-2 introduced a `split` rope variant in addition to the
-   legacy `interleaved` mode. Only `interleaved` is implemented here; if the
-   LTX-2 checkpoint you're using declares `rope_type = "split"` in its
-   config, output will be incorrect. Split-rope requires reshaping Q/K to
-   `[B, H, T, D/2]` before rotation.
+**VAE (much bigger mismatch):**
+4. **9 encoder down_blocks + 9 decoder up_blocks** — current code has 4.
+5. **`block_out_channels` starts at 128** (code has 256) — scale
+   progression is different for LTX-2.3.
+6. **First VAE channel count** — `vae.encoder.conv_in.conv.weight` is
+   `[128, 48, 3, 3, 3]` → 48 input channels (patch_size=4, in_channels=3
+   → 3*16=48). Matches our math but confirm the output of the first conv
+   is 128 not 256.
+7. **`vae.decoder.conv_in`** is `[1024, 128, 3, 3, 3]` → deepest latent
+   channel width is 1024 (not 2048 as LTX-2.0 defaults suggest).
 
-3. **`cross_attn_mod` (LTX-2.X) prompt modulation gate.** The transformer
-   block registers the 9-param `scale_shift_table` and the forward path
-   applies shift/scale to the normed Q for the prompt cross-attention, but
-   the LTX-2.3 `prompt_modulation` branch (where `temb_prompt` adds an extra
-   scale/shift to the KV) is not yet applied.
+**Weight loading:**
+8. Default constructor still uses LTX-2.0 configs (num_layers=48 ok but
+   VAE config wrong). The transformer dims are correct for LTX-2.3 too.
+9. Tensor name for `to_gate_logits` output bias may be `attn1.to_gate_logits.bias`
+   — currently registered as `blocks["to_gate_logits"]` child of LTX2Attention,
+   so path is `...attn1.to_gate_logits.bias` — **this should be OK**.
 
-4. **Flow-match shift.** Diffusers computes a per-shape dynamic shift; we set
-   a fixed `default_flow_shift = 3.0`. If your hardware tests show overly
-   blurry or over-sharpened output, this is the first knob to turn.
-
-5. **Latents mean/std.** LTX-2's `latents_mean` / `latents_std` buffers are
-   not yet consumed by `diffusion_to_vae_latents` / `vae_to_diffusion_latents`
-   (the current implementations are identity). Plug them in once the smoke
-   test proves the graph is otherwise correct.
-
-6. **Audio path.** Audio self-attention, audio cross-attention to text,
-   audio↔video cross-attention, and audio FFN all have their weight slots
-   registered but the forward path skips them. Add them back when audio
-   generation is prioritised.
-
-7. **VAE scale factor.** Defaulted to **32** (patch_size=4 × 2³) in
-   `vae.hpp:get_scale_factor`. If the LTX-2 "video" checkpoint you're using
-   has all four down-blocks spatio-temporal (→ 4 × 2⁴ = 64), bump this.
+**Pipeline:**
+10. Flow-match scheduler defaults (shift, num_steps) for LTX-2.3 not
+    tuned; the distilled checkpoint ships with `steps=8, cfg=1`.
+11. Latent stats (mean/std) — LTX-2.3 may have non-unit latent stats.
+    Not yet parsed from checkpoint.
+12. Frame-count constraint: **dimensions must be divisible by 32,
+    frame count must be 8k+1** — the wiring in
+    `GenerationRequest` uses 8k+1 for LTX so that's correct.
 
 ## Testing
 
-Text-to-video smoke test (DGX / CUDA):
+Do not expect weight loading to succeed on LTX-2.3 yet — the
+`video_embeddings_connector` + VAE architecture changes need to land
+first. Current code will likely error with "missing tensor
+video_embeddings_connector.learnable_registers" or similar.
 
-```bash
-./sd-cli \
-    --model  /path/to/ltx2_video.safetensors \
-    --vae    /path/to/ltx2_vae.safetensors \
-    --t5xxl  /path/to/t5xxl.safetensors \
-    -W 704 -H 480 --video-frames 25 \
-    -p "a cat wearing sunglasses driving a convertible" \
-    --cfg-scale 3.0 --steps 30 \
-    -o /tmp/ltx2_test.webp \
-    --verbose
-```
-
-Expected behaviour when things go wrong:
-
-| Symptom | Most likely cause |
-|---|---|
-| `error: unexpected model type` | detection in `model.cpp` missed one of the LTX-2 keys (audio_scale_shift_table et al.) |
-| `wrong shape` on a transformer weight | stride/mod-param count mismatch — verify `cross_attn_mod` flag |
-| Crash inside `ggml_reshape` in the VAE | pixel-shuffle simplification (§1) |
-| Output that looks like pure noise | flow-match shift (§4), latents mean/std (§5), or split rope missing (§2) |
-| Output that looks blurry but shape is right | gate_logits factor of 2 / qk-norm weight loading; also check `cross_attn_mod` code path |
-| `wrong shape` on a VAE weight | LTX-2 "Video" checkpoint may use `spatio_temporal_scaling=(True,True,True,False)` — override in `LTX2VideoEncoder3d` ctor |
+The architecture investigation artifact is committed so future sessions
+can resume without re-reading the 46GB checkpoint header.
 
 ## References
 
-- LTX-Video model card: https://huggingface.co/Lightricks/LTX-Video
-- Diffusers reference (LTX-2): https://github.com/huggingface/diffusers/tree/main/src/diffusers/pipelines/ltx2
-- Upstream sd.cpp LTX-1 WIP (obsolete): https://github.com/leejet/stable-diffusion.cpp/pull/491
+- LTX-2.3 model card: https://huggingface.co/Lightricks/LTX-2.3
+- LTX-2.3 `ltx-2.3-22b-dev.safetensors` — 5947 tensors, 46GB, merged
+  single-file release with `audio_vae.*` + `vae.*` + `model.diffusion_model.*`
+- Upstream `ltx-pipelines` package (reference impl):
+  https://github.com/Lightricks/LTX-2/tree/main/packages/ltx-pipelines
+- Diffusers LTX-2.0 reference (was the starting point; config keys
+  don't match 2.3 one-to-one): https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/transformers/transformer_ltx2.py
+
+## Input/Output Requirements (from LTX-2.3 model card)
+
+- Width & height divisible by 32
+- Frame count divisible by 8, plus 1 (i.e. 8k+1 for integer k≥0)
+- Non-compliant inputs must be padded with -1 in pixel space then cropped
+  to the desired output dimensions
