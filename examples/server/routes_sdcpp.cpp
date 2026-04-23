@@ -228,7 +228,28 @@ static json make_capabilities_json(ServerRuntime& runtime) {
         {"name", "None"},
     });
     available_upscalers.push_back({
+        {"name", "Lanczos"},
+    });
+    available_upscalers.push_back({
+        {"name", "Nearest"},
+    });
+    available_upscalers.push_back({
+        {"name", "Latent"},
+    });
+    available_upscalers.push_back({
         {"name", "Latent (nearest)"},
+    });
+    available_upscalers.push_back({
+        {"name", "Latent (nearest-exact)"},
+    });
+    available_upscalers.push_back({
+        {"name", "Latent (antialiased)"},
+    });
+    available_upscalers.push_back({
+        {"name", "Latent (bicubic)"},
+    });
+    available_upscalers.push_back({
+        {"name", "Latent (bicubic antialiased)"},
     });
     {
         std::lock_guard<std::mutex> lock(*runtime.upscaler_mutex);

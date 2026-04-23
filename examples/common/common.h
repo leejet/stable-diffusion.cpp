@@ -192,7 +192,7 @@ struct SDGenerationParams {
     int upscale_tile_size = 128;
 
     bool hires_enabled         = false;
-    std::string hires_upscaler = "Latent (nearest)";
+    std::string hires_upscaler = "Latent";
     std::string hires_upscaler_model_path;
     float hires_scale              = 2.f;
     int hires_width                = 0;

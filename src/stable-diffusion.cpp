@@ -2116,12 +2116,19 @@ enum lora_apply_mode_t str_to_lora_apply_mode(const char* str) {
 
 const char* hires_upscaler_to_str[] = {
     "None",
+    "Latent",
     "Latent (nearest)",
+    "Latent (nearest-exact)",
+    "Latent (antialiased)",
+    "Latent (bicubic)",
+    "Latent (bicubic antialiased)",
+    "Lanczos",
+    "Nearest",
     "Model",
 };
 
 const char* sd_hires_upscaler_name(enum sd_hires_upscaler_t upscaler) {
-    if (upscaler < SD_HIRES_UPSCALER_COUNT) {
+    if (upscaler >= SD_HIRES_UPSCALER_NONE && upscaler < SD_HIRES_UPSCALER_COUNT) {
         return hires_upscaler_to_str[upscaler];
     }
     return NONE_STR;
@@ -2167,7 +2174,7 @@ void sd_cache_params_init(sd_cache_params_t* cache_params) {
 void sd_hires_params_init(sd_hires_params_t* hires_params) {
     *hires_params                    = {};
     hires_params->enabled            = false;
-    hires_params->upscaler           = SD_HIRES_UPSCALER_LATENT_NEAREST;
+    hires_params->upscaler           = SD_HIRES_UPSCALER_LATENT;
     hires_params->model_path         = nullptr;
     hires_params->scale              = 2.0f;
     hires_params->target_width       = 0;
@@ -2658,7 +2665,7 @@ struct GenerationRequest {
             hires.enabled = false;
             return;
         }
-        if (hires.upscaler < SD_HIRES_UPSCALER_NONE && hires.upscaler >= SD_HIRES_UPSCALER_COUNT) {
+        if (hires.upscaler < SD_HIRES_UPSCALER_NONE || hires.upscaler >= SD_HIRES_UPSCALER_COUNT) {
             LOG_WARN("hires upscaler '%d' is invalid, disabling hires", hires.upscaler);
             hires.enabled = false;
             return;
@@ -3252,55 +3259,123 @@ static sd::Tensor<float> upscale_hires_latent(sd_ctx_t* sd_ctx,
                                               const sd::Tensor<float>& latent,
                                               const GenerationRequest& request,
                                               UpscalerGGML* upscaler) {
-    if (request.hires.upscaler == SD_HIRES_UPSCALER_LATENT_NEAREST) {
+    auto get_hires_latent_target_shape = [&]() {
         std::vector<int64_t> target_shape = latent.shape();
         if (target_shape.size() < 2) {
-            LOG_ERROR("latent has invalid shape for hires upscale");
-            return {};
+            target_shape.clear();
+            return target_shape;
         }
         target_shape[0] = request.hires.target_width / request.vae_scale_factor;
         target_shape[1] = request.hires.target_height / request.vae_scale_factor;
+        return target_shape;
+    };
 
-        LOG_INFO("hires latent upscale %" PRId64 "x%" PRId64 " -> %" PRId64 "x%" PRId64,
+    if (request.hires.upscaler == SD_HIRES_UPSCALER_LATENT ||
+        request.hires.upscaler == SD_HIRES_UPSCALER_LATENT_NEAREST ||
+        request.hires.upscaler == SD_HIRES_UPSCALER_LATENT_NEAREST_EXACT ||
+        request.hires.upscaler == SD_HIRES_UPSCALER_LATENT_ANTIALIASED ||
+        request.hires.upscaler == SD_HIRES_UPSCALER_LATENT_BICUBIC ||
+        request.hires.upscaler == SD_HIRES_UPSCALER_LATENT_BICUBIC_ANTIALIASED) {
+        std::vector<int64_t> target_shape = get_hires_latent_target_shape();
+        if (target_shape.empty()) {
+            LOG_ERROR("latent has invalid shape for hires upscale");
+            return {};
+        }
+
+        sd::ops::InterpolateMode mode = sd::ops::InterpolateMode::Nearest;
+        bool antialias                = false;
+        switch (request.hires.upscaler) {
+            case SD_HIRES_UPSCALER_LATENT:
+                mode = sd::ops::InterpolateMode::Bilinear;
+                break;
+            case SD_HIRES_UPSCALER_LATENT_NEAREST:
+                mode = sd::ops::InterpolateMode::Nearest;
+                break;
+            case SD_HIRES_UPSCALER_LATENT_NEAREST_EXACT:
+                mode = sd::ops::InterpolateMode::NearestExact;
+                break;
+            case SD_HIRES_UPSCALER_LATENT_ANTIALIASED:
+                mode      = sd::ops::InterpolateMode::Bilinear;
+                antialias = true;
+                break;
+            case SD_HIRES_UPSCALER_LATENT_BICUBIC:
+                mode = sd::ops::InterpolateMode::Bicubic;
+                break;
+            case SD_HIRES_UPSCALER_LATENT_BICUBIC_ANTIALIASED:
+                mode      = sd::ops::InterpolateMode::Bicubic;
+                antialias = true;
+                break;
+            default:
+                break;
+        }
+
+        LOG_INFO("hires %s upscale %" PRId64 "x%" PRId64 " -> %" PRId64 "x%" PRId64,
+                 sd_hires_upscaler_name(request.hires.upscaler),
                  latent.shape()[0],
                  latent.shape()[1],
                  target_shape[0],
                  target_shape[1]);
-        return sd::ops::interpolate(latent, target_shape, sd::ops::InterpolateMode::Nearest);
-    } else if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL) {
-        if (upscaler == nullptr) {
-            LOG_ERROR("hires model upscaler context is null");
+
+        return sd::ops::interpolate(latent, target_shape, mode, false, antialias);
+    } else if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL ||
+               request.hires.upscaler == SD_HIRES_UPSCALER_LANCZOS ||
+               request.hires.upscaler == SD_HIRES_UPSCALER_NEAREST) {
+        if (sd_ctx->sd->vae_decode_only) {
+            LOG_ERROR("hires %s upscaler requires VAE encoder weights; create the context with vae_decode_only=false",
+                      sd_hires_upscaler_name(request.hires.upscaler));
             return {};
         }
-        if (sd_ctx->sd->vae_decode_only) {
-            LOG_ERROR("hires model upscaler requires VAE encoder weights; create the context with vae_decode_only=false");
+        if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL && upscaler == nullptr) {
+            LOG_ERROR("hires model upscaler context is null");
             return {};
         }
 
         sd::Tensor<float> decoded = sd_ctx->sd->decode_first_stage(latent);
         if (decoded.empty()) {
-            LOG_ERROR("decode_first_stage failed before hires model upscale");
+            LOG_ERROR("decode_first_stage failed before hires %s upscale",
+                      sd_hires_upscaler_name(request.hires.upscaler));
             return {};
         }
 
-        sd::Tensor<float> upscaled_tensor = upscaler->upscale_tensor(decoded);
-        if (upscaled_tensor.empty()) {
-            LOG_ERROR("hires model upscale failed");
-            return {};
-        }
+        sd::Tensor<float> upscaled_tensor;
+        if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL) {
+            upscaled_tensor = upscaler->upscale_tensor(decoded);
+            if (upscaled_tensor.empty()) {
+                LOG_ERROR("hires model upscale failed");
+                return {};
+            }
 
-        if (upscaled_tensor.shape()[0] != request.hires.target_width ||
-            upscaled_tensor.shape()[1] != request.hires.target_height) {
-            upscaled_tensor = sd::ops::interpolate(upscaled_tensor,
+            if (upscaled_tensor.shape()[0] != request.hires.target_width ||
+                upscaled_tensor.shape()[1] != request.hires.target_height) {
+                upscaled_tensor = sd::ops::interpolate(upscaled_tensor,
+                                                       {request.hires.target_width,
+                                                        request.hires.target_height,
+                                                        upscaled_tensor.shape()[2],
+                                                        upscaled_tensor.shape()[3]});
+            }
+        } else {
+            sd::ops::InterpolateMode mode = request.hires.upscaler == SD_HIRES_UPSCALER_LANCZOS
+                                                ? sd::ops::InterpolateMode::Lanczos
+                                                : sd::ops::InterpolateMode::Nearest;
+            LOG_INFO("hires %s image upscale %" PRId64 "x%" PRId64 " -> %dx%d",
+                     sd_hires_upscaler_name(request.hires.upscaler),
+                     decoded.shape()[0],
+                     decoded.shape()[1],
+                     request.hires.target_width,
+                     request.hires.target_height);
+            upscaled_tensor = sd::ops::interpolate(decoded,
                                                    {request.hires.target_width,
                                                     request.hires.target_height,
-                                                    upscaled_tensor.shape()[2],
-                                                    upscaled_tensor.shape()[3]});
+                                                    decoded.shape()[2],
+                                                    decoded.shape()[3]},
+                                                   mode);
+            upscaled_tensor = sd::ops::clamp(upscaled_tensor, 0.0f, 1.0f);
         }
 
         sd::Tensor<float> upscaled_latent = sd_ctx->sd->encode_first_stage(upscaled_tensor);
         if (upscaled_latent.empty()) {
-            LOG_ERROR("encode_first_stage failed after hires model upscale");
+            LOG_ERROR("encode_first_stage failed after hires %s upscale",
+                      sd_hires_upscaler_name(request.hires.upscaler));
         }
         return upscaled_latent;
     }

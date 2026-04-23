@@ -219,7 +219,7 @@ Currently supported request fields:
 | `lora` | `array<object>` | Structured LoRA list |
 | `extra_images` | `array<string>` | Base64 or data URL images |
 | `enable_hr` | `boolean` | Enable highres fix for `txt2img` |
-| `hr_upscaler` | `string` | `Latent (nearest)` or an upscaler model name from `/sdapi/v1/upscalers` |
+| `hr_upscaler` | `string` | `Lanczos`, `Nearest`, a latent mode such as `Latent (nearest-exact)`, or an upscaler model name from `/sdapi/v1/upscalers` |
 | `hr_scale` | `number` | Highres scale when resize target is not set |
 | `hr_resize_x` | `integer` | Highres target width, `0` to use scale |
 | `hr_resize_y` | `integer` | Highres target height, `0` to use scale |
@@ -302,6 +302,8 @@ Built-in entries include `None`, `Lanczos`, and `Nearest`. Model-backed entries 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `[].name` | `string` | WebUI-compatible latent upscale mode name |
+
+Built-in latent modes include `Latent`, `Latent (nearest)`, `Latent (nearest-exact)`, `Latent (antialiased)`, `Latent (bicubic)`, and `Latent (bicubic antialiased)`.
 
 `GET /sdapi/v1/samplers`
 
@@ -462,7 +464,7 @@ Shared nested fields:
 | --- | --- | --- |
 | `upscalers[].name` | `string` | Built-in name or model stem; use this value in `hires.upscaler` |
 
-Built-in entries include `None` and `Latent (nearest)`. Model-backed entries are scanned from the top level of `--hires-upscalers-dir`; subdirectories are not scanned.
+Built-in entries include `None`, `Lanczos`, `Nearest`, `Latent`, `Latent (nearest)`, `Latent (nearest-exact)`, `Latent (antialiased)`, `Latent (bicubic)`, and `Latent (bicubic antialiased)`. Model-backed entries are scanned from the top level of `--hires-upscalers-dir`; subdirectories are not scanned.
 
 `limits`
 
@@ -677,7 +679,7 @@ Example:
   "lora": [],
   "hires": {
     "enabled": false,
-    "upscaler": "Latent (nearest)",
+    "upscaler": "Latent",
     "scale": 2.0,
     "target_width": 0,
     "target_height": 0,
@@ -804,7 +806,7 @@ Other native fields:
 | `scm_mask` | `string` |
 | `scm_policy_dynamic` | `boolean` |
 
-For `hires.upscaler`, use `Latent (nearest)` for latent upscale or an `upscalers[].name` value from `GET /sdcpp/v1/capabilities`. Model-backed upscalers are resolved as `--hires-upscalers-dir / (name + ext)` and must live directly in that directory.
+For `hires.upscaler`, use `Lanczos`, `Nearest`, `Latent`, `Latent (nearest)`, `Latent (nearest-exact)`, `Latent (antialiased)`, `Latent (bicubic)`, `Latent (bicubic antialiased)`, or an `upscalers[].name` value from `GET /sdcpp/v1/capabilities`. Model-backed upscalers are resolved as `--hires-upscalers-dir / (name + ext)` and must live directly in that directory.
 
 HTTP-only output fields:
 
