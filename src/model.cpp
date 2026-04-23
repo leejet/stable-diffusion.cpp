@@ -450,15 +450,19 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("model.diffusion_model.joint_blocks.") != std::string::npos) {
             return VERSION_SD3;
         }
-        // LTX-Video 2: unique audio-visual weights distinguish it from every other
-        // DiT family. The transformer has per-block `audio_attn1`, `audio_attn2`,
-        // `audio_to_video_attn`, `video_to_audio_attn` plus top-level
-        // `audio_scale_shift_table`, `av_cross_attn_video_scale_shift.*`.
-        // Key on `audio_scale_shift_table` (the cheapest, unambiguous token).
+        // LTX-Video 2.3: unique audio-visual weights distinguish it from every
+        // other DiT family. Any of these top-level tensors is present only in
+        // the joint audio-visual LTX-2.3 architecture:
+        //   * audio_scale_shift_table (2,2048) — per-modality final modulation
+        //   * audio_patchify_proj — audio latent input projection
+        //   * audio_adaln_single — audio timestep embedder
+        //   * av_ca_video_scale_shift_adaln_single — a2v cross-attn modulation
+        //   * video_embeddings_connector — the LTX-2.3 prompt re-embedder
         if (tensor_storage.name == "model.diffusion_model.audio_scale_shift_table" ||
-            tensor_storage.name.find("model.diffusion_model.av_cross_attn_video_scale_shift.") != std::string::npos ||
-            tensor_storage.name.find("model.diffusion_model.audio_proj_in.") != std::string::npos ||
-            tensor_storage.name.find("model.diffusion_model.audio_time_embed.") != std::string::npos) {
+            tensor_storage.name.find("model.diffusion_model.audio_patchify_proj.") != std::string::npos ||
+            tensor_storage.name.find("model.diffusion_model.audio_adaln_single.") != std::string::npos ||
+            tensor_storage.name.find("model.diffusion_model.av_ca_video_scale_shift_adaln_single.") != std::string::npos ||
+            tensor_storage.name.find("model.diffusion_model.video_embeddings_connector.") != std::string::npos) {
             return VERSION_LTXV2;
         }
         if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.img_mod.1.weight") != std::string::npos) {
