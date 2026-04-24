@@ -165,7 +165,8 @@ namespace LTXV {
             // ggml_cuda_op_im2col_3d only supports F16/F32 destination tensors
             // — BF16 weights (the native LTX-2.3 dtype) would trigger its
             // GGML_ASSERT. Force F16 here so sd.cpp's loader converts BF16
-            // from the checkpoint on its way in.
+            // from the checkpoint on its way in. F32 was tested and gave
+            // identical output scale, so F16 is safe.
             params["conv.weight"] = ggml_new_tensor_4d(ctx,
                                                       GGML_TYPE_F16,
                                                       std::get<2>(kernel_size),

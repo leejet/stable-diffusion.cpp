@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "clip.hpp"
+#include "gemma3.hpp"
 #include "llm.hpp"
 #include "t5.hpp"
 #include "tensor_ggml.hpp"
