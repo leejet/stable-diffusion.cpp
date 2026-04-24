@@ -38,6 +38,84 @@ namespace LTXV {
 
     constexpr int LTXV_GRAPH_SIZE = 32768;
 
+    // Debug probe registry: block forwards add intermediate tensors here;
+    // the Runner keeps them alive across compute and logs stats.
+    struct DebugProbes {
+        struct Entry {
+            std::string name;
+            ggml_tensor* tensor = nullptr;
+        };
+        std::vector<Entry> entries;
+        void add(const std::string& n, ggml_tensor* t) {
+            entries.push_back({n, t});
+        }
+        void clear() { entries.clear(); }
+    };
+    __STATIC_INLINE__ DebugProbes& debug_probes() {
+        static DebugProbes p;
+        return p;
+    }
+
+    // 3-D depth-to-space (pixel-shuffle) matching einops
+    //   rearrange(x, "b (c p1 p2 p3) f h w -> b c (f p1) (h p2) (w p3)")
+    // where the channel axis has structure (c outer, p1, p2, p3 inner). In
+    // ggml ne order the input is [W, H, F, C*p1*p2*p3] and the output is
+    // [W*p3, H*p2, F*p1, C]. Implemented as three separate passes that each
+    // peel one sub-axis off the channel, route it to its destination and
+    // merge it as the INNER sub-index — matching einops' conventions
+    // exactly (naive ggml_reshape_4d alone produces swapped sub-indices and
+    // causes the visible banding artefacts in decoded frames).
+    __STATIC_INLINE__ ggml_tensor* depth_to_space_3d(ggml_context* ctx,
+                                                     ggml_tensor* x,
+                                                     int p1, int p2, int p3) {
+        int64_t W = x->ne[0], H = x->ne[1], F = x->ne[2], Cb = x->ne[3];
+        int64_t C = Cb / ((int64_t)p1 * p2 * p3);
+        GGML_ASSERT(C * p1 * p2 * p3 == Cb);
+
+        // ---- pass p3: merge into W as inner sub-index ----------------
+        if (p3 > 1) {
+            // Split p3 from channel into F*p3 (p3 outer within ne[2]).
+            x = ggml_reshape_4d(ctx, x, W, H, F * p3, C * p1 * p2);
+            // Isolate p3: ne=[W, H*F, p3, X].
+            x = ggml_reshape_4d(ctx, x, W, H * F, p3, C * p1 * p2);
+            // Bring p3 innermost: [p3, W, H*F, X].
+            x = ggml_cont(ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 1, 3));
+            // Merge p3 with W (p3 inner, w outer) and restore H, F.
+            x = ggml_reshape_4d(ctx, x, p3 * W, H, F, C * p1 * p2);
+            W *= p3;
+        }
+
+        // ---- pass p2: merge into H as inner sub-index ----------------
+        if (p2 > 1) {
+            x = ggml_reshape_4d(ctx, x, W, H, F * p2, C * p1);
+            // Isolate p2: ne=[W*H, F, p2, X].
+            x = ggml_reshape_4d(ctx, x, W * H, F, p2, C * p1);
+            // Bring p2 next to W*H: [W*H, p2, F, X].
+            x = ggml_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));
+            // Split W*H → (W inner, H outer): ne=[W, H, p2, F*X].
+            x = ggml_reshape_4d(ctx, x, W, H, p2, F * C * p1);
+            // Swap H ↔ p2 so that the next merge puts p2 inner of H.
+            x = ggml_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));
+            // Merge p2 and H (p2 inner, h outer) and restore F, C*p1.
+            x = ggml_reshape_4d(ctx, x, W, p2 * H, F, C * p1);
+            H *= p2;
+        }
+
+        // ---- pass p1: merge into F as inner sub-index ----------------
+        if (p1 > 1) {
+            x = ggml_reshape_4d(ctx, x, W, H, F * p1, C);
+            // Split F*p1 into separate F and p1 axes: ne=[W*H, F, p1, C].
+            x = ggml_reshape_4d(ctx, x, W * H, F, p1, C);
+            // Swap so p1 is inner of the merged F*p1: [W*H, p1, F, C].
+            x = ggml_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));
+            // Merge p1 with F (p1 inner, f outer) and restore W, H.
+            x = ggml_reshape_4d(ctx, x, W, H, p1 * F, C);
+            F *= p1;
+        }
+
+        return x;
+    }
+
     // =================================================================
     // Shared primitives
     // =================================================================
@@ -286,7 +364,8 @@ namespace LTXV {
                              ggml_tensor* query_rope_sin        = nullptr,
                              ggml_tensor* key_rope_cos          = nullptr,
                              ggml_tensor* key_rope_sin          = nullptr,
-                             ggml_tensor* attention_mask        = nullptr) {
+                             ggml_tensor* attention_mask        = nullptr,
+                             const char* probe_prefix           = nullptr) {
             auto to_q    = std::dynamic_pointer_cast<Linear>(blocks["to_q"]);
             auto to_k    = std::dynamic_pointer_cast<Linear>(blocks["to_k"]);
             auto to_v    = std::dynamic_pointer_cast<Linear>(blocks["to_v"]);
@@ -295,16 +374,32 @@ namespace LTXV {
             auto k_norm  = std::dynamic_pointer_cast<UnaryBlock>(blocks["k_norm"]);
             auto gate    = std::dynamic_pointer_cast<Linear>(blocks["to_gate_logits"]);
 
+            auto probe_attn = [&](const char* suffix, ggml_tensor* t) {
+                if (!probe_prefix) return;
+                std::string full = std::string(probe_prefix) + "_" + suffix;
+                auto dup = ggml_dup(ctx->ggml_ctx, t);
+                ggml_set_name(dup, full.c_str());
+                debug_probes().add(full, dup);
+            };
+
             ggml_tensor* kv_src = encoder_hidden_states != nullptr ? encoder_hidden_states : hidden_states;
+            probe_attn("kv_src", kv_src);
+            probe_attn("q_src", hidden_states);
 
             auto gate_logits = gate->forward(ctx, hidden_states);
+            probe_attn("gate_logits", gate_logits);
 
             auto q = to_q->forward(ctx, hidden_states);
             auto k = to_k->forward(ctx, kv_src);
             auto v = to_v->forward(ctx, kv_src);
+            probe_attn("q_proj", q);
+            probe_attn("k_proj", k);
+            probe_attn("v_proj", v);
 
             q = q_norm->forward(ctx, q);
             k = k_norm->forward(ctx, k);
+            probe_attn("q_norm", q);
+            probe_attn("k_norm", k);
 
             if (has_rope && query_rope_cos != nullptr && query_rope_sin != nullptr) {
                 if (rope_type == "split") {
@@ -323,6 +418,7 @@ namespace LTXV {
             auto out = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v,
                                               num_heads, attention_mask, false,
                                               ctx->flash_attn_enabled);
+            probe_attn("raw_attn_out", out);
 
             // Per-head gate: gates = 2 * sigmoid(gate_logits). Broadcast
             // [heads, L_q, N] over head_dim via reshape to [1, heads, L_q, N].
@@ -336,8 +432,10 @@ namespace LTXV {
                 out_4d        = ggml_mul(ctx->ggml_ctx, out_4d, gates_4d);
                 out           = ggml_reshape_3d(ctx->ggml_ctx, out_4d, inner_dim, L_q, N);
             }
+            probe_attn("after_gate", out);
 
             out = to_out->forward(ctx, out);
+            probe_attn("to_out", out);
             return out;
         }
 
@@ -417,8 +515,12 @@ namespace LTXV {
         }
     };
 
-    // EmbeddingsConnector's internal transformer_1d_blocks have only attn1 + ff
-    // (no norms or cross-attention — checkpoint confirms this layout).
+    // EmbeddingsConnector's internal transformer_1d_blocks: attn1 + ff with
+    // PRE-NORM (stateless rms_norm) before each op. The reference is
+    // Lightricks' Embeddings1DConnector._BasicTransformerBlock1D: it calls
+    // `rms_norm(h)` before attn1 and before ff; residuals add the un-normed
+    // input back. Without the pre-norms, residual magnitudes compound across
+    // the 8 blocks and drive the connector output to ~1e12.
     class EmbeddingsConnectorBlock : public GGMLBlock {
     public:
         int64_t dim;
@@ -434,9 +536,11 @@ namespace LTXV {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             auto attn1 = std::dynamic_pointer_cast<LTXAttention>(blocks["attn1"]);
             auto ff    = std::dynamic_pointer_cast<FeedForward>(blocks["ff"]);
-            auto a     = attn1->forward(ctx, x);
+            auto xn    = ggml_rms_norm(ctx->ggml_ctx, x, 1e-6f);
+            auto a     = attn1->forward(ctx, xn);
             x          = ggml_add(ctx->ggml_ctx, x, a);
-            auto f     = ff->forward(ctx, x);
+            auto xn2   = ggml_rms_norm(ctx->ggml_ctx, x, 1e-6f);
+            auto f     = ff->forward(ctx, xn2);
             x          = ggml_add(ctx->ggml_ctx, x, f);
             return x;
         }
@@ -486,6 +590,8 @@ namespace LTXV {
                     blocks["transformer_1d_blocks." + std::to_string(i)]);
                 x = b->forward(ctx, x);
             }
+            // Final stateless rms_norm (matches reference).
+            x = ggml_rms_norm(ctx->ggml_ctx, x, 1e-6f);
             return x;
         }
     };
@@ -556,10 +662,19 @@ namespace LTXV {
                              ggml_tensor* temb,
                              ggml_tensor* rope_cos     = nullptr,
                              ggml_tensor* rope_sin     = nullptr,
-                             ggml_tensor* encoder_mask = nullptr) {
+                             ggml_tensor* encoder_mask = nullptr,
+                             int block_idx            = -1) {
             auto attn1 = std::dynamic_pointer_cast<LTXAttention>(blocks["attn1"]);
             auto attn2 = std::dynamic_pointer_cast<LTXAttention>(blocks["attn2"]);
             auto ff    = std::dynamic_pointer_cast<FeedForward>(blocks["ff"]);
+
+            auto probe_tensor = [&](const char* name, ggml_tensor* t) {
+                if (block_idx == 0) {
+                    auto dup = ggml_dup(ctx->ggml_ctx, t);
+                    ggml_set_name(dup, name);
+                    debug_probes().add(name, dup);
+                }
+            };
 
             ggml_tensor* sst = params["scale_shift_table"];  // [dim, 9]
             auto temb_r      = ggml_reshape_4d(ctx->ggml_ctx, temb, dim, 9, temb->ne[1], temb->ne[2]);
@@ -601,8 +716,18 @@ namespace LTXV {
                 return ggml_repeat(ctx->ggml_ctx, scale_msa, target);
             }
 
+            probe_tensor("blk0_hidden_in", hidden);
+            probe_tensor("blk0_encoder_in", encoder);
+            probe_tensor("blk0_scale_msa", scale_msa);
+            probe_tensor("blk0_shift_msa", shift_msa);
+            probe_tensor("blk0_gate_msa", gate_msa);
+            probe_tensor("blk0_scale_text_q", scale_text_q);
+            probe_tensor("blk0_shift_text_q", shift_text_q);
+            probe_tensor("blk0_gate_text_q", gate_text_q);
+
             // 1. Video self-attention
             auto h_norm = ggml_rms_norm(ctx->ggml_ctx, hidden, 1e-6f);
+            probe_tensor("blk0_after_norm1", h_norm);
             if (!skip_mod) {
                 if (!skip_scale) {
                     h_norm = ggml_add(ctx->ggml_ctx, h_norm, ggml_mul(ctx->ggml_ctx, h_norm, scale_msa));
@@ -611,12 +736,14 @@ namespace LTXV {
                     h_norm = ggml_add(ctx->ggml_ctx, h_norm, shift_msa);
                 }
             }
+            probe_tensor("blk0_after_mod1", h_norm);
             if (ret_h_norm1) {
                 return h_norm;
             }
             if (!skip_attn1) {
                 auto attn_out = attn1->forward(ctx, h_norm, nullptr,
                                                 rope_cos, rope_sin, nullptr, nullptr, nullptr);
+                probe_tensor("blk0_after_attn1", attn_out);
                 if (ret_attn1_out) {
                     return attn_out;
                 }
@@ -625,38 +752,49 @@ namespace LTXV {
                 } else {
                     hidden = ggml_add(ctx->ggml_ctx, hidden, attn_out);
                 }
+                probe_tensor("blk0_after_attn1_residual", hidden);
             }
 
             // 2. Prompt cross-attention with Q modulation
             auto h_norm2 = ggml_rms_norm(ctx->ggml_ctx, hidden, 1e-6f);
+            probe_tensor("blk0_after_norm2", h_norm2);
             if (!skip_mod) {
                 h_norm2 = ggml_add(ctx->ggml_ctx, h_norm2, ggml_mul(ctx->ggml_ctx, h_norm2, scale_text_q));
                 h_norm2 = ggml_add(ctx->ggml_ctx, h_norm2, shift_text_q);
             }
+            probe_tensor("blk0_after_mod2", h_norm2);
             if (!skip_attn2) {
+                const char* attn2_prefix = (block_idx == 0) ? "blk0_attn2" : nullptr;
                 auto ca_out = attn2->forward(ctx, h_norm2, encoder,
-                                              nullptr, nullptr, nullptr, nullptr, encoder_mask);
+                                              nullptr, nullptr, nullptr, nullptr, encoder_mask,
+                                              attn2_prefix);
+                probe_tensor("blk0_after_attn2", ca_out);
                 if (!skip_mod) {
                     ca_out = ggml_mul(ctx->ggml_ctx, ca_out, gate_text_q);
                 }
                 hidden = ggml_add(ctx->ggml_ctx, hidden, ca_out);
+                probe_tensor("blk0_after_attn2_residual", hidden);
             }
 
             // 3. a2v/v2a cross-attention — SKIPPED (video-only mode).
 
             // 4. FFN
             auto h_norm3 = ggml_rms_norm(ctx->ggml_ctx, hidden, 1e-6f);
+            probe_tensor("blk0_after_norm3", h_norm3);
             if (!skip_mod) {
                 h_norm3 = ggml_add(ctx->ggml_ctx, h_norm3, ggml_mul(ctx->ggml_ctx, h_norm3, scale_mlp));
                 h_norm3 = ggml_add(ctx->ggml_ctx, h_norm3, shift_mlp);
             }
+            probe_tensor("blk0_after_mod3", h_norm3);
             if (!skip_ff) {
                 auto ff_out = ff->forward(ctx, h_norm3);
+                probe_tensor("blk0_after_ff", ff_out);
                 if (!skip_mod) {
                     hidden = ggml_add(ctx->ggml_ctx, hidden, ggml_mul(ctx->ggml_ctx, ff_out, gate_mlp));
                 } else {
                     hidden = ggml_add(ctx->ggml_ctx, hidden, ff_out);
                 }
+                probe_tensor("blk0_after_ff_residual", hidden);
             }
             return hidden;
         }
@@ -836,8 +974,11 @@ namespace LTXV {
             inner_dim       = num_attention_heads * attention_head_dim;
             audio_inner_dim = audio_num_attention_heads * audio_attention_head_dim;
 
-            blocks["patchify_proj"]       = std::shared_ptr<GGMLBlock>(new Linear(in_channels, inner_dim, true));
-            blocks["audio_patchify_proj"] = std::shared_ptr<GGMLBlock>(new Linear(audio_in_channels, audio_inner_dim, true));
+            // Force F32 on patchify weights: the combination of tiny in_channels
+            // (128) and BF16 storage triggers a matmul pathway that gives wildly
+            // wrong magnitudes on some ggml backends (observed 6e9x explosion).
+            blocks["patchify_proj"]       = std::shared_ptr<GGMLBlock>(new Linear(in_channels, inner_dim, true, /*force_f32=*/true));
+            blocks["audio_patchify_proj"] = std::shared_ptr<GGMLBlock>(new Linear(audio_in_channels, audio_inner_dim, true, /*force_f32=*/true));
 
             blocks["adaln_single"]       = std::shared_ptr<GGMLBlock>(new AdaLayerNormSingle(inner_dim, 9));
             blocks["audio_adaln_single"] = std::shared_ptr<GGMLBlock>(new AdaLayerNormSingle(audio_inner_dim, 9));
@@ -891,7 +1032,18 @@ namespace LTXV {
             (void)stage;
             (void)probe;
 
+            auto& probes = debug_probes();
+            probes.clear();
+
+            auto dup_hs = ggml_dup(ctx->ggml_ctx, hidden_states);
+            ggml_set_name(dup_hs, "dbg_patchify_in");
+            probes.add("dbg_patchify_in", dup_hs);
+
             auto x = patchify->forward(ctx, hidden_states);
+
+            auto dup_x = ggml_dup(ctx->ggml_ctx, x);
+            ggml_set_name(dup_x, "dbg_after_patchify");
+            probes.add("dbg_after_patchify", dup_x);
             if (probe && std::strcmp(probe, "after_proj_in") == 0) {
                 ggml_set_name(x, "ltxv_probe_out");
                 return ggml_cont(ctx->ggml_ctx, x);
@@ -925,7 +1077,14 @@ namespace LTXV {
             for (int64_t i = 0; i < max_i; ++i) {
                 auto blk = std::dynamic_pointer_cast<LTX2VideoTransformerBlock>(
                     blocks["transformer_blocks." + std::to_string(i)]);
-                x = blk->forward(ctx, x, encoder, temb, rope_cos, rope_sin, encoder_mask);
+                x = blk->forward(ctx, x, encoder, temb, rope_cos, rope_sin, encoder_mask, (int)i);
+                // Probe the first few block outputs.
+                if (i < 3) {
+                    auto dup = ggml_dup(ctx->ggml_ctx, x);
+                    std::string name = "dbg_after_block" + std::to_string(i);
+                    ggml_set_name(dup, name.c_str());
+                    debug_probes().add(name, dup);
+                }
             }
 
             ggml_tensor* sst = params["scale_shift_table"];
@@ -956,22 +1115,6 @@ namespace LTXV {
     // intermediates into. LTXVRunner::compute then reads them after running
     // the graph and logs stats. Keeps the probe infrastructure out of the
     // block forward signatures.
-    struct DebugProbes {
-        struct Entry {
-            std::string name;
-            ggml_tensor* tensor = nullptr;
-        };
-        std::vector<Entry> entries;
-        void add(const std::string& n, ggml_tensor* t) {
-            entries.push_back({n, t});
-        }
-        void clear() { entries.clear(); }
-    };
-    __STATIC_INLINE__ DebugProbes& debug_probes() {
-        static DebugProbes p;
-        return p;
-    }
-
     struct LTXVRunner : public GGMLRunner {
         LTX2VideoTransformer3DModel dit;
         RopeTables rope_tbl;
@@ -1057,6 +1200,11 @@ namespace LTXV {
                 }
             }
 
+            // Expand probes first, then `out` last so it remains the
+            // graph's final node (which get_compute_graph names final_result).
+            for (auto& p : debug_probes().entries) {
+                if (p.tensor) ggml_build_forward_expand(gf, p.tensor);
+            }
             ggml_build_forward_expand(gf, out);
             return gf;
         }
@@ -1123,6 +1271,50 @@ namespace LTXV {
             if (!result.has_value()) return {};
             sd::Tensor<float> out = std::move(*result);
             log_tensor_stats("transformer_out", out);
+            // Dump any debug-tagged intermediate tensor from the graph so we
+            // can compare against the PyTorch reference. We enumerate every
+            // registered probe rather than a hardcoded list so new probes
+            // (e.g. blk0_*) are picked up automatically.
+            std::vector<std::string> probe_names;
+            for (auto& p : debug_probes().entries) {
+                probe_names.push_back(p.name);
+            }
+            for (const auto& nm : probe_names) {
+                const char* name = nm.c_str();
+                ggml_tensor* t = ggml_get_tensor(compute_ctx, name);
+                if (!t) continue;
+                const size_t nb = ggml_nbytes(t);
+                std::vector<float> cpu(ggml_nelements(t));
+                if (t->type == GGML_TYPE_F32) {
+                    ggml_backend_tensor_get(t, cpu.data(), 0, nb);
+                } else if (t->type == GGML_TYPE_F16) {
+                    std::vector<uint16_t> tmp(ggml_nelements(t));
+                    ggml_backend_tensor_get(t, tmp.data(), 0, nb);
+                    for (size_t i = 0; i < cpu.size(); ++i) {
+                        cpu[i] = ggml_fp16_to_fp32(tmp[i]);
+                    }
+                } else {
+                    LOG_INFO("[ltxv.stats] %s: type=%d (skipping stats)", name, (int)t->type);
+                    continue;
+                }
+                double mn = 1e30, mx = -1e30, sum = 0, sum_sq = 0;
+                size_t nan_count = 0;
+                for (float v : cpu) {
+                    if (std::isnan(v)) { ++nan_count; continue; }
+                    if (v < mn) mn = v;
+                    if (v > mx) mx = v;
+                    sum += v; sum_sq += v * v;
+                }
+                size_t valid = cpu.size() - nan_count;
+                double mean = valid > 0 ? sum / valid : 0;
+                double var  = valid > 0 ? sum_sq / valid - mean * mean : 0;
+                double sd   = var > 0 ? std::sqrt(var) : 0;
+                LOG_INFO("[ltxv.stats] %s: shape=[%lld,%lld,%lld,%lld] n=%zu min=%.4g max=%.4g mean=%.4g std=%.4g nan=%zu",
+                         name,
+                         (long long)t->ne[0], (long long)t->ne[1],
+                         (long long)t->ne[2], (long long)t->ne[3],
+                         cpu.size(), mn, mx, mean, sd, nan_count);
+            }
             return out;
         }
     };
@@ -1246,18 +1438,15 @@ namespace LTXV {
             auto conv = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv"]);
             h = conv->forward(ctx, h, causal);
             int st_t = std::get<0>(stride), st_h = std::get<1>(stride), st_w = std::get<2>(stride);
-            int64_t W = h->ne[0], H = h->ne[1], F = h->ne[2], C = h->ne[3];
-            int64_t prod = (int64_t)st_t * st_h * st_w;
-            int64_t out_c = C / prod;
             h = ggml_cont(ctx->ggml_ctx, h);
-            h = ggml_reshape_4d(ctx->ggml_ctx, h, W * st_w, H * st_h, F * st_t, out_c);
+            h = depth_to_space_3d(ctx->ggml_ctx, h, st_t, st_h, st_w);
             // Diffusers LTX2VideoUpsampler3d drops the first (st_t - 1) temporal
             // samples so each upsampled chunk boundary stays causal and the
             // overall frame count follows f_out = (f_in - 1) * st_t + 1 when
             // composed across multiple temporal upsamples.
             if (st_t > 1) {
-                int64_t T_out   = F * st_t;
-                int64_t T_keep  = T_out - (st_t - 1);
+                int64_t T_out  = h->ne[2];
+                int64_t T_keep = T_out - (st_t - 1);
                 int64_t offset_bytes = h->nb[2] * (st_t - 1);
                 h = ggml_view_4d(ctx->ggml_ctx, h,
                                  h->ne[0], h->ne[1], T_keep, h->ne[3],
@@ -1337,11 +1526,18 @@ namespace LTXV {
                     h = s->forward(ctx, h, causal);
                 }
             }
+            // conv_norm_out (stateless PerChannelRMSNorm) + SiLU before conv_out,
+            // matching the reference video_vae decoder. Without these the
+            // output is O(1000) instead of O(1) per pixel.
+            {
+                PerChannelRMSNorm pn;
+                h = pn.forward(ctx, h);
+            }
+            h = ggml_silu(ctx->ggml_ctx, h);
             h = conv_out->forward(ctx, h, causal);
-            int64_t W = h->ne[0], H = h->ne[1], F = h->ne[2], C = h->ne[3];
             // Un-patchify 4×4 spatial pack: ne [W, H, F, C*16] → [W*4, H*4, F, C]
             h = ggml_cont(ctx->ggml_ctx, h);
-            h = ggml_reshape_4d(ctx->ggml_ctx, h, W * 4, H * 4, F, C / 16);
+            h = depth_to_space_3d(ctx->ggml_ctx, h, /*p1=*/1, /*p2=*/4, /*p3=*/4);
             // sd.cpp's decode_video_outputs expects the 5-D layout
             //   [W, H, T, C, N=1]
             // (batch last, time before channel). Our 4-D result is
@@ -1425,20 +1621,88 @@ namespace LTXV {
 
         // LTX-2.3 normalises diffusion-space latents to unit variance using the
         // per-channel stats saved with the VAE:
-        //   diffusion_to_vae   = latents * std + mean
-        //   vae_to_diffusion   = (latents - mean) / std
-        // The stats are loaded into `ae.params["per_channel_statistics.*"]` at
-        // init_params time. When the stats are unavailable (e.g. running
-        // without the checkpoint), we fall back to identity so tests on
-        // synthetic data still work.
-        //
-        // NOTE: We can't easily read backend-resident tensors from CPU here
-        // without a separate copy. For correctness on a CUDA run the caller
-        // must materialise the stats to CPU first — TODO: plumb that through.
-        // For now the identity fall-through is preserved and we note this as
-        // a known quality gap in docs/ltxv.md.
-        sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latents) override { return latents; }
-        sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents) override { return latents; }
+        //   diffusion_to_vae (un_normalize)   = latents * std + mean
+        //   vae_to_diffusion (normalize)      = (latents - mean) / std
+        // The stats live in the backend under `ae.params["per_channel_statistics.*"]`;
+        // we materialise them to CPU lazily on the first call.
+        std::vector<float> mean_of_means;
+        std::vector<float> std_of_means;
+        bool stats_loaded = false;
+        void load_stats_cpu() {
+            if (stats_loaded) return;
+            std::map<std::string, ggml_tensor*> tensors;
+            ae.get_param_tensors(tensors);
+            auto mm  = tensors.find("per_channel_statistics.mean-of-means");
+            auto sm  = tensors.find("per_channel_statistics.std-of-means");
+            if (mm == tensors.end() || sm == tensors.end() || !mm->second || !sm->second) return;
+            ggml_tensor* m = mm->second;
+            ggml_tensor* s = sm->second;
+            int64_t C = m->ne[0];
+            mean_of_means.resize(C);
+            std_of_means.resize(C);
+            ggml_backend_tensor_get(m, mean_of_means.data(), 0, C * sizeof(float));
+            ggml_backend_tensor_get(s, std_of_means.data(),  0, C * sizeof(float));
+            stats_loaded = true;
+            LOG_INFO("[ltxv.stats] per-channel stats loaded: C=%lld mean[0..3]=%g %g %g std[0..3]=%g %g %g",
+                     (long long)C,
+                     mean_of_means[0], mean_of_means[1], mean_of_means[2],
+                     std_of_means[0],  std_of_means[1],  std_of_means[2]);
+        }
+        // latents shape: [W, H, F, C, N] or [W, H, F, C] (missing batch axis).
+        // The data layout is row-major with shape[0] the fastest-varying dim,
+        // so index(w,h,f,c,n) = n*W*H*F*C + c*W*H*F + f*W*H + h*W + w.
+        sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latents) override {
+            load_stats_cpu();
+            if (!stats_loaded) return latents;
+            sd::Tensor<float> out(latents.shape());
+            const auto& sh = latents.shape();
+            int64_t W = sh.size() > 0 ? sh[0] : 1;
+            int64_t H = sh.size() > 1 ? sh[1] : 1;
+            int64_t F = sh.size() > 2 ? sh[2] : 1;
+            int64_t C = sh.size() > 3 ? sh[3] : 1;
+            int64_t N = sh.size() > 4 ? sh[4] : 1;
+            if ((size_t)C != mean_of_means.size()) return latents;
+            const float* src = latents.data();
+            float* dst       = out.data();
+            int64_t plane    = W * H * F;
+            for (int64_t n = 0; n < N; ++n) {
+                for (int64_t c = 0; c < C; ++c) {
+                    float mu = mean_of_means[c];
+                    float sg = std_of_means[c];
+                    int64_t off = (n * C + c) * plane;
+                    for (int64_t i = 0; i < plane; ++i) {
+                        dst[off + i] = src[off + i] * sg + mu;
+                    }
+                }
+            }
+            return out;
+        }
+        sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents) override {
+            load_stats_cpu();
+            if (!stats_loaded) return latents;
+            sd::Tensor<float> out(latents.shape());
+            const auto& sh = latents.shape();
+            int64_t W = sh.size() > 0 ? sh[0] : 1;
+            int64_t H = sh.size() > 1 ? sh[1] : 1;
+            int64_t F = sh.size() > 2 ? sh[2] : 1;
+            int64_t C = sh.size() > 3 ? sh[3] : 1;
+            int64_t N = sh.size() > 4 ? sh[4] : 1;
+            if ((size_t)C != mean_of_means.size()) return latents;
+            const float* src = latents.data();
+            float* dst       = out.data();
+            int64_t plane    = W * H * F;
+            for (int64_t n = 0; n < N; ++n) {
+                for (int64_t c = 0; c < C; ++c) {
+                    float mu = mean_of_means[c];
+                    float sg = std_of_means[c];
+                    int64_t off = (n * C + c) * plane;
+                    for (int64_t i = 0; i < plane; ++i) {
+                        dst[off + i] = (src[off + i] - mu) / sg;
+                    }
+                }
+            }
+            return out;
+        }
 
       protected:
         struct ggml_cgraph* build_graph_decode(const sd::Tensor<float>& z) {
