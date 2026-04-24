@@ -638,20 +638,39 @@ namespace GEMMA3 {
                 // axis for EACH layer, then concat on the channel axis,
                 // then rescale by sqrt(out/hidden).
                 //
-                // ggml_rms_norm(x, eps) normalises along the innermost
-                // axis (ne[0]) — which is exactly the hidden axis here
-                // since hidden_all[i] has ne=[hidden, L, 1, 1]. So we can
-                // apply it directly per layer, with eps=1e-6 matching the
-                // reference.
+                // IMPORTANT layout: the reference stacks hidden_states into
+                // [B, T, D, L] (with layer L as the LAST axis) and then
+                // reshape(B, T, D*L). That produces a flat axis whose fast
+                // index is L (layer) and slow index is D (hidden). The
+                // video_aggregate_embed Linear weight [4096, 188160] was
+                // trained with this exact ordering, so we must match it.
+                //
+                // ggml_concat along axis 0 on a list of [D, T, 1, 1] tensors
+                // yields [D*L, T] with the OPPOSITE order (D fast, L slow),
+                // so we instead stack into [D, T, L, 1], permute to
+                // [L, D, T, 1] and flatten to get (d slow, l fast).
                 GGML_ASSERT(hidden_all.size() > 0);
                 for (size_t i = 0; i < hidden_all.size(); ++i) {
+                    // Per-token RMSNorm along ne[0]=D (innermost).
                     hidden_all[i] = ggml_rms_norm(compute_ctx, hidden_all[i], 1e-6f);
                 }
-                // Concat all 49 along axis 0 (ggml_concat is binary).
+                // Stack along axis 2 (layer axis): [D, T, L, 1].
                 ggml_tensor* cat = hidden_all[0];
-                for (size_t i = 1; i < hidden_all.size(); ++i) {
-                    cat = ggml_concat(compute_ctx, cat, hidden_all[i], 0);
+                if (hidden_all.size() > 1) {
+                    for (size_t i = 1; i < hidden_all.size(); ++i) {
+                        cat = ggml_concat(compute_ctx, cat, hidden_all[i], 2);
+                    }
                 }
+                int64_t L_tok = cat->ne[1];
+                int64_t L_lay = (int64_t)hidden_all.size();
+                int64_t D     = params.hidden_size;
+                // Permute to put L (layer) as ne[0] (fastest): [L, D, T, 1].
+                cat = ggml_cont(compute_ctx,
+                                ggml_ext_torch_permute(compute_ctx, cat, 2, 0, 1, 3));
+                // Flatten into [D*L, T, 1] — fast index is L, slow is D —
+                // matching HF's `reshape(B, T, D*L)` layout expected by
+                // text_embedding_projection.video_aggregate_embed.
+                cat = ggml_reshape_3d(compute_ctx, cat, D * L_lay, L_tok, 1);
                 // Rescale: multiply by sqrt(target_out_dim / hidden_size).
                 float scale = std::sqrt((float)target_out_dim / (float)params.hidden_size);
                 cat = ggml_scale(compute_ctx, cat, scale);

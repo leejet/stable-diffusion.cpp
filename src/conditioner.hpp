@@ -223,6 +223,16 @@ struct LTXV2Conditioner : public Conditioner {
             double std  = std::sqrt(std::max(0.0, sq / concat.numel() - mean * mean));
             LOG_INFO("[ltxv.cond] gemma_concat: shape=[%zu,%zu] min=%.3f max=%.3f mean=%.3f std=%.3f",
                      (size_t)concat.shape()[0], (size_t)concat.shape()[1], mn, mx, mean, std);
+            // Dump first/last 10 values of token 0 to /tmp for diff vs HF.
+            if (getenv("LTXV_DUMP_COND")) {
+                FILE* f = fopen("/tmp/ltxv_cond_concat.bin", "wb");
+                if (f) {
+                    fwrite(concat.data(), sizeof(float), concat.numel(), f);
+                    fclose(f);
+                    LOG_INFO("[ltxv.cond] dumped concat to /tmp/ltxv_cond_concat.bin (%zu floats)",
+                             (size_t)concat.numel());
+                }
+            }
         }
         // 188160 → caption_channels (4096).
         auto projected = video_proj->compute(n_threads, concat);
@@ -243,6 +253,14 @@ struct LTXV2Conditioner : public Conditioner {
             double std  = std::sqrt(std::max(0.0, sq / projected.numel() - mean * mean));
             LOG_INFO("[ltxv.cond] projected: shape=[%zu,%zu] min=%.3f max=%.3f mean=%.3f std=%.3f",
                      (size_t)projected.shape()[0], (size_t)projected.shape()[1], mn, mx, mean, std);
+            if (getenv("LTXV_DUMP_COND")) {
+                FILE* f = fopen("/tmp/ltxv_cond_projected.bin", "wb");
+                if (f) {
+                    fwrite(projected.data(), sizeof(float), projected.numel(), f);
+                    fclose(f);
+                    LOG_INFO("[ltxv.cond] dumped projected to /tmp/ltxv_cond_projected.bin");
+                }
+            }
         }
         cond.c_crossattn = std::move(projected);
         return cond;

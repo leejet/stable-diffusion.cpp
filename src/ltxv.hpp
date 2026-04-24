@@ -576,16 +576,48 @@ namespace LTXV {
         }
 
         // text_embeddings: [dim, L, N, 1]
-        // Output: [dim, L + num_registers, N, 1]
+        // Output: [dim, num_registers, N, 1]   (ALWAYS 128 tokens)
+        //
+        // Reference: LTX-2 Embeddings1DConnector._replace_padded_with_learnable_registers.
+        // The input is assumed LEFT-padded to num_registers tokens; real
+        // text sits at the END. The connector flips the mask and writes
+        // real text into positions [0..L-1] and learnable_registers[L..R-1]
+        // into positions [L..R-1]. Sequence length is FIXED at num_registers.
+        //
+        // Our caller passes the real text with L ≤ num_registers tokens.
+        // We implement the reference's math directly:
+        //   out[:L]       = text
+        //   out[L:R]      = learnable_registers[L:R]
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* text_embeddings) {
             ggml_tensor* reg = params["learnable_registers"];  // [dim, num_registers]
-            int64_t N         = text_embeddings->ne[2];
-            auto reg_3d       = ggml_reshape_3d(ctx->ggml_ctx, reg, reg->ne[0], reg->ne[1], 1);
-            if (N != 1) {
-                auto target = ggml_new_tensor_3d(ctx->ggml_ctx, reg_3d->type, reg->ne[0], reg->ne[1], N);
-                reg_3d      = ggml_repeat(ctx->ggml_ctx, reg_3d, target);
+            int64_t D        = text_embeddings->ne[0];
+            int64_t L        = text_embeddings->ne[1];
+            int64_t N        = text_embeddings->ne[2];
+            GGML_ASSERT(L <= num_registers);
+
+            ggml_tensor* x;
+            if (L == num_registers) {
+                // No padding needed — use text directly.
+                x = text_embeddings;
+            } else {
+                // Slice learnable_registers[L..R] = [dim, R-L].
+                auto reg_slice = ggml_view_2d(ctx->ggml_ctx, reg,
+                                               D, num_registers - L,
+                                               reg->nb[1], reg->nb[1] * L);
+                reg_slice      = ggml_cont(ctx->ggml_ctx, reg_slice);
+                // Reshape to [dim, R-L, 1] and broadcast across N if needed.
+                auto reg_3d    = ggml_reshape_3d(ctx->ggml_ctx, reg_slice,
+                                                  D, num_registers - L, 1);
+                if (N != 1) {
+                    auto target = ggml_new_tensor_3d(ctx->ggml_ctx, reg_3d->type,
+                                                      D, num_registers - L, N);
+                    reg_3d      = ggml_repeat(ctx->ggml_ctx, reg_3d, target);
+                }
+                // Concatenate text FIRST then registers — matches the
+                // reference output layout [text(L), registers(L..R)].
+                x = ggml_concat(ctx->ggml_ctx, text_embeddings, reg_3d, 1);
             }
-            auto x = ggml_concat(ctx->ggml_ctx, reg_3d, text_embeddings, 1);
+
             for (int64_t i = 0; i < num_blocks; ++i) {
                 auto b = std::dynamic_pointer_cast<EmbeddingsConnectorBlock>(
                     blocks["transformer_1d_blocks." + std::to_string(i)]);
