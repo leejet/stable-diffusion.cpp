@@ -51,7 +51,7 @@ with `ltx-2.3-22b-distilled.safetensors` (46 GB BF16) + Gemma-3-12B-it
 
 ## Numerical correctness — resolved
 
-Eight bugs were diagnosed and fixed by working backwards from the VAE output
+Nine bugs were diagnosed and fixed by working backwards from the VAE output
 (and later the text-conditioning path) using graph-level probes. Each one is
 noted here because the same mistake is easy to make again porting future
 video VAE/DiT stacks:
@@ -109,6 +109,26 @@ video VAE/DiT stacks:
    producing a persistent ~sqrt(D) "attention sink" outlier at the same
    hidden dim for every layer. Dropping the explicit Q scale made the
    Gemma forward match HF to bf16 precision.
+
+9. **Two different patchify conventions in `ops.py` vs `sampling.py`.**
+   `DepthToSpaceUpsample` (intermediate upsamplers) uses
+   `b (c p1 p2 p3) d h w -> b c (d p1) (h p2) (w p3)` — p3 (w-stride)
+   innermost in the channel axis. `ops.py::unpatchify` (the decoder's
+   final 4×4 un-patch) uses
+   `b (c p r q) f h w -> b c (f p) (h q) (w r)` — q (h_patch) innermost.
+   We were reusing the upsampler helper for the final unpatchify, which
+   silently transposed every 4×4 output block and left a visible fine-
+   scale hatching artefact that survived every diffusion step. Added a
+   dedicated `depth_to_space_3d_patch` that swaps the inner (p_w, p_h)
+   pair of the channel axis before delegating, matching the reference
+   layout exactly.
+
+Cross-checked against the 22B checkpoint's embedded config
+(`safetensors __metadata__["config"]["vae"]`): `norm_layer=pixel_norm`,
+`spatial_padding_mode=zeros`, `timestep_conditioning=false`,
+`causal_decoder=false`, patch_size=4, and none of the `compress_all`
+decoder blocks sets `residual=True` — so the residual skip from
+`DepthToSpaceUpsample` is correctly absent here.
 
 End-to-end result: prompts now actually generate the described content.
 Seed 42 with *"a cat walking across a grassy field"* produces exactly
