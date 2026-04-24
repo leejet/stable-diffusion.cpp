@@ -164,5 +164,10 @@ int main(int argc, char** argv) {
         std::snprintf(label, sizeof(label), "layer[%d]", probe);
         log_stats(label, h);
     }
+
+    // Also dump the full 49-layer concatenated feature — what LTX's
+    // text_embedding_projection.video_aggregate_embed will consume.
+    auto cat = runner.compute_concatenated_hiddens(4, input_ids);
+    log_stats("concat[49*H]", cat);
     return 0;
 }

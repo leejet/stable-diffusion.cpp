@@ -583,13 +583,85 @@ namespace GEMMA3 {
             return std::move(*result);
         }
 
-        // Back-compat shim: previous callers asked for the "concatenated"
-        // hidden; for now just return the last hidden state (post-final-
-        // norm) so they still compile. Phase 5 will replace this with a
-        // real concat over all layers.
+        // Compute all 49 hidden states, apply LTX-2.3's FeatureExtractorV2
+        // normalisation (per-token per-layer RMS-norm along the hidden
+        // axis), concatenate along the channel axis, and rescale by
+        // sqrt(out/hidden). Returns [188160, L, 1].
+        //
+        // This is the exact input that
+        // `text_embedding_projection.video_aggregate_embed` (a Linear from
+        // the LTX-2.3 22B safetensors) expects — projecting to 4096-dim
+        // cross-attention features for the video DiT.
+        //
+        // Reference: ltx_core.text_encoders.gemma.feature_extractor
+        //   FeatureExtractorV2.forward:
+        //     encoded = stack(hidden_states, dim=-1)       # [B, T, D, L]
+        //     normed  = norm_and_concat_per_token_rms(...) # [B, T, D*L]
+        //     normed *= sqrt(out/D)
+        //     return video_aggregate_embed(normed)         # [B, T, out]
         sd::Tensor<float> compute_concatenated_hiddens(int n_threads,
-                                                       const sd::Tensor<int32_t>& input_ids) {
-            return compute_layer_hidden(n_threads, input_ids, (int)params.num_layers);
+                                                       const sd::Tensor<int32_t>& input_ids,
+                                                       int64_t target_out_dim = 4096) {
+            auto get_graph = [&]() -> ggml_cgraph* {
+                auto* gf  = ggml_new_graph_custom(compute_ctx, GEMMA3_GRAPH_SIZE, false);
+                auto ids_t = make_input(input_ids);
+                int64_t L  = ids_t->ne[0];
+                if (rope_global.L != L) {
+                    rope_global  = compute_gemma3_rope(L, params.head_dim,
+                                                       params.rope_theta_global,
+                                                       params.rope_scaling_factor);
+                    rope_local   = compute_gemma3_rope(L, params.head_dim,
+                                                       params.rope_theta_local, 1.0f);
+                    sliding_mask = build_causal_mask(L, params.sliding_window);
+                    full_mask    = build_causal_mask(L, (int)L);
+                }
+                auto rope_cos_g = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, params.head_dim, L);
+                auto rope_sin_g = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, params.head_dim, L);
+                auto rope_cos_l = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, params.head_dim, L);
+                auto rope_sin_l = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, params.head_dim, L);
+                auto mask_s     = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, L, L);
+                auto mask_f     = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, L, L);
+                set_backend_tensor_data(rope_cos_g, rope_global.cos.data());
+                set_backend_tensor_data(rope_sin_g, rope_global.sin.data());
+                set_backend_tensor_data(rope_cos_l, rope_local.cos.data());
+                set_backend_tensor_data(rope_sin_l, rope_local.sin.data());
+                set_backend_tensor_data(mask_s,     sliding_mask.data());
+                set_backend_tensor_data(mask_f,     full_mask.data());
+
+                auto rctx = get_context();
+                std::vector<ggml_tensor*> hidden_all;
+                model.forward_with_hidden_states(&rctx, ids_t,
+                                                  rope_cos_g, rope_sin_g,
+                                                  rope_cos_l, rope_sin_l,
+                                                  mask_s, mask_f, hidden_all);
+                // FeatureExtractorV2: per-token RMSNorm along the hidden
+                // axis for EACH layer, then concat on the channel axis,
+                // then rescale by sqrt(out/hidden).
+                //
+                // ggml_rms_norm(x, eps) normalises along the innermost
+                // axis (ne[0]) — which is exactly the hidden axis here
+                // since hidden_all[i] has ne=[hidden, L, 1, 1]. So we can
+                // apply it directly per layer, with eps=1e-6 matching the
+                // reference.
+                GGML_ASSERT(hidden_all.size() > 0);
+                for (size_t i = 0; i < hidden_all.size(); ++i) {
+                    hidden_all[i] = ggml_rms_norm(compute_ctx, hidden_all[i], 1e-6f);
+                }
+                // Concat all 49 along axis 0 (ggml_concat is binary).
+                ggml_tensor* cat = hidden_all[0];
+                for (size_t i = 1; i < hidden_all.size(); ++i) {
+                    cat = ggml_concat(compute_ctx, cat, hidden_all[i], 0);
+                }
+                // Rescale: multiply by sqrt(target_out_dim / hidden_size).
+                float scale = std::sqrt((float)target_out_dim / (float)params.hidden_size);
+                cat = ggml_scale(compute_ctx, cat, scale);
+                cat = ggml_cont(compute_ctx, cat);
+                ggml_build_forward_expand(gf, cat);
+                return gf;
+            };
+            auto result = GGMLRunner::compute<float>(get_graph, n_threads, false);
+            if (!result.has_value()) return {};
+            return std::move(*result);
         }
     };
 
