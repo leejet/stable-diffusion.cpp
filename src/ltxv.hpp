@@ -1100,6 +1100,11 @@ namespace LTXV {
                                       mod->nb[1], mod->nb[2], 0);
             auto scale = ggml_view_3d(ctx->ggml_ctx, mod, inner_dim, 1, mod->ne[2],
                                       mod->nb[1], mod->nb[2], mod->nb[1]);
+            // norm_out (LayerNorm, elementwise_affine=False, eps=1e-6) —
+            // matches reference LTXModel._process_output. Without this the
+            // post-block activations (std≈200+ after 48 layers) leak into
+            // the predicted velocity and the sampler diverges.
+            x = ggml_norm(ctx->ggml_ctx, x, 1e-6f);
             x = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, x, scale));
             x = ggml_add(ctx->ggml_ctx, x, shift);
             x = proj_out->forward(ctx, x);
