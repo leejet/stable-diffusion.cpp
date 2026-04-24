@@ -203,6 +203,10 @@ typedef struct {
     bool chroma_use_t5_mask;
     int chroma_t5_mask_pad;
     bool qwen_image_zero_cond_t;
+    // For LTX-2.3: directory containing Gemma-3-12B-it safetensors shards
+    // + tokenizer.model. When unset, LTXV2Conditioner returns zero
+    // embeddings (unconditional generation).
+    const char* text_encoder_path;
 } sd_ctx_params_t;
 
 typedef struct {

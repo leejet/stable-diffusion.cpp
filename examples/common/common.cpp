@@ -333,6 +333,12 @@ ArgOptions SDContextParams::get_options() {
          "alias of --llm_vision. Deprecated.",
          &llm_vision_path},
         {"",
+         "--text-encoder",
+         "path to the text encoder directory (e.g. google/gemma-3-12b-it for LTX-2.3). "
+         "Must contain tokenizer.model plus *.safetensors shards. "
+         "When unset, LTX-2.3 runs unconditionally.",
+         &text_encoder_path},
+        {"",
          "--diffusion-model",
          "path to the standalone diffusion model",
          &diffusion_model_path},
@@ -744,6 +750,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         chroma_use_t5_mask,
         chroma_t5_mask_pad,
         qwen_image_zero_cond_t,
+        text_encoder_path.c_str(),
     };
     return sd_ctx_params;
 }

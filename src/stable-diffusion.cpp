@@ -1,3 +1,5 @@
+#include <dirent.h>
+
 #include "ggml_extend.hpp"
 
 #include "model.h"
@@ -565,15 +567,84 @@ public:
                                                                     tensor_storage_map,
                                                                     "model.diffusion_model");
             } else if (sd_version_is_ltxv2(version)) {
-                // LTX-2.3 ships a custom multilingual text encoder that is not
-                // part of the 22B checkpoint — we stub it with a zero-embedding
-                // conditioner for now. Porting the real encoder is follow-up.
-                cond_stage_model = std::make_shared<LTXV2Conditioner>(4096, 128);
+                // LTX-2.3 uses Gemma-3-12B as its text encoder. The encoder
+                // weights live OUTSIDE the 22B safetensors — the caller
+                // points `text_encoder_path` at a directory containing
+                // `tokenizer.model` plus Gemma safetensors shards. The
+                // 4096-dim aggregate Linear (`text_embedding_projection.
+                // video_aggregate_embed`) IS in the 22B checkpoint and we
+                // wire it into LTXV2Conditioner.
+                auto ltxv_cond = std::make_shared<LTXV2Conditioner>(4096, 128);
                 diffusion_model  = std::make_shared<LTXV2Model>(backend,
                                                                offload_params_to_cpu,
                                                                tensor_storage_map,
                                                                "model.diffusion_model",
                                                                version);
+                // Build the projection runner from the LTX 22B safetensors.
+                // Its weights are loaded together with the rest of the
+                // LTX tensors further down (we register them in `tensors`).
+                auto proj = std::make_shared<LTXTextEmbedProjection>(
+                    clip_backend, offload_params_to_cpu, tensor_storage_map,
+                    /*in=*/188160, /*out=*/4096);
+                if (!proj->alloc_params_buffer()) {
+                    LOG_ERROR("text_embedding_projection params buffer alloc failed");
+                    return false;
+                }
+                proj->get_param_tensors(tensors,
+                                         "text_embedding_projection.video_aggregate_embed");
+                // If a Gemma directory was provided, load it (heavy).
+                const char* gemma_dir = SAFE_STR(sd_ctx_params->text_encoder_path);
+                if (gemma_dir && gemma_dir[0] != '\0') {
+                    std::string tok_path = std::string(gemma_dir) + "/tokenizer.model";
+                    auto tok = std::make_shared<Gemma3Tokenizer>();
+                    std::string terr;
+                    if (!tok->load_from_spm(tok_path, &terr)) {
+                        LOG_WARN("failed to load Gemma tokenizer at %s: %s",
+                                 tok_path.c_str(), terr.c_str());
+                    } else {
+                        // Enumerate safetensors shards in the directory.
+                        std::vector<std::string> gemma_files;
+                        if (DIR* d = opendir(gemma_dir)) {
+                            struct dirent* e;
+                            while ((e = readdir(d)) != nullptr) {
+                                std::string name = e->d_name;
+                                if (name.size() > 12 &&
+                                    name.substr(name.size() - 12) == ".safetensors") {
+                                    gemma_files.push_back(std::string(gemma_dir) + "/" + name);
+                                }
+                            }
+                            closedir(d);
+                            std::sort(gemma_files.begin(), gemma_files.end());
+                        }
+                        ModelLoader gemma_loader;
+                        bool loaded_any = false;
+                        for (const auto& f : gemma_files) {
+                            if (gemma_loader.init_from_file(f, /*prefix=*/"language_model.")) {
+                                loaded_any = true;
+                            }
+                        }
+                        if (loaded_any) {
+                            auto gemma = std::make_shared<GEMMA3::Gemma3Runner>(
+                                clip_backend, offload_params_to_cpu,
+                                gemma_loader.get_tensor_storage_map(),
+                                /*prefix=*/"model");
+                            gemma->alloc_params_buffer();
+                            std::map<std::string, ggml_tensor*> gt;
+                            gemma->get_param_tensors(gt, "language_model.model");
+                            if (gemma_loader.load_tensors(gt, /*ignore=*/{}, n_threads)) {
+                                ltxv_cond->attach_gemma(gemma, tok, proj);
+                                LOG_INFO("LTX-2.3 Gemma-3 text encoder loaded");
+                            } else {
+                                LOG_WARN("failed to load Gemma tensors");
+                            }
+                        } else {
+                            LOG_WARN("failed to enumerate Gemma shards at %s", gemma_dir);
+                        }
+                    }
+                } else {
+                    LOG_INFO("LTX-2.3: no text_encoder_path set — running unconditional");
+                }
+                cond_stage_model = ltxv_cond;
             } else {  // SD1.x SD2.x SDXL
                 std::map<std::string, std::string> embbeding_map;
                 for (uint32_t i = 0; i < sd_ctx_params->embedding_count; i++) {
@@ -855,12 +926,12 @@ public:
             ignore_tensors.insert("text_encoders.llm.multi_modal_projector.");
         }
         if (sd_version_is_ltxv2(version)) {
-            // LTX-2.3 single-file checkpoints also contain audio VAE, vocoder,
-            // and a text-aggregate projection that the video-only pipeline does
-            // not consume.
+            // LTX-2.3 single-file checkpoints also contain audio VAE and a
+            // vocoder that the video-only pipeline does not consume.
+            // `text_embedding_projection.*` IS consumed when the conditioner
+            // is wired up with a Gemma-3 text encoder (see LTXV2Conditioner).
             ignore_tensors.insert("audio_vae.");
             ignore_tensors.insert("vocoder.");
-            ignore_tensors.insert("text_embedding_projection.");
         }
         bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap);
         if (!success) {
