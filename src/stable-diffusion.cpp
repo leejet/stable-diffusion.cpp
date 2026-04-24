@@ -2931,6 +2931,18 @@ struct SamplePlan {
                 high_noise_sample_steps = total_steps - sample_steps;
                 LOG_WARN("total_steps != custom_sigmas_count - 1, set high_noise_sample_steps to %d", high_noise_sample_steps);
             }
+        } else if (sd_version_is_ltxv2(sd_ctx->sd->version) && total_steps == 8) {
+            // LTX-2.3 distilled default schedule — a hand-tuned non-linear
+            // sigma sequence clustered near 1 with a sharp drop at the end,
+            // per `DISTILLED_SIGMA_VALUES` in ltx_pipelines.utils.constants.
+            // Applied only when the user asked for exactly 8 sampling
+            // steps (the distilled model's target). Otherwise fall through
+            // to the generic shifted flow schedule.
+            sigmas = {1.0f, 0.99375f, 0.9875f, 0.98125f,
+                      0.975f, 0.909375f, 0.725f, 0.421875f, 0.0f};
+            total_steps  = 8;
+            sample_steps = 8;
+            LOG_INFO("Using LTX-2.3 distilled 8-step sigma schedule");
         } else {
             scheduler_t scheduler = resolve_scheduler(sd_ctx,
                                                       sample_params->scheduler,
