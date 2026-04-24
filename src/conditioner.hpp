@@ -115,7 +115,13 @@ struct LTXTextEmbedProjection : public GGMLRunner {
         : GGMLRunner(backend, offload_params_to_cpu),
           in_features(in_features),
           out_features(out_features) {
-        video_proj = std::make_shared<Linear>(in_features, out_features, /*bias=*/true);
+        // Force F32: the [4096 x 188160] matmul accumulates over 188k
+        // terms, and BF16 mantissa (~3 decimal digits) drops enough
+        // precision to visibly shrink the output range (std 5.2 vs HF's
+        // 6.8 on identical inputs). F32 brings us back within HF's noise.
+        video_proj = std::make_shared<Linear>(in_features, out_features, /*bias=*/true,
+                                              /*force_f32=*/true,
+                                              /*force_prec_f32=*/true);
         video_proj->init(params_ctx, tensor_storage_map, prefix);
     }
 

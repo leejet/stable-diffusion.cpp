@@ -198,9 +198,12 @@ namespace GEMMA3 {
             q = apply_rotary_emb(ctx, q, rope_cos, rope_sin);
             k = apply_rotary_emb(ctx, k, rope_cos, rope_sin);
 
-            // Scale Q by 1 / sqrt(query_pre_attn_scalar) — Gemma-3 applies
-            // the scale to Q, not inside softmax.
-            q = ggml_scale(ctx->ggml_ctx, q, 1.0f / std::sqrt(params_.query_pre_attn_scalar));
+            // Gemma-3 uses `scale = 1/sqrt(query_pre_attn_scalar)` — for
+            // Gemma-3-12B this equals `1/sqrt(head_dim)` (both are 256),
+            // which ggml_ext_attention_ext applies internally. If this
+            // assumption ever breaks (e.g. 27B), apply the corrective
+            // factor (sqrt(head_dim) / sqrt(query_pre_attn_scalar)) here.
+            GGML_ASSERT(params_.query_pre_attn_scalar == params_.head_dim);
 
             // GQA: K and V each map to num_heads by repeat (num_heads /
             // num_kv_heads copies). ggml's attention helper handles this

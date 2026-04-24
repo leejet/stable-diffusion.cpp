@@ -158,11 +158,19 @@ int main(int argc, char** argv) {
     }
 
     // Probe every 4th layer so we can diff against HF's hidden_states.
+    // Also dump the (tok=1, d=2339) value — known HF outlier position —
+    // to verify element-level agreement.
     for (int probe : {0, 1, 2, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 47, 48}) {
         auto h = runner.compute_layer_hidden(4, input_ids, probe);
         char label[64];
         std::snprintf(label, sizeof(label), "layer[%d]", probe);
         log_stats(label, h);
+        // h shape is [hidden=3840, T, 1]. Tok 1 is at offset hidden per
+        // the usual ggml layout (ne[0] fast). Index (d=2339, tok=1).
+        if (h.shape().size() >= 2 && h.shape()[0] > 2339 && h.shape()[1] > 1) {
+            int64_t idx = 1 * h.shape()[0] + 2339;
+            std::fprintf(stderr, "  tok=1 d=2339: %.4f\n", h.data()[idx]);
+        }
     }
 
     // Also dump the full 49-layer concatenated feature — what LTX's
