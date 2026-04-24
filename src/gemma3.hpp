@@ -230,8 +230,13 @@ namespace GEMMA3 {
         }
 
     private:
-        // Interleaved RoPE: pair (x[2i], x[2i+1]) rotates. cos/sin are laid
-        // out as [head_dim, L] (full head_dim so we can use element-wise mul).
+        // NEOX-style RoPE (matches Gemma-3 in llama.cpp): pair is
+        //   (x[k], x[k + D/2])   for k in [0, D/2)
+        // rotation:
+        //   x_new[k]       = x[k]       * cos[k] - x[k + D/2] * sin[k]
+        //   x_new[k + D/2] = x[k + D/2] * cos[k] + x[k]       * sin[k]
+        // cos/sin are [D, L] (duplicated: cos[k] == cos[k+D/2], same for sin)
+        // so we can apply via element-wise multiplies.
         static ggml_tensor* apply_rotary_emb(GGMLRunnerContext* ctx,
                                              ggml_tensor* x,
                                              ggml_tensor* cos,
@@ -241,26 +246,41 @@ namespace GEMMA3 {
             int64_t H = x->ne[1];
             int64_t L = x->ne[2];
             int64_t N = x->ne[3];
+            int64_t r = D / 2;
 
-            // Build rotated copy: swap pairs (x[2i], x[2i+1]) -> (-x[2i+1], x[2i])
-            auto x4    = ggml_reshape_4d(ctx->ggml_ctx, x, 2, D / 2, H * L, N);
-            auto real  = ggml_view_4d(ctx->ggml_ctx, x4, 1, D / 2, H * L, N,
-                                      x4->nb[1], x4->nb[2], x4->nb[3], 0);
-            auto imag  = ggml_view_4d(ctx->ggml_ctx, x4, 1, D / 2, H * L, N,
-                                      x4->nb[1], x4->nb[2], x4->nb[3], x4->nb[0]);
-            auto real_c   = ggml_cont(ctx->ggml_ctx, real);
-            auto imag_c   = ggml_cont(ctx->ggml_ctx, imag);
-            auto neg_imag = ggml_neg(ctx->ggml_ctx, imag_c);
-            auto rotated  = ggml_concat(ctx->ggml_ctx, neg_imag, real_c, 0);
-            rotated       = ggml_reshape_4d(ctx->ggml_ctx, rotated, D, H, L, N);
+            // Split x along the head_dim axis into first half (k=0..r-1)
+            // and second half (k=r..D-1), both shape [r, H, L, N].
+            // In ggml ne order, ne[0] is innermost; use views into the
+            // contiguous memory.
+            auto first  = ggml_view_4d(ctx->ggml_ctx, x, r, H, L, N,
+                                       x->nb[1], x->nb[2], x->nb[3], 0);
+            auto second = ggml_view_4d(ctx->ggml_ctx, x, r, H, L, N,
+                                       x->nb[1], x->nb[2], x->nb[3],
+                                       x->nb[0] * r);
+            first  = ggml_cont(ctx->ggml_ctx, first);
+            second = ggml_cont(ctx->ggml_ctx, second);
 
             // cos / sin broadcast over (H, N).
             auto cos_b = ggml_reshape_4d(ctx->ggml_ctx, cos, D, 1, L, 1);
             auto sin_b = ggml_reshape_4d(ctx->ggml_ctx, sin, D, 1, L, 1);
+            auto cos_first  = ggml_view_4d(ctx->ggml_ctx, cos_b, r, 1, L, 1,
+                                           cos_b->nb[1], cos_b->nb[2], cos_b->nb[3], 0);
+            auto sin_first  = ggml_view_4d(ctx->ggml_ctx, sin_b, r, 1, L, 1,
+                                           sin_b->nb[1], sin_b->nb[2], sin_b->nb[3], 0);
+            cos_first = ggml_cont(ctx->ggml_ctx, cos_first);
+            sin_first = ggml_cont(ctx->ggml_ctx, sin_first);
 
-            auto x_cos = ggml_mul(ctx->ggml_ctx, x, cos_b);
-            auto x_sin = ggml_mul(ctx->ggml_ctx, rotated, sin_b);
-            return ggml_add(ctx->ggml_ctx, x_cos, x_sin);
+            // first_new  = first * cos - second * sin
+            // second_new = second * cos + first * sin
+            auto first_new  = ggml_sub(ctx->ggml_ctx,
+                                        ggml_mul(ctx->ggml_ctx, first, cos_first),
+                                        ggml_mul(ctx->ggml_ctx, second, sin_first));
+            auto second_new = ggml_add(ctx->ggml_ctx,
+                                        ggml_mul(ctx->ggml_ctx, second, cos_first),
+                                        ggml_mul(ctx->ggml_ctx, first, sin_first));
+
+            // Concatenate back along head_dim.
+            return ggml_concat(ctx->ggml_ctx, first_new, second_new, 0);
         }
     };
 
@@ -286,9 +306,16 @@ namespace GEMMA3 {
         // rope_cos_local  / rope_sin_local:  [head_dim, L] (local θ, no scaling)
         // sliding_mask: [L, L] additive mask with the 1024-band; full layers
         //               use nullptr.
-        // hidden_out: caller-provided vector to receive 49 intermediate
-        //             tensors (post-embed + per-layer). The caller decides
-        //             what to do with them (usually ggml_concat).
+        // hidden_out: caller-provided vector to receive intermediate tensors.
+        //             After a full forward it will have num_layers+1
+        //             entries: [post-embed, layer0_out, ..., layer_{N-1}_out].
+        //             The last entry is REPLACED with the post-final-norm
+        //             result on return.
+        //
+        // max_layers: run at most this many decoder blocks; -1 = all.
+        //             When < num_layers, the final norm is NOT applied and
+        //             hidden_out contains [post-embed, layer0_out, ...,
+        //             layer_{max_layers-1}_out].
         ggml_tensor* forward_with_hidden_states(GGMLRunnerContext* ctx,
                                                 ggml_tensor* input_ids,
                                                 ggml_tensor* rope_cos_global,
@@ -296,7 +323,9 @@ namespace GEMMA3 {
                                                 ggml_tensor* rope_cos_local,
                                                 ggml_tensor* rope_sin_local,
                                                 ggml_tensor* sliding_mask,
-                                                std::vector<ggml_tensor*>& hidden_out) {
+                                                ggml_tensor* full_mask,
+                                                std::vector<ggml_tensor*>& hidden_out,
+                                                int64_t max_layers = -1) {
             auto embed = std::dynamic_pointer_cast<Embedding>(blocks["embed_tokens"]);
             auto fnorm = std::dynamic_pointer_cast<Gemma3RMSNorm>(blocks["norm"]);
 
@@ -304,24 +333,31 @@ namespace GEMMA3 {
             // Gemma paper: embeddings scaled by sqrt(hidden_size).
             x = ggml_scale(ctx->ggml_ctx, x, std::sqrt((float)params_.hidden_size));
 
+            int64_t lim = max_layers < 0 ? params_.num_layers
+                                          : std::min<int64_t>(max_layers, params_.num_layers);
             hidden_out.clear();
-            hidden_out.reserve(params_.num_layers + 1);
+            hidden_out.reserve(lim + 1);
             hidden_out.push_back(x);
 
-            for (int64_t i = 0; i < params_.num_layers; ++i) {
+            for (int64_t i = 0; i < lim; ++i) {
                 auto blk = std::dynamic_pointer_cast<Gemma3Block>(
                     blocks["layers." + std::to_string(i)]);
                 bool is_global = ((i + 1) % params_.sliding_window_pattern) == 0;
                 auto* cos = is_global ? rope_cos_global : rope_cos_local;
                 auto* sin = is_global ? rope_sin_global : rope_sin_local;
-                auto* msk = is_global ? nullptr         : sliding_mask;
+                // Gemma-3 uses CAUSAL attention everywhere. Full-attention
+                // layers get a plain causal mask; sliding layers get a
+                // windowed causal mask. Caller provides both under the
+                // `full_mask` / `sliding_mask` names.
+                auto* msk = is_global ? full_mask : sliding_mask;
                 x = blk->forward(ctx, x, cos, sin, msk);
                 hidden_out.push_back(x);
             }
-            x = fnorm->forward(ctx, x);
-            // Replace the last entry with the final-normed output so the
-            // consumer sees `[embed, layer0, ..., layer47_post_norm]`.
-            hidden_out.back() = x;
+            if (lim == params_.num_layers) {
+                x = fnorm->forward(ctx, x);
+                // Replace last entry with post-final-norm.
+                hidden_out.back() = x;
+            }
             return x;
         }
     };
@@ -345,43 +381,48 @@ namespace GEMMA3 {
         t.dim = head_dim;
         t.cos.assign(L * head_dim, 0.f);
         t.sin.assign(L * head_dim, 0.f);
-        // standard RoPE: freq[i] = 1 / theta^(2i/head_dim), applied as
-        // (cos(pos*freq), sin(pos*freq)) on each (x[2i], x[2i+1]) pair.
-        // scaling_factor: divide the *position* by factor (linear scaling).
+        // NEOX RoPE layout: pairs are (x[k], x[k+D/2]).
+        //   cos[pos*D + k]   = cos[pos*D + k + D/2] = cos(scaled_pos * freq_k)
+        // i.e. the first half of the dim holds the values and the second
+        // half is a duplicate — so `apply_rotary_emb` can just broadcast.
+        // freq_k = 1 / theta^(2k / head_dim) for k in [0, D/2).
         int64_t half = head_dim / 2;
         for (int64_t pos = 0; pos < L; ++pos) {
             float scaled_pos = (float)pos / scaling_factor;
-            for (int64_t i = 0; i < half; ++i) {
-                float freq  = 1.0f / std::pow(theta, (float)(2 * i) / (float)head_dim);
-                float ang   = scaled_pos * freq;
-                float c     = std::cos(ang);
-                float s     = std::sin(ang);
-                // interleaved layout: cos[pos*D + 2i] = cos[pos*D + 2i+1] = c
-                t.cos[pos * head_dim + 2 * i]     = c;
-                t.cos[pos * head_dim + 2 * i + 1] = c;
-                t.sin[pos * head_dim + 2 * i]     = s;
-                t.sin[pos * head_dim + 2 * i + 1] = s;
+            for (int64_t k = 0; k < half; ++k) {
+                float freq = 1.0f / std::pow(theta, (float)(2 * k) / (float)head_dim);
+                float ang  = scaled_pos * freq;
+                float c    = std::cos(ang);
+                float s    = std::sin(ang);
+                t.cos[pos * head_dim + k]        = c;
+                t.cos[pos * head_dim + k + half] = c;
+                t.sin[pos * head_dim + k]        = s;
+                t.sin[pos * head_dim + k + half] = s;
             }
         }
         return t;
     }
 
-    // Build an additive sliding-window mask of shape [L, L]:
-    //   mask[i, j] = 0       if |i - j| < window && j <= i (causal)
+    // Build an additive causal sliding-window mask of shape [L, L]:
+    //   mask[i, j] = 0       if j <= i && i - j < window
     //              = -inf    otherwise
-    // For Gemma-3 text-encoder use inside LTX, attention is *non-causal*
-    // (bidirectional) — the prompt is seen all at once — so we drop the
-    // causal constraint and just band ±window.
-    __STATIC_INLINE__ std::vector<float> build_sliding_mask(int64_t L, int window) {
+    // Gemma-3 uses causal attention for both sliding and full layers
+    // (`use_bidirectional_attention = False` in the text_config). For full-
+    // attention layers, pass `window = L` to get a plain causal mask.
+    __STATIC_INLINE__ std::vector<float> build_causal_mask(int64_t L, int window) {
         std::vector<float> m(L * L, -INFINITY);
         for (int64_t i = 0; i < L; ++i) {
             int64_t lo = std::max<int64_t>(0, i - window + 1);
-            int64_t hi = std::min<int64_t>(L - 1, i + window - 1);
-            for (int64_t j = lo; j <= hi; ++j) {
+            for (int64_t j = lo; j <= i; ++j) {
                 m[i * L + j] = 0.0f;
             }
         }
         return m;
+    }
+
+    // Back-compat shim.
+    __STATIC_INLINE__ std::vector<float> build_sliding_mask(int64_t L, int window) {
+        return build_causal_mask(L, window);
     }
 
     // GGMLRunner wrapper: allocates params_buffer, builds graph per call.
@@ -393,6 +434,7 @@ namespace GEMMA3 {
         RopeTables rope_global;
         RopeTables rope_local;
         std::vector<float> sliding_mask;
+        std::vector<float> full_mask;
 
         Gemma3Runner(ggml_backend_t backend,
                      bool offload_params_to_cpu,
@@ -423,26 +465,29 @@ namespace GEMMA3 {
             if (rope_global.L != L) {
                 rope_global  = compute_gemma3_rope(L, params.head_dim, params.rope_theta_global, params.rope_scaling_factor);
                 rope_local   = compute_gemma3_rope(L, params.head_dim, params.rope_theta_local,  /*scaling=*/1.0f);
-                sliding_mask = build_sliding_mask(L, params.sliding_window);
+                sliding_mask = build_causal_mask(L, params.sliding_window);
+                full_mask    = build_causal_mask(L, (int)L);
             }
 
             auto rope_cos_g = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, params.head_dim, L);
             auto rope_sin_g = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, params.head_dim, L);
             auto rope_cos_l = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, params.head_dim, L);
             auto rope_sin_l = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, params.head_dim, L);
-            auto mask       = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, L, L);
+            auto mask_s     = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, L, L);
+            auto mask_f     = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, L, L);
             set_backend_tensor_data(rope_cos_g, rope_global.cos.data());
             set_backend_tensor_data(rope_sin_g, rope_global.sin.data());
             set_backend_tensor_data(rope_cos_l, rope_local.cos.data());
             set_backend_tensor_data(rope_sin_l, rope_local.sin.data());
-            set_backend_tensor_data(mask,       sliding_mask.data());
+            set_backend_tensor_data(mask_s,     sliding_mask.data());
+            set_backend_tensor_data(mask_f,     full_mask.data());
 
             auto rctx = get_context();
             std::vector<ggml_tensor*> hidden_all;
             auto out = model.forward_with_hidden_states(&rctx, ids_t,
                                                          rope_cos_g, rope_sin_g,
                                                          rope_cos_l, rope_sin_l,
-                                                         mask, hidden_all);
+                                                         mask_s, mask_f, hidden_all);
             // Publish the hidden states the caller asked for.
             GGML_ASSERT(hidden_out_slots.size() <= hidden_all.size());
             for (size_t i = 0; i < hidden_out_slots.size(); ++i) {
@@ -455,26 +500,96 @@ namespace GEMMA3 {
             return gf;
         }
 
-        // Convenience: compute all 49 hidden states and return them as a
-        // concatenated [hidden_size * 49, L] tensor on CPU. LTX's
-        // text_embedding_projection is a Linear(188160, 4096) applied per
-        // token to this concatenated vector.
-        sd::Tensor<float> compute_concatenated_hiddens(int n_threads,
-                                                       const sd::Tensor<int32_t>& input_ids) {
-            std::vector<ggml_tensor*> hidden_slots(params.num_layers + 1, nullptr);
-            std::vector<ggml_tensor**> slot_ptrs(params.num_layers + 1, nullptr);
-            for (size_t i = 0; i < hidden_slots.size(); ++i) slot_ptrs[i] = &hidden_slots[i];
+        // Compute and return ONE specific hidden state by index.
+        // layer_idx=0 → post-embed; 1..num_layers-1 → post-block i-1;
+        // num_layers → post-final-norm (full model output).
+        //
+        // Implementation note: we inline the forward pass here and STOP
+        // when we reach the target layer, so the graph's last node is
+        // exactly the tensor we want. This bypasses the gallocr buffer-
+        // reuse surprise that makes hidden_out entries unreadable after
+        // later layers overwrite them.
+        sd::Tensor<float> compute_layer_hidden(int n_threads,
+                                               const sd::Tensor<int32_t>& input_ids,
+                                               int layer_idx) {
             auto get_graph = [&]() -> ggml_cgraph* {
-                return build_graph(input_ids, slot_ptrs, /*want_final=*/false);
+                auto* gf  = ggml_new_graph_custom(compute_ctx, GEMMA3_GRAPH_SIZE, false);
+                auto ids_t = make_input(input_ids);
+                int64_t L  = ids_t->ne[0];
+                if (rope_global.L != L) {
+                    rope_global  = compute_gemma3_rope(L, params.head_dim,
+                                                       params.rope_theta_global,
+                                                       params.rope_scaling_factor);
+                    rope_local   = compute_gemma3_rope(L, params.head_dim,
+                                                       params.rope_theta_local, 1.0f);
+                    sliding_mask = build_causal_mask(L, params.sliding_window);
+                    full_mask    = build_causal_mask(L, (int)L);
+                }
+                auto rctx = get_context();
+                // Conditionally create the input tensors we'll actually
+                // use. `set_backend_tensor_data` is only called for tensors
+                // we DEFINITELY put in the graph — otherwise compute<>
+                // tries to upload data to unallocated tensors and asserts.
+                //
+                // For layer_idx=N (num_layers or -1), all layers run, so we
+                // need both global and local RoPE + mask. For a truncated
+                // forward we compute which RoPE families are required.
+                int64_t max_layers = (layer_idx < 0) ? params.num_layers
+                                                      : (int64_t)layer_idx;
+                bool need_global = false;
+                bool need_local  = false;
+                for (int64_t i = 0; i < max_layers; ++i) {
+                    bool is_global = ((i + 1) % params.sliding_window_pattern) == 0;
+                    if (is_global) need_global = true;
+                    else           need_local  = true;
+                }
+
+                ggml_tensor* rope_cos_g = nullptr;
+                ggml_tensor* rope_sin_g = nullptr;
+                ggml_tensor* rope_cos_l = nullptr;
+                ggml_tensor* rope_sin_l = nullptr;
+                ggml_tensor* mask_s     = nullptr;
+                ggml_tensor* mask_f     = nullptr;
+                if (need_global) {
+                    rope_cos_g = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, params.head_dim, L);
+                    rope_sin_g = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, params.head_dim, L);
+                    mask_f     = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, L, L);
+                    set_backend_tensor_data(rope_cos_g, rope_global.cos.data());
+                    set_backend_tensor_data(rope_sin_g, rope_global.sin.data());
+                    set_backend_tensor_data(mask_f,     full_mask.data());
+                }
+                if (need_local) {
+                    rope_cos_l = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, params.head_dim, L);
+                    rope_sin_l = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, params.head_dim, L);
+                    mask_s     = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, L, L);
+                    set_backend_tensor_data(rope_cos_l, rope_local.cos.data());
+                    set_backend_tensor_data(rope_sin_l, rope_local.sin.data());
+                    set_backend_tensor_data(mask_s,     sliding_mask.data());
+                }
+
+                std::vector<ggml_tensor*> hidden_all;
+                model.forward_with_hidden_states(&rctx, ids_t,
+                                                 rope_cos_g, rope_sin_g,
+                                                 rope_cos_l, rope_sin_l,
+                                                 mask_s, mask_f,
+                                                 hidden_all, max_layers);
+                ggml_tensor* pick = hidden_all.back();
+                auto pick_out = ggml_cont(compute_ctx, pick);
+                ggml_build_forward_expand(gf, pick_out);
+                return gf;
             };
             auto result = GGMLRunner::compute<float>(get_graph, n_threads, false);
-            // `result` is just the "final" tensor; we actually want all 49.
-            // For now return the last hidden state's CPU tensor and leave
-            // the multi-state extraction to a follow-up — the build_graph
-            // above has them reachable so a future version can read each
-            // from compute_ctx via ggml_get_tensor.
             if (!result.has_value()) return {};
             return std::move(*result);
+        }
+
+        // Back-compat shim: previous callers asked for the "concatenated"
+        // hidden; for now just return the last hidden state (post-final-
+        // norm) so they still compile. Phase 5 will replace this with a
+        // real concat over all layers.
+        sd::Tensor<float> compute_concatenated_hiddens(int n_threads,
+                                                       const sd::Tensor<int32_t>& input_ids) {
+            return compute_layer_hidden(n_threads, input_ids, (int)params.num_layers);
         }
     };
 

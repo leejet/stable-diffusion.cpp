@@ -1,0 +1,5 @@
+set(TARGET gemma3-test)
+add_executable(${TARGET} gemma3_test.cpp)
+install(TARGETS ${TARGET} RUNTIME)
+target_link_libraries(${TARGET} PRIVATE stable-diffusion ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PUBLIC c_std_11 cxx_std_17)
