@@ -116,6 +116,44 @@ namespace LTXV {
         return x;
     }
 
+    // Patchify-convention 3-D depth-to-space used by the decoder's final
+    // unpatchify. Reference (ltx_core/model/video_vae/ops.py::unpatchify):
+    //   rearrange(x, "b (c p r q) f h w -> b c (f p) (h q) (w r)", p=p_t, q=p_h, r=p_w)
+    // The channel axis is packed as (c outer, p_t, p_w middle, p_h inner).
+    // This is DIFFERENT from DepthToSpaceUpsample which uses (c, p_t, p_h, p_w)
+    // (p_w innermost). Using the wrong convention transposes every (p_h × p_w)
+    // output block and produces a visible fine-scale hatching artefact that
+    // survives every diffusion step.
+    __STATIC_INLINE__ ggml_tensor* depth_to_space_3d_patch(ggml_context* ctx,
+                                                           ggml_tensor* x,
+                                                           int p_t, int p_h, int p_w) {
+        int64_t W = x->ne[0], H = x->ne[1], F = x->ne[2], Cb = x->ne[3];
+        int64_t C = Cb / ((int64_t)p_t * p_h * p_w);
+        GGML_ASSERT(C * p_t * p_h * p_w == Cb);
+        if (p_h == 1 && p_w == 1 && p_t == 1) {
+            return x;
+        }
+        if (p_h != 1 || p_w != 1) {
+            // Swap the inner (p_w, p_h) pair in the channel axis so the layout
+            // becomes (c, p_t, p_h, p_w) with p_w innermost — exactly what the
+            // DepthToSpaceUpsample convention (and therefore depth_to_space_3d)
+            // expects. Then the general helper can do the rest.
+            // Ne[3]=Cb is the slow axis; bring it to ne[0] to be able to split
+            // it into (p_h, p_w, C*p_t).
+            x = ggml_cont(ctx, ggml_ext_torch_permute(ctx, x, 3, 0, 1, 2));
+            // Reinterpret channel axis as [p_h (inner), p_w, C*p_t]. Flat
+            // order in channel is (c * p_t * p_w * p_h + p_t * p_w * p_h + p_w * p_h + p_h);
+            // the innermost (fast) sub-index is p_h, next is p_w, outer is C*p_t.
+            x = ggml_reshape_4d(ctx, x, p_h, p_w, C * p_t, W * H * F);
+            // Swap the first two dims so p_w becomes fastest.
+            x = ggml_cont(ctx, ggml_ext_torch_permute(ctx, x, 1, 0, 2, 3));
+            // Re-merge and put channel back to ne[3]: [W, H, F, Cb].
+            x = ggml_reshape_4d(ctx, x, Cb, W, H, F);
+            x = ggml_cont(ctx, ggml_ext_torch_permute(ctx, x, 1, 2, 3, 0));
+        }
+        return depth_to_space_3d(ctx, x, p_t, p_h, p_w);
+    }
+
     // =================================================================
     // Shared primitives
     // =================================================================
@@ -1516,6 +1554,12 @@ namespace LTXV {
             auto conv_out = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv_out"]);
             int64_t W = x->ne[0], H = x->ne[1], F = x->ne[2], C = x->ne[3];
             GGML_ASSERT(W % 4 == 0 && H % 4 == 0);
+            // TODO: the reference patchify (ops.py:patchify) follows the
+            //   "b c (f p) (h q) (w r) -> b (c p r q) f h w"
+            // convention where q (h_patch) is innermost in the channel axis.
+            // This bare reshape does not honour that — for T2V the encoder
+            // path is unused, but v2v/i2v workflows will need the inverse of
+            // depth_to_space_3d_patch here before we can trust them.
             x = ggml_cont(ctx->ggml_ctx, x);
             x = ggml_reshape_4d(ctx->ggml_ctx, x, W / 4, H / 4, F, C * 16);
             auto h = conv_in->forward(ctx, x, causal);
@@ -1573,9 +1617,14 @@ namespace LTXV {
             }
             h = ggml_silu(ctx->ggml_ctx, h);
             h = conv_out->forward(ctx, h, causal);
-            // Un-patchify 4×4 spatial pack: ne [W, H, F, C*16] → [W*4, H*4, F, C]
+            // Un-patchify 4×4 spatial pack: ne [W, H, F, C*16] → [W*4, H*4, F, C].
+            // The reference ops.py uses the patchify convention
+            //   "b (c p r q) f h w -> b c (f p) (h q) (w r)"
+            // where the channel axis has h_patch (q) as the INNERMOST
+            // sub-index — not w_patch as in the intermediate upsampler.
+            // depth_to_space_3d_patch handles the sub-axis swap.
             h = ggml_cont(ctx->ggml_ctx, h);
-            h = depth_to_space_3d(ctx->ggml_ctx, h, /*p1=*/1, /*p2=*/4, /*p3=*/4);
+            h = depth_to_space_3d_patch(ctx->ggml_ctx, h, /*p_t=*/1, /*p_h=*/4, /*p_w=*/4);
             // sd.cpp's decode_video_outputs expects the 5-D layout
             //   [W, H, T, C, N=1]
             // (batch last, time before channel). Our 4-D result is
