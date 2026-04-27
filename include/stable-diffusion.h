@@ -50,6 +50,7 @@ enum sample_method_t {
     TCD_SAMPLE_METHOD,
     RES_MULTISTEP_SAMPLE_METHOD,
     RES_2S_SAMPLE_METHOD,
+    ER_SDE_SAMPLE_METHOD,
     SAMPLE_METHOD_COUNT
 };
 
@@ -337,6 +338,32 @@ typedef struct {
     const char* path;
 } sd_lora_t;
 
+enum sd_hires_upscaler_t {
+    SD_HIRES_UPSCALER_NONE,
+    SD_HIRES_UPSCALER_LATENT,
+    SD_HIRES_UPSCALER_LATENT_NEAREST,
+    SD_HIRES_UPSCALER_LATENT_NEAREST_EXACT,
+    SD_HIRES_UPSCALER_LATENT_ANTIALIASED,
+    SD_HIRES_UPSCALER_LATENT_BICUBIC,
+    SD_HIRES_UPSCALER_LATENT_BICUBIC_ANTIALIASED,
+    SD_HIRES_UPSCALER_LANCZOS,
+    SD_HIRES_UPSCALER_NEAREST,
+    SD_HIRES_UPSCALER_MODEL,
+    SD_HIRES_UPSCALER_COUNT,
+};
+
+typedef struct {
+    bool enabled;
+    enum sd_hires_upscaler_t upscaler;
+    const char* model_path;
+    float scale;
+    int target_width;
+    int target_height;
+    int steps;
+    float denoising_strength;
+    int upscale_tile_size;
+} sd_hires_params_t;
+
 typedef struct {
     const sd_lora_t* loras;
     uint32_t lora_count;
@@ -360,6 +387,7 @@ typedef struct {
     sd_pm_params_t pm_params;
     sd_tiling_params_t vae_tiling_params;
     sd_cache_params_t cache;
+    sd_hires_params_t hires;
 } sd_img_gen_params_t;
 
 typedef struct {
@@ -396,6 +424,8 @@ SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
 SD_API void sd_set_preview_callback(sd_preview_cb_t cb, enum preview_t mode, int interval, bool denoised, bool noisy, void* data);
 SD_API int32_t sd_get_num_physical_cores();
 SD_API const char* sd_get_system_info();
+SD_API bool sd_ctx_supports_image_generation(const sd_ctx_t* sd_ctx);
+SD_API bool sd_ctx_supports_video_generation(const sd_ctx_t* sd_ctx);
 
 SD_API const char* sd_type_name(enum sd_type_t type);
 SD_API enum sd_type_t str_to_sd_type(const char* str);
@@ -416,8 +446,11 @@ SD_API enum sd_offload_mode_t str_to_offload_mode(const char* str);
 SD_API const char* sd_vram_estimation_name(enum sd_vram_estimation_t method);
 SD_API enum sd_vram_estimation_t str_to_vram_estimation(const char* str);
 SD_API void sd_offload_config_init(sd_offload_config_t* config);
+SD_API const char* sd_hires_upscaler_name(enum sd_hires_upscaler_t upscaler);
+SD_API enum sd_hires_upscaler_t str_to_sd_hires_upscaler(const char* str);
 
 SD_API void sd_cache_params_init(sd_cache_params_t* cache_params);
+SD_API void sd_hires_params_init(sd_hires_params_t* hires_params);
 
 SD_API void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params);
 SD_API char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params);

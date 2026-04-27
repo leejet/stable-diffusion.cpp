@@ -815,7 +815,201 @@ namespace sd {
     namespace ops {
         enum class InterpolateMode {
             Nearest,
+            NearestExact,
+            NearestMax,
+            NearestMin,
+            NearestAvg,
+            Bilinear,
+            Bicubic,
+            Lanczos,
         };
+
+        inline bool is_nearest_like_interpolate_mode(InterpolateMode mode) {
+            return mode == InterpolateMode::Nearest ||
+                   mode == InterpolateMode::NearestExact ||
+                   mode == InterpolateMode::NearestMax ||
+                   mode == InterpolateMode::NearestMin ||
+                   mode == InterpolateMode::NearestAvg;
+        }
+
+        inline bool is_2d_filter_interpolate_mode(InterpolateMode mode) {
+            return mode == InterpolateMode::Bilinear ||
+                   mode == InterpolateMode::Bicubic ||
+                   mode == InterpolateMode::Lanczos;
+        }
+
+        inline int64_t nearest_exact_interpolate_index(int64_t output_index,
+                                                       int64_t input_size,
+                                                       int64_t output_size) {
+            const double scale  = static_cast<double>(input_size) / static_cast<double>(output_size);
+            const double center = (static_cast<double>(output_index) + 0.5) * scale - 0.5;
+            return std::min(std::max<int64_t>(static_cast<int64_t>(std::floor(center + 0.5)), 0), input_size - 1);
+        }
+
+        inline double linear_interpolate_weight(double x) {
+            x = std::abs(x);
+            return x < 1.0 ? 1.0 - x : 0.0;
+        }
+
+        inline double cubic_interpolate_weight(double x) {
+            constexpr double a = -0.75;  // Match PyTorch bicubic interpolation.
+            x                  = std::abs(x);
+            if (x <= 1.0) {
+                return ((a + 2.0) * x - (a + 3.0)) * x * x + 1.0;
+            }
+            if (x < 2.0) {
+                return ((a * x - 5.0 * a) * x + 8.0 * a) * x - 4.0 * a;
+            }
+            return 0.0;
+        }
+
+        inline double sinc(double x) {
+            constexpr double pi = 3.14159265358979323846;
+            if (std::abs(x) < 1e-12) {
+                return 1.0;
+            }
+            const double pix = pi * x;
+            return std::sin(pix) / pix;
+        }
+
+        inline double lanczos_interpolate_weight(double x) {
+            constexpr double radius = 3.0;
+            x                       = std::abs(x);
+            if (x >= radius) {
+                return 0.0;
+            }
+            return sinc(x) * sinc(x / radius);
+        }
+
+        struct InterpolateContributor {
+            int64_t index;
+            double weight;
+        };
+
+        inline std::vector<std::vector<InterpolateContributor>> make_interpolate_contributors(
+            int64_t input_size,
+            int64_t output_size,
+            InterpolateMode mode,
+            bool antialias) {
+            std::vector<std::vector<InterpolateContributor>> contributors(static_cast<size_t>(output_size));
+            const double scale        = static_cast<double>(input_size) / static_cast<double>(output_size);
+            const double filter_scale = antialias ? std::max(1.0, scale) : 1.0;
+
+            for (int64_t out = 0; out < output_size; ++out) {
+                const double center = (static_cast<double>(out) + 0.5) * scale - 0.5;
+                int64_t start       = 0;
+                int64_t end         = 0;
+
+                if (mode == InterpolateMode::Bilinear) {
+                    const double support = filter_scale;
+                    start                = static_cast<int64_t>(std::ceil(center - support));
+                    end                  = static_cast<int64_t>(std::floor(center + support));
+                } else if (mode == InterpolateMode::Bicubic) {
+                    const double support = 2.0 * filter_scale;
+                    start                = static_cast<int64_t>(std::ceil(center - support));
+                    end                  = static_cast<int64_t>(std::floor(center + support));
+                } else if (mode == InterpolateMode::Lanczos) {
+                    const double support = 3.0 * filter_scale;
+                    start                = static_cast<int64_t>(std::ceil(center - support));
+                    end                  = static_cast<int64_t>(std::floor(center + support));
+                } else {
+                    tensor_throw_invalid_argument("Unsupported 2D filter interpolate mode: mode=" +
+                                                  std::to_string(static_cast<int>(mode)));
+                }
+
+                double weight_sum                                      = 0.0;
+                std::vector<InterpolateContributor>& axis_contributors = contributors[static_cast<size_t>(out)];
+                axis_contributors.reserve(static_cast<size_t>(end - start + 1));
+
+                for (int64_t in = start; in <= end; ++in) {
+                    double weight = 0.0;
+                    if (mode == InterpolateMode::Bilinear) {
+                        weight = linear_interpolate_weight((center - static_cast<double>(in)) / filter_scale);
+                    } else if (mode == InterpolateMode::Bicubic) {
+                        weight = cubic_interpolate_weight((center - static_cast<double>(in)) / filter_scale);
+                    } else {
+                        weight = lanczos_interpolate_weight((center - static_cast<double>(in)) / filter_scale);
+                    }
+
+                    if (weight == 0.0) {
+                        continue;
+                    }
+
+                    const int64_t clamped_index = std::min(std::max<int64_t>(in, 0), input_size - 1);
+                    axis_contributors.push_back({clamped_index, weight});
+                    weight_sum += weight;
+                }
+
+                if ((antialias || mode == InterpolateMode::Lanczos) &&
+                    std::abs(weight_sum) > 1e-12) {
+                    for (auto& contributor : axis_contributors) {
+                        contributor.weight /= weight_sum;
+                    }
+                }
+
+                if (axis_contributors.empty()) {
+                    const int64_t nearest = std::min(
+                        std::max<int64_t>(static_cast<int64_t>(std::floor(center + 0.5)), 0),
+                        input_size - 1);
+                    axis_contributors.push_back({nearest, 1.0});
+                }
+            }
+
+            return contributors;
+        }
+
+        template <typename T>
+        inline Tensor<T> interpolate_2d_filter(const Tensor<T>& input,
+                                               const std::vector<int64_t>& output_shape,
+                                               InterpolateMode mode,
+                                               bool antialias) {
+            if (input.dim() < 2) {
+                tensor_throw_invalid_argument("2D filter interpolate requires rank >= 2: input_shape=" +
+                                              tensor_shape_to_string(input.shape()) + ", output_shape=" +
+                                              tensor_shape_to_string(output_shape));
+            }
+            for (size_t i = 2; i < output_shape.size(); ++i) {
+                if (input.shape()[i] != output_shape[i]) {
+                    tensor_throw_invalid_argument("2D filter interpolate only supports resizing dimensions 0 and 1: input_shape=" +
+                                                  tensor_shape_to_string(input.shape()) + ", output_shape=" +
+                                                  tensor_shape_to_string(output_shape));
+                }
+            }
+
+            Tensor<T> output(output_shape);
+            const int64_t input_width   = input.shape()[0];
+            const int64_t input_height  = input.shape()[1];
+            const int64_t output_width  = output_shape[0];
+            const int64_t output_height = output_shape[1];
+            const int64_t input_plane   = input_width * input_height;
+            const int64_t output_plane  = output_width * output_height;
+            const int64_t plane_count   = input.numel() / input_plane;
+
+            auto x_contributors = make_interpolate_contributors(input_width, output_width, mode, antialias);
+            auto y_contributors = make_interpolate_contributors(input_height, output_height, mode, antialias);
+
+            for (int64_t plane = 0; plane < plane_count; ++plane) {
+                const int64_t input_plane_offset  = plane * input_plane;
+                const int64_t output_plane_offset = plane * output_plane;
+                for (int64_t y = 0; y < output_height; ++y) {
+                    const auto& y_axis = y_contributors[static_cast<size_t>(y)];
+                    for (int64_t x = 0; x < output_width; ++x) {
+                        const auto& x_axis = x_contributors[static_cast<size_t>(x)];
+                        double value       = 0.0;
+                        for (const auto& yc : y_axis) {
+                            const int64_t input_row_offset = input_plane_offset + yc.index * input_width;
+                            for (const auto& xc : x_axis) {
+                                value += static_cast<double>(input.data()[input_row_offset + xc.index]) *
+                                         xc.weight * yc.weight;
+                            }
+                        }
+                        output.data()[output_plane_offset + y * output_width + x] = static_cast<T>(value);
+                    }
+                }
+            }
+
+            return output;
+        }
 
         inline int64_t normalize_slice_bound(int64_t index, int64_t dim_size) {
             if (index < 0) {
@@ -1011,13 +1205,20 @@ namespace sd {
         inline Tensor<T> interpolate(const Tensor<T>& input,
                                      std::vector<int64_t> output_shape,
                                      InterpolateMode mode = InterpolateMode::Nearest,
-                                     bool align_corners   = false) {
-            if (mode != InterpolateMode::Nearest) {
-                tensor_throw_invalid_argument("Only nearest interpolate mode is implemented, got mode=" +
+                                     bool align_corners   = false,
+                                     bool antialias       = false) {
+            const bool is_nearest_like_mode = is_nearest_like_interpolate_mode(mode);
+            const bool is_2d_filter_mode    = is_2d_filter_interpolate_mode(mode);
+            if (!is_nearest_like_mode && !is_2d_filter_mode) {
+                tensor_throw_invalid_argument("Unsupported interpolate mode: mode=" +
+                                              std::to_string(static_cast<int>(mode)));
+            }
+            if (antialias && !is_2d_filter_mode) {
+                tensor_throw_invalid_argument("Tensor interpolate antialias requires a 2D filter mode: mode=" +
                                               std::to_string(static_cast<int>(mode)));
             }
             if (align_corners) {
-                tensor_throw_invalid_argument("align_corners is not supported for nearest interpolate: input_shape=" +
+                tensor_throw_invalid_argument("align_corners is not supported for tensor interpolate: input_shape=" +
                                               tensor_shape_to_string(input.shape()) + ", output_shape=" +
                                               tensor_shape_to_string(output_shape));
             }
@@ -1044,14 +1245,126 @@ namespace sd {
                 }
             }
 
-            Tensor<T> output(std::move(output_shape));
-            for (int64_t flat = 0; flat < output.numel(); ++flat) {
-                std::vector<int64_t> output_coord = tensor_unravel_index(flat, output.shape());
-                std::vector<int64_t> input_coord(static_cast<size_t>(input.dim()), 0);
-                for (size_t i = 0; i < static_cast<size_t>(input.dim()); ++i) {
-                    input_coord[i] = output_coord[i] * input.shape()[i] / output.shape()[i];
+            if (is_2d_filter_mode) {
+                return interpolate_2d_filter(input, output_shape, mode, antialias);
+            }
+
+            bool has_downsampling = false;
+            for (int64_t i = 0; i < input.dim(); ++i) {
+                if (input.shape()[i] > output_shape[i]) {
+                    has_downsampling = true;
+                    break;
                 }
-                output[flat] = input.index(input_coord);
+            }
+
+            Tensor<T> output(std::move(output_shape));
+            if (mode == InterpolateMode::Nearest ||
+                mode == InterpolateMode::NearestExact ||
+                !has_downsampling) {
+                for (int64_t flat = 0; flat < output.numel(); ++flat) {
+                    std::vector<int64_t> output_coord = tensor_unravel_index(flat, output.shape());
+                    std::vector<int64_t> input_coord(static_cast<size_t>(input.dim()), 0);
+                    for (size_t i = 0; i < static_cast<size_t>(input.dim()); ++i) {
+                        if (mode == InterpolateMode::NearestExact) {
+                            input_coord[i] = nearest_exact_interpolate_index(output_coord[i],
+                                                                             input.shape()[i],
+                                                                             output.shape()[i]);
+                        } else {
+                            input_coord[i] = output_coord[i] * input.shape()[i] / output.shape()[i];
+                        }
+                    }
+                    output[flat] = input.index(input_coord);
+                }
+
+                return output;
+            }
+
+            auto init_reduction = [&]() -> T {
+                switch (mode) {
+                    case InterpolateMode::NearestMax:
+                        return std::numeric_limits<T>::lowest();
+                    case InterpolateMode::NearestMin:
+                        return std::numeric_limits<T>::max();
+                    case InterpolateMode::NearestAvg:
+                        return T(0);
+                    case InterpolateMode::Nearest:
+                        return T(0);
+                    case InterpolateMode::NearestExact:
+                        return T(0);
+                    case InterpolateMode::Bilinear:
+                    case InterpolateMode::Bicubic:
+                    case InterpolateMode::Lanczos:
+                        break;
+                }
+
+                tensor_throw_invalid_argument("Unsupported interpolate mode: mode=" +
+                                              std::to_string(static_cast<int>(mode)));
+            };
+
+            auto reduce_value = [&](T& acc, const T& sample) {
+                switch (mode) {
+                    case InterpolateMode::NearestMax:
+                        acc = std::max(acc, sample);
+                        break;
+                    case InterpolateMode::NearestMin:
+                        acc = std::min(acc, sample);
+                        break;
+                    case InterpolateMode::NearestAvg:
+                        acc += sample;
+                        break;
+                    case InterpolateMode::Nearest:
+                        break;
+                    case InterpolateMode::NearestExact:
+                        break;
+                    case InterpolateMode::Bilinear:
+                    case InterpolateMode::Bicubic:
+                    case InterpolateMode::Lanczos:
+                        break;
+                }
+            };
+
+            // Reduction modes only differ from nearest mode when downsampling.
+            for (int64_t flat_out = 0; flat_out < output.numel(); ++flat_out) {
+                std::vector<int64_t> output_coord = tensor_unravel_index(flat_out, output.shape());
+
+                std::vector<int64_t> input_start(output.dim(), 0);
+                std::vector<int64_t> input_end(output.dim(), 0);
+
+                for (size_t i = 0; i < static_cast<size_t>(output.dim()); ++i) {
+                    const int64_t input_dim  = input.shape()[i];
+                    const int64_t output_dim = output.shape()[i];
+
+                    input_start[i] = std::max(int64_t(0), static_cast<int64_t>(output_coord[i] * input_dim / output_dim));
+                    input_end[i]   = std::min(input_dim, ((output_coord[i] + 1) * input_dim + output_dim - 1) / output_dim);
+                }
+
+                T value                               = init_reduction();
+                bool done_window                      = false;
+                std::vector<int64_t> current_in_coord = input_start;
+
+                while (!done_window) {
+                    reduce_value(value, input.index(current_in_coord));
+
+                    for (int d = static_cast<int>(output.dim()) - 1; d >= 0; --d) {
+                        if (++current_in_coord[d] < input_end[d]) {
+                            break;
+                        }
+                        current_in_coord[d] = input_start[d];
+                        if (d == 0) {
+                            done_window = true;
+                        }
+                    }
+                }
+
+                if (mode == InterpolateMode::NearestAvg) {
+                    int64_t window_size = 1;
+                    for (size_t i = 0; i < static_cast<size_t>(output.dim()); ++i) {
+                        window_size *= (input_end[i] - input_start[i]);
+                    }
+                    value /= static_cast<T>(window_size);
+                }
+
+                output[flat_out] = value;
             }
 
             return output;
@@ -1062,13 +1375,20 @@ namespace sd {
                                      const std::optional<std::vector<int64_t>>& size,
                                      const std::optional<std::vector<double>>& scale_factor,
                                      InterpolateMode mode = InterpolateMode::Nearest,
-                                     bool align_corners   = false) {
-            if (mode != InterpolateMode::Nearest) {
-                tensor_throw_invalid_argument("Only nearest interpolate mode is implemented, got mode=" +
+                                     bool align_corners   = false,
+                                     bool antialias       = false) {
+            const bool is_nearest_like_mode = is_nearest_like_interpolate_mode(mode);
+            const bool is_2d_filter_mode    = is_2d_filter_interpolate_mode(mode);
+            if (!is_nearest_like_mode && !is_2d_filter_mode) {
+                tensor_throw_invalid_argument("Unsupported interpolate mode: mode=" +
+                                              std::to_string(static_cast<int>(mode)));
+            }
+            if (antialias && !is_2d_filter_mode) {
+                tensor_throw_invalid_argument("Tensor interpolate antialias requires a 2D filter mode: mode=" +
                                               std::to_string(static_cast<int>(mode)));
             }
             if (align_corners) {
-                tensor_throw_invalid_argument("align_corners is not supported for nearest interpolate: input_shape=" +
+                tensor_throw_invalid_argument("align_corners is not supported for tensor interpolate: input_shape=" +
                                               tensor_shape_to_string(input.shape()));
             }
             if (size.has_value() == scale_factor.has_value()) {
@@ -1112,7 +1432,7 @@ namespace sd {
                 }
             }
 
-            return interpolate(input, std::move(output_shape), mode, align_corners);
+            return interpolate(input, std::move(output_shape), mode, align_corners, antialias);
         }
 
         template <typename T>
@@ -1120,12 +1440,88 @@ namespace sd {
                                      const std::optional<std::vector<int64_t>>& size,
                                      double scale_factor,
                                      InterpolateMode mode = InterpolateMode::Nearest,
-                                     bool align_corners   = false) {
+                                     bool align_corners   = false,
+                                     bool antialias       = false) {
             return interpolate(input,
                                size,
                                std::vector<double>(size.has_value() ? size->size() : input.dim(), scale_factor),
                                mode,
-                               align_corners);
+                               align_corners,
+                               antialias);
+        }
+
+        template <typename T>
+        inline Tensor<T> max_pool_2d(const Tensor<T>& input,
+                                     std::vector<int64_t> kernel_size,
+                                     std::vector<int64_t> stride,
+                                     std::vector<int64_t> padding) {
+            if (input.dim() < 2) {
+                tensor_throw_invalid_argument("Tensor max_pool_2d requires input_dim >= 2: input_dim=" +
+                                              std::to_string(input.dim()) + ", input_shape=" +
+                                              tensor_shape_to_string(input.shape()));
+            }
+            if (kernel_size.size() != 2 || stride.size() != 2 || padding.size() != 2) {
+                tensor_throw_invalid_argument("Tensor max_pool_2d requires kernel_size, stride, and padding to have length 2");
+            }
+            for (size_t i = 0; i < 2; ++i) {
+                if (kernel_size[i] <= 0) {
+                    tensor_throw_invalid_argument("Tensor max_pool_2d kernel_size must be positive: kernel_size=" +
+                                                  tensor_shape_to_string(kernel_size));
+                }
+                if (stride[i] <= 0) {
+                    tensor_throw_invalid_argument("Tensor max_pool_2d stride must be positive: stride=" +
+                                                  tensor_shape_to_string(stride));
+                }
+                if (padding[i] < 0) {
+                    tensor_throw_invalid_argument("Tensor max_pool_2d padding must be non-negative: padding=" +
+                                                  tensor_shape_to_string(padding));
+                }
+            }
+
+            const int64_t in_height = input.shape()[0];
+            const int64_t in_width  = input.shape()[1];
+
+            const int64_t out_height = (in_height + 2 * padding[0] - kernel_size[0]) / stride[0] + 1;
+            const int64_t out_width  = (in_width + 2 * padding[1] - kernel_size[1]) / stride[1] + 1;
+
+            if (out_height <= 0 || out_width <= 0) {
+                tensor_throw_invalid_argument("max_pool_2d results in invalid output dimensions: " +
+                                              std::to_string(out_height) + "x" + std::to_string(out_width));
+            }
+
+            std::vector<int64_t> output_shape = input.shape();
+            output_shape[0]                   = out_height;
+            output_shape[1]                   = out_width;
+
+            Tensor<T> output(std::move(output_shape));
+
+            for (int64_t flat_out = 0; flat_out < output.numel(); ++flat_out) {
+                std::vector<int64_t> output_coord = tensor_unravel_index(flat_out, output.shape());
+                std::vector<int64_t> input_coord  = output_coord;
+
+                const int64_t oh = output_coord[0];
+                const int64_t ow = output_coord[1];
+
+                T max_val            = std::numeric_limits<T>::lowest();
+                bool has_valid_input = false;
+
+                for (int64_t kh = 0; kh < kernel_size[0]; ++kh) {
+                    for (int64_t kw = 0; kw < kernel_size[1]; ++kw) {
+                        const int64_t ih = oh * stride[0] + kh - padding[0];
+                        const int64_t iw = ow * stride[1] + kw - padding[1];
+
+                        if (ih >= 0 && ih < in_height && iw >= 0 && iw < in_width) {
+                            input_coord[0]  = ih;
+                            input_coord[1]  = iw;
+                            max_val         = std::max(max_val, input.index(input_coord));
+                            has_valid_input = true;
+                        }
+                    }
+                }
+
+                output[flat_out] = has_valid_input ? max_val : T(0);
+            }
+            return output;
         }
 
         template <typename T>

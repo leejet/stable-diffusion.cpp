@@ -131,8 +131,6 @@ sd-cli -m model.safetensors -p "a cat" --cache-mode spectrum
 | `warmup` | Steps to always compute before caching starts | 4 |
 | `stop` | Stop caching at this fraction of total steps | 0.9 |
 
-```
-
 ### Performance Tips
 
 - Start with default thresholds and adjust based on output quality
