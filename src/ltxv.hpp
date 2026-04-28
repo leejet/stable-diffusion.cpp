@@ -500,7 +500,6 @@ namespace LTXV {
             s             = ggml_repeat(ctx->ggml_ctx, s, e);
             t             = ggml_repeat(ctx->ggml_ctx, t, e);
             auto out      = ggml_add(ctx->ggml_ctx, s, t);
-            GGML_ASSERT(coeff <= INT_MAX);
             return ggml_ext_chunk(ctx->ggml_ctx, out, static_cast<int>(coeff), 1);
         }
 
