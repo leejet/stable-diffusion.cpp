@@ -930,7 +930,6 @@ namespace LTXV {
             t        = ggml_repeat(ctx->ggml_ctx, t, e);
             s        = ggml_repeat(ctx->ggml_ctx, s, e);
             auto out = ggml_add(ctx->ggml_ctx, s, t);
-            GGML_ASSERT(coeff <= INT_MAX);
             auto chunks = ggml_ext_chunk(ctx->ggml_ctx, out, static_cast<int>(coeff), 1);
             return std::vector<ggml_tensor*>(chunks.begin() + start, chunks.begin() + start + count);
         }
