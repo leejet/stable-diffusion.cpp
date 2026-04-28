@@ -177,7 +177,7 @@ jobs:
   build-and-push-docker-images:
     name: Build and push container images
     if: ${{ github.event_name != 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
 
     permissions:
       contents: read
@@ -189,7 +189,12 @@ jobs:
     strategy:
       matrix:
         variant: [musa, sycl, vulkan, cuda]
-
+        platform: [linux/amd64]
+        runner: [ubuntu-latest]
+        include:
+          - variant: cuda-spark
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     env:
       REGISTRY: ghcr.io
       IMAGE_NAME: ${{ github.repository }}
@@ -243,7 +248,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           push: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
           file: Dockerfile.${{ matrix.variant }}
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.BRANCH_NAME }}-${{ matrix.variant }}
