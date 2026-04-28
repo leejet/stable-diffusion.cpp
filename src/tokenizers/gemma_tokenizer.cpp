@@ -50,6 +50,7 @@ GemmaTokenizer::GemmaTokenizer(const std::string& merges_utf8_str, const std::st
     byte_level_bpe = false;
     byte_fallback  = true;
     add_bos_token  = true;
+    pad_left       = true;
     PAD_TOKEN      = "<pad>";
     EOS_TOKEN      = "<eos>";
     BOS_TOKEN      = "<bos>";

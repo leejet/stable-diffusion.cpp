@@ -341,6 +341,10 @@ ArgOptions SDContextParams::get_options() {
          "path to the standalone high noise diffusion model",
          &high_noise_diffusion_model_path},
         {"",
+         "--embeddings-connectors",
+         "path to LTXAV embeddings connectors",
+         &embeddings_connectors_path},
+        {"",
          "--vae",
          "path to standalone vae model",
          &vae_path},
@@ -656,6 +660,7 @@ std::string SDContextParams::to_string() const {
         << "  llm_vision_path: \"" << llm_vision_path << "\",\n"
         << "  diffusion_model_path: \"" << diffusion_model_path << "\",\n"
         << "  high_noise_diffusion_model_path: \"" << high_noise_diffusion_model_path << "\",\n"
+        << "  embeddings_connectors_path: \"" << embeddings_connectors_path << "\",\n"
         << "  vae_path: \"" << vae_path << "\",\n"
         << "  taesd_path: \"" << taesd_path << "\",\n"
         << "  esrgan_path: \"" << esrgan_path << "\",\n"
@@ -712,6 +717,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         llm_vision_path.c_str(),
         diffusion_model_path.c_str(),
         high_noise_diffusion_model_path.c_str(),
+        embeddings_connectors_path.c_str(),
         vae_path.c_str(),
         taesd_path.c_str(),
         control_net_path.c_str(),
@@ -2180,6 +2186,7 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
     params.strength                 = strength;
     params.seed                     = seed;
     params.video_frames             = video_frames;
+    params.fps                      = fps;
     params.vace_strength            = vace_strength;
     params.vae_tiling_params        = vae_tiling_params;
     params.cache                    = cache_params;

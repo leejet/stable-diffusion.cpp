@@ -1675,13 +1675,22 @@ struct WeightAdapter {
 };
 
 struct GGMLRunnerContext {
-    ggml_backend_t backend                        = nullptr;
-    ggml_context* ggml_ctx                        = nullptr;
-    bool flash_attn_enabled                       = false;
-    bool conv2d_direct_enabled                    = false;
-    bool circular_x_enabled                       = false;
-    bool circular_y_enabled                       = false;
-    std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
+    ggml_backend_t backend                                       = nullptr;
+    ggml_context* ggml_ctx                                       = nullptr;
+    bool flash_attn_enabled                                      = false;
+    bool conv2d_direct_enabled                                   = false;
+    bool circular_x_enabled                                      = false;
+    bool circular_y_enabled                                      = false;
+    std::shared_ptr<WeightAdapter> weight_adapter                = nullptr;
+    std::unordered_map<ggml_tensor*, std::string>* debug_tensors = nullptr;
+
+    void capture_tensor(const std::string& name, ggml_tensor* tensor) {
+        if (debug_tensors == nullptr || tensor == nullptr) {
+            return;
+        }
+        ggml_set_output(tensor);
+        (*debug_tensors)[tensor] = name;
+    }
 };
 
 struct GGMLRunner {
@@ -1713,6 +1722,7 @@ protected:
 
     std::map<ggml_tensor*, const void*> backend_tensor_data_map;
     std::map<std::string, ggml_tensor*> cache_tensor_map;  // name -> tensor
+    std::unordered_map<ggml_tensor*, std::string> debug_tensors;
     const std::string final_result_name = "ggml_runner_final_result_tensor";
 
     bool flash_attn_enabled    = false;
@@ -1799,6 +1809,7 @@ protected:
     }
 
     void free_compute_ctx() {
+        debug_tensors.clear();
         if (compute_ctx != nullptr) {
             ggml_free(compute_ctx);
             compute_ctx = nullptr;
@@ -1833,6 +1844,11 @@ protected:
         if (ggml_graph_n_nodes(gf) > 0) {
             auto result = ggml_graph_node(gf, -1);
             ggml_set_name(result, final_result_name.c_str());
+        }
+        for (const auto& entry : debug_tensors) {
+            if (entry.first != nullptr) {
+                ggml_build_forward_expand(gf, entry.first);
+            }
         }
         prepare_build_in_tensor_after(gf);
         return gf;
@@ -1903,6 +1919,21 @@ protected:
         for (auto& kv : backend_tensor_data_map) {
             auto tensor = kv.first;
             auto data   = kv.second;
+            if (tensor == nullptr || data == nullptr) {
+                continue;
+            }
+            const char* name = ggml_get_name(tensor);
+            if (tensor->buffer == nullptr) {
+                LOG_WARN("%s skip backend tensor copy: tensor buffer not set, name='%s', ne=[%lld,%lld,%lld,%lld], type=%s",
+                         get_desc().c_str(),
+                         name != nullptr ? name : "",
+                         (long long)tensor->ne[0],
+                         (long long)tensor->ne[1],
+                         (long long)tensor->ne[2],
+                         (long long)tensor->ne[3],
+                         ggml_type_name(tensor->type));
+                continue;
+            }
 
             ggml_backend_tensor_set(tensor, data, 0, ggml_nbytes(tensor));
         }
@@ -2025,6 +2056,7 @@ public:
         runner_ctx.circular_x_enabled    = circular_x_enabled;
         runner_ctx.circular_y_enabled    = circular_y_enabled;
         runner_ctx.weight_adapter        = weight_adapter;
+        runner_ctx.debug_tensors         = &debug_tensors;
         return runner_ctx;
     }
 
@@ -2162,6 +2194,21 @@ public:
         if (status != GGML_STATUS_SUCCESS) {
             LOG_ERROR("%s compute failed: %s", get_desc().c_str(), ggml_status_to_string(status));
             return std::nullopt;
+        }
+        for (const auto& entry : debug_tensors) {
+            auto tensor = entry.first;
+            if (tensor == nullptr) {
+                continue;
+            }
+            if (tensor->type != GGML_TYPE_F32) {
+                LOG_WARN("%s skip debug tensor '%s': only GGML_TYPE_F32 is supported, got %s",
+                         get_desc().c_str(),
+                         entry.second.c_str(),
+                         ggml_type_name(tensor->type));
+                continue;
+            }
+            auto debug_tensor = sd::make_sd_tensor_from_ggml<float>(tensor);
+            print_sd_tensor(debug_tensor, false, entry.second.c_str());
         }
         copy_cache_tensors_to_cache_buffer();
         auto result = ggml_get_tensor(compute_ctx, final_result_name.c_str());
