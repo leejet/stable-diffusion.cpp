@@ -1,0 +1,30 @@
+ARG CUDA_VERSION=13.0.0
+ARG UBUNTU_VERSION=24.04
+
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu${UBUNTU_VERSION} AS build
+
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential git ccache cmake
+
+WORKDIR /sd.cpp
+
+COPY . .
+
+ARG CUDACXX=/usr/local/cuda/bin/nvcc
+ARG CUDA_ARCHITECTURES=121
+RUN cmake . -B ./build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DSD_CUDA=ON \
+        -DGGML_CUDA_FA_ALL_QUANTS=ON \
+        -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}" \
+RUN cmake --build ./build --config Release -j$(nproc)
+
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu${UBUNTU_VERSION} AS runtime
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libgomp1 && \
+    apt-get clean
+
+COPY --from=build /sd.cpp/build/bin/sd-cli /sd-cli
+COPY --from=build /sd.cpp/build/bin/sd-server /sd-server
+
+ENTRYPOINT ["/sd-cli"]
