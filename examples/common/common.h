@@ -192,7 +192,7 @@ struct SDGenerationParams {
     int upscale_tile_size = 128;
 
     bool hires_enabled         = false;
-    std::string hires_upscaler = "Latent (nearest)";
+    std::string hires_upscaler = "Latent";
     std::string hires_upscaler_model_path;
     float hires_scale              = 2.f;
     int hires_width                = 0;
@@ -249,6 +249,13 @@ struct SDGenerationParams {
 };
 
 std::string version_string();
-std::string get_image_params(const SDContextParams& ctx_params, const SDGenerationParams& gen_params, int64_t seed);
+std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
+                                            const SDGenerationParams& gen_params,
+                                            int64_t seed,
+                                            SDMode mode = IMG_GEN);
+std::string get_image_params(const SDContextParams& ctx_params,
+                             const SDGenerationParams& gen_params,
+                             int64_t seed,
+                             SDMode mode = IMG_GEN);
 
 #endif  // __EXAMPLES_COMMON_COMMON_H__
