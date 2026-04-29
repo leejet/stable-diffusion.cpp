@@ -214,6 +214,7 @@ public:
     virtual sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents)                           = 0;
     virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix)         = 0;
     virtual void set_conv2d_scale(float scale) { SD_UNUSED(scale); };
+    virtual void set_temporal_tiling_enabled(bool enabled) { SD_UNUSED(enabled); };
 };
 
 struct FakeVAE : public VAE {

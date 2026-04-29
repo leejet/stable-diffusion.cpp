@@ -990,6 +990,11 @@ ArgOptions SDGenerationParams::get_options() {
          true,
          &vae_tiling_params.enabled},
         {"",
+         "--temporal-tiling",
+         "enable temporal tiling for LTX video VAE decode",
+         true,
+         &vae_tiling_params.temporal_tiling},
+        {"",
          "--hires",
          "enable highres fix",
          true,
@@ -1681,6 +1686,9 @@ bool SDGenerationParams::from_json_str(
         if (tiling_json.contains("enabled") && tiling_json["enabled"].is_boolean()) {
             vae_tiling_params.enabled = tiling_json["enabled"];
         }
+        if (tiling_json.contains("temporal_tiling") && tiling_json["temporal_tiling"].is_boolean()) {
+            vae_tiling_params.temporal_tiling = tiling_json["temporal_tiling"];
+        }
         if (tiling_json.contains("tile_size_x") && tiling_json["tile_size_x"].is_number_integer()) {
             vae_tiling_params.tile_size_x = tiling_json["tile_size_x"];
         }
@@ -2275,6 +2283,7 @@ std::string SDGenerationParams::to_string() const {
         << ", upscale_tile_size: " << hires_upscale_tile_size << " },\n"
         << "  vae_tiling_params: { "
         << vae_tiling_params.enabled << ", "
+        << vae_tiling_params.temporal_tiling << ", "
         << vae_tiling_params.tile_size_x << ", "
         << vae_tiling_params.tile_size_y << ", "
         << vae_tiling_params.target_overlap << ", "

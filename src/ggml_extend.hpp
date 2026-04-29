@@ -1683,6 +1683,8 @@ struct GGMLRunnerContext {
     bool circular_y_enabled                                      = false;
     std::shared_ptr<WeightAdapter> weight_adapter                = nullptr;
     std::unordered_map<ggml_tensor*, std::string>* debug_tensors = nullptr;
+    std::function<ggml_tensor*(const std::string&)> get_cache_tensor;
+    std::function<void(const std::string&, ggml_tensor*)> cache_tensor;
 
     void capture_tensor(const std::string& name, ggml_tensor* tensor) {
         if (debug_tensors == nullptr || tensor == nullptr) {
@@ -1690,6 +1692,20 @@ struct GGMLRunnerContext {
         }
         ggml_set_output(tensor);
         (*debug_tensors)[tensor] = name;
+    }
+
+    ggml_tensor* load_cache_tensor(const std::string& name) const {
+        if (!get_cache_tensor) {
+            return nullptr;
+        }
+        return get_cache_tensor(name);
+    }
+
+    void persist_cache_tensor(const std::string& name, ggml_tensor* tensor) const {
+        if (!cache_tensor || tensor == nullptr) {
+            return;
+        }
+        cache_tensor(name, tensor);
     }
 };
 
@@ -1848,6 +1864,11 @@ protected:
         for (const auto& entry : debug_tensors) {
             if (entry.first != nullptr) {
                 ggml_build_forward_expand(gf, entry.first);
+            }
+        }
+        for (const auto& entry : cache_tensor_map) {
+            if (entry.second != nullptr) {
+                ggml_build_forward_expand(gf, entry.second);
             }
         }
         prepare_build_in_tensor_after(gf);
@@ -2057,6 +2078,12 @@ public:
         runner_ctx.circular_y_enabled    = circular_y_enabled;
         runner_ctx.weight_adapter        = weight_adapter;
         runner_ctx.debug_tensors         = &debug_tensors;
+        runner_ctx.get_cache_tensor      = [this](const std::string& name) {
+            return this->get_cache_tensor_by_name(name);
+        };
+        runner_ctx.cache_tensor = [this](const std::string& name, ggml_tensor* tensor) {
+            this->cache(name, tensor);
+        };
         return runner_ctx;
     }
 
@@ -2156,6 +2183,9 @@ public:
     }
 
     void cache(const std::string name, ggml_tensor* tensor) {
+        if (tensor != nullptr && tensor->view_src != nullptr) {
+            tensor = ggml_cont(compute_ctx, tensor);
+        }
         cache_tensor_map[name] = tensor;
     }
 

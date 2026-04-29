@@ -149,6 +149,7 @@ enum lora_apply_mode_t {
 
 typedef struct {
     bool enabled;
+    bool temporal_tiling;
     int tile_size_x;
     int tile_size_y;
     float target_overlap;

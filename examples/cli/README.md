@@ -156,6 +156,7 @@ Generation Options:
   --disable-auto-resize-ref-image          disable auto resize of ref images
   --disable-image-metadata                 do not embed generation metadata on image files
   --vae-tiling                             process vae in tiles to reduce memory usage
+  --temporal-tiling                        enable temporal tiling for LTX video VAE decode
   --hires                                  enable highres fix
   -s, --seed                               RNG seed (default: 42, use random seed for < 0)
   --sampling-method                        sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m,

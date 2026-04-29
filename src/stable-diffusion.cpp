@@ -144,7 +144,7 @@ public:
     bool apply_lora_immediately = false;
 
     std::string taesd_path;
-    sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0, 0};
+    sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0, 0};
     bool offload_params_to_cpu           = false;
     bool use_pmid                        = false;
 
@@ -1520,9 +1520,11 @@ public:
             sd::Tensor<float> decoded;
             bool is_video = preview_latent_tensor_is_video(latents);
             if (preview_vae) {
+                preview_vae->set_temporal_tiling_enabled(vae_tiling_params.temporal_tiling);
                 vae_latents = preview_vae->diffusion_to_vae_latents(latents);
                 decoded     = preview_vae->decode(n_threads, vae_latents, vae_tiling_params, is_video, circular_x, circular_y, true);
             } else {
+                first_stage_model->set_temporal_tiling_enabled(vae_tiling_params.temporal_tiling);
                 vae_latents = first_stage_model->diffusion_to_vae_latents(latents);
                 decoded     = first_stage_model->decode(n_threads, vae_latents, vae_tiling_params, is_video, circular_x, circular_y, true);
             }
@@ -1963,6 +1965,7 @@ public:
 
     sd::Tensor<float> decode_first_stage(const sd::Tensor<float>& x, bool decode_video = false) {
         auto latents = first_stage_model->diffusion_to_vae_latents(x);
+        first_stage_model->set_temporal_tiling_enabled(vae_tiling_params.temporal_tiling);
         return first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
     }
 
@@ -2398,7 +2401,7 @@ void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     sd_img_gen_params->batch_count       = 1;
     sd_img_gen_params->control_strength  = 0.9f;
     sd_img_gen_params->pm_params         = {nullptr, 0, nullptr, 20.f};
-    sd_img_gen_params->vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
+    sd_img_gen_params->vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f};
     sd_cache_params_init(&sd_img_gen_params->cache);
     sd_hires_params_init(&sd_img_gen_params->hires);
 }
@@ -2427,7 +2430,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "increase_ref_index: %s\n"
              "control_strength: %.2f\n"
              "photo maker: {style_strength = %.2f, id_images_count = %d, id_embed_path = %s}\n"
-             "VAE tiling: %s\n"
+             "VAE tiling: %s (temporal=%s)\n"
              "hires: {enabled=%s, upscaler=%s, model_path=%s, scale=%.2f, target=%dx%d, steps=%d, denoising_strength=%.2f}\n",
              SAFE_STR(sd_img_gen_params->prompt),
              SAFE_STR(sd_img_gen_params->negative_prompt),
@@ -2446,6 +2449,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              sd_img_gen_params->pm_params.id_images_count,
              SAFE_STR(sd_img_gen_params->pm_params.id_embed_path),
              BOOL_STR(sd_img_gen_params->vae_tiling_params.enabled),
+             BOOL_STR(sd_img_gen_params->vae_tiling_params.temporal_tiling),
              BOOL_STR(sd_img_gen_params->hires.enabled),
              sd_hires_upscaler_name(sd_img_gen_params->hires.upscaler),
              SAFE_STR(sd_img_gen_params->hires.model_path),
@@ -2483,7 +2487,7 @@ void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
     sd_vid_gen_params->fps                                   = 16;
     sd_vid_gen_params->moe_boundary                          = 0.875f;
     sd_vid_gen_params->vace_strength                         = 1.f;
-    sd_vid_gen_params->vae_tiling_params                     = {false, 0, 0, 0.5f, 0.0f, 0.0f};
+    sd_vid_gen_params->vae_tiling_params                     = {false, false, 0, 0, 0.5f, 0.0f, 0.0f};
     sd_cache_params_init(&sd_vid_gen_params->cache);
 }
 

@@ -924,12 +924,12 @@ namespace LTXV {
             if (count < 0) {
                 count = coeff - start;
             }
-            auto t   = ggml_reshape_3d(ctx->ggml_ctx, timestep, dim, coeff, timestep->ne[1]);
-            auto s   = ggml_reshape_3d(ctx->ggml_ctx, table, dim, coeff, 1);
-            auto e   = ggml_new_tensor_3d(ctx->ggml_ctx, timestep->type, dim, coeff, timestep->ne[1]);
-            t        = ggml_repeat(ctx->ggml_ctx, t, e);
-            s        = ggml_repeat(ctx->ggml_ctx, s, e);
-            auto out = ggml_add(ctx->ggml_ctx, s, t);
+            auto t      = ggml_reshape_3d(ctx->ggml_ctx, timestep, dim, coeff, timestep->ne[1]);
+            auto s      = ggml_reshape_3d(ctx->ggml_ctx, table, dim, coeff, 1);
+            auto e      = ggml_new_tensor_3d(ctx->ggml_ctx, timestep->type, dim, coeff, timestep->ne[1]);
+            t           = ggml_repeat(ctx->ggml_ctx, t, e);
+            s           = ggml_repeat(ctx->ggml_ctx, s, e);
+            auto out    = ggml_add(ctx->ggml_ctx, s, t);
             auto chunks = ggml_ext_chunk(ctx->ggml_ctx, out, static_cast<int>(coeff), 1);
             return std::vector<ggml_tensor*>(chunks.begin() + start, chunks.begin() + start + count);
         }

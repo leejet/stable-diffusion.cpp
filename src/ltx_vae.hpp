@@ -130,6 +130,56 @@ namespace LTXVAE {
             }
             return conv->forward(ctx, x);
         }
+
+        // Chunked forward: uses feat_map to carry temporal context across frames.
+        // feat_map[feat_idx] holds the last `pad` frames from the previous chunk at
+        // this layer.  nullptr means first chunk → fall back to repeat-first-frame.
+        // The cache entry is a contiguous copy (not a view) so that the large
+        // intermediate tensor `x` can be freed by GGML after this iteration ends.
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             std::vector<ggml_tensor*>& feat_map,
+                             int& feat_idx,
+                             int chunk_idx,
+                             bool causal = true) {
+            auto conv     = std::dynamic_pointer_cast<Conv3d>(blocks["conv"]);
+            const int pad = causal ? (time_kernel_size - 1) : (time_kernel_size - 1) / 2;
+
+            ggml_tensor* prev = (feat_idx < (int)feat_map.size()) ? feat_map[feat_idx] : nullptr;
+
+            // Save a contiguous copy of the last `pad` frames so the large `x`
+            // tensor is not kept alive across iterations by a dangling view.
+            if (feat_idx < (int)feat_map.size() && pad > 0 && x->ne[2] >= pad) {
+                auto slice         = ggml_ext_slice(ctx->ggml_ctx, x, 2, x->ne[2] - pad, x->ne[2]);
+                feat_map[feat_idx] = ggml_cont(ctx->ggml_ctx, slice);
+            }
+            feat_idx++;
+
+            if (pad > 0) {
+                ggml_tensor* left_pad;
+                if (prev != nullptr) {
+                    left_pad = prev;
+                } else {
+                    auto first_frame = ggml_ext_slice(ctx->ggml_ctx, x, 2, 0, 1);
+                    left_pad         = first_frame;
+                    for (int i = 1; i < pad; i++) {
+                        left_pad = ggml_concat(ctx->ggml_ctx, left_pad, first_frame, 2);
+                    }
+                }
+                x = ggml_concat(ctx->ggml_ctx, left_pad, x, 2);
+            }
+
+            if (!causal && pad > 0) {
+                auto last_frame = ggml_ext_slice(ctx->ggml_ctx, x, 2, x->ne[2] - 1, x->ne[2]);
+                auto right_pad  = last_frame;
+                for (int i = 1; i < pad; i++) {
+                    right_pad = ggml_concat(ctx->ggml_ctx, right_pad, last_frame, 2);
+                }
+                x = ggml_concat(ctx->ggml_ctx, x, right_pad, 2);
+            }
+
+            return conv->forward(ctx, x);
+        }
     };
 
     struct PixelNorm3D : public UnaryBlock {
@@ -225,6 +275,51 @@ namespace LTXVAE {
 
             return ggml_add(ctx->ggml_ctx, h, x);
         }
+
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* timestep,
+                             bool causal,
+                             std::vector<ggml_tensor*>& feat_map,
+                             int& feat_idx,
+                             int chunk_idx) {
+            auto norm1 = std::dynamic_pointer_cast<PixelNorm3D>(blocks["norm1"]);
+            auto conv1 = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv1"]);
+            auto norm2 = std::dynamic_pointer_cast<PixelNorm3D>(blocks["norm2"]);
+            auto conv2 = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv2"]);
+
+            ggml_tensor* shift1 = nullptr;
+            ggml_tensor* scale1 = nullptr;
+            ggml_tensor* shift2 = nullptr;
+            ggml_tensor* scale2 = nullptr;
+            if (timestep_conditioning) {
+                GGML_ASSERT(timestep != nullptr);
+                auto values = ggml_add(ctx->ggml_ctx,
+                                       params["scale_shift_table"],
+                                       ggml_reshape_2d(ctx->ggml_ctx, timestep, channels, 4));
+                auto chunks = ggml_ext_chunk(ctx->ggml_ctx, values, 4, 1, false);
+                shift1      = reshape_channel_broadcast(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, chunks[0]));
+                scale1      = reshape_channel_broadcast(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, chunks[1]));
+                shift2      = reshape_channel_broadcast(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, chunks[2]));
+                scale2      = reshape_channel_broadcast(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, chunks[3]));
+            }
+
+            auto h = norm1->forward(ctx, x);
+            if (timestep_conditioning) {
+                h = apply_scale_shift(ctx->ggml_ctx, h, scale1, shift1);
+            }
+            h = ggml_silu_inplace(ctx->ggml_ctx, h);
+            h = conv1->forward(ctx, h, feat_map, feat_idx, chunk_idx, causal);
+
+            h = norm2->forward(ctx, h);
+            if (timestep_conditioning) {
+                h = apply_scale_shift(ctx->ggml_ctx, h, scale2, shift2);
+            }
+            h = ggml_silu_inplace(ctx->ggml_ctx, h);
+            h = conv2->forward(ctx, h, feat_map, feat_idx, chunk_idx, causal);
+
+            return ggml_add(ctx->ggml_ctx, h, x);
+        }
     };
 
     struct UNetMidBlock3D : public GGMLBlock {
@@ -260,6 +355,26 @@ namespace LTXVAE {
             for (int i = 0; i < num_layers; i++) {
                 auto resnet = std::dynamic_pointer_cast<ResnetBlock3D>(blocks["res_blocks." + std::to_string(i)]);
                 x           = resnet->forward(ctx, x, timestep_embed, causal);
+            }
+            return x;
+        }
+
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* timestep,
+                             bool causal,
+                             std::vector<ggml_tensor*>& feat_map,
+                             int& feat_idx,
+                             int chunk_idx) {
+            ggml_tensor* timestep_embed = nullptr;
+            if (timestep_conditioning) {
+                GGML_ASSERT(timestep != nullptr);
+                auto time_embedder = std::dynamic_pointer_cast<PixArtAlphaCombinedTimestepSizeEmbeddings>(blocks["time_embedder"]);
+                timestep_embed     = time_embedder->forward(ctx, timestep);
+            }
+            for (int i = 0; i < num_layers; i++) {
+                auto resnet = std::dynamic_pointer_cast<ResnetBlock3D>(blocks["res_blocks." + std::to_string(i)]);
+                x           = resnet->forward(ctx, x, timestep_embed, causal, feat_map, feat_idx, chunk_idx);
             }
             return x;
         }
@@ -309,6 +424,35 @@ namespace LTXVAE {
 
             x = conv->forward(ctx, x, causal);
             x = depth_to_space_3d(ctx->ggml_ctx, x, get_output_channels(), factor_t, factor_s, factor_t > 1);
+            if (residual) {
+                x = ggml_add(ctx->ggml_ctx, x, x_in);
+            }
+            return x;
+        }
+
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             bool causal,
+                             std::vector<ggml_tensor*>& feat_map,
+                             int& feat_idx,
+                             int chunk_idx) {
+            auto conv = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv"]);
+
+            bool drop_first = (chunk_idx == 0) && (factor_t > 1);
+
+            ggml_tensor* x_in = nullptr;
+            if (residual) {
+                x_in       = depth_to_space_3d(ctx->ggml_ctx, x, in_channels / (factor_t * factor_s * factor_s), factor_t, factor_s, drop_first);
+                int repeat = (factor_t * factor_s * factor_s) / out_channels_reduction_factor;
+                auto res   = x_in;
+                for (int i = 1; i < repeat; i++) {
+                    res = ggml_concat(ctx->ggml_ctx, res, x_in, 3);
+                }
+                x_in = res;
+            }
+
+            x = conv->forward(ctx, x, feat_map, feat_idx, chunk_idx, causal);
+            x = depth_to_space_3d(ctx->ggml_ctx, x, get_output_channels(), factor_t, factor_s, drop_first);
             if (residual) {
                 x = ggml_add(ctx->ggml_ctx, x, x_in);
             }
@@ -735,6 +879,61 @@ namespace LTXVAE {
             x = conv_out->forward(ctx, x, causal_decoder);
             return x;
         }
+
+        // Process a single latent frame through the complete decoder (conv_in → up_blocks
+        // → final layers), using feat_map to carry per-layer causal context from the
+        // previous frame.  Designed for tiled temporal decode: each iteration receives
+        // 1 latent frame so that intermediate tensors can be freed between iterations.
+        ggml_tensor* forward_tiled_frame(GGMLRunnerContext* ctx,
+                                         ggml_tensor* x,
+                                         ggml_tensor* timestep,
+                                         std::vector<ggml_tensor*>& feat_map,
+                                         int& feat_idx,
+                                         int chunk_idx) {
+            auto conv_in       = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv_in"]);
+            auto conv_norm_out = std::dynamic_pointer_cast<PixelNorm3D>(blocks["conv_norm_out"]);
+            auto conv_out      = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv_out"]);
+
+            ggml_tensor* scaled_timestep = timestep;
+            if (timestep_conditioning && timestep != nullptr) {
+                auto multiplier = ggml_ext_backend_tensor_get_f32(params["timestep_scale_multiplier"]);
+                scaled_timestep = ggml_ext_scale(ctx->ggml_ctx, timestep, multiplier);
+            }
+
+            // conv_in with feat_map for left temporal context
+            x = conv_in->forward(ctx, x, feat_map, feat_idx, chunk_idx, causal_decoder);
+
+            // up_blocks
+            int block_idx = 0;
+            while (blocks.find("up_blocks." + std::to_string(block_idx)) != blocks.end()) {
+                auto mid_block = std::dynamic_pointer_cast<UNetMidBlock3D>(blocks["up_blocks." + std::to_string(block_idx)]);
+                if (mid_block) {
+                    x = mid_block->forward(ctx, x, scaled_timestep, causal_decoder,
+                                           feat_map, feat_idx, chunk_idx);
+                } else {
+                    auto upsample = std::dynamic_pointer_cast<DepthToSpaceUpsample>(
+                        blocks["up_blocks." + std::to_string(block_idx)]);
+                    x = upsample->forward(ctx, x, causal_decoder,
+                                          feat_map, feat_idx, chunk_idx);
+                }
+                block_idx++;
+            }
+
+            x = conv_norm_out->forward(ctx, x);
+            if (timestep_conditioning) {
+                auto last_time_embedder = std::dynamic_pointer_cast<PixArtAlphaCombinedTimestepSizeEmbeddings>(blocks["last_time_embedder"]);
+                auto timestep_embed     = last_time_embedder->forward(ctx, scaled_timestep);
+                auto [shift, scale]     = get_shift_scale(ctx->ggml_ctx,
+                                                          params["last_scale_shift_table"],
+                                                          timestep_embed,
+                                                          hidden_channels,
+                                                          2);
+                x                       = apply_scale_shift(ctx->ggml_ctx, x, scale, shift);
+            }
+            x = ggml_silu_inplace(ctx->ggml_ctx, x);
+            x = conv_out->forward(ctx, x, feat_map, feat_idx, chunk_idx, causal_decoder);
+            return x;
+        }
     };
 
     struct VideoVAE : public GGMLBlock {
@@ -779,6 +978,39 @@ namespace LTXVAE {
             return out;
         }
 
+        // Tiled temporal decode: each latent frame is processed through the COMPLETE
+        // decoder individually.  Per-layer causal context is passed via feat_map
+        // (contiguous copies, not views) so that each iteration's large intermediate
+        // tensors can be freed by GGML before the next iteration starts.
+        ggml_tensor* decode_tiled(GGMLRunnerContext* ctx,
+                                  ggml_tensor* z,
+                                  ggml_tensor* timestep) {
+            auto decoder   = std::dynamic_pointer_cast<Decoder>(blocks["decoder"]);
+            auto processor = std::dynamic_pointer_cast<PerChannelStatistics>(blocks["per_channel_statistics"]);
+            auto latents   = processor->un_normalize(ctx, z);
+
+            const int64_t T = z->ne[2];
+            if (T <= 1) {
+                auto out = decoder->forward(ctx, latents, timestep);
+                return WAN::WanVAE::unpatchify(ctx->ggml_ctx, out, patch_size, 1);
+            }
+
+            // feat_map holds ggml_tensor* nodes (contiguous copies at each conv layer).
+            // 128 slots is generous enough for any supported decoder configuration.
+            std::vector<ggml_tensor*> feat_map(128, nullptr);
+
+            ggml_tensor* out = nullptr;
+            for (int i = 0; i < (int)T; i++) {
+                int feat_idx = 0;
+                auto z_i     = ggml_ext_slice(ctx->ggml_ctx, latents, 2, i, i + 1);
+                auto out_i   = decoder->forward_tiled_frame(ctx, z_i, timestep,
+                                                            feat_map, feat_idx, i);
+                out          = (out == nullptr) ? out_i : ggml_concat(ctx->ggml_ctx, out, out_i, 2);
+            }
+
+            return WAN::WanVAE::unpatchify(ctx->ggml_ctx, out, patch_size, 1);
+        }
+
         ggml_tensor* encode(GGMLRunnerContext* ctx,
                             ggml_tensor* x) {
             GGML_ASSERT(!decode_only);
@@ -797,6 +1029,7 @@ namespace LTXVAE {
 
 struct LTXVideoVAE : public VAE {
     bool decode_only;
+    bool temporal_tiling_enabled = false;
     int ltx_vae_version;
     bool timestep_conditioning;
     int patch_size;
@@ -829,30 +1062,31 @@ struct LTXVideoVAE : public VAE {
         return "ltx_video_vae";
     }
 
+    void set_temporal_tiling_enabled(bool enabled) override {
+        temporal_tiling_enabled = enabled;
+    }
+
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) override {
         vae.get_param_tensors(tensors, prefix);
     }
 
     ggml_cgraph* build_graph(const sd::Tensor<float>& z_tensor, bool decode_graph) {
-        LOG_DEBUG("ltx_video_vae build_graph input %dx%dx%dx%d",
-                  (int)z_tensor.shape()[0],
-                  (int)z_tensor.shape()[1],
-                  (int)z_tensor.shape()[2],
-                  (int)z_tensor.shape()[3]);
-        ggml_cgraph* gf       = ggml_new_graph(compute_ctx);
+        ggml_cgraph* gf       = new_graph_custom(20480);
         ggml_tensor* z        = make_input(z_tensor);
         ggml_tensor* timestep = nullptr;
         if (timestep_conditioning) {
             timestep = make_input(decode_timestep_tensor);
         }
 
-        auto runner_ctx  = get_context();
-        ggml_tensor* out = decode_graph ? vae.decode(&runner_ctx, z, timestep) : vae.encode(&runner_ctx, z);
-        LOG_DEBUG("ltx_video_vae build_graph output ne=[%lld,%lld,%lld,%lld]",
-                  (long long)out->ne[0],
-                  (long long)out->ne[1],
-                  (long long)out->ne[2],
-                  (long long)out->ne[3]);
+        auto runner_ctx = get_context();
+        ggml_tensor* out;
+        bool use_tiled = decode_graph && temporal_tiling_enabled &&
+                         z_tensor.dim() == 5 && z_tensor.shape()[2] > 1;
+        if (use_tiled) {
+            out = vae.decode_tiled(&runner_ctx, z, timestep);
+        } else {
+            out = decode_graph ? vae.decode(&runner_ctx, z, timestep) : vae.encode(&runner_ctx, z);
+        }
         ggml_build_forward_expand(gf, out);
 
         return gf;
@@ -889,12 +1123,6 @@ struct LTXVideoVAE : public VAE {
         if (result.empty()) {
             return {};
         }
-        LOG_DEBUG("ltx_video_vae host output shape=[%lld,%lld,%lld,%lld] dim=%lld",
-                  (long long)(result.shape().size() > 0 ? result.shape()[0] : 0),
-                  (long long)(result.shape().size() > 1 ? result.shape()[1] : 0),
-                  (long long)(result.shape().size() > 2 ? result.shape()[2] : 0),
-                  (long long)(result.shape().size() > 3 ? result.shape()[3] : 0),
-                  (long long)result.dim());
         return result;
     }
 
