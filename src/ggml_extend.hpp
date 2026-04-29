@@ -73,8 +73,8 @@ __STATIC_INLINE__ void ggml_log_callback_default(ggml_log_level level, const cha
 
 __STATIC_INLINE__ bool backend_name_exists(std::string name) {
     ggml_backend_load_all_once();
-    const int device_count = ggml_backend_dev_count();
-    for (int i = 0; i < device_count; i++) {
+    const size_t device_count = ggml_backend_dev_count();
+    for (size_t i = 0; i < device_count; ++i) {
         if (name == ggml_backend_dev_name(ggml_backend_dev_get(i))) {
             return true;
         }
@@ -97,6 +97,9 @@ __STATIC_INLINE__ std::string get_default_backend_name() {
     ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
     dev                    = dev ? dev : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
     dev                    = dev ? dev : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (dev == nullptr) {
+        return "";
+    }
     return ggml_backend_dev_name(dev);
 }
 

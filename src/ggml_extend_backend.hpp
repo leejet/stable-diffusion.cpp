@@ -12,19 +12,19 @@
 #endif
 
 inline void ggml_backend_load_all_once() {
-    // If the host process already preloaded backends explicitly
-    // (for example via ggml_backend_load / ggml_backend_load_all_from_path),
-    // do not rescan the default paths again.
-    // For static-backend mode, the registry is initialized by a singleton
-    // pattern, so any enabled backend will also cause the scan to be skipped
-    if (ggml_backend_dev_count() > 0) {
+    // If the registry already has devices and the CPU backend is present,
+    // assume either static registration or explicit host-side preloading has
+    // completed and avoid rescanning the default paths.
+    if (ggml_backend_dev_count() > 0 && ggml_backend_reg_by_name("CPU") != nullptr) {
         return;
     }
     // In dynamic-backend mode the backend modules are discovered at runtime,
     // so we must load them before asking for the CPU backend or its proc table.
+    // If the host preloaded only a subset of backends, allow one default-path
+    // scan so missing modules can still be discovered.
     static std::once_flag once;
     std::call_once(once, []() {
-        if (ggml_backend_dev_count() > 0) {
+        if (ggml_backend_dev_count() > 0 && ggml_backend_reg_by_name("CPU") != nullptr) {
             return;
         }
         ggml_backend_load_all();
@@ -39,6 +39,11 @@ inline void ggml_backend_load_all_once() {
 // backend discovery instead of compile-time assumptions.
 
 __STATIC_INLINE__ ggml_backend_reg_t ggml_backend_cpu_reg() {
+    ggml_backend_reg_t reg = ggml_backend_reg_by_name("CPU");
+    if (reg != nullptr) {
+        return reg;
+    }
+
     ggml_backend_load_all_once();
     return ggml_backend_reg_by_name("CPU");
 }
@@ -55,6 +60,11 @@ __STATIC_INLINE__ ggml_backend_reg_t ggml_backend_reg_from_backend(ggml_backend_
 }
 
 __STATIC_INLINE__ ggml_backend_t ggml_backend_cpu_init() {
+    ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+    if (backend != nullptr) {
+        return backend;
+    }
+
     ggml_backend_load_all_once();
     return ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
 }

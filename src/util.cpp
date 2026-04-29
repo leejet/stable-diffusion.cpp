@@ -716,45 +716,44 @@ ggml_backend_t sd_get_default_backend() {
     ggml_backend_load_all_once();
     static std::once_flag once;
     std::call_once(once, []() {
-        int dev_count = ggml_backend_dev_count();
+        size_t dev_count = ggml_backend_dev_count();
         if (dev_count == 0) {
             LOG_ERROR("No devices found!");
         } else {
-            LOG_DEBUG("Found %d backend devices:", dev_count);
-            for (int i = 0; i < dev_count; i++) {
+            LOG_DEBUG("Found %zu backend devices:", dev_count);
+            for (size_t i = 0; i < dev_count; ++i) {
                 auto dev = ggml_backend_dev_get(i);
-                LOG_DEBUG("#%d: %s", i, ggml_backend_dev_name(dev));
+                LOG_DEBUG("#%zu: %s", i, ggml_backend_dev_name(dev));
             }
         }
     });
-    std::string dev_name = get_default_backend_name();
     ggml_backend_t backend = nullptr;
-    // apply SD_VK_DEVICE only if the main device is Vulkan
-    if (dev_name.rfind("Vulkan", 0) == 0) {
-        const char* SD_VK_DEVICE = getenv("SD_VK_DEVICE");
-        if (SD_VK_DEVICE != nullptr) {
-            std::string sd_vk_device_str = SD_VK_DEVICE;
-            try {
-                unsigned long long device = std::stoull(sd_vk_device_str);
-                std::string vk_device_name = "Vulkan" + std::to_string(device);
-                if (vk_device_name != dev_name) {
-                    LOG_INFO("Selecting %s as main device by env var SD_VK_DEVICE)", vk_device_name.c_str());
-                    backend = init_named_backend(vk_device_name);
-                    if (!backend) {
-                        LOG_WARN("Device %s requested by SD_VK_DEVICE failed to init. Falling back to the default device.", vk_device_name.c_str());
-                    }
+    const char* SD_VK_DEVICE = getenv("SD_VK_DEVICE");
+    if (SD_VK_DEVICE != nullptr) {
+        std::string sd_vk_device_str = SD_VK_DEVICE;
+        try {
+            unsigned long long device = std::stoull(sd_vk_device_str);
+            std::string vk_device_name = "Vulkan" + std::to_string(device);
+            if (backend_name_exists(vk_device_name)) {
+                LOG_INFO("Selecting %s as main device by env var SD_VK_DEVICE", vk_device_name.c_str());
+                backend = init_named_backend(vk_device_name);
+                if (!backend) {
+                    LOG_WARN("Device %s requested by SD_VK_DEVICE failed to init. Falling back to the default device.", vk_device_name.c_str());
                 }
-            } catch (const std::invalid_argument&) {
-                LOG_WARN("SD_VK_DEVICE environment variable is not a valid integer (%s). Falling back to the default device.", SD_VK_DEVICE);
-            } catch (const std::out_of_range&) {
-                LOG_WARN("SD_VK_DEVICE environment variable value is out of range for `unsigned long long` type (%s). Falling back to the default device.", SD_VK_DEVICE);
+            } else {
+                LOG_WARN("Device %s requested by SD_VK_DEVICE was not found. Falling back to the default device.", vk_device_name.c_str());
             }
+        } catch (const std::invalid_argument&) {
+            LOG_WARN("SD_VK_DEVICE environment variable is not a valid integer (%s). Falling back to the default device.", SD_VK_DEVICE);
+        } catch (const std::out_of_range&) {
+            LOG_WARN("SD_VK_DEVICE environment variable value is out of range for `unsigned long long` type (%s). Falling back to the default device.", SD_VK_DEVICE);
         }
     }
 
     if (!backend) {
+        std::string dev_name = get_default_backend_name();
         backend = init_named_backend(dev_name);
-        if (!backend) {
+        if (!backend && !dev_name.empty()) {
             LOG_WARN("device %s failed to init", dev_name.c_str());
         }
     }
@@ -797,4 +796,3 @@ const char* sd_get_system_info() {
     snprintf(buffer, sizeof(buffer), "%s", ss.str().c_str());
     return buffer;
 }
-
