@@ -1820,7 +1820,7 @@ public:
                     return std::move(cached_output);
                 }
 
-                auto output_opt = work_diffusion_model->compute(n_threads, diffusion_params);
+                auto output_opt = work_diffusion_model->compute_dispatch(n_threads, diffusion_params);
                 if (output_opt.empty()) {
                     LOG_ERROR("diffusion model compute failed");
                     return sd::Tensor<float>();

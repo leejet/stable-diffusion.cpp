@@ -124,6 +124,41 @@ struct DiffusionModel {
     }
     // Offload all streaming layers to CPU (free GPU memory after diffusion)
     virtual void offload_streaming_layers() {}
+
+    // Bridge: dispatch to streaming or regular compute based on layer streaming state,
+    // returning sd::Tensor<float> for compatibility with the upstream sample loop.
+    sd::Tensor<float> compute_dispatch(int n_threads, const DiffusionParams& diffusion_params) {
+        if (!is_layer_streaming_enabled()) {
+            return compute(n_threads, diffusion_params);
+        }
+
+        // Temporary ggml_context with CPU-allocated storage for the output tensor.
+        // The streaming runner writes results via ggml_ext_backend_tensor_get_and_sync
+        // into output->data, so the buffer must be real memory (no_alloc=false).
+        // 256 MB is enough for any DiT output we produce (Z-Image 2K is ~6 MB).
+        ggml_init_params params = {256 * 1024 * 1024, nullptr, false};
+        ggml_context* out_ctx   = ggml_init(params);
+        if (out_ctx == nullptr) {
+            LOG_ERROR("compute_dispatch: ggml_init failed");
+            return {};
+        }
+
+        ggml_tensor* out_tensor = nullptr;
+        bool ok = compute_streaming(n_threads, diffusion_params, &out_tensor, out_ctx);
+        if (!ok || out_tensor == nullptr || out_tensor->data == nullptr) {
+            ggml_free(out_ctx);
+            return {};
+        }
+
+        // ggml ne[] order matches sd::Tensor shape order (ne[0] is innermost / first in shape).
+        std::vector<int64_t> shape(out_tensor->ne, out_tensor->ne + GGML_MAX_DIMS);
+        while (shape.size() > 1 && shape.back() == 1) shape.pop_back();
+
+        sd::Tensor<float> result(shape);
+        memcpy(result.data(), out_tensor->data, ggml_nbytes(out_tensor));
+        ggml_free(out_ctx);
+        return result;
+    }
 };
 
 struct UNetModel : public DiffusionModel {
