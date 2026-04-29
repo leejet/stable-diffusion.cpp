@@ -127,36 +127,39 @@ struct DiffusionModel {
 
     // Bridge: dispatch to streaming or regular compute based on layer streaming state,
     // returning sd::Tensor<float> for compatibility with the upstream sample loop.
+    //
+    // Streaming output shape matches the input x shape (diffusion preserves shape).
+    // We pre-allocate the destination sd::Tensor and have the streaming runner write
+    // directly into its memory via a tiny no_alloc ggml_context — no per-step malloc.
     sd::Tensor<float> compute_dispatch(int n_threads, const DiffusionParams& diffusion_params) {
         if (!is_layer_streaming_enabled()) {
             return compute(n_threads, diffusion_params);
         }
+        if (diffusion_params.x == nullptr) {
+            LOG_ERROR("compute_dispatch: diffusion_params.x is null");
+            return {};
+        }
 
-        // Temporary ggml_context with CPU-allocated storage for the output tensor.
-        // The streaming runner writes results via ggml_ext_backend_tensor_get_and_sync
-        // into output->data, so the buffer must be real memory (no_alloc=false).
-        // 256 MB is enough for any DiT output we produce (Z-Image 2K is ~6 MB).
-        ggml_init_params params = {256 * 1024 * 1024, nullptr, false};
+        // Pre-allocate result with x's shape; stream writes will land here directly.
+        sd::Tensor<float> result(diffusion_params.x->shape());
+
+        // Tiny no_alloc context — only holds tensor metadata, no data backing.
+        ggml_init_params params = {2 * ggml_tensor_overhead(), nullptr, true};
         ggml_context* out_ctx   = ggml_init(params);
         if (out_ctx == nullptr) {
             LOG_ERROR("compute_dispatch: ggml_init failed");
             return {};
         }
 
-        ggml_tensor* out_tensor = nullptr;
+        // Make a metadata tensor with the same shape as result and point its data
+        // pointer at result's memory. The runner's ggml_ext_backend_tensor_get_and_sync
+        // will copy GPU→here directly. Skip ggml_dup_tensor by passing non-null *output.
+        ggml_tensor* out_tensor = sd::make_ggml_tensor(out_ctx, result, false);
+        out_tensor->data        = result.data();
+
         bool ok = compute_streaming(n_threads, diffusion_params, &out_tensor, out_ctx);
-        if (!ok || out_tensor == nullptr || out_tensor->data == nullptr) {
-            ggml_free(out_ctx);
-            return {};
-        }
-
-        // ggml ne[] order matches sd::Tensor shape order (ne[0] is innermost / first in shape).
-        std::vector<int64_t> shape(out_tensor->ne, out_tensor->ne + GGML_MAX_DIMS);
-        while (shape.size() > 1 && shape.back() == 1) shape.pop_back();
-
-        sd::Tensor<float> result(shape);
-        memcpy(result.data(), out_tensor->data, ggml_nbytes(out_tensor));
         ggml_free(out_ctx);
+        if (!ok) return {};
         return result;
     }
 };
