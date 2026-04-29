@@ -791,12 +791,6 @@ namespace ZImage {
                 registry.move_layer_to_cpu(nr_name);
             }
 
-            // Start async prefetch for first layer
-            if (num_layers > 0 && streaming_engine_) {
-                std::string first_layer = "layers.0";
-                streaming_engine_->prefetch_layer(first_layer);
-            }
-
             // Stage 2: Main layers (one at a time)
             // Debug: limit layers if env var set (to isolate where grid pattern appears)
             const char* limit_layers_env = std::getenv("SDCPP_LIMIT_MAIN_LAYERS");
@@ -809,6 +803,22 @@ namespace ZImage {
                              limit, layers_to_run, num_layers);
                 }
             }
+
+            // Honour the configured prefetch depth: keep up to prefetch_n layers in flight
+            // ahead of the current one. Without this, only one layer ever overlaps with compute.
+            int prefetch_n = 1;
+            if (streaming_engine_) {
+                prefetch_n = streaming_engine_->get_config().prefetch_layers;
+                if (prefetch_n < 1) prefetch_n = 1;
+            }
+
+            // Prime the prefetch pipeline with the first prefetch_n layers.
+            if (streaming_engine_) {
+                for (int j = 0; j < prefetch_n && j < num_layers; j++) {
+                    streaming_engine_->prefetch_layer("layers." + std::to_string(j));
+                }
+            }
+
             for (int layer_idx = 0; layer_idx < layers_to_run; layer_idx++) {
                 std::string layer_name = "layers." + std::to_string(layer_idx);
 
@@ -823,10 +833,12 @@ namespace ZImage {
                     return false;
                 }
 
-                // Start async prefetch of NEXT layer while we compute this one
-                if (streaming_engine_ && layer_idx + 1 < num_layers) {
-                    std::string next_layer = "layers." + std::to_string(layer_idx + 1);
-                    streaming_engine_->prefetch_layer(next_layer);
+                // Keep the prefetch window full: kick off prefetch of layer (i + prefetch_n).
+                if (streaming_engine_) {
+                    int target = layer_idx + prefetch_n;
+                    if (target < num_layers) {
+                        streaming_engine_->prefetch_layer("layers." + std::to_string(target));
+                    }
                 }
 
                 ggml_tensor* txt_img_out = nullptr;
