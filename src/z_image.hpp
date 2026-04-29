@@ -870,11 +870,16 @@ namespace ZImage {
                     }
                 }
 
-                // Now safe to free compute buffer
-                free_compute_buffer();
+                // Don't free compute buffer here — every main layer has the same shape
+                // so the gallocr can be reused for the entire sampling step. Freeing here
+                // forces a destroy-and-recreate cycle that idles the GPU between layers.
 
                 registry.move_layer_to_cpu(layer_name);
             }
+
+            // After all main layers are done, free the compute buffer so the output stage
+            // (different graph topology) can allocate a fresh one.
+            free_compute_buffer();
 
             // Stage 3: Output
             {
