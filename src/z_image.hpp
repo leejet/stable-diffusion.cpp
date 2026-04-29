@@ -804,23 +804,13 @@ namespace ZImage {
                 }
             }
 
-            // Honour the configured prefetch depth: keep up to prefetch_n layers in flight
-            // ahead of the current one. Without this, only one layer ever overlaps with compute.
-            int prefetch_n = 1;
+            auto layer_name_at = [](int i) { return "layers." + std::to_string(i); };
             if (streaming_engine_) {
-                prefetch_n = streaming_engine_->get_config().prefetch_layers;
-                if (prefetch_n < 1) prefetch_n = 1;
-            }
-
-            // Prime the prefetch pipeline with the first prefetch_n layers.
-            if (streaming_engine_) {
-                for (int j = 0; j < prefetch_n && j < num_layers; j++) {
-                    streaming_engine_->prefetch_layer("layers." + std::to_string(j));
-                }
+                streaming_engine_->prime_prefetch(layer_name_at, 0, num_layers);
             }
 
             for (int layer_idx = 0; layer_idx < layers_to_run; layer_idx++) {
-                std::string layer_name = "layers." + std::to_string(layer_idx);
+                std::string layer_name = layer_name_at(layer_idx);
 
                 // Wait for this layer's prefetch to complete (if async prefetch was started)
                 if (streaming_engine_) {
@@ -833,12 +823,9 @@ namespace ZImage {
                     return false;
                 }
 
-                // Keep the prefetch window full: kick off prefetch of layer (i + prefetch_n).
+                // Keep the prefetch window full
                 if (streaming_engine_) {
-                    int target = layer_idx + prefetch_n;
-                    if (target < num_layers) {
-                        streaming_engine_->prefetch_layer("layers." + std::to_string(target));
-                    }
+                    streaming_engine_->advance_prefetch(layer_name_at, layer_idx, num_layers);
                 }
 
                 ggml_tensor* txt_img_out = nullptr;

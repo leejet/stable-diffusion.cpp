@@ -1017,14 +1017,13 @@ namespace Anima {
 
             LOG_DEBUG("Input stage done, x=%ldx%ldx%ld", x_ne[0], x_ne[1], x_ne[2]);
 
-            // Start async prefetch for first block
-            if (num_blocks > 0 && streaming_engine_) {
-                std::string first_block = "blocks.0";
-                streaming_engine_->prefetch_layer(first_block);
+            auto block_name_at = [](int i) { return "blocks." + std::to_string(i); };
+            if (streaming_engine_) {
+                streaming_engine_->prime_prefetch(block_name_at, 0, static_cast<int>(num_blocks));
             }
 
             for (int64_t block_idx = 0; block_idx < num_blocks; block_idx++) {
-                std::string block_name = "blocks." + std::to_string(block_idx);
+                std::string block_name = block_name_at(static_cast<int>(block_idx));
                 int64_t t_block_start = ggml_time_ms();
 
                 // Wait for this block's prefetch to complete (if async prefetch was started)
@@ -1038,10 +1037,10 @@ namespace Anima {
                     return false;
                 }
 
-                // Start async prefetch of NEXT block while we compute this one
-                if (streaming_engine_ && block_idx + 1 < num_blocks) {
-                    std::string next_block = "blocks." + std::to_string(block_idx + 1);
-                    streaming_engine_->prefetch_layer(next_block);
+                // Keep the prefetch window full
+                if (streaming_engine_) {
+                    streaming_engine_->advance_prefetch(block_name_at, static_cast<int>(block_idx),
+                                                        static_cast<int>(num_blocks));
                 }
 
                 ggml_tensor* x_out = nullptr;

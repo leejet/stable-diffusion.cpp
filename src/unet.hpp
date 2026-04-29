@@ -888,14 +888,13 @@ struct UNetModelRunner : public GGMLRunner {
         }
 
         // Process input blocks 1-11
-        // Start async prefetch for first block
-        if (num_input_blocks > 1 && streaming_engine_) {
-            std::string first_block = "input_blocks.1";
-            streaming_engine_->prefetch_layer(first_block);
+        auto input_block_at = [](int i) { return "input_blocks." + std::to_string(i); };
+        if (streaming_engine_) {
+            streaming_engine_->prime_prefetch(input_block_at, 1, num_input_blocks);
         }
 
         for (int block_idx = 1; block_idx < num_input_blocks; block_idx++) {
-            std::string block_name = "input_blocks." + std::to_string(block_idx);
+            std::string block_name = input_block_at(block_idx);
             int64_t t_block = ggml_time_ms();
 
             if (streaming_engine_) {
@@ -907,10 +906,9 @@ struct UNetModelRunner : public GGMLRunner {
                 return false;
             }
 
-            // Start async prefetch of NEXT block while we compute this one
-            if (streaming_engine_ && block_idx + 1 < num_input_blocks) {
-                std::string next_block = "input_blocks." + std::to_string(block_idx + 1);
-                streaming_engine_->prefetch_layer(next_block);
+            // Keep the prefetch window full
+            if (streaming_engine_) {
+                streaming_engine_->advance_prefetch(input_block_at, block_idx, num_input_blocks);
             }
 
             ggml_tensor* h_output = nullptr;
@@ -1009,14 +1007,13 @@ struct UNetModelRunner : public GGMLRunner {
 
         LOG_DEBUG("Processing output blocks");
 
-        // Start async prefetch for first output block
-        if (num_output_blocks > 0 && streaming_engine_) {
-            std::string first_block = "output_blocks.0";
-            streaming_engine_->prefetch_layer(first_block);
+        auto output_block_at = [](int i) { return "output_blocks." + std::to_string(i); };
+        if (streaming_engine_) {
+            streaming_engine_->prime_prefetch(output_block_at, 0, num_output_blocks);
         }
 
         for (int block_idx = 0; block_idx < num_output_blocks; block_idx++) {
-            std::string block_name = "output_blocks." + std::to_string(block_idx);
+            std::string block_name = output_block_at(block_idx);
             int64_t t_block = ggml_time_ms();
 
             // Skip connection index (reverse order)
@@ -1031,10 +1028,9 @@ struct UNetModelRunner : public GGMLRunner {
                 return false;
             }
 
-            // Start async prefetch of NEXT block while we compute this one
-            if (streaming_engine_ && block_idx + 1 < num_output_blocks) {
-                std::string next_block = "output_blocks." + std::to_string(block_idx + 1);
-                streaming_engine_->prefetch_layer(next_block);
+            // Keep the prefetch window full
+            if (streaming_engine_) {
+                streaming_engine_->advance_prefetch(output_block_at, block_idx, num_output_blocks);
             }
 
             ggml_tensor* h_output = nullptr;

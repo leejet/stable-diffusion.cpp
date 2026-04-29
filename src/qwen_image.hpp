@@ -843,12 +843,11 @@ namespace Qwen {
                       img_ne[0], img_ne[1], img_ne[2], img_ne[3],
                       txt_ne[0], txt_ne[1], txt_ne[2], txt_ne[3]);
 
-            // Start prefetching the first block
-            std::string first_block_name = "transformer_blocks.0";
-            streaming_engine_->prefetch_layer(first_block_name);
+            auto block_name_at = [](int i) { return "transformer_blocks." + std::to_string(i); };
+            streaming_engine_->prime_prefetch(block_name_at, 0, num_layers);
 
             for (int block_idx = 0; block_idx < num_layers; block_idx++) {
-                std::string block_name = "transformer_blocks." + std::to_string(block_idx);
+                std::string block_name = block_name_at(block_idx);
                 int64_t t_block_start = ggml_time_ms();
 
                 // Wait for this block's prefetch to complete (if it was prefetched)
@@ -860,12 +859,8 @@ namespace Qwen {
                     return false;
                 }
 
-                // Start async prefetch of the NEXT block while we compute this one
-                // This overlaps memory transfer with GPU computation
-                if (block_idx + 1 < num_layers) {
-                    std::string next_block_name = "transformer_blocks." + std::to_string(block_idx + 1);
-                    streaming_engine_->prefetch_layer(next_block_name);
-                }
+                // Keep the prefetch window full
+                streaming_engine_->advance_prefetch(block_name_at, block_idx, num_layers);
 
                 // Build and execute mini-graph for this block
                 ggml_tensor* img_out = nullptr;

@@ -326,6 +326,28 @@ public:
         return pending_prefetches_.find(layer_name) != pending_prefetches_.end();
     }
 
+    // Prime the prefetch pipeline by kicking off transfers for the first
+    // prefetch_layers blocks starting at start_idx. Call once before the
+    // streaming loop. name_for(i) -> the registry key for block i.
+    void prime_prefetch(const std::function<std::string(int)>& name_for,
+                        int start_idx, int num_blocks) {
+        int n = config_.prefetch_layers > 0 ? config_.prefetch_layers : 1;
+        for (int j = 0; j < n && (start_idx + j) < num_blocks; j++) {
+            prefetch_layer(name_for(start_idx + j));
+        }
+    }
+
+    // After moving block current_idx to GPU, kick off prefetch of the slot
+    // (current_idx + prefetch_layers) so the window stays full.
+    void advance_prefetch(const std::function<std::string(int)>& name_for,
+                          int current_idx, int num_blocks) {
+        int n = config_.prefetch_layers > 0 ? config_.prefetch_layers : 1;
+        int target = current_idx + n;
+        if (target < num_blocks) {
+            prefetch_layer(name_for(target));
+        }
+    }
+
 private:
     bool ensure_layer_loaded(const std::string& layer_name, int current_idx) {
         if (registry_.is_layer_on_gpu(layer_name)) {

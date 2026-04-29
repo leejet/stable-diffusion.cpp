@@ -2205,10 +2205,9 @@ namespace Flux {
             LOG_DEBUG("Input stage done, img=%ldx%ldx%ld, txt=%ldx%ldx%ld",
                       img_ne[0], img_ne[1], img_ne[2], txt_ne[0], txt_ne[1], txt_ne[2]);
 
-            // Start async prefetch for first double block
-            if (num_double_blocks > 0 && streaming_engine_) {
-                std::string first_block = "double_blocks.0";
-                streaming_engine_->prefetch_layer(first_block);
+            auto double_name_at = [](int i) { return "double_blocks." + std::to_string(i); };
+            if (streaming_engine_) {
+                streaming_engine_->prime_prefetch(double_name_at, 0, num_double_blocks);
             }
 
             for (int block_idx = 0; block_idx < num_double_blocks; block_idx++) {
@@ -2218,7 +2217,7 @@ namespace Flux {
                     continue;
                 }
 
-                std::string block_name = "double_blocks." + std::to_string(block_idx);
+                std::string block_name = double_name_at(block_idx);
                 int64_t t_block_start = ggml_time_ms();
 
                 // Wait for this block's prefetch to complete (if async prefetch was started)
@@ -2232,10 +2231,9 @@ namespace Flux {
                     return false;
                 }
 
-                // Start async prefetch of NEXT block while we compute this one
-                if (streaming_engine_ && block_idx + 1 < num_double_blocks) {
-                    std::string next_block = "double_blocks." + std::to_string(block_idx + 1);
-                    streaming_engine_->prefetch_layer(next_block);
+                // Keep the prefetch window full
+                if (streaming_engine_) {
+                    streaming_engine_->advance_prefetch(double_name_at, block_idx, num_double_blocks);
                 }
 
                 ggml_tensor* img_out = nullptr;
@@ -2322,10 +2320,9 @@ namespace Flux {
                 txt_img_ne[3] = 1;
             }
 
-            // Start async prefetch for first single block
-            if (num_single_blocks > 0 && streaming_engine_) {
-                std::string first_block = "single_blocks.0";
-                streaming_engine_->prefetch_layer(first_block);
+            auto single_name_at = [](int i) { return "single_blocks." + std::to_string(i); };
+            if (streaming_engine_) {
+                streaming_engine_->prime_prefetch(single_name_at, 0, num_single_blocks);
             }
 
             for (int block_idx = 0; block_idx < num_single_blocks; block_idx++) {
@@ -2336,7 +2333,7 @@ namespace Flux {
                     continue;
                 }
 
-                std::string block_name = "single_blocks." + std::to_string(block_idx);
+                std::string block_name = single_name_at(block_idx);
                 int64_t t_block_start = ggml_time_ms();
 
                 // Wait for this block's prefetch to complete (if async prefetch was started)
@@ -2350,10 +2347,9 @@ namespace Flux {
                     return false;
                 }
 
-                // Start async prefetch of NEXT block while we compute this one
-                if (streaming_engine_ && block_idx + 1 < num_single_blocks) {
-                    std::string next_block = "single_blocks." + std::to_string(block_idx + 1);
-                    streaming_engine_->prefetch_layer(next_block);
+                // Keep the prefetch window full
+                if (streaming_engine_) {
+                    streaming_engine_->advance_prefetch(single_name_at, block_idx, num_single_blocks);
                 }
 
                 ggml_tensor* txt_img_out = nullptr;
