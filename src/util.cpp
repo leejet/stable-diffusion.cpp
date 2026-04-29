@@ -505,17 +505,7 @@ sd_image_t tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index) 
     int channel   = static_cast<int>(shape[shape.size() == 5 ? 3 : 2]);
     uint8_t* data = (uint8_t*)malloc(static_cast<size_t>(width * height * channel));
     GGML_ASSERT(data != nullptr);
-
-    for (int iw = 0; iw < width; ++iw) {
-        for (int ih = 0; ih < height; ++ih) {
-            for (int ic = 0; ic < channel; ++ic) {
-                float value                            = shape.size() == 5 ? tensor.index(iw, ih, frame_index, ic, 0)
-                                                                           : tensor.index(iw, ih, ic, frame_index);
-                value                                  = std::clamp(value, 0.0f, 1.0f);
-                data[(ih * width + iw) * channel + ic] = static_cast<uint8_t>(std::round(value * 255.0f));
-            }
-        }
-    }
+    preprocessing_tensor_frame_to_sd_image(tensor, frame_index, data);
     return {
         static_cast<uint32_t>(width),
         static_cast<uint32_t>(height),
