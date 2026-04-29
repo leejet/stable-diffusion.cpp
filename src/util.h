@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "ggml-backend.h"
 #include "stable-diffusion.h"
 #include "tensor.hpp"
 
@@ -81,6 +82,10 @@ preview_t sd_get_preview_mode();
 int sd_get_preview_interval();
 bool sd_should_preview_denoised();
 bool sd_should_preview_noisy();
+
+// test if the backend is a specific one, e.g. "CUDA", "ROCm", "Vulkan" etc.
+bool sd_backend_is(ggml_backend_t backend, const std::string& name);
+ggml_backend_t sd_get_default_backend();
 
 #define LOG_DEBUG(format, ...) log_printf(SD_LOG_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define LOG_INFO(format, ...) log_printf(SD_LOG_INFO, __FILE__, __LINE__, format, ##__VA_ARGS__)
