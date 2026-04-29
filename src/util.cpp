@@ -727,12 +727,12 @@ ggml_backend_t sd_get_default_backend() {
             }
         }
     });
-    ggml_backend_t backend = nullptr;
+    ggml_backend_t backend   = nullptr;
     const char* SD_VK_DEVICE = getenv("SD_VK_DEVICE");
     if (SD_VK_DEVICE != nullptr) {
         std::string sd_vk_device_str = SD_VK_DEVICE;
         try {
-            unsigned long long device = std::stoull(sd_vk_device_str);
+            unsigned long long device  = std::stoull(sd_vk_device_str);
             std::string vk_device_name = "Vulkan" + std::to_string(device);
             if (backend_name_exists(vk_device_name)) {
                 LOG_INFO("Selecting %s as main device by env var SD_VK_DEVICE", vk_device_name.c_str());
@@ -752,7 +752,7 @@ ggml_backend_t sd_get_default_backend() {
 
     if (!backend) {
         std::string dev_name = get_default_backend_name();
-        backend = init_named_backend(dev_name);
+        backend              = init_named_backend(dev_name);
         if (!backend && !dev_name.empty()) {
             LOG_WARN("device %s failed to init", dev_name.c_str());
         }

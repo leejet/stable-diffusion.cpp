@@ -2806,7 +2806,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_lokr_forward(
     int vq       = q_actual / uq;
 
     int vp = (w2 != nullptr) ? (is_conv ? (int)w2->ne[3] : (int)w2->ne[1])
-                          : (int)w2a->ne[1];
+                             : (int)w2a->ne[1];
     GGML_ASSERT(q_actual == (uq * vq) && "Input dimension mismatch for LoKR split");
 
     ggml_tensor* hb;
