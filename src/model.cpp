@@ -783,11 +783,16 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
 
         std::unique_ptr<MmapWrapper> mmapped;
         if (enable_mmap && !is_zip) {
-            LOG_DEBUG("using mmap for I/O");
             mmapped = MmapWrapper::create(file_path);
             if (!mmapped) {
-                LOG_WARN("failed to memory-map '%s'", file_path.c_str());
+                LOG_WARN("failed to memory-map '%s' (falling back to read())",
+                         file_path.c_str());
+            } else {
+                LOG_INFO("using mmap for '%s'", file_path.c_str());
             }
+        } else if (!is_zip) {
+            LOG_INFO("NOT using mmap for '%s' (mmap disabled by caller)",
+                     file_path.c_str());
         }
 
         int n_threads = is_zip ? 1 : std::min(num_threads_to_use, (int)file_tensors.size());

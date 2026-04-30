@@ -1010,7 +1010,16 @@ public:
             }
             if (auto_lazy_load && !llm_lazy_map.empty()) {
                 ModelLoader* loader_ptr        = owned_model_loader.get();
-                int          n_threads_capture = sd_ctx_params->n_threads;
+                // Bound lazy-load threads to keep the per-thread staging
+                // buffer footprint small. The default n_threads = nproc gives
+                // ~nproc × max_tensor_bytes (up to several GB total) of
+                // CPU-side staging; for RAM-constrained systems running large
+                // models that's enough to trigger the OOM-killer even with
+                // mmap enabled. 2 threads still keep the disk-read pipeline
+                // fed while keeping staging bounded to ~2 × max_tensor_bytes.
+                int          n_threads_capture = std::min(sd_ctx_params->n_threads > 0
+                                                             ? sd_ctx_params->n_threads : 2,
+                                                          2);
                 bool         mmap_capture      = sd_ctx_params->enable_mmap;
                 cond_stage_model->set_llm_lazy_load([=]() -> bool {
                     auto local_map = llm_lazy_map;
@@ -1029,7 +1038,16 @@ public:
                     dit_lazy_tensor_names.insert(kv.first);
                 }
                 ModelLoader* loader_ptr        = owned_model_loader.get();
-                int          n_threads_capture = sd_ctx_params->n_threads;
+                // Bound lazy-load threads to keep the per-thread staging
+                // buffer footprint small. The default n_threads = nproc gives
+                // ~nproc × max_tensor_bytes (up to several GB total) of
+                // CPU-side staging; for RAM-constrained systems running large
+                // models that's enough to trigger the OOM-killer even with
+                // mmap enabled. 2 threads still keep the disk-read pipeline
+                // fed while keeping staging bounded to ~2 × max_tensor_bytes.
+                int          n_threads_capture = std::min(sd_ctx_params->n_threads > 0
+                                                             ? sd_ctx_params->n_threads : 2,
+                                                          2);
                 bool         mmap_capture      = sd_ctx_params->enable_mmap;
                 diffusion_model->set_lazy_load([=]() -> bool {
                     auto local_map = dit_only_tensors;
