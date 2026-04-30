@@ -230,9 +230,24 @@ typedef struct {
     // When more than one GPU device is present, prefer placing different
     // components on different GPUs to balance load and fit larger total
     // working sets. Set false to keep all components on a single GPU when
-    // they fit. Defaults to true. Each component still lives entirely on
-    // one device — no intra-tensor row split.
+    // they fit. Defaults to true.
     bool auto_multi_gpu;
+
+    // When auto_multi_gpu is true and a single component doesn't fit on
+    // one GPU, the planner can split it across multiple GPUs. Two
+    // mechanisms:
+    //   "row":   matmul weights row-split across CUDA devices via
+    //            cuda_split_buffer_type. Single CUDA backend; no sched.
+    //            Cheaper compute buffer (no cross-backend doubling) but
+    //            CUDA-only. Default.
+    //   "layer": block-indexed tensors assigned to per-block backends
+    //            and routed via ggml_backend_sched. Generic across
+    //            backends but costs ~2x activation memory at boundaries.
+    //   "off":   never split a single component across GPUs. Components
+    //            that don't fit fall back to OFFLOAD or CPU.
+    // The string is parsed by backend_fit::str_to_multi_gpu_mode; if
+    // unrecognized, "row" is used.
+    const char* multi_gpu_mode;
 
     // Suppress per-tensor "unknown tensor 'X' in model file" log lines
     // emitted during model loading. Useful for models like LTX-2 that

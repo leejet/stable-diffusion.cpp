@@ -25,6 +25,9 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml.h"
+#ifdef SD_USE_CUDA
+#include "ggml-cuda.h"
+#endif
 #include "ggml_extend_backend.hpp"
 
 #include "model.h"
@@ -1721,15 +1724,28 @@ struct GGMLRunnerContext {
 // To enable: populate g_pending_multi_backend_spec() with the additional
 // backends + tensor->backend callback, then construct the GGMLRunner. The
 // ctor consumes and clears the pending pointer.
+enum class MultiBackendMode {
+    LAYER_SPLIT,  // assign block-indexed tensors to per-block backends + sched
+    ROW_SPLIT,    // CUDA split-buft: matmul weights row-split across devices
+};
+
 struct MultiBackendSpec {
+    MultiBackendMode mode = MultiBackendMode::LAYER_SPLIT;
+
     // Extra backends *in addition to* the runner's main runtime_backend.
     // The first entry's role is the main backend; we don't list it here.
     std::vector<ggml_backend_t> additional_backends;
 
-    // Maps a weight tensor name to one of the runner's backends (the main
-    // runtime_backend, or one of additional_backends). Returning nullptr
-    // means "use the main runtime_backend".
+    // LAYER_SPLIT: maps a weight tensor name to one of the runner's
+    // backends (the main runtime_backend, or one of additional_backends).
+    // Returning nullptr means "use the main runtime_backend".
     std::function<ggml_backend_t(const std::string& tensor_name)> tensor_backend_fn;
+
+    // ROW_SPLIT (CUDA-only): per-device row split ratios (length = total
+    // CUDA device count) and main device. Empty means use CUDA's default
+    // free-VRAM proportions.
+    std::vector<float> tensor_split_ratios;
+    int                main_device = 0;
 
     // Optional CPU backend appended last to the sched for unsupported-op
     // fallback. May be nullptr.
@@ -1748,17 +1764,25 @@ protected:
     ggml_backend_t params_backend  = nullptr;
     ggml_backend_t runtime_backend = nullptr;
 
-    // --- multi-backend (layer-split) state ---
-    bool                                                            multi_backend_mode = false;
+    // --- multi-backend state (layer-split via sched OR row-split via cuda_split_buft) ---
+    bool                                                            multi_backend_mode    = false;
+    MultiBackendMode                                                multi_backend_kind    = MultiBackendMode::LAYER_SPLIT;
     std::vector<ggml_backend_t>                                     additional_backends;
     ggml_backend_t                                                  cpu_fallback_backend = nullptr;
     bool                                                            owns_cpu_fallback_backend = false;
     std::function<ggml_backend_t(const std::string& tensor_name)>   tensor_backend_fn    = nullptr;
     ggml_backend_sched_t                                            sched                = nullptr;
     bool                                                            sched_reserved       = false;
-    // Per-backend params buffers when multi_backend_mode is on.
-    // params_buffer (single-backend) stays nullptr in this mode.
+    // Per-backend params buffers when LAYER_SPLIT is active. ROW_SPLIT uses
+    // a CUDA split-buft buffer + a regular buffer for non-split tensors,
+    // stored in row_split_buffer + row_main_buffer instead.
     std::vector<ggml_backend_buffer_t>                              multi_params_buffers;
+    // ROW_SPLIT-only state.
+    std::vector<float>                                              row_split_ratios;
+    int                                                             row_main_device     = 0;
+    ggml_backend_buffer_type_t                                      row_split_buft      = nullptr;
+    ggml_backend_buffer_t                                           row_split_buffer    = nullptr;
+    ggml_backend_buffer_t                                           row_main_buffer     = nullptr;
 
     // Lazy load: when set, alloc_params_buffer becomes a no-op; the actual
     // alloc + tensor-data load is deferred until the first compute(). The
@@ -2122,17 +2146,40 @@ public:
 
     GGMLRunner(ggml_backend_t backend, bool offload_params_to_cpu = false)
         : runtime_backend(backend) {
-        // Consume any pending multi-backend (layer-split) spec set by the
-        // caller via g_pending_multi_backend_spec().
+        // Consume any pending multi-backend spec set by the caller via
+        // g_pending_multi_backend_spec().
         MultiBackendSpec* pending = g_pending_multi_backend_spec();
         if (pending != nullptr) {
             g_pending_multi_backend_spec() = nullptr;
             multi_backend_mode             = true;
+            multi_backend_kind             = pending->mode;
             additional_backends            = pending->additional_backends;
             tensor_backend_fn              = pending->tensor_backend_fn;
             cpu_fallback_backend           = pending->cpu_fallback;
-            if (offload_params_to_cpu) {
-                LOG_WARN("multi-backend layer-split is incompatible with "
+            row_split_ratios               = pending->tensor_split_ratios;
+            row_main_device                = pending->main_device;
+#ifdef SD_USE_CUDA
+            if (multi_backend_kind == MultiBackendMode::ROW_SPLIT) {
+                row_split_buft = ggml_backend_cuda_split_buffer_type(
+                    row_main_device,
+                    row_split_ratios.empty() ? nullptr : row_split_ratios.data());
+                if (row_split_buft == nullptr) {
+                    LOG_WARN("multi-backend: cuda split buft init failed; "
+                             "falling back to single-backend mode");
+                    multi_backend_mode = false;
+                    additional_backends.clear();
+                    cpu_fallback_backend = nullptr;
+                }
+            }
+#else
+            if (multi_backend_kind == MultiBackendMode::ROW_SPLIT) {
+                LOG_WARN("multi-backend: row-split requires CUDA; "
+                         "falling back to single-backend mode");
+                multi_backend_mode = false;
+            }
+#endif
+            if (multi_backend_mode && offload_params_to_cpu) {
+                LOG_WARN("multi-backend split is incompatible with "
                          "offload_params_to_cpu; ignoring offload");
                 offload_params_to_cpu = false;
             }
@@ -2315,10 +2362,99 @@ public:
         return true;
     }
 
+    // Heuristic for row-split eligibility: contiguous, rank-2, both dims
+    // >= 256, and NOT a view. 1D biases / norms / embeddings / small
+    // projections / views fall back to the main GPU's regular per-device
+    // buft. Excluding views avoids the cuda split buft's
+    // GGML_ASSERT(view_src == nullptr) — sticking to the buft's documented
+    // contract instead of patching ggml.
+    static bool is_row_split_eligible(const ggml_tensor* t) {
+        if (t->view_src != nullptr) return false;
+        if (!ggml_is_contiguous(t)) return false;
+        if (ggml_n_dims(t) != 2) return false;
+        if (t->ne[0] < 256 || t->ne[1] < 256) return false;
+        return true;
+    }
+
+    bool alloc_params_buffer_row_split() {
+#ifdef SD_USE_CUDA
+        ggml_backend_buffer_type_t main_buft = ggml_backend_get_default_buffer_type(runtime_backend);
+        const size_t main_align  = ggml_backend_buft_get_alignment(main_buft);
+        const size_t split_align = ggml_backend_buft_get_alignment(row_split_buft);
+
+        size_t main_size = 0, split_size = 0;
+        size_t main_count = 0, split_count = 0;
+        for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr;
+             t = ggml_get_next_tensor(params_ctx, t)) {
+            if (is_row_split_eligible(t)) {
+                size_t s = ggml_backend_buft_get_alloc_size(row_split_buft, t);
+                split_size += GGML_PAD(s, split_align);
+                split_count++;
+            } else {
+                size_t s = ggml_backend_buft_get_alloc_size(main_buft, t);
+                main_size += GGML_PAD(s, main_align);
+                main_count++;
+            }
+        }
+
+        if (main_size > 0) {
+            row_main_buffer = ggml_backend_buft_alloc_buffer(main_buft, main_size);
+            if (row_main_buffer == nullptr) {
+                LOG_ERROR("%s row-split main buffer alloc failed (%.1f MB)",
+                          get_desc().c_str(), main_size / (1024.f * 1024.f));
+                return false;
+            }
+        }
+        if (split_size > 0) {
+            row_split_buffer = ggml_backend_buft_alloc_buffer(row_split_buft, split_size);
+            if (row_split_buffer == nullptr) {
+                LOG_ERROR("%s row-split params buffer alloc failed (%.1f MB)",
+                          get_desc().c_str(), split_size / (1024.f * 1024.f));
+                return false;
+            }
+        }
+
+        ggml_tallocr main_alloc{};
+        ggml_tallocr split_alloc{};
+        if (row_main_buffer != nullptr)  main_alloc  = ggml_tallocr_new(row_main_buffer);
+        if (row_split_buffer != nullptr) split_alloc = ggml_tallocr_new(row_split_buffer);
+
+        for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr;
+             t = ggml_get_next_tensor(params_ctx, t)) {
+            ggml_status st = is_row_split_eligible(t)
+                                 ? ggml_tallocr_alloc(&split_alloc, t)
+                                 : ggml_tallocr_alloc(&main_alloc, t);
+            if (st != GGML_STATUS_SUCCESS) {
+                LOG_ERROR("%s row-split tallocr_alloc failed for tensor %s",
+                          get_desc().c_str(), t->name);
+                return false;
+            }
+        }
+
+        if (row_main_buffer != nullptr) {
+            ggml_backend_buffer_set_usage(row_main_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        }
+        if (row_split_buffer != nullptr) {
+            ggml_backend_buffer_set_usage(row_split_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        }
+        LOG_INFO("%s row-split params: main %.1f MB (%zu tensors), split %.1f MB (%zu tensors)",
+                 get_desc().c_str(),
+                 main_size / (1024.f * 1024.f), main_count,
+                 split_size / (1024.f * 1024.f), split_count);
+        return true;
+#else
+        LOG_ERROR("alloc_params_buffer_row_split called without CUDA");
+        return false;
+#endif
+    }
+
     // Internal: always materializes the params buffer. Used by both the
     // eager `alloc_params_buffer` path and the lazy `ensure_params_loaded`
     // path; the latter must bypass the lazy-skip.
     bool do_alloc_params_buffer() {
+        if (multi_backend_mode && multi_backend_kind == MultiBackendMode::ROW_SPLIT) {
+            return alloc_params_buffer_row_split();
+        }
         if (multi_backend_mode) {
             return alloc_params_buffer_layer_split();
         }
@@ -2354,7 +2490,8 @@ public:
     }
 
     bool ensure_params_loaded() {
-        if (params_buffer != nullptr || !multi_params_buffers.empty()) {
+        if (params_buffer != nullptr || !multi_params_buffers.empty() ||
+            row_split_buffer != nullptr || row_main_buffer != nullptr) {
             return true;
         }
         if (!lazy_load_fn) {
@@ -2402,6 +2539,14 @@ public:
             }
         }
         multi_params_buffers.clear();
+        if (row_split_buffer != nullptr) {
+            ggml_backend_buffer_free(row_split_buffer);
+            row_split_buffer = nullptr;
+        }
+        if (row_main_buffer != nullptr) {
+            ggml_backend_buffer_free(row_main_buffer);
+            row_main_buffer = nullptr;
+        }
         if (sched != nullptr) {
             ggml_backend_sched_free(sched);
             sched          = nullptr;
@@ -2417,6 +2562,8 @@ public:
         for (auto* buf : multi_params_buffers) {
             if (buf != nullptr) total += ggml_backend_buffer_get_size(buf);
         }
+        if (row_split_buffer != nullptr) total += ggml_backend_buffer_get_size(row_split_buffer);
+        if (row_main_buffer != nullptr)  total += ggml_backend_buffer_get_size(row_main_buffer);
         return total;
     }
 

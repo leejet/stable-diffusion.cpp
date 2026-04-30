@@ -45,7 +45,8 @@ enum class Placement {
     CPU,
     GPU,
     GPU_OFFLOAD_PARAMS,    // params in RAM, compute on GPU
-    GPU_LAYER_SPLIT,       // params split across multiple GPUs at block boundaries
+    GPU_LAYER_SPLIT,       // params split across multiple GPUs at block boundaries (sched-based)
+    GPU_TENSOR_SPLIT,      // matmul weights row-split across GPUs (CUDA split-buft, single backend)
 };
 
 struct Component {
@@ -93,6 +94,28 @@ struct ComputeReserves {
     int64_t vae_bytes         = int64_t(1024) * MiB;
     int64_t conditioner_bytes = int64_t(512) * MiB;
 };
+
+enum class MultiGpuMode {
+    OFF,    // never split a single component across GPUs
+    ROW,    // CUDA-only: row-split matmul weights via cuda_split_buffer_type
+    LAYER,  // generic: assign block-indexed tensors to per-block backends + sched
+};
+
+inline const char* multi_gpu_mode_str(MultiGpuMode m) {
+    switch (m) {
+        case MultiGpuMode::OFF:   return "off";
+        case MultiGpuMode::ROW:   return "row";
+        case MultiGpuMode::LAYER: return "layer";
+    }
+    return "?";
+}
+
+inline MultiGpuMode str_to_multi_gpu_mode(const std::string& s) {
+    if (s == "off")   return MultiGpuMode::OFF;
+    if (s == "row")   return MultiGpuMode::ROW;
+    if (s == "layer") return MultiGpuMode::LAYER;
+    return MultiGpuMode::ROW;  // default
+}
 
 // --- Classification -------------------------------------------------------
 
@@ -231,6 +254,34 @@ inline int64_t gpu_peak(int                           gpu_idx,
         if (pl[i] == Placement::GPU || pl[i] == Placement::GPU_OFFLOAD_PARAMS) {
             if (dev[i] != gpu_idx) continue;
             footprint = components[i].params_bytes + components[i].compute_bytes;
+        } else if (pl[i] == Placement::GPU_TENSOR_SPLIT) {
+            // Row-split: every GPU in the mask gets a free-VRAM-weighted
+            // share of params; the compute reserve lands on the BIGGEST
+            // GPU (which becomes the runner's main backend).
+            const int mask = dev[i];
+            if (!(mask & (1 << gpu_idx))) continue;
+            std::vector<size_t> gpu_idxs;
+            for (size_t k = 0; k < devices.size(); k++) {
+                if (mask & (1 << k)) gpu_idxs.push_back(k);
+            }
+            int slot = -1;
+            int biggest_slot = 0;
+            int64_t biggest_mem = -1;
+            for (size_t k = 0; k < gpu_idxs.size(); k++) {
+                if (int(gpu_idxs[k]) == gpu_idx) slot = int(k);
+                if (devices[gpu_idxs[k]].total_bytes > biggest_mem) {
+                    biggest_mem  = devices[gpu_idxs[k]].total_bytes;
+                    biggest_slot = int(k);
+                }
+            }
+            if (slot < 0) continue;
+            auto shares = layer_split_shares(components[i].params_bytes,
+                                             /*compute_bytes=*/0,
+                                             devices, gpu_idxs);
+            footprint = shares[slot];
+            if (slot == biggest_slot) {
+                footprint += components[i].compute_bytes;
+            }
         } else if (pl[i] == Placement::GPU_LAYER_SPLIT) {
             // dev[i] holds the bitmask of participating GPU indices into the
             // devices[] vector (encoded by the planner). Look up our slot.
@@ -258,9 +309,13 @@ inline int64_t gpu_peak(int                           gpu_idx,
 inline Plan compute_plan(const std::vector<Component>& components,
                          const std::vector<Device>&    devices,
                          int64_t                       margin_bytes,
-                         bool                          allow_multi_gpu = true) {
+                         bool                          allow_multi_gpu = true,
+                         MultiGpuMode                  mode = MultiGpuMode::ROW) {
     const size_t nC = components.size();
     const size_t nG = devices.size();
+    if (!allow_multi_gpu) {
+        mode = MultiGpuMode::OFF;
+    }
 
     std::vector<int64_t> cap(nG, 0);
     for (size_t g = 0; g < nG; g++) {
@@ -287,9 +342,15 @@ inline Plan compute_plan(const std::vector<Component>& components,
                 opts.push_back({Placement::GPU_OFFLOAD_PARAMS, int(g)});
             }
         }
-        // Layer-split: enumerate non-trivial subsets of GPUs (size >= 2).
-        // Encode the participating set as a bitmask in device_idx.
-        if (allow_multi_gpu && nG >= 2 && supports_layer_split(c.kind)) {
+        // Multi-GPU split: one option type per mode. Encoded as a bitmask
+        // of participating GPUs in device_idx.
+        if (mode == MultiGpuMode::ROW && nG >= 2 && supports_layer_split(c.kind)) {
+            // Row-split spans all GPUs; single option with all bits set.
+            int all_mask = (1 << nG) - 1;
+            opts.push_back({Placement::GPU_TENSOR_SPLIT, all_mask});
+        }
+        if (mode == MultiGpuMode::LAYER && nG >= 2 && supports_layer_split(c.kind)) {
+            // Layer-split: enumerate non-trivial subsets (size >= 2).
             const int max_mask = 1 << nG;
             for (int mask = 1; mask < max_mask; mask++) {
                 if (__builtin_popcount(mask) < 2) continue;
@@ -326,6 +387,15 @@ inline Plan compute_plan(const std::vector<Component>& components,
             } else if (pl[i] == Placement::GPU_OFFLOAD_PARAMS) {
                 s += 5 * pw;
                 gpus_used.insert(dev[i]);
+            } else if (pl[i] == Placement::GPU_TENSOR_SPLIT) {
+                // Row-split: cheaper than layer-split (no sched cross-
+                // backend doubling) but pays per-matmul cross-device
+                // reductions. Score it slightly above LAYER_SPLIT so the
+                // planner prefers it when both fit.
+                s += 8 * pw;
+                for (size_t g = 0; g < nG; g++) {
+                    if (dev[i] & (1 << g)) gpus_used.insert(int(g));
+                }
             } else if (pl[i] == Placement::GPU_LAYER_SPLIT) {
                 // Better than CPU but worse than fitting on a single GPU
                 // (cross-GPU traffic between blocks).
@@ -418,6 +488,36 @@ inline Plan compute_plan(const std::vector<Component>& components,
             d.device_id      = DEVICE_ID_CPU;
             d.on_host_bytes  = c.params_bytes + c.compute_bytes;
             plan.any_changes = true;
+        } else if (best_pl[i] == Placement::GPU_TENSOR_SPLIT) {
+            std::vector<size_t> gpu_idxs;
+            for (size_t k = 0; k < nG; k++) {
+                if (best_dev[i] & (1 << k)) gpu_idxs.push_back(k);
+            }
+            auto shares = layer_split_shares(c.params_bytes, /*compute_bytes=*/0,
+                                             devices, gpu_idxs);
+            // Sort participating GPUs by descending TOTAL memory so the
+            // largest device is the "main" (gets the row-split's compute
+            // buffer + sub-runners that don't get their own spec). This
+            // matches the user's preference: always use the bigger GPU
+            // as main for splits.
+            std::vector<size_t> order(gpu_idxs.size());
+            std::iota(order.begin(), order.end(), 0);
+            std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+                return devices[gpu_idxs[a]].total_bytes > devices[gpu_idxs[b]].total_bytes;
+            });
+
+            int64_t max_share = 0;
+            for (size_t pos = 0; pos < order.size(); pos++) {
+                size_t k = order[pos];
+                d.split_device_ids.push_back(devices[gpu_idxs[k]].id);
+                int64_t share = shares[k];
+                if (pos == 0) share += c.compute_bytes;  // main (= biggest) gets compute
+                d.split_share_bytes.push_back(share);
+                max_share = std::max(max_share, share);
+            }
+            d.device_id        = d.split_device_ids.empty() ? DEVICE_ID_CPU : d.split_device_ids[0];
+            d.on_device_bytes  = max_share;
+            plan.any_changes   = true;
         } else if (best_pl[i] == Placement::GPU_LAYER_SPLIT) {
             std::vector<size_t> gpu_idxs;
             for (size_t k = 0; k < nG; k++) {
@@ -425,15 +525,15 @@ inline Plan compute_plan(const std::vector<Component>& components,
             }
             auto shares = layer_split_shares(c.params_bytes, c.compute_bytes,
                                              devices, gpu_idxs);
-            // Sort participating GPUs by descending share so the LARGEST-share
-            // GPU is listed first. Sub-runners that don't get the layer-split
-            // spec (e.g. the LTX-2 text projection) follow the "main" backend
-            // (= first in this list) — putting the biggest one first keeps
-            // them on the GPU with most headroom.
+            // Sort participating GPUs by descending TOTAL memory so the
+            // physically bigger GPU is listed first (and becomes the runner's
+            // main backend). Sub-runners that don't get the layer-split spec
+            // (e.g. the LTX-2 text projection) follow the main backend.
             std::vector<size_t> order(gpu_idxs.size());
             std::iota(order.begin(), order.end(), 0);
-            std::sort(order.begin(), order.end(),
-                      [&](size_t a, size_t b) { return shares[a] > shares[b]; });
+            std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+                return devices[gpu_idxs[a]].total_bytes > devices[gpu_idxs[b]].total_bytes;
+            });
 
             int64_t max_share = 0;
             for (size_t pos = 0; pos < order.size(); pos++) {
@@ -471,6 +571,7 @@ inline const char* placement_str(Placement p) {
         case Placement::GPU: return "GPU";
         case Placement::GPU_OFFLOAD_PARAMS: return "GPU(params->RAM)";
         case Placement::GPU_LAYER_SPLIT: return "GPU(layer-split)";
+        case Placement::GPU_TENSOR_SPLIT: return "GPU(row-split)";
     }
     return "?";
 }
@@ -506,15 +607,17 @@ inline void print_plan(const Plan&                   plan,
             LOG_INFO("    %-12s -> GPU %d              (VRAM %lld MiB)",
                      d.name.c_str(), d.device_id,
                      (long long)(d.on_device_bytes / MiB));
-        } else if (d.placement == Placement::GPU_LAYER_SPLIT) {
+        } else if (d.placement == Placement::GPU_LAYER_SPLIT ||
+                   d.placement == Placement::GPU_TENSOR_SPLIT) {
             std::string ids;
+            const char* tag = d.placement == Placement::GPU_TENSOR_SPLIT ? "row" : "layer";
             for (size_t k = 0; k < d.split_device_ids.size(); k++) {
                 if (k > 0) ids += "+";
                 ids += "GPU" + std::to_string(d.split_device_ids[k]);
                 ids += "(" + std::to_string(d.split_share_bytes[k] / MiB) + "MiB)";
             }
-            LOG_INFO("    %-12s -> %s",
-                     d.name.c_str(), ids.c_str());
+            LOG_INFO("    %-12s -> %s-split %s",
+                     d.name.c_str(), tag, ids.c_str());
         } else {
             LOG_INFO("    %-12s -> GPU %d (params RAM) (VRAM %lld MiB, RAM %lld MiB)",
                      d.name.c_str(), d.device_id,

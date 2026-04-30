@@ -143,6 +143,9 @@ struct SDContextParams {
     int  auto_fit_compute_reserve_vae_mb  = 0;
     int  auto_fit_compute_reserve_cond_mb = 0;
     bool auto_multi_gpu                   = true;
+    // "row" (default), "layer", or "off". Selects the multi-GPU split
+    // mechanism the auto-fit planner is allowed to emit.
+    std::string multi_gpu_mode            = "row";
 
     // When set, the model loader skips per-tensor "unknown tensor" log
     // lines and instead emits a single summary count at the end of load.

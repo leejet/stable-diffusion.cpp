@@ -127,16 +127,20 @@ public:
     bool fit_cond_offload_params = false;
     bool fit_vae_offload_params  = false;
 
-    // Layer-split state (when auto-fit picks GPU_LAYER_SPLIT). Holds the
-    // ordered list of device names and per-device share bytes; the actual
-    // backend handles are init'd at construction time and stored in
-    // *_extra_backends so the destructor can free them.
+    // Multi-GPU split state (LAYER_SPLIT or ROW_SPLIT). Holds the ordered
+    // list of device names and per-device share bytes; the actual backend
+    // handles are init'd at construction time and stored in *_extra_backends
+    // so the destructor can free them. fit_*_row_split=true means use the
+    // CUDA row-split path (matmul weights split row-wise via cuda_split_buft);
+    // false means layer-split (per-block backend assignment via sched).
     std::vector<std::string>    fit_dit_split_device_names;
     std::vector<int64_t>        fit_dit_split_share_bytes;
     std::vector<ggml_backend_t> fit_dit_extra_backends;
+    bool                        fit_dit_row_split  = false;
     std::vector<std::string>    fit_cond_split_device_names;
     std::vector<int64_t>        fit_cond_split_share_bytes;
     std::vector<ggml_backend_t> fit_cond_extra_backends;
+    bool                        fit_cond_row_split = false;
 
     // Owned model loader: kept alive across init() so lazy_load callbacks
     // can re-read tensor data from disk on demand. Only set when at least
@@ -410,8 +414,11 @@ public:
             auto    devices = backend_fit::enumerate_gpu_devices();
             int64_t margin_bytes =
                 int64_t(std::max(0, sd_ctx_params->auto_fit_target_mb)) * backend_fit::MiB;
+            backend_fit::MultiGpuMode mode = backend_fit::str_to_multi_gpu_mode(
+                SAFE_STR(sd_ctx_params->multi_gpu_mode));
             auto plan = backend_fit::compute_plan(
-                components, devices, margin_bytes, sd_ctx_params->auto_multi_gpu);
+                components, devices, margin_bytes,
+                sd_ctx_params->auto_multi_gpu, mode);
             backend_fit::print_plan(plan, components, devices, margin_bytes);
 
             if (sd_ctx_params->auto_fit_dry_run) {
@@ -439,9 +446,11 @@ public:
                                std::string&                  out_device,
                                bool&                         out_offload,
                                std::vector<std::string>&     out_split_devices,
-                               std::vector<int64_t>&         out_split_shares) {
+                               std::vector<int64_t>&         out_split_shares,
+                               bool&                         out_row_split) {
                 out_split_devices.clear();
                 out_split_shares.clear();
+                out_row_split = false;
                 if (d == nullptr) {
                     out_device.clear();
                     out_offload = false;
@@ -452,7 +461,8 @@ public:
                     out_offload = false;
                     return;
                 }
-                if (d->placement == backend_fit::Placement::GPU_LAYER_SPLIT) {
+                if (d->placement == backend_fit::Placement::GPU_LAYER_SPLIT ||
+                    d->placement == backend_fit::Placement::GPU_TENSOR_SPLIT) {
                     // Primary device drives main_backend choice for the model;
                     // the rest become additional backends in the spec.
                     for (size_t k = 0; k < d->split_device_ids.size(); k++) {
@@ -461,6 +471,7 @@ public:
                     }
                     if (!out_split_devices.empty()) out_device = out_split_devices[0];
                     out_offload = false;
+                    out_row_split = (d->placement == backend_fit::Placement::GPU_TENSOR_SPLIT);
                     return;
                 }
                 out_device  = device_id_to_name(d->device_id);
@@ -468,14 +479,18 @@ public:
             };
             std::vector<std::string> dummy_devs;
             std::vector<int64_t>     dummy_shares;
+            bool                     dummy_row_split = false;
             resolve(backend_fit::find_decision(plan, backend_fit::ComponentKind::DIT),
                     fit_diffusion_device, fit_dit_offload_params,
-                    fit_dit_split_device_names, fit_dit_split_share_bytes);
+                    fit_dit_split_device_names, fit_dit_split_share_bytes,
+                    fit_dit_row_split);
             resolve(backend_fit::find_decision(plan, backend_fit::ComponentKind::VAE),
-                    fit_vae_device, fit_vae_offload_params, dummy_devs, dummy_shares);
+                    fit_vae_device, fit_vae_offload_params, dummy_devs, dummy_shares,
+                    dummy_row_split);
             resolve(backend_fit::find_decision(plan, backend_fit::ComponentKind::CONDITIONER),
                     fit_clip_device, fit_cond_offload_params,
-                    fit_cond_split_device_names, fit_cond_split_share_bytes);
+                    fit_cond_split_device_names, fit_cond_split_share_bytes,
+                    fit_cond_row_split);
 
             // CPU placements: leave fit_*_device empty AND remember they're
             // CPU so the resolver below picks ggml_backend_cpu_init().
@@ -488,7 +503,8 @@ public:
             std::map<int, int64_t> sum_per_device;
             auto add_sum = [&](const backend_fit::Decision* d) {
                 if (!d) return;
-                if (d->placement == backend_fit::Placement::GPU_LAYER_SPLIT) {
+                if (d->placement == backend_fit::Placement::GPU_LAYER_SPLIT ||
+                    d->placement == backend_fit::Placement::GPU_TENSOR_SPLIT) {
                     for (size_t k = 0; k < d->split_device_ids.size(); k++) {
                         sum_per_device[d->split_device_ids[k]] += d->split_share_bytes[k];
                     }
@@ -584,6 +600,84 @@ public:
                                                           sd_ctx_params->clip_backend_device);
         const char* vae_dev_name       = effective_device(fit_vae_device,
                                                           sd_ctx_params->vae_backend_device);
+
+        // Build the row-split MultiBackendSpec for a component (ROW_SPLIT
+        // mode). Unlike layer-split, the runner uses a SINGLE CUDA backend;
+        // matmul weights are row-split across all CUDA devices internally
+        // by cuda_split_buffer_type. extra_backends stays empty.
+        // - share_devices/share_bytes: per-device share order from auto-fit
+        //   (largest first by descending share). The first device is the
+        //   "main" CUDA device, where the compute buffer lives.
+        // Returns true on success; populates out_spec.tensor_split_ratios
+        // with a vector of length total CUDA device count.
+        auto prepare_row_split_spec = [&](const std::vector<std::string>&     share_devices,
+                                          const std::vector<int64_t>&         share_bytes,
+                                          std::vector<ggml_backend_t>&        out_extra_backends,
+                                          MultiBackendSpec&                   out_spec) -> bool {
+#ifdef SD_USE_CUDA
+            const int cuda_count = ggml_backend_cuda_get_device_count();
+            if (cuda_count <= 0 || share_devices.size() < 2) return false;
+
+            // Map device names like "CUDA0" -> 0, "CUDA1" -> 1, ...
+            auto cuda_index_of = [](const std::string& name) -> int {
+                if (name.rfind("CUDA", 0) != 0) return -1;
+                try { return std::stoi(name.substr(4)); } catch (...) { return -1; }
+            };
+
+            std::vector<float> ratios(cuda_count, 0.0f);
+            int64_t total = 0;
+            for (auto b : share_bytes) total += b;
+            if (total <= 0) return false;
+            int main_dev = -1;
+            int64_t max_share = -1;
+            for (size_t k = 0; k < share_devices.size(); k++) {
+                int idx = cuda_index_of(share_devices[k]);
+                if (idx < 0 || idx >= cuda_count) continue;
+                ratios[idx] = float(double(share_bytes[k]) / double(total));
+                if (share_bytes[k] > max_share) {
+                    max_share = share_bytes[k];
+                    main_dev  = idx;
+                }
+            }
+            if (main_dev < 0) return false;
+
+            // Init extra CUDA backends for the non-main devices so sched
+            // can route ops across them (row-split tensors are dispatched
+            // by the CUDA backend; ggml-sched still needs all participating
+            // backends in its list to schedule cross-device copies).
+            for (size_t k = 0; k < share_devices.size(); k++) {
+                int idx = cuda_index_of(share_devices[k]);
+                if (idx == main_dev || idx < 0) continue;
+                ggml_backend_t b = init_named_backend(share_devices[k]);
+                if (b != nullptr) {
+                    out_extra_backends.push_back(b);
+                } else {
+                    LOG_WARN("row-split: failed to init backend %s",
+                             share_devices[k].c_str());
+                }
+            }
+            out_spec.mode                = MultiBackendMode::ROW_SPLIT;
+            out_spec.tensor_split_ratios = ratios;
+            out_spec.main_device         = main_dev;
+            out_spec.additional_backends.assign(out_extra_backends.begin(),
+                                                out_extra_backends.end());
+            out_spec.tensor_backend_fn   = nullptr;
+            out_spec.cpu_fallback        = nullptr;
+
+            std::string ratio_str;
+            for (int i = 0; i < cuda_count; i++) {
+                if (i > 0) ratio_str += ",";
+                char buf[16]; std::snprintf(buf, sizeof(buf), "%.2f", ratios[i]);
+                ratio_str += buf;
+            }
+            LOG_INFO("row-split spec: ratios=[%s] main_device=%d",
+                     ratio_str.c_str(), main_dev);
+            return true;
+#else
+            (void)share_devices; (void)share_bytes; (void)out_spec;
+            return false;
+#endif
+        };
 
         // Build the layer-split MultiBackendSpec for a component. Only used
         // when auto-fit picked GPU_LAYER_SPLIT for this component.
@@ -750,12 +844,19 @@ public:
         MultiBackendSpec dit_spec;
         bool             dit_spec_active = false;
         if (!fit_dit_split_device_names.empty()) {
-            dit_spec_active = prepare_layer_split_spec(diffusion_backend,
-                                                       fit_dit_split_device_names,
-                                                       fit_dit_split_share_bytes,
-                                                       "model.diffusion_model.",
-                                                       fit_dit_extra_backends,
-                                                       dit_spec);
+            if (fit_dit_row_split) {
+                dit_spec_active = prepare_row_split_spec(fit_dit_split_device_names,
+                                                         fit_dit_split_share_bytes,
+                                                         fit_dit_extra_backends,
+                                                         dit_spec);
+            } else {
+                dit_spec_active = prepare_layer_split_spec(diffusion_backend,
+                                                           fit_dit_split_device_names,
+                                                           fit_dit_split_share_bytes,
+                                                           "model.diffusion_model.",
+                                                           fit_dit_extra_backends,
+                                                           dit_spec);
+            }
         }
         // Lambda to set the pending spec immediately before constructing the
         // diffusion model. Caller must invoke this on the same line / right
@@ -799,14 +900,21 @@ public:
                 LOG_INFO("CLIP: using device %s", clip_dev_name);
             }
             // Now that clip_backend is resolved, build the conditioner's
-            // layer-split spec if auto-fit picked it.
+            // multi-GPU spec if auto-fit picked one (row-split or layer-split).
             if (!fit_cond_split_device_names.empty()) {
-                cond_spec_active = prepare_layer_split_spec(clip_backend,
-                                                            fit_cond_split_device_names,
-                                                            fit_cond_split_share_bytes,
-                                                            "text_encoders.",  // covers text_encoders.llm.* and text_encoders.t5xxl.*
-                                                            fit_cond_extra_backends,
-                                                            cond_spec);
+                if (fit_cond_row_split) {
+                    cond_spec_active = prepare_row_split_spec(fit_cond_split_device_names,
+                                                              fit_cond_split_share_bytes,
+                                                              fit_cond_extra_backends,
+                                                              cond_spec);
+                } else {
+                    cond_spec_active = prepare_layer_split_spec(clip_backend,
+                                                                fit_cond_split_device_names,
+                                                                fit_cond_split_share_bytes,
+                                                                "text_encoders.",
+                                                                fit_cond_extra_backends,
+                                                                cond_spec);
+                }
             }
             if (sd_version_is_sd3(version)) {
                 prime_cond_spec();
@@ -2701,6 +2809,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->auto_fit_compute_reserve_vae_mb  = 0;
     sd_ctx_params->auto_fit_compute_reserve_cond_mb = 0;
     sd_ctx_params->auto_multi_gpu               = true;
+    sd_ctx_params->multi_gpu_mode               = "row";
     sd_ctx_params->quiet_unknown_tensors        = false;
 }
 
@@ -2749,6 +2858,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "auto_fit_compute_reserve_vae_mb: %d\n"
              "auto_fit_compute_reserve_cond_mb: %d\n"
              "auto_multi_gpu: %s\n"
+             "multi_gpu_mode: %s\n"
              "quiet_unknown_tensors: %s\n"
              "flash_attn: %s\n"
              "diffusion_flash_attn: %s\n"
@@ -2795,6 +2905,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              sd_ctx_params->auto_fit_compute_reserve_vae_mb,
              sd_ctx_params->auto_fit_compute_reserve_cond_mb,
              BOOL_STR(sd_ctx_params->auto_multi_gpu),
+             SAFE_STR(sd_ctx_params->multi_gpu_mode),
              BOOL_STR(sd_ctx_params->quiet_unknown_tensors),
              BOOL_STR(sd_ctx_params->flash_attn),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),

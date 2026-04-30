@@ -420,6 +420,14 @@ ArgOptions SDContextParams::get_options() {
          "--vision-backend-device",
          "ggml device name for the vision model (currently routed through main).",
          &vision_backend_device},
+        {"",
+         "--multi-gpu-mode",
+         "auto-fit multi-GPU split mechanism: 'row' (default; CUDA-only "
+         "row-split via cuda_split_buffer_type, single backend, smaller "
+         "compute buffer), 'layer' (block-indexed tensors split across "
+         "per-block backends + sched, generic but ~2x activation cost at "
+         "boundaries), or 'off' (never split a single component)",
+         &multi_gpu_mode},
     };
 
     options.int_options = {
@@ -762,6 +770,7 @@ std::string SDContextParams::to_string() const {
         << "  auto_fit_target_mb: " << auto_fit_target_mb << ",\n"
         << "  auto_fit_dry_run: " << (auto_fit_dry_run ? "true" : "false") << ",\n"
         << "  auto_multi_gpu: " << (auto_multi_gpu ? "true" : "false") << ",\n"
+        << "  multi_gpu_mode: \"" << multi_gpu_mode << "\",\n"
         << "  quiet_unknown_tensors: " << (quiet_unknown_tensors ? "true" : "false") << ",\n"
         << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
@@ -846,6 +855,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         auto_fit_compute_reserve_vae_mb,
         auto_fit_compute_reserve_cond_mb,
         auto_multi_gpu,
+        multi_gpu_mode.empty() ? nullptr : multi_gpu_mode.c_str(),
         quiet_unknown_tensors,
     };
     return sd_ctx_params;
