@@ -1,5 +1,6 @@
 #include "ggml_extend.hpp"
 
+#include "backend_fit.hpp"
 #include "model.h"
 #include "rng.hpp"
 #include "rng_mt19937.hpp"
@@ -108,10 +109,23 @@ static float get_cache_reuse_threshold(const sd_cache_params_t& params) {
 
 class StableDiffusionGGML {
 public:
-    ggml_backend_t backend             = nullptr;  // general backend
+    ggml_backend_t backend             = nullptr;  // general / main backend
     ggml_backend_t clip_backend        = nullptr;
     ggml_backend_t control_net_backend = nullptr;
     ggml_backend_t vae_backend         = nullptr;
+    ggml_backend_t diffusion_backend   = nullptr;
+
+    // Auto-fit decisions resolved into device-name strings. When non-empty,
+    // these win over the user-provided sd_ctx_params->*_backend_device.
+    // When empty, the explicit param (or `backend` fallback) is used.
+    std::string fit_diffusion_device;
+    std::string fit_clip_device;
+    std::string fit_vae_device;
+    // Per-component offload-params override coming from auto-fit. Forces
+    // offload_params_to_cpu for that component even when global flag is off.
+    bool fit_dit_offload_params  = false;
+    bool fit_cond_offload_params = false;
+    bool fit_vae_offload_params  = false;
 
     SDVersion version;
     bool vae_decode_only         = false;
@@ -168,11 +182,23 @@ public:
         if (vae_backend != backend) {
             ggml_backend_free(vae_backend);
         }
+        if (diffusion_backend != backend) {
+            ggml_backend_free(diffusion_backend);
+        }
         ggml_backend_free(backend);
     }
 
-    void init_backend() {
-        backend = sd_get_default_backend();
+    void init_backend(const char* main_device_name) {
+        if (main_device_name != nullptr && main_device_name[0] != '\0') {
+            backend = init_named_backend(main_device_name);
+            if (backend == nullptr) {
+                LOG_WARN("main backend device '%s' init failed; falling back to default",
+                         main_device_name);
+            }
+        }
+        if (backend == nullptr) {
+            backend = sd_get_default_backend();
+        }
     }
 
     std::shared_ptr<RNG> get_rng(rng_type_t rng_type) {
@@ -202,7 +228,7 @@ public:
 
         ggml_log_set(ggml_log_callback_default, nullptr);
 
-        init_backend();
+        init_backend(sd_ctx_params->main_backend_device);
 
         ModelLoader model_loader;
 
@@ -328,6 +354,75 @@ public:
             return oss.str();
         };
 
+        if (sd_ctx_params->auto_fit) {
+            backend_fit::ComputeReserves reserves;
+            if (sd_ctx_params->auto_fit_compute_reserve_dit_mb > 0) {
+                reserves.dit_bytes =
+                    int64_t(sd_ctx_params->auto_fit_compute_reserve_dit_mb) * backend_fit::MiB;
+            }
+            if (sd_ctx_params->auto_fit_compute_reserve_vae_mb > 0) {
+                reserves.vae_bytes =
+                    int64_t(sd_ctx_params->auto_fit_compute_reserve_vae_mb) * backend_fit::MiB;
+            }
+            if (sd_ctx_params->auto_fit_compute_reserve_cond_mb > 0) {
+                reserves.conditioner_bytes =
+                    int64_t(sd_ctx_params->auto_fit_compute_reserve_cond_mb) * backend_fit::MiB;
+            }
+            auto components = backend_fit::estimate_components(
+                model_loader, wtype, /*alignment=*/64, reserves);
+            auto    devices = backend_fit::enumerate_gpu_devices();
+            int64_t margin_bytes =
+                int64_t(std::max(0, sd_ctx_params->auto_fit_target_mb)) * backend_fit::MiB;
+            auto plan = backend_fit::compute_plan(
+                components, devices, margin_bytes, sd_ctx_params->auto_multi_gpu);
+            backend_fit::print_plan(plan, components, devices, margin_bytes);
+
+            if (sd_ctx_params->auto_fit_dry_run) {
+                LOG_INFO("auto-fit: --fit-dry-run set, aborting init before loading models");
+                return false;
+            }
+
+            // Find the CPU device's ggml name (so we can route "CPU"
+            // placements through init_named_backend uniformly).
+            std::string cpu_device_name;
+            for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                    cpu_device_name = ggml_backend_dev_name(dev);
+                    break;
+                }
+            }
+            auto resolve = [&](const backend_fit::Decision* d, std::string& out_device,
+                               bool& out_offload) {
+                if (d == nullptr) {
+                    out_device.clear();
+                    out_offload = false;
+                    return;
+                }
+                if (d->placement == backend_fit::Placement::CPU) {
+                    out_device = cpu_device_name;
+                    out_offload = false;
+                    return;
+                }
+                for (const auto& dev : devices) {
+                    if (dev.id == d->device_id) {
+                        out_device = dev.name;
+                        break;
+                    }
+                }
+                out_offload = (d->placement == backend_fit::Placement::GPU_OFFLOAD_PARAMS);
+            };
+            resolve(backend_fit::find_decision(plan, backend_fit::ComponentKind::DIT),
+                    fit_diffusion_device, fit_dit_offload_params);
+            resolve(backend_fit::find_decision(plan, backend_fit::ComponentKind::VAE),
+                    fit_vae_device, fit_vae_offload_params);
+            resolve(backend_fit::find_decision(plan, backend_fit::ComponentKind::CONDITIONER),
+                    fit_clip_device, fit_cond_offload_params);
+
+            // CPU placements: leave fit_*_device empty AND remember they're
+            // CPU so the resolver below picks ggml_backend_cpu_init().
+        }
+
         LOG_INFO("Weight type stat:                 %s", wtype_stat_to_str(wtype_stat).c_str());
         LOG_INFO("Conditioner weight type stat:     %s", wtype_stat_to_str(conditioner_wtype_stat).c_str());
         LOG_INFO("Diffusion model weight type stat: %s", wtype_stat_to_str(diffusion_model_wtype_stat).c_str());
@@ -373,19 +468,57 @@ public:
             LOG_INFO("Using circular padding for convolutions");
         }
 
-        bool clip_on_cpu = sd_ctx_params->keep_clip_on_cpu;
+        // If auto-fit decided ANY component must offload params, force the
+        // global flag on. This is a coarsening: one component needing offload
+        // forces all to offload (safer, just slower for non-offload ones).
+        if (fit_dit_offload_params || fit_cond_offload_params || fit_vae_offload_params) {
+            if (!offload_params_to_cpu) {
+                LOG_INFO("auto-fit: enabling offload_params_to_cpu (one or more "
+                         "components don't fit without param streaming)");
+                offload_params_to_cpu = true;
+            }
+        }
+
+        // Pick the effective device name for each component: the auto-fit
+        // override (if any) wins; otherwise the user-provided string; nullptr
+        // falls back to `backend` (the main).
+        auto effective_device = [&](const std::string& fit_str, const char* user_str) -> const char* {
+            if (!fit_str.empty()) return fit_str.c_str();
+            return user_str;
+        };
+        const char* diffusion_dev_name = effective_device(fit_diffusion_device,
+                                                          sd_ctx_params->diffusion_backend_device);
+        const char* clip_dev_name      = effective_device(fit_clip_device,
+                                                          sd_ctx_params->clip_backend_device);
+        const char* vae_dev_name       = effective_device(fit_vae_device,
+                                                          sd_ctx_params->vae_backend_device);
+
+        // Helper: init a named backend if name is non-null/non-empty,
+        // returns nullptr on missing/failed name (caller falls back to main).
+        auto init_named_or_null = [](const char* name) -> ggml_backend_t {
+            if (name == nullptr || name[0] == '\0') return nullptr;
+            return init_named_backend(name);
+        };
+
+        diffusion_backend = init_named_or_null(diffusion_dev_name);
+        if (!diffusion_backend) {
+            diffusion_backend = backend;
+        } else {
+            LOG_INFO("Diffusion model: using device %s", diffusion_dev_name);
+        }
 
         {
-            clip_backend = backend;
-            if (clip_on_cpu && !ggml_backend_is_cpu(backend)) {
-                LOG_INFO("CLIP: Using CPU backend");
-                clip_backend = ggml_backend_cpu_init();
+            clip_backend = init_named_or_null(clip_dev_name);
+            if (!clip_backend) {
+                clip_backend = backend;
+            } else {
+                LOG_INFO("CLIP: using device %s", clip_dev_name);
             }
             if (sd_version_is_sd3(version)) {
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend,
                                                                      offload_params_to_cpu,
                                                                      tensor_storage_map);
-                diffusion_model  = std::make_shared<MMDiTModel>(backend,
+                diffusion_model  = std::make_shared<MMDiTModel>(diffusion_backend,
                                                                offload_params_to_cpu,
                                                                tensor_storage_map);
             } else if (sd_version_is_flux(version)) {
@@ -423,7 +556,7 @@ public:
                                                                           offload_params_to_cpu,
                                                                           tensor_storage_map);
                 }
-                diffusion_model = std::make_shared<FluxModel>(backend,
+                diffusion_model = std::make_shared<FluxModel>(diffusion_backend,
                                                               offload_params_to_cpu,
                                                               tensor_storage_map,
                                                               version,
@@ -434,7 +567,7 @@ public:
                                                                  offload_params_to_cpu,
                                                                  tensor_storage_map,
                                                                  version);
-                diffusion_model  = std::make_shared<FluxModel>(backend,
+                diffusion_model  = std::make_shared<FluxModel>(diffusion_backend,
                                                               offload_params_to_cpu,
                                                               tensor_storage_map,
                                                               version,
@@ -446,13 +579,13 @@ public:
                                                                     true,
                                                                     0,
                                                                     true);
-                diffusion_model  = std::make_shared<WanModel>(backend,
+                diffusion_model  = std::make_shared<WanModel>(diffusion_backend,
                                                              offload_params_to_cpu,
                                                              tensor_storage_map,
                                                              "model.diffusion_model",
                                                              version);
                 if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
-                    high_noise_diffusion_model = std::make_shared<WanModel>(backend,
+                    high_noise_diffusion_model = std::make_shared<WanModel>(diffusion_backend,
                                                                             offload_params_to_cpu,
                                                                             tensor_storage_map,
                                                                             "model.high_noise_diffusion_model",
@@ -478,7 +611,7 @@ public:
                                                                  version,
                                                                  "",
                                                                  enable_vision);
-                diffusion_model  = std::make_shared<QwenImageModel>(backend,
+                diffusion_model  = std::make_shared<QwenImageModel>(diffusion_backend,
                                                                    offload_params_to_cpu,
                                                                    tensor_storage_map,
                                                                    "model.diffusion_model",
@@ -488,7 +621,7 @@ public:
                 cond_stage_model = std::make_shared<AnimaConditioner>(clip_backend,
                                                                       offload_params_to_cpu,
                                                                       tensor_storage_map);
-                diffusion_model  = std::make_shared<AnimaModel>(backend,
+                diffusion_model  = std::make_shared<AnimaModel>(diffusion_backend,
                                                                offload_params_to_cpu,
                                                                tensor_storage_map,
                                                                "model.diffusion_model");
@@ -497,7 +630,7 @@ public:
                                                                  offload_params_to_cpu,
                                                                  tensor_storage_map,
                                                                  version);
-                diffusion_model  = std::make_shared<ZImageModel>(backend,
+                diffusion_model  = std::make_shared<ZImageModel>(diffusion_backend,
                                                                 offload_params_to_cpu,
                                                                 tensor_storage_map,
                                                                 "model.diffusion_model",
@@ -507,7 +640,7 @@ public:
                                                                  offload_params_to_cpu,
                                                                  tensor_storage_map,
                                                                  version);
-                diffusion_model  = std::make_shared<ErnieImageModel>(backend,
+                diffusion_model  = std::make_shared<ErnieImageModel>(diffusion_backend,
                                                                     offload_params_to_cpu,
                                                                     tensor_storage_map,
                                                                     "model.diffusion_model");
@@ -530,7 +663,7 @@ public:
                                                                                            embbeding_map,
                                                                                            version);
                 }
-                diffusion_model = std::make_shared<UNetModel>(backend,
+                diffusion_model = std::make_shared<UNetModel>(diffusion_backend,
                                                               offload_params_to_cpu,
                                                               tensor_storage_map,
                                                               version);
@@ -555,11 +688,13 @@ public:
                 high_noise_diffusion_model->get_param_tensors(tensors);
             }
 
-            if (sd_ctx_params->keep_vae_on_cpu && !ggml_backend_is_cpu(backend)) {
-                LOG_INFO("VAE Autoencoder: Using CPU backend");
-                vae_backend = ggml_backend_cpu_init();
-            } else {
+            if (vae_dev_name != nullptr && vae_dev_name[0] != '\0') {
+                vae_backend = init_named_backend(vae_dev_name);
+            }
+            if (!vae_backend) {
                 vae_backend = backend;
+            } else {
+                LOG_INFO("VAE: using device %s", vae_dev_name);
             }
 
             auto create_tae = [&]() -> std::shared_ptr<VAE> {
@@ -648,11 +783,14 @@ public:
 
             if (strlen(SAFE_STR(sd_ctx_params->control_net_path)) > 0) {
                 ggml_backend_t controlnet_backend = nullptr;
-                if (sd_ctx_params->keep_control_net_on_cpu && !ggml_backend_is_cpu(backend)) {
-                    LOG_DEBUG("ControlNet: Using CPU backend");
-                    controlnet_backend = ggml_backend_cpu_init();
-                } else {
+                const char* cn_dev_name = sd_ctx_params->control_net_backend_device;
+                if (cn_dev_name != nullptr && cn_dev_name[0] != '\0') {
+                    controlnet_backend = init_named_backend(cn_dev_name);
+                }
+                if (!controlnet_backend) {
                     controlnet_backend = backend;
+                } else {
+                    LOG_INFO("ControlNet: using device %s", cn_dev_name);
                 }
                 control_net = std::make_shared<ControlNet>(controlnet_backend,
                                                            offload_params_to_cpu,
@@ -2142,16 +2280,29 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->prediction              = PREDICTION_COUNT;
     sd_ctx_params->lora_apply_mode         = LORA_APPLY_AUTO;
     sd_ctx_params->offload_params_to_cpu   = false;
-    sd_ctx_params->enable_mmap             = false;
-    sd_ctx_params->keep_clip_on_cpu        = false;
-    sd_ctx_params->keep_control_net_on_cpu = false;
-    sd_ctx_params->keep_vae_on_cpu         = false;
-    sd_ctx_params->diffusion_flash_attn    = false;
-    sd_ctx_params->circular_x              = false;
-    sd_ctx_params->circular_y              = false;
-    sd_ctx_params->chroma_use_dit_mask     = true;
-    sd_ctx_params->chroma_use_t5_mask      = false;
-    sd_ctx_params->chroma_t5_mask_pad      = 1;
+    sd_ctx_params->enable_mmap                  = false;
+    sd_ctx_params->main_backend_device          = nullptr;
+    sd_ctx_params->diffusion_backend_device     = nullptr;
+    sd_ctx_params->clip_backend_device          = nullptr;
+    sd_ctx_params->vae_backend_device           = nullptr;
+    sd_ctx_params->control_net_backend_device   = nullptr;
+    sd_ctx_params->tae_backend_device           = nullptr;
+    sd_ctx_params->upscaler_backend_device      = nullptr;
+    sd_ctx_params->photomaker_backend_device    = nullptr;
+    sd_ctx_params->vision_backend_device        = nullptr;
+    sd_ctx_params->diffusion_flash_attn         = false;
+    sd_ctx_params->circular_x                   = false;
+    sd_ctx_params->circular_y                   = false;
+    sd_ctx_params->chroma_use_dit_mask          = true;
+    sd_ctx_params->chroma_use_t5_mask           = false;
+    sd_ctx_params->chroma_t5_mask_pad           = 1;
+    sd_ctx_params->auto_fit                     = true;
+    sd_ctx_params->auto_fit_target_mb           = 512;
+    sd_ctx_params->auto_fit_dry_run             = false;
+    sd_ctx_params->auto_fit_compute_reserve_dit_mb  = 0;
+    sd_ctx_params->auto_fit_compute_reserve_vae_mb  = 0;
+    sd_ctx_params->auto_fit_compute_reserve_cond_mb = 0;
+    sd_ctx_params->auto_multi_gpu               = true;
 }
 
 char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
@@ -2183,9 +2334,22 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "sampler_rng_type: %s\n"
              "prediction: %s\n"
              "offload_params_to_cpu: %s\n"
-             "keep_clip_on_cpu: %s\n"
-             "keep_control_net_on_cpu: %s\n"
-             "keep_vae_on_cpu: %s\n"
+             "main_backend_device: %s\n"
+             "diffusion_backend_device: %s\n"
+             "clip_backend_device: %s\n"
+             "vae_backend_device: %s\n"
+             "control_net_backend_device: %s\n"
+             "tae_backend_device: %s\n"
+             "upscaler_backend_device: %s\n"
+             "photomaker_backend_device: %s\n"
+             "vision_backend_device: %s\n"
+             "auto_fit: %s\n"
+             "auto_fit_target_mb: %d\n"
+             "auto_fit_dry_run: %s\n"
+             "auto_fit_compute_reserve_dit_mb: %d\n"
+             "auto_fit_compute_reserve_vae_mb: %d\n"
+             "auto_fit_compute_reserve_cond_mb: %d\n"
+             "auto_multi_gpu: %s\n"
              "flash_attn: %s\n"
              "diffusion_flash_attn: %s\n"
              "circular_x: %s\n"
@@ -2215,9 +2379,22 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              sd_rng_type_name(sd_ctx_params->sampler_rng_type),
              sd_prediction_name(sd_ctx_params->prediction),
              BOOL_STR(sd_ctx_params->offload_params_to_cpu),
-             BOOL_STR(sd_ctx_params->keep_clip_on_cpu),
-             BOOL_STR(sd_ctx_params->keep_control_net_on_cpu),
-             BOOL_STR(sd_ctx_params->keep_vae_on_cpu),
+             SAFE_STR(sd_ctx_params->main_backend_device),
+             SAFE_STR(sd_ctx_params->diffusion_backend_device),
+             SAFE_STR(sd_ctx_params->clip_backend_device),
+             SAFE_STR(sd_ctx_params->vae_backend_device),
+             SAFE_STR(sd_ctx_params->control_net_backend_device),
+             SAFE_STR(sd_ctx_params->tae_backend_device),
+             SAFE_STR(sd_ctx_params->upscaler_backend_device),
+             SAFE_STR(sd_ctx_params->photomaker_backend_device),
+             SAFE_STR(sd_ctx_params->vision_backend_device),
+             BOOL_STR(sd_ctx_params->auto_fit),
+             sd_ctx_params->auto_fit_target_mb,
+             BOOL_STR(sd_ctx_params->auto_fit_dry_run),
+             sd_ctx_params->auto_fit_compute_reserve_dit_mb,
+             sd_ctx_params->auto_fit_compute_reserve_vae_mb,
+             sd_ctx_params->auto_fit_compute_reserve_cond_mb,
+             BOOL_STR(sd_ctx_params->auto_multi_gpu),
              BOOL_STR(sd_ctx_params->flash_attn),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
              BOOL_STR(sd_ctx_params->circular_x),

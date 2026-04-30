@@ -110,9 +110,15 @@ struct SDContextParams {
     rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
     bool offload_params_to_cpu  = false;
     bool enable_mmap            = false;
-    bool control_net_cpu        = false;
-    bool clip_on_cpu            = false;
-    bool vae_on_cpu             = false;
+    std::string main_backend_device;
+    std::string diffusion_backend_device;
+    std::string clip_backend_device;
+    std::string vae_backend_device;
+    std::string control_net_backend_device;
+    std::string tae_backend_device;
+    std::string upscaler_backend_device;
+    std::string photomaker_backend_device;
+    std::string vision_backend_device;
     bool flash_attn             = false;
     bool diffusion_flash_attn   = false;
     bool diffusion_conv_direct  = false;
@@ -127,6 +133,16 @@ struct SDContextParams {
     int chroma_t5_mask_pad   = 1;
 
     bool qwen_image_zero_cond_t = false;
+
+    // Auto-fit defaults — placement is computed automatically based on free
+    // VRAM. Pass --no-auto-fit to disable and use explicit *-backend-device.
+    bool auto_fit                         = true;
+    int  auto_fit_target_mb               = 512;
+    bool auto_fit_dry_run                 = false;
+    int  auto_fit_compute_reserve_dit_mb  = 0;
+    int  auto_fit_compute_reserve_vae_mb  = 0;
+    int  auto_fit_compute_reserve_cond_mb = 0;
+    bool auto_multi_gpu                   = true;
 
     prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;

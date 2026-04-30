@@ -193,6 +193,8 @@ using TensorTypeRules = std::vector<std::pair<std::string, ggml_type>>;
 
 TensorTypeRules parse_tensor_type_rules(const std::string& tensor_type_rules);
 
+bool is_unused_tensor(const std::string& name);
+
 class ModelLoader {
 protected:
     SDVersion version_ = VERSION_COUNT;
