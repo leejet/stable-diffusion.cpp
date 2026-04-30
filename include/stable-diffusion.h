@@ -206,9 +206,6 @@ typedef struct {
     enum lora_apply_mode_t lora_apply_mode;
     bool offload_params_to_cpu;
     bool enable_mmap;
-    bool keep_clip_on_cpu;
-    bool keep_control_net_on_cpu;
-    bool keep_vae_on_cpu;
     bool flash_attn;
     bool diffusion_flash_attn;
     bool tae_preview_only;
@@ -226,6 +223,28 @@ typedef struct {
     bool stream_layers;  // Enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram)
     const char* backend;
     const char* params_backend;
+
+    // Auto-fit: pick DiT/VAE/Conditioner devices based on free GPU memory.
+    // When `auto_fit` is true (default), `backend` / `params_backend` are
+    // ignored and the placement is computed automatically (the plan is fed
+    // into the same backend assignment that `backend` / `params_backend` use).
+    // `auto_fit_target_mb` is the memory to leave free per GPU (default 512).
+    // `auto_fit_dry_run` prints the plan and aborts init before loading.
+    // `auto_fit_compute_reserve_{dit,vae,cond}_mb` let the user tune the
+    // per-component compute-buffer reserve; 0 means use the built-in default.
+    bool auto_fit;
+    int  auto_fit_target_mb;
+    bool auto_fit_dry_run;
+    int  auto_fit_compute_reserve_dit_mb;
+    int  auto_fit_compute_reserve_vae_mb;
+    int  auto_fit_compute_reserve_cond_mb;
+
+    // When more than one GPU device is present, prefer placing different
+    // components on different GPUs to balance load and fit larger total
+    // working sets. Set false to keep all components on a single GPU when
+    // they fit. Defaults to true. Each component still lives entirely on
+    // one device — no intra-tensor row split.
+    bool auto_multi_gpu;
 } sd_ctx_params_t;
 
 typedef struct {
@@ -490,6 +509,11 @@ SD_API bool preprocess_canny(sd_image_t image,
 
 SD_API const char* sd_commit(void);
 SD_API const char* sd_version(void);
+
+// List available ggml backend devices to stdout, in `name<TAB>description<NL>`
+// per-line format. The output is intended to be parsed by tools and used as
+// device names in the --backend / --params-backend assignment specs.
+SD_API void sd_list_devices(void);
 
 #ifdef __cplusplus
 }

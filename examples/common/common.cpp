@@ -435,6 +435,23 @@ ArgOptions SDContextParams::get_options() {
          "--chroma-t5-mask-pad",
          "t5 mask pad size of chroma",
          &chroma_t5_mask_pad},
+        {"",
+         "--fit-target",
+         "auto-fit: MiB of free memory to leave on each GPU (default: 512)",
+         &auto_fit_target_mb},
+        {"",
+         "--fit-compute-reserve-dit",
+         "auto-fit: MiB reserved on the DiT's GPU for its compute buffer "
+         "(0 keeps the built-in default)",
+         &auto_fit_compute_reserve_dit_mb},
+        {"",
+         "--fit-compute-reserve-vae",
+         "auto-fit: MiB reserved on the VAE's GPU for its compute buffer",
+         &auto_fit_compute_reserve_vae_mb},
+        {"",
+         "--fit-compute-reserve-cond",
+         "auto-fit: MiB reserved on the conditioner's GPU for its compute buffer",
+         &auto_fit_compute_reserve_cond_mb},
     };
 
     options.float_options = {
@@ -461,18 +478,6 @@ ArgOptions SDContextParams::get_options() {
          "--mmap",
          "whether to memory-map model",
          true, &enable_mmap},
-        {"",
-         "--control-net-cpu",
-         "keep controlnet in cpu (for low vram)",
-         true, &control_net_cpu},
-        {"",
-         "--clip-on-cpu",
-         "keep clip in cpu (for low vram)",
-         true, &clip_on_cpu},
-        {"",
-         "--vae-on-cpu",
-         "keep vae in cpu (for low vram)",
-         true, &vae_on_cpu},
         {"",
          "--fa",
          "use flash attention",
@@ -513,6 +518,24 @@ ArgOptions SDContextParams::get_options() {
          "--chroma-enable-t5-mask",
          "enable t5 mask for chroma",
          true, &chroma_use_t5_mask},
+        {"",
+         "--auto-fit",
+         "automatically pick DiT/VAE/Conditioner device placements based on "
+         "free GPU memory (default ON)",
+         true, &auto_fit},
+        {"",
+         "--no-auto-fit",
+         "disable auto-fit and use the explicit --backend / --params-backend flags",
+         false, &auto_fit},
+        {"",
+         "--no-multi-gpu",
+         "auto-fit: keep all components on a single GPU when they fit "
+         "(by default, multi-GPU placements are preferred to balance load)",
+         false, &auto_multi_gpu},
+        {"",
+         "--fit-dry-run",
+         "auto-fit: print the computed plan and exit without loading models",
+         true, &auto_fit_dry_run},
     };
 
     auto on_type_arg = [&](int argc, const char** argv, int index) {
@@ -611,6 +634,15 @@ ArgOptions SDContextParams::get_options() {
          "but it usually offers faster inference speed and, in some cases, lower memory usage. "
          "The at_runtime mode, on the other hand, is exactly the opposite.",
          on_lora_apply_mode_arg},
+        {"",
+         "--list-devices",
+         "list available ggml backend devices (one per line, "
+         "name<TAB>description) and exit",
+         [](int /*argc*/, const char** /*argv*/, int /*index*/) {
+             sd_list_devices();
+             std::exit(0);
+             return 0;
+         }},
     };
 
     return options;
@@ -736,9 +768,10 @@ std::string SDContextParams::to_string() const {
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
         << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
-        << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
-        << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
-        << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
+        << "  auto_fit: " << (auto_fit ? "true" : "false") << ",\n"
+        << "  auto_fit_target_mb: " << auto_fit_target_mb << ",\n"
+        << "  auto_fit_dry_run: " << (auto_fit_dry_run ? "true" : "false") << ",\n"
+        << "  auto_multi_gpu: " << (auto_multi_gpu ? "true" : "false") << ",\n"
         << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
@@ -797,9 +830,6 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         lora_apply_mode,
         offload_params_to_cpu,
         enable_mmap,
-        clip_on_cpu,
-        control_net_cpu,
-        vae_on_cpu,
         flash_attn,
         diffusion_flash_attn,
         taesd_preview,
@@ -817,6 +847,13 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         stream_layers,
         backend.c_str(),
         params_backend.c_str(),
+        auto_fit,
+        auto_fit_target_mb,
+        auto_fit_dry_run,
+        auto_fit_compute_reserve_dit_mb,
+        auto_fit_compute_reserve_vae_mb,
+        auto_fit_compute_reserve_cond_mb,
+        auto_multi_gpu,
     };
     return sd_ctx_params;
 }

@@ -10,6 +10,8 @@
 #include "core/rng_mt19937.hpp"
 #include "core/rng_philox.hpp"
 #include "core/util.h"
+
+#include "backend_fit.hpp"
 #include "model_loader.h"
 #include "stable-diffusion.h"
 
@@ -232,14 +234,19 @@ public:
         return params_backend_for(module) != nullptr;
     }
 
-    bool init_backend(const sd_ctx_params_t* sd_ctx_params) {
+    // Initialize the backend manager from backend_spec / params_backend_spec.
+    // These hold the user's --backend / --params-backend by default, but when
+    // auto-fit is enabled they are overwritten with the computed plan before
+    // this runs. The keep_*_on_cpu shortcuts were replaced by the spec
+    // mechanism (e.g. "vae=cpu"), so they are always false here.
+    bool init_backend() {
         std::string error;
-        if (!backend_manager.init(sd_ctx_params->backend,
-                                  sd_ctx_params->params_backend,
+        if (!backend_manager.init(backend_spec.c_str(),
+                                  params_backend_spec.c_str(),
                                   offload_params_to_cpu,
-                                  sd_ctx_params->keep_clip_on_cpu,
-                                  sd_ctx_params->keep_vae_on_cpu,
-                                  sd_ctx_params->keep_control_net_on_cpu,
+                                  /*keep_clip_on_cpu=*/false,
+                                  /*keep_vae_on_cpu=*/false,
+                                  /*keep_control_net_on_cpu=*/false,
                                   &error)) {
             LOG_ERROR("backend config failed: %s", error.c_str());
             return false;
@@ -288,10 +295,10 @@ public:
 
         ggml_log_set(ggml_log_callback_default, nullptr);
 
-        if (!init_backend(sd_ctx_params)) {
-            return false;
-        }
-        max_vram = sd::ggml_graph_cut::resolve_max_vram_gib(max_vram, backend_for(SDBackendModule::DIFFUSION));
+        // Backend initialization is deferred until after the model metadata is
+        // loaded, so auto-fit can size the components and choose device
+        // placements before the backends are created (see the auto-fit block
+        // below, which feeds its plan into init_backend()).
 
         ModelLoader model_loader;
 
@@ -440,6 +447,98 @@ public:
             }
             return oss.str();
         };
+
+        if (sd_ctx_params->auto_fit) {
+            if (!backend_spec.empty() || !params_backend_spec.empty()) {
+                LOG_WARN("auto-fit is enabled; ignoring --backend / --params-backend "
+                         "(pass --no-auto-fit to set device placement manually)");
+            }
+
+            backend_fit::ComputeReserves reserves;
+            if (sd_ctx_params->auto_fit_compute_reserve_dit_mb > 0) {
+                reserves.dit_bytes =
+                    int64_t(sd_ctx_params->auto_fit_compute_reserve_dit_mb) * backend_fit::MiB;
+            }
+            if (sd_ctx_params->auto_fit_compute_reserve_vae_mb > 0) {
+                reserves.vae_bytes =
+                    int64_t(sd_ctx_params->auto_fit_compute_reserve_vae_mb) * backend_fit::MiB;
+            }
+            if (sd_ctx_params->auto_fit_compute_reserve_cond_mb > 0) {
+                reserves.conditioner_bytes =
+                    int64_t(sd_ctx_params->auto_fit_compute_reserve_cond_mb) * backend_fit::MiB;
+            }
+            auto components = backend_fit::estimate_components(
+                model_loader, wtype, /*alignment=*/64, reserves);
+            auto    devices = backend_fit::enumerate_gpu_devices();
+            int64_t margin_bytes =
+                int64_t(std::max(0, sd_ctx_params->auto_fit_target_mb)) * backend_fit::MiB;
+            auto plan = backend_fit::compute_plan(
+                components, devices, margin_bytes, sd_ctx_params->auto_multi_gpu);
+            backend_fit::print_plan(plan, components, devices, margin_bytes);
+
+            if (sd_ctx_params->auto_fit_dry_run) {
+                LOG_INFO("auto-fit: --fit-dry-run set, aborting init before loading models");
+                return false;
+            }
+
+            // Translate the plan into the backend-assignment specs consumed by
+            // SDBackendManager. Each component lives entirely on one device:
+            //   GPU                -> runtime=<dev>             (params follow runtime)
+            //   GPU_OFFLOAD_PARAMS -> runtime=<dev>, params=cpu (params streamed from RAM)
+            //   CPU                -> runtime=cpu               (params follow runtime)
+            // Modules the planner doesn't cover (clip_vision, control_net,
+            // photomaker, upscaler) fall back to the default backend.
+            std::string runtime_spec;
+            std::string params_spec;
+            auto append_assignment = [](std::string& spec, const char* key, const std::string& value) {
+                if (!spec.empty()) {
+                    spec += ",";
+                }
+                spec += key;
+                spec += "=";
+                spec += value;
+            };
+            auto apply_decision = [&](const backend_fit::Decision* d, const char* module_key) {
+                if (d == nullptr) {
+                    return;
+                }
+                if (d->placement == backend_fit::Placement::CPU) {
+                    append_assignment(runtime_spec, module_key, "cpu");
+                    return;
+                }
+                std::string dev_name;
+                for (const auto& dev : devices) {
+                    if (dev.id == d->device_id) {
+                        dev_name = dev.name;
+                        break;
+                    }
+                }
+                if (dev_name.empty()) {
+                    return;  // no matching device; fall back to the default backend
+                }
+                append_assignment(runtime_spec, module_key, dev_name);
+                if (d->placement == backend_fit::Placement::GPU_OFFLOAD_PARAMS) {
+                    append_assignment(params_spec, module_key, "cpu");
+                }
+            };
+            apply_decision(backend_fit::find_decision(plan, backend_fit::ComponentKind::DIT), "diffusion");
+            apply_decision(backend_fit::find_decision(plan, backend_fit::ComponentKind::CONDITIONER), "te");
+            apply_decision(backend_fit::find_decision(plan, backend_fit::ComponentKind::VAE), "vae");
+
+            backend_spec        = runtime_spec;
+            params_backend_spec = params_spec;
+            LOG_INFO("auto-fit: backend spec '%s', params backend spec '%s'",
+                     backend_spec.empty() ? "(default)" : backend_spec.c_str(),
+                     params_backend_spec.empty() ? "(none)" : params_backend_spec.c_str());
+        }
+
+        // Create the backends now that the placement (manual or auto-fit) is
+        // settled, then resolve the graph-cut VRAM budget against the DiT's
+        // runtime backend.
+        if (!init_backend()) {
+            return false;
+        }
+        max_vram = sd::ggml_graph_cut::resolve_max_vram_gib(max_vram, backend_for(SDBackendModule::DIFFUSION));
 
         LOG_INFO("Weight type stat:                 %s", wtype_stat_to_str(wtype_stat).c_str());
         LOG_INFO("Conditioner weight type stat:     %s", wtype_stat_to_str(conditioner_wtype_stat).c_str());
@@ -2688,21 +2787,25 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->prediction              = PREDICTION_COUNT;
     sd_ctx_params->lora_apply_mode         = LORA_APPLY_AUTO;
     sd_ctx_params->offload_params_to_cpu   = false;
-    sd_ctx_params->max_vram                = 0.f;
-    sd_ctx_params->stream_layers           = false;
-    sd_ctx_params->enable_mmap             = false;
-    sd_ctx_params->keep_clip_on_cpu        = false;
-    sd_ctx_params->keep_control_net_on_cpu = false;
-    sd_ctx_params->keep_vae_on_cpu         = false;
-    sd_ctx_params->diffusion_flash_attn    = false;
-    sd_ctx_params->circular_x              = false;
-    sd_ctx_params->circular_y              = false;
-    sd_ctx_params->chroma_use_dit_mask     = true;
-    sd_ctx_params->chroma_use_t5_mask      = false;
-    sd_ctx_params->chroma_t5_mask_pad      = 1;
-    sd_ctx_params->vae_format              = SD_VAE_FORMAT_AUTO;
-    sd_ctx_params->backend                 = nullptr;
-    sd_ctx_params->params_backend          = nullptr;
+    sd_ctx_params->max_vram                         = 0.f;
+    sd_ctx_params->stream_layers                    = false;
+    sd_ctx_params->enable_mmap                      = false;
+    sd_ctx_params->diffusion_flash_attn             = false;
+    sd_ctx_params->circular_x                       = false;
+    sd_ctx_params->circular_y                       = false;
+    sd_ctx_params->chroma_use_dit_mask              = true;
+    sd_ctx_params->chroma_use_t5_mask               = false;
+    sd_ctx_params->chroma_t5_mask_pad               = 1;
+    sd_ctx_params->vae_format                       = SD_VAE_FORMAT_AUTO;
+    sd_ctx_params->backend                          = nullptr;
+    sd_ctx_params->params_backend                   = nullptr;
+    sd_ctx_params->auto_fit                         = true;
+    sd_ctx_params->auto_fit_target_mb               = 512;
+    sd_ctx_params->auto_fit_dry_run                 = false;
+    sd_ctx_params->auto_fit_compute_reserve_dit_mb  = 0;
+    sd_ctx_params->auto_fit_compute_reserve_vae_mb  = 0;
+    sd_ctx_params->auto_fit_compute_reserve_cond_mb = 0;
+    sd_ctx_params->auto_multi_gpu                   = true;
 }
 
 char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
@@ -2741,9 +2844,13 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "stream_layers: %s\n"
              "backend: %s\n"
              "params_backend: %s\n"
-             "keep_clip_on_cpu: %s\n"
-             "keep_control_net_on_cpu: %s\n"
-             "keep_vae_on_cpu: %s\n"
+             "auto_fit: %s\n"
+             "auto_fit_target_mb: %d\n"
+             "auto_fit_dry_run: %s\n"
+             "auto_fit_compute_reserve_dit_mb: %d\n"
+             "auto_fit_compute_reserve_vae_mb: %d\n"
+             "auto_fit_compute_reserve_cond_mb: %d\n"
+             "auto_multi_gpu: %s\n"
              "flash_attn: %s\n"
              "diffusion_flash_attn: %s\n"
              "circular_x: %s\n"
@@ -2781,9 +2888,13 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              BOOL_STR(sd_ctx_params->stream_layers),
              SAFE_STR(sd_ctx_params->backend),
              SAFE_STR(sd_ctx_params->params_backend),
-             BOOL_STR(sd_ctx_params->keep_clip_on_cpu),
-             BOOL_STR(sd_ctx_params->keep_control_net_on_cpu),
-             BOOL_STR(sd_ctx_params->keep_vae_on_cpu),
+             BOOL_STR(sd_ctx_params->auto_fit),
+             sd_ctx_params->auto_fit_target_mb,
+             BOOL_STR(sd_ctx_params->auto_fit_dry_run),
+             sd_ctx_params->auto_fit_compute_reserve_dit_mb,
+             sd_ctx_params->auto_fit_compute_reserve_vae_mb,
+             sd_ctx_params->auto_fit_compute_reserve_cond_mb,
+             BOOL_STR(sd_ctx_params->auto_multi_gpu),
              BOOL_STR(sd_ctx_params->flash_attn),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
              BOOL_STR(sd_ctx_params->circular_x),

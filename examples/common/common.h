@@ -148,14 +148,11 @@ struct SDContextParams {
     bool stream_layers          = false;
     std::string backend;
     std::string params_backend;
-    bool enable_mmap           = false;
-    bool control_net_cpu       = false;
-    bool clip_on_cpu           = false;
-    bool vae_on_cpu            = false;
-    bool flash_attn            = false;
-    bool diffusion_flash_attn  = false;
-    bool diffusion_conv_direct = false;
-    bool vae_conv_direct       = false;
+    bool enable_mmap            = false;
+    bool flash_attn             = false;
+    bool diffusion_flash_attn   = false;
+    bool diffusion_conv_direct  = false;
+    bool vae_conv_direct        = false;
 
     bool circular   = false;
     bool circular_x = false;
@@ -166,6 +163,16 @@ struct SDContextParams {
     int chroma_t5_mask_pad   = 1;
 
     bool qwen_image_zero_cond_t = false;
+
+    // Auto-fit defaults — placement is computed automatically based on free
+    // VRAM. Pass --no-auto-fit to disable and use explicit *-backend-device.
+    bool auto_fit                         = true;
+    int  auto_fit_target_mb               = 512;
+    bool auto_fit_dry_run                 = false;
+    int  auto_fit_compute_reserve_dit_mb  = 0;
+    int  auto_fit_compute_reserve_vae_mb  = 0;
+    int  auto_fit_compute_reserve_cond_mb = 0;
+    bool auto_multi_gpu                   = true;
 
     prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
