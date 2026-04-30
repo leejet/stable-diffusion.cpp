@@ -5,6 +5,7 @@
 #include "anima.hpp"
 #include "ernie_image.hpp"
 #include "flux.hpp"
+#include "ltx.hpp"
 #include "mmdit.hpp"
 #include "qwen_image.hpp"
 #include "tensor_ggml.hpp"
@@ -29,6 +30,10 @@ struct DiffusionParams {
     const sd::Tensor<float>* vace_context             = nullptr;
     float vace_strength                               = 1.f;
     const std::vector<int>* skip_layers               = nullptr;
+    // STG (Spatio-Temporal Guidance): block indices whose self-attention is bypassed
+    // during the perturbed-pass forward. Currently only LTX-2 honors this; other
+    // models ignore the field. Empty/nullptr means no perturbation.
+    const std::vector<int>* stg_skip_blocks           = nullptr;
 };
 
 template <typename T>
@@ -50,6 +55,14 @@ struct DiffusionModel {
     virtual int64_t get_adm_in_channels()                            = 0;
     virtual void set_flash_attention_enabled(bool enabled)           = 0;
     virtual void set_circular_axes(bool circular_x, bool circular_y) = 0;
+    // Overridden only by models whose spatial / temporal embeddings depend on the
+    // output fps (currently LTX-2). Image-only models ignore the value.
+    virtual void set_fps(float fps) {}
+    // Lazy-load hook — register a callback on the inner GGMLRunner. Default
+    // no-op for models that don't yet support sequential lazy loading; the
+    // user-facing OOM scenarios ( Q6_K LTX-2 + Q8_K_XL Gemma on 24GB combined
+    // VRAM) only need this for LTXDiffusionModel right now.
+    virtual void set_lazy_load(std::function<bool()> /*fn*/) {}
 };
 
 struct UNetModel : public DiffusionModel {
@@ -514,6 +527,82 @@ struct ZImageModel : public DiffusionModel {
                                tensor_or_empty(diffusion_params.context),
                                diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
                                true);
+    }
+};
+
+struct LTXDiffusionModel : public DiffusionModel {
+    std::string prefix;
+    LTX::LTXRunner ltx;
+
+    LTXDiffusionModel(ggml_backend_t backend,
+                      bool offload_params_to_cpu,
+                      const String2TensorStorage& tensor_storage_map = {},
+                      const std::string prefix                       = "model.diffusion_model",
+                      SDVersion version                              = VERSION_LTX2)
+        : prefix(prefix), ltx(backend, offload_params_to_cpu, tensor_storage_map, prefix, version) {
+    }
+
+    std::string get_desc() override {
+        return ltx.get_desc();
+    }
+
+    void alloc_params_buffer() override {
+        ltx.alloc_params_buffer();
+    }
+
+    void free_params_buffer() override {
+        ltx.free_params_buffer();
+    }
+
+    void free_compute_buffer() override {
+        ltx.free_compute_buffer();
+    }
+
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        ltx.get_param_tensors(tensors, prefix);
+    }
+
+    size_t get_params_buffer_size() override {
+        return ltx.get_params_buffer_size();
+    }
+
+    void set_lazy_load(std::function<bool()> fn) override {
+        ltx.set_lazy_load(std::move(fn));
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        ltx.set_weight_adapter(adapter);
+    }
+
+    int64_t get_adm_in_channels() override {
+        return 0;
+    }
+
+    void set_flash_attention_enabled(bool enabled) override {
+        ltx.set_flash_attention_enabled(enabled);
+    }
+
+    void set_circular_axes(bool circular_x, bool circular_y) override {
+        ltx.set_circular_axes(circular_x, circular_y);
+    }
+
+    void set_fps(float fps) override {
+        if (fps > 0.f) {
+            ltx.set_fps(fps);
+        }
+    }
+
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
+        static const sd::Tensor<float> empty;
+        return ltx.compute(n_threads,
+                           *diffusion_params.x,
+                           *diffusion_params.timesteps,
+                           tensor_or_empty(diffusion_params.context),
+                           empty,
+                           diffusion_params.stg_skip_blocks);
     }
 };
 

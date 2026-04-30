@@ -76,6 +76,7 @@ enum prediction_t {
     FLOW_PRED,
     FLUX_FLOW_PRED,
     FLUX2_FLOW_PRED,
+    LTX2_FLOW_PRED,
     PREDICTION_COUNT
 };
 
@@ -169,6 +170,11 @@ typedef struct {
     const char* t5xxl_path;
     const char* llm_path;
     const char* llm_vision_path;
+    // Path to a HuggingFace-format tokenizer.json file. Currently only read by the
+    // LTX-2 Gemma 3 conditioner, which requires Gemma's tokenizer for BPE + metaspace
+    // encoding of prompts. If empty for LTX-2, the conditioner aborts with a clear
+    // message. Non-LTX-2 pipelines ignore this field.
+    const char* gemma_tokenizer_path;
     const char* diffusion_model_path;
     const char* high_noise_diffusion_model_path;
     const char* vae_path;
@@ -203,6 +209,36 @@ typedef struct {
     bool chroma_use_t5_mask;
     int chroma_t5_mask_pad;
     bool qwen_image_zero_cond_t;
+
+    // Auto-fit: pick DiT/VAE/Conditioner devices based on free GPU memory.
+    // When `auto_fit` is true (default), the CLI placement overrides (env vars,
+    // keep_*_on_cpu) are ignored and the plan is computed automatically.
+    // `auto_fit_target_mb` is the memory to leave free per GPU (default 512).
+    // `auto_fit_dry_run` prints the plan and aborts init before loading.
+    // `auto_fit_compute_reserve_{dit,vae,cond}_mb` let the user tune the
+    // per-component compute-buffer reserve; 0 means use the built-in default.
+    bool auto_fit;
+    int  auto_fit_target_mb;
+    bool auto_fit_dry_run;
+    int  auto_fit_compute_reserve_dit_mb;
+    int  auto_fit_compute_reserve_vae_mb;
+    int  auto_fit_compute_reserve_cond_mb;
+
+    // Lazy load: defer DiT and conditioner-LLM weight allocation+read until
+    // the first compute() call, so the working set never holds all components
+    // resident simultaneously. Required when sum-of-components exceeds combined
+    // VRAM (LTX-2 + Gemma + VAE all at once won't fit on a 24 GB rig).
+    // Defaults to true. Env-var overrides (SD_LAZY_LOAD_DIT/SD_LAZY_LOAD_COND)
+    // still work and force-enable when set; they cannot disable.
+    bool lazy_load_dit;
+    bool lazy_load_cond;
+
+    // Auto tensor split: when more than one CUDA device is detected and the
+    // user did NOT explicitly set SD_CUDA_TENSOR_SPLIT, automatically split
+    // the DiT row-wise across all available GPUs with ratios proportional to
+    // each device's free VRAM. Defaults to true. Set false to keep the DiT
+    // on a single GPU (with auto-fit choosing which one).
+    bool auto_tensor_split;
 } sd_ctx_params_t;
 
 typedef struct {
@@ -225,6 +261,20 @@ typedef struct {
     float img_cfg;
     float distilled_guidance;
     sd_slg_params_t slg;
+    // CFG-rescale (LTX-2.3 default 0.7, no effect when 0). After CFG mixing,
+    // pred is rescaled toward cond's std to combat oversaturation:
+    //   factor = cond.std() / pred.std()
+    //   factor = rescale_scale * factor + (1 - rescale_scale)
+    //   pred  *= factor
+    float rescale_scale;
+    // Spatio-Temporal Guidance (LTX-2.3 default stg_scale=1.0, stg_blocks=[28]).
+    // Adds a third forward pass with self-attention skipped on the listed
+    // transformer blocks; the resulting "weakened" prediction is mixed into
+    // the guided pred:  pred += stg_scale * (cond - perturbed).
+    // No effect when stg_scale==0 or stg_blocks_count==0.
+    float stg_scale;
+    int*   stg_blocks;
+    size_t stg_blocks_count;
 } sd_guidance_params_t;
 
 typedef struct {
@@ -332,6 +382,12 @@ typedef struct {
     float strength;
     int64_t seed;
     int video_frames;
+    // Output video fps. Carried through to models that use it for temporal
+    // positional embeddings — LTX-2's RoPE divides the time axis by fps
+    // (ltx_core/tools.py::VideoLatentTools.create_initial_state), so the
+    // default 24 on LTXRunner silently produces wrong positions at any
+    // other target fps. 0 means "don't override runner default".
+    float fps;
     float vace_strength;
     sd_tiling_params_t vae_tiling_params;
     sd_cache_params_t cache;

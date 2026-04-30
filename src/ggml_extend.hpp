@@ -1307,6 +1307,29 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_cast_f32(ggml_context* ctx, ggml_tensor*
     return out;
 }
 
+// Optional tap collector for debugging the attention block. The Gemma parity
+// test sets this to capture intermediate kq/softmax/kqv values. Inplace ops
+// in the manual attention path overwrite the tap tensors' names to "node_X"
+// or "(view)" so the names don't survive collection — left here as a knob
+// for future experiments where the manual path is rewritten to use
+// non-inplace variants.
+inline std::vector<ggml_tensor*>* g_attn_layer0_taps = nullptr;
+inline int g_attn_tap_count = 0;
+inline int g_attn_tap_budget = 7;
+inline ggml_tensor* attn_tap(ggml_context* ctx, ggml_tensor* t, const char* name) {
+    if (g_attn_layer0_taps == nullptr) return t;
+    if (g_attn_tap_count >= g_attn_tap_budget) return t;
+    ggml_tensor* keep = ggml_cont(ctx, t);
+    ggml_set_output(keep);
+    std::string full = std::string("DBG:") + name;
+    ggml_set_name(keep, full.c_str());
+    fprintf(stderr, "[attn_tap] pushed name='%s' (intended='%s') tensor=%p\n",
+            ggml_get_name(keep), full.c_str(), (void*)keep);
+    g_attn_layer0_taps->push_back(keep);
+    ++g_attn_tap_count;
+    return keep;
+}
+
 // q: [N, L_q, C(n_head*d_head)] or [N*n_head, L_q, d_head]
 // k: [N, L_k, n_kv_head*d_head] or [N*n_kv_head, L_k, d_head]
 // v: [N, L_k, n_kv_head*d_head] or [N, L_k, n_kv_head, d_head]
@@ -1439,16 +1462,27 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
         // }
         v = ggml_ext_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));  // [N, n_kv_head, d_head, L_k]
         v = ggml_reshape_3d(ctx, v, L_k, d_head, n_kv_head * N);   // [N * n_kv_head, d_head, L_k]
+        v = attn_tap(ctx, v, "_attn_v");
 
         auto kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, L_q, L_k]
         ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
-        kq = ggml_scale_inplace(ctx, kq, scale);
+        kq = attn_tap(ctx, kq, "_attn_kq_raw");
+        // Non-inplace variants here so the parity-test taps above survive
+        // collection. ggml's allocator reuses inplace-op buffers and overwrites
+        // the cont tensor's name, leaving us with "node_42 / (view)" entries
+        // that the dumper can't match.
+        kq = ggml_scale(ctx, kq, scale);
+        kq = attn_tap(ctx, kq, "_attn_kq_scaled");
         if (mask) {
-            kq = ggml_add_inplace(ctx, kq, mask);
+            kq = ggml_add(ctx, kq, mask);
+            kq = attn_tap(ctx, kq, "_attn_kq_masked");
         }
-        kq = ggml_soft_max_inplace(ctx, kq);
+        kq = ggml_soft_max(ctx, kq);
+        kq = attn_tap(ctx, kq, "_attn_softmax");
 
         kqv = ggml_mul_mat(ctx, v, kq);  // [N * n_head, L_q, d_head]
+        ggml_mul_mat_set_prec(kqv, GGML_PREC_F32);
+        kqv = attn_tap(ctx, kqv, "_attn_kqv_raw");
 
         kqv = ggml_reshape_4d(ctx, kqv, d_head, L_q, n_head, N);  // [N, n_head, L_q, d_head]
         kqv = ggml_permute(ctx, kqv, 0, 2, 1, 3);                 // [N, L_q, n_head, d_head]
@@ -1684,6 +1718,59 @@ struct GGMLRunnerContext {
     std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
 };
 
+// Forward declaration — defined near support_get_rows() below. Used by
+// GGMLRunner's ctor to publish its params backend so Embedding::init_params
+// can pick the right get_rows allowlist without plumbing backend through
+// every init_params override.
+__STATIC_INLINE__ ggml_backend_t& current_params_backend();
+
+// ---------------------------------------------------------------------------
+// Multi-GPU tensor split support
+// ---------------------------------------------------------------------------
+// A GGMLRunner can opt into "tensor split" mode where matmul weight tensors
+// are distributed row-wise across multiple GPUs (CUDA-only today). This is
+// triggered by setting `g_pending_multi_backend_spec()` to a populated
+// MultiBackendSpec just before constructing the runner. The runner ctor
+// consumes and clears the pointer.
+//
+// In multi-backend mode the runner:
+//   - allocates a CUDA split-buffer-type for matmul-eligible weights
+//   - allocates a regular per-device buffer for non-matmul weights (norms,
+//     biases, embeddings, small projections, non-contiguous weights)
+//   - replaces ggml_gallocr with ggml_backend_sched_t for graph compute
+//   - the CUDA backend internally dispatches split-tensor matmul work to
+//     all participating devices (via tensor->extra->data_device[id])
+//
+// Limitations:
+//   - tensor split is incompatible with offload_params_to_cpu (offload
+//     assumes a single contiguous params buffer)
+//   - non-CUDA builds silently disable the request and fall back to single-
+//     backend mode
+struct MultiBackendSpec {
+    // Extra GPU backends *in addition to* the runner's main runtime_backend.
+    // Together {runtime_backend} ∪ extra_backends forms the GPU set.
+    std::vector<ggml_backend_t> extra_backends;
+
+    // Per-device row-split ratios (length = total CUDA device count).
+    // If empty, the CUDA backend's default tensor_split (free-VRAM
+    // proportions) is used.
+    std::vector<float> tensor_split;
+
+    // CUDA device id of the "main" GPU (the one the split buft is anchored
+    // to). Typically 0.
+    int main_device = 0;
+
+    // CPU backend appended last to the sched for unsupported-op fallback.
+    // Optional — may be nullptr to skip CPU fallback.
+    ggml_backend_t cpu_fallback = nullptr;
+};
+
+// Thread-local pending spec consumed by the next GGMLRunner ctor.
+__STATIC_INLINE__ MultiBackendSpec*& g_pending_multi_backend_spec() {
+    thread_local MultiBackendSpec* spec = nullptr;
+    return spec;
+}
+
 struct GGMLRunner {
 protected:
     typedef std::function<ggml_cgraph*()> get_graph_cb_t;
@@ -1702,6 +1789,29 @@ protected:
 
     ggml_context* compute_ctx    = nullptr;
     ggml_gallocr* compute_allocr = nullptr;
+
+    // --- multi-backend (tensor split) state ---
+    // multi_backend_mode toggles the multi-backend code paths in
+    // alloc_params_buffer / compute(). False (default) keeps the existing
+    // single-backend gallocr path with zero behavioural change.
+    bool                       multi_backend_mode    = false;
+    std::vector<ggml_backend_t> extra_backends;  // additional GPU backends
+    std::vector<float>         tensor_split_ratios;
+    int                        main_device           = 0;
+    ggml_backend_t             cpu_fallback_backend  = nullptr;
+    ggml_backend_buffer_type_t split_buft            = nullptr;
+    ggml_backend_buffer_t      split_params_buffer   = nullptr;
+    ggml_backend_sched_t       sched                 = nullptr;
+    bool                       sched_reserved        = false;
+
+    // --- Lazy load (sequential per-component loading) ---
+    // When set, the runner defers alloc_params_buffer + reading bytes from disk
+    // until the first compute() call. After free_params_buffer, the next
+    // compute() re-allocates and re-loads. Lets multi-component pipelines whose
+    // total params exceed combined VRAM run by loading at most one component
+    // at a time. Eager mode (default, lazy_load_fn unset) preserves existing
+    // behaviour: caller calls alloc_params_buffer() + populates tensors.
+    std::function<bool()>      lazy_load_fn          = nullptr;
 
     std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
 
@@ -1838,7 +1948,52 @@ protected:
         return gf;
     }
 
+    // Build the sched on first use. Sched lifetime ties to the runner; reset
+    // happens on every compute() to clear prev-graph allocations.
+    bool ensure_sched() {
+        if (sched != nullptr) return true;
+
+        std::vector<ggml_backend_t> backends;
+        backends.reserve(1 + extra_backends.size() + (cpu_fallback_backend ? 1 : 0));
+        backends.push_back(runtime_backend);
+        for (auto* b : extra_backends) backends.push_back(b);
+        if (cpu_fallback_backend != nullptr) backends.push_back(cpu_fallback_backend);
+
+        sched = ggml_backend_sched_new(backends.data(),
+                                       /*bufts=*/nullptr,
+                                       (int)backends.size(),
+                                       MAX_GRAPH_SIZE,
+                                       /*parallel=*/false,
+                                       /*op_offload=*/false);
+        if (sched == nullptr) {
+            LOG_ERROR("%s: failed to create backend sched", get_desc().c_str());
+            return false;
+        }
+        return true;
+    }
+
     bool alloc_compute_buffer(get_graph_cb_t get_graph) {
+        if (multi_backend_mode) {
+            if (sched_reserved) return true;
+            if (!ensure_sched()) return false;
+            reset_compute_ctx();
+            ggml_cgraph* gf = get_compute_graph(get_graph);
+            backend_tensor_data_map.clear();
+            if (!ggml_backend_sched_reserve(sched, gf)) {
+                LOG_ERROR("%s: sched reserve failed", get_desc().c_str());
+                return false;
+            }
+            sched_reserved = true;
+            for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); i++) {
+                ggml_backend_t b = ggml_backend_sched_get_backend(sched, i);
+                size_t s = ggml_backend_sched_get_buffer_size(sched, b);
+                LOG_DEBUG("%s sched buf[%d] %s = %.2f MB",
+                          get_desc().c_str(), i, ggml_backend_name(b),
+                          s / (1024.f * 1024.f));
+            }
+            return true;
+        }
+
         if (compute_allocr != nullptr) {
             return true;
         }
@@ -1997,12 +2152,53 @@ public:
 
     GGMLRunner(ggml_backend_t backend, bool offload_params_to_cpu = false)
         : runtime_backend(backend) {
+        // Consume any pending multi-backend (tensor-split) spec set by the
+        // caller via g_pending_multi_backend_spec().
+        MultiBackendSpec* pending = g_pending_multi_backend_spec();
+        if (pending != nullptr) {
+            g_pending_multi_backend_spec() = nullptr;  // consume
+#ifdef SD_USE_CUDA
+            multi_backend_mode    = true;
+            extra_backends        = pending->extra_backends;
+            tensor_split_ratios   = pending->tensor_split;
+            main_device           = pending->main_device;
+            cpu_fallback_backend  = pending->cpu_fallback;
+            // Build the CUDA split buft. tensor_split_ratios may be empty,
+            // in which case the CUDA backend uses its default free-VRAM
+            // proportional split.
+            split_buft = ggml_backend_cuda_split_buffer_type(
+                main_device,
+                tensor_split_ratios.empty() ? nullptr : tensor_split_ratios.data());
+            if (split_buft == nullptr) {
+                LOG_WARN("multi-backend: split buft init failed; falling back to single-backend mode");
+                multi_backend_mode   = false;
+                extra_backends.clear();
+                cpu_fallback_backend = nullptr;
+            }
+            if (multi_backend_mode && offload_params_to_cpu) {
+                LOG_WARN("multi-backend: tensor split is incompatible with offload_params_to_cpu; "
+                         "ignoring offload");
+                offload_params_to_cpu = false;
+            }
+#else
+            (void)pending;
+            LOG_WARN("multi-backend: tensor split requested but build lacks CUDA; ignoring");
+#endif
+        }
+
         alloc_params_ctx();
         if (!ggml_backend_is_cpu(runtime_backend) && offload_params_to_cpu) {
             params_backend = ggml_backend_cpu_init();
         } else {
             params_backend = runtime_backend;
         }
+        // Publish the RUNTIME backend (not params) so block init_params() can
+        // reach it from support_get_rows() without plumbing backend through
+        // every init_params override. Runtime matters for get_rows: when
+        // offload_params_to_cpu is true, params live on CPU but the actual
+        // get_rows executes on the runtime backend (the GPU), which requires
+        // the weight dtype to be CUDA-supported.
+        current_params_backend() = runtime_backend;
     }
 
     virtual ~GGMLRunner() {
@@ -2014,6 +2210,14 @@ public:
             ggml_backend_free(params_backend);
         }
         free_cache_ctx_and_buffer();
+        // The extra GPU backends and the CPU fallback are owned by the caller
+        // (see init_multi_backend_spec in stable-diffusion.cpp). The split
+        // buft is a process-cached singleton owned by the CUDA backend, so
+        // we don't free it here. Sched is per-runner and owned here.
+        if (sched != nullptr) {
+            ggml_backend_sched_free(sched);
+            sched = nullptr;
+        }
     }
 
     virtual GGMLRunnerContext get_context() {
@@ -2033,13 +2237,108 @@ public:
         alloc_compute_ctx();
     }
 
-    bool alloc_params_buffer() {
+    // Heuristic: which weight tensors should be row-split across GPUs?
+    // Constraints from the CUDA split buft impl:
+    //   - must be contiguous (init_tensor asserts on this)
+    //   - row-splitting only pays off for sizable matmul weights, so we
+    //     restrict to rank-2 tensors with both dims >= 256
+    // 1D biases, norms, embeddings, and small projections fall back to the
+    // main GPU's regular per-device buft.
+    static bool is_split_eligible(const ggml_tensor* t) {
+        if (!ggml_is_contiguous(t)) return false;
+        if (ggml_n_dims(t) != 2) return false;
+        if (t->ne[0] < 256 || t->ne[1] < 256) return false;
+        return true;
+    }
+
+    bool alloc_params_buffer_multi() {
+#ifdef SD_USE_CUDA
+        // Walk params_ctx, classify tensors into split-eligible vs. main, then
+        // allocate two buffers (split buft + per-device buft) and bind tensors
+        // via ggml_tallocr.
+        ggml_backend_buffer_type_t main_buft = ggml_backend_get_default_buffer_type(runtime_backend);
+        const size_t main_align  = ggml_backend_buft_get_alignment(main_buft);
+        const size_t split_align = ggml_backend_buft_get_alignment(split_buft);
+
+        size_t main_size = 0, split_size = 0;
+        size_t main_count = 0, split_count = 0;
+        for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr;
+             t = ggml_get_next_tensor(params_ctx, t)) {
+            if (is_split_eligible(t)) {
+                size_t s = ggml_backend_buft_get_alloc_size(split_buft, t);
+                split_size += GGML_PAD(s, split_align);
+                split_count++;
+            } else {
+                size_t s = ggml_backend_buft_get_alloc_size(main_buft, t);
+                main_size += GGML_PAD(s, main_align);
+                main_count++;
+            }
+        }
+
+        if (main_size > 0) {
+            params_buffer = ggml_backend_buft_alloc_buffer(main_buft, main_size);
+            if (params_buffer == nullptr) {
+                LOG_ERROR("%s alloc main params buffer failed (%.1f MB)",
+                          get_desc().c_str(), main_size / (1024.f * 1024.f));
+                return false;
+            }
+        }
+        if (split_size > 0) {
+            split_params_buffer = ggml_backend_buft_alloc_buffer(split_buft, split_size);
+            if (split_params_buffer == nullptr) {
+                LOG_ERROR("%s alloc split params buffer failed (%.1f MB)",
+                          get_desc().c_str(), split_size / (1024.f * 1024.f));
+                return false;
+            }
+        }
+
+        ggml_tallocr main_alloc{};
+        ggml_tallocr split_alloc{};
+        if (params_buffer != nullptr)       main_alloc  = ggml_tallocr_new(params_buffer);
+        if (split_params_buffer != nullptr) split_alloc = ggml_tallocr_new(split_params_buffer);
+
+        for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr;
+             t = ggml_get_next_tensor(params_ctx, t)) {
+            ggml_status st = is_split_eligible(t)
+                                 ? ggml_tallocr_alloc(&split_alloc, t)
+                                 : ggml_tallocr_alloc(&main_alloc, t);
+            if (st != GGML_STATUS_SUCCESS) {
+                LOG_ERROR("%s tallocr_alloc failed for tensor %s",
+                          get_desc().c_str(), t->name);
+                return false;
+            }
+        }
+
+        if (params_buffer != nullptr) {
+            ggml_backend_buffer_set_usage(params_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        }
+        if (split_params_buffer != nullptr) {
+            ggml_backend_buffer_set_usage(split_params_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        }
+
+        LOG_INFO("%s tensor-split params: main %.1f MB (%zu tensors), split %.1f MB (%zu tensors)",
+                 get_desc().c_str(),
+                 main_size / (1024.f * 1024.f), main_count,
+                 split_size / (1024.f * 1024.f), split_count);
+        return true;
+#else
+        LOG_ERROR("alloc_params_buffer_multi called without CUDA support");
+        return false;
+#endif
+    }
+
+    // Internal allocator — always materializes the params buffer. Used by
+    // both the eager `alloc_params_buffer` path and the lazy
+    // `ensure_params_loaded` path; the latter must bypass the lazy-skip.
+    bool do_alloc_params_buffer() {
+        if (multi_backend_mode && split_buft != nullptr) {
+            return alloc_params_buffer_multi();
+        }
         size_t num_tensors = ggml_tensor_num(params_ctx);
         params_buffer      = ggml_backend_alloc_ctx_tensors(params_ctx, params_backend);
         if (params_buffer == nullptr) {
             LOG_ERROR("%s alloc params backend buffer failed, num_tensors = %i",
-                      get_desc().c_str(),
-                      num_tensors);
+                      get_desc().c_str(), num_tensors);
             return false;
         }
         size_t params_buffer_size = ggml_backend_buffer_get_size(params_buffer);
@@ -2048,21 +2347,111 @@ public:
                   params_buffer_size / (1024.f * 1024.f),
                   ggml_backend_is_cpu(params_backend) ? "RAM" : "VRAM",
                   num_tensors);
+        if (params_buffer_size >= size_t(1) << 30) {
+            std::map<ggml_type, std::pair<size_t, size_t>> per_type;
+            for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr;
+                 t = ggml_get_next_tensor(params_ctx, t)) {
+                auto& entry = per_type[t->type];
+                entry.first += ggml_nbytes(t);
+                entry.second += 1;
+            }
+            std::string breakdown;
+            for (const auto& kv : per_type) {
+                char buf[96];
+                std::snprintf(buf, sizeof(buf), "%s %zu/%6.1fMB ",
+                              ggml_type_name(kv.first), kv.second.second,
+                              kv.second.first / (1024.f * 1024.f));
+                breakdown += buf;
+            }
+            LOG_INFO("%s param breakdown: %s", get_desc().c_str(), breakdown.c_str());
+        }
         return true;
     }
 
+    bool alloc_params_buffer() {
+        // Lazy mode: defer alloc + disk read until first compute(). The runner
+        // is configured but holds no VRAM until then. Caller still goes through
+        // the same alloc + get_param_tensors flow at init; the load step inside
+        // ModelLoader::load_tensors silently skips this runner's tensors (their
+        // ->data is null because no buffer is allocated yet — the loader's
+        // unknown-tensor branch handles that via the per-component tensor map).
+        if (lazy_load_fn) return true;
+        return do_alloc_params_buffer();
+    }
+
     void free_params_buffer() {
+        // When offload_params_to_cpu is in effect, the tensors currently point
+        // at `runtime_params_buffer` (on the runtime backend). Restore them to
+        // `params_buffer` and free the runtime copy before freeing the params
+        // buffer itself — otherwise subsequent offloads would re-copy freed
+        // memory and the runtime buffer would leak on teardown.
+        offload_params_to_params_backend();
         if (params_buffer != nullptr) {
             ggml_backend_buffer_free(params_buffer);
             params_buffer = nullptr;
         }
+        if (split_params_buffer != nullptr) {
+            ggml_backend_buffer_free(split_params_buffer);
+            split_params_buffer = nullptr;
+        }
+        // Drop sched too — its compute buffer is bound to the now-freed params
+        // backend(s). Next compute() will re-create it from a freshly allocated
+        // (lazy-loaded) params buffer.
+        if (sched != nullptr) {
+            ggml_backend_sched_free(sched);
+            sched = nullptr;
+            sched_reserved = false;
+        }
+    }
+
+    // Register a callback that lazy-loads this runner's weights into ggml
+    // tensors AFTER alloc_params_buffer succeeds. ensure_params_loaded()
+    // invokes alloc + this callback on the first compute() (or after a
+    // previous free_params_buffer). Used by the sequential-loading path in
+    // stable-diffusion.cpp where DiT and Conditioner lazy-load their weights
+    // from disk so peak VRAM is per-phase rather than sum-of-components.
+    void set_lazy_load(std::function<bool()> fn) {
+        lazy_load_fn = std::move(fn);
+    }
+
+    bool ensure_params_loaded() {
+        // Already alloc'd (eager mode or previously lazy-loaded and not yet freed).
+        if (params_buffer != nullptr || split_params_buffer != nullptr) {
+            return true;
+        }
+        if (!lazy_load_fn) {
+            // Eager mode but caller forgot to alloc — surface an error rather
+            // than crashing later in graph alloc.
+            LOG_ERROR("%s: no params buffer and no lazy_load_fn — caller must alloc_params_buffer", get_desc().c_str());
+            return false;
+        }
+        int64_t t0 = ggml_time_ms();
+        // Use do_alloc_params_buffer (which bypasses the lazy-skip in the
+        // public alloc_params_buffer wrapper). Otherwise the buffer would
+        // remain unallocated and lazy_load_fn would write into null tensor
+        // data pointers and the disk read would fail.
+        if (!do_alloc_params_buffer()) {
+            LOG_ERROR("%s: lazy alloc_params_buffer failed", get_desc().c_str());
+            return false;
+        }
+        if (!lazy_load_fn()) {
+            LOG_ERROR("%s: lazy load callback failed", get_desc().c_str());
+            return false;
+        }
+        int64_t t1 = ggml_time_ms();
+        LOG_INFO("%s: lazy-loaded params in %.2fs", get_desc().c_str(), (t1 - t0) / 1000.f);
+        return true;
     }
 
     size_t get_params_buffer_size() {
+        size_t total = 0;
         if (params_buffer != nullptr) {
-            return ggml_backend_buffer_get_size(params_buffer);
+            total += ggml_backend_buffer_get_size(params_buffer);
         }
-        return 0;
+        if (split_params_buffer != nullptr) {
+            total += ggml_backend_buffer_get_size(split_params_buffer);
+        }
+        return total;
     }
 
     void free_cache_ctx_and_buffer() {
@@ -2075,11 +2464,32 @@ public:
             ggml_gallocr_free(compute_allocr);
             compute_allocr = nullptr;
         }
-        offload_params_to_params_backend();
+        if (sched != nullptr) {
+            // Reset rather than free: keeping the sched alive across compute()
+            // calls of a sampling loop avoids the per-step rebuild cost.
+            // free_params_immediately tears the runner down entirely (dtor),
+            // which frees sched fully — see ~GGMLRunner.
+            ggml_backend_sched_reset(sched);
+            sched_reserved = false;
+        }
+        // Intentionally do NOT call offload_params_to_params_backend() here.
+        // For offload mode, keeping runtime_params_buffer resident across
+        // compute() calls of the same runner is the whole point — otherwise
+        // a DiT sampling loop re-uploads ~9 GB from RAM to GPU every CFG pass
+        // (observed ~5.7 min of pure upload overhead on 60-step 720p runs).
+        // free_params_buffer() handles the offload teardown when the caller
+        // is actually done with the runner (sd.cpp triggers it via
+        // free_params_immediately between components).
     }
 
     // do copy after alloc graph
     void set_backend_tensor_data(ggml_tensor* tensor, const void* data) {
+        // Mark as INPUT so ggml_backend_sched assigns the tensor a backend
+        // (last-prio CPU). Without this, tensors with no producers and no
+        // GPU consumers leave sched at backend_id=-1, tripping
+        // ggml_gallocr_allocate_node's GGML_ASSERT(buffer_id >= 0). Harmless
+        // for the gallocr (single-backend) path.
+        ggml_set_input(tensor);
         backend_tensor_data_map[tensor] = data;
     }
 
@@ -2139,6 +2549,11 @@ public:
                                          int n_threads,
                                          bool free_compute_buffer_immediately,
                                          bool no_return = false) {
+        // Lazy load: if this runner was registered with a lazy_load_fn,
+        // alloc_params_buffer + read weights from disk now (or after a free).
+        if (!ensure_params_loaded()) {
+            return std::nullopt;
+        }
         if (!offload_params_to_runtime_backend()) {
             LOG_ERROR("%s offload params to runtime backend failed", get_desc().c_str());
             return std::nullopt;
@@ -2147,6 +2562,41 @@ public:
             LOG_ERROR("%s alloc compute buffer failed", get_desc().c_str());
             return std::nullopt;
         }
+
+        if (multi_backend_mode) {
+            // Sched path: reset, build a fresh graph, alloc through the sched,
+            // populate inputs, compute. The CUDA backend handles cross-device
+            // dispatch for split-tensor matmuls internally.
+            ggml_backend_sched_reset(sched);
+            reset_compute_ctx();
+            ggml_cgraph* gf = get_compute_graph(get_graph);
+            if (!ggml_backend_sched_alloc_graph(sched, gf)) {
+                LOG_ERROR("%s sched alloc graph failed", get_desc().c_str());
+                return std::nullopt;
+            }
+            copy_data_to_backend_tensor();
+            if (cpu_fallback_backend && ggml_backend_is_cpu(cpu_fallback_backend)) {
+                ggml_backend_cpu_set_n_threads(cpu_fallback_backend, n_threads);
+            }
+            ggml_status status = ggml_backend_sched_graph_compute(sched, gf);
+            if (status != GGML_STATUS_SUCCESS) {
+                LOG_ERROR("%s sched compute failed: %s",
+                          get_desc().c_str(), ggml_status_to_string(status));
+                return std::nullopt;
+            }
+            ggml_backend_sched_synchronize(sched);
+            copy_cache_tensors_to_cache_buffer();
+            auto result = ggml_get_tensor(compute_ctx, final_result_name.c_str());
+            std::optional<sd::Tensor<T>> output;
+            if (!no_return) {
+                output = sd::make_sd_tensor_from_ggml<T>(result);
+            }
+            if (free_compute_buffer_immediately) {
+                free_compute_buffer();
+            }
+            return output;
+        }
+
         reset_compute_ctx();
         ggml_cgraph* gf = get_compute_graph(get_graph);
         if (!ggml_gallocr_alloc_graph(compute_allocr, gf)) {
@@ -2353,12 +2803,67 @@ public:
     }
 };
 
+// Set by GGMLRunner's constructor to the params backend of the most recently
+// constructed runner. Read by support_get_rows() below. Defined as a
+// function-local static so the header stays single-definition.
+__STATIC_INLINE__ ggml_backend_t& current_params_backend() {
+    static ggml_backend_t b = nullptr;
+    return b;
+}
+
 __STATIC_INLINE__ bool support_get_rows(ggml_type wtype) {
-    std::set<ggml_type> allow_types = {GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0};
-    if (allow_types.find(wtype) != allow_types.end()) {
-        return true;
-    }
-    return false;
+    // ggml-cpu implements get_rows for the full quant set in
+    // ggml_compute_forward_get_rows (ggml-cpu/ops.cpp) — both the legacy
+    // Q{4,5,8}_{0,1} formats AND the K-quants / IQ-quants. The CUDA kernel
+    // in ggml-cuda/getrows.cu only supports F16/BF16/F32/I32 + legacy
+    // Q4_{0,1}/Q5_{0,1}/Q8_0 — calling it with a K- or IQ-quant aborts.
+    // So the allowlist must match the BACKEND that will actually hold the
+    // Embedding weight. When the current runner's params backend is CUDA
+    // we fall back to F32 for non-legacy quants (costs ~3.5 GB VRAM for a
+    // Gemma 12B IQ4_XS token_embd, but is the only option that runs).
+    static const std::set<ggml_type> allow_legacy = {
+        GGML_TYPE_F16,
+        GGML_TYPE_BF16,
+        GGML_TYPE_Q8_0,
+        GGML_TYPE_Q5_1,
+        GGML_TYPE_Q5_0,
+        GGML_TYPE_Q4_1,
+        GGML_TYPE_Q4_0,
+    };
+    static const std::set<ggml_type> allow_full = {
+        GGML_TYPE_F16,
+        GGML_TYPE_BF16,
+        GGML_TYPE_Q8_0,
+        GGML_TYPE_Q5_1,
+        GGML_TYPE_Q5_0,
+        GGML_TYPE_Q4_1,
+        GGML_TYPE_Q4_0,
+        GGML_TYPE_Q2_K,
+        GGML_TYPE_Q3_K,
+        GGML_TYPE_Q4_K,
+        GGML_TYPE_Q5_K,
+        GGML_TYPE_Q6_K,
+        GGML_TYPE_IQ2_XXS,
+        GGML_TYPE_IQ2_XS,
+        GGML_TYPE_IQ2_S,
+        GGML_TYPE_IQ3_XXS,
+        GGML_TYPE_IQ3_S,
+        GGML_TYPE_IQ1_S,
+        GGML_TYPE_IQ1_M,
+        GGML_TYPE_IQ4_NL,
+        GGML_TYPE_IQ4_XS,
+    };
+
+    ggml_backend_t b = current_params_backend();
+    const bool     on_cpu =
+        (b == nullptr) || ggml_backend_is_cpu(b);
+    // Debug knob: set SD_FORCE_LEGACY_GETROWS=1 to apply the CUDA-safe
+    // allowlist on both CPU and CUDA. Useful for isolating whether CPU and
+    // CUDA agree on the F32 fallback path.
+    static const bool force_legacy =
+        std::getenv("SD_FORCE_LEGACY_GETROWS") != nullptr;
+    const auto& allow = (on_cpu && !force_legacy) ? allow_full : allow_legacy;
+    return allow.count(wtype) > 0;
 }
 
 class Embedding : public UnaryBlock {

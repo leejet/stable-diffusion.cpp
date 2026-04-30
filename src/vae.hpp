@@ -7,7 +7,12 @@
 struct VAE : public GGMLRunner {
 protected:
     SDVersion version;
+    // scale_input: encode-time [0,1]→[-1,1] of the user-provided RGB image.
+    // scale_output: decode-time [-1,1]→[0,1] of the decoder's RGB output.
+    // These are independent: LTX-2 takes [-1,1] inputs (no encode scaling) but
+    // still produces [-1,1] outputs that callers expect mapped to [0,1].
     bool scale_input                                      = true;
+    bool scale_output                                     = true;
     virtual sd::Tensor<float> _compute(const int n_threads,
                                        const sd::Tensor<float>& z,
                                        bool decode_graph) = 0;
@@ -73,6 +78,9 @@ public:
             scale_factor = 16;
         } else if (version == VERSION_CHROMA_RADIANCE) {
             scale_factor = 1;
+        } else if (sd_version_is_ltx2(version)) {
+            // LTX-2 VAE: 32× spatial compression (256×256 → 8×8 latent).
+            scale_factor = 32;
         }
         return scale_factor;
     }
@@ -199,7 +207,7 @@ public:
             LOG_ERROR("vae decode compute failed");
             return {};
         }
-        if (scale_input) {
+        if (scale_output) {
             scale_tensor_to_0_1(&output);
         }
         int64_t t1 = ggml_time_ms();

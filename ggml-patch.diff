@@ -1,0 +1,20 @@
+diff --git a/src/ggml-cuda/ggml-cuda.cu b/src/ggml-cuda/ggml-cuda.cu
+index cc80eb3f..dd79d9c0 100644
+--- a/src/ggml-cuda/ggml-cuda.cu
++++ b/src/ggml-cuda/ggml-cuda.cu
+@@ -865,7 +865,14 @@ static void * ggml_backend_cuda_split_buffer_get_base(ggml_backend_buffer_t buff
+ }
+ 
+ static enum ggml_status ggml_backend_cuda_split_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
+-    GGML_ASSERT(tensor->view_src == nullptr); // views of split tensors are not supported
++    // Views: the view's storage comes from view_src, so we don't allocate
++    // anything on the split buffer for it. The split buffer's per-device
++    // shards aren't applicable to a view — the view simply reuses view_src's
++    // memory layout. Sched will route any op that consumes this view through
++    // view_src's backend.
++    if (tensor->view_src != nullptr) {
++        return GGML_STATUS_SUCCESS;
++    }
+     GGML_ASSERT(ggml_is_contiguous(tensor) && "split buffers only supported for contiguous tensors");
+ 
+     ggml_backend_cuda_split_buffer_context * ctx = (ggml_backend_cuda_split_buffer_context *)buffer->context;

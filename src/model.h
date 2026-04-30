@@ -45,6 +45,7 @@ enum SDVersion {
     VERSION_Z_IMAGE,
     VERSION_OVIS_IMAGE,
     VERSION_ERNIE_IMAGE,
+    VERSION_LTX2,
     VERSION_COUNT,
 };
 
@@ -139,6 +140,13 @@ static inline bool sd_version_is_ernie_image(SDVersion version) {
     return false;
 }
 
+static inline bool sd_version_is_ltx2(SDVersion version) {
+    if (version == VERSION_LTX2) {
+        return true;
+    }
+    return false;
+}
+
 static inline bool sd_version_uses_flux2_vae(SDVersion version) {
     if (sd_version_is_flux2(version) || sd_version_is_ernie_image(version)) {
         return true;
@@ -165,7 +173,8 @@ static inline bool sd_version_is_dit(SDVersion version) {
         sd_version_is_qwen_image(version) ||
         sd_version_is_anima(version) ||
         sd_version_is_z_image(version) ||
-        sd_version_is_ernie_image(version)) {
+        sd_version_is_ernie_image(version) ||
+        sd_version_is_ltx2(version)) {
         return true;
     }
     return false;
@@ -192,6 +201,8 @@ typedef OrderedMap<std::string, TensorStorage> String2TensorStorage;
 using TensorTypeRules = std::vector<std::pair<std::string, ggml_type>>;
 
 TensorTypeRules parse_tensor_type_rules(const std::string& tensor_type_rules);
+
+bool is_unused_tensor(const std::string& name);
 
 class ModelLoader {
 protected:

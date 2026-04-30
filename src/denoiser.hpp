@@ -720,6 +720,97 @@ struct FluxFlowDenoiser : public DiscreteFlowDenoiser {
     }
 };
 
+// LTX-2 flow-match denoiser.
+//
+// Reference: /devel/tools/diffusion/LTX-2/packages/ltx-core/src/ltx_core/components/schedulers.py
+//
+// Key differences from FluxFlowDenoiser:
+//   - sigma_to_t(σ) = σ * 1000   (Flux passes raw σ; LTX's TransformerArgsPreprocessor scales by
+//                                 1000 in Python, but we externalise that to the denoiser so the
+//                                 DiT's AdaLayerNormSingle doesn't double-multiply).
+//   - Token-count-dependent shift: mu = linear_interp(tokens, 1024→0.95, 4096→2.05), log-space.
+//   - Terminal stretch: after flux_time_shift, rescale non-zero sigmas so the last non-zero lands
+//     at `terminal` (default 0.1). This is what the LTX-2 distilled LoRAs expect.
+//   - scheduler_t is ignored — LTX2Scheduler is fixed; a non-default value would give wrong
+//     behaviour for the trained weights.
+struct LTX2FlowDenoiser : public DiscreteFlowDenoiser {
+    static constexpr int BASE_SHIFT_ANCHOR = 1024;
+    static constexpr int MAX_SHIFT_ANCHOR  = 4096;
+
+    // Log-space shift anchors; get exponentiated in compute_mu.
+    float max_shift  = 2.05f;
+    float base_shift = 0.95f;
+    float terminal   = 0.1f;
+    bool stretch     = true;
+
+    LTX2FlowDenoiser() = default;
+
+    // Compute the shift `mu` used inside flux_time_shift. Python:
+    //   mm = (max_shift - base_shift) / (MAX_ANCHOR - BASE_ANCHOR)
+    //   b  = base_shift - mm * BASE_ANCHOR
+    //   sigma_shift = tokens * mm + b
+    float compute_mu(int tokens) const {
+        float mm = (max_shift - base_shift) / static_cast<float>(MAX_SHIFT_ANCHOR - BASE_SHIFT_ANCHOR);
+        float b  = base_shift - mm * static_cast<float>(BASE_SHIFT_ANCHOR);
+        return static_cast<float>(tokens) * mm + b;
+    }
+
+    // t_to_sigma uses the base-shift mapping as a best-effort inverse. The real inverse depends on
+    // the terminal stretch, which needs the full schedule context — sampling never actually inverts
+    // t_to_sigma at arbitrary points, so this is only here to satisfy the virtual interface.
+    float t_to_sigma(float t) override {
+        return flux_time_shift(base_shift, 1.0f, (t + 1.0f) / TIMESTEPS);
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler_type, SDVersion /*version*/) override {
+        if (scheduler_type != DISCRETE_SCHEDULER) {
+            LOG_WARN("LTX2FlowDenoiser: ignoring scheduler_type=%d; LTX-2 uses a fixed schedule",
+                     static_cast<int>(scheduler_type));
+        }
+
+        int tokens   = image_seq_len > 0 ? image_seq_len : MAX_SHIFT_ANCHOR;
+        float mu     = compute_mu(tokens);
+        float exp_mu = std::exp(mu);
+        LOG_DEBUG("LTX2FlowDenoiser: tokens=%d mu=%.4f stretch=%d terminal=%.3f",
+                  tokens, mu, stretch ? 1 : 0, terminal);
+
+        std::vector<float> sigmas(n + 1);
+        // linspace(1.0, 0.0, n+1) then apply flux_time_shift (power=1) to non-zero entries.
+        for (uint32_t i = 0; i <= n; ++i) {
+            float t = 1.0f - static_cast<float>(i) / static_cast<float>(n);
+            if (t <= 0.0f) {
+                sigmas[i] = 0.0f;
+            } else {
+                sigmas[i] = exp_mu / (exp_mu + (1.0f / t - 1.0f));
+            }
+        }
+
+        // Terminal stretch: rescale `1 - σ` so that the last non-zero σ lands at `terminal`.
+        if (stretch) {
+            int last_nonzero = -1;
+            for (int i = static_cast<int>(n); i >= 0; --i) {
+                if (sigmas[i] > 0.0f) {
+                    last_nonzero = i;
+                    break;
+                }
+            }
+            if (last_nonzero > 0) {
+                float one_minus_last = 1.0f - sigmas[last_nonzero];
+                float scale_factor   = one_minus_last / (1.0f - terminal);
+                if (scale_factor > 0.0f) {
+                    for (uint32_t i = 0; i <= n; ++i) {
+                        if (sigmas[i] > 0.0f) {
+                            sigmas[i] = 1.0f - (1.0f - sigmas[i]) / scale_factor;
+                        }
+                    }
+                }
+            }
+        }
+
+        return sigmas;
+    }
+};
+
 struct Flux2FlowDenoiser : public FluxFlowDenoiser {
     Flux2FlowDenoiser() = default;
 

@@ -320,6 +320,10 @@ ArgOptions SDContextParams::get_options() {
          "alias of --llm_vision. Deprecated.",
          &llm_vision_path},
         {"",
+         "--gemma-tokenizer",
+         "path to Gemma's tokenizer.json (HF format). Required for LTX-2 text conditioning.",
+         &gemma_tokenizer_path},
+        {"",
          "--diffusion-model",
          "path to the standalone diffusion model",
          &diffusion_model_path},
@@ -376,6 +380,25 @@ ArgOptions SDContextParams::get_options() {
          "--chroma-t5-mask-pad",
          "t5 mask pad size of chroma",
          &chroma_t5_mask_pad},
+        {"",
+         "--fit-target",
+         "auto-fit: MiB of free memory to leave on each GPU (default: 512)",
+         &auto_fit_target_mb},
+        {"",
+         "--fit-compute-reserve-dit",
+         "auto-fit: MiB reserved on the DiT's GPU for its compute buffer "
+         "(default: 2048, 0 keeps the built-in default)",
+         &auto_fit_compute_reserve_dit_mb},
+        {"",
+         "--fit-compute-reserve-vae",
+         "auto-fit: MiB reserved on the VAE's GPU for its compute buffer "
+         "(default: 1024, 0 keeps the built-in default)",
+         &auto_fit_compute_reserve_vae_mb},
+        {"",
+         "--fit-compute-reserve-cond",
+         "auto-fit: MiB reserved on the conditioner's GPU for its compute "
+         "buffer (default: 512, 0 keeps the built-in default)",
+         &auto_fit_compute_reserve_cond_mb},
     };
 
     options.float_options = {};
@@ -445,6 +468,27 @@ ArgOptions SDContextParams::get_options() {
          "--chroma-enable-t5-mask",
          "enable t5 mask for chroma",
          true, &chroma_use_t5_mask},
+        {"",
+         "--auto-fit",
+         "automatically pick DiT/VAE/Conditioner device placements based on "
+         "free GPU memory (default ON; priority: DiT+compute > VAE > "
+         "Conditioner; overflow goes to CPU or DiT-params-offload mode)",
+         true, &auto_fit},
+        {"",
+         "--no-auto-fit",
+         "disable auto-fit and use the explicit placement flags / env vars "
+         "(--clip-on-cpu, --vae-on-cpu, SD_CUDA_DEVICE*, etc.)",
+         false, &auto_fit},
+        {"",
+         "--no-tensor-split",
+         "disable auto tensor split: keep the DiT on a single GPU even when "
+         "more than one CUDA device is detected. SD_CUDA_TENSOR_SPLIT env "
+         "still wins when set.",
+         false, &auto_tensor_split},
+        {"",
+         "--fit-dry-run",
+         "auto-fit: print the computed plan and exit without loading models",
+         true, &auto_fit_dry_run},
     };
 
     auto on_type_arg = [&](int argc, const char** argv, int index) {
@@ -517,6 +561,12 @@ ArgOptions SDContextParams::get_options() {
         return 1;
     };
 
+    auto on_no_lazy_load_arg = [&](int /*argc*/, const char** /*argv*/, int /*index*/) {
+        lazy_load_dit  = false;
+        lazy_load_cond = false;
+        return 0;
+    };
+
     options.manual_options = {
         {"",
          "--type",
@@ -543,6 +593,12 @@ ArgOptions SDContextParams::get_options() {
          "but it usually offers faster inference speed and, in some cases, lower memory usage. "
          "The at_runtime mode, on the other hand, is exactly the opposite.",
          on_lora_apply_mode_arg},
+        {"",
+         "--no-lazy-load",
+         "disable lazy load of DiT and conditioner-LLM weights (default ON). "
+         "Lazy load defers per-component allocation+read until first compute() "
+         "so the working set never holds all components resident.",
+         on_no_lazy_load_arg},
     };
 
     return options;
@@ -638,6 +694,7 @@ std::string SDContextParams::to_string() const {
         << "  t5xxl_path: \"" << t5xxl_path << "\",\n"
         << "  llm_path: \"" << llm_path << "\",\n"
         << "  llm_vision_path: \"" << llm_vision_path << "\",\n"
+        << "  gemma_tokenizer_path: \"" << gemma_tokenizer_path << "\",\n"
         << "  diffusion_model_path: \"" << diffusion_model_path << "\",\n"
         << "  high_noise_diffusion_model_path: \"" << high_noise_diffusion_model_path << "\",\n"
         << "  vae_path: \"" << vae_path << "\",\n"
@@ -693,6 +750,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         t5xxl_path.c_str(),
         llm_path.c_str(),
         llm_vision_path.c_str(),
+        gemma_tokenizer_path.c_str(),
         diffusion_model_path.c_str(),
         high_noise_diffusion_model_path.c_str(),
         vae_path.c_str(),
@@ -727,6 +785,15 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         chroma_use_t5_mask,
         chroma_t5_mask_pad,
         qwen_image_zero_cond_t,
+        auto_fit,
+        auto_fit_target_mb,
+        auto_fit_dry_run,
+        auto_fit_compute_reserve_dit_mb,
+        auto_fit_compute_reserve_vae_mb,
+        auto_fit_compute_reserve_cond_mb,
+        lazy_load_dit,
+        lazy_load_cond,
+        auto_tensor_split,
     };
     return sd_ctx_params;
 }
@@ -841,6 +908,18 @@ ArgOptions SDGenerationParams::get_options() {
          "--guidance",
          "distilled guidance scale for models with guidance input (default: 3.5)",
          &sample_params.guidance.distilled_guidance},
+        {"",
+         "--rescale-scale",
+         "CFG-rescale to combat oversaturation (default: 0; LTX-2.3 expects 0.7)",
+         &sample_params.guidance.rescale_scale},
+        {"",
+         "--stg-scale",
+         "Spatio-Temporal Guidance scale (default: 0; LTX-2.3 expects 1.0 with --stg-blocks [28])",
+         &sample_params.guidance.stg_scale},
+        {"",
+         "--high-noise-stg-scale",
+         "(high noise) Spatio-Temporal Guidance scale (default: 0)",
+         &high_noise_sample_params.guidance.stg_scale},
         {"",
          "--slg-scale",
          "skip layer guidance (SLG) scale, only for DiT models: (default: 0). 0 means disabled, a value of 2.5 is nice for sd3.5 medium",
@@ -1042,6 +1121,36 @@ ArgOptions SDGenerationParams::get_options() {
         return 1;
     };
 
+    auto parse_int_list = [](std::string s, std::vector<int>& out) -> bool {
+        if (s.empty()) return false;
+        if (s.front() == '[') s.erase(0, 1);
+        if (!s.empty() && s.back() == ']') s.pop_back();
+        std::regex regex("[, ]+");
+        std::sregex_token_iterator iter(s.begin(), s.end(), regex, -1);
+        std::sregex_token_iterator end;
+        std::vector<int> tmp;
+        for (auto it = iter; it != end; ++it) {
+            std::string token = *it;
+            if (token.empty()) continue;
+            try {
+                tmp.push_back(std::stoi(token));
+            } catch (const std::invalid_argument&) {
+                return false;
+            }
+        }
+        out = std::move(tmp);
+        return true;
+    };
+
+    auto on_stg_blocks_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) return -1;
+        return parse_int_list(argv[index], stg_blocks) ? 1 : -1;
+    };
+    auto on_high_noise_stg_blocks_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) return -1;
+        return parse_int_list(argv[index], high_noise_stg_blocks) ? 1 : -1;
+    };
+
     auto on_sigmas_arg = [&](int argc, const char** argv, int index) {
         if (++index >= argc) {
             return -1;
@@ -1209,6 +1318,14 @@ ArgOptions SDGenerationParams::get_options() {
          "--high-noise-skip-layers",
          "(high noise) layers to skip for SLG steps (default: [7,8,9])",
          on_high_noise_skip_layers_arg},
+        {"",
+         "--stg-blocks",
+         "blocks for STG perturbed pass (LTX-2.3 default: [28]). Empty disables STG.",
+         on_stg_blocks_arg},
+        {"",
+         "--high-noise-stg-blocks",
+         "(high noise) blocks for STG perturbed pass.",
+         on_high_noise_stg_blocks_arg},
         {"-r",
          "--ref-image",
          "reference image for Flux Kontext models (can be used multiple times)",
@@ -1932,6 +2049,10 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     sample_params.guidance.slg.layer_count            = skip_layers.size();
     high_noise_sample_params.guidance.slg.layers      = high_noise_skip_layers.empty() ? nullptr : high_noise_skip_layers.data();
     high_noise_sample_params.guidance.slg.layer_count = high_noise_skip_layers.size();
+    sample_params.guidance.stg_blocks                 = stg_blocks.empty() ? nullptr : stg_blocks.data();
+    sample_params.guidance.stg_blocks_count           = stg_blocks.size();
+    high_noise_sample_params.guidance.stg_blocks      = high_noise_stg_blocks.empty() ? nullptr : high_noise_stg_blocks.data();
+    high_noise_sample_params.guidance.stg_blocks_count = high_noise_stg_blocks.size();
     sample_params.custom_sigmas                       = custom_sigmas.empty() ? nullptr : custom_sigmas.data();
     sample_params.custom_sigmas_count                 = static_cast<int>(custom_sigmas.size());
     cache_params.scm_mask                             = scm_mask.empty() ? nullptr : scm_mask.c_str();
@@ -1991,6 +2112,10 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
     sample_params.guidance.slg.layer_count            = skip_layers.size();
     high_noise_sample_params.guidance.slg.layers      = high_noise_skip_layers.empty() ? nullptr : high_noise_skip_layers.data();
     high_noise_sample_params.guidance.slg.layer_count = high_noise_skip_layers.size();
+    sample_params.guidance.stg_blocks                 = stg_blocks.empty() ? nullptr : stg_blocks.data();
+    sample_params.guidance.stg_blocks_count           = stg_blocks.size();
+    high_noise_sample_params.guidance.stg_blocks      = high_noise_stg_blocks.empty() ? nullptr : high_noise_stg_blocks.data();
+    high_noise_sample_params.guidance.stg_blocks_count = high_noise_stg_blocks.size();
     sample_params.custom_sigmas                       = custom_sigmas.empty() ? nullptr : custom_sigmas.data();
     sample_params.custom_sigmas_count                 = static_cast<int>(custom_sigmas.size());
     cache_params.scm_mask                             = scm_mask.empty() ? nullptr : scm_mask.c_str();
@@ -2012,6 +2137,7 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
     params.strength                 = strength;
     params.seed                     = seed;
     params.video_frames             = video_frames;
+    params.fps                      = static_cast<float>(fps);
     params.vace_strength            = vace_strength;
     params.vae_tiling_params        = vae_tiling_params;
     params.cache                    = cache_params;

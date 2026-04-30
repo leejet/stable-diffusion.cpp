@@ -653,6 +653,39 @@ std::string convert_diffusers_dit_to_original_lumina2(std::string name) {
     return name;
 }
 
+std::string convert_diffusers_dit_to_original_ltx2(std::string name) {
+    // Maps diffusers' LTX Video Transformer naming → original LTX-2 naming.
+    // The GGML block tree mirrors the original Python class attribute names, so anything matching the
+    // original naming passes through. Only the few diffusers-specific renames are listed here.
+    static std::unordered_map<std::string, std::string> ltx2_name_map;
+
+    if (ltx2_name_map.empty()) {
+        // Input projection: diffusers names it x_embedder; original uses patchify_proj.
+        ltx2_name_map["x_embedder.weight"] = "patchify_proj.weight";
+        ltx2_name_map["x_embedder.bias"]   = "patchify_proj.bias";
+
+        // Timestep head: diffusers sometimes puts these under time_embed / time_text_embed while the
+        // original LTX-2 uses adaln_single.emb.timestep_embedder.linear_{1,2} and adaln_single.linear.
+        ltx2_name_map["time_embed.timestep_embedder.linear_1.weight"]      = "adaln_single.emb.timestep_embedder.linear_1.weight";
+        ltx2_name_map["time_embed.timestep_embedder.linear_1.bias"]        = "adaln_single.emb.timestep_embedder.linear_1.bias";
+        ltx2_name_map["time_embed.timestep_embedder.linear_2.weight"]      = "adaln_single.emb.timestep_embedder.linear_2.weight";
+        ltx2_name_map["time_embed.timestep_embedder.linear_2.bias"]        = "adaln_single.emb.timestep_embedder.linear_2.bias";
+        ltx2_name_map["time_embed.linear.weight"]                          = "adaln_single.linear.weight";
+        ltx2_name_map["time_embed.linear.bias"]                            = "adaln_single.linear.bias";
+        ltx2_name_map["time_text_embed.timestep_embedder.linear_1.weight"] = "adaln_single.emb.timestep_embedder.linear_1.weight";
+        ltx2_name_map["time_text_embed.timestep_embedder.linear_1.bias"]   = "adaln_single.emb.timestep_embedder.linear_1.bias";
+        ltx2_name_map["time_text_embed.timestep_embedder.linear_2.weight"] = "adaln_single.emb.timestep_embedder.linear_2.weight";
+        ltx2_name_map["time_text_embed.timestep_embedder.linear_2.bias"]   = "adaln_single.emb.timestep_embedder.linear_2.bias";
+
+        // Transformer block names typically match (attn1/attn2/ff/scale_shift_table), so nothing to rewrite.
+        // Output projection & scale_shift_table pass through.
+    }
+
+    replace_with_prefix_map(name, ltx2_name_map);
+
+    return name;
+}
+
 std::string convert_other_dit_to_original_anima(std::string name) {
     static const std::string anima_net_prefix = "net.";
     if (!starts_with(name, anima_net_prefix)) {
@@ -672,6 +705,8 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_diffusers_dit_to_original_flux(name);
     } else if (sd_version_is_z_image(version)) {
         name = convert_diffusers_dit_to_original_lumina2(name);
+    } else if (sd_version_is_ltx2(version)) {
+        name = convert_diffusers_dit_to_original_ltx2(name);
     } else if (sd_version_is_anima(version)) {
         name = convert_other_dit_to_original_anima(name);
     }

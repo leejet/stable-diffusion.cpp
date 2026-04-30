@@ -471,6 +471,9 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("model.diffusion_model.layers.0.adaLN_sa_ln.weight") != std::string::npos) {
             return VERSION_ERNIE_IMAGE;
         }
+        if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.scale_shift_table") != std::string::npos) {
+            return VERSION_LTX2;
+        }
         if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
             is_wan = true;
         }
@@ -1019,6 +1022,15 @@ bool ModelLoader::load_tensors(std::map<std::string, ggml_tensor*>& tensors,
                                bool enable_mmap) {
     std::set<std::string> tensor_names_in_file;
     std::mutex tensor_names_mutex;
+    // SD_QUIET_UNKNOWN_TENSORS=1 silences the per-tensor "unknown tensor"
+    // log line. The LTX-2 pipeline ships hundreds of audio / encoder
+    // tensors that the video-only path doesn't consume, swamping the log.
+    // Default is OFF (current behaviour, log every unknown).
+    const char* env_quiet_unknown = std::getenv("SD_QUIET_UNKNOWN_TENSORS");
+    const bool quiet_unknown      = env_quiet_unknown != nullptr && env_quiet_unknown[0] != '\0' &&
+                                    env_quiet_unknown[0] != '0';
+    size_t                  unknown_count = 0;
+    std::mutex              unknown_mutex;
     auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
         const std::string& name = tensor_storage.name;
         // LOG_DEBUG("%s", tensor_storage.to_string().c_str());
@@ -1036,7 +1048,12 @@ bool ModelLoader::load_tensors(std::map<std::string, ggml_tensor*>& tensors,
                     return true;
                 }
             }
-            LOG_INFO("unknown tensor '%s' in model file", tensor_storage.to_string().c_str());
+            if (quiet_unknown) {
+                std::lock_guard<std::mutex> lock(unknown_mutex);
+                unknown_count++;
+            } else {
+                LOG_INFO("unknown tensor '%s' in model file", tensor_storage.to_string().c_str());
+            }
             return true;
         }
 
@@ -1084,6 +1101,9 @@ bool ModelLoader::load_tensors(std::map<std::string, ggml_tensor*>& tensors,
 
     if (some_tensor_not_init) {
         return false;
+    }
+    if (quiet_unknown && unknown_count > 0) {
+        LOG_INFO("skipped %zu unknown tensors (SD_QUIET_UNKNOWN_TENSORS=1)", unknown_count);
     }
     return true;
 }
@@ -1134,6 +1154,9 @@ int64_t ModelLoader::get_params_mem_size(ggml_backend_t backend, ggml_type type)
         }
         if (tensor_should_be_converted(tensor_storage, type)) {
             tensor_storage.type = type;
+        } else if (tensor_storage.expected_type != GGML_TYPE_COUNT &&
+                   tensor_storage.expected_type != tensor_storage.type) {
+            tensor_storage.type = tensor_storage.expected_type;
         }
         mem_size += tensor_storage.nbytes() + alignment;
     }

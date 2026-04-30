@@ -90,6 +90,7 @@ struct SDContextParams {
     std::string t5xxl_path;
     std::string llm_path;
     std::string llm_vision_path;
+    std::string gemma_tokenizer_path;
     std::string diffusion_model_path;
     std::string high_noise_diffusion_model_path;
     std::string vae_path;
@@ -126,6 +127,25 @@ struct SDContextParams {
     int chroma_t5_mask_pad   = 1;
 
     bool qwen_image_zero_cond_t = false;
+
+    // Auto-fit: pick DiT/VAE/Conditioner device placements from free GPU memory.
+    // Default ON; pass --no-auto-fit to opt out.
+    bool auto_fit                         = true;
+    int  auto_fit_target_mb               = 512;
+    bool auto_fit_dry_run                 = false;
+    int  auto_fit_compute_reserve_dit_mb  = 0;  // 0 = use header default
+    int  auto_fit_compute_reserve_vae_mb  = 0;
+    int  auto_fit_compute_reserve_cond_mb = 0;
+
+    // Lazy load: defer DiT and conditioner-LLM weight allocation+read until
+    // the first compute(). Default ON; pass --no-lazy-load to opt out.
+    bool lazy_load_dit  = true;
+    bool lazy_load_cond = true;
+
+    // Auto tensor split: when >1 CUDA device is detected, split DiT row-wise
+    // across all GPUs by free-VRAM ratio. Default ON; pass --no-tensor-split
+    // to opt out. SD_CUDA_TENSOR_SPLIT env still wins when set.
+    bool auto_tensor_split = true;
 
     prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
@@ -168,6 +188,10 @@ struct SDGenerationParams {
     sd_sample_params_t high_noise_sample_params;
     std::vector<int> skip_layers            = {7, 8, 9};
     std::vector<int> high_noise_skip_layers = {7, 8, 9};
+    // STG (Spatio-Temporal Guidance) blocks (LTX-2.3 default: [28]). Empty means
+    // STG disabled even if --stg-scale is set.
+    std::vector<int> stg_blocks            = {};
+    std::vector<int> high_noise_stg_blocks = {};
 
     std::vector<float> custom_sigmas;
 

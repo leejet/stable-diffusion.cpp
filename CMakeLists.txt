@@ -265,6 +265,7 @@ target_compile_features(${SD_LIB} PUBLIC c_std_11 cxx_std_17)
 
 if (SD_BUILD_EXAMPLES)
     add_subdirectory(examples)
+    add_subdirectory(tests/ltx_parity)
 endif()
 
 set(SD_PUBLIC_HEADERS include/stable-diffusion.h)

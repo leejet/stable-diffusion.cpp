@@ -5,8 +5,10 @@
 
 #include "clip.hpp"
 #include "llm.hpp"
+#include "ltx_connector.hpp"
 #include "t5.hpp"
 #include "tensor_ggml.hpp"
+#include "tokenizers/gemma_tokenizer.h"
 
 struct SDCondition {
     sd::Tensor<float> c_crossattn;
@@ -93,6 +95,18 @@ public:
     }
     virtual std::string remove_trigger_from_prompt(const std::string& prompt) {
         GGML_ABORT("Not implemented yet!");
+    }
+    // Lazy-load hook on the LLM/Gemma side. Default no-op for conditioners
+    // whose state is too small to need it. Overridden by LTX2GemmaConditioner.
+    virtual void set_llm_lazy_load(std::function<bool()> /*fn*/) {}
+    // Tensor-map split for the lazy LLM path: populate `tensors` with ONLY the
+    // LLM's tensors (so the lazy callback knows what to load) or with
+    // EVERYTHING EXCEPT the LLM (so the global eager load skips them). Default
+    // no-op / delegates to get_param_tensors for conditioners without an LLM
+    // split point.
+    virtual void get_llm_param_tensors(std::map<std::string, ggml_tensor*>& /*tensors*/) {}
+    virtual void get_non_llm_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {
+        get_param_tensors(tensors);
     }
 };
 
@@ -1955,6 +1969,354 @@ struct LLMEmbedder : public Conditioner {
         result.c_crossattn        = std::move(hidden_states);
         result.extra_c_crossattns = std::move(extra_hidden_states_vec);
         return result;
+    }
+};
+
+// LTX-2 conditioner: Gemma 3 text encoder → feature extractor → 1D connector →
+// DiT cross-attention context. Supports both V1 (19B) and V2 (22B) feature
+// extractor variants, auto-detected from the tensor map.
+//
+// Key prefixes (native LTX-2 checkpoint layout, no name-conversion applied):
+//   text_encoder.model.*                                  Gemma weights
+//   text_embedding_projection.aggregate_embed.*           V1 FeatureExtractorV1 (19B)
+//   text_embedding_projection.video_aggregate_embed.*     V2 FeatureExtractorV2 video branch (22B)
+//   text_embedding_projection.audio_aggregate_embed.*     V2 audio branch (22B, currently unused)
+//   model.diffusion_model.embeddings_connector.*          V1 Embeddings1DConnector (19B)
+//   model.diffusion_model.video_embeddings_connector.*    V2 video connector (22B)
+//   model.diffusion_model.caption_projection.*            V1 PixArt caption_projection (on DiT)
+//                                                          (V2 has no caption_projection — feature
+//                                                           extractor already outputs DiT's inner_dim)
+//
+// If neither V1 nor V2 connector weights are present (e.g. Gemma-only test
+// checkpoints), the conditioner falls back to returning the final post-norm
+// hidden state — the same cheap path we had before Phase 9 landed.
+struct LTX2GemmaConditioner : public Conditioner {
+    std::shared_ptr<LLM::LLMRunner> llm;
+    std::shared_ptr<GemmaTokenizer> tokenizer;
+    std::shared_ptr<LTXConnector::LTX2ConnectorRunner> connector_runner;
+    std::string prefix;
+    std::string tokenizer_path;
+    int64_t gemma_hidden_size   = 0;
+    int gemma_num_hidden_layers = 0;
+    // True when using the V2 (22B) feature extractor; used by get_learned_condition
+    // to pick the right CPU normalization path.
+    bool use_v2_feature_extractor = false;
+
+    LTX2GemmaConditioner(ggml_backend_t backend,
+                         bool offload_params_to_cpu,
+                         const String2TensorStorage& tensor_storage_map,
+                         const std::string prefix            = "text_encoder",
+                         const std::string tokenizer_path    = "",
+                         const std::string feat_ext_prefix   = "text_embedding_projection",
+                         const std::string connector_prefix_arg = "")
+        : prefix(prefix), tokenizer_path(tokenizer_path) {
+        llm = std::make_shared<LLM::LLMRunner>(LLM::LLMArch::GEMMA3,
+                                               backend,
+                                               offload_params_to_cpu,
+                                               tensor_storage_map,
+                                               prefix,
+                                               /*enable_vision=*/false);
+        gemma_hidden_size       = llm->params.hidden_size;
+        gemma_num_hidden_layers = static_cast<int>(llm->params.num_layers);
+
+        if (!tokenizer_path.empty()) {
+            tokenizer = std::make_shared<GemmaTokenizer>();
+            if (!tokenizer->load_from_file(tokenizer_path)) {
+                LOG_WARN("LTX2GemmaConditioner: failed to load Gemma tokenizer from '%s'", tokenizer_path.c_str());
+                tokenizer.reset();
+            }
+        }
+
+        // Auto-detect V1 vs V2 feature extractor + connector prefix variant.
+        //   V2 (22B): text_embedding_projection.video_aggregate_embed.{weight,bias} +
+        //             model.diffusion_model.video_embeddings_connector.*
+        //   V1 (19B): text_embedding_projection.aggregate_embed.weight +
+        //             model.diffusion_model.embeddings_connector.*
+        // `connector_prefix_arg` is honored when non-empty, otherwise we probe both.
+        const std::string& feat_ext_pre = feat_ext_prefix;
+
+        auto agg_v1_it = tensor_storage_map.find(feat_ext_pre + ".aggregate_embed.weight");
+        auto agg_v2_it = tensor_storage_map.find(feat_ext_pre + ".video_aggregate_embed.weight");
+
+        std::string connector_pre;
+        LTXConnector::FeatureExtractorVersion fe_version = LTXConnector::FeatureExtractorVersion::V1;
+        int64_t flat_dim  = 0;
+        int64_t inner_dim = 0;
+
+        if (agg_v2_it != tensor_storage_map.end()) {
+            fe_version = LTXConnector::FeatureExtractorVersion::V2;
+            flat_dim   = agg_v2_it->second.ne[0];
+            inner_dim  = agg_v2_it->second.ne[1];
+            use_v2_feature_extractor = true;
+            connector_pre = connector_prefix_arg.empty()
+                                ? "model.diffusion_model.video_embeddings_connector"
+                                : connector_prefix_arg;
+        } else if (agg_v1_it != tensor_storage_map.end()) {
+            fe_version = LTXConnector::FeatureExtractorVersion::V1;
+            flat_dim   = agg_v1_it->second.ne[0];
+            inner_dim  = agg_v1_it->second.ne[1];
+            connector_pre = connector_prefix_arg.empty()
+                                ? "model.diffusion_model.embeddings_connector"
+                                : connector_prefix_arg;
+        } else {
+            LOG_INFO("LTX2GemmaConditioner: no feature_extractor weights found — falling back to "
+                     "last_hidden_state pass-through (Gemma-only mode)");
+            return;
+        }
+
+        auto conn0_it = tensor_storage_map.find(connector_pre + ".transformer_1d_blocks.0.attn1.to_q.weight");
+        if (conn0_it == tensor_storage_map.end()) {
+            LOG_WARN("LTX2GemmaConditioner: feature_extractor weights present but connector at '%s' is missing; "
+                     "falling back to last_hidden_state",
+                     connector_pre.c_str());
+            return;
+        }
+        if (conn0_it->second.ne[1] != inner_dim) {
+            LOG_WARN("LTX2GemmaConditioner: connector to_q out_features=%lld does not match "
+                     "feature_extractor inner_dim=%lld; skipping connector.",
+                     (long long)conn0_it->second.ne[1], (long long)inner_dim);
+            return;
+        }
+
+        // Count connector layers by probing to_q presence.
+        int num_layers = 0;
+        while (tensor_storage_map.find(connector_pre + ".transformer_1d_blocks." +
+                                       std::to_string(num_layers) + ".attn1.to_q.weight") !=
+               tensor_storage_map.end()) {
+            num_layers++;
+        }
+
+        // num_registers from learnable_registers.ne (ne[0]=inner_dim, ne[1]=num_registers).
+        int num_registers = 0;
+        auto reg_it = tensor_storage_map.find(connector_pre + ".learnable_registers");
+        if (reg_it != tensor_storage_map.end() && reg_it->second.n_dims >= 2) {
+            num_registers = static_cast<int>(reg_it->second.ne[1]);
+        }
+
+        // Detect gated attention inside the connector (V2 / 22B has this).
+        bool apply_gated = tensor_storage_map.find(
+            connector_pre + ".transformer_1d_blocks.0.attn1.to_gate_logits.weight") !=
+                           tensor_storage_map.end();
+
+        // LTX-2 fixes head_dim=128 across both variants.
+        int head_dim  = 128;
+        int num_heads = static_cast<int>(inner_dim / head_dim);
+
+        // We do NOT include caption_projection here — V1 has it on the DiT side,
+        // V2 has none. Pass source_dim=Gemma hidden so V2's sqrt(target/source)
+        // rescale is applied correctly.
+        connector_runner = std::make_shared<LTXConnector::LTX2ConnectorRunner>(
+            backend, offload_params_to_cpu,
+            flat_dim, num_heads, head_dim, num_layers, num_registers,
+            /*caption_channels=*/0, /*caption_hidden=*/0, /*caption_out=*/0,
+            /*theta=*/10000.0f, /*max_pos=*/std::vector<int>{1},
+            tensor_storage_map,
+            /*include_caption_projection=*/false,
+            feat_ext_pre, connector_pre, /*caption_proj_prefix=*/"",
+            fe_version, /*source_dim=*/gemma_hidden_size, apply_gated);
+        LOG_INFO("LTX2GemmaConditioner: wired %s connector (flat_dim=%lld inner_dim=%lld "
+                 "num_layers=%d num_registers=%d gated=%d)",
+                 fe_version == LTXConnector::FeatureExtractorVersion::V2 ? "V2" : "V1",
+                 (long long)flat_dim, (long long)inner_dim, num_layers, num_registers,
+                 apply_gated ? 1 : 0);
+    }
+
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        llm->get_param_tensors(tensors, prefix);
+        if (connector_runner) {
+            connector_runner->get_param_tensors(tensors);
+        }
+    }
+    void get_llm_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        if (llm) llm->get_param_tensors(tensors, prefix);
+    }
+    void get_non_llm_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        if (connector_runner) connector_runner->get_param_tensors(tensors);
+    }
+    void alloc_params_buffer() override {
+        llm->alloc_params_buffer();
+        if (connector_runner) connector_runner->alloc_params_buffer();
+    }
+    void free_params_buffer() override {
+        llm->free_params_buffer();
+        if (connector_runner) connector_runner->free_params_buffer();
+    }
+    size_t get_params_buffer_size() override {
+        size_t s = llm->get_params_buffer_size();
+        if (connector_runner) s += connector_runner->get_params_buffer_size();
+        return s;
+    }
+    void set_flash_attention_enabled(bool enabled) override {
+        llm->set_flash_attention_enabled(enabled);
+        if (connector_runner) connector_runner->set_flash_attention_enabled(enabled);
+    }
+
+    void set_llm_lazy_load(std::function<bool()> fn) override {
+        if (llm) llm->set_lazy_load(std::move(fn));
+    }
+
+    SDCondition get_learned_condition(int n_threads,
+                                      const ConditionerParams& p) override {
+        if (!tokenizer) {
+            LOG_ERROR("LTX2GemmaConditioner: no tokenizer loaded. Construct the conditioner "
+                      "with a path to Gemma's tokenizer.json.");
+            GGML_ABORT("Gemma tokenizer missing");
+        }
+        // HuggingFace Gemma tokenizer always prepends <bos>; we replicate that here
+        // so the encoder sees the same sequence the Python reference does.
+        std::vector<int> real_ids = tokenizer->tokenize(p.text, nullptr, /*padding=*/false);
+        real_ids.insert(real_ids.begin(), tokenizer->BOS_TOKEN_ID);
+        const int64_t T_real = static_cast<int64_t>(real_ids.size());
+        LOG_DEBUG("LTX2GemmaConditioner: tokenized prompt '%s' -> %lld real tokens",
+                  p.text.c_str(), (long long)T_real);
+        sd::Tensor<float> empty_mask;
+
+        if (!connector_runner) {
+            // No connector weights: behave like before Phase 9 landed (no padding).
+            sd::Tensor<int32_t> ids_tensor({T_real, 1});
+            for (int64_t i = 0; i < T_real; ++i) ids_tensor.data()[i] = real_ids[i];
+            auto last_hidden = llm->compute(n_threads, ids_tensor, empty_mask, {}, {});
+            SDCondition cond;
+            cond.c_crossattn = last_hidden;
+            return cond;
+        }
+
+        // Python LTX-2 tokenizer pads to max_length=1024 with padding_side="left"
+        // and pad_token = EOS:
+        //   ltx_core/text_encoders/gemma/tokenizer.py:21-24 (padding_side="left",
+        //   pad_token=EOS) and ltx_core/text_encoders/gemma/encoders/base_encoder.py:182
+        //   (`LTXVGemmaTokenizer(tokenizer_root, 1024)`).
+        // Gemma processes the full max_length, and the connector then sees a
+        // max_length-long sequence with learnable_registers tiled max_length/num_reg
+        // times (8× on the 22B V2 path, where num_reg=128). Padding only to
+        // num_registers produces the wrong Gemma RoPE positions for the real tokens
+        // and cuts the DiT cross-attention context by the same factor; both regress
+        // output quality from recognisable subjects to colored-blob textures.
+        const int num_registers   = connector_runner->num_registers;
+        // The 1024-pad-with-register-tile path (Python ref's
+        // `Embeddings1DConnector._replace_padded_with_learnable_registers`) produces
+        // wrong subjects on LTX-2.3 22B (e.g. "fiery sword" → vintage farm scene),
+        // while feeding T_real real tokens through the connector blocks produces
+        // correctly prompt-locked output. Until we localize the discrepancy in the
+        // tile path, default to the no-pad/no-tile path. Set LTX2_PAD=1 to opt back
+        // into the Python-ref tile path (e.g. for parity dumps).
+        const bool no_pad = std::getenv("LTX2_PAD") == nullptr;
+        const int64_t max_length = no_pad ? T_real : 1024;
+        int64_t T_pad            = 0;
+        int64_t T                = T_real;
+        if (T_real < max_length) {
+            T_pad = max_length - T_real;
+            T     = max_length;
+        } else if (T_real > max_length) {
+            // Prompt already exceeds max_length — truncate to match tokenizer
+            // behaviour (`truncation=True` in LTXVGemmaTokenizer).
+            LOG_WARN("LTX2GemmaConditioner: prompt tokenised to %lld >= max_length=%lld; truncating.",
+                     (long long)T_real, (long long)max_length);
+            real_ids.resize(static_cast<size_t>(max_length));
+            T      = max_length;
+            T_pad  = 0;
+        }
+        sd::Tensor<int32_t> input_ids({T, 1});
+        for (int64_t i = 0; i < T_pad; ++i) input_ids.data()[i] = tokenizer->EOS_TOKEN_ID;
+        const int64_t real_to_write = std::min<int64_t>(T_real, max_length);
+        for (int64_t i = 0; i < real_to_write; ++i) input_ids.data()[T_pad + i] = real_ids[i];
+        // In no_pad mode the connector skips the register tile (target_seq_len = T_real).
+        // In padded mode (default) we tile to 1024 to match Python's Embeddings1DConnector.
+        if (no_pad) {
+            connector_runner->set_target_seq_len(static_cast<int>(T_real));
+        } else {
+            GGML_ASSERT(num_registers == 0 || max_length % num_registers == 0);
+            connector_runner->set_target_seq_len(static_cast<int>(max_length));
+        }
+
+        // 1. Gemma: compute all N+1 hidden states on the padded sequence. Passing
+        //    T_pad as pad_count tells build_graph to mask out positions [0, T_pad)
+        //    as keys for any real query — without this the real tokens at [T_pad, T)
+        //    attend across all 1024-T_real left-padded EOS tokens and lose subject
+        //    information. HF transformers does this implicitly when given an
+        //    attention_mask=[0..0,1..1] alongside left-padded input_ids.
+        //    Layout returned by compute_all_hidden_states: ne [N+1, H, T, B] =
+        //    PyTorch [B, T, H, N+1] (stack of per-layer hidden states).
+        auto stacked   = llm->compute_all_hidden_states(n_threads, input_ids, empty_mask,
+                                                        /*pad_count=*/static_cast<int>(T_pad));
+        const int64_t B = 1;
+        const int64_t D = gemma_hidden_size;
+        const int64_t L = gemma_num_hidden_layers + 1;
+        GGML_ASSERT(stacked.numel() == L * D * T * B);
+
+        if (const char* dump_path = std::getenv("SD_DUMP_COND_STACKED")) {
+            FILE* f = std::fopen(dump_path, "wb");
+            if (f) {
+                std::fwrite(stacked.data(), sizeof(float), stacked.numel(), f);
+                std::fclose(f);
+                LOG_INFO("SD_DUMP_COND_STACKED: wrote %ld floats to %s (ne=[%ld,%ld,%ld,%ld])",
+                         (long)stacked.numel(), dump_path, (long)L, (long)D, (long)T, (long)B);
+            }
+        }
+
+        // 2. CPU normalize → [B, T, D*L]. seq_lens=[T_real_eff] + left-padding tells
+        //    the normalizer to zero out the pad positions (which live at [0, T_pad)).
+        //    T_real_eff caps at max_length to handle the truncated-prompt branch above.
+        const int64_t T_real_eff = std::min<int64_t>(T_real, max_length);
+        std::vector<int> seq_lens(B, static_cast<int>(T_real_eff));
+        sd::Tensor<float> normed({D * L, T, B});
+        if (use_v2_feature_extractor) {
+            LTXConnector::feature_extractor_normalize_v2(
+                stacked.data(), seq_lens.data(), normed.data(),
+                static_cast<int>(B), static_cast<int>(T), static_cast<int>(D), static_cast<int>(L),
+                "left", 1e-6f);
+        } else {
+            LTXConnector::feature_extractor_normalize(
+                stacked.data(), seq_lens.data(), normed.data(),
+                static_cast<int>(B), static_cast<int>(T), static_cast<int>(D), static_cast<int>(L),
+                "left", 1e-6f);
+        }
+
+        // Python's Embeddings1DConnector._replace_padded_with_learnable_registers moves
+        // the real-token rows from [T_pad, T) to the START of the sequence and replaces
+        // the now-empty tail with learnable_registers[T_real:]. Equivalent CPU-side shift:
+        // after normalize, [0,T_pad) holds zeros (masked pad), [T_pad,T) holds real.
+        // Slide the real rows down to [0,T_real) and re-zero the tail — the connector
+        // runner then tiles/slices learnable_registers[T_real:max_length] and concats.
+        if (T_pad > 0) {
+            const int64_t flat_dim = D * L;
+            sd::Tensor<float> reals({flat_dim, T_real_eff, B});
+            for (int64_t b = 0; b < B; ++b) {
+                std::memcpy(reals.data() + b * T_real_eff * flat_dim,
+                            normed.data() + b * T * flat_dim + T_pad * flat_dim,
+                            static_cast<size_t>(T_real_eff * flat_dim) * sizeof(float));
+            }
+            normed = std::move(reals);
+        }
+
+        // 3. Run connector. Stage selection:
+        //    0 = stop right after the feature_extractor projection (no register
+        //        tiling, no transformer_1d_blocks, no final rms_norm). This is
+        //        what PR #1459 / #1463 do — they treat the embeddings_connector
+        //        as a refinement layer and skip it.
+        //    3 = full Embeddings1DConnector (Python-faithful: register-tile to
+        //        max_length, run all blocks, final rms_norm).
+        // Defaulting to stage=3 (faithful). Override with LTX2_COND_STAGE=N for
+        // diagnostics.
+        int cond_stage = 3;
+        if (const char* cs = std::getenv("LTX2_COND_STAGE")) {
+            cond_stage = std::atoi(cs);
+        }
+        auto context = connector_runner->compute(n_threads, normed, cond_stage);
+
+        if (const char* dump_path = std::getenv("SD_DUMP_COND_CONTEXT")) {
+            FILE* f = std::fopen(dump_path, "wb");
+            if (f) {
+                std::fwrite(context.data(), sizeof(float), context.numel(), f);
+                std::fclose(f);
+                LOG_INFO("SD_DUMP_COND_CONTEXT: wrote %ld floats to %s",
+                         (long)context.numel(), dump_path);
+            }
+        }
+
+        SDCondition cond;
+        cond.c_crossattn = context;
+        return cond;
     }
 };
 

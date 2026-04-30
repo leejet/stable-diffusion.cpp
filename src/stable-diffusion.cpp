@@ -8,6 +8,7 @@
 #include "util.h"
 
 #include "auto_encoder_kl.hpp"
+#include "backend_fit.hpp"
 #include "conditioner.hpp"
 #include "control.hpp"
 #include "denoiser.hpp"
@@ -16,6 +17,7 @@
 #include "lora.hpp"
 #include "pmid.hpp"
 #include "sample-cache.h"
+#include "ltxvae.hpp"
 #include "tae.hpp"
 #include "vae.hpp"
 
@@ -54,6 +56,7 @@ const char* model_version_to_str[] = {
     "Z-Image",
     "Ovis Image",
     "Ernie Image",
+    "LTX-2",
 };
 
 const char* sampling_methods_str[] = {
@@ -111,6 +114,12 @@ public:
     ggml_backend_t clip_backend        = nullptr;
     ggml_backend_t control_net_backend = nullptr;
     ggml_backend_t vae_backend         = nullptr;
+    // Actual device id that `backend` points at. `SD_CUDA_DEVICE` can go stale
+    // when auto-fit re-initialises `backend` onto a different GPU. We track the
+    // live value so per-component resolution can decide "same device as main"
+    // correctly. -1 means the main backend is CPU.
+    int            backend_device_id   = -1;
+    static constexpr int BACKEND_DEVICE_CPU = -1;
 
     SDVersion version;
     bool vae_decode_only         = false;
@@ -148,12 +157,124 @@ public:
     bool is_using_v_parameterization     = false;
     bool is_using_edm_v_parameterization = false;
 
+    // Populated by auto-fit (when --auto-fit is passed). When enabled, this
+    // overrides env-var based per-component placement. device_id == -1 means
+    // "no override" (fall through to env vars / defaults).
+    struct FitOverride {
+        bool enabled             = false;
+        int  dit_device_id       = -1;   // -1 = keep main backend
+        int  vae_device_id       = -2;   // -2 = no override (distinguishes from "force CPU")
+        int  cond_device_id      = -2;
+        bool dit_offload_params  = false;  // force offload_params_to_cpu for DiT only
+        bool cond_offload_params = false;  // force offload_params_to_cpu for Conditioner only
+        bool vae_offload_params  = false;
+        bool vae_on_cpu          = false;
+        bool cond_on_cpu         = false;
+    };
+    FitOverride fit_override;
+
+    // Auto-fit VAE tiling: when auto_fit is enabled, generate_video /
+    // generate_image consult this budget at gen time to decide whether the
+    // current resolution needs VAE tiling (and at what tile size). Captured
+    // from sd_ctx_params at init so it survives past sd_ctx_params_t scope.
+    bool    auto_fit_enabled                = false;
+    int64_t auto_fit_vae_compute_reserve_bytes = 0;
+    bool    auto_fit_vae_on_cpu             = false;
+
+    // Pending tensor-split decisions from auto-fit (consumed by init_tensor_split).
+    // When true, the corresponding component will be configured for split mode
+    // even when SD_CUDA_TENSOR_SPLIT_DIT / _COND env vars are unset.
+    bool    pending_split_dit  = false;
+    bool    pending_split_cond = false;
+
+    // Heuristic: VAE peak compute scales with the largest activation tensor,
+    // which is roughly proportional to the number of latent voxels times a
+    // per-voxel byte cost dominated by the deepest decoder block (1024-channel
+    // up_block in LTX-2). 1 MiB/voxel is an empirical fit that lets a typical
+    // 480x320x25 LTX-2 decode (15*10*4=600 voxels) decode in one pass under
+    // the default 1024 MiB reserve while triggering tiling at HD+ (e.g.
+    // 1280x720x49 → 40*22*7=6160 voxels, tile side ≈ 12).
+    static constexpr int64_t LATENT_VOXEL_PEAK_BYTES = 1 * backend_fit::MiB;
+
+    // Compute auto-tiling parameters for the VAE based on the captured
+    // auto-fit budget and the latent grid (lw × lh × t_latent). Modifies
+    // `vae_tiling_params` in place ONLY when:
+    //   - auto-fit is enabled
+    //   - the user did NOT explicitly enable tiling (we don't override)
+    //   - the predicted peak exceeds the reserved budget
+    // Logs the chosen tile size; no-op otherwise.
+    void maybe_auto_set_vae_tiling(int64_t lw, int64_t lh, int64_t t_latent) {
+        if (!auto_fit_enabled) return;
+        if (vae_tiling_params.enabled) return;  // user override: don't touch
+        if (auto_fit_vae_on_cpu) return;        // CPU VAE: no VRAM budget
+        if (auto_fit_vae_compute_reserve_bytes <= 0) return;
+        if (lw <= 0 || lh <= 0 || t_latent <= 0) return;
+
+        const int64_t total_voxels = lw * lh * t_latent;
+        const int64_t budget_voxels =
+            auto_fit_vae_compute_reserve_bytes / LATENT_VOXEL_PEAK_BYTES;
+        if (total_voxels <= budget_voxels) {
+            // Fits in a single decode pass — leave tiling disabled.
+            return;
+        }
+
+        // Time stays untiled (the LTX-2 VAE has temporal coupling); spread
+        // the budget across spatial tiles. Pick a square tile_w × tile_h.
+        const int64_t voxels_per_tile = std::max<int64_t>(budget_voxels, 1);
+        const int64_t tile_area_max   = std::max<int64_t>(voxels_per_tile / t_latent, 16);
+        int           tile_side       = static_cast<int>(std::round(std::sqrt(double(tile_area_max))));
+        // Clamp to [8, max(lw, lh)] so the VAE tiler doesn't get a degenerate
+        // tile size, and never go above the actual latent dim.
+        tile_side = std::max(8, tile_side);
+        int tile_x = std::min<int>(tile_side, static_cast<int>(lw));
+        int tile_y = std::min<int>(tile_side, static_cast<int>(lh));
+
+        vae_tiling_params.enabled        = true;
+        vae_tiling_params.tile_size_x    = tile_x;
+        vae_tiling_params.tile_size_y    = tile_y;
+        vae_tiling_params.target_overlap = 0.5f;
+        vae_tiling_params.rel_size_x     = 0.f;
+        vae_tiling_params.rel_size_y     = 0.f;
+
+        LOG_INFO("auto-fit: VAE tiling enabled (latent %lldx%lldx%lld = %lld voxels > "
+                 "budget %lld voxels @ %lld MiB reserve); tile %dx%d (latent), overlap %.2f",
+                 (long long)lw, (long long)lh, (long long)t_latent, (long long)total_voxels,
+                 (long long)budget_voxels,
+                 (long long)(auto_fit_vae_compute_reserve_bytes / backend_fit::MiB),
+                 tile_x, tile_y, vae_tiling_params.target_overlap);
+    }
+
     std::map<std::string, ggml_tensor*> tensors;
 
     // lora_name => multiplier
     std::unordered_map<std::string, float> curr_lora_state;
 
     std::shared_ptr<Denoiser> denoiser = std::make_shared<CompVisDenoiser>();
+
+    // ModelLoader kept alive for the lifetime of the SD context. Lazy-load
+    // callbacks (registered on DiT / LLM runners) call back into this loader
+    // on the first compute() of each component to read weights from disk
+    // sequentially — keeps peak VRAM at max-across-phases instead of
+    // sum-of-components. Toggled per-component via SD_LAZY_LOAD_DIT /
+    // SD_LAZY_LOAD_COND env vars.
+    std::unique_ptr<ModelLoader> model_loader_;
+    std::set<std::string>        load_ignore_tensors;
+    bool                         lazy_load_dit  = false;
+    bool                         lazy_load_cond = false;
+
+    // Multi-GPU tensor split state. Populated when SD_CUDA_TENSOR_SPLIT is set.
+    // The extra GPU backends and the CPU fallback are owned here so they live
+    // as long as any GGMLRunner that references them via MultiBackendSpec.
+    struct TensorSplitState {
+        bool                        enabled = false;
+        std::vector<float>          ratios;             // per-device row-split ratios
+        int                         main_device = 0;
+        std::vector<ggml_backend_t> extra_backends;     // additional GPU backends (excluding main)
+        ggml_backend_t              cpu_fallback = nullptr;
+        bool                        split_dit    = false;  // apply to LTX-2 DiT
+        bool                        split_cond   = false;  // apply to conditioner (LLM/Gemma)
+    };
+    TensorSplitState tensor_split_state;
 
     StableDiffusionGGML() = default;
 
@@ -167,13 +288,110 @@ public:
         if (vae_backend != backend) {
             ggml_backend_free(vae_backend);
         }
+        // Tensor-split extra GPUs + CPU fallback: free after the runners (they
+        // refer to these via MultiBackendSpec). Order: extras first, then CPU
+        // fallback, then main `backend`.
+        for (auto* b : tensor_split_state.extra_backends) {
+            if (b != nullptr && b != backend) {
+                ggml_backend_free(b);
+            }
+        }
+        tensor_split_state.extra_backends.clear();
+        if (tensor_split_state.cpu_fallback != nullptr) {
+            ggml_backend_free(tensor_split_state.cpu_fallback);
+            tensor_split_state.cpu_fallback = nullptr;
+        }
         ggml_backend_free(backend);
     }
 
+    // Read an integer environment variable, returning `def` if unset or malformed.
+    static int get_env_int(const char* name, int def) {
+        const char* v = getenv(name);
+        if (v == nullptr || *v == '\0') return def;
+        try {
+            return std::stoi(v);
+        } catch (...) {
+            LOG_WARN("env %s: '%s' is not a valid integer, using default %d", name, v, def);
+            return def;
+        }
+    }
+
+    // Initialize a GPU backend for the given device id, or fall back to CPU.
+    // For CUDA, device_id < 0 means "CPU only"; otherwise clamp to available count.
+    // `component_name` is used for log messages (e.g. "DiT", "Gemma", "VAE").
+    static ggml_backend_t init_device_backend(int device_id, const char* component_name) {
+        if (device_id < 0) {
+            LOG_INFO("%s: using CPU backend (device=-1)", component_name);
+            return ggml_backend_cpu_init();
+        }
+#ifdef SD_USE_CUDA
+        int count = ggml_backend_cuda_get_device_count();
+        if (count <= 0) {
+            LOG_WARN("%s: no CUDA devices available, falling back to CPU", component_name);
+            return ggml_backend_cpu_init();
+        }
+        if (device_id >= count) {
+            LOG_WARN("%s: CUDA device %d requested but only %d available, falling back to device 0",
+                     component_name, device_id, count);
+            device_id = 0;
+        }
+        auto b = ggml_backend_cuda_init(device_id);
+        if (b != nullptr) {
+            LOG_INFO("%s: using CUDA device %d", component_name, device_id);
+            return b;
+        }
+        LOG_WARN("%s: CUDA device %d init failed, falling back to CPU", component_name, device_id);
+        return ggml_backend_cpu_init();
+#elif defined(SD_USE_VULKAN)
+        int count = ggml_backend_vk_get_device_count();
+        if (count <= 0) {
+            LOG_WARN("%s: no Vulkan devices available, falling back to CPU", component_name);
+            return ggml_backend_cpu_init();
+        }
+        if (device_id >= count) {
+            LOG_WARN("%s: Vulkan device %d requested but only %d available, falling back to device 0",
+                     component_name, device_id, count);
+            device_id = 0;
+        }
+        auto b = ggml_backend_vk_init((size_t)device_id);
+        if (b != nullptr) {
+            LOG_INFO("%s: using Vulkan device %d", component_name, device_id);
+            return b;
+        }
+        LOG_WARN("%s: Vulkan device %d init failed, falling back to CPU", component_name, device_id);
+        return ggml_backend_cpu_init();
+#elif defined(SD_USE_SYCL)
+        auto b = ggml_backend_sycl_init(device_id);
+        if (b != nullptr) {
+            LOG_INFO("%s: using SYCL device %d", component_name, device_id);
+            return b;
+        }
+        LOG_WARN("%s: SYCL init failed, falling back to CPU", component_name);
+        return ggml_backend_cpu_init();
+#else
+        (void)device_id;
+        LOG_INFO("%s: using CPU backend", component_name);
+        return ggml_backend_cpu_init();
+#endif
+    }
+
+    // Main backend init. Honours these env vars for per-component device placement
+    // (used by the init path below):
+    //   SD_CUDA_DEVICE          default CUDA device id (default 0) — also used for DiT
+    //   SD_CUDA_DEVICE_CLIP     text encoder / conditioner (falls back to SD_CUDA_DEVICE)
+    //   SD_CUDA_DEVICE_VAE      VAE                          (falls back to SD_CUDA_DEVICE)
+    //   SD_CUDA_DEVICE_CONTROL  ControlNet                    (falls back to SD_CUDA_DEVICE)
+    //   SD_VK_DEVICE            same pattern for the Vulkan build
+    // Setting any of these to -1 forces CPU for that component.
+    //
+    // `keep_clip_on_cpu` / `keep_vae_on_cpu` still take precedence and force CPU.
+    // For weights too big even for a dedicated device, use offload_params_to_cpu
+    // (keeps weights on CPU and streams per-step to GPU).
     void init_backend() {
 #ifdef SD_USE_CUDA
-        LOG_DEBUG("Using CUDA backend");
-        backend = ggml_backend_cuda_init(0);
+        int main_dev       = get_env_int("SD_CUDA_DEVICE", 0);
+        backend            = init_device_backend(main_dev, "main");
+        backend_device_id  = ggml_backend_is_cpu(backend) ? BACKEND_DEVICE_CPU : main_dev;
 #endif
 #ifdef SD_USE_METAL
         LOG_DEBUG("Using Metal backend");
@@ -227,6 +445,205 @@ public:
         }
     }
 
+    // Resolve the backend for a sub-component by reading its env override (if set),
+    // otherwise reusing the main backend. Returns the main `backend` unchanged if
+    // the override matches the main device; otherwise creates a new backend (which
+    // the caller is responsible for freeing via the existing `!= backend` dtor check).
+    // `force_cpu` short-circuits to CPU regardless of the env var.
+    // `fit_device_id` is the auto-fit override: -2 means "no override", -1 means
+    // "force CPU", >=0 names a specific GPU.
+    ggml_backend_t resolve_component_backend(const char* env_name,
+                                              const char* component_name,
+                                              bool        force_cpu,
+                                              int         fit_device_id = -2) {
+        if (force_cpu) {
+            if (ggml_backend_is_cpu(backend)) {
+                return backend;
+            }
+            LOG_INFO("%s: forced CPU backend", component_name);
+            return ggml_backend_cpu_init();
+        }
+#if defined(SD_USE_CUDA) || defined(SD_USE_VULKAN) || defined(SD_USE_SYCL)
+        // Reuse the main backend iff this component resolves to the same
+        // physical device. After auto-fit re-initialises the main backend
+        // onto a different GPU, `SD_CUDA_DEVICE` no longer reflects reality,
+        // so we compare against `backend_device_id` instead.
+        int override_dev;
+        if (fit_override.enabled && fit_device_id != -2) {
+            override_dev = fit_device_id;
+        } else {
+            override_dev = get_env_int(env_name, get_env_int("SD_CUDA_DEVICE", 0));
+        }
+        if (override_dev == backend_device_id && !ggml_backend_is_cpu(backend)) {
+            return backend;
+        }
+        return init_device_backend(override_dev, component_name);
+#else
+        (void)env_name;
+        (void)component_name;
+        (void)fit_device_id;
+        return backend;
+#endif
+    }
+
+    // Configure tensor split for multi-GPU systems.
+    //
+    // Source of ratios (in priority order):
+    //   1. SD_CUDA_TENSOR_SPLIT="W0,W1,..." — explicit user override.
+    //   2. sd_ctx_params->auto_tensor_split (default true): when >1 CUDA
+    //      device is detected and the env is unset, compute ratios from the
+    //      free VRAM of each device and apply them to the DiT.
+    //
+    // SD_CUDA_TENSOR_SPLIT_DIT=1 enables split for the LTX-2 DiT.
+    // SD_CUDA_TENSOR_SPLIT_COND=1 enables split for the conditioner (Gemma).
+    // Both default off when only the ratios env is set, so the user can dial
+    // in just one component.
+    void init_tensor_split(bool auto_tensor_split) {
+#ifdef SD_USE_CUDA
+        if (tensor_split_state.enabled) return;
+        const int dev_count = ggml_backend_cuda_get_device_count();
+
+        std::vector<float> ratios;
+        bool from_env = false;
+        if (const char* split_env = getenv("SD_CUDA_TENSOR_SPLIT");
+            split_env != nullptr && *split_env != '\0') {
+            from_env = true;
+            std::string s(split_env);
+            size_t i = 0;
+            while (i < s.size()) {
+                size_t j = s.find(',', i);
+                std::string tok = s.substr(i, (j == std::string::npos) ? std::string::npos : j - i);
+                try {
+                    float v = std::stof(tok);
+                    ratios.push_back(v);
+                } catch (...) {
+                    LOG_WARN("SD_CUDA_TENSOR_SPLIT: bad token '%s' — disabling tensor split",
+                             tok.c_str());
+                    return;
+                }
+                if (j == std::string::npos) break;
+                i = j + 1;
+            }
+        } else if (auto_tensor_split && dev_count >= 2) {
+            // Auto-derive: ratios proportional to free VRAM, one per device.
+            ratios.reserve(dev_count);
+            for (int d = 0; d < dev_count; d++) {
+                size_t free_b = 0, total_b = 0;
+                ggml_backend_cuda_get_device_memory(d, &free_b, &total_b);
+                ratios.push_back(static_cast<float>(free_b) / float(backend_fit::MiB));
+            }
+            LOG_INFO("auto tensor split: deriving DiT ratios from free VRAM "
+                     "across %d CUDA device(s)",
+                     dev_count);
+        } else {
+            return;  // single GPU, env unset, auto disabled, or no CUDA
+        }
+
+        if (dev_count < 2) {
+            if (from_env) {
+                LOG_WARN("SD_CUDA_TENSOR_SPLIT set but only %d CUDA device(s) available; ignoring",
+                         dev_count);
+            }
+            return;
+        }
+        if ((int)ratios.size() > dev_count) {
+            LOG_WARN("SD_CUDA_TENSOR_SPLIT has %zu ratios but only %d CUDA devices; truncating",
+                     ratios.size(), dev_count);
+            ratios.resize(dev_count);
+        }
+        // Pad with zeros so downstream code can index by device id without bounds checks.
+        while ((int)ratios.size() < dev_count) ratios.push_back(0.f);
+
+        int main_dev = backend_device_id;
+        if (main_dev < 0) {
+            LOG_WARN("SD_CUDA_TENSOR_SPLIT: main backend is not CUDA; ignoring tensor split");
+            return;
+        }
+        // Determine which non-main devices have non-zero ratio — those need
+        // their own ggml_backend_cuda instance for sched routing.
+        std::vector<int> participating_devices;
+        for (int d = 0; d < dev_count; d++) {
+            if (ratios[d] > 0.f && d != main_dev) {
+                participating_devices.push_back(d);
+            }
+        }
+        if (participating_devices.empty()) {
+            LOG_WARN("SD_CUDA_TENSOR_SPLIT: no non-main device has nonzero ratio; ignoring");
+            return;
+        }
+
+        tensor_split_state.enabled     = true;
+        tensor_split_state.ratios      = std::move(ratios);
+        tensor_split_state.main_device = main_dev;
+
+        for (int d : participating_devices) {
+            ggml_backend_t b = ggml_backend_cuda_init(d);
+            if (b == nullptr) {
+                LOG_WARN("SD_CUDA_TENSOR_SPLIT: failed to init CUDA device %d; skipping", d);
+                continue;
+            }
+            tensor_split_state.extra_backends.push_back(b);
+        }
+        if (tensor_split_state.extra_backends.empty()) {
+            LOG_WARN("SD_CUDA_TENSOR_SPLIT: no extra CUDA backends could be initialised; disabling");
+            tensor_split_state.enabled = false;
+            return;
+        }
+
+        tensor_split_state.cpu_fallback = ggml_backend_cpu_init();
+        // Env vars take priority; otherwise honour what auto-fit decided
+        // (pending_split_dit / pending_split_cond). If neither: default to
+        // DiT-only split for the multi-GPU case.
+        tensor_split_state.split_dit  = get_env_int("SD_CUDA_TENSOR_SPLIT_DIT",  0) != 0
+                                         || pending_split_dit;
+        tensor_split_state.split_cond = get_env_int("SD_CUDA_TENSOR_SPLIT_COND", 0) != 0
+                                         || pending_split_cond;
+        if (!tensor_split_state.split_dit && !tensor_split_state.split_cond) {
+            tensor_split_state.split_dit = true;
+            LOG_INFO("SD_CUDA_TENSOR_SPLIT: neither SD_CUDA_TENSOR_SPLIT_DIT nor _COND set; "
+                     "defaulting to DiT-only split");
+        }
+
+        std::string ratio_str;
+        for (size_t k = 0; k < tensor_split_state.ratios.size(); k++) {
+            if (k > 0) ratio_str += ",";
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%.2f", tensor_split_state.ratios[k]);
+            ratio_str += buf;
+        }
+        LOG_INFO("tensor split enabled: ratios=[%s] main_dev=%d extras=%zu DiT=%s Cond=%s",
+                 ratio_str.c_str(), main_dev, tensor_split_state.extra_backends.size(),
+                 tensor_split_state.split_dit ? "yes" : "no",
+                 tensor_split_state.split_cond ? "yes" : "no");
+#endif
+    }
+
+    // Populate g_pending_multi_backend_spec() with this runner's split config
+    // if `apply` is true. The pending spec is consumed (cleared) by the next
+    // GGMLRunner ctor. Returns a guard struct that clears the pending spec on
+    // destruction (in case construction throws and the runner ctor doesn't
+    // run).
+    struct PendingSplitGuard {
+        MultiBackendSpec spec;
+        bool             active = false;
+        ~PendingSplitGuard() {
+            if (active && g_pending_multi_backend_spec() == &spec) {
+                g_pending_multi_backend_spec() = nullptr;
+            }
+        }
+    };
+    std::unique_ptr<PendingSplitGuard> begin_pending_split(bool apply) {
+        if (!apply || !tensor_split_state.enabled) return nullptr;
+        auto g = std::make_unique<PendingSplitGuard>();
+        g->spec.extra_backends = tensor_split_state.extra_backends;
+        g->spec.tensor_split   = tensor_split_state.ratios;
+        g->spec.main_device    = tensor_split_state.main_device;
+        g->spec.cpu_fallback   = tensor_split_state.cpu_fallback;
+        g->active              = true;
+        g_pending_multi_backend_spec() = &g->spec;
+        return g;
+    }
+
     std::shared_ptr<RNG> get_rng(rng_type_t rng_type) {
         if (rng_type == STD_DEFAULT_RNG) {
             return std::make_shared<STDDefaultRNG>();
@@ -255,8 +672,22 @@ public:
         ggml_log_set(ggml_log_callback_default, nullptr);
 
         init_backend();
+        // tensor split is initialised AFTER auto-fit, since auto-fit may decide
+        // to place a component in tensor-split mode.
 
-        ModelLoader model_loader;
+        // Lazy load — let DiT and Conditioner-LLM lazy-load weights on first
+        // compute() instead of all-at-once at init. Required when sum-of-
+        // components exceeds combined VRAM (e.g. Q6_K LTX-2 + Q8_K_XL Gemma
+        // + connector + VAE on a 24 GB combined system). Defaults to ON via
+        // sd_ctx_params; env vars (SD_LAZY_LOAD_DIT / SD_LAZY_LOAD_COND) act
+        // as force-on overrides (they do not disable).
+        lazy_load_dit  = sd_ctx_params->lazy_load_dit  || get_env_int("SD_LAZY_LOAD_DIT",  0) != 0;
+        lazy_load_cond = sd_ctx_params->lazy_load_cond || get_env_int("SD_LAZY_LOAD_COND", 0) != 0;
+        if (lazy_load_dit)  LOG_INFO("lazy load: DiT  (alloc + read on first compute, free after free_params_immediately)");
+        if (lazy_load_cond) LOG_INFO("lazy load: LLM  (Gemma allocs on first encode; connector stays eager)");
+
+        model_loader_ = std::make_unique<ModelLoader>();
+        ModelLoader& model_loader = *model_loader_;
 
         if (strlen(SAFE_STR(sd_ctx_params->model_path)) > 0) {
             LOG_INFO("loading model from '%s'", sd_ctx_params->model_path);
@@ -352,6 +783,115 @@ public:
 
         auto& tensor_storage_map = model_loader.get_tensor_storage_map();
 
+        // LTX-2 prefix + Gemma sandwich-norm fixup: the conditioner expects Gemma at
+        // `text_encoder.model.*`, but `--llm-path` prepends `text_encoders.llm.*`
+        // (convert_tensors_name then maps gguf llama names to HF names, yielding
+        // `text_encoders.llm.model.*`).
+        //
+        // Additionally, Gemma 3 has 4 layernorms per block (sandwich norms) that the
+        // shared llm_name_map only partly translates. The raw GGUF names blk.N.{attn_norm,
+        // post_attention_norm, ffn_norm, post_ffw_norm} end up as HF-style
+        // input_layernorm + post_attention_norm + post_attention_layernorm + post_ffw_norm
+        // after the generic map (where ffn_norm→post_attention_layernorm is Qwen-correct
+        // but wrong for Gemma). We rename here once version is LTX-2:
+        //   post_attention_layernorm → pre_feedforward_layernorm  (was actually ffn_norm)
+        //   post_attention_norm      → post_attention_layernorm   (append _layernorm)
+        //   post_ffw_norm            → post_feedforward_layernorm
+        // Order matters: do the first rename first so the second can safely write to
+        // the now-vacated post_attention_layernorm slot.
+        if (sd_version_is_ltx2(version)) {
+            // Step 1: prefix rewrite text_encoders.llm. → text_encoder.
+            const std::string from = "text_encoders.llm.";
+            const std::string to   = "text_encoder.";
+            {
+                String2TensorStorage renamed;
+                size_t renames = 0;
+                for (auto& kv : tensor_storage_map) {
+                    const std::string& k = kv.first;
+                    std::string new_k    = k;
+                    if (k.rfind(from, 0) == 0) {
+                        new_k = to + k.substr(from.size());
+                        kv.second.name = new_k;
+                        renames++;
+                    }
+                    renamed[new_k] = std::move(kv.second);
+                }
+                if (renames > 0) {
+                    tensor_storage_map.swap(renamed);
+                    LOG_INFO("LTX-2: renamed %zu '%s*' tensors → '%s*' (Gemma text encoder path)",
+                             renames, from.c_str(), to.c_str());
+                }
+            }
+
+            // Step 2: Gemma 3 sandwich-norm renames, applied in the order documented
+            // above. Each pass rebuilds the storage map because std::map keys are const.
+            auto rename_suffix = [&](const std::string& old_suffix, const std::string& new_suffix) -> size_t {
+                String2TensorStorage renamed;
+                size_t renames = 0;
+                for (auto& kv : tensor_storage_map) {
+                    const std::string& k = kv.first;
+                    std::string new_k    = k;
+                    size_t p = k.rfind(old_suffix);
+                    if (p != std::string::npos && p + old_suffix.size() == k.size()) {
+                        // Only rename if prefix looks like a Gemma layer key.
+                        if (k.find("text_encoder.model.layers.") != std::string::npos) {
+                            new_k = k.substr(0, p) + new_suffix;
+                            kv.second.name = new_k;
+                            renames++;
+                        }
+                    }
+                    renamed[new_k] = std::move(kv.second);
+                }
+                tensor_storage_map.swap(renamed);
+                return renames;
+            };
+            size_t r1 = rename_suffix(".post_attention_layernorm.weight", ".pre_feedforward_layernorm.weight");
+            size_t r2 = rename_suffix(".post_attention_norm.weight",      ".post_attention_layernorm.weight");
+            size_t r3 = rename_suffix(".post_ffw_norm.weight",            ".post_feedforward_layernorm.weight");
+            if (r1 + r2 + r3 > 0) {
+                LOG_INFO("LTX-2: Gemma sandwich-norm rename: %zu pre_ff, %zu post_attn, %zu post_ff",
+                         r1, r2, r3);
+            }
+
+            // Step 3: Duplicate `first_stage_model.per_channel_statistics.*` into the
+            // `first_stage_model.encoder.per_channel_statistics.*` path expected by
+            // VideoEncoder's child block tree. VideoDecoder also expects these under
+            // its `decoder.per_channel_statistics` subprefix. Real LTX-2 checkpoints
+            // only ship the top-level buffer (mean-of-means, std-of-means).
+            {
+                const std::string top_pre = "first_stage_model.per_channel_statistics.";
+                size_t copied = 0;
+                // Snapshot keys with top_pre first (iteration + insertion is unsafe).
+                std::vector<std::pair<std::string, std::string>> to_copy;
+                for (auto& kv : tensor_storage_map) {
+                    const std::string& k = kv.first;
+                    if (k.rfind(top_pre, 0) == 0) {
+                        std::string suffix = k.substr(top_pre.size());
+                        to_copy.push_back({k, suffix});
+                    }
+                }
+                for (auto& pair : to_copy) {
+                    const std::string& src_key = pair.first;
+                    const std::string& suffix  = pair.second;
+                    auto src_it = tensor_storage_map.find(src_key);
+                    if (src_it == tensor_storage_map.end()) continue;
+                    for (const char* sub : {"encoder", "decoder"}) {
+                        std::string dst_key = "first_stage_model." + std::string(sub) +
+                                              ".per_channel_statistics." + suffix;
+                        if (tensor_storage_map.find(dst_key) != tensor_storage_map.end()) continue;
+                        TensorStorage dup = src_it->second;
+                        dup.name          = dst_key;
+                        tensor_storage_map[dst_key] = dup;
+                        copied++;
+                    }
+                }
+                if (copied > 0) {
+                    LOG_INFO("LTX-2: duplicated %zu PerChannelStatistics entries to encoder/decoder subprefixes",
+                             copied);
+                }
+            }
+        }
+
         LOG_INFO("Version: %s ", model_version_to_str[version]);
         ggml_type wtype               = (int)sd_ctx_params->wtype < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)
                                             ? (ggml_type)sd_ctx_params->wtype
@@ -360,6 +900,7 @@ public:
         if (wtype != GGML_TYPE_COUNT || tensor_type_rules.size() > 0) {
             model_loader.set_wtype_override(wtype, tensor_type_rules);
         }
+
 
         std::map<ggml_type, uint32_t> wtype_stat                 = model_loader.get_wtype_stat();
         std::map<ggml_type, uint32_t> conditioner_wtype_stat     = model_loader.get_conditioner_wtype_stat();
@@ -386,6 +927,113 @@ public:
         LOG_INFO("VAE weight type stat:             %s", wtype_stat_to_str(vae_wtype_stat).c_str());
 
         LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
+
+        // ------------------------------------------------------------------
+        // Auto-fit: compute per-component GPU/CPU placement plan based on
+        // currently free device memory. Runs before backend resolution so we
+        // can redirect the DiT backend and set per-component placement flags.
+        // Only affects the run when sd_ctx_params->auto_fit is true.
+        if (sd_ctx_params->auto_fit) {
+            backend_fit::ComputeReserves reserves;
+            if (sd_ctx_params->auto_fit_compute_reserve_dit_mb > 0) {
+                reserves.dit_bytes =
+                    int64_t(sd_ctx_params->auto_fit_compute_reserve_dit_mb) * backend_fit::MiB;
+            }
+            if (sd_ctx_params->auto_fit_compute_reserve_vae_mb > 0) {
+                reserves.vae_bytes =
+                    int64_t(sd_ctx_params->auto_fit_compute_reserve_vae_mb) * backend_fit::MiB;
+            }
+            if (sd_ctx_params->auto_fit_compute_reserve_cond_mb > 0) {
+                reserves.conditioner_bytes =
+                    int64_t(sd_ctx_params->auto_fit_compute_reserve_cond_mb) * backend_fit::MiB;
+            }
+
+            const int64_t alignment_guess = 256;
+            auto components = backend_fit::estimate_components(
+                model_loader, wtype, alignment_guess, reserves);
+            auto devices = backend_fit::enumerate_gpu_devices();
+            int64_t margin_bytes =
+                int64_t(std::max(0, sd_ctx_params->auto_fit_target_mb)) * backend_fit::MiB;
+            const bool allow_split = sd_ctx_params->auto_tensor_split &&
+                                     devices.size() >= 2 &&
+                                     getenv("SD_CUDA_TENSOR_SPLIT") == nullptr;
+            auto plan = backend_fit::compute_plan(components, devices, margin_bytes, allow_split);
+            backend_fit::print_plan(plan, components, devices, margin_bytes);
+
+            if (sd_ctx_params->auto_fit_dry_run) {
+                LOG_INFO("auto-fit: --fit-dry-run set, aborting init before loading models");
+                return false;
+            }
+
+            // Apply plan to fit_override.
+            fit_override.enabled = true;
+            auto dit_d  = backend_fit::find_decision(plan, backend_fit::ComponentKind::DIT);
+            auto vae_d  = backend_fit::find_decision(plan, backend_fit::ComponentKind::VAE);
+            auto cond_d = backend_fit::find_decision(plan, backend_fit::ComponentKind::CONDITIONER);
+
+            if (dit_d) {
+                fit_override.dit_device_id      = dit_d->device_id;
+                fit_override.dit_offload_params =
+                    (dit_d->placement == backend_fit::Placement::GPU_OFFLOAD_PARAMS);
+                // Re-init the main backend if the chosen DiT device differs from
+                // whatever init_backend() picked. Keep `backend_device_id` in
+                // sync — it's what resolve_component_backend compares against.
+                const int current_dev = backend_device_id;
+                if (!ggml_backend_is_cpu(backend) && dit_d->placement == backend_fit::Placement::CPU) {
+                    LOG_INFO("auto-fit: switching DiT backend from GPU %d to CPU", current_dev);
+                    ggml_backend_free(backend);
+                    backend            = ggml_backend_cpu_init();
+                    backend_device_id  = BACKEND_DEVICE_CPU;
+                } else if (dit_d->placement != backend_fit::Placement::CPU &&
+                           dit_d->device_id != current_dev) {
+                    LOG_INFO("auto-fit: switching DiT backend from GPU %d to GPU %d",
+                             current_dev, dit_d->device_id);
+                    ggml_backend_free(backend);
+                    backend            = init_device_backend(dit_d->device_id, "DiT (auto-fit)");
+                    backend_device_id  = dit_d->device_id;
+                }
+            }
+            if (vae_d) {
+                fit_override.vae_device_id      = vae_d->device_id;
+                fit_override.vae_on_cpu         = (vae_d->placement == backend_fit::Placement::CPU);
+                fit_override.vae_offload_params =
+                    (vae_d->placement == backend_fit::Placement::GPU_OFFLOAD_PARAMS);
+            }
+            if (cond_d) {
+                fit_override.cond_device_id      = cond_d->device_id;
+                fit_override.cond_on_cpu         = (cond_d->placement == backend_fit::Placement::CPU);
+                fit_override.cond_offload_params =
+                    (cond_d->placement == backend_fit::Placement::GPU_OFFLOAD_PARAMS);
+            }
+
+            // Capture state for auto-VAE-tiling at gen time. We can't read
+            // sd_ctx_params after this scope, so store what we'll need.
+            auto_fit_enabled                   = true;
+            auto_fit_vae_compute_reserve_bytes = reserves.vae_bytes;
+            auto_fit_vae_on_cpu                = vae_d && vae_d->placement == backend_fit::Placement::CPU;
+
+            // If auto-fit placed any component in tensor-split mode, capture
+            // that here so init_tensor_split below configures the right flags.
+            const bool dit_split  = dit_d  && dit_d->placement  == backend_fit::Placement::GPU_TENSOR_SPLIT;
+            const bool cond_split = cond_d && cond_d->placement == backend_fit::Placement::GPU_TENSOR_SPLIT;
+            if (dit_split)  pending_split_dit  = true;
+            if (cond_split) pending_split_cond = true;
+
+            // For tensor-split components, the device id semantically means
+            // "main GPU + extras"; pin that to whatever main backend ended up
+            // active so resolve_component_backend doesn't try to forward to
+            // a non-main GPU.
+            if (dit_split) {
+                fit_override.dit_device_id      = backend_device_id;
+                fit_override.dit_offload_params = false;
+            }
+            if (cond_split) {
+                fit_override.cond_device_id      = backend_device_id;
+                fit_override.cond_on_cpu         = false;
+                fit_override.cond_offload_params = false;
+            }
+        }
+        init_tensor_split(sd_ctx_params->auto_tensor_split);
 
         if (sd_ctx_params->lora_apply_mode == LORA_APPLY_AUTO) {
             bool have_quantized_weight = false;
@@ -426,19 +1074,76 @@ public:
         }
 
         bool clip_on_cpu = sd_ctx_params->keep_clip_on_cpu;
+        if (fit_override.enabled && fit_override.cond_on_cpu) {
+            clip_on_cpu = true;
+        }
+
+        // LTX-2 Gemma 3: default the text encoder to CPU. Per-layer F32
+        // reduction-order disagreement between cuBLAS's tile reduction and
+        // CPU's SIMD horizontal reduction seeds ~6e-5 drift at the first
+        // RMSNorm and compounds across 48 transformer layers; the final
+        // hidden state ends up ~10× off in absolute terms, which is enough
+        // to alter prompt semantics in the LTX-2 conditioner (e.g. drop the
+        // subject — "cat on beach" → "person on beach"). Allow the user to
+        // override via SD_CUDA_DEVICE_CLIP=N or via auto-fit; warn loudly
+        // when they do, especially on quantized weights.
+        if (sd_version_is_ltx2(version) && !clip_on_cpu) {
+            const char* explicit_clip   = getenv("SD_CUDA_DEVICE_CLIP");
+            const bool  user_set_cpu    = (explicit_clip != nullptr && std::atoi(explicit_clip) < 0);
+            const bool  user_set_cuda   = (explicit_clip != nullptr && std::atoi(explicit_clip) >= 0);
+            const bool  autofit_picks   = fit_override.enabled && fit_override.cond_device_id >= 0;
+            if (user_set_cpu) {
+                clip_on_cpu = true;  // explicit -1 → CPU, no message needed
+            } else if (!user_set_cuda && !autofit_picks) {
+                clip_on_cpu = true;
+                LOG_INFO("LTX-2: defaulting Gemma 3 text encoder to CPU "
+                         "(CUDA path has cumulative F32 drift that can alter prompt semantics). "
+                         "Set SD_CUDA_DEVICE_CLIP=N to run on CUDA device N anyway.");
+            } else {
+                auto q_proj_it = tensor_storage_map.find("text_encoder.model.layers.0.self_attn.q_proj.weight");
+                const bool gemma_quantized = (q_proj_it != tensor_storage_map.end() &&
+                                              ggml_is_quantized(q_proj_it->second.type));
+                if (gemma_quantized) {
+                    LOG_WARN("LTX-2: running QUANTIZED Gemma 3 text encoder on CUDA. "
+                             "Cumulative F32 reduction-order drift across 48 layers can shift "
+                             "the prompt embedding enough to lose subject/style cues "
+                             "(e.g. \"cat on a beach\" → \"person on a beach\"). "
+                             "Unset SD_CUDA_DEVICE_CLIP (or set it to -1) to use the CPU "
+                             "encoder for full prompt fidelity.");
+                } else {
+                    LOG_WARN("LTX-2: running Gemma 3 text encoder on CUDA. "
+                             "Cumulative F32 reduction-order drift across 48 layers may alter "
+                             "prompt semantics. Unset SD_CUDA_DEVICE_CLIP to use CPU.");
+                }
+            }
+        }
+
+        // Per-component offload flags. `offload_params_to_cpu` (the user's
+        // global --offload-to-cpu) applies to every component. Auto-fit may
+        // additionally force DiT-only offload when the DiT doesn't fit in
+        // VRAM; that MUST NOT be propagated to the Conditioner/VAE, otherwise
+        // their weights get pinned in RAM and the system can OOM (e.g. an
+        // LTX-2 run pinning Gemma 9.5 GB + DiT 13 GB + VAE 1.4 GB in 32 GB RAM).
+        const bool dit_offload  = offload_params_to_cpu ||
+                                  (fit_override.enabled && fit_override.dit_offload_params);
+        const bool cond_offload = offload_params_to_cpu ||
+                                  (fit_override.enabled && fit_override.cond_offload_params);
+        const bool vae_offload  = offload_params_to_cpu ||
+                                  (fit_override.enabled && fit_override.vae_offload_params);
 
         {
-            clip_backend = backend;
-            if (clip_on_cpu && !ggml_backend_is_cpu(backend)) {
-                LOG_INFO("CLIP: Using CPU backend");
-                clip_backend = ggml_backend_cpu_init();
-            }
+            // Pick a device for the text-encoder stack. SD_CUDA_DEVICE_CLIP overrides
+            // (set to -1 for CPU); `keep_clip_on_cpu` still forces CPU regardless.
+            // When auto-fit is active, fit_override.cond_device_id wins.
+            clip_backend = resolve_component_backend(
+                "SD_CUDA_DEVICE_CLIP", "CLIP/TextEncoder", clip_on_cpu,
+                fit_override.enabled ? fit_override.cond_device_id : -2);
             if (sd_version_is_sd3(version)) {
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend,
-                                                                     offload_params_to_cpu,
+                                                                     cond_offload,
                                                                      tensor_storage_map);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend,
-                                                               offload_params_to_cpu,
+                                                               dit_offload,
                                                                tensor_storage_map);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
@@ -459,53 +1164,53 @@ public:
                     }
 
                     cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
-                                                                        offload_params_to_cpu,
+                                                                        cond_offload,
                                                                         tensor_storage_map,
                                                                         sd_ctx_params->chroma_use_t5_mask,
                                                                         sd_ctx_params->chroma_t5_mask_pad);
                 } else if (version == VERSION_OVIS_IMAGE) {
                     cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
-                                                                     offload_params_to_cpu,
+                                                                     cond_offload,
                                                                      tensor_storage_map,
                                                                      version,
                                                                      "",
                                                                      false);
                 } else {
                     cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend,
-                                                                          offload_params_to_cpu,
+                                                                          cond_offload,
                                                                           tensor_storage_map);
                 }
                 diffusion_model = std::make_shared<FluxModel>(backend,
-                                                              offload_params_to_cpu,
+                                                              dit_offload,
                                                               tensor_storage_map,
                                                               version,
                                                               sd_ctx_params->chroma_use_dit_mask);
             } else if (sd_version_is_flux2(version)) {
                 bool is_chroma   = false;
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
-                                                                 offload_params_to_cpu,
+                                                                 cond_offload,
                                                                  tensor_storage_map,
                                                                  version);
                 diffusion_model  = std::make_shared<FluxModel>(backend,
-                                                              offload_params_to_cpu,
+                                                              dit_offload,
                                                               tensor_storage_map,
                                                               version,
                                                               sd_ctx_params->chroma_use_dit_mask);
             } else if (sd_version_is_wan(version)) {
                 cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
-                                                                    offload_params_to_cpu,
+                                                                    cond_offload,
                                                                     tensor_storage_map,
                                                                     true,
                                                                     0,
                                                                     true);
                 diffusion_model  = std::make_shared<WanModel>(backend,
-                                                             offload_params_to_cpu,
+                                                             dit_offload,
                                                              tensor_storage_map,
                                                              "model.diffusion_model",
                                                              version);
                 if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
                     high_noise_diffusion_model = std::make_shared<WanModel>(backend,
-                                                                            offload_params_to_cpu,
+                                                                            dit_offload,
                                                                             tensor_storage_map,
                                                                             "model.high_noise_diffusion_model",
                                                                             version);
@@ -514,7 +1219,7 @@ public:
                     diffusion_model->get_desc() == "Wan2.1-FLF2V-14B" ||
                     diffusion_model->get_desc() == "Wan2.1-I2V-1.3B") {
                     clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(backend,
-                                                                             offload_params_to_cpu,
+                                                                             dit_offload,
                                                                              tensor_storage_map);
                     clip_vision->alloc_params_buffer();
                     clip_vision->get_param_tensors(tensors);
@@ -525,44 +1230,67 @@ public:
                     enable_vision = true;
                 }
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
-                                                                 offload_params_to_cpu,
+                                                                 cond_offload,
                                                                  tensor_storage_map,
                                                                  version,
                                                                  "",
                                                                  enable_vision);
                 diffusion_model  = std::make_shared<QwenImageModel>(backend,
-                                                                   offload_params_to_cpu,
+                                                                   dit_offload,
                                                                    tensor_storage_map,
                                                                    "model.diffusion_model",
                                                                    version,
                                                                    sd_ctx_params->qwen_image_zero_cond_t);
             } else if (sd_version_is_anima(version)) {
                 cond_stage_model = std::make_shared<AnimaConditioner>(clip_backend,
-                                                                      offload_params_to_cpu,
+                                                                      cond_offload,
                                                                       tensor_storage_map);
                 diffusion_model  = std::make_shared<AnimaModel>(backend,
-                                                               offload_params_to_cpu,
+                                                               dit_offload,
                                                                tensor_storage_map,
                                                                "model.diffusion_model");
             } else if (sd_version_is_z_image(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
-                                                                 offload_params_to_cpu,
+                                                                 cond_offload,
                                                                  tensor_storage_map,
                                                                  version);
                 diffusion_model  = std::make_shared<ZImageModel>(backend,
-                                                                offload_params_to_cpu,
+                                                                dit_offload,
                                                                 tensor_storage_map,
                                                                 "model.diffusion_model",
                                                                 version);
             } else if (sd_version_is_ernie_image(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
-                                                                 offload_params_to_cpu,
+                                                                 cond_offload,
                                                                  tensor_storage_map,
                                                                  version);
                 diffusion_model  = std::make_shared<ErnieImageModel>(backend,
-                                                                    offload_params_to_cpu,
+                                                                    dit_offload,
                                                                     tensor_storage_map,
                                                                     "model.diffusion_model");
+            } else if (sd_version_is_ltx2(version)) {
+                // LTX-2: Gemma 3 text encoder (Phase 8), 1D embeddings connector + DiT
+                // caption_projection (Phase 9), and LTX-2 causal 3D VAE (Phase 11) are all
+                // landed. LTX2GemmaConditioner auto-detects connector presence from the
+                // tensor map; if absent it falls back to Gemma's last_hidden_state.
+                // The tokenizer.json path is required — prompts can't be encoded without
+                // it. Any HuggingFace-format `tokenizer.json` for Gemma 3 works.
+                {
+                    auto split_guard = begin_pending_split(tensor_split_state.split_cond);
+                    cond_stage_model = std::make_shared<LTX2GemmaConditioner>(clip_backend,
+                                                                              cond_offload,
+                                                                              tensor_storage_map,
+                                                                              "text_encoder",
+                                                                              SAFE_STR(sd_ctx_params->gemma_tokenizer_path));
+                }
+                {
+                    auto split_guard = begin_pending_split(tensor_split_state.split_dit);
+                    diffusion_model  = std::make_shared<LTXDiffusionModel>(backend,
+                                                                          dit_offload,
+                                                                          tensor_storage_map,
+                                                                          "model.diffusion_model",
+                                                                          version);
+                }
             } else {  // SD1.x SD2.x SDXL
                 std::map<std::string, std::string> embbeding_map;
                 for (uint32_t i = 0; i < sd_ctx_params->embedding_count; i++) {
@@ -570,20 +1298,20 @@ public:
                 }
                 if (strstr(SAFE_STR(sd_ctx_params->photo_maker_path), "v2")) {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
-                                                                                           offload_params_to_cpu,
+                                                                                           cond_offload,
                                                                                            tensor_storage_map,
                                                                                            embbeding_map,
                                                                                            version,
                                                                                            PM_VERSION_2);
                 } else {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
-                                                                                           offload_params_to_cpu,
+                                                                                           cond_offload,
                                                                                            tensor_storage_map,
                                                                                            embbeding_map,
                                                                                            version);
                 }
                 diffusion_model = std::make_shared<UNetModel>(backend,
-                                                              offload_params_to_cpu,
+                                                              dit_offload,
                                                               tensor_storage_map,
                                                               version);
                 if (sd_ctx_params->diffusion_conv_direct) {
@@ -592,11 +1320,40 @@ public:
                 }
             }
 
+            // ---- Conditioner: optionally lazy-load the LLM (e.g. Gemma) ----
+            // The connector stays eager because it's tiny relative to the LLM.
+            // Lazy mode skips adding LLM tensors to the global eager-load map
+            // and registers a callback that reads them from disk on first encode.
+            if (lazy_load_cond) {
+                std::map<std::string, ggml_tensor*> llm_lazy_tensors;
+                cond_stage_model->get_llm_param_tensors(llm_lazy_tensors);
+                int n_threads_local = n_threads;
+                bool enable_mmap    = sd_ctx_params->enable_mmap;
+                cond_stage_model->set_llm_lazy_load([this, llm_lazy_tensors, n_threads_local, enable_mmap]() mutable {
+                    return model_loader_->load_tensors(llm_lazy_tensors, load_ignore_tensors, n_threads_local, enable_mmap);
+                });
+                size_t before = tensors.size();
+                cond_stage_model->get_non_llm_param_tensors(tensors);
+                LOG_INFO("lazy_cond: %zu LLM tensors (lazy), +%zu non-LLM tensors (eager)",
+                         llm_lazy_tensors.size(), tensors.size() - before);
+            } else {
+                cond_stage_model->get_param_tensors(tensors);
+            }
             cond_stage_model->alloc_params_buffer();
-            cond_stage_model->get_param_tensors(tensors);
 
+            // ---- DiT: optionally lazy-load entirely (single inner runner) ----
+            if (lazy_load_dit) {
+                std::map<std::string, ggml_tensor*> dit_lazy_tensors;
+                diffusion_model->get_param_tensors(dit_lazy_tensors);
+                int n_threads_local = n_threads;
+                bool enable_mmap    = sd_ctx_params->enable_mmap;
+                diffusion_model->set_lazy_load([this, dit_lazy_tensors, n_threads_local, enable_mmap]() mutable {
+                    return model_loader_->load_tensors(dit_lazy_tensors, load_ignore_tensors, n_threads_local, enable_mmap);
+                });
+            } else {
+                diffusion_model->get_param_tensors(tensors);
+            }
             diffusion_model->alloc_params_buffer();
-            diffusion_model->get_param_tensors(tensors);
 
             if (sd_version_is_unet_edit(version)) {
                 vae_decode_only = false;
@@ -607,19 +1364,23 @@ public:
                 high_noise_diffusion_model->get_param_tensors(tensors);
             }
 
-            if (sd_ctx_params->keep_vae_on_cpu && !ggml_backend_is_cpu(backend)) {
-                LOG_INFO("VAE Autoencoder: Using CPU backend");
-                vae_backend = ggml_backend_cpu_init();
-            } else {
-                vae_backend = backend;
+            // Pick a device for the VAE. SD_CUDA_DEVICE_VAE overrides (set to -1 for CPU);
+            // `keep_vae_on_cpu` still forces CPU regardless. Auto-fit, when active,
+            // supplies fit_override.vae_device_id which takes precedence over env.
+            bool vae_on_cpu = sd_ctx_params->keep_vae_on_cpu;
+            if (fit_override.enabled && fit_override.vae_on_cpu) {
+                vae_on_cpu = true;
             }
+            vae_backend = resolve_component_backend(
+                "SD_CUDA_DEVICE_VAE", "VAE", vae_on_cpu,
+                fit_override.enabled ? fit_override.vae_device_id : -2);
 
             auto create_tae = [&]() -> std::shared_ptr<VAE> {
                 if (sd_version_is_wan(version) ||
                     sd_version_is_qwen_image(version) ||
                     sd_version_is_anima(version)) {
                     return std::make_shared<TinyVideoAutoEncoder>(vae_backend,
-                                                                  offload_params_to_cpu,
+                                                                  vae_offload,
                                                                   tensor_storage_map,
                                                                   "decoder",
                                                                   vae_decode_only,
@@ -627,7 +1388,7 @@ public:
 
                 } else {
                     auto model = std::make_shared<TinyImageAutoEncoder>(vae_backend,
-                                                                        offload_params_to_cpu,
+                                                                        vae_offload,
                                                                         tensor_storage_map,
                                                                         "decoder.layers",
                                                                         vae_decode_only,
@@ -641,14 +1402,38 @@ public:
                     sd_version_is_qwen_image(version) ||
                     sd_version_is_anima(version)) {
                     return std::make_shared<WAN::WanVAERunner>(vae_backend,
-                                                               offload_params_to_cpu,
+                                                               vae_offload,
                                                                tensor_storage_map,
                                                                "first_stage_model",
                                                                vae_decode_only,
                                                                version);
+                } else if (sd_version_is_ltx2(version)) {
+                    // LTX-2 VAE: in the real checkpoint after convert_tensors_name,
+                    // the `vae.` → `first_stage_model.` rename from name_conversion.cpp
+                    // puts weights under the standard `first_stage_model.` prefix. The
+                    // sd-vae-parity test uses a pre-named `vae.` state dict directly so
+                    // it can run on the parity dumper's output without going through the
+                    // conversion pass.
+                    //
+                    // The 22B checkpoint (see `ltx2_22b_{enc,dec}_specs`) has a 9-block
+                    // encoder/decoder with mixed RES_X and COMPRESS_* blocks — much deeper
+                    // than the 4-block tiny-test default. We hardcode the 22B spec here for
+                    // the smoke test; a proper auto-detect from tensor shapes is a follow-up.
+                    return std::make_shared<LTXVAE::LTX2VAERunner>(vae_backend,
+                                                                   vae_offload,
+                                                                   tensor_storage_map,
+                                                                   "first_stage_model",
+                                                                   version,
+                                                                   /*in_ch=*/3,
+                                                                   /*latent_ch=*/128,
+                                                                   /*patch=*/4,
+                                                                   /*decoder_base_ch=*/128,
+                                                                   /*timestep_cond=*/false,
+                                                                   LTXVAE::LTX2VAERunner::ltx2_22b_enc_specs(),
+                                                                   LTXVAE::LTX2VAERunner::ltx2_22b_dec_specs());
                 } else {
                     auto model = std::make_shared<AutoEncoderKL>(vae_backend,
-                                                                 offload_params_to_cpu,
+                                                                 vae_offload,
                                                                  tensor_storage_map,
                                                                  "first_stage_model",
                                                                  vae_decode_only,
@@ -671,7 +1456,7 @@ public:
                 LOG_INFO("using FakeVAE");
                 first_stage_model = std::make_shared<FakeVAE>(version,
                                                               vae_backend,
-                                                              offload_params_to_cpu);
+                                                              vae_offload);
             } else if (use_tae && !tae_preview_only) {
                 LOG_INFO("using TAE for encoding / decoding");
                 first_stage_model = create_tae();
@@ -718,7 +1503,7 @@ public:
 
             if (strstr(SAFE_STR(sd_ctx_params->photo_maker_path), "v2")) {
                 pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend,
-                                                                   offload_params_to_cpu,
+                                                                   dit_offload,
                                                                    tensor_storage_map,
                                                                    "pmid",
                                                                    version,
@@ -726,7 +1511,7 @@ public:
                 LOG_INFO("using PhotoMaker Version 2");
             } else {
                 pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend,
-                                                                   offload_params_to_cpu,
+                                                                   dit_offload,
                                                                    tensor_storage_map,
                                                                    "pmid",
                                                                    version);
@@ -835,6 +1620,11 @@ public:
             ignore_tensors.insert("text_encoders.llm.vision_tower.");
             ignore_tensors.insert("text_encoders.llm.multi_modal_projector.");
         }
+        // Stash ignore_tensors so lazy-load callbacks (registered earlier) can
+        // re-pass it when ModelLoader::load_tensors fires per-component.
+        load_ignore_tensors = ignore_tensors;
+        // Debug: dump tensor names containing video_embeddings_connector to verify
+        // they're registered (only in lazy_load_cond mode).
         bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap);
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
@@ -960,6 +1750,8 @@ public:
                     }
                 } else if (sd_version_is_flux2(version)) {
                     pred_type = FLUX2_FLOW_PRED;
+                } else if (sd_version_is_ltx2(version)) {
+                    pred_type = LTX2_FLOW_PRED;
                 } else {
                     pred_type = EPS_PRED;
                 }
@@ -990,6 +1782,11 @@ public:
                 case FLUX2_FLOW_PRED: {
                     LOG_INFO("running in Flux2 FLOW mode");
                     denoiser = std::make_shared<Flux2FlowDenoiser>();
+                    break;
+                }
+                case LTX2_FLOW_PRED: {
+                    LOG_INFO("running in LTX-2 FLOW mode");
+                    denoiser = std::make_shared<LTX2FlowDenoiser>();
                     break;
                 }
                 default: {
@@ -1625,6 +2422,11 @@ public:
         float cfg_scale     = guidance.txt_cfg;
         float img_cfg_scale = guidance.img_cfg;
         float slg_scale     = guidance.slg.scale;
+        float rescale_scale = guidance.rescale_scale;
+        float stg_scale     = guidance.stg_scale;
+        std::vector<int> stg_blocks(guidance.stg_blocks,
+                                    guidance.stg_blocks + guidance.stg_blocks_count);
+        bool has_stg        = stg_scale != 0.f && !stg_blocks.empty();
 
         sd_sample::SampleCacheRuntime cache_runtime = sd_sample::init_sample_cache_runtime(version,
                                                                                            cache_params,
@@ -1686,6 +2488,7 @@ public:
             sd::Tensor<float> uncond_out;
             sd::Tensor<float> img_cond_out;
             sd::Tensor<float> skip_cond_out;
+            sd::Tensor<float> stg_cond_out;
             sd_sample::SampleStepCacheDispatcher step_cache(cache_runtime, step, sigma);
             std::vector<sd::Tensor<float>> controls;
             DiffusionParams diffusion_params;
@@ -1699,6 +2502,7 @@ public:
             diffusion_params.vace_context       = vace_context.empty() ? nullptr : &vace_context;
             diffusion_params.vace_strength      = vace_strength;
             diffusion_params.skip_layers        = nullptr;
+            diffusion_params.stg_skip_blocks    = nullptr;
 
             compute_sample_controls(control_image,
                                     noised_input,
@@ -1707,14 +2511,16 @@ public:
                                     &controls);
 
             auto run_condition = [&](const SDCondition& condition,
-                                     const sd::Tensor<float>* c_concat_override = nullptr,
-                                     const std::vector<int>* local_skip_layers  = nullptr) -> sd::Tensor<float> {
-                diffusion_params.context     = condition.c_crossattn.empty() ? nullptr : &condition.c_crossattn;
-                diffusion_params.c_concat    = c_concat_override != nullptr ? c_concat_override : (condition.c_concat.empty() ? nullptr : &condition.c_concat);
-                diffusion_params.y           = condition.c_vector.empty() ? nullptr : &condition.c_vector;
-                diffusion_params.t5_ids      = condition.c_t5_ids.empty() ? nullptr : &condition.c_t5_ids;
-                diffusion_params.t5_weights  = condition.c_t5_weights.empty() ? nullptr : &condition.c_t5_weights;
-                diffusion_params.skip_layers = local_skip_layers;
+                                     const sd::Tensor<float>* c_concat_override        = nullptr,
+                                     const std::vector<int>* local_skip_layers         = nullptr,
+                                     const std::vector<int>* local_stg_skip_blocks     = nullptr) -> sd::Tensor<float> {
+                diffusion_params.context         = condition.c_crossattn.empty() ? nullptr : &condition.c_crossattn;
+                diffusion_params.c_concat        = c_concat_override != nullptr ? c_concat_override : (condition.c_concat.empty() ? nullptr : &condition.c_concat);
+                diffusion_params.y               = condition.c_vector.empty() ? nullptr : &condition.c_vector;
+                diffusion_params.t5_ids          = condition.c_t5_ids.empty() ? nullptr : &condition.c_t5_ids;
+                diffusion_params.t5_weights      = condition.c_t5_weights.empty() ? nullptr : &condition.c_t5_weights;
+                diffusion_params.skip_layers     = local_skip_layers;
+                diffusion_params.stg_skip_blocks = local_stg_skip_blocks;
 
                 sd::Tensor<float> cached_output;
                 if (step_cache.before_condition(&condition, noised_input, &cached_output)) {
@@ -1780,6 +2586,20 @@ public:
                 }
             }
 
+            // STG (Spatio-Temporal Guidance): third forward pass with self-attention
+            // skipped on stg_blocks. The "weakened" prediction is mixed into the
+            // guided pred:  pred += stg_scale * (cond - perturbed). Reference:
+            // ltx_core/components/guiders.py::calculate (perturbed term).
+            if (has_stg && !step_cache.is_step_skipped()) {
+                stg_cond_out = run_condition(cond,
+                                             cond.c_concat.empty() ? nullptr : &cond.c_concat,
+                                             /*local_skip_layers=*/nullptr,
+                                             &stg_blocks);
+                if (stg_cond_out.empty()) {
+                    return {};
+                }
+            }
+
             GGML_ASSERT(!cond_out.empty());
             sd::Tensor<float> latent_result = cond_out;
             if (!uncond_out.empty()) {
@@ -1797,7 +2617,45 @@ public:
             if (is_skiplayer_step && !skip_cond_out.empty()) {
                 latent_result += (cond_out - skip_cond_out) * slg_scale;
             }
+
+            // STG perturbed-pass mixing: pred += stg_scale * (cond - perturbed).
+            if (has_stg && !stg_cond_out.empty()) {
+                latent_result += (cond_out - stg_cond_out) * stg_scale;
+            }
+
             denoised = latent_result * c_out + x * c_skip;
+
+            // CFG-rescale: pull pred.std() back toward cond.std() to combat oversaturation
+            // introduced by CFG amplitude. Reference: ltx_core/components/guiders.py::calculate.
+            // Python operates on DENOISED predictions (X0Model returns denoised, then guider
+            // does CFG on denoised) — so we must compute std and multiply on the denoised
+            // tensor, not on the velocity-domain `latent_result`. Skip when rescale_scale==0
+            // (default for non-LTX-2 models) or when only cond_out is present (no CFG mix
+            // happened — pred would equal cond_only and rescale would be a no-op).
+            if (rescale_scale != 0.f && (!uncond_out.empty() || !img_cond_out.empty())) {
+                auto t_std = [](const float* d, int64_t n) -> double {
+                    if (n <= 1) return 0.0;
+                    double s = 0.0, sq = 0.0;
+                    for (int64_t i = 0; i < n; ++i) {
+                        double v = static_cast<double>(d[i]);
+                        s += v;
+                        sq += v * v;
+                    }
+                    double mean = s / n;
+                    double var  = sq / n - mean * mean;
+                    return std::sqrt(std::max(0.0, var));
+                };
+                // Denoised(cond_alone) = c_out * cond_out + c_skip * x. Materialize it just
+                // for the std computation; we don't want to apply CFG to it.
+                sd::Tensor<float> denoised_cond_only = cond_out * c_out + x * c_skip;
+                double cond_std = t_std(denoised_cond_only.data(), denoised_cond_only.numel());
+                double pred_std = t_std(denoised.data(), denoised.numel());
+                if (pred_std > 1e-12) {
+                    double factor = cond_std / pred_std;
+                    factor = rescale_scale * factor + (1.0 - rescale_scale);
+                    denoised *= static_cast<float>(factor);
+                }
+            }
             if (cache_runtime.spectrum_enabled) {
                 cache_runtime.spectrum.update(denoised);
             }
@@ -1865,6 +2723,9 @@ public:
                 latent_channel = 3;
             } else if (sd_version_uses_flux2_vae(version)) {
                 latent_channel = 128;
+            } else if (sd_version_is_ltx2(version)) {
+                // LTX-2 VAE latent dim (matches DiT patchify_proj in_channels).
+                latent_channel = 128;
             } else {
                 latent_channel = 16;
             }
@@ -1872,9 +2733,24 @@ public:
         return latent_channel;
     }
 
-    int get_image_seq_len(int h, int w) {
+    int get_image_seq_len(int h, int w, int frames = 1) {
         int vae_scale_factor = get_vae_scale_factor();
-        return (h / vae_scale_factor) * (w / vae_scale_factor);
+        int spatial_tokens   = (h / vae_scale_factor) * (w / vae_scale_factor);
+        // For video flow-match schedulers (LTX-2, Wan), `tokens` in the shift
+        // formula is math.prod(latent.shape[2:]) = T_latent * H_latent * W_latent.
+        // Earlier we only passed the spatial count (H*W), which under-shifted
+        // the LTX-2 schedule because the 22B run has 25-frame inputs →
+        // T_latent = 4, so the real token count is 4× the spatial count.
+        // Python reference: ltx_core/components/schedulers.py::LTX2Scheduler.execute.
+        if (frames > 1 && sd_version_is_ltx2(version)) {
+            int T_latent = ((frames - 1) / 8) + 1;  // LTX-2 VAE: 8× temporal compression.
+            return spatial_tokens * T_latent;
+        }
+        if (frames > 1 && sd_version_is_wan(version)) {
+            int T_latent = ((frames - 1) / 4) + 1;  // Wan VAE: 4× temporal compression.
+            return spatial_tokens * T_latent;
+        }
+        return spatial_tokens;
     }
 
     sd::Tensor<float> generate_init_latent(int width,
@@ -1887,6 +2763,9 @@ public:
         int T                = frames;
         if (sd_version_is_wan(version)) {
             T = ((T - 1) / 4) + 1;
+        } else if (sd_version_is_ltx2(version)) {
+            // LTX-2 VAE: 8× temporal compression.
+            T = ((T - 1) / 8) + 1;
         }
         int C = get_latent_channel();
         if (video) {
@@ -2050,6 +2929,7 @@ const char* prediction_to_str[] = {
     "sd3_flow",
     "flux_flow",
     "flux2_flow",
+    "ltx2_flow",
 };
 
 const char* sd_prediction_name(enum prediction_t prediction) {
@@ -2162,6 +3042,16 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->chroma_use_dit_mask     = true;
     sd_ctx_params->chroma_use_t5_mask      = false;
     sd_ctx_params->chroma_t5_mask_pad      = 1;
+
+    sd_ctx_params->auto_fit                           = true;
+    sd_ctx_params->auto_fit_target_mb                 = 512;
+    sd_ctx_params->auto_fit_dry_run                   = false;
+    sd_ctx_params->auto_fit_compute_reserve_dit_mb    = 0;
+    sd_ctx_params->auto_fit_compute_reserve_vae_mb    = 0;
+    sd_ctx_params->auto_fit_compute_reserve_cond_mb   = 0;
+    sd_ctx_params->lazy_load_dit                      = true;
+    sd_ctx_params->lazy_load_cond                     = true;
+    sd_ctx_params->auto_tensor_split                  = true;
 }
 
 char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
@@ -2178,6 +3068,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "t5xxl_path: %s\n"
              "llm_path: %s\n"
              "llm_vision_path: %s\n"
+             "gemma_tokenizer_path: %s\n"
              "diffusion_model_path: %s\n"
              "high_noise_diffusion_model_path: %s\n"
              "vae_path: %s\n"
@@ -2210,6 +3101,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->t5xxl_path),
              SAFE_STR(sd_ctx_params->llm_path),
              SAFE_STR(sd_ctx_params->llm_vision_path),
+             SAFE_STR(sd_ctx_params->gemma_tokenizer_path),
              SAFE_STR(sd_ctx_params->diffusion_model_path),
              SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path),
              SAFE_STR(sd_ctx_params->vae_path),
@@ -2244,6 +3136,10 @@ void sd_sample_params_init(sd_sample_params_t* sample_params) {
     sample_params->guidance.txt_cfg            = 7.0f;
     sample_params->guidance.img_cfg            = INFINITY;
     sample_params->guidance.distilled_guidance = 3.5f;
+    sample_params->guidance.rescale_scale      = 0.f;  // LTX-2.3 expects 0.7
+    sample_params->guidance.stg_scale          = 0.f;  // LTX-2.3 expects 1.0 with stg_blocks=[28]
+    sample_params->guidance.stg_blocks         = nullptr;
+    sample_params->guidance.stg_blocks_count   = 0;
     sample_params->guidance.slg.layer_count    = 0;
     sample_params->guidance.slg.layer_start    = 0.01f;
     sample_params->guidance.slg.layer_end      = 0.2f;
@@ -2382,6 +3278,7 @@ void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
     sd_vid_gen_params->video_frames                          = 6;
     sd_vid_gen_params->moe_boundary                          = 0.875f;
     sd_vid_gen_params->vace_strength                         = 1.f;
+    sd_vid_gen_params->fps                                   = 24.f;
     sd_vid_gen_params->vae_tiling_params                     = {false, 0, 0, 0.5f, 0.0f, 0.0f};
     sd_cache_params_init(&sd_vid_gen_params->cache);
 }
@@ -2510,6 +3407,23 @@ static float resolve_eta(sd_ctx_t* sd_ctx,
     return eta;
 }
 
+// Mirrors the Python LTX-2 reference's DEFAULT_NEGATIVE_PROMPT
+// (ltx-pipelines/utils/constants.py:135). Used when the caller does not pass
+// a negative prompt for an LTX-2 video gen — empty negative + CFG ≥ 5 was
+// observed to over-push attention into broken/dark scenes for some seeds.
+static const char* LTX2_DEFAULT_NEGATIVE_PROMPT =
+    "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, "
+    "grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, "
+    "deformed facial features, asymmetrical face, missing facial features, extra limbs, disfigured hands, "
+    "wrong hand count, artifacts around text, inconsistent perspective, camera shake, incorrect depth of "
+    "field, background too sharp, background clutter, distracting reflections, harsh shadows, inconsistent "
+    "lighting direction, color banding, cartoonish rendering, 3D CGI look, unrealistic materials, uncanny "
+    "valley effect, incorrect ethnicity, wrong gender, exaggerated expressions, wrong gaze direction, "
+    "mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, background noise, "
+    "off-sync audio, incorrect dialogue, added dialogue, repetitive speech, jittery movement, awkward "
+    "pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, "
+    "inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts.";
+
 struct GenerationRequest {
     std::string prompt;
     std::string negative_prompt;
@@ -2535,6 +3449,7 @@ struct GenerationRequest {
     sd_guidance_params_t high_noise_guidance = {};
     sd_pm_params_t pm_params                 = {};
     int frames                               = -1;
+    float fps                                = 0.f;  // 0 = keep diffusion model's default
     float vace_strength                      = 1.f;
 
     GenerationRequest(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params) {
@@ -2562,9 +3477,30 @@ struct GenerationRequest {
     GenerationRequest(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params) {
         prompt                      = SAFE_STR(sd_vid_gen_params->prompt);
         negative_prompt             = SAFE_STR(sd_vid_gen_params->negative_prompt);
+        const SDVersion version     = sd_ctx->sd->version;
+        const bool is_ltx2          = sd_version_is_ltx2(version);
+        // LTX-2: default to the curated negative prompt from the Python
+        // reference (ltx-pipelines/utils/constants.py:135) when the caller
+        // didn't supply one. Empty negative + CFG ≥ 5 over-pushes attention
+        // and produces dark/distorted scenes for some seeds.
+        if (is_ltx2 && negative_prompt.empty()) {
+            negative_prompt = LTX2_DEFAULT_NEGATIVE_PROMPT;
+            LOG_INFO("LTX-2: using default negative prompt (caller passed empty). "
+                     "Pass --negative-prompt to override.");
+        }
         width                       = sd_vid_gen_params->width;
         height                      = sd_vid_gen_params->height;
-        frames                      = (sd_vid_gen_params->video_frames - 1) / 4 * 4 + 1;
+        // LTX-2's VAE has 8× temporal compression, so the output frame count
+        // must satisfy (frames - 1) %% 8 == 0; other video models (Wan etc.)
+        // use 4× compression. Snap DOWN to the nearest valid value.
+        const int frame_stride      = is_ltx2 ? 8 : 4;
+        const int requested_frames  = sd_vid_gen_params->video_frames;
+        frames                      = (requested_frames - 1) / frame_stride * frame_stride + 1;
+        if (frames != requested_frames) {
+            LOG_WARN("%s: requested %d frames is not (N - 1) %% %d == 0; snapping to %d",
+                     is_ltx2 ? "LTX-2" : "video", requested_frames, frame_stride, frames);
+        }
+        fps                         = sd_vid_gen_params->fps;
         clip_skip                   = sd_vid_gen_params->clip_skip;
         vae_scale_factor            = sd_ctx->sd->get_vae_scale_factor();
         diffusion_model_down_factor = sd_ctx->sd->get_diffusion_model_down_factor();
@@ -2716,7 +3652,7 @@ struct SamplePlan {
                                                       sample_params->scheduler,
                                                       sample_method);
             sigmas                = sd_ctx->sd->denoiser->get_sigmas(total_steps,
-                                                                     sd_ctx->sd->get_image_seq_len(request->height, request->width),
+                                                                     sd_ctx->sd->get_image_seq_len(request->height, request->width, request->frames),
                                                                      scheduler,
                                                                      sd_ctx->sd->version);
         }
@@ -3157,6 +4093,12 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
     int64_t t0                    = ggml_time_ms();
     sd_ctx->sd->vae_tiling_params = sd_img_gen_params->vae_tiling_params;
     GenerationRequest request(sd_ctx, sd_img_gen_params);
+    {
+        const int     vsf = std::max(1, request.vae_scale_factor);
+        const int64_t lw  = request.width  / vsf;
+        const int64_t lh  = request.height / vsf;
+        sd_ctx->sd->maybe_auto_set_vae_tiling(lw, lh, /*t_latent=*/1);
+    }
     LOG_INFO("generate_image %dx%d", request.width, request.height);
 
     sd_ctx->sd->rng->manual_seed(request.seed);
@@ -3489,6 +4431,40 @@ static sd_image_t* decode_video_outputs(sd_ctx_t* sd_ctx,
     sd::Tensor<float> vid = sd_ctx->sd->decode_first_stage(final_latent, true);
     int64_t t5            = ggml_time_ms();
     LOG_INFO("decode_first_stage completed, taking %.2fs", (t5 - t4) * 1.0f / 1000);
+    // Diagnostic (gated by SD_DUMP_GEN_STATS=1): post-decode video stats.
+    // Should be in [0, 1] after the scale_output rescale; mean ~0.3-0.5 for a
+    // natural image. If mean is near 0, decoder output is being clamped.
+    if (std::getenv("SD_DUMP_GEN_STATS") && !vid.empty()) {
+        const auto& sh = vid.shape();
+        const float* d = vid.data();
+        int64_t n = vid.numel();
+        double s = 0, sq = 0; float lo = d[0], hi = d[0];
+        for (int64_t i = 0; i < n; ++i) {
+            double v = d[i]; s += v; sq += v*v;
+            if (d[i] < lo) lo = d[i]; if (d[i] > hi) hi = d[i];
+        }
+        double m = s / n; double v = sq / n - m * m;
+        std::printf("=== decoded video stats: shape=[");
+        for (size_t i = 0; i < sh.size(); ++i) std::printf("%s%lld", i ? "," : "", (long long)sh[i]);
+        std::printf("] overall mean=%.3f std=%.3f min=%.3f max=%.3f ===\n",
+                    m, std::sqrt(std::max(0.0, v)), lo, hi);
+        // Per-channel breakdown if 5D [W,H,T,C,B] or 4D [W,H,T,C]
+        if (sh.size() >= 4) {
+            int64_t W = sh[0], H = sh[1], T = sh[2], C = sh[3];
+            for (int64_t c = 0; c < std::min<int64_t>(C, 3); ++c) {
+                double cs = 0, csq = 0; int64_t cn = W * H * T;
+                for (int64_t t = 0; t < T; ++t)
+                    for (int64_t h = 0; h < H; ++h)
+                        for (int64_t w = 0; w < W; ++w) {
+                            double vv = d[((c * T + t) * H + h) * W + w];
+                            cs += vv; csq += vv*vv;
+                        }
+                double cm = cs / cn; double cv = csq / cn - cm * cm;
+                std::printf("  channel %lld: mean=%.3f std=%.3f\n", (long long)c,
+                            cm, std::sqrt(std::max(0.0, cv)));
+            }
+        }
+    }
     if (sd_ctx->sd->free_params_immediately) {
         sd_ctx->sd->first_stage_model->free_params_buffer();
     }
@@ -3522,10 +4498,31 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     int64_t t0                    = ggml_time_ms();
     sd_ctx->sd->vae_tiling_params = sd_vid_gen_params->vae_tiling_params;
     GenerationRequest request(sd_ctx, sd_vid_gen_params);
+    {
+        const int      vsf      = std::max(1, request.vae_scale_factor);
+        const int64_t  lw       = request.width  / vsf;
+        const int64_t  lh       = request.height / vsf;
+        // Temporal compression: WAN /4, LTX-2 /8, otherwise no compression.
+        // GenerationRequest::frames already reflects the user request; the
+        // latent T is computed the same way StableDiffusionGGML does it.
+        int64_t        t_latent = request.frames;
+        if (sd_version_is_wan(sd_ctx->sd->version))        t_latent = ((t_latent - 1) / 4) + 1;
+        else if (sd_version_is_ltx2(sd_ctx->sd->version))  t_latent = ((t_latent - 1) / 8) + 1;
+        sd_ctx->sd->maybe_auto_set_vae_tiling(lw, lh, t_latent);
+    }
     sd_ctx->sd->rng->manual_seed(request.seed);
     sd_ctx->sd->sampler_rng->manual_seed(request.seed);
     sd_ctx->sd->set_flow_shift(sd_vid_gen_params->sample_params.flow_shift);
     sd_ctx->sd->apply_loras(sd_vid_gen_params->loras, sd_vid_gen_params->lora_count);
+
+    // Propagate output fps to diffusion models that need it for temporal RoPE
+    // (LTX-2 divides time positions by fps; see LTXRope::gen_video_positions).
+    if (request.fps > 0.f && sd_ctx->sd->diffusion_model) {
+        sd_ctx->sd->diffusion_model->set_fps(request.fps);
+    }
+    if (request.fps > 0.f && sd_ctx->sd->high_noise_diffusion_model) {
+        sd_ctx->sd->high_noise_diffusion_model->set_fps(request.fps);
+    }
 
     SamplePlan plan(sd_ctx, sd_vid_gen_params, request);
     auto latent_inputs_opt = prepare_video_generation_latents(sd_ctx, sd_vid_gen_params, &request);
@@ -3639,6 +4636,45 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 
     int64_t latent_end = ggml_time_ms();
     LOG_INFO("generating latent video completed, taking %.2fs", (latent_end - latent_start) * 1.0f / 1000);
+
+    // Diagnostic (gated by SD_DUMP_GEN_STATS=1): per-channel mean/std of the
+    // final latent. Useful when VAE output looks off — confirms the latent is
+    // in-distribution (~zero mean, unit std per channel post-PCS-normalize).
+    if (std::getenv("SD_DUMP_GEN_STATS")) {
+        const auto& sh = final_latent.shape();
+        if (sh.size() >= 4) {
+            int64_t W = sh[0], H = sh[1], T = sh[2], C = sh[3];
+            const float* d = final_latent.data();
+            double overall_s = 0, overall_sq = 0;
+            int64_t overall_n = 0;
+            std::printf("=== final_latent stats (W=%lld H=%lld T=%lld C=%lld) ===\n",
+                        (long long)W, (long long)H, (long long)T, (long long)C);
+            std::printf("first 4 channels (mean/std):");
+            for (int64_t c = 0; c < std::min<int64_t>(C, 4); ++c) {
+                double s = 0, sq = 0; int64_t n = W * H * T;
+                for (int64_t t = 0; t < T; ++t)
+                    for (int64_t h = 0; h < H; ++h)
+                        for (int64_t w = 0; w < W; ++w) {
+                            double v = d[((c * T + t) * H + h) * W + w];
+                            s += v; sq += v*v;
+                        }
+                double mean = s / n;
+                double var  = sq / n - mean * mean;
+                std::printf(" c%lld=%.3f/%.3f", (long long)c, mean, std::sqrt(std::max(0.0, var)));
+            }
+            for (int64_t i = 0; i < final_latent.numel(); ++i) {
+                double v = d[i]; overall_s += v; overall_sq += v*v;
+            }
+            overall_n = final_latent.numel();
+            double om = overall_s / overall_n;
+            double ov = overall_sq / overall_n - om * om;
+            std::printf("\noverall: mean=%.3f std=%.3f min/max=", om, std::sqrt(std::max(0.0, ov)));
+            const float* d2 = final_latent.data();
+            float lo = d2[0], hi = d2[0];
+            for (int64_t i = 1; i < overall_n; ++i) { if (d2[i] < lo) lo = d2[i]; if (d2[i] > hi) hi = d2[i]; }
+            std::printf("%.3f/%.3f\n", lo, hi);
+        }
+    }
 
     auto result = decode_video_outputs(sd_ctx, final_latent, num_frames_out);
     if (result == nullptr) {
