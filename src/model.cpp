@@ -779,14 +779,18 @@ void ModelLoader::process_model_files(bool enable_mmap, bool writable_mmap) {
                 uint8_t * mmap_data = static_cast<uint8_t*>(mmapped->writable_data());
                 ggml_backend_buffer_t buf_mmap = ggml_backend_cpu_buffer_from_ptr(mmap_data, mmapped->size());
                 if (buf_mmap) {
+                    LOG_INFO("using mmap for '%s'", file_path.c_str());
                     fdata.mmbuffer = std::shared_ptr<struct ggml_backend_buffer>(buf_mmap, ggml_backend_buffer_free);
                 } else {
                     LOG_WARN("mmap: failed to create backend buffer for file %s", fdata.path.c_str());
                 }
                 fdata.mmapped = std::shared_ptr<MmapWrapper>(std::move(mmapped));
             } else {
-                LOG_WARN("failed to memory-map '%s'", file_path.c_str());
+                LOG_WARN("failed to memory-map '%s' (falling back to read())", file_path.c_str());
             }
+        } else if (!is_zip) {
+            LOG_INFO("NOT using mmap for '%s' (mmap disabled by caller)",
+                     file_path.c_str());
         }
 
         file_data.push_back(std::move(fdata));
