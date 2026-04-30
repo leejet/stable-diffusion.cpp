@@ -77,19 +77,9 @@ const char* sampling_methods_str[] = {
 
 /*================================================== Helper Functions ================================================*/
 
-void calculate_alphas_cumprod(float* alphas_cumprod,
-                              float linear_start = 0.00085f,
-                              float linear_end   = 0.0120f,
-                              int timesteps      = TIMESTEPS) {
-    float ls_sqrt = sqrtf(linear_start);
-    float le_sqrt = sqrtf(linear_end);
-    float amount  = le_sqrt - ls_sqrt;
-    float product = 1.0f;
-    for (int i = 0; i < timesteps; i++) {
-        float beta = ls_sqrt + amount * ((float)i / (timesteps - 1));
-        product *= 1.0f - powf(beta, 2.0f);
-        alphas_cumprod[i] = product;
-    }
+void calculate_alphas_cumprod(float* alphas_cumprod) {
+    const float * src = CompVisDenoiser::get_alphas_cumprods();
+    std::copy(src, src + TIMESTEPS, alphas_cumprod);
 }
 
 static float get_cache_reuse_threshold(const sd_cache_params_t& params) {
@@ -947,13 +937,6 @@ public:
                 }
             }
 
-            auto comp_vis_denoiser = std::dynamic_pointer_cast<CompVisDenoiser>(denoiser);
-            if (comp_vis_denoiser) {
-                for (int i = 0; i < TIMESTEPS; i++) {
-                    comp_vis_denoiser->sigmas[i]     = std::sqrt((1 - ((float*)alphas_cumprod_tensor->data)[i]) / ((float*)alphas_cumprod_tensor->data)[i]);
-                    comp_vis_denoiser->log_sigmas[i] = std::log(comp_vis_denoiser->sigmas[i]);
-                }
-            }
         }
 
         ggml_free(ctx);
