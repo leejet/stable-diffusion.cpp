@@ -2202,6 +2202,16 @@ public:
         for (size_t i = 0; i < backends.size(); i++) {
             bufts.push_back(ggml_backend_get_default_buffer_type(backends[i]));
             aligns[i] = ggml_backend_buft_get_alignment(bufts[i]);
+            // Diagnostic: confirm we got a sensible buft from each backend.
+            const char* buft_name    = ggml_backend_buft_name(bufts[i]);
+            const char* backend_name = ggml_backend_name(backends[i]);
+            ggml_backend_dev_t        dev      = ggml_backend_buft_get_device(bufts[i]);
+            enum ggml_backend_dev_type dev_type = dev ? ggml_backend_dev_type(dev) : GGML_BACKEND_DEVICE_TYPE_CPU;
+            const char*              dev_name = dev ? ggml_backend_dev_name(dev) : "(none)";
+            LOG_INFO("%s layer-split backend[%zu]=%s, buft=%s, dev=%s, dev_type=%d",
+                     get_desc().c_str(), i, backend_name ? backend_name : "(null)",
+                     buft_name ? buft_name : "(null)", dev_name,
+                     (int)dev_type);
         }
 
         // First pass: assign each tensor to a backend, accumulate sizes.
@@ -2230,6 +2240,10 @@ public:
         multi_params_buffers.assign(backends.size(), nullptr);
         for (size_t i = 0; i < backends.size(); i++) {
             if (sizes[i] == 0) continue;
+            // Diagnostic: query the device's free memory BEFORE alloc.
+            ggml_backend_dev_t dev_pre = ggml_backend_buft_get_device(bufts[i]);
+            size_t free_pre = 0, total_pre = 0;
+            if (dev_pre) ggml_backend_dev_memory(dev_pre, &free_pre, &total_pre);
             multi_params_buffers[i] = ggml_backend_buft_alloc_buffer(bufts[i], sizes[i]);
             if (multi_params_buffers[i] == nullptr) {
                 LOG_ERROR("%s alloc params buffer on backend %s failed (%.1f MB)",
@@ -2238,6 +2252,22 @@ public:
                           sizes[i] / (1024.f * 1024.f));
                 return false;
             }
+            // Diagnostic: query AFTER alloc. The drop in free memory tells
+            // us whether the alloc actually went to GPU device memory or
+            // to a virtual reservation that's not yet committed.
+            size_t free_post = 0, total_post = 0;
+            if (dev_pre) ggml_backend_dev_memory(dev_pre, &free_post, &total_post);
+            int64_t actual_drop = (int64_t)free_pre - (int64_t)free_post;
+            void*  base       = ggml_backend_buffer_get_base(multi_params_buffers[i]);
+            size_t actual_sz  = ggml_backend_buffer_get_size(multi_params_buffers[i]);
+            bool   is_host    = ggml_backend_buffer_is_host(multi_params_buffers[i]);
+            LOG_INFO("%s layer-split alloc[%zu] backend=%s req=%.1f MB actual=%.1f MB "
+                     "dev_free %.1f -> %.1f MB (drop %.1f MB) base=%p is_host=%d",
+                     get_desc().c_str(), i, ggml_backend_name(backends[i]),
+                     sizes[i] / (1024.f * 1024.f), actual_sz / (1024.f * 1024.f),
+                     free_pre / (1024.f * 1024.f), free_post / (1024.f * 1024.f),
+                     actual_drop / (1024.f * 1024.f),
+                     base, (int)is_host);
         }
 
         // Bind tensors via ggml_tallocr.
@@ -2254,6 +2284,18 @@ public:
                           get_desc().c_str(), kv.first->name);
                 return false;
             }
+        }
+        // Diagnostic: pick a sample tensor per backend and confirm its
+        // buffer + data pointer.
+        std::vector<bool> sampled(backends.size(), false);
+        for (auto& kv : tensor_backend_idx) {
+            int idx = kv.second;
+            if (sampled[idx]) continue;
+            sampled[idx] = true;
+            ggml_tensor* t = kv.first;
+            LOG_INFO("%s layer-split sample[%d] tensor=%s buffer=%p data=%p buffer_is_host=%d",
+                     get_desc().c_str(), idx, t->name, (void*)t->buffer, t->data,
+                     t->buffer ? (int)ggml_backend_buffer_is_host(t->buffer) : -1);
         }
         for (auto* buf : multi_params_buffers) {
             if (buf != nullptr) {
@@ -2327,6 +2369,25 @@ public:
         }
         int64_t t1 = ggml_time_ms();
         LOG_INFO("%s: lazy-loaded params in %.2fs", get_desc().c_str(), (t1 - t0) / 1000.f);
+        // Diagnostic: report device-memory free per backend AFTER load.
+        // If the bytes actually went to GPU, free should have decreased
+        // by ~params_size for each layer-split shard.
+        if (multi_backend_mode) {
+            std::vector<ggml_backend_t> backends;
+            backends.push_back(runtime_backend);
+            for (auto* b : additional_backends) backends.push_back(b);
+            for (size_t i = 0; i < backends.size(); i++) {
+                ggml_backend_dev_t dev = ggml_backend_get_device(backends[i]);
+                if (!dev) continue;
+                size_t free_b = 0, total_b = 0;
+                ggml_backend_dev_memory(dev, &free_b, &total_b);
+                LOG_INFO("%s post-load device %s free=%.1f MB / %.1f MB",
+                         get_desc().c_str(),
+                         ggml_backend_dev_name(dev),
+                         free_b / (1024.f * 1024.f),
+                         total_b / (1024.f * 1024.f));
+            }
+        }
         return true;
     }
 

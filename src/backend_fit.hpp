@@ -273,14 +273,10 @@ inline Plan compute_plan(const std::vector<Component>& components,
     };
 
     // Layer-split is only meaningful for components made up of many similarly
-    // shaped blocks. Currently restricted to the DiT — the Conditioner's
-    // layer-split path has a known issue where some sub-runners (e.g. LTX-2
-    // text projection) and possibly some Gemma ops route through CPU,
-    // dragging weights back into RAM and tanking performance. Until that
-    // is fixed, the planner keeps the Conditioner on a single GPU (or
-    // OFFLOAD / CPU when it doesn't fit).
+    // shaped blocks. DiT and Conditioner (LLM transformer) qualify; the VAE
+    // is too structurally heterogeneous for naive block partitioning.
     auto supports_layer_split = [](ComponentKind k) {
-        return k == ComponentKind::DIT;
+        return k == ComponentKind::DIT || k == ComponentKind::CONDITIONER;
     };
 
     auto build_options = [&](const Component& c) {
