@@ -226,7 +226,8 @@ public:
     bool load_tensors(std::map<std::string, ggml_tensor*>& tensors,
                       std::set<std::string> ignore_tensors = {},
                       int n_threads                        = 0,
-                      bool use_mmap                        = false);
+                      bool use_mmap                        = false,
+                      bool quiet_unknown_tensors           = false);
 
     std::vector<std::string> get_tensor_names() const {
         std::vector<std::string> names;

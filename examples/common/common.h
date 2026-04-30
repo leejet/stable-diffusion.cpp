@@ -144,6 +144,10 @@ struct SDContextParams {
     int  auto_fit_compute_reserve_cond_mb = 0;
     bool auto_multi_gpu                   = true;
 
+    // When set, the model loader skips per-tensor "unknown tensor" log
+    // lines and instead emits a single summary count at the end of load.
+    bool quiet_unknown_tensors            = false;
+
     prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
 

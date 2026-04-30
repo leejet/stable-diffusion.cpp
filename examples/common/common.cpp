@@ -524,6 +524,12 @@ ArgOptions SDContextParams::get_options() {
          "--fit-dry-run",
          "auto-fit: print the computed plan and exit without loading models",
          true, &auto_fit_dry_run},
+        {"",
+         "--quiet-unknown-tensors",
+         "suppress per-tensor 'unknown tensor X in model file' log lines "
+         "(useful for LTX-2 and similar models that ship many unused "
+         "tensors); a single summary line with the count is logged instead",
+         true, &quiet_unknown_tensors},
     };
 
     auto on_type_arg = [&](int argc, const char** argv, int index) {
@@ -756,6 +762,7 @@ std::string SDContextParams::to_string() const {
         << "  auto_fit_target_mb: " << auto_fit_target_mb << ",\n"
         << "  auto_fit_dry_run: " << (auto_fit_dry_run ? "true" : "false") << ",\n"
         << "  auto_multi_gpu: " << (auto_multi_gpu ? "true" : "false") << ",\n"
+        << "  quiet_unknown_tensors: " << (quiet_unknown_tensors ? "true" : "false") << ",\n"
         << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
@@ -839,6 +846,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         auto_fit_compute_reserve_vae_mb,
         auto_fit_compute_reserve_cond_mb,
         auto_multi_gpu,
+        quiet_unknown_tensors,
     };
     return sd_ctx_params;
 }

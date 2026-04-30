@@ -1021,10 +1021,12 @@ public:
                                                              ? sd_ctx_params->n_threads : 2,
                                                           2);
                 bool         mmap_capture      = sd_ctx_params->enable_mmap;
+                bool         quiet_capture     = sd_ctx_params->quiet_unknown_tensors;
                 cond_stage_model->set_llm_lazy_load([=]() -> bool {
                     auto local_map = llm_lazy_map;
                     return loader_ptr->load_tensors(local_map, /*ignore=*/{},
-                                                    n_threads_capture, mmap_capture);
+                                                    n_threads_capture, mmap_capture,
+                                                    quiet_capture);
                 });
                 LOG_INFO("auto-fit: conditioner LLM is lazy (defer alloc until first compute, %zu tensors)",
                          llm_lazy_map.size());
@@ -1049,10 +1051,12 @@ public:
                                                              ? sd_ctx_params->n_threads : 2,
                                                           2);
                 bool         mmap_capture      = sd_ctx_params->enable_mmap;
+                bool         quiet_capture     = sd_ctx_params->quiet_unknown_tensors;
                 diffusion_model->set_lazy_load([=]() -> bool {
                     auto local_map = dit_only_tensors;
                     return loader_ptr->load_tensors(local_map, /*ignore=*/{},
-                                                    n_threads_capture, mmap_capture);
+                                                    n_threads_capture, mmap_capture,
+                                                    quiet_capture);
                 });
                 LOG_INFO("auto-fit: diffusion_model is lazy (defer alloc until first compute, %zu tensors)",
                          dit_only_tensors.size());
@@ -1313,7 +1317,9 @@ public:
             ignore_tensors.insert("text_encoders.llm.vision_tower.");
             ignore_tensors.insert("text_encoders.llm.multi_modal_projector.");
         }
-        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap);
+        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads,
+                                                  sd_ctx_params->enable_mmap,
+                                                  sd_ctx_params->quiet_unknown_tensors);
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
             ggml_free(ctx);
@@ -2695,6 +2701,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->auto_fit_compute_reserve_vae_mb  = 0;
     sd_ctx_params->auto_fit_compute_reserve_cond_mb = 0;
     sd_ctx_params->auto_multi_gpu               = true;
+    sd_ctx_params->quiet_unknown_tensors        = false;
 }
 
 char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
@@ -2742,6 +2749,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "auto_fit_compute_reserve_vae_mb: %d\n"
              "auto_fit_compute_reserve_cond_mb: %d\n"
              "auto_multi_gpu: %s\n"
+             "quiet_unknown_tensors: %s\n"
              "flash_attn: %s\n"
              "diffusion_flash_attn: %s\n"
              "circular_x: %s\n"
@@ -2787,6 +2795,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              sd_ctx_params->auto_fit_compute_reserve_vae_mb,
              sd_ctx_params->auto_fit_compute_reserve_cond_mb,
              BOOL_STR(sd_ctx_params->auto_multi_gpu),
+             BOOL_STR(sd_ctx_params->quiet_unknown_tensors),
              BOOL_STR(sd_ctx_params->flash_attn),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
              BOOL_STR(sd_ctx_params->circular_x),

@@ -233,6 +233,13 @@ typedef struct {
     // they fit. Defaults to true. Each component still lives entirely on
     // one device — no intra-tensor row split.
     bool auto_multi_gpu;
+
+    // Suppress per-tensor "unknown tensor 'X' in model file" log lines
+    // emitted during model loading. Useful for models like LTX-2 that
+    // ship hundreds of audio-branch / encoder tensors a video-only
+    // pipeline doesn't consume. A single summary line is logged at the
+    // end with the count of skipped tensors.
+    bool quiet_unknown_tensors;
 } sd_ctx_params_t;
 
 typedef struct {

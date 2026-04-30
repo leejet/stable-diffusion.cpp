@@ -2208,7 +2208,7 @@ public:
             ggml_backend_dev_t        dev      = ggml_backend_buft_get_device(bufts[i]);
             enum ggml_backend_dev_type dev_type = dev ? ggml_backend_dev_type(dev) : GGML_BACKEND_DEVICE_TYPE_CPU;
             const char*              dev_name = dev ? ggml_backend_dev_name(dev) : "(none)";
-            LOG_INFO("%s layer-split backend[%zu]=%s, buft=%s, dev=%s, dev_type=%d",
+            LOG_DEBUG("%s layer-split backend[%zu]=%s, buft=%s, dev=%s, dev_type=%d",
                      get_desc().c_str(), i, backend_name ? backend_name : "(null)",
                      buft_name ? buft_name : "(null)", dev_name,
                      (int)dev_type);
@@ -2261,7 +2261,7 @@ public:
             void*  base       = ggml_backend_buffer_get_base(multi_params_buffers[i]);
             size_t actual_sz  = ggml_backend_buffer_get_size(multi_params_buffers[i]);
             bool   is_host    = ggml_backend_buffer_is_host(multi_params_buffers[i]);
-            LOG_INFO("%s layer-split alloc[%zu] backend=%s req=%.1f MB actual=%.1f MB "
+            LOG_DEBUG("%s layer-split alloc[%zu] backend=%s req=%.1f MB actual=%.1f MB "
                      "dev_free %.1f -> %.1f MB (drop %.1f MB) base=%p is_host=%d",
                      get_desc().c_str(), i, ggml_backend_name(backends[i]),
                      sizes[i] / (1024.f * 1024.f), actual_sz / (1024.f * 1024.f),
@@ -2293,7 +2293,7 @@ public:
             if (sampled[idx]) continue;
             sampled[idx] = true;
             ggml_tensor* t = kv.first;
-            LOG_INFO("%s layer-split sample[%d] tensor=%s buffer=%p data=%p buffer_is_host=%d",
+            LOG_DEBUG("%s layer-split sample[%d] tensor=%s buffer=%p data=%p buffer_is_host=%d",
                      get_desc().c_str(), idx, t->name, (void*)t->buffer, t->data,
                      t->buffer ? (int)ggml_backend_buffer_is_host(t->buffer) : -1);
         }
@@ -2381,7 +2381,7 @@ public:
                 if (!dev) continue;
                 size_t free_b = 0, total_b = 0;
                 ggml_backend_dev_memory(dev, &free_b, &total_b);
-                LOG_INFO("%s post-load device %s free=%.1f MB / %.1f MB",
+                LOG_DEBUG("%s post-load device %s free=%.1f MB / %.1f MB",
                          get_desc().c_str(),
                          ggml_backend_dev_name(dev),
                          free_b / (1024.f * 1024.f),
