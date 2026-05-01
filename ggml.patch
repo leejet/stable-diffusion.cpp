@@ -1,0 +1,184 @@
+diff --git a/src/ggml-cuda/ggml-cuda.cu b/src/ggml-cuda/ggml-cuda.cu
+index cc80eb3f..a73ef0de 100644
+--- a/src/ggml-cuda/ggml-cuda.cu
++++ b/src/ggml-cuda/ggml-cuda.cu
+@@ -832,6 +832,19 @@ struct ggml_backend_cuda_split_buffer_type_context {
+ };
+ 
+ struct ggml_backend_cuda_split_buffer_context {
++    // Per-device pool: one contiguous cudaMalloc per device, sub-allocated
++    // by init_tensor. Replaces the previous per-tensor cudaMalloc to avoid
++    // bucketed-free fragmentation when multiple split buffers are loaded
++    // and freed sequentially (e.g. row-split conditioner -> row-split DiT).
++    char * pool_base[GGML_CUDA_MAX_DEVICES] = {};
++    size_t pool_size[GGML_CUDA_MAX_DEVICES] = {};
++    size_t pool_used[GGML_CUDA_MAX_DEVICES] = {};
++    // Side-allocations for tensors whose per-device slice didn't fit in the
++    // pool (row-split rounding skews per-device sizes off the planner's
++    // ratio). These do hit the per-tensor cudaMalloc path but only for the
++    // tail few tensors, not all of them.
++    std::vector<char *> pool_overflow_ptrs[GGML_CUDA_MAX_DEVICES];
++
+     ~ggml_backend_cuda_split_buffer_context() {
+         for (ggml_tensor_extra_gpu * extra : tensor_extras) {
+             for (int id = 0; id < GGML_CUDA_MAX_DEVICES; ++id) {
+@@ -840,12 +853,22 @@ struct ggml_backend_cuda_split_buffer_context {
+                         CUDA_CHECK(cudaEventDestroy(extra->events[id][is]));
+                     }
+                 }
+-                if (extra->data_device[id] != nullptr) {
+-                    CUDA_CHECK(cudaFree(extra->data_device[id]));
+-                }
++                // tensor data lives inside per-device pool or pool_overflow_ptrs; freed below
+             }
+             delete extra;
+         }
++        for (int id = 0; id < GGML_CUDA_MAX_DEVICES; ++id) {
++            if (pool_base[id] == nullptr && pool_overflow_ptrs[id].empty()) {
++                continue;  // never touched this device — skip set_device
++            }
++            ggml_cuda_set_device(id);
++            for (char * p : pool_overflow_ptrs[id]) {
++                if (p != nullptr) CUDA_CHECK(cudaFree(p));
++            }
++            if (pool_base[id] != nullptr) {
++                CUDA_CHECK(cudaFree(pool_base[id]));
++            }
++        }
+     }
+ 
+     std::vector<ggml_tensor_extra_gpu *> tensor_extras;
+@@ -865,7 +888,13 @@ static void * ggml_backend_cuda_split_buffer_get_base(ggml_backend_buffer_t buff
+ }
+ 
+ static enum ggml_status ggml_backend_cuda_split_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
+-    GGML_ASSERT(tensor->view_src == nullptr); // views of split tensors are not supported
++    // Views: storage comes from view_src, so this split buffer has nothing
++    // to allocate for the view. Sched routes any op that consumes the view
++    // through view_src's backend. Mirrors the non-split buffer init's
++    // early-return for views.
++    if (tensor->view_src != nullptr) {
++        return GGML_STATUS_SUCCESS;
++    }
+     GGML_ASSERT(ggml_is_contiguous(tensor) && "split buffers only supported for contiguous tensors");
+ 
+     ggml_backend_cuda_split_buffer_context * ctx = (ggml_backend_cuda_split_buffer_context *)buffer->context;
+@@ -876,6 +905,10 @@ static enum ggml_status ggml_backend_cuda_split_buffer_init_tensor(ggml_backend_
+     ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
+     ctx->tensor_extras.push_back(extra);
+ 
++    // 256-byte alignment is the CUDA default and matches what plain
++    // cudaMalloc returns; matmul kernels assume at least this.
++    constexpr size_t SPLIT_POOL_ALIGN = 256;
++
+     for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
+         int64_t row_low, row_high;
+         get_row_split(&row_low, &row_high, tensor, buft_ctx->tensor_split, id);
+@@ -893,11 +926,34 @@ static enum ggml_status ggml_backend_cuda_split_buffer_init_tensor(ggml_backend_
+             size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
+         }
+ 
+-        // FIXME: do not crash if cudaMalloc fails
+-        // currently, init_tensor cannot fail, it needs to be fixed in ggml-backend first
+         ggml_cuda_set_device(id);
+-        char * buf;
+-        CUDA_CHECK(ggml_cuda_device_malloc((void**)&buf, size, id));
++
++        char * buf = nullptr;
++        if (ctx->pool_base[id] != nullptr) {
++            // Pool path: bump-allocate inside the pre-allocated per-device
++            // slab. Avoids the per-tensor cudaMalloc fragmentation that
++            // breaks sequential row-split loads (Cond -> free -> DiT).
++            size_t off = (ctx->pool_used[id] + SPLIT_POOL_ALIGN - 1) & ~(SPLIT_POOL_ALIGN - 1);
++            if (off + size <= ctx->pool_size[id]) {
++                buf = ctx->pool_base[id] + off;
++                ctx->pool_used[id] = off + size;
++            } else {
++                // Pool exhausted (per-device share computation undershoot
++                // because row-split rounding skews per-device sizes away
++                // from tensor_split ratios). Fall back to a side cudaMalloc
++                // for this tensor's slice; freed by the per-tensor branch
++                // in the dtor. Most tensors still hit the pool; only the
++                // tail few that don't fit pay the fragmentation cost.
++                CUDA_CHECK(ggml_cuda_device_malloc((void **)&buf, size, id));
++                ctx->pool_overflow_ptrs[id].push_back(buf);
++            }
++        } else {
++            // Fallback for the legacy path (pool alloc failed in alloc_buffer
++            // or some caller bypassed the pool). Per-tensor cudaMalloc.
++            // FIXME: do not crash if cudaMalloc fails
++            // currently, init_tensor cannot fail, it needs to be fixed in ggml-backend first
++            CUDA_CHECK(ggml_cuda_device_malloc((void**)&buf, size, id));
++        }
+ 
+         // set padding to 0 to avoid possible NaN values
+         if (size > original_size) {
+@@ -1022,12 +1078,64 @@ static bool ggml_backend_buft_is_cuda_split(ggml_backend_buffer_type_t buft) {
+ }
+ 
+ static ggml_backend_buffer_t ggml_backend_cuda_split_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+-    // since we don't know the exact split after rounding, we cannot allocate the device buffers at this point
+-    // instead, we allocate them for each tensor separately in init_tensor
+-    // however, the size still represents the maximum cumulative size of all the device buffers after the tensors are allocated,
+-    // as returned by get_alloc_size. this limit is enforced during tensor allocation by ggml-alloc, so it must be correct.
++    // size is the cumulative max across ALL devices and ALL tensors (sum of
++    // get_alloc_size). Pre-allocate one contiguous slab per device sized by
++    // the tensor_split ratio + a small safety margin for per-tensor padding
++    // rounding. init_tensor then bump-allocates inside these slabs.
++    //
++    // Why: per-tensor cudaMalloc fragments the CUDA driver's free-list when
++    // the buffer is freed (driver keeps bucketed reuse pools). When two
++    // split buffers are loaded sequentially (e.g. row-split conditioner ->
++    // free -> row-split DiT), the second load OOMs even when the planner's
++    // MAX-based peak says memory should be available.
++    ggml_backend_cuda_split_buffer_type_context * buft_ctx =
++        (ggml_backend_cuda_split_buffer_type_context *)buft->context;
+     ggml_backend_cuda_split_buffer_context * ctx = new ggml_backend_cuda_split_buffer_context();
+ 
++    const int dev_count = ggml_backend_cuda_get_device_count();
++
++    // tensor_split is cumulative offsets in [0, 1]: device i covers
++    // [tensor_split[i], tensor_split[i+1]). Its share of the total is the
++    // delta. The last device gets up to 1.0.
++    bool pool_alloc_ok = true;
++    for (int id = 0; id < dev_count; ++id) {
++        const float lo = buft_ctx->tensor_split[id];
++        const float hi = (id == dev_count - 1) ? 1.0f : buft_ctx->tensor_split[id + 1];
++        const float frac = hi - lo;
++        if (frac <= 0.0f) {
++            continue;
++        }
++        // Safety margin: each tensor's per-device slice can pad up to
++        // (MATRIX_ROW_PADDING - 1) elements * row_size bytes. With many
++        // tensors that adds up; size_t(frac * size) plus 16 MiB cushion
++        // covers it for typical row counts. Plus one pool-alignment quantum
++        // per tensor would be tighter but harder to compute upfront.
++        size_t per_dev = size_t((double)frac * (double)size) + size_t(16) * 1024 * 1024;
++        ggml_cuda_set_device(id);
++        cudaError_t err = ggml_cuda_device_malloc((void **)&ctx->pool_base[id], per_dev, id);
++        if (err != cudaSuccess) {
++            GGML_LOG_WARN("%s: split pool alloc failed on device %d (%zu bytes, frac=%.3f); "
++                          "falling back to per-tensor cudaMalloc\n",
++                          __func__, id, per_dev, frac);
++            ctx->pool_base[id] = nullptr;
++            pool_alloc_ok = false;
++            // Don't bail — release any pools we've already taken so we don't
++            // hold partial pools while running fragmented anyway.
++            break;
++        }
++        ctx->pool_size[id] = per_dev;
++    }
++    if (!pool_alloc_ok) {
++        for (int id = 0; id < dev_count; ++id) {
++            if (ctx->pool_base[id] != nullptr) {
++                ggml_cuda_set_device(id);
++                CUDA_CHECK(cudaFree(ctx->pool_base[id]));
++                ctx->pool_base[id] = nullptr;
++                ctx->pool_size[id] = 0;
++            }
++        }
++    }
++
+     return ggml_backend_buffer_init(buft, ggml_backend_cuda_split_buffer_interface, ctx, size);
+ }
+ 
