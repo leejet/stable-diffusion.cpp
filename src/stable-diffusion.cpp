@@ -1104,8 +1104,13 @@ public:
                     cond_stage_lora_models.push_back(lora);
                 }
             }
-            auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(cond_stage_lora_models);
-            cond_stage_model->set_weight_adapter(multi_lora_adapter);
+            // Only attach the adapter when there are LoRAs targeting the cond_stage model.
+            // An empty MultiLoraAdapter still routes every linear/conv through
+            // forward_with_lora() instead of the direct kernel path — slower for no benefit.
+            if (!cond_stage_lora_models.empty()) {
+                auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(cond_stage_lora_models);
+                cond_stage_model->set_weight_adapter(multi_lora_adapter);
+            }
         }
         if (diffusion_model) {
             std::vector<std::shared_ptr<LoraModel>> lora_models;
@@ -1136,10 +1141,12 @@ public:
                     diffusion_lora_models.push_back(lora);
                 }
             }
-            auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(diffusion_lora_models);
-            diffusion_model->set_weight_adapter(multi_lora_adapter);
-            if (high_noise_diffusion_model) {
-                high_noise_diffusion_model->set_weight_adapter(multi_lora_adapter);
+            if (!diffusion_lora_models.empty()) {
+                auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(diffusion_lora_models);
+                diffusion_model->set_weight_adapter(multi_lora_adapter);
+                if (high_noise_diffusion_model) {
+                    high_noise_diffusion_model->set_weight_adapter(multi_lora_adapter);
+                }
             }
         }
 
@@ -1172,8 +1179,10 @@ public:
                     first_stage_lora_models.push_back(lora);
                 }
             }
-            auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(first_stage_lora_models);
-            first_stage_model->set_weight_adapter(multi_lora_adapter);
+            if (!first_stage_lora_models.empty()) {
+                auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(first_stage_lora_models);
+                first_stage_model->set_weight_adapter(multi_lora_adapter);
+            }
         }
     }
 
