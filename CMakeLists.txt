@@ -72,7 +72,6 @@ option(SD_USE_SYSTEM_GGML            "sd: use system-installed GGML library" OFF
 if(SD_CUDA)
     message("-- Use CUDA as backend stable-diffusion")
     set(GGML_CUDA ON)
-    add_definitions(-DSD_USE_CUDA)
 endif()
 
 if(SD_METAL)

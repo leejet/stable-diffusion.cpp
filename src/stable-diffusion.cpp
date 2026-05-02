@@ -614,25 +614,38 @@ public:
                                           const std::vector<int64_t>&         share_bytes,
                                           std::vector<ggml_backend_t>&        out_extra_backends,
                                           MultiBackendSpec&                   out_spec) -> bool {
-#ifdef SD_USE_CUDA
-            const int cuda_count = ggml_backend_cuda_get_device_count();
-            if (cuda_count <= 0 || share_devices.size() < 2) return false;
+            if (share_devices.size() < 2) return false;
 
-            // Map device names like "CUDA0" -> 0, "CUDA1" -> 1, ...
-            auto cuda_index_of = [](const std::string& name) -> int {
-                if (name.rfind("CUDA", 0) != 0) return -1;
-                try { return std::stoi(name.substr(4)); } catch (...) { return -1; }
+            // Derive the backend registry from the device-name prefix (e.g.
+            // "CUDA0" -> reg "CUDA", "SYCL1" -> reg "SYCL"). This keeps the
+            // code backend-agnostic: any backend whose registry publishes
+            // `ggml_backend_split_buffer_type` via reg_get_proc_address can
+            // drive row-split, not just CUDA.
+            auto reg_prefix_of = [](const std::string& name) -> std::string {
+                size_t i = 0;
+                while (i < name.size() && (std::isalpha((unsigned char)name[i]) || name[i] == '_')) i++;
+                return name.substr(0, i);
+            };
+            const std::string reg_name = reg_prefix_of(share_devices[0]);
+            ggml_backend_reg_t reg     = ggml_backend_reg_by_name(reg_name.c_str());
+            if (reg == nullptr) return false;
+            const int dev_count = (int)ggml_backend_reg_dev_count(reg);
+            if (dev_count <= 0) return false;
+
+            auto reg_index_of = [&](const std::string& name) -> int {
+                if (name.rfind(reg_name, 0) != 0) return -1;
+                try { return std::stoi(name.substr(reg_name.size())); } catch (...) { return -1; }
             };
 
-            std::vector<float> ratios(cuda_count, 0.0f);
+            std::vector<float> ratios(dev_count, 0.0f);
             int64_t total = 0;
             for (auto b : share_bytes) total += b;
             if (total <= 0) return false;
             int main_dev = -1;
             int64_t max_share = -1;
             for (size_t k = 0; k < share_devices.size(); k++) {
-                int idx = cuda_index_of(share_devices[k]);
-                if (idx < 0 || idx >= cuda_count) continue;
+                int idx = reg_index_of(share_devices[k]);
+                if (idx < 0 || idx >= dev_count) continue;
                 ratios[idx] = float(double(share_bytes[k]) / double(total));
                 if (share_bytes[k] > max_share) {
                     max_share = share_bytes[k];
@@ -641,12 +654,12 @@ public:
             }
             if (main_dev < 0) return false;
 
-            // Init extra CUDA backends for the non-main devices so sched
-            // can route ops across them (row-split tensors are dispatched
-            // by the CUDA backend; ggml-sched still needs all participating
+            // Init extra backends for the non-main devices so sched can
+            // route ops across them (row-split tensors are dispatched by the
+            // primary backend; ggml-sched still needs all participating
             // backends in its list to schedule cross-device copies).
             for (size_t k = 0; k < share_devices.size(); k++) {
-                int idx = cuda_index_of(share_devices[k]);
+                int idx = reg_index_of(share_devices[k]);
                 if (idx == main_dev || idx < 0) continue;
                 ggml_backend_t b = init_named_backend(share_devices[k]);
                 if (b != nullptr) {
@@ -665,7 +678,7 @@ public:
             out_spec.cpu_fallback        = nullptr;
 
             std::string ratio_str;
-            for (int i = 0; i < cuda_count; i++) {
+            for (int i = 0; i < dev_count; i++) {
                 if (i > 0) ratio_str += ",";
                 char buf[16]; std::snprintf(buf, sizeof(buf), "%.2f", ratios[i]);
                 ratio_str += buf;
@@ -673,10 +686,6 @@ public:
             LOG_INFO("row-split spec: ratios=[%s] main_device=%d",
                      ratio_str.c_str(), main_dev);
             return true;
-#else
-            (void)share_devices; (void)share_bytes; (void)out_spec;
-            return false;
-#endif
         };
 
         // Build the layer-split MultiBackendSpec for a component. Only used

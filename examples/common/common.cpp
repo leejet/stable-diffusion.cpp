@@ -645,6 +645,34 @@ ArgOptions SDContextParams::get_options() {
              std::exit(0);
              return 0;
          }},
+        // Soft-deprecated aliases for the old per-component CPU-placement
+        // toggles. They map onto the new --*-backend-device strings and also
+        // disable auto-fit so the placement is honored verbatim (matching
+        // the pre-auto-fit behavior these flags expressed).
+        {"",
+         "--clip-on-cpu",
+         "alias of --clip-backend-device CPU (also disables --auto-fit). Deprecated.",
+         [this](int /*argc*/, const char** /*argv*/, int /*index*/) {
+             clip_backend_device = "CPU";
+             auto_fit            = false;
+             return 0;
+         }},
+        {"",
+         "--vae-on-cpu",
+         "alias of --vae-backend-device CPU (also disables --auto-fit). Deprecated.",
+         [this](int /*argc*/, const char** /*argv*/, int /*index*/) {
+             vae_backend_device = "CPU";
+             auto_fit           = false;
+             return 0;
+         }},
+        {"",
+         "--control-net-cpu",
+         "alias of --control-net-backend-device CPU (also disables --auto-fit). Deprecated.",
+         [this](int /*argc*/, const char** /*argv*/, int /*index*/) {
+             control_net_backend_device = "CPU";
+             auto_fit                   = false;
+             return 0;
+         }},
     };
 
     return options;

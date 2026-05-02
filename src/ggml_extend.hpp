@@ -25,9 +25,6 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml.h"
-#ifdef SD_USE_CUDA
-#include "ggml-cuda.h"
-#endif
 #include "ggml_extend_backend.hpp"
 
 #include "model.h"
@@ -2158,26 +2155,21 @@ public:
             cpu_fallback_backend           = pending->cpu_fallback;
             row_split_ratios               = pending->tensor_split_ratios;
             row_main_device                = pending->main_device;
-#ifdef SD_USE_CUDA
             if (multi_backend_kind == MultiBackendMode::ROW_SPLIT) {
-                row_split_buft = ggml_backend_cuda_split_buffer_type(
+                row_split_buft = ggml_backend_split_buffer_type(
+                    runtime_backend,
                     row_main_device,
                     row_split_ratios.empty() ? nullptr : row_split_ratios.data());
                 if (row_split_buft == nullptr) {
-                    LOG_WARN("multi-backend: cuda split buft init failed; "
-                             "falling back to single-backend mode");
+                    LOG_WARN("multi-backend: row-split buft init failed "
+                             "(backend does not publish "
+                             "ggml_backend_split_buffer_type); falling back "
+                             "to single-backend mode");
                     multi_backend_mode = false;
                     additional_backends.clear();
                     cpu_fallback_backend = nullptr;
                 }
             }
-#else
-            if (multi_backend_kind == MultiBackendMode::ROW_SPLIT) {
-                LOG_WARN("multi-backend: row-split requires CUDA; "
-                         "falling back to single-backend mode");
-                multi_backend_mode = false;
-            }
-#endif
             if (multi_backend_mode && offload_params_to_cpu) {
                 LOG_WARN("multi-backend split is incompatible with "
                          "offload_params_to_cpu; ignoring offload");
@@ -2377,7 +2369,12 @@ public:
     }
 
     bool alloc_params_buffer_row_split() {
-#ifdef SD_USE_CUDA
+        if (row_split_buft == nullptr) {
+            LOG_ERROR("alloc_params_buffer_row_split: row-split buft not "
+                      "initialized (backend lacks "
+                      "ggml_backend_split_buffer_type)");
+            return false;
+        }
         ggml_backend_buffer_type_t main_buft = ggml_backend_get_default_buffer_type(runtime_backend);
         const size_t main_align  = ggml_backend_buft_get_alignment(main_buft);
         const size_t split_align = ggml_backend_buft_get_alignment(row_split_buft);
@@ -2442,10 +2439,6 @@ public:
                  main_size / (1024.f * 1024.f), main_count,
                  split_size / (1024.f * 1024.f), split_count);
         return true;
-#else
-        LOG_ERROR("alloc_params_buffer_row_split called without CUDA");
-        return false;
-#endif
     }
 
     // Internal: always materializes the params buffer. Used by both the
