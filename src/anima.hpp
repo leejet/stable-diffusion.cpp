@@ -602,6 +602,10 @@ namespace Anima {
         AnimaNet net;
         int64_t num_layers_ = 28;  // Store for streaming
 
+        // Static layer cache decided on the first sampling step. -1 = not yet
+        // computed; 0..N = number of "blocks.X" kept resident across steps.
+        int resident_blocks_ = -1;
+
     public:
 
         AnimaRunner(ggml_backend_t backend,
@@ -1018,8 +1022,23 @@ namespace Anima {
             LOG_DEBUG("Input stage done, x=%ldx%ldx%ld", x_ne[0], x_ne[1], x_ne[2]);
 
             auto block_name_at = [](int i) { return "blocks." + std::to_string(i); };
+
+            if (resident_blocks_ < 0 && streaming_engine_) {
+                resident_blocks_ = streaming_engine_->compute_resident_block_count(
+                    "blocks.0", static_cast<int>(num_blocks));
+                LOG_INFO("%s blocks cache: %d resident, %d streamed per step",
+                         get_desc().c_str(),
+                         resident_blocks_,
+                         static_cast<int>(num_blocks) - resident_blocks_);
+            }
+
+            int prefetch_start = 0;
+            while (prefetch_start < static_cast<int>(num_blocks) &&
+                   registry.is_layer_on_gpu(block_name_at(prefetch_start))) {
+                prefetch_start++;
+            }
             if (streaming_engine_) {
-                streaming_engine_->prime_prefetch(block_name_at, 0, static_cast<int>(num_blocks));
+                streaming_engine_->prime_prefetch(block_name_at, prefetch_start, static_cast<int>(num_blocks));
             }
 
             for (int64_t block_idx = 0; block_idx < num_blocks; block_idx++) {
@@ -1099,8 +1118,10 @@ namespace Anima {
                 // Now safe to free compute buffer
                 free_compute_buffer();
 
-                // Offload this block
-                registry.move_layer_to_cpu(block_name);
+                // Resident blocks stay on GPU across sampling steps.
+                if (static_cast<int>(block_idx) >= resident_blocks_) {
+                    registry.move_layer_to_cpu(block_name);
+                }
 
                 LOG_DEBUG("Block %lld/%lld done (%.2fms)",
                           block_idx + 1, num_blocks, (ggml_time_ms() - t_block_start) / 1.0);

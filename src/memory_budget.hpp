@@ -11,10 +11,6 @@
 #include "tensor_registry.hpp"
 #include "util.h"
 
-#ifdef SD_USE_CUDA
-#include "ggml-cuda.h"
-#endif
-
 namespace LayerStreaming {
 
 enum class EvictionPolicy {
@@ -43,13 +39,16 @@ public:
     }
 
     void query_device_memory() {
-#ifdef SD_USE_CUDA
-        ggml_backend_cuda_get_device_memory(0, &free_vram_, &total_vram_);
-#else
-        // Non-CUDA fallback - extend for Vulkan, Metal, etc.
-        total_vram_ = 8ULL * 1024 * 1024 * 1024;
-        free_vram_  = total_vram_ / 2;
-#endif
+        // Use runtime backend device API (works for CUDA, Vulkan, Metal, etc.).
+        // The previous SD_USE_CUDA gate broke after PR #1448 removed compile-time
+        // backend selection, leaving every build on the 8 GB / 4 GB fallback.
+        ggml_backend_dev_t dev = gpu_backend_ ? ggml_backend_get_device(gpu_backend_) : nullptr;
+        if (dev != nullptr) {
+            ggml_backend_dev_memory(dev, &free_vram_, &total_vram_);
+        } else {
+            total_vram_ = 8ULL * 1024 * 1024 * 1024;
+            free_vram_  = total_vram_ / 2;
+        }
         LOG_DEBUG("total VRAM = %.2f GB, free = %.2f GB",
                   total_vram_ / (1024.0 * 1024.0 * 1024.0),
                   free_vram_ / (1024.0 * 1024.0 * 1024.0));

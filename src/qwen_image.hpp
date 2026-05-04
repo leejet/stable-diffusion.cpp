@@ -569,6 +569,10 @@ namespace Qwen {
         std::vector<float> modulate_index_vec;
         SDVersion version;
 
+        // Static layer cache decided on the first sampling step. -1 = not yet
+        // computed; 0..N = number of "transformer_blocks.X" kept resident.
+        int resident_transformer_blocks_ = -1;
+
         QwenImageRunner(ggml_backend_t backend,
                         bool offload_params_to_cpu,
                         const String2TensorStorage& tensor_storage_map = {},
@@ -846,7 +850,22 @@ namespace Qwen {
                       txt_ne[0], txt_ne[1], txt_ne[2], txt_ne[3]);
 
             auto block_name_at = [](int i) { return "transformer_blocks." + std::to_string(i); };
-            streaming_engine_->prime_prefetch(block_name_at, 0, num_layers);
+
+            if (resident_transformer_blocks_ < 0) {
+                resident_transformer_blocks_ = streaming_engine_->compute_resident_block_count(
+                    "transformer_blocks.0", num_layers);
+                LOG_INFO("%s transformer_blocks cache: %d resident, %d streamed per step",
+                         get_desc().c_str(),
+                         resident_transformer_blocks_,
+                         num_layers - resident_transformer_blocks_);
+            }
+
+            int prefetch_start = 0;
+            while (prefetch_start < num_layers &&
+                   registry.is_layer_on_gpu(block_name_at(prefetch_start))) {
+                prefetch_start++;
+            }
+            streaming_engine_->prime_prefetch(block_name_at, prefetch_start, num_layers);
 
             for (int block_idx = 0; block_idx < num_layers; block_idx++) {
                 std::string block_name = block_name_at(block_idx);
@@ -930,8 +949,10 @@ namespace Qwen {
                 // Now safe to free compute buffer
                 free_compute_buffer();
 
-                // Offload this block
-                registry.move_layer_to_cpu(block_name);
+                // Resident blocks stay on GPU across sampling steps.
+                if (block_idx >= resident_transformer_blocks_) {
+                    registry.move_layer_to_cpu(block_name);
+                }
 
                 LOG_DEBUG("Block %d/%d done (%.2fms)",
                           block_idx + 1, num_layers, (ggml_time_ms() - t_block_start) / 1.0);

@@ -880,6 +880,10 @@ public:
 struct MMDiTRunner : public GGMLRunner {
     MMDiT mmdit;
 
+    // Static layer cache decided on the first sampling step. -1 = not yet
+    // computed; 0..N = number of joint_blocks kept resident on GPU.
+    int resident_joint_blocks_ = -1;
+
     MMDiTRunner(ggml_backend_t backend,
                 bool offload_params_to_cpu,
                 const String2TensorStorage& tensor_storage_map = {},
@@ -1042,7 +1046,21 @@ struct MMDiTRunner : public GGMLRunner {
 
         auto block_name_at = [](int i) { return "joint_blocks." + std::to_string(i); };
         if (streaming_engine_) {
-            streaming_engine_->prime_prefetch(block_name_at, 0, num_blocks);
+            if (resident_joint_blocks_ < 0) {
+                resident_joint_blocks_ = streaming_engine_->compute_resident_block_count(
+                    "joint_blocks.0", num_blocks);
+                LOG_INFO("%s joint_blocks cache: %d resident, %d streamed per step",
+                         get_desc().c_str(),
+                         resident_joint_blocks_,
+                         num_blocks - resident_joint_blocks_);
+            }
+
+            int prefetch_start = 0;
+            while (prefetch_start < num_blocks &&
+                   registry.is_layer_on_gpu(block_name_at(prefetch_start))) {
+                prefetch_start++;
+            }
+            streaming_engine_->prime_prefetch(block_name_at, prefetch_start, num_blocks);
         }
 
         for (int block_idx = 0; block_idx < num_blocks; block_idx++) {
@@ -1129,8 +1147,10 @@ struct MMDiTRunner : public GGMLRunner {
             // Now safe to free compute buffer
             free_compute_buffer();
 
-            // Offload this block
-            registry.move_layer_to_cpu(block_name);
+            // Resident blocks stay on GPU across sampling steps.
+            if (block_idx >= resident_joint_blocks_) {
+                registry.move_layer_to_cpu(block_name);
+            }
 
             LOG_DEBUG("Joint block %d/%d done (%.2fms)",
                       block_idx + 1, num_blocks, (ggml_time_ms() - t_block_start) / 1.0);

@@ -556,6 +556,11 @@ namespace ZImage {
         std::vector<float> timestep_vec;
         SDVersion version;
 
+        // Number of main layers kept resident on GPU across sampling steps.
+        // -1 = uncomputed; set on the first compute_streaming_true() call once
+        // refiners and _global are loaded so we know real free VRAM.
+        int resident_layer_count_ = -1;
+
     public:
 
         ZImageRunner(ggml_backend_t backend,
@@ -785,12 +790,19 @@ namespace ZImage {
                 free_compute_buffer();
             }
 
-            // Offload refiner layers to free VRAM for main layers
-            for (int i = 0; i < num_refiner_layers; i++) {
-                std::string cr_name = "context_refiner." + std::to_string(i);
-                std::string nr_name = "noise_refiner." + std::to_string(i);
-                registry.move_layer_to_cpu(cr_name);
-                registry.move_layer_to_cpu(nr_name);
+            // Refiners stay resident across sampling steps. Their weights are
+            // identical every step, so evicting and re-streaming them was
+            // pure waste. They cost ~4 layers worth of VRAM (small).
+
+            // On the first sampling step, decide how many main layers we can
+            // keep permanently resident. Layers [0..K-1] become a static cache;
+            // layers [K..N-1] continue to stream and evict each step.
+            if (resident_layer_count_ < 0 && streaming_engine_) {
+                resident_layer_count_ = streaming_engine_->compute_resident_block_count("layers.0", num_layers);
+                LOG_INFO("%s layer cache: %d resident, %d streamed per step",
+                         get_desc().c_str(),
+                         resident_layer_count_,
+                         num_layers - resident_layer_count_);
             }
 
             // Stage 2: Main layers (one at a time)
@@ -807,8 +819,17 @@ namespace ZImage {
             }
 
             auto layer_name_at = [](int i) { return "layers." + std::to_string(i); };
+
+            // Begin prefetch at the first non-resident layer. On step 1 nothing
+            // is loaded so this starts at 0; on later steps it skips the cache
+            // prefix and queues the streamed tail directly.
+            int prefetch_start = 0;
+            while (prefetch_start < num_layers &&
+                   registry.is_layer_on_gpu(layer_name_at(prefetch_start))) {
+                prefetch_start++;
+            }
             if (streaming_engine_) {
-                streaming_engine_->prime_prefetch(layer_name_at, 0, num_layers);
+                streaming_engine_->prime_prefetch(layer_name_at, prefetch_start, num_layers);
             }
 
             for (int layer_idx = 0; layer_idx < layers_to_run; layer_idx++) {
@@ -876,7 +897,11 @@ namespace ZImage {
                 // so the gallocr can be reused for the entire sampling step. Freeing here
                 // forces a destroy-and-recreate cycle that idles the GPU between layers.
 
-                registry.move_layer_to_cpu(layer_name);
+                // Resident layers stay on GPU across sampling steps; only evict
+                // streamed layers (idx >= resident_layer_count_).
+                if (layer_idx >= resident_layer_count_) {
+                    registry.move_layer_to_cpu(layer_name);
+                }
             }
 
             // After all main layers are done, free the compute buffer so the output stage

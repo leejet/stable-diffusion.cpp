@@ -326,6 +326,48 @@ public:
         return pending_prefetches_.find(layer_name) != pending_prefetches_.end();
     }
 
+    // Decides how many blocks to keep permanently resident on GPU for a
+    // section of the model (e.g. all "layers.N" or all "double_blocks.N").
+    // Static partition follows ComfyUI's partially_load() — for the cyclic
+    // sequential access pattern of diffusion sampling, caching a fixed
+    // prefix is simpler and faster than dynamic eviction. Caller is
+    // responsible for storing the result and only computing it once per
+    // section so that consecutive calls inside the same generation see a
+    // consistent VRAM budget.
+    //
+    // sample_block_name should be a real block in the section (e.g.
+    // "layers.0") so per-block size can be measured. compute_buffer_reserve
+    // should be set per-runner to the peak compute buffer observed during
+    // a single block forward pass.
+    int compute_resident_block_count(const std::string& sample_block_name,
+                                     int num_blocks,
+                                     size_t compute_buffer_reserve = 768ULL * 1024 * 1024) {
+        if (num_blocks <= 0) {
+            return 0;
+        }
+
+        size_t per_block = registry_.get_layer_size(sample_block_name);
+        if (per_block == 0) {
+            return 0;
+        }
+
+        // Headroom: prefetch window in flight + the active block + the
+        // upcoming compute buffer + a hard safety margin. Without this
+        // slack the next prefetch's cudaMalloc can fail mid-loop.
+        int prefetch_count = std::max(1, config_.prefetch_layers);
+        size_t prefetch_reserve = static_cast<size_t>(prefetch_count + 1) * per_block;
+        size_t safety = std::max<size_t>(config_.min_free_vram, 512ULL * 1024 * 1024);
+        size_t reserved = prefetch_reserve + safety + compute_buffer_reserve;
+
+        size_t free_vram = budget_.get_free_vram();
+        if (free_vram <= reserved) {
+            return 0;
+        }
+        size_t available = free_vram - reserved;
+        int max_resident = static_cast<int>(available / per_block);
+        return std::min(num_blocks, max_resident);
+    }
+
     // Prime the prefetch pipeline by kicking off transfers for the first
     // prefetch_layers blocks starting at start_idx. Call once before the
     // streaming loop. name_for(i) -> the registry key for block i.

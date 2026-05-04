@@ -1503,6 +1503,12 @@ namespace Flux {
         SDVersion version;
         bool use_mask = false;
 
+        // Static layer cache decided on the first sampling step. -1 = not yet
+        // computed; 0..N = number of "double_blocks.X" / "single_blocks.X"
+        // blocks kept resident on GPU across sampling steps.
+        int resident_double_blocks_ = -1;
+        int resident_single_blocks_ = -1;
+
         FluxRunner(ggml_backend_t backend,
                    bool offload_params_to_cpu,
                    const String2TensorStorage& tensor_storage_map = {},
@@ -2206,8 +2212,23 @@ namespace Flux {
                       img_ne[0], img_ne[1], img_ne[2], txt_ne[0], txt_ne[1], txt_ne[2]);
 
             auto double_name_at = [](int i) { return "double_blocks." + std::to_string(i); };
+
+            if (resident_double_blocks_ < 0 && streaming_engine_) {
+                resident_double_blocks_ = streaming_engine_->compute_resident_block_count(
+                    "double_blocks.0", num_double_blocks);
+                LOG_INFO("%s double_blocks cache: %d resident, %d streamed per step",
+                         get_desc().c_str(),
+                         resident_double_blocks_,
+                         num_double_blocks - resident_double_blocks_);
+            }
+
+            int double_prefetch_start = 0;
+            while (double_prefetch_start < num_double_blocks &&
+                   registry.is_layer_on_gpu(double_name_at(double_prefetch_start))) {
+                double_prefetch_start++;
+            }
             if (streaming_engine_) {
-                streaming_engine_->prime_prefetch(double_name_at, 0, num_double_blocks);
+                streaming_engine_->prime_prefetch(double_name_at, double_prefetch_start, num_double_blocks);
             }
 
             for (int block_idx = 0; block_idx < num_double_blocks; block_idx++) {
@@ -2294,8 +2315,10 @@ namespace Flux {
                 // Now safe to free compute buffer
                 free_compute_buffer();
 
-                // Offload this block
-                registry.move_layer_to_cpu(block_name);
+                // Resident blocks stay on GPU across sampling steps.
+                if (block_idx >= resident_double_blocks_) {
+                    registry.move_layer_to_cpu(block_name);
+                }
 
                 LOG_DEBUG("Double block %d/%d done (%.2fms)",
                           block_idx + 1, num_double_blocks, (ggml_time_ms() - t_block_start) / 1.0);
@@ -2321,8 +2344,23 @@ namespace Flux {
             }
 
             auto single_name_at = [](int i) { return "single_blocks." + std::to_string(i); };
+
+            if (resident_single_blocks_ < 0 && streaming_engine_) {
+                resident_single_blocks_ = streaming_engine_->compute_resident_block_count(
+                    "single_blocks.0", num_single_blocks);
+                LOG_INFO("%s single_blocks cache: %d resident, %d streamed per step",
+                         get_desc().c_str(),
+                         resident_single_blocks_,
+                         num_single_blocks - resident_single_blocks_);
+            }
+
+            int single_prefetch_start = 0;
+            while (single_prefetch_start < num_single_blocks &&
+                   registry.is_layer_on_gpu(single_name_at(single_prefetch_start))) {
+                single_prefetch_start++;
+            }
             if (streaming_engine_) {
-                streaming_engine_->prime_prefetch(single_name_at, 0, num_single_blocks);
+                streaming_engine_->prime_prefetch(single_name_at, single_prefetch_start, num_single_blocks);
             }
 
             for (int block_idx = 0; block_idx < num_single_blocks; block_idx++) {
@@ -2401,8 +2439,10 @@ namespace Flux {
                 // Now safe to free compute buffer
                 free_compute_buffer();
 
-                // Offload this block
-                registry.move_layer_to_cpu(block_name);
+                // Resident blocks stay on GPU across sampling steps.
+                if (block_idx >= resident_single_blocks_) {
+                    registry.move_layer_to_cpu(block_name);
+                }
 
                 LOG_DEBUG("Single block %d/%d done (%.2fms)",
                           block_idx + 1, num_single_blocks, (ggml_time_ms() - t_block_start) / 1.0);
