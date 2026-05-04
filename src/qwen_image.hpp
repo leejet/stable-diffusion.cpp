@@ -761,10 +761,19 @@ namespace Qwen {
             int64_t orig_H = x->ne[1];
             int64_t orig_W = x->ne[0];
 
-            // Persistent storage for intermediate img and txt tensors
-            std::vector<float> persistent_img;
-            std::vector<float> persistent_txt;
-            std::vector<float> persistent_t_emb;
+            // Persistent storage. Backed by a single GPU-pinned host buffer
+            // (ensure_pinned_act_buffers) so per-block ggml_backend_tensor_get
+            // / set_backend_tensor_data run at full PCIe bandwidth. Falls back
+            // to pageable std::vector if pinned alloc fails.
+            std::vector<float> persistent_img_fallback;
+            std::vector<float> persistent_txt_fallback;
+            std::vector<float> persistent_t_emb_fallback;
+            float* persistent_img   = nullptr;
+            float* persistent_txt   = nullptr;
+            float* persistent_t_emb = nullptr;
+            size_t persistent_img_count   = 0;
+            size_t persistent_txt_count   = 0;
+            size_t persistent_t_emb_count = 0;
             int64_t img_ne[4], txt_ne[4], t_emb_ne[4];
             int64_t img_tokens_count = 0;
 
@@ -818,17 +827,33 @@ namespace Qwen {
                 // Extract computed tensors to persistent storage
                 if (img_output && txt_output && t_emb_output) {
                     // Copy tensor data to CPU storage
-                    size_t img_size = ggml_nelements(img_output);
-                    size_t txt_size = ggml_nelements(txt_output);
+                    size_t img_size   = ggml_nelements(img_output);
+                    size_t txt_size   = ggml_nelements(txt_output);
                     size_t t_emb_size = ggml_nelements(t_emb_output);
 
-                    persistent_img.resize(img_size);
-                    persistent_txt.resize(txt_size);
-                    persistent_t_emb.resize(t_emb_size);
+                    persistent_img_count   = img_size;
+                    persistent_txt_count   = txt_size;
+                    persistent_t_emb_count = t_emb_size;
 
-                    ggml_backend_tensor_get(img_output, persistent_img.data(), 0, img_size * sizeof(float));
-                    ggml_backend_tensor_get(txt_output, persistent_txt.data(), 0, txt_size * sizeof(float));
-                    ggml_backend_tensor_get(t_emb_output, persistent_t_emb.data(), 0, t_emb_size * sizeof(float));
+                    std::vector<float*> ptrs;
+                    if (ensure_pinned_act_buffers({img_size   * sizeof(float),
+                                                   txt_size   * sizeof(float),
+                                                   t_emb_size * sizeof(float)}, ptrs)) {
+                        persistent_img   = ptrs[0];
+                        persistent_txt   = ptrs[1];
+                        persistent_t_emb = ptrs[2];
+                    } else {
+                        persistent_img_fallback.resize(img_size);
+                        persistent_txt_fallback.resize(txt_size);
+                        persistent_t_emb_fallback.resize(t_emb_size);
+                        persistent_img   = persistent_img_fallback.data();
+                        persistent_txt   = persistent_txt_fallback.data();
+                        persistent_t_emb = persistent_t_emb_fallback.data();
+                    }
+
+                    ggml_backend_tensor_get(img_output, persistent_img, 0, img_size * sizeof(float));
+                    ggml_backend_tensor_get(txt_output, persistent_txt, 0, txt_size * sizeof(float));
+                    ggml_backend_tensor_get(t_emb_output, persistent_t_emb, 0, t_emb_size * sizeof(float));
 
                     for (int i = 0; i < 4; i++) {
                         img_ne[i] = img_output->ne[i];
@@ -900,9 +925,9 @@ namespace Qwen {
                     txt_in = to_backend(txt_in);
                     t_emb_in = to_backend(t_emb_in);
 
-                    set_backend_tensor_data(img_in, persistent_img.data());
-                    set_backend_tensor_data(txt_in, persistent_txt.data());
-                    set_backend_tensor_data(t_emb_in, persistent_t_emb.data());
+                    set_backend_tensor_data(img_in, persistent_img);
+                    set_backend_tensor_data(txt_in, persistent_txt);
+                    set_backend_tensor_data(t_emb_in, persistent_t_emb);
 
                     // Generate PE
                     int pos_len = static_cast<int>(pe_vec.size() / qwen_image_params.axes_dim_sum / 2);
@@ -937,8 +962,8 @@ namespace Qwen {
 
                 // Extract outputs to persistent storage
                 if (img_out && txt_out) {
-                    ggml_backend_tensor_get(img_out, persistent_img.data(), 0, persistent_img.size() * sizeof(float));
-                    ggml_backend_tensor_get(txt_out, persistent_txt.data(), 0, persistent_txt.size() * sizeof(float));
+                    ggml_backend_tensor_get(img_out, persistent_img, 0, persistent_img_count * sizeof(float));
+                    ggml_backend_tensor_get(txt_out, persistent_txt, 0, persistent_txt_count * sizeof(float));
 
                     for (int i = 0; i < 4; i++) {
                         img_ne[i] = img_out->ne[i];
@@ -972,8 +997,8 @@ namespace Qwen {
                     img_in = to_backend(img_in);
                     t_emb_in = to_backend(t_emb_in);
 
-                    set_backend_tensor_data(img_in, persistent_img.data());
-                    set_backend_tensor_data(t_emb_in, persistent_t_emb.data());
+                    set_backend_tensor_data(img_in, persistent_img);
+                    set_backend_tensor_data(t_emb_in, persistent_t_emb);
 
                     auto runner_ctx = get_context();
                     final_out = qwen_image.forward_output_stage(&runner_ctx, img_in, t_emb_in,

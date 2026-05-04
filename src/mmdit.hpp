@@ -967,10 +967,19 @@ struct MMDiTRunner : public GGMLRunner {
             return false;
         }
 
-        // Persistent storage for intermediate tensors
-        std::vector<float> persistent_x;
-        std::vector<float> persistent_context;
-        std::vector<float> persistent_c_mod;
+        // Persistent storage for intermediate tensors. Backed by a single
+        // GPU-pinned host buffer (ensure_pinned_act_buffers) so per-block
+        // ggml_backend_tensor_get / set_backend_tensor_data run at full
+        // PCIe bandwidth. context is optional (some MMDiT variants omit it).
+        std::vector<float> persistent_x_fallback;
+        std::vector<float> persistent_context_fallback;
+        std::vector<float> persistent_c_mod_fallback;
+        float* persistent_x       = nullptr;
+        float* persistent_context = nullptr;
+        float* persistent_c_mod   = nullptr;
+        size_t persistent_x_count       = 0;
+        size_t persistent_context_count = 0;
+        size_t persistent_c_mod_count   = 0;
         int64_t x_ne[4], context_ne[4], c_mod_ne[4];
 
         LOG_DEBUG("Executing input stage");
@@ -1010,14 +1019,34 @@ struct MMDiTRunner : public GGMLRunner {
 
             // Extract to persistent storage
             if (x_output && c_mod_output) {
-                size_t x_size = ggml_nelements(x_output);
-                size_t c_mod_size = ggml_nelements(c_mod_output);
+                size_t x_size       = ggml_nelements(x_output);
+                size_t c_mod_size   = ggml_nelements(c_mod_output);
+                size_t context_size = context_output ? ggml_nelements(context_output) : 0;
 
-                persistent_x.resize(x_size);
-                persistent_c_mod.resize(c_mod_size);
+                persistent_x_count       = x_size;
+                persistent_c_mod_count   = c_mod_size;
+                persistent_context_count = context_size;
 
-                ggml_backend_tensor_get(x_output, persistent_x.data(), 0, x_size * sizeof(float));
-                ggml_backend_tensor_get(c_mod_output, persistent_c_mod.data(), 0, c_mod_size * sizeof(float));
+                std::vector<float*> ptrs;
+                if (ensure_pinned_act_buffers({x_size       * sizeof(float),
+                                               c_mod_size   * sizeof(float),
+                                               context_size * sizeof(float)}, ptrs)) {
+                    persistent_x       = ptrs[0];
+                    persistent_c_mod   = ptrs[1];
+                    persistent_context = context_size ? ptrs[2] : nullptr;
+                } else {
+                    persistent_x_fallback.resize(x_size);
+                    persistent_c_mod_fallback.resize(c_mod_size);
+                    persistent_x     = persistent_x_fallback.data();
+                    persistent_c_mod = persistent_c_mod_fallback.data();
+                    if (context_size) {
+                        persistent_context_fallback.resize(context_size);
+                        persistent_context = persistent_context_fallback.data();
+                    }
+                }
+
+                ggml_backend_tensor_get(x_output, persistent_x, 0, x_size * sizeof(float));
+                ggml_backend_tensor_get(c_mod_output, persistent_c_mod, 0, c_mod_size * sizeof(float));
 
                 for (int i = 0; i < 4; i++) {
                     x_ne[i] = x_output->ne[i];
@@ -1025,9 +1054,7 @@ struct MMDiTRunner : public GGMLRunner {
                 }
 
                 if (context_output) {
-                    size_t context_size = ggml_nelements(context_output);
-                    persistent_context.resize(context_size);
-                    ggml_backend_tensor_get(context_output, persistent_context.data(), 0, context_size * sizeof(float));
+                    ggml_backend_tensor_get(context_output, persistent_context, 0, context_size * sizeof(float));
                     for (int i = 0; i < 4; i++) {
                         context_ne[i] = context_output->ne[i];
                     }
@@ -1102,14 +1129,14 @@ struct MMDiTRunner : public GGMLRunner {
                 x_in = to_backend(x_in);
                 c_mod_in = to_backend(c_mod_in);
 
-                set_backend_tensor_data(x_in, persistent_x.data());
-                set_backend_tensor_data(c_mod_in, persistent_c_mod.data());
+                set_backend_tensor_data(x_in, persistent_x);
+                set_backend_tensor_data(c_mod_in, persistent_c_mod);
 
                 ggml_tensor* context_in = nullptr;
-                if (!persistent_context.empty()) {
+                if (persistent_context_count > 0) {
                     context_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, context_ne[0], context_ne[1], context_ne[2], context_ne[3]);
                     context_in = to_backend(context_in);
-                    set_backend_tensor_data(context_in, persistent_context.data());
+                    set_backend_tensor_data(context_in, persistent_context);
                 }
 
                 auto runner_ctx = get_context();
@@ -1132,13 +1159,13 @@ struct MMDiTRunner : public GGMLRunner {
 
             // Extract outputs to persistent storage
             if (x_out) {
-                ggml_backend_tensor_get(x_out, persistent_x.data(), 0, persistent_x.size() * sizeof(float));
+                ggml_backend_tensor_get(x_out, persistent_x, 0, persistent_x_count * sizeof(float));
                 for (int i = 0; i < 4; i++) {
                     x_ne[i] = x_out->ne[i];
                 }
             }
-            if (context_out && !persistent_context.empty()) {
-                ggml_backend_tensor_get(context_out, persistent_context.data(), 0, persistent_context.size() * sizeof(float));
+            if (context_out && persistent_context_count > 0) {
+                ggml_backend_tensor_get(context_out, persistent_context, 0, persistent_context_count * sizeof(float));
                 for (int i = 0; i < 4; i++) {
                     context_ne[i] = context_out->ne[i];
                 }
@@ -1167,8 +1194,8 @@ struct MMDiTRunner : public GGMLRunner {
                 x_in = to_backend(x_in);
                 c_mod_in = to_backend(c_mod_in);
 
-                set_backend_tensor_data(x_in, persistent_x.data());
-                set_backend_tensor_data(c_mod_in, persistent_c_mod.data());
+                set_backend_tensor_data(x_in, persistent_x);
+                set_backend_tensor_data(c_mod_in, persistent_c_mod);
 
                 auto runner_ctx = get_context();
                 auto final_out = mmdit.forward_output_stage(&runner_ctx, x_in, c_mod_in);

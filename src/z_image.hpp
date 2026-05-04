@@ -561,18 +561,6 @@ namespace ZImage {
         // refiners and _global are loaded so we know real free VRAM.
         int resident_layer_count_ = -1;
 
-        // Pinned host buffer for persistent activations (txt_img, t_emb) used
-        // across the per-layer streaming graphs. Pageable host buffers force
-        // the CUDA backend to stage transfers through an internal bounce
-        // buffer; pinning makes both ggml_backend_tensor_get and
-        // copy_data_to_backend_tensor 3–4x faster.
-        ggml_backend_buffer_t persistent_act_host_buf_ = nullptr;
-        size_t persistent_act_host_size_               = 0;
-        float* persistent_txt_img_ptr_                 = nullptr;
-        float* persistent_t_emb_ptr_                   = nullptr;
-        size_t persistent_txt_img_count_               = 0;
-        size_t persistent_t_emb_count_                 = 0;
-
     public:
 
         ZImageRunner(ggml_backend_t backend,
@@ -585,58 +573,8 @@ namespace ZImage {
             z_image.init(params_ctx, tensor_storage_map, prefix);
         }
 
-        ~ZImageRunner() {
-            if (persistent_act_host_buf_ != nullptr) {
-                ggml_backend_buffer_free(persistent_act_host_buf_);
-                persistent_act_host_buf_ = nullptr;
-            }
-        }
-
         std::string get_desc() override {
             return "z_image";
-        }
-
-        // Allocates (or reallocates if size grew) a single pinned host buffer
-        // big enough to hold both persistent_txt_img and persistent_t_emb. The
-        // pinned memory makes the per-layer ggml_backend_tensor_get and
-        // copy_data_to_backend_tensor calls run at full PCIe bandwidth instead
-        // of staging through CUDA's internal bounce buffer.
-        bool ensure_pinned_act_buffers(size_t txt_img_count, size_t t_emb_count) {
-            const size_t align = 256;
-            size_t txt_img_bytes = ((txt_img_count * sizeof(float) + align - 1) / align) * align;
-            size_t t_emb_bytes   = ((t_emb_count   * sizeof(float) + align - 1) / align) * align;
-            size_t total         = txt_img_bytes + t_emb_bytes;
-
-            if (persistent_act_host_buf_ != nullptr && persistent_act_host_size_ >= total) {
-                persistent_txt_img_count_ = txt_img_count;
-                persistent_t_emb_count_   = t_emb_count;
-                persistent_t_emb_ptr_     = persistent_txt_img_ptr_ + (txt_img_bytes / sizeof(float));
-                return true;
-            }
-
-            if (persistent_act_host_buf_ != nullptr) {
-                ggml_backend_buffer_free(persistent_act_host_buf_);
-                persistent_act_host_buf_ = nullptr;
-            }
-
-            ggml_backend_dev_t gpu_dev = runtime_backend ? ggml_backend_get_device(runtime_backend) : nullptr;
-            ggml_backend_buffer_type_t host_buft = gpu_dev ? ggml_backend_dev_host_buffer_type(gpu_dev) : nullptr;
-            if (host_buft != nullptr) {
-                persistent_act_host_buf_ = ggml_backend_buft_alloc_buffer(host_buft, total);
-            }
-            if (persistent_act_host_buf_ == nullptr) {
-                LOG_WARN("%s pinned activation buffer alloc failed (%.2f MB), "
-                         "falling back to pageable",
-                         get_desc().c_str(), total / (1024.0 * 1024.0));
-                return false;
-            }
-
-            persistent_act_host_size_ = total;
-            persistent_txt_img_ptr_   = static_cast<float*>(ggml_backend_buffer_get_base(persistent_act_host_buf_));
-            persistent_t_emb_ptr_     = persistent_txt_img_ptr_ + (txt_img_bytes / sizeof(float));
-            persistent_txt_img_count_ = txt_img_count;
-            persistent_t_emb_count_   = t_emb_count;
-            return true;
         }
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
@@ -837,9 +775,11 @@ namespace ZImage {
                     size_t txt_img_size = ggml_nelements(txt_img_output);
                     size_t t_emb_size = ggml_nelements(t_emb_output);
 
-                    if (ensure_pinned_act_buffers(txt_img_size, t_emb_size)) {
-                        persistent_txt_img = persistent_txt_img_ptr_;
-                        persistent_t_emb   = persistent_t_emb_ptr_;
+                    std::vector<float*> ptrs;
+                    if (ensure_pinned_act_buffers({txt_img_size * sizeof(float),
+                                                   t_emb_size   * sizeof(float)}, ptrs)) {
+                        persistent_txt_img = ptrs[0];
+                        persistent_t_emb   = ptrs[1];
                     } else {
                         persistent_txt_img_fallback.resize(txt_img_size);
                         persistent_t_emb_fallback.resize(t_emb_size);
@@ -979,7 +919,7 @@ namespace ZImage {
 
                 // Extract output
                 if (txt_img_out) {
-                    ggml_backend_tensor_get(txt_img_out, persistent_txt_img, 0, persistent_txt_img_count_ * sizeof(float));
+                    ggml_backend_tensor_get(txt_img_out, persistent_txt_img, 0, ggml_nbytes(txt_img_out));
                     for (int i = 0; i < 4; i++) {
                         txt_img_ne[i] = txt_img_out->ne[i];
                     }

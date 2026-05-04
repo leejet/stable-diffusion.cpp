@@ -1726,6 +1726,13 @@ protected:
     ggml_context* compute_ctx    = nullptr;
     ggml_gallocr* compute_allocr = nullptr;
 
+    // Shared GPU-pinned host buffer that backs the per-runner persistent
+    // activation regions used by streaming compute paths (txt_img, t_emb,
+    // pe, vec, ...). Allocated lazily in ensure_pinned_act_buffers() and
+    // freed in ~GGMLRunner. See that method for usage.
+    ggml_backend_buffer_t persistent_act_host_buf_ = nullptr;
+    size_t persistent_act_host_size_               = 0;
+
     std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
 
     std::vector<float> one_vec = {1.f};
@@ -2145,6 +2152,10 @@ public:
             ggml_backend_buffer_free(runtime_params_buffer);
             runtime_params_buffer = nullptr;
         }
+        if (persistent_act_host_buf_ != nullptr) {
+            ggml_backend_buffer_free(persistent_act_host_buf_);
+            persistent_act_host_buf_ = nullptr;
+        }
         free_compute_buffer();
         free_params_ctx();
         free_compute_ctx();
@@ -2152,6 +2163,57 @@ public:
             ggml_backend_free(params_backend);
         }
         free_cache_ctx_and_buffer();
+    }
+
+    // Allocates (or grows) a single GPU-pinned host buffer that backs all the
+    // runner's persistent activation regions for streaming compute paths, and
+    // writes 256-byte-aligned start pointers for each region into out_ptrs
+    // (same length as sizes_bytes). Pinned host memory makes the per-layer
+    // ggml_backend_tensor_get / copy_data_to_backend_tensor calls run at
+    // full PCIe bandwidth instead of staging through CUDA's bounce buffer.
+    //
+    // Returns true on success. On failure (pinned alloc rejected by the
+    // backend, e.g. out of locked pages) returns false so the caller can
+    // fall back to pageable std::vector storage — output is still correct,
+    // just slower.
+    bool ensure_pinned_act_buffers(const std::vector<size_t>& sizes_bytes,
+                                   std::vector<float*>& out_ptrs) {
+        out_ptrs.assign(sizes_bytes.size(), nullptr);
+        const size_t align = 256;
+        std::vector<size_t> aligned_sizes(sizes_bytes.size());
+        size_t total = 0;
+        for (size_t i = 0; i < sizes_bytes.size(); i++) {
+            aligned_sizes[i] = ((sizes_bytes[i] + align - 1) / align) * align;
+            total += aligned_sizes[i];
+        }
+
+        if (persistent_act_host_buf_ == nullptr || persistent_act_host_size_ < total) {
+            if (persistent_act_host_buf_ != nullptr) {
+                ggml_backend_buffer_free(persistent_act_host_buf_);
+                persistent_act_host_buf_ = nullptr;
+            }
+            ggml_backend_dev_t gpu_dev = runtime_backend ? ggml_backend_get_device(runtime_backend) : nullptr;
+            ggml_backend_buffer_type_t host_buft = gpu_dev ? ggml_backend_dev_host_buffer_type(gpu_dev) : nullptr;
+            if (host_buft != nullptr) {
+                persistent_act_host_buf_ = ggml_backend_buft_alloc_buffer(host_buft, total);
+            }
+            if (persistent_act_host_buf_ == nullptr) {
+                LOG_WARN("%s pinned activation buffer alloc failed (%.2f MB), "
+                         "falling back to pageable",
+                         get_desc().c_str(), total / (1024.0 * 1024.0));
+                persistent_act_host_size_ = 0;
+                return false;
+            }
+            persistent_act_host_size_ = total;
+        }
+
+        char* base = static_cast<char*>(ggml_backend_buffer_get_base(persistent_act_host_buf_));
+        size_t offset = 0;
+        for (size_t i = 0; i < sizes_bytes.size(); i++) {
+            out_ptrs[i] = reinterpret_cast<float*>(base + offset);
+            offset += aligned_sizes[i];
+        }
+        return true;
     }
 
     virtual GGMLRunnerContext get_context() {

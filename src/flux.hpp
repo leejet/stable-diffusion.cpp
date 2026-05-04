@@ -2116,11 +2116,23 @@ namespace Flux {
 
             LOG_DEBUG("About to execute input stage");
 
-            // Persistent storage for intermediate tensors
-            std::vector<float> persistent_img;
-            std::vector<float> persistent_txt;
-            std::vector<float> persistent_vec;
-            std::vector<float> persistent_txt_img;  // For single blocks
+            // Persistent storage for intermediate tensors. Backed by a single
+            // GPU-pinned host buffer (via ensure_pinned_act_buffers) so the
+            // per-block ggml_backend_tensor_get / set_backend_tensor_data
+            // calls run at full PCIe bandwidth. Falls back to pageable
+            // std::vector if pinned alloc fails.
+            std::vector<float> persistent_img_fallback;
+            std::vector<float> persistent_txt_fallback;
+            std::vector<float> persistent_vec_fallback;
+            std::vector<float> persistent_txt_img_fallback;
+            float* persistent_img     = nullptr;
+            float* persistent_txt     = nullptr;
+            float* persistent_vec     = nullptr;
+            float* persistent_txt_img = nullptr;
+            size_t persistent_img_count     = 0;
+            size_t persistent_txt_count     = 0;
+            size_t persistent_vec_count     = 0;
+            size_t persistent_txt_img_count = 0;
             int64_t img_ne[4], txt_ne[4], vec_ne[4], txt_img_ne[4];
             int64_t n_txt_tokens = 0;
             int64_t n_img_tokens = 0;
@@ -2184,14 +2196,38 @@ namespace Flux {
                     size_t img_size = ggml_nelements(img_output);
                     size_t txt_size = ggml_nelements(txt_output);
                     size_t vec_size = ggml_nelements(vec_output);
+                    // txt_img region is sized to hold the concatenated
+                    // (txt + img) activations consumed by single blocks.
+                    size_t txt_img_size = txt_size + img_size;
 
-                    persistent_img.resize(img_size);
-                    persistent_txt.resize(txt_size);
-                    persistent_vec.resize(vec_size);
+                    persistent_img_count     = img_size;
+                    persistent_txt_count     = txt_size;
+                    persistent_vec_count     = vec_size;
+                    persistent_txt_img_count = txt_img_size;
 
-                    ggml_backend_tensor_get(img_output, persistent_img.data(), 0, img_size * sizeof(float));
-                    ggml_backend_tensor_get(txt_output, persistent_txt.data(), 0, txt_size * sizeof(float));
-                    ggml_backend_tensor_get(vec_output, persistent_vec.data(), 0, vec_size * sizeof(float));
+                    std::vector<float*> ptrs;
+                    if (ensure_pinned_act_buffers({img_size     * sizeof(float),
+                                                   txt_size     * sizeof(float),
+                                                   vec_size     * sizeof(float),
+                                                   txt_img_size * sizeof(float)}, ptrs)) {
+                        persistent_img     = ptrs[0];
+                        persistent_txt     = ptrs[1];
+                        persistent_vec     = ptrs[2];
+                        persistent_txt_img = ptrs[3];
+                    } else {
+                        persistent_img_fallback.resize(img_size);
+                        persistent_txt_fallback.resize(txt_size);
+                        persistent_vec_fallback.resize(vec_size);
+                        persistent_txt_img_fallback.resize(txt_img_size);
+                        persistent_img     = persistent_img_fallback.data();
+                        persistent_txt     = persistent_txt_fallback.data();
+                        persistent_vec     = persistent_vec_fallback.data();
+                        persistent_txt_img = persistent_txt_img_fallback.data();
+                    }
+
+                    ggml_backend_tensor_get(img_output, persistent_img, 0, img_size * sizeof(float));
+                    ggml_backend_tensor_get(txt_output, persistent_txt, 0, txt_size * sizeof(float));
+                    ggml_backend_tensor_get(vec_output, persistent_vec, 0, vec_size * sizeof(float));
 
                     for (int i = 0; i < 4; i++) {
                         img_ne[i] = img_output->ne[i];
@@ -2272,9 +2308,9 @@ namespace Flux {
                     txt_in = to_backend(txt_in);
                     vec_in = to_backend(vec_in);
 
-                    set_backend_tensor_data(img_in, persistent_img.data());
-                    set_backend_tensor_data(txt_in, persistent_txt.data());
-                    set_backend_tensor_data(vec_in, persistent_vec.data());
+                    set_backend_tensor_data(img_in, persistent_img);
+                    set_backend_tensor_data(txt_in, persistent_txt);
+                    set_backend_tensor_data(vec_in, persistent_vec);
 
                     // PE tensor
                     int pos_len = static_cast<int>(pe_vec.size() / flux_params.axes_dim_sum / 2);
@@ -2303,8 +2339,8 @@ namespace Flux {
 
                 // Extract outputs to persistent storage
                 if (img_out && txt_out) {
-                    ggml_backend_tensor_get(img_out, persistent_img.data(), 0, persistent_img.size() * sizeof(float));
-                    ggml_backend_tensor_get(txt_out, persistent_txt.data(), 0, persistent_txt.size() * sizeof(float));
+                    ggml_backend_tensor_get(img_out, persistent_img, 0, persistent_img_count * sizeof(float));
+                    ggml_backend_tensor_get(txt_out, persistent_txt, 0, persistent_txt_count * sizeof(float));
 
                     for (int i = 0; i < 4; i++) {
                         img_ne[i] = img_out->ne[i];
@@ -2326,16 +2362,17 @@ namespace Flux {
 
             {
                 // Concatenate txt and img into txt_img
-                size_t txt_img_size = persistent_txt.size() + persistent_img.size();
-                persistent_txt_img.resize(txt_img_size);
+                size_t txt_img_size = persistent_txt_count + persistent_img_count;
+                // persistent_txt_img was already sized in ensure_pinned_act_buffers
+                // (txt_img region == txt_count + img_count). Just concat into it.
 
                 // txt goes first, then img (along dimension 1)
                 // Since we store flattened, we need to handle this carefully
                 // txt: [hidden_size, n_txt_tokens, N]
                 // img: [hidden_size, n_img_tokens, N]
                 // txt_img: [hidden_size, n_txt_tokens + n_img_tokens, N]
-                std::copy(persistent_txt.begin(), persistent_txt.end(), persistent_txt_img.begin());
-                std::copy(persistent_img.begin(), persistent_img.end(), persistent_txt_img.begin() + persistent_txt.size());
+                std::copy(persistent_txt, persistent_txt + persistent_txt_count, persistent_txt_img);
+                std::copy(persistent_img, persistent_img + persistent_img_count, persistent_txt_img + persistent_txt_count);
 
                 txt_img_ne[0] = img_ne[0];  // hidden_size
                 txt_img_ne[1] = txt_ne[1] + img_ne[1];  // n_txt_tokens + n_img_tokens
@@ -2403,8 +2440,8 @@ namespace Flux {
                     txt_img_in = to_backend(txt_img_in);
                     vec_in = to_backend(vec_in);
 
-                    set_backend_tensor_data(txt_img_in, persistent_txt_img.data());
-                    set_backend_tensor_data(vec_in, persistent_vec.data());
+                    set_backend_tensor_data(txt_img_in, persistent_txt_img);
+                    set_backend_tensor_data(vec_in, persistent_vec);
 
                     // PE tensor
                     int pos_len = static_cast<int>(pe_vec.size() / flux_params.axes_dim_sum / 2);
@@ -2429,7 +2466,7 @@ namespace Flux {
 
                 // Extract output to persistent storage
                 if (txt_img_out) {
-                    ggml_backend_tensor_get(txt_img_out, persistent_txt_img.data(), 0, persistent_txt_img.size() * sizeof(float));
+                    ggml_backend_tensor_get(txt_img_out, persistent_txt_img, 0, persistent_txt_img_count * sizeof(float));
 
                     for (int i = 0; i < 4; i++) {
                         txt_img_ne[i] = txt_img_out->ne[i];
@@ -2460,8 +2497,8 @@ namespace Flux {
                     txt_img_in = to_backend(txt_img_in);
                     vec_in = to_backend(vec_in);
 
-                    set_backend_tensor_data(txt_img_in, persistent_txt_img.data());
-                    set_backend_tensor_data(vec_in, persistent_vec.data());
+                    set_backend_tensor_data(txt_img_in, persistent_txt_img);
+                    set_backend_tensor_data(vec_in, persistent_vec);
 
                     auto runner_ctx = get_context();
                     auto final_out = flux.forward_output_stage(&runner_ctx, txt_img_in, vec_in, n_img_tokens, n_txt_tokens);

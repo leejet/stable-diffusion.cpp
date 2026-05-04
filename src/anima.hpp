@@ -924,11 +924,22 @@ namespace Anima {
                                                    4.0f,  // w_extrapolation_ratio
                                                    1.0f); // t_extrapolation_ratio
 
-            // Persistent storage for intermediate tensors
-            std::vector<float> persistent_x;
-            std::vector<float> persistent_context;
-            std::vector<float> persistent_embedded_ts;
-            std::vector<float> persistent_temb;
+            // Persistent storage. Backed by a single GPU-pinned host buffer
+            // (ensure_pinned_act_buffers) so per-block ggml_backend_tensor_get
+            // / set_backend_tensor_data run at full PCIe bandwidth. context
+            // is optional in some Anima variants.
+            std::vector<float> persistent_x_fallback;
+            std::vector<float> persistent_context_fallback;
+            std::vector<float> persistent_embedded_ts_fallback;
+            std::vector<float> persistent_temb_fallback;
+            float* persistent_x           = nullptr;
+            float* persistent_context     = nullptr;
+            float* persistent_embedded_ts = nullptr;
+            float* persistent_temb        = nullptr;
+            size_t persistent_x_count           = 0;
+            size_t persistent_context_count     = 0;
+            size_t persistent_embedded_ts_count = 0;
+            size_t persistent_temb_count        = 0;
             int64_t x_ne[4], context_ne[4], embedded_ts_ne[4], temb_ne[4];
 
             LOG_DEBUG("Executing input stage");
@@ -983,17 +994,41 @@ namespace Anima {
 
                 // Extract to persistent storage
                 if (x_output && embedded_ts_output && temb_output) {
-                    size_t x_size = ggml_nelements(x_output);
+                    size_t x_size           = ggml_nelements(x_output);
                     size_t embedded_ts_size = ggml_nelements(embedded_ts_output);
-                    size_t temb_size = ggml_nelements(temb_output);
+                    size_t temb_size        = ggml_nelements(temb_output);
+                    size_t context_size     = context_output ? ggml_nelements(context_output) : 0;
 
-                    persistent_x.resize(x_size);
-                    persistent_embedded_ts.resize(embedded_ts_size);
-                    persistent_temb.resize(temb_size);
+                    persistent_x_count           = x_size;
+                    persistent_embedded_ts_count = embedded_ts_size;
+                    persistent_temb_count        = temb_size;
+                    persistent_context_count     = context_size;
 
-                    ggml_backend_tensor_get(x_output, persistent_x.data(), 0, x_size * sizeof(float));
-                    ggml_backend_tensor_get(embedded_ts_output, persistent_embedded_ts.data(), 0, embedded_ts_size * sizeof(float));
-                    ggml_backend_tensor_get(temb_output, persistent_temb.data(), 0, temb_size * sizeof(float));
+                    std::vector<float*> ptrs;
+                    if (ensure_pinned_act_buffers({x_size           * sizeof(float),
+                                                   embedded_ts_size * sizeof(float),
+                                                   temb_size        * sizeof(float),
+                                                   context_size     * sizeof(float)}, ptrs)) {
+                        persistent_x           = ptrs[0];
+                        persistent_embedded_ts = ptrs[1];
+                        persistent_temb        = ptrs[2];
+                        persistent_context     = context_size ? ptrs[3] : nullptr;
+                    } else {
+                        persistent_x_fallback.resize(x_size);
+                        persistent_embedded_ts_fallback.resize(embedded_ts_size);
+                        persistent_temb_fallback.resize(temb_size);
+                        persistent_x           = persistent_x_fallback.data();
+                        persistent_embedded_ts = persistent_embedded_ts_fallback.data();
+                        persistent_temb        = persistent_temb_fallback.data();
+                        if (context_size) {
+                            persistent_context_fallback.resize(context_size);
+                            persistent_context = persistent_context_fallback.data();
+                        }
+                    }
+
+                    ggml_backend_tensor_get(x_output, persistent_x, 0, x_size * sizeof(float));
+                    ggml_backend_tensor_get(embedded_ts_output, persistent_embedded_ts, 0, embedded_ts_size * sizeof(float));
+                    ggml_backend_tensor_get(temb_output, persistent_temb, 0, temb_size * sizeof(float));
 
                     for (int i = 0; i < 4; i++) {
                         x_ne[i] = x_output->ne[i];
@@ -1002,9 +1037,7 @@ namespace Anima {
                     }
 
                     if (context_output) {
-                        size_t context_size = ggml_nelements(context_output);
-                        persistent_context.resize(context_size);
-                        ggml_backend_tensor_get(context_output, persistent_context.data(), 0, context_size * sizeof(float));
+                        ggml_backend_tensor_get(context_output, persistent_context, 0, context_size * sizeof(float));
                         for (int i = 0; i < 4; i++) {
                             context_ne[i] = context_output->ne[i];
                         }
@@ -1076,15 +1109,15 @@ namespace Anima {
                     embedded_ts_in = to_backend(embedded_ts_in);
                     temb_in = to_backend(temb_in);
 
-                    set_backend_tensor_data(x_in, persistent_x.data());
-                    set_backend_tensor_data(embedded_ts_in, persistent_embedded_ts.data());
-                    set_backend_tensor_data(temb_in, persistent_temb.data());
+                    set_backend_tensor_data(x_in, persistent_x);
+                    set_backend_tensor_data(embedded_ts_in, persistent_embedded_ts);
+                    set_backend_tensor_data(temb_in, persistent_temb);
 
                     ggml_tensor* context_in = nullptr;
-                    if (!persistent_context.empty()) {
+                    if (persistent_context_count > 0) {
                         context_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, context_ne[0], context_ne[1], context_ne[2], context_ne[3]);
                         context_in = to_backend(context_in);
-                        set_backend_tensor_data(context_in, persistent_context.data());
+                        set_backend_tensor_data(context_in, persistent_context);
                     }
 
                     // Image PE tensor (shape matches [2, 2, head_dim/2, pos_len])
@@ -1109,7 +1142,7 @@ namespace Anima {
 
                 // Extract output to persistent storage
                 if (x_out) {
-                    ggml_backend_tensor_get(x_out, persistent_x.data(), 0, persistent_x.size() * sizeof(float));
+                    ggml_backend_tensor_get(x_out, persistent_x, 0, persistent_x_count * sizeof(float));
                     for (int i = 0; i < 4; i++) {
                         x_ne[i] = x_out->ne[i];
                     }
@@ -1140,9 +1173,9 @@ namespace Anima {
                     embedded_ts_in = to_backend(embedded_ts_in);
                     temb_in = to_backend(temb_in);
 
-                    set_backend_tensor_data(x_in, persistent_x.data());
-                    set_backend_tensor_data(embedded_ts_in, persistent_embedded_ts.data());
-                    set_backend_tensor_data(temb_in, persistent_temb.data());
+                    set_backend_tensor_data(x_in, persistent_x);
+                    set_backend_tensor_data(embedded_ts_in, persistent_embedded_ts);
+                    set_backend_tensor_data(temb_in, persistent_temb);
 
                     auto runner_ctx = get_context();
                     auto final_out = net.forward_output_stage(&runner_ctx, x_in, embedded_ts_in, temb_in);
