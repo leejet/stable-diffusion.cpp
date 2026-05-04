@@ -918,24 +918,6 @@ namespace ZImage {
             const bool prof_enabled = std::getenv("SDCPP_STREAM_PROFILE") != nullptr;
             auto prof_now = []() { return ggml_time_us(); };
 
-            // Phase 3c: build the per-layer graph ONCE (using layer 0's weight
-            // tensors) and reuse it for every subsequent layer by swapping
-            // the registered weight pointers between layer 0 and layer N.
-            // All 30 ZImage main layers share an identical JointTransformerBlock
-            // structure, so the cached graph is valid for any layer once its
-            // weights are mapped behind layer 0's tensor pointers.
-            //
-            // Disabled when an at-runtime WeightAdapter (e.g. LoRA) is active —
-            // the adapter's forward_with_lora() looks up adapter tensors by
-            // a layer-specific prefix at graph-build time, so a cached graph
-            // would always reference layer 0's adapter weights, applying
-            // them to every layer. We could swap adapter tensors too, but
-            // they're managed outside the streaming registry, so for now we
-            // just fall back to per-layer graph rebuild.
-            const bool graph_reuse_enabled = !has_weight_adapter();
-            ggml_cgraph* cached_layer_gf = nullptr;
-            ggml_tensor* cached_layer_out = nullptr;
-
             for (int layer_idx = 0; layer_idx < layers_to_run; layer_idx++) {
                 std::string layer_name = layer_name_at(layer_idx);
 
@@ -960,91 +942,56 @@ namespace ZImage {
                 }
                 int64_t t3 = prof_enabled ? prof_now() : 0;
 
-                // Redirect the cached graph at this layer's weights. For
-                // layer 0 the graph already references its own tensors, so no
-                // swap is needed; for any other layer we swap the runtime
-                // pointers between layer 0 and layer N before dispatch.
-                bool swapped = false;
-                if (graph_reuse_enabled && cached_layer_gf != nullptr && layer_idx != 0) {
-                    swapped = registry.swap_layer_buffers("layers.0", layer_name);
-                    if (!swapped) {
-                        LOG_ERROR("Failed to swap weights into cached graph for %s", layer_name.c_str());
-                        return false;
-                    }
-                }
+                ggml_tensor* txt_img_out = nullptr;
 
-                if (!graph_reuse_enabled || cached_layer_gf == nullptr) {
-                    // First layer (or fallback path when graph reuse is disabled
-                    // due to at-runtime weight adapters): build the per-layer
-                    // graph and dispatch through GGMLRunner::compute() which
-                    // creates / re-uses the gallocr.
-                    ggml_tensor* current_layer_out = nullptr;
-                    auto build_layer_graph = [&]() -> struct ggml_cgraph* {
-                        struct ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE / 4);
+                auto get_layer_graph = [&]() -> struct ggml_cgraph* {
+                    struct ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE / 4);
 
-                        ggml_tensor* txt_img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
-                                                                      txt_img_ne[0], txt_img_ne[1], txt_img_ne[2], txt_img_ne[3]);
-                        ggml_tensor* t_emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
-                                                                    t_emb_ne[0], t_emb_ne[1], t_emb_ne[2], t_emb_ne[3]);
+                    // Create input tensors in compute_ctx - no need for to_backend() since
+                    // these are created fresh and will be allocated by the graph allocator
+                    ggml_tensor* txt_img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                                  txt_img_ne[0], txt_img_ne[1], txt_img_ne[2], txt_img_ne[3]);
+                    ggml_tensor* t_emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                                t_emb_ne[0], t_emb_ne[1], t_emb_ne[2], t_emb_ne[3]);
 
-                        set_backend_tensor_data(txt_img_in, persistent_txt_img);
-                        set_backend_tensor_data(t_emb_in, persistent_t_emb);
+                    // Schedule data copy from CPU to GPU (happens after graph allocation)
+                    set_backend_tensor_data(txt_img_in, persistent_txt_img);
+                    set_backend_tensor_data(t_emb_in, persistent_t_emb);
 
-                        int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
-                        auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, z_image_params.axes_dim_sum / 2, pos_len);
-                        set_backend_tensor_data(pe, pe_vec.data());
+                    // PE tensor
+                    int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
+                    auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, z_image_params.axes_dim_sum / 2, pos_len);
+                    set_backend_tensor_data(pe, pe_vec.data());
 
-                        auto runner_ctx = get_context();
-                        current_layer_out = z_image.forward_layer_block(&runner_ctx, layer_idx, txt_img_in, pe, t_emb_in);
+                    auto runner_ctx = get_context();
+                    txt_img_out = z_image.forward_layer_block(&runner_ctx, layer_idx, txt_img_in, pe, t_emb_in);
 
-                        ggml_build_forward_expand(gf, current_layer_out);
+                    ggml_build_forward_expand(gf, txt_img_out);
 
-                        if (graph_reuse_enabled) {
-                            cached_layer_gf  = gf;
-                            cached_layer_out = current_layer_out;
-                        }
-                        return gf;
-                    };
+                    return gf;
+                };
 
-                    if (!GGMLRunner::compute(build_layer_graph, n_threads, false, nullptr, nullptr, true)) {
-                        LOG_ERROR("Layer %d execution failed", layer_idx);
-                        return false;
-                    }
-                    if (!graph_reuse_enabled) {
-                        cached_layer_out = current_layer_out;
-                    }
-                } else {
-                    if (!dispatch_cached_graph(cached_layer_gf)) {
-                        LOG_ERROR("Layer %d cached dispatch failed", layer_idx);
-                        if (swapped) {
-                            registry.swap_layer_buffers("layers.0", layer_name);
-                        }
-                        return false;
-                    }
+                if (!GGMLRunner::compute(get_layer_graph, n_threads, false, nullptr, nullptr, true)) {
+                    LOG_ERROR("Layer %d execution failed", layer_idx);
+                    return false;
                 }
                 int64_t t4 = prof_enabled ? prof_now() : 0;
 
-                // Read output back into the persistent host buffer (which is
-                // the source for the next iteration's txt_img_in upload).
-                if (cached_layer_out) {
-                    ggml_backend_tensor_get(cached_layer_out, persistent_txt_img, 0, persistent_txt_img_count_ * sizeof(float));
+                // Extract output
+                if (txt_img_out) {
+                    ggml_backend_tensor_get(txt_img_out, persistent_txt_img, 0, persistent_txt_img_count_ * sizeof(float));
                     for (int i = 0; i < 4; i++) {
-                        txt_img_ne[i] = cached_layer_out->ne[i];
+                        txt_img_ne[i] = txt_img_out->ne[i];
                     }
                 }
                 int64_t t5 = prof_enabled ? prof_now() : 0;
-
-                // Restore layer 0's weight pointers BEFORE move_layer_to_cpu,
-                // otherwise the registry's swap-back would move the wrong
-                // bytes between CPU and GPU.
-                if (swapped) {
-                    registry.swap_layer_buffers("layers.0", layer_name);
-                }
 
                 if (prof_enabled) {
                     prof_wait_us    += t1 - t0;
                     prof_load_us    += t2 - t1;
                     prof_advance_us += t3 - t2;
+                    // build+compute happens together inside GGMLRunner::compute;
+                    // we can't separate them without instrumenting ggml_extend.
                     prof_compute_us += t4 - t3;
                     prof_get_us     += t5 - t4;
                 }
