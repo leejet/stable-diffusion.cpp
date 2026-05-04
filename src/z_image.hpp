@@ -561,6 +561,24 @@ namespace ZImage {
         // refiners and _global are loaded so we know real free VRAM.
         int resident_layer_count_ = -1;
 
+        // Phase 4: cached "chunk" graph spanning all K resident layers in one
+        // dispatch. Built once on the first sampling step that has K > 0,
+        // dispatched once per subsequent step. Resident layer weights never
+        // move between steps so the graph stays cache-stable.
+        //
+        // Lives in its own ggml_context (chunk_ctx_) and uses its own gallocr
+        // because compute_ctx / compute_allocr get reset between the streamed
+        // tail's compute() calls within the same sampling step — the chunk
+        // would be invalidated mid-loop without a separate context.
+        ggml_context*         chunk_ctx_           = nullptr;
+        ggml_gallocr_t        chunk_allocr_        = nullptr;
+        ggml_cgraph*          chunk_gf_            = nullptr;
+        ggml_tensor*          chunk_txt_img_in_    = nullptr;
+        ggml_tensor*          chunk_t_emb_in_      = nullptr;
+        ggml_tensor*          chunk_pe_            = nullptr;
+        ggml_tensor*          chunk_txt_img_out_   = nullptr;
+        int                   chunk_layer_count_   = 0;
+
     public:
 
         ZImageRunner(ggml_backend_t backend,
@@ -571,6 +589,111 @@ namespace ZImage {
             : GGMLRunner(backend, offload_params_to_cpu) {
             z_image = ZImageModel(z_image_params);
             z_image.init(params_ctx, tensor_storage_map, prefix);
+        }
+
+        ~ZImageRunner() {
+            if (chunk_allocr_ != nullptr) {
+                ggml_gallocr_free(chunk_allocr_);
+                chunk_allocr_ = nullptr;
+            }
+            if (chunk_ctx_ != nullptr) {
+                ggml_free(chunk_ctx_);
+                chunk_ctx_ = nullptr;
+            }
+        }
+
+        // Phase 4: build the K-layer mega-graph in chunk_ctx_, reserve a
+        // dedicated gallocr for it, and run the first dispatch. Subsequent
+        // sampling steps reuse the same graph via dispatch_chunk_graph().
+        bool build_and_dispatch_chunk_graph(int K, int n_threads,
+                                             const int64_t txt_img_ne[4],
+                                             const int64_t t_emb_ne[4],
+                                             float* persistent_txt_img,
+                                             float* persistent_t_emb) {
+            // Allocate a generously-sized no_alloc context for K layers' worth
+            // of op metadata. Each ZImage layer block contributes ~50 ggml
+            // tensors; plus inputs/outputs and PE. 16 MB headroom is plenty.
+            size_t ctx_size = 16 * 1024 * 1024;
+            chunk_ctx_ = ggml_init({ctx_size, nullptr, true});
+            if (chunk_ctx_ == nullptr) {
+                LOG_ERROR("%s chunk_ctx alloc failed", get_desc().c_str());
+                return false;
+            }
+
+            chunk_gf_ = ggml_new_graph_custom(chunk_ctx_, Z_IMAGE_GRAPH_SIZE * 2, false);
+
+            chunk_txt_img_in_ = ggml_new_tensor_4d(chunk_ctx_, GGML_TYPE_F32,
+                                                    txt_img_ne[0], txt_img_ne[1], txt_img_ne[2], txt_img_ne[3]);
+            chunk_t_emb_in_ = ggml_new_tensor_4d(chunk_ctx_, GGML_TYPE_F32,
+                                                  t_emb_ne[0], t_emb_ne[1], t_emb_ne[2], t_emb_ne[3]);
+            int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
+            chunk_pe_ = ggml_new_tensor_4d(chunk_ctx_, GGML_TYPE_F32,
+                                            2, 2, z_image_params.axes_dim_sum / 2, pos_len);
+            ggml_set_input(chunk_txt_img_in_);
+            ggml_set_input(chunk_t_emb_in_);
+            ggml_set_input(chunk_pe_);
+
+            // Build a runner_ctx pointing at chunk_ctx_ so all op tensors
+            // emitted by forward_layer_block are owned by the chunk context
+            // (and survive across compute() calls on compute_ctx).
+            GGMLRunnerContext runner_ctx;
+            runner_ctx.ggml_ctx              = chunk_ctx_;
+            runner_ctx.backend               = runtime_backend;
+            runner_ctx.flash_attn_enabled    = flash_attn_enabled;
+            runner_ctx.conv2d_direct_enabled = conv2d_direct_enabled;
+            runner_ctx.circular_x_enabled    = circular_x_enabled;
+            runner_ctx.circular_y_enabled    = circular_y_enabled;
+            runner_ctx.weight_adapter        = weight_adapter;
+
+            ggml_tensor* x = chunk_txt_img_in_;
+            for (int i = 0; i < K; i++) {
+                x = z_image.forward_layer_block(&runner_ctx, i, x, chunk_pe_, chunk_t_emb_in_);
+            }
+            chunk_txt_img_out_ = x;
+            ggml_set_output(chunk_txt_img_out_);
+            ggml_build_forward_expand(chunk_gf_, chunk_txt_img_out_);
+
+            chunk_allocr_ = ggml_gallocr_new(ggml_backend_get_default_buffer_type(runtime_backend));
+            if (chunk_allocr_ == nullptr) {
+                LOG_ERROR("%s chunk gallocr_new failed", get_desc().c_str());
+                return false;
+            }
+            if (!ggml_gallocr_reserve(chunk_allocr_, chunk_gf_)) {
+                LOG_ERROR("%s chunk gallocr_reserve failed", get_desc().c_str());
+                return false;
+            }
+            size_t buf_size = ggml_gallocr_get_buffer_size(chunk_allocr_, 0);
+            LOG_INFO("%s chunk graph: %d layers, compute buffer = %.2f MB",
+                     get_desc().c_str(), K, buf_size / (1024.0 * 1024.0));
+
+            chunk_layer_count_ = K;
+            return dispatch_chunk_graph(persistent_txt_img, persistent_t_emb);
+        }
+
+        // Re-bind tensor offsets, upload activation/PE inputs, run compute,
+        // and download the chunk output into persistent_txt_img.
+        bool dispatch_chunk_graph(float* persistent_txt_img,
+                                   float* persistent_t_emb) {
+            if (!ggml_gallocr_alloc_graph(chunk_allocr_, chunk_gf_)) {
+                LOG_ERROR("%s chunk alloc_graph failed", get_desc().c_str());
+                return false;
+            }
+            ggml_backend_tensor_set(chunk_txt_img_in_, persistent_txt_img, 0,
+                                     ggml_nbytes(chunk_txt_img_in_));
+            ggml_backend_tensor_set(chunk_t_emb_in_, persistent_t_emb, 0,
+                                     ggml_nbytes(chunk_t_emb_in_));
+            ggml_backend_tensor_set(chunk_pe_, pe_vec.data(), 0,
+                                     ggml_nbytes(chunk_pe_));
+
+            ggml_status status = ggml_backend_graph_compute(runtime_backend, chunk_gf_);
+            if (status != GGML_STATUS_SUCCESS) {
+                LOG_ERROR("%s chunk compute failed: %s",
+                          get_desc().c_str(), ggml_status_to_string(status));
+                return false;
+            }
+            ggml_backend_tensor_get(chunk_txt_img_out_, persistent_txt_img, 0,
+                                     ggml_nbytes(chunk_txt_img_out_));
+            return true;
         }
 
         std::string get_desc() override {
@@ -834,10 +957,42 @@ namespace ZImage {
 
             auto layer_name_at = [](int i) { return "layers." + std::to_string(i); };
 
-            // Begin prefetch at the first non-resident layer. On step 1 nothing
-            // is loaded so this starts at 0; on later steps it skips the cache
-            // prefix and queues the streamed tail directly.
-            int prefetch_start = 0;
+            // Phase 4: dispatch the K resident layers as a single mega-graph
+            // (one ggml_backend_graph_compute call instead of K). On the first
+            // sampling step we pre-load all K resident weights and build the
+            // cached graph; subsequent steps reuse it.
+            int chunk_K = std::min(resident_layer_count_ < 0 ? 0 : resident_layer_count_,
+                                    layers_to_run);
+            if (chunk_K > 0) {
+                for (int i = 0; i < chunk_K; i++) {
+                    std::string nm = layer_name_at(i);
+                    if (!registry.is_layer_on_gpu(nm)) {
+                        if (!registry.move_layer_to_gpu(nm)) {
+                            LOG_ERROR("Failed to load resident %s for chunk", nm.c_str());
+                            return false;
+                        }
+                    }
+                }
+                bool ok;
+                if (chunk_gf_ == nullptr) {
+                    ok = build_and_dispatch_chunk_graph(chunk_K, n_threads,
+                                                        txt_img_ne, t_emb_ne,
+                                                        persistent_txt_img,
+                                                        persistent_t_emb);
+                } else {
+                    ok = dispatch_chunk_graph(persistent_txt_img, persistent_t_emb);
+                }
+                if (!ok) return false;
+                // chunk_txt_img_out_ has the same shape as the last resident
+                // layer's output; ne carries through unchanged.
+                for (int i = 0; i < 4; i++) {
+                    txt_img_ne[i] = chunk_txt_img_out_->ne[i];
+                }
+            }
+
+            // Begin prefetch at the first non-resident layer. With chunk_K > 0
+            // the resident prefix is already loaded, so prefetch starts at K.
+            int prefetch_start = chunk_K;
             while (prefetch_start < num_layers &&
                    registry.is_layer_on_gpu(layer_name_at(prefetch_start))) {
                 prefetch_start++;
@@ -858,7 +1013,8 @@ namespace ZImage {
             const bool prof_enabled = std::getenv("SDCPP_STREAM_PROFILE") != nullptr;
             auto prof_now = []() { return ggml_time_us(); };
 
-            for (int layer_idx = 0; layer_idx < layers_to_run; layer_idx++) {
+            // Phase 4: skip layers already covered by the chunk dispatch.
+            for (int layer_idx = chunk_K; layer_idx < layers_to_run; layer_idx++) {
                 std::string layer_name = layer_name_at(layer_idx);
 
                 int64_t t0 = prof_enabled ? prof_now() : 0;
