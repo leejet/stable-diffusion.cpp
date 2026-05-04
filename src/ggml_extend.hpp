@@ -2482,6 +2482,38 @@ public:
         return true;
     }
 
+    // Dispatch a graph that was previously built by compute() and is still
+    // alive in compute_ctx. Skips graph rebuild + reset_compute_ctx(), so
+    // streaming runners can amortise the per-layer build cost across many
+    // dispatches in the same sampling step. The caller is responsible for:
+    //   1. Ensuring `cached_gf` was built into the current `compute_ctx` and
+    //      hasn't been freed (don't call free_compute_buffer between calls).
+    //   2. Setting up any pre-iteration state (e.g. swapping layer weight
+    //      pointers in the registry) before invoking dispatch_cached_graph.
+    // Returns true on success.
+    bool dispatch_cached_graph(ggml_cgraph* cached_gf) {
+        if (compute_allocr == nullptr) {
+            LOG_ERROR("%s dispatch_cached_graph called before compute_allocr exists",
+                      get_desc().c_str());
+            return false;
+        }
+        if (!ggml_gallocr_alloc_graph(compute_allocr, cached_gf)) {
+            LOG_ERROR("%s dispatch_cached_graph: alloc_graph failed", get_desc().c_str());
+            return false;
+        }
+        copy_data_to_backend_tensor();
+        if (ggml_backend_is_cpu(runtime_backend)) {
+            // n_threads management is the caller's responsibility for cached dispatch.
+        }
+        ggml_status status = ggml_backend_graph_compute(runtime_backend, cached_gf);
+        if (status != GGML_STATUS_SUCCESS) {
+            LOG_ERROR("%s dispatch_cached_graph compute failed: %s",
+                      get_desc().c_str(), ggml_status_to_string(status));
+            return false;
+        }
+        return true;
+    }
+
     // Upstream's templated compute returning sd::Tensor
     template <typename T>
     std::optional<sd::Tensor<T>> compute(get_graph_cb_t get_graph,
@@ -2541,6 +2573,10 @@ public:
 
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {
         weight_adapter = adapter;
+    }
+
+    bool has_weight_adapter() const {
+        return weight_adapter != nullptr;
     }
 
     ggml_backend_t get_runtime_backend() {

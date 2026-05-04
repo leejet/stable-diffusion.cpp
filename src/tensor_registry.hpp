@@ -276,6 +276,38 @@ public:
         return layers_.size();
     }
 
+    // Swaps the runtime-tensor backing pointers (buffer/data/extra) between
+    // two structurally-identical layers. Used by streaming runners that
+    // build the per-layer compute graph once and "redirect" it across layers
+    // by swapping weight pointers — saves rebuilding the same graph 30 times
+    // per sampling step.
+    //
+    // REQUIRES: both layers must already be on GPU (or both have buffer_cached
+    // in the same way) and have the same tensor structure (same number,
+    // sorted by suffix in identical order).
+    bool swap_layer_buffers(const std::string& layer_a, const std::string& layer_b) {
+        auto a_it = layers_.find(layer_a);
+        auto b_it = layers_.find(layer_b);
+        if (a_it == layers_.end() || b_it == layers_.end()) {
+            return false;
+        }
+        LayerInfo& la = a_it->second;
+        LayerInfo& lb = b_it->second;
+        if (la.tensor_names.size() != lb.tensor_names.size()) {
+            LOG_ERROR("swap_layer_buffers: tensor count mismatch (%zu vs %zu)",
+                      la.tensor_names.size(), lb.tensor_names.size());
+            return false;
+        }
+        for (size_t i = 0; i < la.tensor_names.size(); i++) {
+            ggml_tensor* a = tensors_[la.tensor_names[i]].cpu_tensor;
+            ggml_tensor* b = tensors_[lb.tensor_names[i]].cpu_tensor;
+            std::swap(a->buffer, b->buffer);
+            std::swap(a->data, b->data);
+            std::swap(a->extra, b->extra);
+        }
+        return true;
+    }
+
     // Initiates transfer without waiting; call complete_async_layer_load() to finalize
     bool start_async_layer_load(const std::string& layer_name,
                                 ggml_backend_t gpu_backend,
