@@ -561,6 +561,18 @@ namespace ZImage {
         // refiners and _global are loaded so we know real free VRAM.
         int resident_layer_count_ = -1;
 
+        // Pinned host buffer for persistent activations (txt_img, t_emb) used
+        // across the per-layer streaming graphs. Pageable host buffers force
+        // the CUDA backend to stage transfers through an internal bounce
+        // buffer; pinning makes both ggml_backend_tensor_get and
+        // copy_data_to_backend_tensor 3–4x faster.
+        ggml_backend_buffer_t persistent_act_host_buf_ = nullptr;
+        size_t persistent_act_host_size_               = 0;
+        float* persistent_txt_img_ptr_                 = nullptr;
+        float* persistent_t_emb_ptr_                   = nullptr;
+        size_t persistent_txt_img_count_               = 0;
+        size_t persistent_t_emb_count_                 = 0;
+
     public:
 
         ZImageRunner(ggml_backend_t backend,
@@ -573,8 +585,58 @@ namespace ZImage {
             z_image.init(params_ctx, tensor_storage_map, prefix);
         }
 
+        ~ZImageRunner() {
+            if (persistent_act_host_buf_ != nullptr) {
+                ggml_backend_buffer_free(persistent_act_host_buf_);
+                persistent_act_host_buf_ = nullptr;
+            }
+        }
+
         std::string get_desc() override {
             return "z_image";
+        }
+
+        // Allocates (or reallocates if size grew) a single pinned host buffer
+        // big enough to hold both persistent_txt_img and persistent_t_emb. The
+        // pinned memory makes the per-layer ggml_backend_tensor_get and
+        // copy_data_to_backend_tensor calls run at full PCIe bandwidth instead
+        // of staging through CUDA's internal bounce buffer.
+        bool ensure_pinned_act_buffers(size_t txt_img_count, size_t t_emb_count) {
+            const size_t align = 256;
+            size_t txt_img_bytes = ((txt_img_count * sizeof(float) + align - 1) / align) * align;
+            size_t t_emb_bytes   = ((t_emb_count   * sizeof(float) + align - 1) / align) * align;
+            size_t total         = txt_img_bytes + t_emb_bytes;
+
+            if (persistent_act_host_buf_ != nullptr && persistent_act_host_size_ >= total) {
+                persistent_txt_img_count_ = txt_img_count;
+                persistent_t_emb_count_   = t_emb_count;
+                persistent_t_emb_ptr_     = persistent_txt_img_ptr_ + (txt_img_bytes / sizeof(float));
+                return true;
+            }
+
+            if (persistent_act_host_buf_ != nullptr) {
+                ggml_backend_buffer_free(persistent_act_host_buf_);
+                persistent_act_host_buf_ = nullptr;
+            }
+
+            ggml_backend_dev_t gpu_dev = runtime_backend ? ggml_backend_get_device(runtime_backend) : nullptr;
+            ggml_backend_buffer_type_t host_buft = gpu_dev ? ggml_backend_dev_host_buffer_type(gpu_dev) : nullptr;
+            if (host_buft != nullptr) {
+                persistent_act_host_buf_ = ggml_backend_buft_alloc_buffer(host_buft, total);
+            }
+            if (persistent_act_host_buf_ == nullptr) {
+                LOG_WARN("%s pinned activation buffer alloc failed (%.2f MB), "
+                         "falling back to pageable",
+                         get_desc().c_str(), total / (1024.0 * 1024.0));
+                return false;
+            }
+
+            persistent_act_host_size_ = total;
+            persistent_txt_img_ptr_   = static_cast<float*>(ggml_backend_buffer_get_base(persistent_act_host_buf_));
+            persistent_t_emb_ptr_     = persistent_txt_img_ptr_ + (txt_img_bytes / sizeof(float));
+            persistent_txt_img_count_ = txt_img_count;
+            persistent_t_emb_count_   = t_emb_count;
+            return true;
         }
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
@@ -681,9 +743,14 @@ namespace ZImage {
             // then stream main layers one at a time
             // This is a simplified approach - refiners are usually small
 
-            // Persistent storage
-            std::vector<float> persistent_txt_img;
-            std::vector<float> persistent_t_emb;
+            // Persistent storage. Pinned host buffer (member-scoped, reused
+            // across sampling steps) so the per-layer ggml_backend_tensor_get
+            // and copy_data_to_backend_tensor calls run at full PCIe bandwidth.
+            // Falls back to pageable std::vector if pinned alloc fails.
+            std::vector<float> persistent_txt_img_fallback;
+            std::vector<float> persistent_t_emb_fallback;
+            float* persistent_txt_img = nullptr;
+            float* persistent_t_emb   = nullptr;
             int64_t txt_img_ne[4], t_emb_ne[4];
             int64_t n_txt_token = 0, n_txt_pad_token = 0, n_img_token_val = 0;
 
@@ -770,11 +837,18 @@ namespace ZImage {
                     size_t txt_img_size = ggml_nelements(txt_img_output);
                     size_t t_emb_size = ggml_nelements(t_emb_output);
 
-                    persistent_txt_img.resize(txt_img_size);
-                    persistent_t_emb.resize(t_emb_size);
+                    if (ensure_pinned_act_buffers(txt_img_size, t_emb_size)) {
+                        persistent_txt_img = persistent_txt_img_ptr_;
+                        persistent_t_emb   = persistent_t_emb_ptr_;
+                    } else {
+                        persistent_txt_img_fallback.resize(txt_img_size);
+                        persistent_t_emb_fallback.resize(t_emb_size);
+                        persistent_txt_img = persistent_txt_img_fallback.data();
+                        persistent_t_emb   = persistent_t_emb_fallback.data();
+                    }
 
-                    ggml_backend_tensor_get(txt_img_output, persistent_txt_img.data(), 0, txt_img_size * sizeof(float));
-                    ggml_backend_tensor_get(t_emb_output, persistent_t_emb.data(), 0, t_emb_size * sizeof(float));
+                    ggml_backend_tensor_get(txt_img_output, persistent_txt_img, 0, txt_img_size * sizeof(float));
+                    ggml_backend_tensor_get(t_emb_output, persistent_t_emb, 0, t_emb_size * sizeof(float));
 
                     for (int i = 0; i < 4; i++) {
                         txt_img_ne[i] = txt_img_output->ne[i];
@@ -832,24 +906,41 @@ namespace ZImage {
                 streaming_engine_->prime_prefetch(layer_name_at, prefetch_start, num_layers);
             }
 
+            // Phase 3 profiling: per-stage cumulative timings, dumped after the
+            // main loop. Set SDCPP_STREAM_PROFILE=1 to enable.
+            int64_t prof_wait_us    = 0;
+            int64_t prof_load_us    = 0;
+            int64_t prof_advance_us = 0;
+            int64_t prof_build_us   = 0;
+            int64_t prof_compute_us = 0;
+            int64_t prof_get_us     = 0;
+            int64_t prof_evict_us   = 0;
+            const bool prof_enabled = std::getenv("SDCPP_STREAM_PROFILE") != nullptr;
+            auto prof_now = []() { return ggml_time_us(); };
+
             for (int layer_idx = 0; layer_idx < layers_to_run; layer_idx++) {
                 std::string layer_name = layer_name_at(layer_idx);
+
+                int64_t t0 = prof_enabled ? prof_now() : 0;
 
                 // Wait for this layer's prefetch to complete (if async prefetch was started)
                 if (streaming_engine_) {
                     streaming_engine_->wait_for_prefetch(layer_name);
                 }
+                int64_t t1 = prof_enabled ? prof_now() : 0;
 
                 // Load this layer's weights (sync load if prefetch didn't happen)
                 if (!registry.move_layer_to_gpu(layer_name)) {
                     LOG_ERROR("Failed to load %s", layer_name.c_str());
                     return false;
                 }
+                int64_t t2 = prof_enabled ? prof_now() : 0;
 
                 // Keep the prefetch window full
                 if (streaming_engine_) {
                     streaming_engine_->advance_prefetch(layer_name_at, layer_idx, num_layers);
                 }
+                int64_t t3 = prof_enabled ? prof_now() : 0;
 
                 ggml_tensor* txt_img_out = nullptr;
 
@@ -864,8 +955,8 @@ namespace ZImage {
                                                                 t_emb_ne[0], t_emb_ne[1], t_emb_ne[2], t_emb_ne[3]);
 
                     // Schedule data copy from CPU to GPU (happens after graph allocation)
-                    set_backend_tensor_data(txt_img_in, persistent_txt_img.data());
-                    set_backend_tensor_data(t_emb_in, persistent_t_emb.data());
+                    set_backend_tensor_data(txt_img_in, persistent_txt_img);
+                    set_backend_tensor_data(t_emb_in, persistent_t_emb);
 
                     // PE tensor
                     int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
@@ -884,13 +975,25 @@ namespace ZImage {
                     LOG_ERROR("Layer %d execution failed", layer_idx);
                     return false;
                 }
+                int64_t t4 = prof_enabled ? prof_now() : 0;
 
                 // Extract output
                 if (txt_img_out) {
-                    ggml_backend_tensor_get(txt_img_out, persistent_txt_img.data(), 0, persistent_txt_img.size() * sizeof(float));
+                    ggml_backend_tensor_get(txt_img_out, persistent_txt_img, 0, persistent_txt_img_count_ * sizeof(float));
                     for (int i = 0; i < 4; i++) {
                         txt_img_ne[i] = txt_img_out->ne[i];
                     }
+                }
+                int64_t t5 = prof_enabled ? prof_now() : 0;
+
+                if (prof_enabled) {
+                    prof_wait_us    += t1 - t0;
+                    prof_load_us    += t2 - t1;
+                    prof_advance_us += t3 - t2;
+                    // build+compute happens together inside GGMLRunner::compute;
+                    // we can't separate them without instrumenting ggml_extend.
+                    prof_compute_us += t4 - t3;
+                    prof_get_us     += t5 - t4;
                 }
 
                 // Don't free compute buffer here — every main layer has the same shape
@@ -902,6 +1005,20 @@ namespace ZImage {
                 if (layer_idx >= resident_layer_count_) {
                     registry.move_layer_to_cpu(layer_name);
                 }
+            }
+
+            if (prof_enabled) {
+                int64_t total = prof_wait_us + prof_load_us + prof_advance_us +
+                                prof_compute_us + prof_get_us;
+                LOG_INFO("[stream-profile] %d layers: total=%.2fms wait=%.2fms load=%.2fms "
+                         "advance=%.2fms compute=%.2fms tensor_get=%.2fms",
+                         layers_to_run,
+                         total / 1000.0,
+                         prof_wait_us / 1000.0,
+                         prof_load_us / 1000.0,
+                         prof_advance_us / 1000.0,
+                         prof_compute_us / 1000.0,
+                         prof_get_us / 1000.0);
             }
 
             // After all main layers are done, free the compute buffer so the output stage
@@ -920,8 +1037,8 @@ namespace ZImage {
                                                                 t_emb_ne[0], t_emb_ne[1], t_emb_ne[2], t_emb_ne[3]);
 
                     // Schedule data copy from CPU to GPU
-                    set_backend_tensor_data(txt_img_in, persistent_txt_img.data());
-                    set_backend_tensor_data(t_emb_in, persistent_t_emb.data());
+                    set_backend_tensor_data(txt_img_in, persistent_txt_img);
+                    set_backend_tensor_data(t_emb_in, persistent_t_emb);
 
                     auto runner_ctx = get_context();
                     auto final_out = z_image.forward_output_stage(&runner_ctx, txt_img_in, t_emb_in);
