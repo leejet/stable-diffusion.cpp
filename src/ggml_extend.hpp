@@ -2173,7 +2173,34 @@ public:
 
     bool alloc_params_buffer() {
         size_t num_tensors = ggml_tensor_num(params_ctx);
-        params_buffer      = ggml_backend_alloc_ctx_tensors(params_ctx, params_backend);
+        bool used_pinned_host = false;
+
+        // When weights live on CPU but get streamed/transferred to GPU during
+        // compute, allocate them in the GPU device's pinned host buffer so
+        // async H2D copies actually overlap with compute. Without pinning,
+        // CUDA falls back to a staged sync copy through an internal bounce
+        // buffer (and Vulkan/Metal hit similar slow paths).
+        if (params_backend != runtime_backend && ggml_backend_is_cpu(params_backend)) {
+            ggml_backend_dev_t gpu_dev = ggml_backend_get_device(runtime_backend);
+            if (gpu_dev != nullptr) {
+                ggml_backend_buffer_type_t host_buft = ggml_backend_dev_host_buffer_type(gpu_dev);
+                if (host_buft != nullptr) {
+                    params_buffer = ggml_backend_alloc_ctx_tensors_from_buft(params_ctx, host_buft);
+                    if (params_buffer != nullptr) {
+                        used_pinned_host = true;
+                    } else {
+                        LOG_WARN("%s pinned host alloc failed (system out of locked pages?), "
+                                 "falling back to pageable",
+                                 get_desc().c_str());
+                    }
+                }
+            }
+        }
+
+        if (params_buffer == nullptr) {
+            params_buffer = ggml_backend_alloc_ctx_tensors(params_ctx, params_backend);
+        }
+
         if (params_buffer == nullptr) {
             LOG_ERROR("%s alloc params backend buffer failed, num_tensors = %i",
                       get_desc().c_str(),
@@ -2181,10 +2208,11 @@ public:
             return false;
         }
         size_t params_buffer_size = ggml_backend_buffer_get_size(params_buffer);
-        LOG_DEBUG("%s params backend buffer size = % 6.2f MB(%s) (%i tensors)",
+        LOG_DEBUG("%s params backend buffer size = % 6.2f MB(%s%s) (%i tensors)",
                   get_desc().c_str(),
                   params_buffer_size / (1024.f * 1024.f),
                   ggml_backend_is_cpu(params_backend) ? "RAM" : "VRAM",
+                  used_pinned_host ? ",pinned" : "",
                   num_tensors);
         return true;
     }
