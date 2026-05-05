@@ -584,6 +584,17 @@ namespace ZImage {
 
         ~ZImageRunner() = default;
 
+        // Drop the cached chunk graph and reset the resident-layer count when
+        // streaming layers are evicted to CPU. The chunk graph's compiled ops
+        // hold raw pointers into the resident layers' GPU tensors; once those
+        // tensors are moved off-GPU, reusing the graph would read freed
+        // memory. Forcing a rebuild also lets a new generation pick a
+        // different resident set if VRAM availability changed.
+        void on_streaming_layers_offloaded() override {
+            chunk_graph_.clear();
+            resident_layer_count_ = -1;
+        }
+
         // Build (or reuse a cached) chunk graph for K resident layers, then
         // dispatch it: upload the persistent activations + pe, run K layers in
         // a single ggml_backend_graph_compute, read the chunk output back into

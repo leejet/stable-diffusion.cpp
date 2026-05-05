@@ -2404,7 +2404,16 @@ public:
         if (offloaded > 0) {
             LOG_INFO("%s offloaded %zu streaming layers to CPU", get_desc().c_str(), offloaded);
         }
+        // Hook: runners can drop any cached state that referenced the resident
+        // layers (e.g. ZImageRunner's Phase 4 chunk graph), since those tensors
+        // have just been moved to CPU.
+        on_streaming_layers_offloaded();
     }
+
+    // Override in subclasses to release any cached state tied to the
+    // streaming layers' GPU residency (e.g. cached chunk graphs whose ops
+    // reference the now-evicted weight tensors).
+    virtual void on_streaming_layers_offloaded() {}
 
     LayerStreaming::LayerExecutionEngine* get_streaming_engine() {
         return streaming_engine_.get();
