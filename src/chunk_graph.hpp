@@ -77,6 +77,20 @@ public:
             inputs_.push_back(t);
         }
 
+        // Mirror GGMLRunner::prepare_build_in_tensor_before(): create the
+        // named build-in scalar tensors on the chunk context so anything in
+        // build_fn that uses ggml_ext_full / ggml_ext_zeros / ggml_ext_ones /
+        // ggml_ext_cast_f32 (all of which look these up by name via
+        // ggml_get_tensor) finds them. Without this they're null in our
+        // standalone context and the next op SEGVs — surfaces in attention's
+        // KV-pad mask creation when token sequences are short.
+        one_tensor_ = ggml_new_tensor_1d(ctx_, GGML_TYPE_F32, 1);
+        ggml_set_name(one_tensor_, "ggml_runner_build_in_tensor:one");
+        ggml_set_input(one_tensor_);
+        zero_int_tensor_ = ggml_new_tensor_1d(ctx_, GGML_TYPE_I32, 1);
+        ggml_set_name(zero_int_tensor_, "ggml_runner_build_in_tensor:zero_int");
+        ggml_set_input(zero_int_tensor_);
+
         out_ = build_fn(ctx_, inputs_, K);
         if (out_ == nullptr) {
             LOG_ERROR("%s chunk build_fn returned null", desc_tag.c_str());
@@ -84,6 +98,8 @@ public:
             return false;
         }
         ggml_set_output(out_);
+        ggml_build_forward_expand(gf_, one_tensor_);
+        ggml_build_forward_expand(gf_, zero_int_tensor_);
         ggml_build_forward_expand(gf_, out_);
 
         allocr_ = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
@@ -128,6 +144,13 @@ public:
         for (size_t i = 0; i < inputs_.size(); i++) {
             ggml_backend_tensor_set(inputs_[i], host_data[i], 0, host_nbytes[i]);
         }
+        // Upload the build-in scalars each dispatch (gallocr_alloc_graph may
+        // re-bind tensor data offsets within the compute buffer).
+        static constexpr float   kOneVal     = 1.0f;
+        static constexpr int32_t kZeroIntVal = 0;
+        ggml_backend_tensor_set(one_tensor_, &kOneVal, 0, sizeof(kOneVal));
+        ggml_backend_tensor_set(zero_int_tensor_, &kZeroIntVal, 0, sizeof(kZeroIntVal));
+
         ggml_status status = ggml_backend_graph_compute(backend, gf_);
         if (status != GGML_STATUS_SUCCESS) {
             LOG_ERROR("chunk compute failed: %s", ggml_status_to_string(status));
@@ -150,8 +173,10 @@ public:
             ggml_free(ctx_);
             ctx_ = nullptr;
         }
-        gf_          = nullptr;
-        out_         = nullptr;
+        gf_              = nullptr;
+        out_             = nullptr;
+        one_tensor_      = nullptr;
+        zero_int_tensor_ = nullptr;
         inputs_.clear();
         cached_shapes_.clear();
         layer_count_ = 0;
@@ -172,12 +197,14 @@ private:
         return true;
     }
 
-    ggml_context*                          ctx_           = nullptr;
-    ggml_gallocr_t                         allocr_        = nullptr;
-    ggml_cgraph*                           gf_            = nullptr;
+    ggml_context*                          ctx_              = nullptr;
+    ggml_gallocr_t                         allocr_           = nullptr;
+    ggml_cgraph*                           gf_               = nullptr;
     std::vector<ggml_tensor*>              inputs_;
-    ggml_tensor*                           out_           = nullptr;
-    int                                    layer_count_   = 0;
+    ggml_tensor*                           out_              = nullptr;
+    ggml_tensor*                           one_tensor_       = nullptr;
+    ggml_tensor*                           zero_int_tensor_  = nullptr;
+    int                                    layer_count_      = 0;
     std::vector<std::array<int64_t, 4>>    cached_shapes_;
 };
 
