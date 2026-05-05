@@ -1520,28 +1520,24 @@ static sd::Tensor<float> sample_ddim_trailing(denoise_cb_t model,
         float sigma    = sigmas[i];
         float sigma_to = sigmas[i + 1];
 
-        auto model_output_opt = model(x, sigma, i + 1);
-        if (model_output_opt.empty()) {
+        auto denoised_opt = model(x, sigma, i + 1);
+        if (denoised_opt.empty()) {
             return {};
         }
-        sd::Tensor<float> model_output = std::move(model_output_opt);
-        model_output                   = (x - model_output) * (1.0f / sigma);
+        sd::Tensor<float> denoised = std::move(denoised_opt);
+        sd::Tensor<float> d        = (x - denoised) / sigma;
 
         float alpha_prod_t      = 1.0f / (sigma * sigma + 1.0f);
         float alpha_prod_t_prev = 1.0f / (sigma_to * sigma_to + 1.0f);
         float beta_prod_t       = 1.0f - alpha_prod_t;
-
-        sd::Tensor<float> pred_original_sample = ((x / std::sqrt(sigma * sigma + 1)) -
-                                                  std::sqrt(beta_prod_t) * model_output) *
-                                                 (1.0f / std::sqrt(alpha_prod_t));
 
         float beta_prod_t_prev = 1.0f - alpha_prod_t_prev;
         float variance         = (beta_prod_t_prev / beta_prod_t) *
                          (1.0f - alpha_prod_t / alpha_prod_t_prev);
         float std_dev_t = eta * std::sqrt(variance);
 
-        x = pred_original_sample +
-            std::sqrt((1.0f - alpha_prod_t_prev - std::pow(std_dev_t, 2)) / alpha_prod_t_prev) * model_output;
+        x = denoised +
+            std::sqrt((1.0f - alpha_prod_t_prev - std::pow(std_dev_t, 2)) / alpha_prod_t_prev) * d;
 
         if (eta > 0) {
             x += std_dev_t / std::sqrt(alpha_prod_t_prev) * sd::Tensor<float>::randn_like(x, rng);
@@ -1592,12 +1588,12 @@ static sd::Tensor<float> sample_tcd(denoise_cb_t model,
         int timestep_s    = (int)floor((1 - eta) * prev_timestep);
         float sigma       = sigmas[i];
 
-        auto model_output_opt = model(x, sigma, i + 1);
-        if (model_output_opt.empty()) {
+        auto denoised_opt = model(x, sigma, i + 1);
+        if (denoised_opt.empty()) {
             return {};
         }
-        sd::Tensor<float> model_output = std::move(model_output_opt);
-        model_output                   = (x - model_output) * (1.0f / sigma);
+        sd::Tensor<float> denoised = std::move(denoised_opt);
+        sd::Tensor<float> d        = (x - denoised) / sigma;
 
         float alpha_prod_t      = 1.0f / (sigma * sigma + 1.0f);
         float beta_prod_t       = 1.0f - alpha_prod_t;
@@ -1605,12 +1601,8 @@ static sd::Tensor<float> sample_tcd(denoise_cb_t model,
         float alpha_prod_s      = static_cast<float>(alphas_cumprod[timestep_s]);
         float beta_prod_s       = 1.0f - alpha_prod_s;
 
-        sd::Tensor<float> pred_original_sample = ((x / std::sqrt(sigma * sigma + 1)) -
-                                                  std::sqrt(beta_prod_t) * model_output) *
-                                                 (1.0f / std::sqrt(alpha_prod_t));
-
-        x = std::sqrt(alpha_prod_s / alpha_prod_t_prev) * pred_original_sample +
-            std::sqrt(beta_prod_s / alpha_prod_t_prev) * model_output;
+        x = std::sqrt(alpha_prod_s / alpha_prod_t_prev) * denoised +
+            std::sqrt(beta_prod_s / alpha_prod_t_prev) * d;
 
         if (eta > 0 && sigma_to > 0.0f) {
             x = std::sqrt(alpha_prod_t_prev / alpha_prod_s) * x +
