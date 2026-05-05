@@ -2,6 +2,7 @@
 #define __CHUNK_GRAPH_HPP__
 
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -36,8 +37,14 @@ public:
     ChunkGraph& operator=(const ChunkGraph&) = delete;
 
     // Build (or keep cached) a graph for K layers with the given input shapes.
-    // The cached graph is reused only if K and every input shape match the
-    // last build; otherwise the old graph is freed and a fresh one is built.
+    // The cached graph is reused only if K, every input shape, AND the
+    // caller-supplied state_token match the last build; otherwise the old
+    // graph is freed and a fresh one is built.
+    //
+    // state_token: caller-computed fingerprint of any external state that the
+    // graph captures by reference and can become stale (e.g. weight_adapter
+    // pointer when LoRAs change, or runner flag bits like flash_attn). If two
+    // builds would topologically differ, give them different tokens.
     //
     // build_fn receives the freshly created input tensors (one per entry of
     // input_shapes, in the same order) and must wire them through K layers,
@@ -50,10 +57,14 @@ public:
                       int                                          K,
                       const std::vector<std::array<int64_t, 4>>&  input_shapes,
                       ggml_type                                    input_type,
+                      uint64_t                                     state_token,
                       BuildFn                                      build_fn,
                       size_t                                       graph_node_capacity,
                       const std::string&                           desc_tag) {
-        if (gf_ != nullptr && layer_count_ == K && shapes_match(input_shapes)) {
+        if (gf_ != nullptr
+            && layer_count_ == K
+            && state_token_ == state_token
+            && shapes_match(input_shapes)) {
             return true;
         }
         clear();
@@ -84,6 +95,11 @@ public:
         // ggml_get_tensor) finds them. Without this they're null in our
         // standalone context and the next op SEGVs — surfaces in attention's
         // KV-pad mask creation when token sequences are short.
+        // ggml_set_input is required: without it the gallocr treats these as
+        // regular scratch nodes and may reuse their buffer slot for op
+        // intermediates, overwriting our uploaded scalar values before compute
+        // reads them. (GGMLRunner avoids this by registering them via
+        // set_backend_tensor_data, which keeps the data outside the allocator.)
         one_tensor_ = ggml_new_tensor_1d(ctx_, GGML_TYPE_F32, 1);
         ggml_set_name(one_tensor_, "ggml_runner_build_in_tensor:one");
         ggml_set_input(one_tensor_);
@@ -119,6 +135,7 @@ public:
 
         layer_count_   = K;
         cached_shapes_ = input_shapes;
+        state_token_   = state_token;
         return true;
     }
 
@@ -179,7 +196,8 @@ public:
         zero_int_tensor_ = nullptr;
         inputs_.clear();
         cached_shapes_.clear();
-        layer_count_ = 0;
+        layer_count_  = 0;
+        state_token_  = 0;
     }
 
 private:
@@ -205,6 +223,7 @@ private:
     ggml_tensor*                           one_tensor_       = nullptr;
     ggml_tensor*                           zero_int_tensor_  = nullptr;
     int                                    layer_count_      = 0;
+    uint64_t                               state_token_      = 0;
     std::vector<std::array<int64_t, 4>>    cached_shapes_;
 };
 

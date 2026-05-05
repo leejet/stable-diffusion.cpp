@@ -622,8 +622,18 @@ namespace ZImage {
                 return x;
             };
 
+            // Fingerprint any state captured by reference in the cached graph
+            // that would invalidate it: weight_adapter (replaced per
+            // apply_loras call, so its tensors can be freed) and the runner
+            // boolean flags that pick alternate ops in forward_layer_block.
+            uint64_t state_token = reinterpret_cast<uintptr_t>(weight_adapter.get());
+            state_token ^= (static_cast<uint64_t>(flash_attn_enabled)    << 0)
+                         | (static_cast<uint64_t>(conv2d_direct_enabled) << 1)
+                         | (static_cast<uint64_t>(circular_x_enabled)    << 2)
+                         | (static_cast<uint64_t>(circular_y_enabled)    << 3);
+
             if (!chunk_graph_.ensure_built(runtime_backend, K, shapes,
-                                           GGML_TYPE_F32, build_fn,
+                                           GGML_TYPE_F32, state_token, build_fn,
                                            Z_IMAGE_GRAPH_SIZE * 2,
                                            get_desc())) {
                 return false;
