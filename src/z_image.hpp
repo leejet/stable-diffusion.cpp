@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "chunk_graph.hpp"
 #include "flux.hpp"
 #include "ggml_extend.hpp"
 #include "layer_streaming.hpp"
@@ -564,20 +565,10 @@ namespace ZImage {
         // Phase 4: cached "chunk" graph spanning all K resident layers in one
         // dispatch. Built once on the first sampling step that has K > 0,
         // dispatched once per subsequent step. Resident layer weights never
-        // move between steps so the graph stays cache-stable.
-        //
-        // Lives in its own ggml_context (chunk_ctx_) and uses its own gallocr
-        // because compute_ctx / compute_allocr get reset between the streamed
-        // tail's compute() calls within the same sampling step — the chunk
-        // would be invalidated mid-loop without a separate context.
-        ggml_context*         chunk_ctx_           = nullptr;
-        ggml_gallocr_t        chunk_allocr_        = nullptr;
-        ggml_cgraph*          chunk_gf_            = nullptr;
-        ggml_tensor*          chunk_txt_img_in_    = nullptr;
-        ggml_tensor*          chunk_t_emb_in_      = nullptr;
-        ggml_tensor*          chunk_pe_            = nullptr;
-        ggml_tensor*          chunk_txt_img_out_   = nullptr;
-        int                   chunk_layer_count_   = 0;
+        // move between steps so the graph stays cache-stable. Rebuilt when
+        // input shapes change (e.g. between queue jobs with different prompt
+        // token counts). See chunk_graph.hpp for the shared helper.
+        LayerStreaming::ChunkGraph chunk_graph_;
 
     public:
 
@@ -591,138 +582,68 @@ namespace ZImage {
             z_image.init(params_ctx, tensor_storage_map, prefix);
         }
 
-        ~ZImageRunner() {
-            free_chunk_graph();
-        }
+        ~ZImageRunner() = default;
 
-        // Tear down all Phase 4 chunk-graph state. Safe to call even if no
-        // chunk graph has been built yet.
-        void free_chunk_graph() {
-            if (chunk_allocr_ != nullptr) {
-                ggml_gallocr_free(chunk_allocr_);
-                chunk_allocr_ = nullptr;
-            }
-            if (chunk_ctx_ != nullptr) {
-                ggml_free(chunk_ctx_);
-                chunk_ctx_ = nullptr;
-            }
-            chunk_gf_           = nullptr;
-            chunk_txt_img_in_   = nullptr;
-            chunk_t_emb_in_     = nullptr;
-            chunk_pe_           = nullptr;
-            chunk_txt_img_out_  = nullptr;
-            chunk_layer_count_  = 0;
-        }
-
-        // Returns true iff the cached chunk graph was built for the same
-        // input shapes and resident-layer count as the current call.
-        bool chunk_graph_matches(int K,
-                                  const int64_t txt_img_ne[4],
-                                  const int64_t t_emb_ne[4]) const {
-            if (chunk_gf_ == nullptr || chunk_layer_count_ != K) {
-                return false;
-            }
-            for (int i = 0; i < 4; i++) {
-                if (chunk_txt_img_in_->ne[i] != txt_img_ne[i]) return false;
-                if (chunk_t_emb_in_->ne[i]   != t_emb_ne[i])   return false;
-            }
+        // Build (or reuse a cached) chunk graph for K resident layers, then
+        // dispatch it: upload the persistent activations + pe, run K layers in
+        // a single ggml_backend_graph_compute, read the chunk output back into
+        // persistent_txt_img. Replaces the per-layer dispatch loop for the
+        // resident block.
+        bool dispatch_resident_chunk(int K,
+                                      const int64_t txt_img_ne[4],
+                                      const int64_t t_emb_ne[4],
+                                      float* persistent_txt_img,
+                                      float* persistent_t_emb) {
             int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
-            if (chunk_pe_->ne[3] != pos_len) return false;
-            return true;
-        }
+            std::vector<std::array<int64_t, 4>> shapes = {
+                { txt_img_ne[0], txt_img_ne[1], txt_img_ne[2], txt_img_ne[3] },
+                { t_emb_ne[0],   t_emb_ne[1],   t_emb_ne[2],   t_emb_ne[3]   },
+                { 2, 2, z_image_params.axes_dim_sum / 2, pos_len },
+            };
 
-        // Phase 4: build the K-layer mega-graph in chunk_ctx_, reserve a
-        // dedicated gallocr for it, and run the first dispatch. Subsequent
-        // sampling steps reuse the same graph via dispatch_chunk_graph().
-        bool build_and_dispatch_chunk_graph(int K, int n_threads,
-                                             const int64_t txt_img_ne[4],
-                                             const int64_t t_emb_ne[4],
-                                             float* persistent_txt_img,
-                                             float* persistent_t_emb) {
-            // Allocate a generously-sized no_alloc context for K layers' worth
-            // of op metadata. Each ZImage layer block contributes ~50 ggml
-            // tensors; plus inputs/outputs and PE. 16 MB headroom is plenty.
-            size_t ctx_size = 16 * 1024 * 1024;
-            chunk_ctx_ = ggml_init({ctx_size, nullptr, true});
-            if (chunk_ctx_ == nullptr) {
-                LOG_ERROR("%s chunk_ctx alloc failed", get_desc().c_str());
+            auto build_fn = [this](ggml_context*                       ctx,
+                                    const std::vector<ggml_tensor*>&   inputs,
+                                    int                                 K_inner) -> ggml_tensor* {
+                GGMLRunnerContext runner_ctx;
+                runner_ctx.ggml_ctx              = ctx;
+                runner_ctx.backend               = runtime_backend;
+                runner_ctx.flash_attn_enabled    = flash_attn_enabled;
+                runner_ctx.conv2d_direct_enabled = conv2d_direct_enabled;
+                runner_ctx.circular_x_enabled    = circular_x_enabled;
+                runner_ctx.circular_y_enabled    = circular_y_enabled;
+                runner_ctx.weight_adapter        = weight_adapter;
+
+                ggml_tensor* x = inputs[0];      // txt_img
+                ggml_tensor* t_emb = inputs[1];
+                ggml_tensor* pe = inputs[2];
+                for (int i = 0; i < K_inner; i++) {
+                    x = z_image.forward_layer_block(&runner_ctx, i, x, pe, t_emb);
+                }
+                return x;
+            };
+
+            if (!chunk_graph_.ensure_built(runtime_backend, K, shapes,
+                                           GGML_TYPE_F32, build_fn,
+                                           Z_IMAGE_GRAPH_SIZE * 2,
+                                           get_desc())) {
                 return false;
             }
 
-            chunk_gf_ = ggml_new_graph_custom(chunk_ctx_, Z_IMAGE_GRAPH_SIZE * 2, false);
+            std::vector<const void*> host_data = {
+                persistent_txt_img,
+                persistent_t_emb,
+                pe_vec.data(),
+            };
+            std::vector<size_t> host_nbytes = {
+                static_cast<size_t>(txt_img_ne[0] * txt_img_ne[1] * txt_img_ne[2] * txt_img_ne[3]) * sizeof(float),
+                static_cast<size_t>(t_emb_ne[0]   * t_emb_ne[1]   * t_emb_ne[2]   * t_emb_ne[3])   * sizeof(float),
+                static_cast<size_t>(2 * 2 * (z_image_params.axes_dim_sum / 2) * pos_len) * sizeof(float),
+            };
 
-            chunk_txt_img_in_ = ggml_new_tensor_4d(chunk_ctx_, GGML_TYPE_F32,
-                                                    txt_img_ne[0], txt_img_ne[1], txt_img_ne[2], txt_img_ne[3]);
-            chunk_t_emb_in_ = ggml_new_tensor_4d(chunk_ctx_, GGML_TYPE_F32,
-                                                  t_emb_ne[0], t_emb_ne[1], t_emb_ne[2], t_emb_ne[3]);
-            int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
-            chunk_pe_ = ggml_new_tensor_4d(chunk_ctx_, GGML_TYPE_F32,
-                                            2, 2, z_image_params.axes_dim_sum / 2, pos_len);
-            ggml_set_input(chunk_txt_img_in_);
-            ggml_set_input(chunk_t_emb_in_);
-            ggml_set_input(chunk_pe_);
-
-            // Build a runner_ctx pointing at chunk_ctx_ so all op tensors
-            // emitted by forward_layer_block are owned by the chunk context
-            // (and survive across compute() calls on compute_ctx).
-            GGMLRunnerContext runner_ctx;
-            runner_ctx.ggml_ctx              = chunk_ctx_;
-            runner_ctx.backend               = runtime_backend;
-            runner_ctx.flash_attn_enabled    = flash_attn_enabled;
-            runner_ctx.conv2d_direct_enabled = conv2d_direct_enabled;
-            runner_ctx.circular_x_enabled    = circular_x_enabled;
-            runner_ctx.circular_y_enabled    = circular_y_enabled;
-            runner_ctx.weight_adapter        = weight_adapter;
-
-            ggml_tensor* x = chunk_txt_img_in_;
-            for (int i = 0; i < K; i++) {
-                x = z_image.forward_layer_block(&runner_ctx, i, x, chunk_pe_, chunk_t_emb_in_);
-            }
-            chunk_txt_img_out_ = x;
-            ggml_set_output(chunk_txt_img_out_);
-            ggml_build_forward_expand(chunk_gf_, chunk_txt_img_out_);
-
-            chunk_allocr_ = ggml_gallocr_new(ggml_backend_get_default_buffer_type(runtime_backend));
-            if (chunk_allocr_ == nullptr) {
-                LOG_ERROR("%s chunk gallocr_new failed", get_desc().c_str());
-                return false;
-            }
-            if (!ggml_gallocr_reserve(chunk_allocr_, chunk_gf_)) {
-                LOG_ERROR("%s chunk gallocr_reserve failed", get_desc().c_str());
-                return false;
-            }
-            size_t buf_size = ggml_gallocr_get_buffer_size(chunk_allocr_, 0);
-            LOG_INFO("%s chunk graph: %d layers, compute buffer = %.2f MB",
-                     get_desc().c_str(), K, buf_size / (1024.0 * 1024.0));
-
-            chunk_layer_count_ = K;
-            return dispatch_chunk_graph(persistent_txt_img, persistent_t_emb);
-        }
-
-        // Re-bind tensor offsets, upload activation/PE inputs, run compute,
-        // and download the chunk output into persistent_txt_img.
-        bool dispatch_chunk_graph(float* persistent_txt_img,
-                                   float* persistent_t_emb) {
-            if (!ggml_gallocr_alloc_graph(chunk_allocr_, chunk_gf_)) {
-                LOG_ERROR("%s chunk alloc_graph failed", get_desc().c_str());
-                return false;
-            }
-            ggml_backend_tensor_set(chunk_txt_img_in_, persistent_txt_img, 0,
-                                     ggml_nbytes(chunk_txt_img_in_));
-            ggml_backend_tensor_set(chunk_t_emb_in_, persistent_t_emb, 0,
-                                     ggml_nbytes(chunk_t_emb_in_));
-            ggml_backend_tensor_set(chunk_pe_, pe_vec.data(), 0,
-                                     ggml_nbytes(chunk_pe_));
-
-            ggml_status status = ggml_backend_graph_compute(runtime_backend, chunk_gf_);
-            if (status != GGML_STATUS_SUCCESS) {
-                LOG_ERROR("%s chunk compute failed: %s",
-                          get_desc().c_str(), ggml_status_to_string(status));
-                return false;
-            }
-            ggml_backend_tensor_get(chunk_txt_img_out_, persistent_txt_img, 0,
-                                     ggml_nbytes(chunk_txt_img_out_));
-            return true;
+            size_t out_nbytes = ggml_nbytes(chunk_graph_.output());
+            return chunk_graph_.dispatch(runtime_backend,
+                                          host_data, host_nbytes,
+                                          persistent_txt_img, out_nbytes);
         }
 
         std::string get_desc() override {
@@ -1002,27 +923,16 @@ namespace ZImage {
                         }
                     }
                 }
-                // Cached chunk graph is shape-bound: token sequence length
-                // changes per prompt, so a cached graph from a previous call
-                // can have stale input shapes. Rebuild when shapes differ.
-                if (chunk_gf_ != nullptr &&
-                    !chunk_graph_matches(chunk_K, txt_img_ne, t_emb_ne)) {
-                    free_chunk_graph();
+                // The shared ChunkGraph helper (chunk_graph.hpp) handles cache
+                // reuse and shape-mismatch rebuild automatically.
+                if (!dispatch_resident_chunk(chunk_K, txt_img_ne, t_emb_ne,
+                                              persistent_txt_img, persistent_t_emb)) {
+                    return false;
                 }
-                bool ok;
-                if (chunk_gf_ == nullptr) {
-                    ok = build_and_dispatch_chunk_graph(chunk_K, n_threads,
-                                                        txt_img_ne, t_emb_ne,
-                                                        persistent_txt_img,
-                                                        persistent_t_emb);
-                } else {
-                    ok = dispatch_chunk_graph(persistent_txt_img, persistent_t_emb);
-                }
-                if (!ok) return false;
-                // chunk_txt_img_out_ has the same shape as the last resident
+                // The chunk output has the same shape as the last resident
                 // layer's output; ne carries through unchanged.
                 for (int i = 0; i < 4; i++) {
-                    txt_img_ne[i] = chunk_txt_img_out_->ne[i];
+                    txt_img_ne[i] = chunk_graph_.output()->ne[i];
                 }
             }
 
