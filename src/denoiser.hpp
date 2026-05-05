@@ -1526,20 +1526,22 @@ static sd::Tensor<float> sample_ddim_trailing(denoise_cb_t model,
         }
         sd::Tensor<float> denoised = std::move(denoised_opt);
         sd::Tensor<float> d        = (x - denoised) / sigma;
+        if (eta == 0.f) {
+            x += d * (sigma_to - sigma);
+        } else {
 
-        float alpha_prod_t      = 1.0f / (sigma * sigma + 1.0f);
-        float alpha_prod_t_prev = 1.0f / (sigma_to * sigma_to + 1.0f);
-        float beta_prod_t       = 1.0f - alpha_prod_t;
+            float alpha_prod_t      = 1.0f / (sigma * sigma + 1.0f);
+            float alpha_prod_t_prev = 1.0f / (sigma_to * sigma_to + 1.0f);
+            float beta_prod_t       = 1.0f - alpha_prod_t;
 
-        float beta_prod_t_prev = 1.0f - alpha_prod_t_prev;
-        float variance         = (beta_prod_t_prev / beta_prod_t) *
-                         (1.0f - alpha_prod_t / alpha_prod_t_prev);
-        float std_dev_t = eta * std::sqrt(variance);
+            float beta_prod_t_prev = 1.0f - alpha_prod_t_prev;
+            float variance         = (beta_prod_t_prev / beta_prod_t) *
+                             (1.0f - alpha_prod_t / alpha_prod_t_prev);
+            float std_dev_t = eta * std::sqrt(variance);
 
-        x = denoised +
-            std::sqrt((1.0f - alpha_prod_t_prev - std::pow(std_dev_t, 2)) / alpha_prod_t_prev) * d;
+            x = denoised +
+                std::sqrt((1.0f - alpha_prod_t_prev - std::pow(std_dev_t, 2)) / alpha_prod_t_prev) * d;
 
-        if (eta > 0) {
             x += std_dev_t / std::sqrt(alpha_prod_t_prev) * sd::Tensor<float>::randn_like(x, rng);
         }
     }
