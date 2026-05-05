@@ -838,20 +838,16 @@ static sd::Tensor<float> sample_euler_ancestral(denoise_cb_t model,
         if (sigma_to == 0.f) {
             x = denoised;
         } else if (eta == 0.f) {
-            sd::Tensor<float> d = (x - denoised) / sigma;
-            x += d * (sigma_to - sigma);
-        } else if (is_flow_denoiser) {
-            auto [sigma_down, sigma_up, alpha_scale] = get_ancestral_step_flow(sigma, sigma_to, eta);
+            float sigma_ratio = sigma_to / sigma;
+            x                 = sigma_ratio * x + (1.0 - sigma_ratio) * denoised;
+        } else {
+            auto [sigma_down, sigma_up, alpha_scale] = get_ancestral_step(sigma, sigma_to, eta, is_flow_denoiser);
             float sigma_ratio                        = sigma_down / sigma;
             x                                        = sigma_ratio * x + (1.0f - sigma_ratio) * denoised;
             if (sigma_up > 0.f) {
-                x = alpha_scale * x + sd::Tensor<float>::randn_like(x, rng) * sigma_up;
-            }
-        } else {
-            sd::Tensor<float> d         = (x - denoised) / sigma;
-            auto [sigma_down, sigma_up] = get_ancestral_step(sigma, sigma_to, eta);
-            x += d * (sigma_down - sigma);
-            if (sigma_up > 0.f) {
+                if (is_flow_denoiser) {
+                    x *= alpha_scale;
+                }
                 x += sd::Tensor<float>::randn_like(x, rng) * sigma_up;
             }
         }
