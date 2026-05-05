@@ -1510,36 +1510,6 @@ static sd::Tensor<float> sample_er_sde(denoise_cb_t model,
     return x;
 }
 
-static sd::Tensor<float> sample_ddim_trailing(denoise_cb_t model,
-                                              sd::Tensor<float> x,
-                                              const std::vector<float>& sigmas,
-                                              std::shared_ptr<RNG> rng,
-                                              float eta) {
-    int steps = static_cast<int>(sigmas.size()) - 1;
-    for (int i = 0; i < steps; i++) {
-        float sigma    = sigmas[i];
-        float sigma_to = sigmas[i + 1];
-
-        auto denoised_opt = model(x, sigma, i + 1);
-        if (denoised_opt.empty()) {
-            return {};
-        }
-        sd::Tensor<float> denoised = std::move(denoised_opt);
-        sd::Tensor<float> d        = (x - denoised) / sigma;
-        if (eta == 0.f) {
-            x += d * (sigma_to - sigma);
-        } else {
-            auto [sigma_down, sigma_up] = get_ancestral_step(sigma, sigma_to, eta);
-            float sigma_ratio           = sigma_down / sigma;
-            x                           = sigma_ratio * x + (1.0f - sigma_ratio) * denoised;
-            if (sigma_up > 0.f) {
-                x += sd::Tensor<float>::randn_like(x, rng) * sigma_up;
-            }
-        }
-    }
-    return x;
-}
-
 static sd::Tensor<float> sample_tcd(denoise_cb_t model,
                                     sd::Tensor<float> x,
                                     const std::vector<float>& sigmas,
@@ -1645,7 +1615,8 @@ static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
         case ER_SDE_SAMPLE_METHOD:
             return sample_er_sde(model, std::move(x), sigmas, rng, is_flow_denoiser, eta);
         case DDIM_TRAILING_SAMPLE_METHOD:
-            return sample_ddim_trailing(model, std::move(x), sigmas, rng, eta);
+            // DDIM is equivalent to Euler Ancestral with the Simple scheduler
+            return sample_euler_ancestral(model, std::move(x), sigmas, rng, is_flow_denoiser, eta);
         case TCD_SAMPLE_METHOD:
             return sample_tcd(model, std::move(x), sigmas, rng, eta);
         default:
