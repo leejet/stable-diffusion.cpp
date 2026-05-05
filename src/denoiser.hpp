@@ -808,6 +808,18 @@ static std::tuple<float, float, float> get_ancestral_step_flow(float sigma_from,
     return {sigma_down, sigma_up, alpha_scale};
 }
 
+static std::tuple<float, float, float> get_ancestral_step(float sigma_from,
+                                                          float sigma_to,
+                                                          float eta,
+                                                          bool is_flow_denoiser) {
+    if (is_flow_denoiser) {
+        return get_ancestral_step_flow(sigma_from, sigma_to, eta);
+    } else {
+        auto [sigma_down, sigma_up] = get_ancestral_step(sigma_from, sigma_to, eta);
+        return {sigma_down, sigma_up, 1.0f};
+    }
+}
+
 static sd::Tensor<float> sample_euler_ancestral(denoise_cb_t model,
                                                 sd::Tensor<float> x,
                                                 const std::vector<float>& sigmas,
