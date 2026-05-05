@@ -592,6 +592,12 @@ namespace ZImage {
         }
 
         ~ZImageRunner() {
+            free_chunk_graph();
+        }
+
+        // Tear down all Phase 4 chunk-graph state. Safe to call even if no
+        // chunk graph has been built yet.
+        void free_chunk_graph() {
             if (chunk_allocr_ != nullptr) {
                 ggml_gallocr_free(chunk_allocr_);
                 chunk_allocr_ = nullptr;
@@ -600,6 +606,29 @@ namespace ZImage {
                 ggml_free(chunk_ctx_);
                 chunk_ctx_ = nullptr;
             }
+            chunk_gf_           = nullptr;
+            chunk_txt_img_in_   = nullptr;
+            chunk_t_emb_in_     = nullptr;
+            chunk_pe_           = nullptr;
+            chunk_txt_img_out_  = nullptr;
+            chunk_layer_count_  = 0;
+        }
+
+        // Returns true iff the cached chunk graph was built for the same
+        // input shapes and resident-layer count as the current call.
+        bool chunk_graph_matches(int K,
+                                  const int64_t txt_img_ne[4],
+                                  const int64_t t_emb_ne[4]) const {
+            if (chunk_gf_ == nullptr || chunk_layer_count_ != K) {
+                return false;
+            }
+            for (int i = 0; i < 4; i++) {
+                if (chunk_txt_img_in_->ne[i] != txt_img_ne[i]) return false;
+                if (chunk_t_emb_in_->ne[i]   != t_emb_ne[i])   return false;
+            }
+            int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
+            if (chunk_pe_->ne[3] != pos_len) return false;
+            return true;
         }
 
         // Phase 4: build the K-layer mega-graph in chunk_ctx_, reserve a
@@ -972,6 +1001,13 @@ namespace ZImage {
                             return false;
                         }
                     }
+                }
+                // Cached chunk graph is shape-bound: token sequence length
+                // changes per prompt, so a cached graph from a previous call
+                // can have stale input shapes. Rebuild when shapes differ.
+                if (chunk_gf_ != nullptr &&
+                    !chunk_graph_matches(chunk_K, txt_img_ne, t_emb_ne)) {
+                    free_chunk_graph();
                 }
                 bool ok;
                 if (chunk_gf_ == nullptr) {
