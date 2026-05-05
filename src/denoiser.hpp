@@ -824,45 +824,37 @@ static std::tuple<float, float, float> get_ancestral_step(float sigma_from,
 static sd::Tensor<float> sample_euler_ancestral(denoise_cb_t model,
                                                 sd::Tensor<float> x,
                                                 const std::vector<float>& sigmas,
-                                                std::shared_ptr<RNG> rng,
-                                                float eta) {
+                                                std::shared_ptr<RNG> rng = nullptr,
+                                                bool is_flow_denoiser    = false,
+                                                float eta                = 0.f) {
     int steps = static_cast<int>(sigmas.size()) - 1;
     for (int i = 0; i < steps; i++) {
         float sigma       = sigmas[i];
+        float sigma_to    = sigmas[i + 1];
         auto denoised_opt = model(x, sigma, i + 1, nullptr);
         if (denoised_opt.empty()) {
             return {};
         }
-        sd::Tensor<float> denoised  = std::move(denoised_opt);
-        sd::Tensor<float> d         = (x - denoised) / sigma;
-        auto [sigma_down, sigma_up] = get_ancestral_step(sigmas[i], sigmas[i + 1], eta);
-        x += d * (sigma_down - sigmas[i]);
-        if (sigmas[i + 1] > 0) {
-            x += sd::Tensor<float>::randn_like(x, rng) * sigma_up;
-        }
-    }
-    return x;
-}
-
-static sd::Tensor<float> sample_euler_flow(denoise_cb_t model,
-                                           sd::Tensor<float> x,
-                                           const std::vector<float>& sigmas,
-                                           std::shared_ptr<RNG> rng,
-                                           float eta) {
-    int steps = static_cast<int>(sigmas.size()) - 1;
-    for (int i = 0; i < steps; i++) {
-        float sigma       = sigmas[i];
-        auto denoised_opt = model(x, sigma, i + 1, nullptr);
-        if (denoised_opt.empty()) {
-            return {};
-        }
-        sd::Tensor<float> denoised               = std::move(denoised_opt);
-        auto [sigma_down, sigma_up, alpha_scale] = get_ancestral_step_flow(sigma, sigmas[i + 1], eta);
-        float sigma_ratio                        = sigma_down / sigma;
-        x                                        = sigma_ratio * x + (1.0f - sigma_ratio) * denoised;
-
-        if (sigma_up > 0.0f) {
-            x = alpha_scale * x + sd::Tensor<float>::randn_like(x, rng) * sigma_up;
+        sd::Tensor<float> denoised = std::move(denoised_opt);
+        if (sigma_to == 0.f) {
+            x = denoised;
+        } else if (eta == 0.f) {
+            sd::Tensor<float> d = (x - denoised) / sigma;
+            x += d * (sigma_to - sigma);
+        } else if (is_flow_denoiser) {
+            auto [sigma_down, sigma_up, alpha_scale] = get_ancestral_step_flow(sigma, sigma_to, eta);
+            float sigma_ratio                        = sigma_down / sigma;
+            x                                        = sigma_ratio * x + (1.0f - sigma_ratio) * denoised;
+            if (sigma_up > 0.f) {
+                x = alpha_scale * x + sd::Tensor<float>::randn_like(x, rng) * sigma_up;
+            }
+        } else {
+            sd::Tensor<float> d         = (x - denoised) / sigma;
+            auto [sigma_down, sigma_up] = get_ancestral_step(sigma, sigma_to, eta);
+            x += d * (sigma_down - sigma);
+            if (sigma_up > 0.f) {
+                x += sd::Tensor<float>::randn_like(x, rng) * sigma_up;
+            }
         }
     }
     return x;
@@ -1804,10 +1796,7 @@ static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
                                             const char* extra_sample_args) {
     switch (method) {
         case EULER_A_SAMPLE_METHOD:
-            if (is_flow_denoiser)
-                return sample_euler_flow(model, std::move(x), sigmas, rng, eta);
-            else
-                return sample_euler_ancestral(model, std::move(x), sigmas, rng, eta);
+            return sample_euler_ancestral(model, std::move(x), sigmas, rng, is_flow_denoiser, eta);
         case EULER_SAMPLE_METHOD:
             return sample_euler(model, std::move(x), sigmas);
         case HEUN_SAMPLE_METHOD:
