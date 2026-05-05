@@ -1529,20 +1529,12 @@ static sd::Tensor<float> sample_ddim_trailing(denoise_cb_t model,
         if (eta == 0.f) {
             x += d * (sigma_to - sigma);
         } else {
-
-            float alpha_prod_t      = 1.0f / (sigma * sigma + 1.0f);
-            float alpha_prod_t_prev = 1.0f / (sigma_to * sigma_to + 1.0f);
-            float beta_prod_t       = 1.0f - alpha_prod_t;
-
-            float beta_prod_t_prev = 1.0f - alpha_prod_t_prev;
-            float variance         = (beta_prod_t_prev / beta_prod_t) *
-                             (1.0f - alpha_prod_t / alpha_prod_t_prev);
-            float std_dev_t = eta * std::sqrt(variance);
-
-            x = denoised +
-                std::sqrt((1.0f - alpha_prod_t_prev - std::pow(std_dev_t, 2)) / alpha_prod_t_prev) * d;
-
-            x += std_dev_t / std::sqrt(alpha_prod_t_prev) * sd::Tensor<float>::randn_like(x, rng);
+            auto [sigma_down, sigma_up] = get_ancestral_step(sigma, sigma_to, eta);
+            float sigma_ratio           = sigma_down / sigma;
+            x                           = sigma_ratio * x + (1.0f - sigma_ratio) * denoised;
+            if (sigma_up > 0.f) {
+                x += sd::Tensor<float>::randn_like(x, rng) * sigma_up;
+            }
         }
     }
     return x;
