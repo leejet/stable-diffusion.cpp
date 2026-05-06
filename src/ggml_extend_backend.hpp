@@ -121,6 +121,24 @@ __STATIC_INLINE__ void ggml_backend_cpu_set_abort_callback(ggml_backend_t backen
     }
 }
 
+// Runtime lookup of a backend's row-split buffer type (currently published by
+// the CUDA and SYCL backends as `ggml_backend_split_buffer_type` in their
+// reg_get_proc_address tables). Returns nullptr when the backend does not
+// support row-split, leaving the caller to fall back to a non-split path.
+using __ggml_backend_split_buffer_type_t = ggml_backend_buffer_type_t (*)(int main_device, const float* tensor_split);
+
+__STATIC_INLINE__ ggml_backend_buffer_type_t ggml_backend_split_buffer_type(ggml_backend_t backend, int main_device, const float* tensor_split) {
+    ggml_backend_reg_t reg = ggml_backend_reg_from_backend(backend);
+    if (reg == nullptr) {
+        return nullptr;
+    }
+    auto fn = reinterpret_cast<__ggml_backend_split_buffer_type_t>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_split_buffer_type"));
+    if (fn == nullptr) {
+        return nullptr;
+    }
+    return fn(main_device, tensor_split);
+}
+
 __STATIC_INLINE__ ggml_backend_buffer_t ggml_backend_tensor_buffer(const struct ggml_tensor* tensor) {
     if (tensor == nullptr) {
         return nullptr;

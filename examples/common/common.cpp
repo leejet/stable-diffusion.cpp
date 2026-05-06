@@ -380,6 +380,54 @@ ArgOptions SDContextParams::get_options() {
          "--upscale-model",
          "path to esrgan model.",
          &esrgan_path},
+        {"",
+         "--main-backend-device",
+         "ggml device name to use as the main backend (see --list-devices). "
+         "When unset, the first GPU device is used.",
+         &main_backend_device},
+        {"",
+         "--diffusion-backend-device",
+         "ggml device name for the diffusion / flow model. "
+         "Falls back to --main-backend-device.",
+         &diffusion_backend_device},
+        {"",
+         "--clip-backend-device",
+         "ggml device name for the text encoders. "
+         "Falls back to --main-backend-device.",
+         &clip_backend_device},
+        {"",
+         "--vae-backend-device",
+         "ggml device name for the VAE. Falls back to --main-backend-device.",
+         &vae_backend_device},
+        {"",
+         "--control-net-backend-device",
+         "ggml device name for the ControlNet. "
+         "Falls back to --main-backend-device.",
+         &control_net_backend_device},
+        {"",
+         "--tae-backend-device",
+         "ggml device name for the TAE (currently routed through main).",
+         &tae_backend_device},
+        {"",
+         "--upscaler-backend-device",
+         "ggml device name for the upscaler (currently routed through main).",
+         &upscaler_backend_device},
+        {"",
+         "--photomaker-backend-device",
+         "ggml device name for PhotoMaker (currently routed through main).",
+         &photomaker_backend_device},
+        {"",
+         "--vision-backend-device",
+         "ggml device name for the vision model (currently routed through main).",
+         &vision_backend_device},
+        {"",
+         "--multi-gpu-mode",
+         "auto-fit multi-GPU split mechanism: 'row' (default; CUDA-only "
+         "row-split via cuda_split_buffer_type, single backend, smaller "
+         "compute buffer), 'layer' (block-indexed tensors split across "
+         "per-block backends + sched, generic but ~2x activation cost at "
+         "boundaries), or 'off' (never split a single component)",
+         &multi_gpu_mode},
     };
 
     options.int_options = {
@@ -392,6 +440,23 @@ ArgOptions SDContextParams::get_options() {
          "--chroma-t5-mask-pad",
          "t5 mask pad size of chroma",
          &chroma_t5_mask_pad},
+        {"",
+         "--fit-target",
+         "auto-fit: MiB of free memory to leave on each GPU (default: 512)",
+         &auto_fit_target_mb},
+        {"",
+         "--fit-compute-reserve-dit",
+         "auto-fit: MiB reserved on the DiT's GPU for its compute buffer "
+         "(0 keeps the built-in default)",
+         &auto_fit_compute_reserve_dit_mb},
+        {"",
+         "--fit-compute-reserve-vae",
+         "auto-fit: MiB reserved on the VAE's GPU for its compute buffer",
+         &auto_fit_compute_reserve_vae_mb},
+        {"",
+         "--fit-compute-reserve-cond",
+         "auto-fit: MiB reserved on the conditioner's GPU for its compute buffer",
+         &auto_fit_compute_reserve_cond_mb},
     };
 
     options.float_options = {};
@@ -409,18 +474,6 @@ ArgOptions SDContextParams::get_options() {
          "--mmap",
          "whether to memory-map model",
          true, &enable_mmap},
-        {"",
-         "--control-net-cpu",
-         "keep controlnet in cpu (for low vram)",
-         true, &control_net_cpu},
-        {"",
-         "--clip-on-cpu",
-         "keep clip in cpu (for low vram)",
-         true, &clip_on_cpu},
-        {"",
-         "--vae-on-cpu",
-         "keep vae in cpu (for low vram)",
-         true, &vae_on_cpu},
         {"",
          "--fa",
          "use flash attention",
@@ -461,6 +514,30 @@ ArgOptions SDContextParams::get_options() {
          "--chroma-enable-t5-mask",
          "enable t5 mask for chroma",
          true, &chroma_use_t5_mask},
+        {"",
+         "--auto-fit",
+         "automatically pick DiT/VAE/Conditioner device placements based on "
+         "free GPU memory (default ON)",
+         true, &auto_fit},
+        {"",
+         "--no-auto-fit",
+         "disable auto-fit and use the explicit *-backend-device flags",
+         false, &auto_fit},
+        {"",
+         "--no-multi-gpu",
+         "auto-fit: keep all components on a single GPU when they fit "
+         "(by default, multi-GPU placements are preferred to balance load)",
+         false, &auto_multi_gpu},
+        {"",
+         "--fit-dry-run",
+         "auto-fit: print the computed plan and exit without loading models",
+         true, &auto_fit_dry_run},
+        {"",
+         "--quiet-unknown-tensors",
+         "suppress per-tensor 'unknown tensor X in model file' log lines "
+         "(useful for LTX-2 and similar models that ship many unused "
+         "tensors); a single summary line with the count is logged instead",
+         true, &quiet_unknown_tensors},
     };
 
     auto on_type_arg = [&](int argc, const char** argv, int index) {
@@ -559,6 +636,43 @@ ArgOptions SDContextParams::get_options() {
          "but it usually offers faster inference speed and, in some cases, lower memory usage. "
          "The at_runtime mode, on the other hand, is exactly the opposite.",
          on_lora_apply_mode_arg},
+        {"",
+         "--list-devices",
+         "list available ggml backend devices (one per line, "
+         "name<TAB>description) and exit",
+         [](int /*argc*/, const char** /*argv*/, int /*index*/) {
+             sd_list_devices();
+             std::exit(0);
+             return 0;
+         }},
+        // Soft-deprecated aliases for the old per-component CPU-placement
+        // toggles. They map onto the new --*-backend-device strings and also
+        // disable auto-fit so the placement is honored verbatim (matching
+        // the pre-auto-fit behavior these flags expressed).
+        {"",
+         "--clip-on-cpu",
+         "alias of --clip-backend-device CPU (also disables --auto-fit). Deprecated.",
+         [this](int /*argc*/, const char** /*argv*/, int /*index*/) {
+             clip_backend_device = "CPU";
+             auto_fit            = false;
+             return 0;
+         }},
+        {"",
+         "--vae-on-cpu",
+         "alias of --vae-backend-device CPU (also disables --auto-fit). Deprecated.",
+         [this](int /*argc*/, const char** /*argv*/, int /*index*/) {
+             vae_backend_device = "CPU";
+             auto_fit           = false;
+             return 0;
+         }},
+        {"",
+         "--control-net-cpu",
+         "alias of --control-net-backend-device CPU (also disables --auto-fit). Deprecated.",
+         [this](int /*argc*/, const char** /*argv*/, int /*index*/) {
+             control_net_backend_device = "CPU";
+             auto_fit                   = false;
+             return 0;
+         }},
     };
 
     return options;
@@ -671,9 +785,21 @@ std::string SDContextParams::to_string() const {
         << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
         << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
         << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
-        << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
-        << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
-        << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
+        << "  main_backend_device: \"" << main_backend_device << "\",\n"
+        << "  diffusion_backend_device: \"" << diffusion_backend_device << "\",\n"
+        << "  clip_backend_device: \"" << clip_backend_device << "\",\n"
+        << "  vae_backend_device: \"" << vae_backend_device << "\",\n"
+        << "  control_net_backend_device: \"" << control_net_backend_device << "\",\n"
+        << "  tae_backend_device: \"" << tae_backend_device << "\",\n"
+        << "  upscaler_backend_device: \"" << upscaler_backend_device << "\",\n"
+        << "  photomaker_backend_device: \"" << photomaker_backend_device << "\",\n"
+        << "  vision_backend_device: \"" << vision_backend_device << "\",\n"
+        << "  auto_fit: " << (auto_fit ? "true" : "false") << ",\n"
+        << "  auto_fit_target_mb: " << auto_fit_target_mb << ",\n"
+        << "  auto_fit_dry_run: " << (auto_fit_dry_run ? "true" : "false") << ",\n"
+        << "  auto_multi_gpu: " << (auto_multi_gpu ? "true" : "false") << ",\n"
+        << "  multi_gpu_mode: \"" << multi_gpu_mode << "\",\n"
+        << "  quiet_unknown_tensors: " << (quiet_unknown_tensors ? "true" : "false") << ",\n"
         << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
@@ -729,9 +855,15 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         lora_apply_mode,
         offload_params_to_cpu,
         enable_mmap,
-        clip_on_cpu,
-        control_net_cpu,
-        vae_on_cpu,
+        main_backend_device.empty() ? nullptr : main_backend_device.c_str(),
+        diffusion_backend_device.empty() ? nullptr : diffusion_backend_device.c_str(),
+        clip_backend_device.empty() ? nullptr : clip_backend_device.c_str(),
+        vae_backend_device.empty() ? nullptr : vae_backend_device.c_str(),
+        control_net_backend_device.empty() ? nullptr : control_net_backend_device.c_str(),
+        tae_backend_device.empty() ? nullptr : tae_backend_device.c_str(),
+        upscaler_backend_device.empty() ? nullptr : upscaler_backend_device.c_str(),
+        photomaker_backend_device.empty() ? nullptr : photomaker_backend_device.c_str(),
+        vision_backend_device.empty() ? nullptr : vision_backend_device.c_str(),
         flash_attn,
         diffusion_flash_attn,
         taesd_preview,
@@ -744,6 +876,15 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         chroma_use_t5_mask,
         chroma_t5_mask_pad,
         qwen_image_zero_cond_t,
+        auto_fit,
+        auto_fit_target_mb,
+        auto_fit_dry_run,
+        auto_fit_compute_reserve_dit_mb,
+        auto_fit_compute_reserve_vae_mb,
+        auto_fit_compute_reserve_cond_mb,
+        auto_multi_gpu,
+        multi_gpu_mode.empty() ? nullptr : multi_gpu_mode.c_str(),
+        quiet_unknown_tensors,
     };
     return sd_ctx_params;
 }

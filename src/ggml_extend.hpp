@@ -1705,12 +1705,88 @@ struct GGMLRunnerContext {
     std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
 };
 
+// ---------------------------------------------------------------------------
+// Multi-backend (layer-split) support
+// ---------------------------------------------------------------------------
+// A GGMLRunner can opt into "layer-split" mode where each weight tensor lives
+// entirely on one of several backends, picked by a caller-supplied callback
+// (typically based on the tensor name's block index). The runner switches
+// from gallocr to ggml_backend_sched for graph compute, so cross-backend
+// edges are routed automatically.
+//
+// This is the llama.cpp LLAMA_SPLIT_MODE_LAYER analogue. There is no
+// intra-tensor row split, so every tensor lives on a single normal device
+// buffer — views work without any ggml-cuda patch.
+//
+// To enable: populate g_pending_multi_backend_spec() with the additional
+// backends + tensor->backend callback, then construct the GGMLRunner. The
+// ctor consumes and clears the pending pointer.
+enum class MultiBackendMode {
+    LAYER_SPLIT,  // assign block-indexed tensors to per-block backends + sched
+    ROW_SPLIT,    // CUDA split-buft: matmul weights row-split across devices
+};
+
+struct MultiBackendSpec {
+    MultiBackendMode mode = MultiBackendMode::LAYER_SPLIT;
+
+    // Extra backends *in addition to* the runner's main runtime_backend.
+    // The first entry's role is the main backend; we don't list it here.
+    std::vector<ggml_backend_t> additional_backends;
+
+    // LAYER_SPLIT: maps a weight tensor name to one of the runner's
+    // backends (the main runtime_backend, or one of additional_backends).
+    // Returning nullptr means "use the main runtime_backend".
+    std::function<ggml_backend_t(const std::string& tensor_name)> tensor_backend_fn;
+
+    // ROW_SPLIT (CUDA-only): per-device row split ratios (length = total
+    // CUDA device count) and main device. Empty means use CUDA's default
+    // free-VRAM proportions.
+    std::vector<float> tensor_split_ratios;
+    int                main_device = 0;
+
+    // Optional CPU backend appended last to the sched for unsupported-op
+    // fallback. May be nullptr.
+    ggml_backend_t cpu_fallback = nullptr;
+};
+
+__STATIC_INLINE__ MultiBackendSpec*& g_pending_multi_backend_spec() {
+    thread_local MultiBackendSpec* spec = nullptr;
+    return spec;
+}
+
 struct GGMLRunner {
 protected:
     typedef std::function<ggml_cgraph*()> get_graph_cb_t;
 
     ggml_backend_t params_backend  = nullptr;
     ggml_backend_t runtime_backend = nullptr;
+
+    // --- multi-backend state (layer-split via sched OR row-split via cuda_split_buft) ---
+    bool                                                            multi_backend_mode    = false;
+    MultiBackendMode                                                multi_backend_kind    = MultiBackendMode::LAYER_SPLIT;
+    std::vector<ggml_backend_t>                                     additional_backends;
+    ggml_backend_t                                                  cpu_fallback_backend = nullptr;
+    bool                                                            owns_cpu_fallback_backend = false;
+    std::function<ggml_backend_t(const std::string& tensor_name)>   tensor_backend_fn    = nullptr;
+    ggml_backend_sched_t                                            sched                = nullptr;
+    bool                                                            sched_reserved       = false;
+    // Per-backend params buffers when LAYER_SPLIT is active. ROW_SPLIT uses
+    // a CUDA split-buft buffer + a regular buffer for non-split tensors,
+    // stored in row_split_buffer + row_main_buffer instead.
+    std::vector<ggml_backend_buffer_t>                              multi_params_buffers;
+    // ROW_SPLIT-only state.
+    std::vector<float>                                              row_split_ratios;
+    int                                                             row_main_device     = 0;
+    ggml_backend_buffer_type_t                                      row_split_buft      = nullptr;
+    ggml_backend_buffer_t                                           row_split_buffer    = nullptr;
+    ggml_backend_buffer_t                                           row_main_buffer     = nullptr;
+
+    // Lazy load: when set, alloc_params_buffer becomes a no-op; the actual
+    // alloc + tensor-data load is deferred until the first compute(). The
+    // callback is invoked AFTER do_alloc_params_buffer succeeds and is
+    // responsible for populating tensor->data via ModelLoader. Used to keep
+    // peak VRAM per-component-MAX rather than sum-of-components at init.
+    std::function<bool()>                                           lazy_load_fn = nullptr;
 
     ggml_context* params_ctx                    = nullptr;
     ggml_backend_buffer_t params_buffer         = nullptr;
@@ -1859,7 +1935,56 @@ protected:
         return gf;
     }
 
+    // Build the multi-backend sched (lazily).
+    bool ensure_sched() {
+        if (sched != nullptr) return true;
+        std::vector<ggml_backend_t> backends;
+        backends.reserve(1 + additional_backends.size() + 1);
+        backends.push_back(runtime_backend);
+        for (auto* b : additional_backends) backends.push_back(b);
+        // ggml_backend_sched_new asserts the last backend is a CPU; create
+        // a CPU fallback if the caller didn't provide one. We own this
+        // instance and free it in the dtor below.
+        if (cpu_fallback_backend == nullptr) {
+            cpu_fallback_backend     = ggml_backend_cpu_init();
+            owns_cpu_fallback_backend = true;
+        }
+        backends.push_back(cpu_fallback_backend);
+        sched = ggml_backend_sched_new(backends.data(),
+                                       /*bufts=*/nullptr,
+                                       (int)backends.size(),
+                                       MAX_GRAPH_SIZE,
+                                       /*parallel=*/false,
+                                       /*op_offload=*/false);
+        if (sched == nullptr) {
+            LOG_ERROR("%s: failed to create backend sched", get_desc().c_str());
+            return false;
+        }
+        return true;
+    }
+
     bool alloc_compute_buffer(get_graph_cb_t get_graph) {
+        if (multi_backend_mode) {
+            if (sched_reserved) return true;
+            if (!ensure_sched()) return false;
+            reset_compute_ctx();
+            ggml_cgraph* gf = get_compute_graph(get_graph);
+            backend_tensor_data_map.clear();
+            if (!ggml_backend_sched_reserve(sched, gf)) {
+                LOG_ERROR("%s: sched reserve failed", get_desc().c_str());
+                return false;
+            }
+            sched_reserved = true;
+            for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); i++) {
+                ggml_backend_t b = ggml_backend_sched_get_backend(sched, i);
+                size_t s         = ggml_backend_sched_get_buffer_size(sched, b);
+                LOG_DEBUG("%s sched buf[%d] %s = %.2f MB",
+                          get_desc().c_str(), i, ggml_backend_name(b),
+                          s / (1024.f * 1024.f));
+            }
+            return true;
+        }
+
         if (compute_allocr != nullptr) {
             return true;
         }
@@ -2018,6 +2143,40 @@ public:
 
     GGMLRunner(ggml_backend_t backend, bool offload_params_to_cpu = false)
         : runtime_backend(backend) {
+        // Consume any pending multi-backend spec set by the caller via
+        // g_pending_multi_backend_spec().
+        MultiBackendSpec* pending = g_pending_multi_backend_spec();
+        if (pending != nullptr) {
+            g_pending_multi_backend_spec() = nullptr;
+            multi_backend_mode             = true;
+            multi_backend_kind             = pending->mode;
+            additional_backends            = pending->additional_backends;
+            tensor_backend_fn              = pending->tensor_backend_fn;
+            cpu_fallback_backend           = pending->cpu_fallback;
+            row_split_ratios               = pending->tensor_split_ratios;
+            row_main_device                = pending->main_device;
+            if (multi_backend_kind == MultiBackendMode::ROW_SPLIT) {
+                row_split_buft = ggml_backend_split_buffer_type(
+                    runtime_backend,
+                    row_main_device,
+                    row_split_ratios.empty() ? nullptr : row_split_ratios.data());
+                if (row_split_buft == nullptr) {
+                    LOG_WARN("multi-backend: row-split buft init failed "
+                             "(backend does not publish "
+                             "ggml_backend_split_buffer_type); falling back "
+                             "to single-backend mode");
+                    multi_backend_mode = false;
+                    additional_backends.clear();
+                    cpu_fallback_backend = nullptr;
+                }
+            }
+            if (multi_backend_mode && offload_params_to_cpu) {
+                LOG_WARN("multi-backend split is incompatible with "
+                         "offload_params_to_cpu; ignoring offload");
+                offload_params_to_cpu = false;
+            }
+        }
+
         alloc_params_ctx();
         if (!ggml_backend_is_cpu(runtime_backend) && offload_params_to_cpu) {
             params_backend = ggml_backend_cpu_init();
@@ -2035,6 +2194,16 @@ public:
             ggml_backend_free(params_backend);
         }
         free_cache_ctx_and_buffer();
+        if (sched != nullptr) {
+            ggml_backend_sched_free(sched);
+            sched = nullptr;
+        }
+        if (owns_cpu_fallback_backend && cpu_fallback_backend != nullptr) {
+            ggml_backend_free(cpu_fallback_backend);
+            cpu_fallback_backend = nullptr;
+        }
+        // additional_backends are owned by the caller (see the MultiBackendSpec
+        // setup site in stable-diffusion.cpp); not freed here.
     }
 
     virtual GGMLRunnerContext get_context() {
@@ -2054,7 +2223,234 @@ public:
         alloc_compute_ctx();
     }
 
-    bool alloc_params_buffer() {
+    // Multi-backend params allocation: walk params_ctx, classify each tensor
+    // via tensor_backend_fn, allocate one buffer per backend on its default
+    // buft, bind tensors via ggml_tallocr.
+    bool alloc_params_buffer_layer_split() {
+        // Build the backend list (main first, then additional). Index 0 is
+        // the default for tensors whose callback returns nullptr.
+        std::vector<ggml_backend_t> backends;
+        backends.push_back(runtime_backend);
+        for (auto* b : additional_backends) backends.push_back(b);
+
+        std::vector<ggml_backend_buffer_type_t> bufts;
+        bufts.reserve(backends.size());
+        std::vector<size_t> aligns(backends.size());
+        std::vector<size_t> sizes(backends.size(), 0);
+        std::vector<size_t> counts(backends.size(), 0);
+        for (size_t i = 0; i < backends.size(); i++) {
+            bufts.push_back(ggml_backend_get_default_buffer_type(backends[i]));
+            aligns[i] = ggml_backend_buft_get_alignment(bufts[i]);
+            // Diagnostic: confirm we got a sensible buft from each backend.
+            const char* buft_name    = ggml_backend_buft_name(bufts[i]);
+            const char* backend_name = ggml_backend_name(backends[i]);
+            ggml_backend_dev_t        dev      = ggml_backend_buft_get_device(bufts[i]);
+            enum ggml_backend_dev_type dev_type = dev ? ggml_backend_dev_type(dev) : GGML_BACKEND_DEVICE_TYPE_CPU;
+            const char*              dev_name = dev ? ggml_backend_dev_name(dev) : "(none)";
+            LOG_DEBUG("%s layer-split backend[%zu]=%s, buft=%s, dev=%s, dev_type=%d",
+                     get_desc().c_str(), i, backend_name ? backend_name : "(null)",
+                     buft_name ? buft_name : "(null)", dev_name,
+                     (int)dev_type);
+        }
+
+        // First pass: assign each tensor to a backend, accumulate sizes.
+        std::map<ggml_tensor*, int> tensor_backend_idx;
+        for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr;
+             t = ggml_get_next_tensor(params_ctx, t)) {
+            int idx = 0;
+            if (tensor_backend_fn) {
+                ggml_backend_t target = tensor_backend_fn(t->name);
+                if (target != nullptr) {
+                    for (size_t i = 0; i < backends.size(); i++) {
+                        if (backends[i] == target) {
+                            idx = int(i);
+                            break;
+                        }
+                    }
+                }
+            }
+            tensor_backend_idx[t] = idx;
+            size_t s              = ggml_backend_buft_get_alloc_size(bufts[idx], t);
+            sizes[idx] += GGML_PAD(s, aligns[idx]);
+            counts[idx] += 1;
+        }
+
+        // Allocate one buffer per used backend.
+        multi_params_buffers.assign(backends.size(), nullptr);
+        for (size_t i = 0; i < backends.size(); i++) {
+            if (sizes[i] == 0) continue;
+            // Diagnostic: query the device's free memory BEFORE alloc.
+            ggml_backend_dev_t dev_pre = ggml_backend_buft_get_device(bufts[i]);
+            size_t free_pre = 0, total_pre = 0;
+            if (dev_pre) ggml_backend_dev_memory(dev_pre, &free_pre, &total_pre);
+            multi_params_buffers[i] = ggml_backend_buft_alloc_buffer(bufts[i], sizes[i]);
+            if (multi_params_buffers[i] == nullptr) {
+                LOG_ERROR("%s alloc params buffer on backend %s failed (%.1f MB)",
+                          get_desc().c_str(),
+                          ggml_backend_name(backends[i]),
+                          sizes[i] / (1024.f * 1024.f));
+                return false;
+            }
+            // Diagnostic: query AFTER alloc. The drop in free memory tells
+            // us whether the alloc actually went to GPU device memory or
+            // to a virtual reservation that's not yet committed.
+            size_t free_post = 0, total_post = 0;
+            if (dev_pre) ggml_backend_dev_memory(dev_pre, &free_post, &total_post);
+            int64_t actual_drop = (int64_t)free_pre - (int64_t)free_post;
+            void*  base       = ggml_backend_buffer_get_base(multi_params_buffers[i]);
+            size_t actual_sz  = ggml_backend_buffer_get_size(multi_params_buffers[i]);
+            bool   is_host    = ggml_backend_buffer_is_host(multi_params_buffers[i]);
+            LOG_DEBUG("%s layer-split alloc[%zu] backend=%s req=%.1f MB actual=%.1f MB "
+                     "dev_free %.1f -> %.1f MB (drop %.1f MB) base=%p is_host=%d",
+                     get_desc().c_str(), i, ggml_backend_name(backends[i]),
+                     sizes[i] / (1024.f * 1024.f), actual_sz / (1024.f * 1024.f),
+                     free_pre / (1024.f * 1024.f), free_post / (1024.f * 1024.f),
+                     actual_drop / (1024.f * 1024.f),
+                     base, (int)is_host);
+        }
+
+        // Bind tensors via ggml_tallocr.
+        std::vector<ggml_tallocr> tallocs(backends.size());
+        for (size_t i = 0; i < backends.size(); i++) {
+            if (multi_params_buffers[i] != nullptr) {
+                tallocs[i] = ggml_tallocr_new(multi_params_buffers[i]);
+            }
+        }
+        for (auto& kv : tensor_backend_idx) {
+            ggml_status st = ggml_tallocr_alloc(&tallocs[kv.second], kv.first);
+            if (st != GGML_STATUS_SUCCESS) {
+                LOG_ERROR("%s tallocr_alloc failed for tensor %s",
+                          get_desc().c_str(), kv.first->name);
+                return false;
+            }
+        }
+        // Diagnostic: pick a sample tensor per backend and confirm its
+        // buffer + data pointer.
+        std::vector<bool> sampled(backends.size(), false);
+        for (auto& kv : tensor_backend_idx) {
+            int idx = kv.second;
+            if (sampled[idx]) continue;
+            sampled[idx] = true;
+            ggml_tensor* t = kv.first;
+            LOG_DEBUG("%s layer-split sample[%d] tensor=%s buffer=%p data=%p buffer_is_host=%d",
+                     get_desc().c_str(), idx, t->name, (void*)t->buffer, t->data,
+                     t->buffer ? (int)ggml_backend_buffer_is_host(t->buffer) : -1);
+        }
+        for (auto* buf : multi_params_buffers) {
+            if (buf != nullptr) {
+                ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            }
+        }
+
+        // Log the breakdown.
+        for (size_t i = 0; i < backends.size(); i++) {
+            if (counts[i] == 0) continue;
+            LOG_INFO("%s layer-split params on %s: %.1f MB (%zu tensors)",
+                     get_desc().c_str(),
+                     ggml_backend_name(backends[i]),
+                     sizes[i] / (1024.f * 1024.f),
+                     counts[i]);
+        }
+        return true;
+    }
+
+    // Heuristic for row-split eligibility: contiguous, rank-2, both dims
+    // >= 256, and NOT a view. 1D biases / norms / embeddings / small
+    // projections / views fall back to the main GPU's regular per-device
+    // buft. Excluding views avoids the cuda split buft's
+    // GGML_ASSERT(view_src == nullptr) — sticking to the buft's documented
+    // contract instead of patching ggml.
+    static bool is_row_split_eligible(const ggml_tensor* t) {
+        if (t->view_src != nullptr) return false;
+        if (!ggml_is_contiguous(t)) return false;
+        if (ggml_n_dims(t) != 2) return false;
+        if (t->ne[0] < 256 || t->ne[1] < 256) return false;
+        return true;
+    }
+
+    bool alloc_params_buffer_row_split() {
+        if (row_split_buft == nullptr) {
+            LOG_ERROR("alloc_params_buffer_row_split: row-split buft not "
+                      "initialized (backend lacks "
+                      "ggml_backend_split_buffer_type)");
+            return false;
+        }
+        ggml_backend_buffer_type_t main_buft = ggml_backend_get_default_buffer_type(runtime_backend);
+        const size_t main_align  = ggml_backend_buft_get_alignment(main_buft);
+        const size_t split_align = ggml_backend_buft_get_alignment(row_split_buft);
+
+        size_t main_size = 0, split_size = 0;
+        size_t main_count = 0, split_count = 0;
+        for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr;
+             t = ggml_get_next_tensor(params_ctx, t)) {
+            if (is_row_split_eligible(t)) {
+                size_t s = ggml_backend_buft_get_alloc_size(row_split_buft, t);
+                split_size += GGML_PAD(s, split_align);
+                split_count++;
+            } else {
+                size_t s = ggml_backend_buft_get_alloc_size(main_buft, t);
+                main_size += GGML_PAD(s, main_align);
+                main_count++;
+            }
+        }
+
+        if (main_size > 0) {
+            row_main_buffer = ggml_backend_buft_alloc_buffer(main_buft, main_size);
+            if (row_main_buffer == nullptr) {
+                LOG_ERROR("%s row-split main buffer alloc failed (%.1f MB)",
+                          get_desc().c_str(), main_size / (1024.f * 1024.f));
+                return false;
+            }
+        }
+        if (split_size > 0) {
+            row_split_buffer = ggml_backend_buft_alloc_buffer(row_split_buft, split_size);
+            if (row_split_buffer == nullptr) {
+                LOG_ERROR("%s row-split params buffer alloc failed (%.1f MB)",
+                          get_desc().c_str(), split_size / (1024.f * 1024.f));
+                return false;
+            }
+        }
+
+        ggml_tallocr main_alloc{};
+        ggml_tallocr split_alloc{};
+        if (row_main_buffer != nullptr)  main_alloc  = ggml_tallocr_new(row_main_buffer);
+        if (row_split_buffer != nullptr) split_alloc = ggml_tallocr_new(row_split_buffer);
+
+        for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr;
+             t = ggml_get_next_tensor(params_ctx, t)) {
+            ggml_status st = is_row_split_eligible(t)
+                                 ? ggml_tallocr_alloc(&split_alloc, t)
+                                 : ggml_tallocr_alloc(&main_alloc, t);
+            if (st != GGML_STATUS_SUCCESS) {
+                LOG_ERROR("%s row-split tallocr_alloc failed for tensor %s",
+                          get_desc().c_str(), t->name);
+                return false;
+            }
+        }
+
+        if (row_main_buffer != nullptr) {
+            ggml_backend_buffer_set_usage(row_main_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        }
+        if (row_split_buffer != nullptr) {
+            ggml_backend_buffer_set_usage(row_split_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        }
+        LOG_INFO("%s row-split params: main %.1f MB (%zu tensors), split %.1f MB (%zu tensors)",
+                 get_desc().c_str(),
+                 main_size / (1024.f * 1024.f), main_count,
+                 split_size / (1024.f * 1024.f), split_count);
+        return true;
+    }
+
+    // Internal: always materializes the params buffer. Used by both the
+    // eager `alloc_params_buffer` path and the lazy `ensure_params_loaded`
+    // path; the latter must bypass the lazy-skip.
+    bool do_alloc_params_buffer() {
+        if (multi_backend_mode && multi_backend_kind == MultiBackendMode::ROW_SPLIT) {
+            return alloc_params_buffer_row_split();
+        }
+        if (multi_backend_mode) {
+            return alloc_params_buffer_layer_split();
+        }
         size_t num_tensors = ggml_tensor_num(params_ctx);
         params_buffer      = ggml_backend_alloc_ctx_tensors(params_ctx, params_backend);
         if (params_buffer == nullptr) {
@@ -2072,18 +2468,96 @@ public:
         return true;
     }
 
+    bool alloc_params_buffer() {
+        // Lazy mode: skip alloc until first compute() (via ensure_params_loaded).
+        // The caller still goes through alloc_params_buffer + get_param_tensors
+        // at init; ModelLoader::load_tensors will silently skip this runner's
+        // tensors (their data ptrs are null because no buffer is allocated yet)
+        // and the lazy_load_fn callback re-loads them on demand.
+        if (lazy_load_fn) return true;
+        return do_alloc_params_buffer();
+    }
+
+    void set_lazy_load(std::function<bool()> fn) {
+        lazy_load_fn = std::move(fn);
+    }
+
+    bool ensure_params_loaded() {
+        if (params_buffer != nullptr || !multi_params_buffers.empty() ||
+            row_split_buffer != nullptr || row_main_buffer != nullptr) {
+            return true;
+        }
+        if (!lazy_load_fn) {
+            LOG_ERROR("%s: no params buffer and no lazy_load_fn", get_desc().c_str());
+            return false;
+        }
+        int64_t t0 = ggml_time_ms();
+        if (!do_alloc_params_buffer()) return false;
+        if (!lazy_load_fn()) {
+            LOG_ERROR("%s: lazy load callback failed", get_desc().c_str());
+            return false;
+        }
+        int64_t t1 = ggml_time_ms();
+        LOG_INFO("%s: lazy-loaded params in %.2fs", get_desc().c_str(), (t1 - t0) / 1000.f);
+        // Diagnostic: report device-memory free per backend AFTER load.
+        // If the bytes actually went to GPU, free should have decreased
+        // by ~params_size for each layer-split shard.
+        if (multi_backend_mode) {
+            std::vector<ggml_backend_t> backends;
+            backends.push_back(runtime_backend);
+            for (auto* b : additional_backends) backends.push_back(b);
+            for (size_t i = 0; i < backends.size(); i++) {
+                ggml_backend_dev_t dev = ggml_backend_get_device(backends[i]);
+                if (!dev) continue;
+                size_t free_b = 0, total_b = 0;
+                ggml_backend_dev_memory(dev, &free_b, &total_b);
+                LOG_DEBUG("%s post-load device %s free=%.1f MB / %.1f MB",
+                         get_desc().c_str(),
+                         ggml_backend_dev_name(dev),
+                         free_b / (1024.f * 1024.f),
+                         total_b / (1024.f * 1024.f));
+            }
+        }
+        return true;
+    }
+
     void free_params_buffer() {
         if (params_buffer != nullptr) {
             ggml_backend_buffer_free(params_buffer);
             params_buffer = nullptr;
         }
+        for (auto* buf : multi_params_buffers) {
+            if (buf != nullptr) {
+                ggml_backend_buffer_free(buf);
+            }
+        }
+        multi_params_buffers.clear();
+        if (row_split_buffer != nullptr) {
+            ggml_backend_buffer_free(row_split_buffer);
+            row_split_buffer = nullptr;
+        }
+        if (row_main_buffer != nullptr) {
+            ggml_backend_buffer_free(row_main_buffer);
+            row_main_buffer = nullptr;
+        }
+        if (sched != nullptr) {
+            ggml_backend_sched_free(sched);
+            sched          = nullptr;
+            sched_reserved = false;
+        }
     }
 
     size_t get_params_buffer_size() {
+        size_t total = 0;
         if (params_buffer != nullptr) {
-            return ggml_backend_buffer_get_size(params_buffer);
+            total += ggml_backend_buffer_get_size(params_buffer);
         }
-        return 0;
+        for (auto* buf : multi_params_buffers) {
+            if (buf != nullptr) total += ggml_backend_buffer_get_size(buf);
+        }
+        if (row_split_buffer != nullptr) total += ggml_backend_buffer_get_size(row_split_buffer);
+        if (row_main_buffer != nullptr)  total += ggml_backend_buffer_get_size(row_main_buffer);
+        return total;
     }
 
     void free_cache_ctx_and_buffer() {
@@ -2096,11 +2570,23 @@ public:
             ggml_gallocr_free(compute_allocr);
             compute_allocr = nullptr;
         }
+        if (sched != nullptr) {
+            // Reset rather than free: keeping the sched alive across compute()
+            // calls of a sampling loop avoids the per-step rebuild cost.
+            ggml_backend_sched_reset(sched);
+            sched_reserved = false;
+        }
         offload_params_to_params_backend();
     }
 
     // do copy after alloc graph
     void set_backend_tensor_data(ggml_tensor* tensor, const void* data) {
+        // In multi-backend mode, sched needs the tensor flagged as input so
+        // it gets a backend assignment (otherwise tensors with no producers
+        // and no consumers leave sched at backend_id=-1).
+        if (multi_backend_mode) {
+            ggml_set_input(tensor);
+        }
         backend_tensor_data_map[tensor] = data;
     }
 
@@ -2160,6 +2646,9 @@ public:
                                          int n_threads,
                                          bool free_compute_buffer_immediately,
                                          bool no_return = false) {
+        if (!ensure_params_loaded()) {
+            return std::nullopt;
+        }
         if (!offload_params_to_runtime_backend()) {
             LOG_ERROR("%s offload params to runtime backend failed", get_desc().c_str());
             return std::nullopt;
@@ -2168,18 +2657,41 @@ public:
             LOG_ERROR("%s alloc compute buffer failed", get_desc().c_str());
             return std::nullopt;
         }
-        reset_compute_ctx();
-        ggml_cgraph* gf = get_compute_graph(get_graph);
-        if (!ggml_gallocr_alloc_graph(compute_allocr, gf)) {
-            LOG_ERROR("%s alloc compute graph failed", get_desc().c_str());
-            return std::nullopt;
+        ggml_cgraph* gf = nullptr;
+        if (multi_backend_mode) {
+            ggml_backend_sched_reset(sched);
+            reset_compute_ctx();
+            gf = get_compute_graph(get_graph);
+            if (!ggml_backend_sched_alloc_graph(sched, gf)) {
+                LOG_ERROR("%s sched alloc graph failed", get_desc().c_str());
+                return std::nullopt;
+            }
+        } else {
+            reset_compute_ctx();
+            gf = get_compute_graph(get_graph);
+            if (!ggml_gallocr_alloc_graph(compute_allocr, gf)) {
+                LOG_ERROR("%s alloc compute graph failed", get_desc().c_str());
+                return std::nullopt;
+            }
         }
         copy_data_to_backend_tensor();
         if (ggml_backend_is_cpu(runtime_backend)) {
             ggml_backend_cpu_set_n_threads(runtime_backend, n_threads);
         }
+        if (multi_backend_mode && cpu_fallback_backend &&
+            ggml_backend_is_cpu(cpu_fallback_backend)) {
+            ggml_backend_cpu_set_n_threads(cpu_fallback_backend, n_threads);
+        }
 
-        ggml_status status = ggml_backend_graph_compute(runtime_backend, gf);
+        ggml_status status;
+        if (multi_backend_mode) {
+            status = ggml_backend_sched_graph_compute(sched, gf);
+            if (status == GGML_STATUS_SUCCESS) {
+                ggml_backend_sched_synchronize(sched);
+            }
+        } else {
+            status = ggml_backend_graph_compute(runtime_backend, gf);
+        }
         if (status != GGML_STATUS_SUCCESS) {
             LOG_ERROR("%s compute failed: %s", get_desc().c_str(), ggml_status_to_string(status));
             return std::nullopt;
@@ -2259,6 +2771,14 @@ public:
             prefix = prefix + ".";
         }
         init_params(ctx, tensor_storage_map, prefix);
+        // Tag each param tensor with its full (prefix-qualified) name so the
+        // multi-backend runner's tensor_backend_fn callback can route it.
+        // Without this, init_params leaves tensors with empty t->name.
+        for (auto& pair : params) {
+            if (pair.second != nullptr) {
+                ggml_set_name(pair.second, (prefix + pair.first).c_str());
+            }
+        }
         init_blocks(ctx, tensor_storage_map, prefix);
     }
 

@@ -1,5 +1,6 @@
 #include "ggml_extend.hpp"
 
+#include "backend_fit.hpp"
 #include "model.h"
 #include "rng.hpp"
 #include "rng_mt19937.hpp"
@@ -108,10 +109,47 @@ static float get_cache_reuse_threshold(const sd_cache_params_t& params) {
 
 class StableDiffusionGGML {
 public:
-    ggml_backend_t backend             = nullptr;  // general backend
+    ggml_backend_t backend             = nullptr;  // general / main backend
     ggml_backend_t clip_backend        = nullptr;
     ggml_backend_t control_net_backend = nullptr;
     ggml_backend_t vae_backend         = nullptr;
+    ggml_backend_t diffusion_backend   = nullptr;
+
+    // Auto-fit decisions resolved into device-name strings. When non-empty,
+    // these win over the user-provided sd_ctx_params->*_backend_device.
+    // When empty, the explicit param (or `backend` fallback) is used.
+    std::string fit_diffusion_device;
+    std::string fit_clip_device;
+    std::string fit_vae_device;
+    // Per-component offload-params override coming from auto-fit. Forces
+    // offload_params_to_cpu for that component even when global flag is off.
+    bool fit_dit_offload_params  = false;
+    bool fit_cond_offload_params = false;
+    bool fit_vae_offload_params  = false;
+
+    // Multi-GPU split state (LAYER_SPLIT or ROW_SPLIT). Holds the ordered
+    // list of device names and per-device share bytes; the actual backend
+    // handles are init'd at construction time and stored in *_extra_backends
+    // so the destructor can free them. fit_*_row_split=true means use the
+    // CUDA row-split path (matmul weights split row-wise via cuda_split_buft);
+    // false means layer-split (per-block backend assignment via sched).
+    std::vector<std::string>    fit_dit_split_device_names;
+    std::vector<int64_t>        fit_dit_split_share_bytes;
+    std::vector<ggml_backend_t> fit_dit_extra_backends;
+    bool                        fit_dit_row_split  = false;
+    std::vector<std::string>    fit_cond_split_device_names;
+    std::vector<int64_t>        fit_cond_split_share_bytes;
+    std::vector<ggml_backend_t> fit_cond_extra_backends;
+    bool                        fit_cond_row_split = false;
+
+    // Owned model loader: kept alive across init() so lazy_load callbacks
+    // can re-read tensor data from disk on demand. Only set when at least
+    // one component is configured for lazy load.
+    std::unique_ptr<ModelLoader> owned_model_loader;
+    // Auto-fit decided init-time SUM exceeds device cap; defer cond + DiT
+    // allocation until first compute() so peaks don't pile up.
+    bool auto_lazy_load = false;
+    bool enable_mmap_member = false;
 
     SDVersion version;
     bool vae_decode_only         = false;
@@ -168,11 +206,35 @@ public:
         if (vae_backend != backend) {
             ggml_backend_free(vae_backend);
         }
+        if (diffusion_backend != backend) {
+            ggml_backend_free(diffusion_backend);
+        }
+        for (auto* b : fit_dit_extra_backends) {
+            if (b != backend && b != diffusion_backend && b != clip_backend &&
+                b != vae_backend && b != control_net_backend) {
+                ggml_backend_free(b);
+            }
+        }
+        for (auto* b : fit_cond_extra_backends) {
+            if (b != backend && b != diffusion_backend && b != clip_backend &&
+                b != vae_backend && b != control_net_backend) {
+                ggml_backend_free(b);
+            }
+        }
         ggml_backend_free(backend);
     }
 
-    void init_backend() {
-        backend = sd_get_default_backend();
+    void init_backend(const char* main_device_name) {
+        if (main_device_name != nullptr && main_device_name[0] != '\0') {
+            backend = init_named_backend(main_device_name);
+            if (backend == nullptr) {
+                LOG_WARN("main backend device '%s' init failed; falling back to default",
+                         main_device_name);
+            }
+        }
+        if (backend == nullptr) {
+            backend = sd_get_default_backend();
+        }
     }
 
     std::shared_ptr<RNG> get_rng(rng_type_t rng_type) {
@@ -202,9 +264,14 @@ public:
 
         ggml_log_set(ggml_log_callback_default, nullptr);
 
-        init_backend();
+        init_backend(sd_ctx_params->main_backend_device);
 
-        ModelLoader model_loader;
+        // Use a stack-local handle that points into `owned_model_loader` if we
+        // need lazy callbacks (decided after auto-fit), otherwise a temp local
+        // is fine. Defer the unique_ptr decision; for now always own it so the
+        // pointer is stable even if lazy load is enabled later in this init().
+        owned_model_loader = std::make_unique<ModelLoader>();
+        ModelLoader& model_loader = *owned_model_loader;
 
         if (strlen(SAFE_STR(sd_ctx_params->model_path)) > 0) {
             LOG_INFO("loading model from '%s'", sd_ctx_params->model_path);
@@ -328,6 +395,142 @@ public:
             return oss.str();
         };
 
+        if (sd_ctx_params->auto_fit) {
+            backend_fit::ComputeReserves reserves;
+            if (sd_ctx_params->auto_fit_compute_reserve_dit_mb > 0) {
+                reserves.dit_bytes =
+                    int64_t(sd_ctx_params->auto_fit_compute_reserve_dit_mb) * backend_fit::MiB;
+            }
+            if (sd_ctx_params->auto_fit_compute_reserve_vae_mb > 0) {
+                reserves.vae_bytes =
+                    int64_t(sd_ctx_params->auto_fit_compute_reserve_vae_mb) * backend_fit::MiB;
+            }
+            if (sd_ctx_params->auto_fit_compute_reserve_cond_mb > 0) {
+                reserves.conditioner_bytes =
+                    int64_t(sd_ctx_params->auto_fit_compute_reserve_cond_mb) * backend_fit::MiB;
+            }
+            auto components = backend_fit::estimate_components(
+                model_loader, wtype, /*alignment=*/64, reserves);
+            auto    devices = backend_fit::enumerate_gpu_devices();
+            int64_t margin_bytes =
+                int64_t(std::max(0, sd_ctx_params->auto_fit_target_mb)) * backend_fit::MiB;
+            backend_fit::MultiGpuMode mode = backend_fit::str_to_multi_gpu_mode(
+                SAFE_STR(sd_ctx_params->multi_gpu_mode));
+            auto plan = backend_fit::compute_plan(
+                components, devices, margin_bytes,
+                sd_ctx_params->auto_multi_gpu, mode);
+            backend_fit::print_plan(plan, components, devices, margin_bytes);
+
+            if (sd_ctx_params->auto_fit_dry_run) {
+                LOG_INFO("auto-fit: --fit-dry-run set, aborting init before loading models");
+                return false;
+            }
+
+            // Find the CPU device's ggml name (so we can route "CPU"
+            // placements through init_named_backend uniformly).
+            std::string cpu_device_name;
+            for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                    cpu_device_name = ggml_backend_dev_name(dev);
+                    break;
+                }
+            }
+            auto device_id_to_name = [&](int dev_id) -> std::string {
+                for (const auto& dev : devices) {
+                    if (dev.id == dev_id) return dev.name;
+                }
+                return {};
+            };
+            auto resolve = [&](const backend_fit::Decision*  d,
+                               std::string&                  out_device,
+                               bool&                         out_offload,
+                               std::vector<std::string>&     out_split_devices,
+                               std::vector<int64_t>&         out_split_shares,
+                               bool&                         out_row_split) {
+                out_split_devices.clear();
+                out_split_shares.clear();
+                out_row_split = false;
+                if (d == nullptr) {
+                    out_device.clear();
+                    out_offload = false;
+                    return;
+                }
+                if (d->placement == backend_fit::Placement::CPU) {
+                    out_device = cpu_device_name;
+                    out_offload = false;
+                    return;
+                }
+                if (d->placement == backend_fit::Placement::GPU_LAYER_SPLIT ||
+                    d->placement == backend_fit::Placement::GPU_TENSOR_SPLIT) {
+                    // Primary device drives main_backend choice for the model;
+                    // the rest become additional backends in the spec.
+                    for (size_t k = 0; k < d->split_device_ids.size(); k++) {
+                        out_split_devices.push_back(device_id_to_name(d->split_device_ids[k]));
+                        out_split_shares.push_back(d->split_share_bytes[k]);
+                    }
+                    if (!out_split_devices.empty()) out_device = out_split_devices[0];
+                    out_offload = false;
+                    out_row_split = (d->placement == backend_fit::Placement::GPU_TENSOR_SPLIT);
+                    return;
+                }
+                out_device  = device_id_to_name(d->device_id);
+                out_offload = (d->placement == backend_fit::Placement::GPU_OFFLOAD_PARAMS);
+            };
+            std::vector<std::string> dummy_devs;
+            std::vector<int64_t>     dummy_shares;
+            bool                     dummy_row_split = false;
+            resolve(backend_fit::find_decision(plan, backend_fit::ComponentKind::DIT),
+                    fit_diffusion_device, fit_dit_offload_params,
+                    fit_dit_split_device_names, fit_dit_split_share_bytes,
+                    fit_dit_row_split);
+            resolve(backend_fit::find_decision(plan, backend_fit::ComponentKind::VAE),
+                    fit_vae_device, fit_vae_offload_params, dummy_devs, dummy_shares,
+                    dummy_row_split);
+            resolve(backend_fit::find_decision(plan, backend_fit::ComponentKind::CONDITIONER),
+                    fit_clip_device, fit_cond_offload_params,
+                    fit_cond_split_device_names, fit_cond_split_share_bytes,
+                    fit_cond_row_split);
+
+            // CPU placements: leave fit_*_device empty AND remember they're
+            // CPU so the resolver below picks ggml_backend_cpu_init().
+
+            // Decide auto-lazy-load: if the per-component MAX-based plan fits
+            // but the SUM-of-components on any device would exceed cap, defer
+            // alloc until first compute() so peaks don't pile up. Heuristic:
+            // sum the per-device on_device_bytes across all GPU decisions
+            // (excluding VAE which is small) and compare to free_bytes.
+            std::map<int, int64_t> sum_per_device;
+            auto add_sum = [&](const backend_fit::Decision* d) {
+                if (!d) return;
+                if (d->placement == backend_fit::Placement::GPU_LAYER_SPLIT ||
+                    d->placement == backend_fit::Placement::GPU_TENSOR_SPLIT) {
+                    for (size_t k = 0; k < d->split_device_ids.size(); k++) {
+                        sum_per_device[d->split_device_ids[k]] += d->split_share_bytes[k];
+                    }
+                } else if (d->placement == backend_fit::Placement::GPU ||
+                           d->placement == backend_fit::Placement::GPU_OFFLOAD_PARAMS) {
+                    sum_per_device[d->device_id] += d->on_device_bytes;
+                }
+            };
+            add_sum(backend_fit::find_decision(plan, backend_fit::ComponentKind::DIT));
+            add_sum(backend_fit::find_decision(plan, backend_fit::ComponentKind::VAE));
+            add_sum(backend_fit::find_decision(plan, backend_fit::ComponentKind::CONDITIONER));
+            for (const auto& dev : devices) {
+                int64_t cap = dev.free_bytes - margin_bytes;
+                int64_t sum = sum_per_device.count(dev.id) ? sum_per_device[dev.id] : 0;
+                if (sum > cap) {
+                    LOG_INFO("auto-fit: enabling lazy load (init-time SUM %lld MiB on %s "
+                             "exceeds cap %lld MiB; per-component MAX plan needs lazy alloc)",
+                             (long long)(sum / backend_fit::MiB),
+                             dev.name.c_str(),
+                             (long long)(cap / backend_fit::MiB));
+                    auto_lazy_load = true;
+                    break;
+                }
+            }
+        }
+
         LOG_INFO("Weight type stat:                 %s", wtype_stat_to_str(wtype_stat).c_str());
         LOG_INFO("Conditioner weight type stat:     %s", wtype_stat_to_str(conditioner_wtype_stat).c_str());
         LOG_INFO("Diffusion model weight type stat: %s", wtype_stat_to_str(diffusion_model_wtype_stat).c_str());
@@ -373,19 +576,362 @@ public:
             LOG_INFO("Using circular padding for convolutions");
         }
 
-        bool clip_on_cpu = sd_ctx_params->keep_clip_on_cpu;
+        // If auto-fit decided ANY component must offload params, force the
+        // global flag on. This is a coarsening: one component needing offload
+        // forces all to offload (safer, just slower for non-offload ones).
+        if (fit_dit_offload_params || fit_cond_offload_params || fit_vae_offload_params) {
+            if (!offload_params_to_cpu) {
+                LOG_INFO("auto-fit: enabling offload_params_to_cpu (one or more "
+                         "components don't fit without param streaming)");
+                offload_params_to_cpu = true;
+            }
+        }
+
+        // Pick the effective device name for each component: the auto-fit
+        // override (if any) wins; otherwise the user-provided string; nullptr
+        // falls back to `backend` (the main).
+        auto effective_device = [&](const std::string& fit_str, const char* user_str) -> const char* {
+            if (!fit_str.empty()) return fit_str.c_str();
+            return user_str;
+        };
+        const char* diffusion_dev_name = effective_device(fit_diffusion_device,
+                                                          sd_ctx_params->diffusion_backend_device);
+        const char* clip_dev_name      = effective_device(fit_clip_device,
+                                                          sd_ctx_params->clip_backend_device);
+        const char* vae_dev_name       = effective_device(fit_vae_device,
+                                                          sd_ctx_params->vae_backend_device);
+
+        // Build the row-split MultiBackendSpec for a component (ROW_SPLIT
+        // mode). Unlike layer-split, the runner uses a SINGLE CUDA backend;
+        // matmul weights are row-split across all CUDA devices internally
+        // by cuda_split_buffer_type. extra_backends stays empty.
+        // - share_devices/share_bytes: per-device share order from auto-fit
+        //   (largest first by descending share). The first device is the
+        //   "main" CUDA device, where the compute buffer lives.
+        // Returns true on success; populates out_spec.tensor_split_ratios
+        // with a vector of length total CUDA device count.
+        auto prepare_row_split_spec = [&](const std::vector<std::string>&     share_devices,
+                                          const std::vector<int64_t>&         share_bytes,
+                                          std::vector<ggml_backend_t>&        out_extra_backends,
+                                          MultiBackendSpec&                   out_spec) -> bool {
+            if (share_devices.size() < 2) return false;
+
+            // Derive the backend registry from the device-name prefix (e.g.
+            // "CUDA0" -> reg "CUDA", "SYCL1" -> reg "SYCL"). This keeps the
+            // code backend-agnostic: any backend whose registry publishes
+            // `ggml_backend_split_buffer_type` via reg_get_proc_address can
+            // drive row-split, not just CUDA.
+            auto reg_prefix_of = [](const std::string& name) -> std::string {
+                size_t i = 0;
+                while (i < name.size() && (std::isalpha((unsigned char)name[i]) || name[i] == '_')) i++;
+                return name.substr(0, i);
+            };
+            const std::string reg_name = reg_prefix_of(share_devices[0]);
+            ggml_backend_reg_t reg     = ggml_backend_reg_by_name(reg_name.c_str());
+            if (reg == nullptr) return false;
+            const int dev_count = (int)ggml_backend_reg_dev_count(reg);
+            if (dev_count <= 0) return false;
+
+            auto reg_index_of = [&](const std::string& name) -> int {
+                if (name.rfind(reg_name, 0) != 0) return -1;
+                try { return std::stoi(name.substr(reg_name.size())); } catch (...) { return -1; }
+            };
+
+            std::vector<float> ratios(dev_count, 0.0f);
+            int64_t total = 0;
+            for (auto b : share_bytes) total += b;
+            if (total <= 0) return false;
+            int main_dev = -1;
+            int64_t max_share = -1;
+            for (size_t k = 0; k < share_devices.size(); k++) {
+                int idx = reg_index_of(share_devices[k]);
+                if (idx < 0 || idx >= dev_count) continue;
+                ratios[idx] = float(double(share_bytes[k]) / double(total));
+                if (share_bytes[k] > max_share) {
+                    max_share = share_bytes[k];
+                    main_dev  = idx;
+                }
+            }
+            if (main_dev < 0) return false;
+
+            // Init extra backends for the non-main devices so sched can
+            // route ops across them (row-split tensors are dispatched by the
+            // primary backend; ggml-sched still needs all participating
+            // backends in its list to schedule cross-device copies).
+            for (size_t k = 0; k < share_devices.size(); k++) {
+                int idx = reg_index_of(share_devices[k]);
+                if (idx == main_dev || idx < 0) continue;
+                ggml_backend_t b = init_named_backend(share_devices[k]);
+                if (b != nullptr) {
+                    out_extra_backends.push_back(b);
+                } else {
+                    LOG_WARN("row-split: failed to init backend %s",
+                             share_devices[k].c_str());
+                }
+            }
+            out_spec.mode                = MultiBackendMode::ROW_SPLIT;
+            out_spec.tensor_split_ratios = ratios;
+            out_spec.main_device         = main_dev;
+            out_spec.additional_backends.assign(out_extra_backends.begin(),
+                                                out_extra_backends.end());
+            out_spec.tensor_backend_fn   = nullptr;
+            out_spec.cpu_fallback        = nullptr;
+
+            std::string ratio_str;
+            for (int i = 0; i < dev_count; i++) {
+                if (i > 0) ratio_str += ",";
+                char buf[16]; std::snprintf(buf, sizeof(buf), "%.2f", ratios[i]);
+                ratio_str += buf;
+            }
+            LOG_INFO("row-split spec: ratios=[%s] main_device=%d",
+                     ratio_str.c_str(), main_dev);
+            return true;
+        };
+
+        // Build the layer-split MultiBackendSpec for a component. Only used
+        // when auto-fit picked GPU_LAYER_SPLIT for this component.
+        // - main_backend: the runner's primary backend (also first in the spec)
+        // - extra_device_names: additional device names to span
+        // - share_bytes: per-device share (for proportional block partition)
+        // - tensor_prefix: the model's weight name prefix (e.g.,
+        //   "model.diffusion_model.") — used to locate block-indexed tensors
+        // Returns true if a spec was prepared and pending_spec_storage was
+        // populated; the caller must set g_pending_multi_backend_spec()
+        // immediately before constructing the model.
+        auto prepare_layer_split_spec = [&](ggml_backend_t                       main_backend,
+                                            const std::vector<std::string>&      extra_device_names,
+                                            const std::vector<int64_t>&          share_bytes,
+                                            const std::string&                   tensor_prefix,
+                                            std::vector<ggml_backend_t>&         out_extra_backends,
+                                            MultiBackendSpec&                    out_spec) -> bool {
+            if (extra_device_names.size() < 2) return false;  // only [main] -> single GPU
+            // Init the additional backends (skip [0] which is main_backend).
+            std::vector<ggml_backend_t> all_backends;
+            all_backends.push_back(main_backend);
+            for (size_t k = 1; k < extra_device_names.size(); k++) {
+                ggml_backend_t b = init_named_backend(extra_device_names[k]);
+                if (b == nullptr) {
+                    LOG_WARN("layer-split: failed to init extra backend %s; falling back to single backend",
+                             extra_device_names[k].c_str());
+                    return false;
+                }
+                out_extra_backends.push_back(b);
+                all_backends.push_back(b);
+            }
+
+            // Walk tensor_storage_map to get per-block byte sizes and the
+            // total non-block bytes that will land on backend[0]. Then
+            // greedy-partition blocks by byte budget to balance per-backend
+            // bytes (accounting for non-block fixed load on backend[0]).
+            int max_block_idx = -1;
+            static const std::regex block_re(
+                R"((?:transformer_blocks|joint_blocks|double_blocks|single_blocks|blocks|layers)\.([0-9]+)\.)");
+            std::map<int, int64_t> block_bytes;        // block idx -> bytes
+            int64_t                non_block_bytes = 0;
+            for (const auto& kv : tensor_storage_map) {
+                if (!tensor_prefix.empty() && kv.first.compare(0, tensor_prefix.size(), tensor_prefix) != 0) {
+                    continue;
+                }
+                int64_t bytes = (int64_t)kv.second.nbytes();
+                std::smatch m;
+                if (std::regex_search(kv.first, m, block_re)) {
+                    int idx = std::stoi(m[1]);
+                    if (idx > max_block_idx) max_block_idx = idx;
+                    block_bytes[idx] += bytes;
+                } else {
+                    non_block_bytes += bytes;
+                }
+            }
+            if (max_block_idx < 0) {
+                LOG_WARN("layer-split: no blocks found under prefix '%s'; aborting split",
+                         tensor_prefix.c_str());
+                return false;
+            }
+            const int n_blocks = max_block_idx + 1;
+
+            // Build per-backend byte budgets from share_bytes (ratios). The
+            // first backend absorbs `non_block_bytes` as a fixed load, so we
+            // SHRINK its remaining budget for blocks accordingly.
+            int64_t total_share = 0;
+            for (auto s : share_bytes) total_share += s;
+            int64_t total_block_bytes = 0;
+            for (const auto& kv : block_bytes) total_block_bytes += kv.second;
+            std::vector<int64_t> backend_block_budgets(share_bytes.size(), 0);
+            for (size_t k = 0; k < share_bytes.size(); k++) {
+                int64_t share = int64_t(double(total_block_bytes + non_block_bytes) *
+                                        double(share_bytes[k]) / double(total_share));
+                if (k == 0) share = std::max<int64_t>(share - non_block_bytes, 0);
+                backend_block_budgets[k] = share;
+            }
+            // Greedy assign each block (in order) to the current backend
+            // until its budget is filled, then move to the next.
+            std::vector<int> boundaries(share_bytes.size(), 0);
+            size_t            cur_backend = 0;
+            int64_t           cur_used    = 0;
+            for (int b = 0; b < n_blocks; b++) {
+                int64_t bb = block_bytes[b];
+                if (cur_backend + 1 < share_bytes.size() &&
+                    cur_used + bb > backend_block_budgets[cur_backend] &&
+                    cur_used > 0) {
+                    boundaries[cur_backend] = b;
+                    cur_backend++;
+                    cur_used = 0;
+                }
+                cur_used += bb;
+            }
+            // The remaining backends get the rest, terminating at n_blocks.
+            for (size_t k = cur_backend; k < boundaries.size(); k++) {
+                boundaries[k] = n_blocks;
+            }
+            // Safety: ensure each backend has at least one block.
+            for (size_t k = 0; k < boundaries.size(); k++) {
+                int min_bound = (k > 0 ? boundaries[k - 1] : 0) + 1;
+                if (boundaries[k] < min_bound) boundaries[k] = std::min(min_bound, n_blocks);
+            }
+            std::string boundary_log = "layer-split [" + tensor_prefix + "] " +
+                                       std::to_string(n_blocks) + " blocks: ";
+            int prev = 0;
+            for (size_t k = 0; k < all_backends.size() && k < boundaries.size(); k++) {
+                if (k > 0) boundary_log += ", ";
+                boundary_log += std::string(ggml_backend_name(all_backends[k])) + "=[" +
+                                std::to_string(prev) + ".." + std::to_string(boundaries[k]) + ")";
+                prev = boundaries[k];
+            }
+            LOG_INFO("%s", boundary_log.c_str());
+
+            // Build the tensor_backend_fn closure.
+            std::vector<ggml_backend_t> backends_capture = all_backends;
+            std::vector<int>            boundaries_capture = boundaries;
+            std::string                 prefix_capture     = tensor_prefix;
+            out_spec.tensor_backend_fn =
+                [backends_capture, boundaries_capture, prefix_capture](const std::string& name) -> ggml_backend_t {
+                    if (!prefix_capture.empty() &&
+                        name.compare(0, prefix_capture.size(), prefix_capture) != 0) {
+                        return backends_capture[0];
+                    }
+                    std::smatch m;
+                    if (!std::regex_search(name, m, block_re)) {
+                        return backends_capture[0];
+                    }
+                    int idx = std::stoi(m[1]);
+                    for (size_t k = 0; k < boundaries_capture.size(); k++) {
+                        if (idx < boundaries_capture[k]) {
+                            return backends_capture[std::min(k, backends_capture.size() - 1)];
+                        }
+                    }
+                    return backends_capture.back();
+                };
+            // Spec contains the additional backends only (main is implicit).
+            out_spec.additional_backends.assign(out_extra_backends.begin(), out_extra_backends.end());
+            out_spec.cpu_fallback = nullptr;
+            return true;
+        };
+
+        // Helper: init a named backend if name is non-null/non-empty,
+        // returns nullptr on missing/failed name (caller falls back to main).
+        auto init_named_or_null = [](const char* name) -> ggml_backend_t {
+            if (name == nullptr || name[0] == '\0') return nullptr;
+            return init_named_backend(name);
+        };
+
+        diffusion_backend = init_named_or_null(diffusion_dev_name);
+        if (!diffusion_backend) {
+            diffusion_backend = backend;
+        } else {
+            LOG_INFO("Diffusion model: using device %s", diffusion_dev_name);
+        }
+
+        // Tensor name sets for components that are configured for lazy load.
+        // Populated below right before/after the cond + DiT construction;
+        // consumed by the bulk-load step's ignore_tensors.
+        std::set<std::string> cond_lazy_tensor_names;
+        std::set<std::string> dit_lazy_tensor_names;
+
+        // Build the layer-split MultiBackendSpec for DiT (when auto-fit picked
+        // GPU_LAYER_SPLIT). The spec is consumed by the diffusion_model's
+        // GGMLRunner ctor when we set g_pending_multi_backend_spec() to it.
+        MultiBackendSpec dit_spec;
+        bool             dit_spec_active = false;
+        if (!fit_dit_split_device_names.empty()) {
+            if (fit_dit_row_split) {
+                dit_spec_active = prepare_row_split_spec(fit_dit_split_device_names,
+                                                         fit_dit_split_share_bytes,
+                                                         fit_dit_extra_backends,
+                                                         dit_spec);
+            } else {
+                dit_spec_active = prepare_layer_split_spec(diffusion_backend,
+                                                           fit_dit_split_device_names,
+                                                           fit_dit_split_share_bytes,
+                                                           "model.diffusion_model.",
+                                                           fit_dit_extra_backends,
+                                                           dit_spec);
+            }
+        }
+        // Lambda to set the pending spec immediately before constructing the
+        // diffusion model. Caller must invoke this on the same line / right
+        // before the std::make_shared<...Model>(diffusion_backend, ...) call.
+        auto prime_dit_spec = [&]() {
+            if (dit_spec_active) {
+                g_pending_multi_backend_spec() = &dit_spec;
+            }
+        };
+
+        // Same dance for the conditioner. The conditioner uses clip_backend as
+        // its main backend; we need to set up the spec BEFORE the cond_stage
+        // ctor runs (which is BEFORE the DiT ctor). Each cond model wraps one
+        // or more sub-runners; the spec's tensor_backend_fn handles all of
+        // them since it's keyed on tensor names with a generic block regex.
+        // (Some conditioners construct multiple sub-runners — only the FIRST
+        // ggml runner ctor consumes the pending spec, so we re-prime between
+        // sub-runners' allocs by leaving cond_spec_active true; the runner's
+        // multi_backend_mode is per-runner.)
+        // For LTX-2 specifically: LTXAVEmbedder constructs LLMRunner first
+        // (consumes spec), then LTXAVTextProjectionRunner (no spec consumed).
+        // The LLM has block-named tensors so layer-split applies; the
+        // projector has only 4 tensors and they should ride along on its
+        // single backend (clip_backend = main). Auto-fit's cond share counts
+        // both, so the share is over-counted on backend[0] for the projector.
+        // Acceptable for now — small correction.
+        ggml_backend_t   clip_main_backend_for_spec = nullptr;  // resolved below
+        MultiBackendSpec cond_spec;
+        bool             cond_spec_active = false;
+        auto prime_cond_spec = [&]() {
+            if (cond_spec_active) {
+                g_pending_multi_backend_spec() = &cond_spec;
+            }
+        };
 
         {
-            clip_backend = backend;
-            if (clip_on_cpu && !ggml_backend_is_cpu(backend)) {
-                LOG_INFO("CLIP: Using CPU backend");
-                clip_backend = ggml_backend_cpu_init();
+            clip_backend = init_named_or_null(clip_dev_name);
+            if (!clip_backend) {
+                clip_backend = backend;
+            } else {
+                LOG_INFO("CLIP: using device %s", clip_dev_name);
+            }
+            // Now that clip_backend is resolved, build the conditioner's
+            // multi-GPU spec if auto-fit picked one (row-split or layer-split).
+            if (!fit_cond_split_device_names.empty()) {
+                if (fit_cond_row_split) {
+                    cond_spec_active = prepare_row_split_spec(fit_cond_split_device_names,
+                                                              fit_cond_split_share_bytes,
+                                                              fit_cond_extra_backends,
+                                                              cond_spec);
+                } else {
+                    cond_spec_active = prepare_layer_split_spec(clip_backend,
+                                                                fit_cond_split_device_names,
+                                                                fit_cond_split_share_bytes,
+                                                                "text_encoders.",
+                                                                fit_cond_extra_backends,
+                                                                cond_spec);
+                }
             }
             if (sd_version_is_sd3(version)) {
+                prime_cond_spec();
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend,
                                                                      offload_params_to_cpu,
                                                                      tensor_storage_map);
-                diffusion_model  = std::make_shared<MMDiTModel>(backend,
+                prime_dit_spec();
+                diffusion_model  = std::make_shared<MMDiTModel>(diffusion_backend,
                                                                offload_params_to_cpu,
                                                                tensor_storage_map);
             } else if (sd_version_is_flux(version)) {
@@ -406,12 +952,14 @@ public:
                             "--chroma-disable-dit-mask as a workaround.");
                     }
 
+                    prime_cond_spec();
                     cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
                                                                         offload_params_to_cpu,
                                                                         tensor_storage_map,
                                                                         sd_ctx_params->chroma_use_t5_mask,
                                                                         sd_ctx_params->chroma_t5_mask_pad);
                 } else if (version == VERSION_OVIS_IMAGE) {
+                    prime_cond_spec();
                     cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
                                                                      offload_params_to_cpu,
                                                                      tensor_storage_map,
@@ -419,40 +967,47 @@ public:
                                                                      "",
                                                                      false);
                 } else {
+                    prime_cond_spec();
                     cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend,
                                                                           offload_params_to_cpu,
                                                                           tensor_storage_map);
                 }
-                diffusion_model = std::make_shared<FluxModel>(backend,
+                prime_dit_spec();
+                diffusion_model = std::make_shared<FluxModel>(diffusion_backend,
                                                               offload_params_to_cpu,
                                                               tensor_storage_map,
                                                               version,
                                                               sd_ctx_params->chroma_use_dit_mask);
             } else if (sd_version_is_flux2(version)) {
                 bool is_chroma   = false;
+                prime_cond_spec();
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
                                                                  offload_params_to_cpu,
                                                                  tensor_storage_map,
                                                                  version);
-                diffusion_model  = std::make_shared<FluxModel>(backend,
+                prime_dit_spec();
+                diffusion_model  = std::make_shared<FluxModel>(diffusion_backend,
                                                               offload_params_to_cpu,
                                                               tensor_storage_map,
                                                               version,
                                                               sd_ctx_params->chroma_use_dit_mask);
             } else if (sd_version_is_wan(version)) {
+                prime_cond_spec();
                 cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
                                                                     offload_params_to_cpu,
                                                                     tensor_storage_map,
                                                                     true,
                                                                     0,
                                                                     true);
-                diffusion_model  = std::make_shared<WanModel>(backend,
+                prime_dit_spec();
+                diffusion_model  = std::make_shared<WanModel>(diffusion_backend,
                                                              offload_params_to_cpu,
                                                              tensor_storage_map,
                                                              "model.diffusion_model",
                                                              version);
                 if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
-                    high_noise_diffusion_model = std::make_shared<WanModel>(backend,
+                    prime_dit_spec();
+                    high_noise_diffusion_model = std::make_shared<WanModel>(diffusion_backend,
                                                                             offload_params_to_cpu,
                                                                             tensor_storage_map,
                                                                             "model.high_noise_diffusion_model",
@@ -472,42 +1027,50 @@ public:
                 if (!vae_decode_only) {
                     enable_vision = true;
                 }
+                prime_cond_spec();
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
                                                                  offload_params_to_cpu,
                                                                  tensor_storage_map,
                                                                  version,
                                                                  "",
                                                                  enable_vision);
-                diffusion_model  = std::make_shared<QwenImageModel>(backend,
+                prime_dit_spec();
+                diffusion_model  = std::make_shared<QwenImageModel>(diffusion_backend,
                                                                    offload_params_to_cpu,
                                                                    tensor_storage_map,
                                                                    "model.diffusion_model",
                                                                    version,
                                                                    sd_ctx_params->qwen_image_zero_cond_t);
             } else if (sd_version_is_anima(version)) {
+                prime_cond_spec();
                 cond_stage_model = std::make_shared<AnimaConditioner>(clip_backend,
                                                                       offload_params_to_cpu,
                                                                       tensor_storage_map);
-                diffusion_model  = std::make_shared<AnimaModel>(backend,
+                prime_dit_spec();
+                diffusion_model  = std::make_shared<AnimaModel>(diffusion_backend,
                                                                offload_params_to_cpu,
                                                                tensor_storage_map,
                                                                "model.diffusion_model");
             } else if (sd_version_is_z_image(version)) {
+                prime_cond_spec();
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
                                                                  offload_params_to_cpu,
                                                                  tensor_storage_map,
                                                                  version);
-                diffusion_model  = std::make_shared<ZImageModel>(backend,
+                prime_dit_spec();
+                diffusion_model  = std::make_shared<ZImageModel>(diffusion_backend,
                                                                 offload_params_to_cpu,
                                                                 tensor_storage_map,
                                                                 "model.diffusion_model",
                                                                 version);
             } else if (sd_version_is_ernie_image(version)) {
+                prime_cond_spec();
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
                                                                  offload_params_to_cpu,
                                                                  tensor_storage_map,
                                                                  version);
-                diffusion_model  = std::make_shared<ErnieImageModel>(backend,
+                prime_dit_spec();
+                diffusion_model  = std::make_shared<ErnieImageModel>(diffusion_backend,
                                                                     offload_params_to_cpu,
                                                                     tensor_storage_map,
                                                                     "model.diffusion_model");
@@ -517,6 +1080,7 @@ public:
                     embbeding_map.emplace(SAFE_STR(sd_ctx_params->embeddings[i].name), SAFE_STR(sd_ctx_params->embeddings[i].path));
                 }
                 if (strstr(SAFE_STR(sd_ctx_params->photo_maker_path), "v2")) {
+                    prime_cond_spec();
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
                                                                                            offload_params_to_cpu,
                                                                                            tensor_storage_map,
@@ -524,13 +1088,15 @@ public:
                                                                                            version,
                                                                                            PM_VERSION_2);
                 } else {
+                    prime_cond_spec();
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
                                                                                            offload_params_to_cpu,
                                                                                            tensor_storage_map,
                                                                                            embbeding_map,
                                                                                            version);
                 }
-                diffusion_model = std::make_shared<UNetModel>(backend,
+                prime_dit_spec();
+                diffusion_model = std::make_shared<UNetModel>(diffusion_backend,
                                                               offload_params_to_cpu,
                                                               tensor_storage_map,
                                                               version);
@@ -540,11 +1106,83 @@ public:
                 }
             }
 
-            cond_stage_model->alloc_params_buffer();
-            cond_stage_model->get_param_tensors(tensors);
+            // Conditioner: publish its tensors to the global map, EXCEPT the
+            // ones that are about to be configured for lazy load (we want the
+            // bulk loader to skip them — they have no buffer yet).
+            std::map<std::string, ggml_tensor*> cond_only_tensors;
+            cond_stage_model->get_param_tensors(cond_only_tensors);
+            std::map<std::string, ggml_tensor*> llm_lazy_map;
+            if (auto_lazy_load) {
+                for (const auto& kv : cond_only_tensors) {
+                    if (kv.first.rfind("text_encoders.llm.", 0) == 0) {
+                        llm_lazy_map[kv.first] = kv.second;
+                        cond_lazy_tensor_names.insert(kv.first);
+                    }
+                }
+            }
+            for (const auto& kv : cond_only_tensors) {
+                if (cond_lazy_tensor_names.find(kv.first) == cond_lazy_tensor_names.end()) {
+                    tensors[kv.first] = kv.second;  // eager — bulk loader will fill
+                }
+            }
+            if (auto_lazy_load && !llm_lazy_map.empty()) {
+                ModelLoader* loader_ptr        = owned_model_loader.get();
+                // Bound lazy-load threads to keep the per-thread staging
+                // buffer footprint small. The default n_threads = nproc gives
+                // ~nproc × max_tensor_bytes (up to several GB total) of
+                // CPU-side staging; for RAM-constrained systems running large
+                // models that's enough to trigger the OOM-killer even with
+                // mmap enabled. 2 threads still keep the disk-read pipeline
+                // fed while keeping staging bounded to ~2 × max_tensor_bytes.
+                int          n_threads_capture = std::min(sd_ctx_params->n_threads > 0
+                                                             ? sd_ctx_params->n_threads : 2,
+                                                          2);
+                bool         mmap_capture      = sd_ctx_params->enable_mmap;
+                bool         quiet_capture     = sd_ctx_params->quiet_unknown_tensors;
+                cond_stage_model->set_llm_lazy_load([=]() -> bool {
+                    auto local_map = llm_lazy_map;
+                    return loader_ptr->load_tensors(local_map, /*ignore=*/{},
+                                                    n_threads_capture, mmap_capture,
+                                                    quiet_capture);
+                });
+                LOG_INFO("auto-fit: conditioner LLM is lazy (defer alloc until first compute, %zu tensors)",
+                         llm_lazy_map.size());
+            }
+            cond_stage_model->alloc_params_buffer();  // no-op for the lazy LLM
 
-            diffusion_model->alloc_params_buffer();
-            diffusion_model->get_param_tensors(tensors);
+            std::map<std::string, ggml_tensor*> dit_only_tensors;
+            diffusion_model->get_param_tensors(dit_only_tensors);
+            if (auto_lazy_load) {
+                for (const auto& kv : dit_only_tensors) {
+                    dit_lazy_tensor_names.insert(kv.first);
+                }
+                ModelLoader* loader_ptr        = owned_model_loader.get();
+                // Bound lazy-load threads to keep the per-thread staging
+                // buffer footprint small. The default n_threads = nproc gives
+                // ~nproc × max_tensor_bytes (up to several GB total) of
+                // CPU-side staging; for RAM-constrained systems running large
+                // models that's enough to trigger the OOM-killer even with
+                // mmap enabled. 2 threads still keep the disk-read pipeline
+                // fed while keeping staging bounded to ~2 × max_tensor_bytes.
+                int          n_threads_capture = std::min(sd_ctx_params->n_threads > 0
+                                                             ? sd_ctx_params->n_threads : 2,
+                                                          2);
+                bool         mmap_capture      = sd_ctx_params->enable_mmap;
+                bool         quiet_capture     = sd_ctx_params->quiet_unknown_tensors;
+                diffusion_model->set_lazy_load([=]() -> bool {
+                    auto local_map = dit_only_tensors;
+                    return loader_ptr->load_tensors(local_map, /*ignore=*/{},
+                                                    n_threads_capture, mmap_capture,
+                                                    quiet_capture);
+                });
+                LOG_INFO("auto-fit: diffusion_model is lazy (defer alloc until first compute, %zu tensors)",
+                         dit_only_tensors.size());
+            } else {
+                for (const auto& kv : dit_only_tensors) {
+                    tensors[kv.first] = kv.second;
+                }
+            }
+            diffusion_model->alloc_params_buffer();  // no-op when lazy_load_fn is set
 
             if (sd_version_is_unet_edit(version)) {
                 vae_decode_only = false;
@@ -555,11 +1193,13 @@ public:
                 high_noise_diffusion_model->get_param_tensors(tensors);
             }
 
-            if (sd_ctx_params->keep_vae_on_cpu && !ggml_backend_is_cpu(backend)) {
-                LOG_INFO("VAE Autoencoder: Using CPU backend");
-                vae_backend = ggml_backend_cpu_init();
-            } else {
+            if (vae_dev_name != nullptr && vae_dev_name[0] != '\0') {
+                vae_backend = init_named_backend(vae_dev_name);
+            }
+            if (!vae_backend) {
                 vae_backend = backend;
+            } else {
+                LOG_INFO("VAE: using device %s", vae_dev_name);
             }
 
             auto create_tae = [&]() -> std::shared_ptr<VAE> {
@@ -648,11 +1288,14 @@ public:
 
             if (strlen(SAFE_STR(sd_ctx_params->control_net_path)) > 0) {
                 ggml_backend_t controlnet_backend = nullptr;
-                if (sd_ctx_params->keep_control_net_on_cpu && !ggml_backend_is_cpu(backend)) {
-                    LOG_DEBUG("ControlNet: Using CPU backend");
-                    controlnet_backend = ggml_backend_cpu_init();
-                } else {
+                const char* cn_dev_name = sd_ctx_params->control_net_backend_device;
+                if (cn_dev_name != nullptr && cn_dev_name[0] != '\0') {
+                    controlnet_backend = init_named_backend(cn_dev_name);
+                }
+                if (!controlnet_backend) {
                     controlnet_backend = backend;
+                } else {
+                    LOG_INFO("ControlNet: using device %s", cn_dev_name);
                 }
                 control_net = std::make_shared<ControlNet>(controlnet_backend,
                                                            offload_params_to_cpu,
@@ -754,6 +1397,14 @@ public:
 
         std::set<std::string> ignore_tensors;
         tensors["alphas_cumprod"] = alphas_cumprod_tensor;
+        // Lazy-loaded components: skip them in the bulk load; their lazy
+        // callbacks will load them on first compute().
+        for (const auto& name : cond_lazy_tensor_names) {
+            ignore_tensors.insert(name);
+        }
+        for (const auto& name : dit_lazy_tensor_names) {
+            ignore_tensors.insert(name);
+        }
         if (use_tae && !tae_preview_only) {
             ignore_tensors.insert("first_stage_model.");
         }
@@ -783,7 +1434,9 @@ public:
             ignore_tensors.insert("text_encoders.llm.vision_tower.");
             ignore_tensors.insert("text_encoders.llm.multi_modal_projector.");
         }
-        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap);
+        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads,
+                                                  sd_ctx_params->enable_mmap,
+                                                  sd_ctx_params->quiet_unknown_tensors);
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
             ggml_free(ctx);
@@ -2151,16 +2804,31 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->prediction              = PREDICTION_COUNT;
     sd_ctx_params->lora_apply_mode         = LORA_APPLY_AUTO;
     sd_ctx_params->offload_params_to_cpu   = false;
-    sd_ctx_params->enable_mmap             = false;
-    sd_ctx_params->keep_clip_on_cpu        = false;
-    sd_ctx_params->keep_control_net_on_cpu = false;
-    sd_ctx_params->keep_vae_on_cpu         = false;
-    sd_ctx_params->diffusion_flash_attn    = false;
-    sd_ctx_params->circular_x              = false;
-    sd_ctx_params->circular_y              = false;
-    sd_ctx_params->chroma_use_dit_mask     = true;
-    sd_ctx_params->chroma_use_t5_mask      = false;
-    sd_ctx_params->chroma_t5_mask_pad      = 1;
+    sd_ctx_params->enable_mmap                  = false;
+    sd_ctx_params->main_backend_device          = nullptr;
+    sd_ctx_params->diffusion_backend_device     = nullptr;
+    sd_ctx_params->clip_backend_device          = nullptr;
+    sd_ctx_params->vae_backend_device           = nullptr;
+    sd_ctx_params->control_net_backend_device   = nullptr;
+    sd_ctx_params->tae_backend_device           = nullptr;
+    sd_ctx_params->upscaler_backend_device      = nullptr;
+    sd_ctx_params->photomaker_backend_device    = nullptr;
+    sd_ctx_params->vision_backend_device        = nullptr;
+    sd_ctx_params->diffusion_flash_attn         = false;
+    sd_ctx_params->circular_x                   = false;
+    sd_ctx_params->circular_y                   = false;
+    sd_ctx_params->chroma_use_dit_mask          = true;
+    sd_ctx_params->chroma_use_t5_mask           = false;
+    sd_ctx_params->chroma_t5_mask_pad           = 1;
+    sd_ctx_params->auto_fit                     = true;
+    sd_ctx_params->auto_fit_target_mb           = 512;
+    sd_ctx_params->auto_fit_dry_run             = false;
+    sd_ctx_params->auto_fit_compute_reserve_dit_mb  = 0;
+    sd_ctx_params->auto_fit_compute_reserve_vae_mb  = 0;
+    sd_ctx_params->auto_fit_compute_reserve_cond_mb = 0;
+    sd_ctx_params->auto_multi_gpu               = true;
+    sd_ctx_params->multi_gpu_mode               = "row";
+    sd_ctx_params->quiet_unknown_tensors        = false;
 }
 
 char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
@@ -2192,9 +2860,24 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "sampler_rng_type: %s\n"
              "prediction: %s\n"
              "offload_params_to_cpu: %s\n"
-             "keep_clip_on_cpu: %s\n"
-             "keep_control_net_on_cpu: %s\n"
-             "keep_vae_on_cpu: %s\n"
+             "main_backend_device: %s\n"
+             "diffusion_backend_device: %s\n"
+             "clip_backend_device: %s\n"
+             "vae_backend_device: %s\n"
+             "control_net_backend_device: %s\n"
+             "tae_backend_device: %s\n"
+             "upscaler_backend_device: %s\n"
+             "photomaker_backend_device: %s\n"
+             "vision_backend_device: %s\n"
+             "auto_fit: %s\n"
+             "auto_fit_target_mb: %d\n"
+             "auto_fit_dry_run: %s\n"
+             "auto_fit_compute_reserve_dit_mb: %d\n"
+             "auto_fit_compute_reserve_vae_mb: %d\n"
+             "auto_fit_compute_reserve_cond_mb: %d\n"
+             "auto_multi_gpu: %s\n"
+             "multi_gpu_mode: %s\n"
+             "quiet_unknown_tensors: %s\n"
              "flash_attn: %s\n"
              "diffusion_flash_attn: %s\n"
              "circular_x: %s\n"
@@ -2224,9 +2907,24 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              sd_rng_type_name(sd_ctx_params->sampler_rng_type),
              sd_prediction_name(sd_ctx_params->prediction),
              BOOL_STR(sd_ctx_params->offload_params_to_cpu),
-             BOOL_STR(sd_ctx_params->keep_clip_on_cpu),
-             BOOL_STR(sd_ctx_params->keep_control_net_on_cpu),
-             BOOL_STR(sd_ctx_params->keep_vae_on_cpu),
+             SAFE_STR(sd_ctx_params->main_backend_device),
+             SAFE_STR(sd_ctx_params->diffusion_backend_device),
+             SAFE_STR(sd_ctx_params->clip_backend_device),
+             SAFE_STR(sd_ctx_params->vae_backend_device),
+             SAFE_STR(sd_ctx_params->control_net_backend_device),
+             SAFE_STR(sd_ctx_params->tae_backend_device),
+             SAFE_STR(sd_ctx_params->upscaler_backend_device),
+             SAFE_STR(sd_ctx_params->photomaker_backend_device),
+             SAFE_STR(sd_ctx_params->vision_backend_device),
+             BOOL_STR(sd_ctx_params->auto_fit),
+             sd_ctx_params->auto_fit_target_mb,
+             BOOL_STR(sd_ctx_params->auto_fit_dry_run),
+             sd_ctx_params->auto_fit_compute_reserve_dit_mb,
+             sd_ctx_params->auto_fit_compute_reserve_vae_mb,
+             sd_ctx_params->auto_fit_compute_reserve_cond_mb,
+             BOOL_STR(sd_ctx_params->auto_multi_gpu),
+             SAFE_STR(sd_ctx_params->multi_gpu_mode),
+             BOOL_STR(sd_ctx_params->quiet_unknown_tensors),
              BOOL_STR(sd_ctx_params->flash_attn),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
              BOOL_STR(sd_ctx_params->circular_x),

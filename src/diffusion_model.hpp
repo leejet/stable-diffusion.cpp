@@ -50,6 +50,10 @@ struct DiffusionModel {
     virtual int64_t get_adm_in_channels()                            = 0;
     virtual void set_flash_attention_enabled(bool enabled)           = 0;
     virtual void set_circular_axes(bool circular_x, bool circular_y) = 0;
+    // Defer params alloc + tensor data load until the first compute() call.
+    // Default: no-op. Subclasses backed by a single GGMLRunner forward to
+    // its set_lazy_load.
+    virtual void set_lazy_load(std::function<bool()> /*fn*/) {}
 };
 
 struct UNetModel : public DiffusionModel {

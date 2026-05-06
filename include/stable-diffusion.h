@@ -188,9 +188,18 @@ typedef struct {
     enum lora_apply_mode_t lora_apply_mode;
     bool offload_params_to_cpu;
     bool enable_mmap;
-    bool keep_clip_on_cpu;
-    bool keep_control_net_on_cpu;
-    bool keep_vae_on_cpu;
+    // Per-component backend device names (ggml device names). Empty / NULL
+    // means "use the main backend device". The strings are only borrowed for
+    // the duration of the init call. See sd_list_devices() for what to pass.
+    const char* main_backend_device;
+    const char* diffusion_backend_device;
+    const char* clip_backend_device;
+    const char* vae_backend_device;
+    const char* control_net_backend_device;
+    const char* tae_backend_device;
+    const char* upscaler_backend_device;
+    const char* photomaker_backend_device;
+    const char* vision_backend_device;
     bool flash_attn;
     bool diffusion_flash_attn;
     bool tae_preview_only;
@@ -203,6 +212,49 @@ typedef struct {
     bool chroma_use_t5_mask;
     int chroma_t5_mask_pad;
     bool qwen_image_zero_cond_t;
+
+    // Auto-fit: pick DiT/VAE/Conditioner devices based on free GPU memory.
+    // When `auto_fit` is true (default), the *_backend_device strings are
+    // ignored and the plan is computed automatically.
+    // `auto_fit_target_mb` is the memory to leave free per GPU (default 512).
+    // `auto_fit_dry_run` prints the plan and aborts init before loading.
+    // `auto_fit_compute_reserve_{dit,vae,cond}_mb` let the user tune the
+    // per-component compute-buffer reserve; 0 means use the built-in default.
+    bool auto_fit;
+    int  auto_fit_target_mb;
+    bool auto_fit_dry_run;
+    int  auto_fit_compute_reserve_dit_mb;
+    int  auto_fit_compute_reserve_vae_mb;
+    int  auto_fit_compute_reserve_cond_mb;
+
+    // When more than one GPU device is present, prefer placing different
+    // components on different GPUs to balance load and fit larger total
+    // working sets. Set false to keep all components on a single GPU when
+    // they fit. Defaults to true.
+    bool auto_multi_gpu;
+
+    // When auto_multi_gpu is true and a single component doesn't fit on
+    // one GPU, the planner can split it across multiple GPUs. Two
+    // mechanisms:
+    //   "row":   matmul weights row-split across CUDA devices via
+    //            cuda_split_buffer_type. Single CUDA backend; no sched.
+    //            Cheaper compute buffer (no cross-backend doubling) but
+    //            CUDA-only. Default.
+    //   "layer": block-indexed tensors assigned to per-block backends
+    //            and routed via ggml_backend_sched. Generic across
+    //            backends but costs ~2x activation memory at boundaries.
+    //   "off":   never split a single component across GPUs. Components
+    //            that don't fit fall back to OFFLOAD or CPU.
+    // The string is parsed by backend_fit::str_to_multi_gpu_mode; if
+    // unrecognized, "row" is used.
+    const char* multi_gpu_mode;
+
+    // Suppress per-tensor "unknown tensor 'X' in model file" log lines
+    // emitted during model loading. Useful for models like LTX-2 that
+    // ship hundreds of audio-branch / encoder tensors a video-only
+    // pipeline doesn't consume. A single summary line is logged at the
+    // end with the count of skipped tensors.
+    bool quiet_unknown_tensors;
 } sd_ctx_params_t;
 
 typedef struct {
@@ -448,6 +500,11 @@ SD_API bool preprocess_canny(sd_image_t image,
 
 SD_API const char* sd_commit(void);
 SD_API const char* sd_version(void);
+
+// List available ggml backend devices to stdout, in `name<TAB>description<NL>`
+// per-line format. The output is intended to be parsed by tools and used
+// directly as the value of --*-backend-device flags.
+SD_API void sd_list_devices(void);
 
 #ifdef __cplusplus
 }

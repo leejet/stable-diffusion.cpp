@@ -87,6 +87,11 @@ public:
     virtual size_t get_params_buffer_size()                                                = 0;
     virtual void set_flash_attention_enabled(bool enabled)                                 = 0;
     virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {}
+    // Defer the LLM sub-runner's params alloc + read until first compute().
+    // Only conditioners with a heavy LLM (e.g. LTX-2 Gemma) override this;
+    // others ignore the call. The callback is invoked AFTER the runner's
+    // alloc_params_buffer succeeds and is responsible for tensor data load.
+    virtual void set_llm_lazy_load(std::function<bool()> /*fn*/) {}
     virtual std::tuple<SDCondition, std::vector<bool>> get_learned_condition_with_trigger(int n_threads,
                                                                                           const ConditionerParams& conditioner_params) {
         GGML_ABORT("Not implemented yet!");

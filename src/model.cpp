@@ -783,11 +783,16 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
 
         std::unique_ptr<MmapWrapper> mmapped;
         if (enable_mmap && !is_zip) {
-            LOG_DEBUG("using mmap for I/O");
             mmapped = MmapWrapper::create(file_path);
             if (!mmapped) {
-                LOG_WARN("failed to memory-map '%s'", file_path.c_str());
+                LOG_WARN("failed to memory-map '%s' (falling back to read())",
+                         file_path.c_str());
+            } else {
+                LOG_INFO("using mmap for '%s'", file_path.c_str());
             }
+        } else if (!is_zip) {
+            LOG_INFO("NOT using mmap for '%s' (mmap disabled by caller)",
+                     file_path.c_str());
         }
 
         int n_threads = is_zip ? 1 : std::min(num_threads_to_use, (int)file_tensors.size());
@@ -1003,9 +1008,11 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
 bool ModelLoader::load_tensors(std::map<std::string, ggml_tensor*>& tensors,
                                std::set<std::string> ignore_tensors,
                                int n_threads,
-                               bool enable_mmap) {
+                               bool enable_mmap,
+                               bool quiet_unknown_tensors) {
     std::set<std::string> tensor_names_in_file;
     std::mutex tensor_names_mutex;
+    std::atomic<size_t> unknown_tensor_count{0};
     auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
         const std::string& name = tensor_storage.name;
         // LOG_DEBUG("%s", tensor_storage.to_string().c_str());
@@ -1023,7 +1030,11 @@ bool ModelLoader::load_tensors(std::map<std::string, ggml_tensor*>& tensors,
                     return true;
                 }
             }
-            LOG_INFO("unknown tensor '%s' in model file", tensor_storage.to_string().c_str());
+            if (quiet_unknown_tensors) {
+                unknown_tensor_count.fetch_add(1);
+            } else {
+                LOG_INFO("unknown tensor '%s' in model file", tensor_storage.to_string().c_str());
+            }
             return true;
         }
 
@@ -1071,6 +1082,10 @@ bool ModelLoader::load_tensors(std::map<std::string, ggml_tensor*>& tensors,
 
     if (some_tensor_not_init) {
         return false;
+    }
+    if (quiet_unknown_tensors && unknown_tensor_count.load() > 0) {
+        LOG_INFO("skipped %zu unknown tensors (--quiet-unknown-tensors)",
+                 unknown_tensor_count.load());
     }
     return true;
 }
