@@ -264,10 +264,10 @@ Default Generation Options:
   -s, --seed                               RNG seed (default: 42, use random seed for < 0)
   --sampling-method                        sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m,
                                            dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s,
-                                           er_sde] (default: euler for Flux/SD3/Wan, euler_a otherwise)
+                                           er_sde, euler_cfg_pp, euler_a_cfg_pp] (default: euler for Flux/SD3/Wan, euler_a otherwise)
   --high-noise-sampling-method             (high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a,
                                            dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep,
-                                           res_2s, er_sde] default: euler for Flux/SD3/Wan, euler_a otherwise
+                                           res_2s, er_sde, euler_cfg_pp, euler_a_cfg_pp] default: euler for Flux/SD3/Wan, euler_a otherwise
   --scheduler                              denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits,
                                            smoothstep, sgm_uniform, simple, kl_optimal, lcm, bong_tangent], default:
                                            discrete
