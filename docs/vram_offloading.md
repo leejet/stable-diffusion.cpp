@@ -97,3 +97,16 @@ sd-cli -m sd-v1-4.ckpt \
 - **OOM during generation**: Try a more aggressive mode. `layer_streaming` uses the least VRAM.
 - **Slow generation**: Coarse-stage streaming (model fits in VRAM) is nearly as fast as no offloading. Per-layer streaming is slower due to CPU-GPU transfers each step. Using quantized models often lets you stay in coarse-stage mode.
 - **Black or corrupted output**: This is a bug. Please report it with the model, offload mode, and resolution used.
+- **One CPU core pegged at 100% while the GPU is working**: this is the CUDA driver spin-waiting on kernel completion. The default schedule policy (`cudaDeviceScheduleAuto`) often picks `Spin` for short-kernel workloads like per-layer streaming, which busy-waits one host thread for each kernel return. It does *not* slow generation down (the wait is wasted heat, not blocking work), but it looks bad on `top`/`nvtop` and is unfriendly to shared-host setups. Two ways to silence it:
+
+  1. Per-run, no rebuild needed:
+     ```
+     CUDA_DEVICE_SCHEDULE=BlockingSync sd-cli ...
+     ```
+  2. Per-process, set once at startup:
+     ```c
+     cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
+     ```
+     Long-lived processes (REST servers, queue workers) should do this.
+
+  CPU drops to near zero; GPU performance is unchanged.
