@@ -2,7 +2,6 @@
 #define __TAE_HPP__
 
 #include "ggml_extend.hpp"
-
 #include "model.h"
 
 /*

@@ -42,6 +42,7 @@ enum SDVersion {
     VERSION_ANIMA,
     VERSION_FLUX2,
     VERSION_FLUX2_KLEIN,
+    VERSION_LTXAV,
     VERSION_Z_IMAGE,
     VERSION_OVIS_IMAGE,
     VERSION_ERNIE_IMAGE,
@@ -104,6 +105,13 @@ static inline bool sd_version_is_flux2(SDVersion version) {
     return false;
 }
 
+static inline bool sd_version_is_ltxav(SDVersion version) {
+    if (version == VERSION_LTXAV) {
+        return true;
+    }
+    return false;
+}
+
 static inline bool sd_version_is_wan(SDVersion version) {
     if (version == VERSION_WAN2 || version == VERSION_WAN2_2_I2V || version == VERSION_WAN2_2_TI2V) {
         return true;
@@ -160,6 +168,7 @@ static inline bool sd_version_is_inpaint(SDVersion version) {
 static inline bool sd_version_is_dit(SDVersion version) {
     if (sd_version_is_flux(version) ||
         sd_version_is_flux2(version) ||
+        sd_version_is_ltxav(version) ||
         sd_version_is_sd3(version) ||
         sd_version_is_wan(version) ||
         sd_version_is_qwen_image(version) ||

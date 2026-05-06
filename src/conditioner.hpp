@@ -1,6 +1,8 @@
 #ifndef __CONDITIONER_HPP__
 #define __CONDITIONER_HPP__
 
+#include <cmath>
+#include <limits>
 #include <optional>
 
 #include "clip.hpp"
@@ -46,6 +48,17 @@ static inline sd::Tensor<float> apply_token_weights(sd::Tensor<float> hidden_sta
         return hidden_states;
     }
 
+    bool all_one = true;
+    for (float weight : weights) {
+        if (weight != 1.0f) {
+            all_one = false;
+            break;
+        }
+    }
+    if (all_one) {
+        return hidden_states;
+    }
+
     if (hidden_states.dim() == 1) {
         hidden_states.unsqueeze_(1);
     }
@@ -57,7 +70,7 @@ static inline sd::Tensor<float> apply_token_weights(sd::Tensor<float> hidden_sta
     chunk_weights.reshape_({1, static_cast<int64_t>(weights.size())});
     hidden_states *= chunk_weights;
     float new_mean = hidden_states.mean();
-    if (new_mean != 0.0f) {
+    if (std::isfinite(original_mean) && std::isfinite(new_mean) && new_mean != 0.0f) {
         hidden_states *= (original_mean / new_mean);
     }
 
@@ -1997,6 +2010,279 @@ struct LLMEmbedder : public Conditioner {
         SDCondition result;
         result.c_crossattn        = std::move(hidden_states);
         result.extra_c_crossattns = std::move(extra_hidden_states_vec);
+        return result;
+    }
+};
+
+struct LTXAVTextProjection : public GGMLBlock {
+    static constexpr int64_t kHiddenSize = 3840;
+    static constexpr int64_t kNumStates  = 49;
+    bool dual_projection                 = false;
+
+    LTXAVTextProjection(bool dual_projection = false)
+        : dual_projection(dual_projection) {
+        if (dual_projection) {
+            blocks["video_aggregate_embed"] = std::make_shared<Linear>(kHiddenSize * kNumStates, 4096, true);
+            blocks["audio_aggregate_embed"] = std::make_shared<Linear>(kHiddenSize * kNumStates, 2048, true);
+        } else {
+            blocks["projection"] = std::make_shared<Linear>(kHiddenSize * kNumStates, kHiddenSize, false);
+        }
+    }
+
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+        if (!dual_projection) {
+            auto projection = std::dynamic_pointer_cast<Linear>(blocks["projection"]);
+            return projection->forward(ctx, x);
+        }
+
+        auto video_projection = std::dynamic_pointer_cast<Linear>(blocks["video_aggregate_embed"]);
+        auto audio_projection = std::dynamic_pointer_cast<Linear>(blocks["audio_aggregate_embed"]);
+        auto video_in         = ggml_ext_scale(ctx->ggml_ctx, x, std::sqrt(4096.f / static_cast<float>(kHiddenSize)));
+        auto audio_in         = ggml_ext_scale(ctx->ggml_ctx, x, std::sqrt(2048.f / static_cast<float>(kHiddenSize)));
+        auto video            = video_projection->forward(ctx, video_in);
+        auto audio            = audio_projection->forward(ctx, audio_in);
+        return ggml_concat(ctx->ggml_ctx, video, audio, 0);
+    }
+};
+
+struct LTXAVTextProjectionRunner : public GGMLRunner {
+    LTXAVTextProjection model;
+
+    LTXAVTextProjectionRunner(ggml_backend_t backend,
+                              bool offload_params_to_cpu,
+                              const String2TensorStorage& tensor_storage_map = {},
+                              const std::string& prefix                      = "")
+        : GGMLRunner(backend, offload_params_to_cpu),
+          model(tensor_storage_map.find(prefix + ".video_aggregate_embed.weight") != tensor_storage_map.end()) {
+        model.init(params_ctx, tensor_storage_map, prefix);
+    }
+
+    std::string get_desc() override {
+        return "ltxav_text_projection";
+    }
+
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) {
+        model.get_param_tensors(tensors, prefix);
+    }
+
+    ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor) {
+        ggml_cgraph* gf = ggml_new_graph(compute_ctx);
+        auto x          = make_input(x_tensor);
+        auto runner_ctx = get_context();
+        auto out        = model.forward(&runner_ctx, x);
+        ggml_build_forward_expand(gf, out);
+        return gf;
+    }
+
+    sd::Tensor<float> compute(int n_threads, const sd::Tensor<float>& x) {
+        auto get_graph = [&]() -> ggml_cgraph* {
+            return build_graph(x);
+        };
+        return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, true));
+    }
+};
+
+struct LTXAVEmbedder : public Conditioner {
+    static constexpr int64_t kHiddenSize = 3840;
+    static constexpr int64_t kNumStates  = 49;
+    static constexpr int64_t kMinLength  = 1024;
+
+    std::shared_ptr<GemmaTokenizer> tokenizer;
+    std::shared_ptr<LLM::LLMRunner> llm;
+    std::shared_ptr<LTXAVTextProjectionRunner> projector;
+    bool dual_projection = false;
+
+    LTXAVEmbedder(ggml_backend_t backend,
+                  bool offload_params_to_cpu,
+                  const String2TensorStorage& tensor_storage_map = {},
+                  const std::string& llm_prefix                  = "text_encoders.llm",
+                  const std::string& projector_prefix            = "text_embedding_projection") {
+        tokenizer       = std::make_shared<GemmaTokenizer>();
+        llm             = std::make_shared<LLM::LLMRunner>(LLM::LLMArch::GEMMA3_12B,
+                                               backend,
+                                               offload_params_to_cpu,
+                                               tensor_storage_map,
+                                               llm_prefix,
+                                               false);
+        dual_projection = tensor_storage_map.find(projector_prefix + ".video_aggregate_embed.weight") != tensor_storage_map.end();
+        projector       = std::make_shared<LTXAVTextProjectionRunner>(backend,
+                                                                offload_params_to_cpu,
+                                                                tensor_storage_map,
+                                                                projector_prefix);
+    }
+
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        llm->get_param_tensors(tensors, "text_encoders.llm");
+        projector->get_param_tensors(tensors, "text_embedding_projection");
+    }
+
+    void alloc_params_buffer() override {
+        llm->alloc_params_buffer();
+        projector->alloc_params_buffer();
+    }
+
+    void free_params_buffer() override {
+        llm->free_params_buffer();
+        projector->free_params_buffer();
+    }
+
+    size_t get_params_buffer_size() override {
+        return llm->get_params_buffer_size() + projector->get_params_buffer_size();
+    }
+
+    void set_flash_attention_enabled(bool enabled) override {
+        llm->set_flash_attention_enabled(enabled);
+        projector->set_flash_attention_enabled(enabled);
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        llm->set_weight_adapter(adapter);
+        projector->set_weight_adapter(adapter);
+    }
+
+    std::tuple<std::vector<int>, std::vector<float>, std::vector<float>> tokenize(std::string text,
+                                                                                  const std::pair<int, int>& attn_range) {
+        std::vector<std::pair<std::string, float>> parsed_attention;
+        if (attn_range.first >= 0 && attn_range.second > 0) {
+            if (attn_range.first > 0) {
+                parsed_attention.emplace_back(text.substr(0, attn_range.first), 1.f);
+            }
+            if (attn_range.second - attn_range.first > 0) {
+                auto new_parsed_attention = parse_prompt_attention(text.substr(attn_range.first, attn_range.second - attn_range.first));
+                parsed_attention.insert(parsed_attention.end(), new_parsed_attention.begin(), new_parsed_attention.end());
+            }
+            if (static_cast<size_t>(attn_range.second) < text.size()) {
+                parsed_attention.emplace_back(text.substr(attn_range.second), 1.f);
+            }
+        } else {
+            parsed_attention.emplace_back(text, 1.f);
+        }
+
+        std::vector<int> tokens;
+        std::vector<float> weights;
+        for (const auto& item : parsed_attention) {
+            auto curr_tokens = tokenizer->encode(item.first, nullptr);
+            tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
+            weights.insert(weights.end(), curr_tokens.size(), item.second);
+        }
+
+        std::vector<float> mask;
+        tokenizer->pad_tokens(tokens, &weights, &mask, kMinLength);
+        return {tokens, weights, mask};
+    }
+
+    sd::Tensor<float> encode_prompt(int n_threads,
+                                    const std::string& prompt,
+                                    const std::pair<int, int>& prompt_attn_range) {
+        auto tokens_weights_mask = tokenize(prompt, prompt_attn_range);
+        auto& tokens             = std::get<0>(tokens_weights_mask);
+        auto& weights            = std::get<1>(tokens_weights_mask);
+        auto& mask               = std::get<2>(tokens_weights_mask);
+
+        sd::Tensor<int32_t> input_ids({static_cast<int64_t>(tokens.size())}, std::vector<int32_t>(tokens.begin(), tokens.end()));
+        sd::Tensor<float> attention_mask;
+        if (!mask.empty()) {
+            const float mask_min = std::numeric_limits<float>::lowest() / 4.0f;
+            attention_mask       = sd::Tensor<float>({static_cast<int64_t>(mask.size()), static_cast<int64_t>(mask.size())});
+            for (size_t i1 = 0; i1 < mask.size(); ++i1) {
+                for (size_t i0 = 0; i0 < mask.size(); ++i0) {
+                    float value = 0.0f;
+                    if (mask[i0] == 0.0f) {
+                        value += mask_min;
+                    }
+                    if (i0 > i1) {
+                        value += mask_min;
+                    }
+                    attention_mask[static_cast<int64_t>(i0 + mask.size() * i1)] = value;
+                }
+            }
+        }
+
+        auto hidden_states = llm->compute(n_threads,
+                                          input_ids,
+                                          attention_mask,
+                                          {},
+                                          {},
+                                          true);
+        GGML_ASSERT(!hidden_states.empty());
+        hidden_states = apply_token_weights(std::move(hidden_states), weights);
+
+        int64_t valid_tokens = 0;
+        for (float value : mask) {
+            valid_tokens += static_cast<int64_t>(value > 0.0f);
+        }
+        GGML_ASSERT(valid_tokens > 0);
+
+        hidden_states = sd::ops::slice(hidden_states,
+                                       1,
+                                       hidden_states.shape()[1] - valid_tokens,
+                                       hidden_states.shape()[1]);
+        hidden_states.reshape_({kHiddenSize, kNumStates, valid_tokens});
+        hidden_states = hidden_states.permute({1, 0, 2});
+
+        if (dual_projection) {
+            for (int64_t state_idx = 0; state_idx < kNumStates; ++state_idx) {
+                for (int64_t token_idx = 0; token_idx < valid_tokens; ++token_idx) {
+                    double sq_sum = 0.0;
+                    for (int64_t hidden_idx = 0; hidden_idx < kHiddenSize; ++hidden_idx) {
+                        float value = hidden_states.index(state_idx, hidden_idx, token_idx);
+                        sq_sum += static_cast<double>(value) * static_cast<double>(value);
+                    }
+
+                    float inv_rms = 1.0f / std::sqrt(static_cast<float>(sq_sum / static_cast<double>(kHiddenSize)) + 1e-6f);
+                    for (int64_t hidden_idx = 0; hidden_idx < kHiddenSize; ++hidden_idx) {
+                        hidden_states.index(state_idx, hidden_idx, token_idx) *= inv_rms;
+                    }
+                }
+            }
+        } else {
+            for (int64_t state_idx = 0; state_idx < kNumStates; ++state_idx) {
+                double sum      = 0.0;
+                float min_value = std::numeric_limits<float>::infinity();
+                float max_value = -std::numeric_limits<float>::infinity();
+                for (int64_t token_idx = 0; token_idx < valid_tokens; ++token_idx) {
+                    for (int64_t hidden_idx = 0; hidden_idx < kHiddenSize; ++hidden_idx) {
+                        float value = hidden_states.index(state_idx, hidden_idx, token_idx);
+                        sum += value;
+                        min_value = std::min(min_value, value);
+                        max_value = std::max(max_value, value);
+                    }
+                }
+
+                float mean_value  = static_cast<float>(sum / static_cast<double>(kHiddenSize * valid_tokens));
+                float denom       = max_value - min_value + 1e-6f;
+                float scale_value = 8.0f / denom;
+                for (int64_t token_idx = 0; token_idx < valid_tokens; ++token_idx) {
+                    for (int64_t hidden_idx = 0; hidden_idx < kHiddenSize; ++hidden_idx) {
+                        float value                                           = hidden_states.index(state_idx, hidden_idx, token_idx);
+                        hidden_states.index(state_idx, hidden_idx, token_idx) = (value - mean_value) * scale_value;
+                    }
+                }
+            }
+        }
+
+        hidden_states.reshape_({kNumStates * kHiddenSize, valid_tokens});
+        return projector->compute(n_threads, hidden_states);
+    }
+
+    SDCondition get_learned_condition(int n_threads,
+                                      const ConditionerParams& conditioner_params) override {
+        int64_t t0 = ggml_time_ms();
+
+        std::string prompt;
+        std::pair<int, int> prompt_attn_range;
+        prompt_attn_range.first = static_cast<int>(prompt.size());
+        prompt += conditioner_params.text;
+        prompt_attn_range.second = static_cast<int>(prompt.size());
+
+        auto hidden_states = encode_prompt(n_threads, prompt, prompt_attn_range);
+        GGML_ASSERT(!hidden_states.empty());
+
+        int64_t t1 = ggml_time_ms();
+        LOG_DEBUG("computing LTXAV condition graph completed, taking %" PRId64 " ms", t1 - t0);
+
+        SDCondition result;
+        result.c_crossattn = std::move(hidden_states);
         return result;
     }
 };
