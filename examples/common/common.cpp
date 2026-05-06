@@ -538,6 +538,78 @@ ArgOptions SDContextParams::get_options() {
         return 1;
     };
 
+    auto on_offload_mode_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        const char* arg     = argv[index];
+        offload_config.mode = str_to_offload_mode(arg);
+        if (offload_config.mode == SD_OFFLOAD_MODE_COUNT) {
+            LOG_ERROR("error: invalid offload mode %s", arg);
+            return -1;
+        }
+        return 1;
+    };
+
+    auto on_vram_estimation_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        const char* arg                = argv[index];
+        offload_config.vram_estimation = str_to_vram_estimation(arg);
+        if (offload_config.vram_estimation == SD_VRAM_EST_COUNT) {
+            LOG_ERROR("error: invalid VRAM estimation method %s", arg);
+            return -1;
+        }
+        return 1;
+    };
+
+    auto on_streaming_prefetch_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        try {
+            offload_config.streaming_prefetch_layers = std::stoi(argv[index]);
+            if (offload_config.streaming_prefetch_layers < 0) {
+                LOG_ERROR("error: streaming prefetch must be >= 0");
+                return -1;
+            }
+        } catch (...) {
+            LOG_ERROR("error: invalid streaming prefetch value %s", argv[index]);
+            return -1;
+        }
+        return 1;
+    };
+
+    auto on_streaming_min_vram_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        try {
+            int mb = std::stoi(argv[index]);
+            if (mb < 0) {
+                LOG_ERROR("error: streaming min VRAM must be >= 0");
+                return -1;
+            }
+            offload_config.streaming_min_free_vram = static_cast<size_t>(mb) * 1024 * 1024;
+        } catch (...) {
+            LOG_ERROR("error: invalid streaming min VRAM value %s", argv[index]);
+            return -1;
+        }
+        return 1;
+    };
+
+    options.bool_options.push_back({"", "--offload-log", "log offload events", true, &offload_config.log_offload_events});
+    options.bool_options.push_back({"", "--no-offload-log", "do not log offload events", false, &offload_config.log_offload_events});
+    options.bool_options.push_back({"", "--offload-cond-stage", "offload cond stage to CPU after use", true, &offload_config.offload_cond_stage});
+    options.bool_options.push_back({"", "--no-offload-cond-stage", "do not offload cond stage", false, &offload_config.offload_cond_stage});
+    options.bool_options.push_back({"", "--offload-diffusion", "offload diffusion model to CPU after use", true, &offload_config.offload_diffusion});
+    options.bool_options.push_back({"", "--no-offload-diffusion", "do not offload diffusion model", false, &offload_config.offload_diffusion});
+    options.bool_options.push_back({"", "--reload-cond-stage", "reload cond stage to GPU before use", true, &offload_config.reload_cond_stage});
+    options.bool_options.push_back({"", "--no-reload-cond-stage", "do not reload cond stage", false, &offload_config.reload_cond_stage});
+    options.bool_options.push_back({"", "--reload-diffusion", "reload diffusion to GPU before use", true, &offload_config.reload_diffusion});
+    options.bool_options.push_back({"", "--no-reload-diffusion", "do not reload diffusion", false, &offload_config.reload_diffusion});
+
     options.manual_options = {
         {"",
          "--type",
@@ -564,6 +636,24 @@ ArgOptions SDContextParams::get_options() {
          "but it usually offers faster inference speed and, in some cases, lower memory usage. "
          "The at_runtime mode, on the other hand, is exactly the opposite.",
          on_lora_apply_mode_arg},
+        {"",
+         "--offload-mode",
+         "dynamic VRAM offloading mode, one of [none, cond_only, cond_diffusion, aggressive, layer_streaming] (default: none). "
+         "Use 'cond_only' to offload the LLM/CLIP model to CPU after conditioning. "
+         "Use 'layer_streaming' to stream model layers one-by-one (enables models larger than VRAM).",
+         on_offload_mode_arg},
+        {"",
+         "--vram-estimation",
+         "VRAM estimation method for smart offloading, one of [dryrun, formula] (default: dryrun)",
+         on_vram_estimation_arg},
+        {"",
+         "--streaming-prefetch",
+         "Number of layers to prefetch ahead during layer streaming (default: 1)",
+         on_streaming_prefetch_arg},
+        {"",
+         "--streaming-min-vram",
+         "Minimum VRAM to keep free during layer streaming, in MB (default: 512)",
+         on_streaming_min_vram_arg},
     };
 
     return options;
@@ -693,7 +783,14 @@ std::string SDContextParams::to_string() const {
         << "  chroma_t5_mask_pad: " << chroma_t5_mask_pad << ",\n"
         << "  prediction: " << sd_prediction_name(prediction) << ",\n"
         << "  lora_apply_mode: " << sd_lora_apply_mode_name(lora_apply_mode) << ",\n"
-        << "  force_sdxl_vae_conv_scale: " << (force_sdxl_vae_conv_scale ? "true" : "false") << "\n"
+        << "  force_sdxl_vae_conv_scale: " << (force_sdxl_vae_conv_scale ? "true" : "false") << ",\n"
+        << "  offload_config: { mode=" << sd_offload_mode_name(offload_config.mode)
+        << ", vram_est=" << sd_vram_estimation_name(offload_config.vram_estimation)
+        << ", offload_cond=" << (offload_config.offload_cond_stage ? "true" : "false")
+        << ", offload_diff=" << (offload_config.offload_diffusion ? "true" : "false")
+        << ", reload_cond=" << (offload_config.reload_cond_stage ? "true" : "false")
+        << ", reload_diff=" << (offload_config.reload_diffusion ? "true" : "false")
+        << ", log=" << (offload_config.log_offload_events ? "true" : "false") << " }\n"
         << "}";
     return oss.str();
 }
@@ -751,6 +848,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         chroma_t5_mask_pad,
         qwen_image_zero_cond_t,
         max_vram,
+        offload_config,
     };
     return sd_ctx_params;
 }

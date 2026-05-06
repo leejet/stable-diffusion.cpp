@@ -95,6 +95,13 @@ public:
     virtual std::string remove_trigger_from_prompt(const std::string& prompt) {
         GGML_ABORT("Not implemented yet!");
     }
+
+    // Dynamic tensor offloading interface
+    virtual bool is_params_on_gpu() const { return false; }
+    virtual bool move_params_to_cpu() { return false; }
+    virtual bool move_params_to_gpu() { return false; }
+    virtual size_t get_params_vram_size() const { return 0; }
+    virtual void set_auto_offload(bool enabled) {}
 };
 
 // ldm.modules.encoders.modules.FrozenCLIPEmbedder
@@ -184,6 +191,46 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         text_model->set_weight_adapter(adapter);
         if (sd_version_is_sdxl(version)) {
             text_model2->set_weight_adapter(adapter);
+        }
+    }
+
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override {
+        bool on_gpu = text_model->is_params_on_gpu();
+        if (sd_version_is_sdxl(version) && text_model2) {
+            on_gpu = on_gpu && text_model2->is_params_on_gpu();
+        }
+        return on_gpu;
+    }
+
+    bool move_params_to_cpu() override {
+        bool success = text_model->move_params_to_cpu();
+        if (sd_version_is_sdxl(version) && text_model2) {
+            success = text_model2->move_params_to_cpu() && success;
+        }
+        return success;
+    }
+
+    bool move_params_to_gpu() override {
+        bool success = text_model->move_params_to_gpu();
+        if (sd_version_is_sdxl(version) && text_model2) {
+            success = text_model2->move_params_to_gpu() && success;
+        }
+        return success;
+    }
+
+    size_t get_params_vram_size() const override {
+        size_t size = text_model->get_params_vram_size();
+        if (sd_version_is_sdxl(version) && text_model2) {
+            size += text_model2->get_params_vram_size();
+        }
+        return size;
+    }
+
+    void set_auto_offload(bool enabled) override {
+        text_model->set_auto_offload(enabled);
+        if (sd_version_is_sdxl(version) && text_model2) {
+            text_model2->set_auto_offload(enabled);
         }
     }
 
@@ -825,6 +872,75 @@ struct SD3CLIPEmbedder : public Conditioner {
         }
     }
 
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override {
+        bool on_gpu = true;
+        if (clip_l) {
+            on_gpu = on_gpu && clip_l->is_params_on_gpu();
+        }
+        if (clip_g) {
+            on_gpu = on_gpu && clip_g->is_params_on_gpu();
+        }
+        if (t5) {
+            on_gpu = on_gpu && t5->is_params_on_gpu();
+        }
+        return on_gpu;
+    }
+
+    bool move_params_to_cpu() override {
+        bool success = true;
+        if (clip_l) {
+            success = clip_l->move_params_to_cpu() && success;
+        }
+        if (clip_g) {
+            success = clip_g->move_params_to_cpu() && success;
+        }
+        if (t5) {
+            success = t5->move_params_to_cpu() && success;
+        }
+        return success;
+    }
+
+    bool move_params_to_gpu() override {
+        bool success = true;
+        if (clip_l) {
+            success = clip_l->move_params_to_gpu() && success;
+        }
+        if (clip_g) {
+            success = clip_g->move_params_to_gpu() && success;
+        }
+        if (t5) {
+            success = t5->move_params_to_gpu() && success;
+        }
+        return success;
+    }
+
+    size_t get_params_vram_size() const override {
+        size_t size = 0;
+        if (clip_l) {
+            size += clip_l->get_params_vram_size();
+        }
+        if (clip_g) {
+            size += clip_g->get_params_vram_size();
+        }
+        if (t5) {
+            size += t5->get_params_vram_size();
+        }
+        return size;
+    }
+
+    void set_auto_offload(bool enabled) override {
+        if (clip_l) {
+            clip_l->set_auto_offload(enabled);
+        }
+        if (clip_g) {
+            clip_g->set_auto_offload(enabled);
+        }
+        if (t5) {
+            t5->set_auto_offload(enabled);
+        }
+    }
+
     std::vector<std::pair<std::vector<int>, std::vector<float>>> tokenize(std::string text,
                                                                           size_t min_length          = 0,
                                                                           size_t max_length          = 0,
@@ -1168,6 +1284,60 @@ struct FluxCLIPEmbedder : public Conditioner {
         }
         if (t5) {
             t5->set_weight_adapter(adapter);
+        }
+    }
+
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override {
+        bool on_gpu = true;
+        if (clip_l) {
+            on_gpu = on_gpu && clip_l->is_params_on_gpu();
+        }
+        if (t5) {
+            on_gpu = on_gpu && t5->is_params_on_gpu();
+        }
+        return on_gpu;
+    }
+
+    bool move_params_to_cpu() override {
+        bool success = true;
+        if (clip_l) {
+            success = clip_l->move_params_to_cpu() && success;
+        }
+        if (t5) {
+            success = t5->move_params_to_cpu() && success;
+        }
+        return success;
+    }
+
+    bool move_params_to_gpu() override {
+        bool success = true;
+        if (clip_l) {
+            success = clip_l->move_params_to_gpu() && success;
+        }
+        if (t5) {
+            success = t5->move_params_to_gpu() && success;
+        }
+        return success;
+    }
+
+    size_t get_params_vram_size() const override {
+        size_t size = 0;
+        if (clip_l) {
+            size += clip_l->get_params_vram_size();
+        }
+        if (t5) {
+            size += t5->get_params_vram_size();
+        }
+        return size;
+    }
+
+    void set_auto_offload(bool enabled) override {
+        if (clip_l) {
+            clip_l->set_auto_offload(enabled);
+        }
+        if (t5) {
+            t5->set_auto_offload(enabled);
         }
     }
 
@@ -1525,6 +1695,29 @@ struct T5CLIPEmbedder : public Conditioner {
                                             conditioner_params.clip_skip,
                                             conditioner_params.zero_out_masked);
     }
+
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override {
+        return t5 ? t5->is_params_on_gpu() : false;
+    }
+
+    bool move_params_to_cpu() override {
+        return t5 ? t5->move_params_to_cpu() : false;
+    }
+
+    bool move_params_to_gpu() override {
+        return t5 ? t5->move_params_to_gpu() : false;
+    }
+
+    size_t get_params_vram_size() const override {
+        return t5 ? t5->get_params_vram_size() : 0;
+    }
+
+    void set_auto_offload(bool enabled) override {
+        if (t5) {
+            t5->set_auto_offload(enabled);
+        }
+    }
 };
 
 struct AnimaConditioner : public Conditioner {
@@ -1570,6 +1763,27 @@ struct AnimaConditioner : public Conditioner {
 
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
         llm->set_weight_adapter(adapter);
+    }
+
+    // Dynamic tensor offloading - delegate to LLM
+    bool is_params_on_gpu() const override {
+        return llm->is_params_on_gpu();
+    }
+
+    bool move_params_to_cpu() override {
+        return llm->move_params_to_cpu();
+    }
+
+    bool move_params_to_gpu() override {
+        return llm->move_params_to_gpu();
+    }
+
+    size_t get_params_vram_size() const override {
+        return llm->get_params_vram_size();
+    }
+
+    void set_auto_offload(bool enabled) override {
+        llm->set_auto_offload(enabled);
     }
 
     std::tuple<std::vector<int>, std::vector<float>, std::vector<int>, std::vector<float>> tokenize(std::string text) {
@@ -1998,6 +2212,29 @@ struct LLMEmbedder : public Conditioner {
         result.c_crossattn        = std::move(hidden_states);
         result.extra_c_crossattns = std::move(extra_hidden_states_vec);
         return result;
+    }
+
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override {
+        return llm ? llm->is_params_on_gpu() : false;
+    }
+
+    bool move_params_to_cpu() override {
+        return llm ? llm->move_params_to_cpu() : false;
+    }
+
+    bool move_params_to_gpu() override {
+        return llm ? llm->move_params_to_gpu() : false;
+    }
+
+    size_t get_params_vram_size() const override {
+        return llm ? llm->get_params_vram_size() : 0;
+    }
+
+    void set_auto_offload(bool enabled) override {
+        if (llm) {
+            llm->set_auto_offload(enabled);
+        }
     }
 };
 

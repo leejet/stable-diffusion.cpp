@@ -29,6 +29,7 @@
 #include "ggml_extend_backend.hpp"
 #include "ggml_graph_cut.h"
 
+#include "layer_streaming.hpp"
 #include "model.h"
 #include "tensor.hpp"
 
@@ -1721,6 +1722,7 @@ protected:
     ggml_context* offload_ctx                   = nullptr;
     ggml_backend_buffer_t runtime_params_buffer = nullptr;
     bool params_on_runtime_backend              = false;
+    bool auto_offload_after_compute             = true;  // If false, don't auto-offload in free_compute_buffer
 
     ggml_context* cache_ctx            = nullptr;
     ggml_backend_buffer_t cache_buffer = nullptr;
@@ -1728,10 +1730,19 @@ protected:
     ggml_context* compute_ctx    = nullptr;
     ggml_gallocr* compute_allocr = nullptr;
 
+    // Graph-cut segmented param offload (`--max-vram` budget): the executor
+    // streams only the params needed by the current sub-graph segment.
     ggml_context* partial_offload_ctx                   = nullptr;
     ggml_backend_buffer_t partial_runtime_params_buffer = nullptr;
     std::vector<std::pair<ggml_tensor*, ggml_tensor*>> partial_offload_pairs;
     size_t max_graph_vram_bytes = 0;
+
+    // GPU-pinned host buffer shared across the per-runner persistent
+    // activation regions used by layer-streaming compute paths (txt_img,
+    // t_emb, pe, vec, ...). Allocated lazily in ensure_pinned_act_buffers()
+    // and freed in ~GGMLRunner.
+    ggml_backend_buffer_t persistent_act_host_buf_ = nullptr;
+    size_t persistent_act_host_size_               = 0;
 
     std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
 
@@ -1750,8 +1761,89 @@ protected:
     bool circular_x_enabled    = false;
     bool circular_y_enabled    = false;
 
+    // Graph-cut planner state — caches the segment plan + the set of param
+    // tensors so the planner doesn't rebuild on every dispatch.
     sd::ggml_graph_cut::PlanCache graph_cut_plan_cache_;
     std::unordered_set<const ggml_tensor*> params_tensor_set_;
+
+    // Layer-streaming engine: drives per-layer prefetch + dispatch when the
+    // runner is configured with `--offload-mode layer_streaming`.
+    std::unique_ptr<LayerStreaming::LayerExecutionEngine> streaming_engine_;
+
+    using layer_pattern_fn_t = std::function<std::pair<std::string, int>(const std::string&)>;
+
+    void init_streaming(const LayerStreaming::StreamingConfig& config,
+                        const std::map<std::string, ggml_tensor*>& tensor_map,
+                        layer_pattern_fn_t pattern_fn) {
+        if (!params_backend || !runtime_backend) {
+            LOG_WARN("%s cannot enable streaming without both CPU and GPU backends", get_desc().c_str());
+            return;
+        }
+        if (!streaming_engine_) {
+            streaming_engine_ = std::make_unique<LayerStreaming::LayerExecutionEngine>(
+                runtime_backend, params_backend);
+        }
+        auto cfg = config;
+        cfg.enabled = true;
+        streaming_engine_->set_config(cfg);
+        streaming_engine_->register_model_layers_from_map(tensor_map, pattern_fn);
+    }
+
+    struct StreamingVramAnalysis {
+        size_t total_model_size = 0;
+        size_t available_vram   = 0;
+        size_t already_on_gpu   = 0;
+        size_t remaining_to_load = 0;
+        bool fits_in_vram       = false;
+    };
+
+    StreamingVramAnalysis analyze_vram_budget() {
+        StreamingVramAnalysis result = {};
+        if (!streaming_engine_) return result;
+
+        auto& registry = streaming_engine_->get_registry();
+        auto& budget   = streaming_engine_->get_budget();
+
+        auto all_layers = registry.get_layer_names_sorted();
+        for (const auto& name : all_layers) {
+            result.total_model_size += registry.get_layer_size(name);
+        }
+
+        result.available_vram = budget.get_available_vram();
+
+        for (const auto& name : all_layers) {
+            if (registry.is_layer_on_gpu(name)) {
+                result.already_on_gpu += registry.get_layer_size(name);
+            }
+        }
+
+        result.remaining_to_load = (result.total_model_size > result.already_on_gpu)
+            ? (result.total_model_size - result.already_on_gpu) : 0;
+        result.fits_in_vram = (result.remaining_to_load <= result.available_vram);
+
+        LOG_DEBUG("%s model size = %.2f GB, on GPU = %.2f GB, remaining = %.2f GB, available VRAM = %.2f GB",
+                  get_desc().c_str(),
+                  result.total_model_size / (1024.0 * 1024.0 * 1024.0),
+                  result.already_on_gpu / (1024.0 * 1024.0 * 1024.0),
+                  result.remaining_to_load / (1024.0 * 1024.0 * 1024.0),
+                  result.available_vram / (1024.0 * 1024.0 * 1024.0));
+
+        return result;
+    }
+
+    bool load_all_layers_coarse() {
+        if (!streaming_engine_) return false;
+        auto& registry = streaming_engine_->get_registry();
+        auto& budget   = streaming_engine_->get_budget();
+        auto all_layers = registry.get_layer_names_sorted();
+        for (const auto& name : all_layers) {
+            if (!registry.is_layer_on_gpu(name)) {
+                budget.ensure_vram_for_layer(name, 0);
+                registry.move_layer_to_gpu(name);
+            }
+        }
+        return true;
+    }
 
     template <typename T>
     static sd::Tensor<T> take_or_empty(std::optional<sd::Tensor<T>> tensor) {
@@ -1888,6 +1980,11 @@ protected:
         return gf;
     }
 
+    // Two-step compute graph + buffer setup. Upstream split alloc_compute_buffer
+    // into prepare_compute_graph + alloc_compute_buffer(gf) so the graph-cut
+    // planner can inspect the graph before reserving (it needs to know which
+    // params each segment touches). The old single-call form is preserved as
+    // an overload below for callers that don't need the inspection step.
     bool prepare_compute_graph(get_graph_cb_t get_graph,
                                ggml_cgraph** gf_out) {
         GGML_ASSERT(gf_out != nullptr);
@@ -1910,18 +2007,39 @@ protected:
         compute_allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(runtime_backend));
 
         if (!ggml_gallocr_reserve(compute_allocr, gf)) {
-            // failed to allocate the compute buffer
             LOG_ERROR("%s: failed to allocate the compute buffer\n", get_desc().c_str());
             free_compute_buffer();
             return false;
         }
 
-        // compute the required memory
         size_t compute_buffer_size = ggml_gallocr_get_buffer_size(compute_allocr, 0);
         LOG_DEBUG("%s compute buffer size: %.2f MB(%s)",
                   get_desc().c_str(),
                   compute_buffer_size / 1024.0 / 1024.0,
                   ggml_backend_is_cpu(runtime_backend) ? "RAM" : "VRAM");
+        return true;
+    }
+
+    // Backward-compatible single-call overload. Used by the layer-streaming
+    // path which doesn't need to re-inspect the graph before allocating; it
+    // wraps prepare_compute_graph + alloc_compute_buffer(gf) and returns the
+    // built graph via *out_gf so the caller can reuse it for the subsequent
+    // ggml_gallocr_alloc_graph() pass (avoids tensor pointer mismatches).
+    bool alloc_compute_buffer(get_graph_cb_t get_graph, struct ggml_cgraph** out_gf = nullptr) {
+        if (compute_allocr != nullptr) {
+            if (out_gf) *out_gf = nullptr;
+            return true;
+        }
+        ggml_cgraph* gf = nullptr;
+        if (!prepare_compute_graph(get_graph, &gf)) {
+            if (out_gf) *out_gf = nullptr;
+            return false;
+        }
+        if (!alloc_compute_buffer(gf)) {
+            if (out_gf) *out_gf = nullptr;
+            return false;
+        }
+        if (out_gf) *out_gf = gf;
         return true;
     }
 
@@ -2015,29 +2133,44 @@ protected:
         return true;
     }
 
-    void copy_data_to_backend_tensor(ggml_cgraph* gf, bool clear_after_copy = true) {
-        GGML_ASSERT(gf != nullptr);
+    // Upload entries from backend_tensor_data_map to their backend tensors.
+    // When a graph is supplied, only tensors that appear in the graph are
+    // uploaded (graph-cut needs this so segment-N inputs aren't touched
+    // outside their segment); otherwise every entry is uploaded
+    // unconditionally, which is what the layer-streaming dispatch path
+    // wants since each layer's mini-graph carries only its own inputs.
+    void copy_data_to_backend_tensor(ggml_cgraph* gf = nullptr, bool clear_after_copy = true) {
         std::unordered_set<const ggml_tensor*> graph_tensor_set;
-        const int n_leafs = sd::ggml_graph_cut::leaf_count(gf);
-        const int n_nodes = ggml_graph_n_nodes(gf);
-        graph_tensor_set.reserve(static_cast<size_t>(n_leafs + n_nodes));
-        for (int i = 0; i < n_leafs; ++i) {
-            graph_tensor_set.insert(sd::ggml_graph_cut::leaf_tensor(gf, i));
+        if (gf != nullptr) {
+            const int n_leafs = sd::ggml_graph_cut::leaf_count(gf);
+            const int n_nodes = ggml_graph_n_nodes(gf);
+            graph_tensor_set.reserve(static_cast<size_t>(n_leafs + n_nodes));
+            for (int i = 0; i < n_leafs; ++i) {
+                graph_tensor_set.insert(sd::ggml_graph_cut::leaf_tensor(gf, i));
+            }
+            for (int i = 0; i < n_nodes; ++i) {
+                graph_tensor_set.insert(ggml_graph_node(gf, i));
+            }
         }
-        for (int i = 0; i < n_nodes; ++i) {
-            graph_tensor_set.insert(ggml_graph_node(gf, i));
-        }
+
+        int copied_count  = 0;
+        int skipped_count = 0;
 
         for (auto& kv : backend_tensor_data_map) {
             auto tensor = kv.first;
             auto data   = kv.second;
 
-            if (graph_tensor_set.find(tensor) == graph_tensor_set.end()) {
+            if (gf != nullptr && graph_tensor_set.find(tensor) == graph_tensor_set.end()) {
                 continue;
             }
 
             ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
             if (buf == nullptr) {
+                // Either an input the graph didn't actually allocate, or a
+                // genuine missing-buffer bug. Log once with enough context
+                // to debug; treat as skip rather than crash so layer streaming
+                // (which adds inputs that may go unused in some sub-graphs)
+                // doesn't trip on benign cases.
                 LOG_WARN("%s graph exec skip tensor copy: name=%s op=%s reason=buffer_not_set data=%p view_src=%p view_src_buffer=%p",
                          get_desc().c_str(),
                          tensor && tensor->name[0] != '\0' ? tensor->name : "<unnamed>",
@@ -2045,10 +2178,16 @@ protected:
                          data,
                          tensor ? tensor->view_src : nullptr,
                          (tensor && tensor->view_src) ? tensor->view_src->buffer : nullptr);
+                skipped_count++;
                 continue;
             }
 
             ggml_backend_tensor_set(tensor, data, 0, ggml_nbytes(tensor));
+            copied_count++;
+        }
+
+        if (copied_count > 0 || skipped_count > 0) {
+            LOG_DEBUG("copy_data_to_backend_tensor: copied %d tensors, skipped %d", copied_count, skipped_count);
         }
 
         if (clear_after_copy) {
@@ -2539,6 +2678,15 @@ public:
 
     virtual ~GGMLRunner() {
         free_params_buffer();
+        // Also free runtime params buffer (GPU) if allocated
+        if (runtime_params_buffer != nullptr) {
+            ggml_backend_buffer_free(runtime_params_buffer);
+            runtime_params_buffer = nullptr;
+        }
+        if (persistent_act_host_buf_ != nullptr) {
+            ggml_backend_buffer_free(persistent_act_host_buf_);
+            persistent_act_host_buf_ = nullptr;
+        }
         free_compute_buffer();
         free_params_ctx();
         free_compute_ctx();
@@ -2546,6 +2694,57 @@ public:
             ggml_backend_free(params_backend);
         }
         free_cache_ctx_and_buffer();
+    }
+
+    // Allocates (or grows) a single GPU-pinned host buffer that backs all the
+    // runner's persistent activation regions for streaming compute paths, and
+    // writes 256-byte-aligned start pointers for each region into out_ptrs
+    // (same length as sizes_bytes). Pinned host memory makes the per-layer
+    // ggml_backend_tensor_get / copy_data_to_backend_tensor calls run at
+    // full PCIe bandwidth instead of staging through CUDA's bounce buffer.
+    //
+    // Returns true on success. On failure (pinned alloc rejected by the
+    // backend, e.g. out of locked pages) returns false so the caller can
+    // fall back to pageable std::vector storage — output is still correct,
+    // just slower.
+    bool ensure_pinned_act_buffers(const std::vector<size_t>& sizes_bytes,
+                                   std::vector<float*>& out_ptrs) {
+        out_ptrs.assign(sizes_bytes.size(), nullptr);
+        const size_t align = 256;
+        std::vector<size_t> aligned_sizes(sizes_bytes.size());
+        size_t total = 0;
+        for (size_t i = 0; i < sizes_bytes.size(); i++) {
+            aligned_sizes[i] = ((sizes_bytes[i] + align - 1) / align) * align;
+            total += aligned_sizes[i];
+        }
+
+        if (persistent_act_host_buf_ == nullptr || persistent_act_host_size_ < total) {
+            if (persistent_act_host_buf_ != nullptr) {
+                ggml_backend_buffer_free(persistent_act_host_buf_);
+                persistent_act_host_buf_ = nullptr;
+            }
+            ggml_backend_dev_t gpu_dev = runtime_backend ? ggml_backend_get_device(runtime_backend) : nullptr;
+            ggml_backend_buffer_type_t host_buft = gpu_dev ? ggml_backend_dev_host_buffer_type(gpu_dev) : nullptr;
+            if (host_buft != nullptr) {
+                persistent_act_host_buf_ = ggml_backend_buft_alloc_buffer(host_buft, total);
+            }
+            if (persistent_act_host_buf_ == nullptr) {
+                LOG_WARN("%s pinned activation buffer alloc failed (%.2f MB), "
+                         "falling back to pageable",
+                         get_desc().c_str(), total / (1024.0 * 1024.0));
+                persistent_act_host_size_ = 0;
+                return false;
+            }
+            persistent_act_host_size_ = total;
+        }
+
+        char* base = static_cast<char*>(ggml_backend_buffer_get_base(persistent_act_host_buf_));
+        size_t offset = 0;
+        for (size_t i = 0; i < sizes_bytes.size(); i++) {
+            out_ptrs[i] = reinterpret_cast<float*>(base + offset);
+            offset += aligned_sizes[i];
+        }
+        return true;
     }
 
     virtual GGMLRunnerContext get_context() {
@@ -2567,7 +2766,34 @@ public:
 
     bool alloc_params_buffer() {
         size_t num_tensors = ggml_tensor_num(params_ctx);
-        params_buffer      = ggml_backend_alloc_ctx_tensors(params_ctx, params_backend);
+        bool used_pinned_host = false;
+
+        // When weights live on CPU but get streamed/transferred to GPU during
+        // compute, allocate them in the GPU device's pinned host buffer so
+        // async H2D copies actually overlap with compute. Without pinning,
+        // CUDA falls back to a staged sync copy through an internal bounce
+        // buffer (and Vulkan/Metal hit similar slow paths).
+        if (params_backend != runtime_backend && ggml_backend_is_cpu(params_backend)) {
+            ggml_backend_dev_t gpu_dev = ggml_backend_get_device(runtime_backend);
+            if (gpu_dev != nullptr) {
+                ggml_backend_buffer_type_t host_buft = ggml_backend_dev_host_buffer_type(gpu_dev);
+                if (host_buft != nullptr) {
+                    params_buffer = ggml_backend_alloc_ctx_tensors_from_buft(params_ctx, host_buft);
+                    if (params_buffer != nullptr) {
+                        used_pinned_host = true;
+                    } else {
+                        LOG_WARN("%s pinned host alloc failed (system out of locked pages?), "
+                                 "falling back to pageable",
+                                 get_desc().c_str());
+                    }
+                }
+            }
+        }
+
+        if (params_buffer == nullptr) {
+            params_buffer = ggml_backend_alloc_ctx_tensors(params_ctx, params_backend);
+        }
+
         if (params_buffer == nullptr) {
             LOG_ERROR("%s alloc params backend buffer failed, num_tensors = %i",
                       get_desc().c_str(),
@@ -2577,15 +2803,20 @@ public:
         rebuild_params_tensor_set();
         ggml_backend_buffer_set_usage(params_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
         size_t params_buffer_size = ggml_backend_buffer_get_size(params_buffer);
-        LOG_DEBUG("%s params backend buffer size = % 6.2f MB(%s) (%i tensors)",
+        LOG_DEBUG("%s params backend buffer size = % 6.2f MB(%s%s) (%i tensors)",
                   get_desc().c_str(),
                   params_buffer_size / (1024.f * 1024.f),
                   ggml_backend_is_cpu(params_backend) ? "RAM" : "VRAM",
+                  used_pinned_host ? ",pinned" : "",
                   num_tensors);
         return true;
     }
 
     void free_params_buffer() {
+        // If params are on GPU, move them back to CPU first (this also frees runtime_params_buffer)
+        if (params_on_runtime_backend) {
+            offload_params_to_params_backend();
+        }
         if (params_buffer != nullptr) {
             ggml_backend_buffer_free(params_buffer);
             params_buffer = nullptr;
@@ -2599,6 +2830,128 @@ public:
         return 0;
     }
 
+    // Estimate compute buffer size without actually allocating (dry-run)
+    // Returns 0 on failure, otherwise the required buffer size in bytes
+    size_t estimate_compute_buffer_size(get_graph_cb_t get_graph) {
+        reset_compute_ctx();
+        struct ggml_cgraph* gf = get_compute_graph(get_graph);
+        backend_tensor_data_map.clear();
+
+        ggml_gallocr_t temp_allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(runtime_backend));
+        if (temp_allocr == nullptr) {
+            return 0;
+        }
+
+        size_t result = 0;
+        if (ggml_gallocr_reserve(temp_allocr, gf)) {
+            result = ggml_gallocr_get_buffer_size(temp_allocr, 0);
+        }
+
+        ggml_gallocr_free(temp_allocr);
+        reset_compute_ctx();  // Clean up after estimation
+        return result;
+    }
+
+    // Dynamic tensor offloading API
+    // Returns true if params are currently on the runtime (GPU) backend
+    bool is_params_on_gpu() const {
+        // If params_backend == runtime_backend, params are always "on GPU"
+        // (or always on CPU if CPU-only mode)
+        if (params_backend == runtime_backend) {
+            return !ggml_backend_is_cpu(runtime_backend);
+        }
+        // Otherwise check the offload state
+        return params_on_runtime_backend;
+    }
+
+    // Move params from GPU to CPU (params_backend), freeing GPU memory
+    // Returns true on success, false if already on CPU or not applicable
+    bool move_params_to_cpu() {
+        if (params_backend == runtime_backend) {
+            // No separate CPU backend configured, can't offload
+            return false;
+        }
+        if (!params_on_runtime_backend) {
+            // Already on CPU
+            return true;
+        }
+        offload_params_to_params_backend();
+        return true;
+    }
+
+    // Move params from CPU to GPU (runtime_backend), allocating GPU memory
+    // Returns true on success, false if already on GPU or allocation failed
+    bool move_params_to_gpu() {
+        if (params_backend == runtime_backend) {
+            // No separate CPU backend, params are always on runtime backend
+            return true;
+        }
+        if (params_on_runtime_backend) {
+            // Already on GPU
+            return true;
+        }
+        return offload_params_to_runtime_backend();
+    }
+
+    // Get the size of params buffer (VRAM usage when on GPU)
+    size_t get_params_vram_size() const {
+        if (params_buffer != nullptr) {
+            return ggml_backend_buffer_get_size(params_buffer);
+        }
+        return 0;
+    }
+
+    // Control automatic offloading after compute operations
+    // When disabled, params stay on GPU until explicitly moved via move_params_to_cpu()
+    void set_auto_offload(bool enabled) {
+        auto_offload_after_compute = enabled;
+    }
+
+    bool get_auto_offload() const {
+        return auto_offload_after_compute;
+    }
+
+    bool is_streaming_enabled() const {
+        return streaming_engine_ && streaming_engine_->get_config().enabled;
+    }
+
+    void disable_layer_streaming() {
+        if (streaming_engine_) {
+            auto cfg = streaming_engine_->get_config();
+            cfg.enabled = false;
+            streaming_engine_->set_config(cfg);
+        }
+    }
+
+    void offload_streaming_layers() {
+        if (!streaming_engine_) return;
+        auto& registry = streaming_engine_->get_registry();
+        auto layers = registry.get_layer_names_sorted();
+        size_t offloaded = 0;
+        for (const auto& layer : layers) {
+            if (registry.is_layer_on_gpu(layer)) {
+                registry.move_layer_to_cpu(layer);
+                offloaded++;
+            }
+        }
+        if (offloaded > 0) {
+            LOG_INFO("%s offloaded %zu streaming layers to CPU", get_desc().c_str(), offloaded);
+        }
+        // Hook: runners can drop any cached state that referenced the resident
+        // layers (e.g. ZImageRunner's Phase 4 chunk graph), since those tensors
+        // have just been moved to CPU.
+        on_streaming_layers_offloaded();
+    }
+
+    // Override in subclasses to release any cached state tied to the
+    // streaming layers' GPU residency (e.g. cached chunk graphs whose ops
+    // reference the now-evicted weight tensors).
+    virtual void on_streaming_layers_offloaded() {}
+
+    LayerStreaming::LayerExecutionEngine* get_streaming_engine() {
+        return streaming_engine_.get();
+    }
+
     void free_cache_ctx_and_buffer() {
         free_cache_buffer();
         free_cache_ctx();
@@ -2609,8 +2962,16 @@ public:
             ggml_gallocr_free(compute_allocr);
             compute_allocr = nullptr;
         }
+        // Graph-cut path: undo any per-segment partial offload so the next
+        // compute starts fresh. Both restore_* calls are no-ops if not active.
         restore_partial_params();
         restore_all_params();
+        // Layer-streaming / offload-mode path: when the runner has been told
+        // to drop params back to the params backend after each compute (e.g.
+        // cond_diffusion / aggressive modes), do that here.
+        if (auto_offload_after_compute) {
+            offload_params_to_params_backend();
+        }
     }
 
     // do copy after alloc graph
@@ -2669,6 +3030,69 @@ public:
         return ggml_get_tensor(cache_ctx, name.c_str());
     }
 
+    // Our fork's compute overload with output tensor and skip_param_offload support
+    bool compute(get_graph_cb_t get_graph,
+                 int n_threads,
+                 bool free_compute_buffer_immediately = true,
+                 ggml_tensor** output                 = nullptr,
+                 ggml_context* output_ctx             = nullptr,
+                 bool skip_param_offload              = false) {
+        // In streaming mode, weights are managed by the streaming engine
+        // so skip the bulk offload which would fail due to VRAM limits
+        if (!skip_param_offload && !offload_params_to_runtime_backend()) {
+            LOG_ERROR("%s offload params to runtime backend failed", get_desc().c_str());
+            return false;
+        }
+
+        ggml_cgraph* gf = nullptr;
+        if (!alloc_compute_buffer(get_graph, &gf)) {
+            LOG_ERROR("%s alloc compute buffer failed", get_desc().c_str());
+            return false;
+        }
+        // If alloc_compute_buffer just created a new allocator, gf contains the graph
+        // used for reservation and we MUST reuse it (same tensor pointers).
+        // If allocator already existed, gf is nullptr and we need to rebuild.
+        if (gf == nullptr) {
+            backend_tensor_data_map.clear();
+            reset_compute_ctx();
+            gf = get_compute_graph(get_graph);
+        }
+
+        if (!ggml_gallocr_alloc_graph(compute_allocr, gf)) {
+            LOG_ERROR("%s alloc compute graph failed", get_desc().c_str());
+            return false;
+        }
+        copy_data_to_backend_tensor();
+        if (ggml_backend_is_cpu(runtime_backend)) {
+            ggml_backend_cpu_set_n_threads(runtime_backend, n_threads);
+        }
+
+        ggml_status status = ggml_backend_graph_compute(runtime_backend, gf);
+        if (status != GGML_STATUS_SUCCESS) {
+            LOG_ERROR("%s compute failed: %s", get_desc().c_str(), ggml_status_to_string(status));
+            return false;
+        }
+#ifdef GGML_PERF
+        ggml_graph_print(gf);
+#endif
+        copy_cache_tensors_to_cache_buffer();
+        if (output != nullptr) {
+            auto result = ggml_get_tensor(compute_ctx, final_result_name.c_str());
+            if (*output == nullptr && output_ctx != nullptr) {
+                *output = ggml_dup_tensor(output_ctx, result);
+            }
+            if (*output != nullptr) {
+                ggml_ext_backend_tensor_get_and_sync(runtime_backend, result, (*output)->data, 0, ggml_nbytes(*output));
+            }
+        }
+
+        if (free_compute_buffer_immediately) {
+            free_compute_buffer();
+        }
+        return true;
+    }
+
+    // Upstream's templated compute returning sd::Tensor
     template <typename T>
     std::optional<sd::Tensor<T>> compute(get_graph_cb_t get_graph,
                                          int n_threads,
@@ -2680,6 +3104,10 @@ public:
         }
         GGML_ASSERT(gf != nullptr);
 
+        // Try the graph-cut segmented path first when --max-vram is set and
+        // params live on a different backend than the runtime. The planner
+        // may decide a single segment is enough, in which case we fall
+        // through to the regular alloc + execute path below.
         if (can_attempt_graph_cut_segmented_compute()) {
             GraphCutPlan plan;
             if (!resolve_graph_cut_plan(gf, &plan)) {

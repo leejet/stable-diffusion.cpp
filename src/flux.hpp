@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "common_dit.hpp"
+#include "layer_streaming.hpp"
 #include "model.h"
 #include "rope.hpp"
 
@@ -847,6 +848,142 @@ namespace Flux {
             }
         }
 
+        struct StreamingInputResult {
+            ggml_tensor* img;
+            ggml_tensor* txt;
+            ggml_tensor* vec;
+            ggml_tensor* txt_img_mask;
+            std::vector<ModulationOut> ds_img_mods;
+            std::vector<ModulationOut> ds_txt_mods;
+            std::vector<ModulationOut> ss_mods;
+            int64_t n_txt_tokens;
+        };
+
+        StreamingInputResult forward_input_stage(GGMLRunnerContext* ctx,
+                                                 ggml_tensor* img,
+                                                 ggml_tensor* txt,
+                                                 ggml_tensor* timesteps,
+                                                 ggml_tensor* y,
+                                                 ggml_tensor* guidance,
+                                                 ggml_tensor* mod_index_arange = nullptr) {
+            auto img_in = std::dynamic_pointer_cast<Linear>(blocks["img_in"]);
+            auto txt_in = std::dynamic_pointer_cast<Linear>(blocks["txt_in"]);
+
+            int64_t n_txt_tokens = txt->ne[1];
+
+            if (img_in) {
+                img = img_in->forward(ctx, img);
+            }
+
+            ggml_tensor* vec;
+            ggml_tensor* txt_img_mask = nullptr;
+            if (params.is_chroma) {
+                int64_t mod_index_length = 344;
+                auto approx = std::dynamic_pointer_cast<ChromaApproximator>(blocks["distilled_guidance_layer"]);
+                auto distill_timestep = ggml_ext_timestep_embedding(ctx->ggml_ctx, timesteps, 16, 10000, 1000.f);
+                auto distill_guidance = ggml_ext_timestep_embedding(ctx->ggml_ctx, guidance, 16, 10000, 1000.f);
+
+                GGML_ASSERT(mod_index_arange != nullptr);
+                auto modulation_index = ggml_ext_timestep_embedding(ctx->ggml_ctx, mod_index_arange, 32, 10000, 1000.f);
+                modulation_index = ggml_repeat(ctx->ggml_ctx, modulation_index, ggml_new_tensor_3d(ctx->ggml_ctx, GGML_TYPE_F32, modulation_index->ne[0], modulation_index->ne[1], img->ne[2]));
+
+                auto timestep_guidance = ggml_concat(ctx->ggml_ctx, distill_timestep, distill_guidance, 0);
+                timestep_guidance = ggml_repeat(ctx->ggml_ctx, timestep_guidance, modulation_index);
+
+                vec = ggml_concat(ctx->ggml_ctx, timestep_guidance, modulation_index, 0);
+                vec = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, vec, 0, 2, 1, 3));
+                vec = approx->forward(ctx, vec);
+
+                if (y != nullptr) {
+                    txt_img_mask = ggml_pad(ctx->ggml_ctx, y, static_cast<int>(img->ne[1]), 0, 0, 0);
+                }
+            } else {
+                auto time_in = std::dynamic_pointer_cast<MLPEmbedder>(blocks["time_in"]);
+                vec = time_in->forward(ctx, ggml_ext_timestep_embedding(ctx->ggml_ctx, timesteps, 256, 10000, 1000.f));
+                if (params.guidance_embed) {
+                    GGML_ASSERT(guidance != nullptr);
+                    auto guidance_in = std::dynamic_pointer_cast<MLPEmbedder>(blocks["guidance_in"]);
+                    auto g_in = ggml_ext_timestep_embedding(ctx->ggml_ctx, guidance, 256, 10000, 1000.f);
+                    vec = ggml_add(ctx->ggml_ctx, vec, guidance_in->forward(ctx, g_in));
+                }
+                if (params.vec_in_dim > 0) {
+                    auto vector_in = std::dynamic_pointer_cast<MLPEmbedder>(blocks["vector_in"]);
+                    vec = ggml_add(ctx->ggml_ctx, vec, vector_in->forward(ctx, y));
+                }
+            }
+
+            std::vector<ModulationOut> ds_img_mods;
+            std::vector<ModulationOut> ds_txt_mods;
+            std::vector<ModulationOut> ss_mods;
+            if (params.share_modulation) {
+                auto double_stream_modulation_img = std::dynamic_pointer_cast<Modulation>(blocks["double_stream_modulation_img"]);
+                auto double_stream_modulation_txt = std::dynamic_pointer_cast<Modulation>(blocks["double_stream_modulation_txt"]);
+                auto single_stream_modulation = std::dynamic_pointer_cast<Modulation>(blocks["single_stream_modulation"]);
+
+                ds_img_mods = double_stream_modulation_img->forward(ctx, vec);
+                ds_txt_mods = double_stream_modulation_txt->forward(ctx, vec);
+                ss_mods = single_stream_modulation->forward(ctx, vec);
+            }
+
+            if (params.semantic_txt_norm) {
+                auto semantic_txt_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["txt_norm"]);
+                txt = semantic_txt_norm->forward(ctx, txt);
+            }
+
+            txt = txt_in->forward(ctx, txt);
+
+            return {img, txt, vec, txt_img_mask, ds_img_mods, ds_txt_mods, ss_mods, n_txt_tokens};
+        }
+
+        std::pair<ggml_tensor*, ggml_tensor*> forward_double_block(GGMLRunnerContext* ctx,
+                                                                    int block_idx,
+                                                                    ggml_tensor* img,
+                                                                    ggml_tensor* txt,
+                                                                    ggml_tensor* vec,
+                                                                    ggml_tensor* pe,
+                                                                    ggml_tensor* txt_img_mask,
+                                                                    std::vector<ModulationOut>& ds_img_mods,
+                                                                    std::vector<ModulationOut>& ds_txt_mods) {
+            auto block = std::dynamic_pointer_cast<DoubleStreamBlock>(blocks["double_blocks." + std::to_string(block_idx)]);
+            auto img_txt = block->forward(ctx, img, txt, vec, pe, txt_img_mask, ds_img_mods, ds_txt_mods);
+            return img_txt;
+        }
+
+        ggml_tensor* forward_single_block(GGMLRunnerContext* ctx,
+                                           int block_idx,
+                                           ggml_tensor* txt_img,
+                                           ggml_tensor* vec,
+                                           ggml_tensor* pe,
+                                           ggml_tensor* txt_img_mask,
+                                           std::vector<ModulationOut>& ss_mods) {
+            auto block = std::dynamic_pointer_cast<SingleStreamBlock>(blocks["single_blocks." + std::to_string(block_idx)]);
+            return block->forward(ctx, txt_img, vec, pe, txt_img_mask, ss_mods);
+        }
+
+        ggml_tensor* forward_output_stage(GGMLRunnerContext* ctx,
+                                           ggml_tensor* txt_img,
+                                           ggml_tensor* vec,
+                                           int64_t n_img_tokens,
+                                           int64_t n_txt_tokens) {
+            auto final_layer = std::dynamic_pointer_cast<LastLayer>(blocks["final_layer"]);
+
+            // Extract img from txt_img
+            auto img = ggml_view_3d(ctx->ggml_ctx,
+                                    txt_img,
+                                    txt_img->ne[0],
+                                    n_img_tokens,
+                                    txt_img->ne[2],
+                                    txt_img->nb[1],
+                                    txt_img->nb[2],
+                                    n_txt_tokens * txt_img->nb[1]);
+
+            if (final_layer) {
+                img = final_layer->forward(ctx, img, vec);
+            }
+
+            return img;
+        }
+
         ggml_tensor* forward_orig(GGMLRunnerContext* ctx,
                                   ggml_tensor* img,
                                   ggml_tensor* txt,
@@ -1175,6 +1312,190 @@ namespace Flux {
                                            skip_layers);
             }
         }
+
+        struct StreamingContext {
+            // Intermediate tensors (persist across blocks)
+            ggml_tensor* img = nullptr;            // Image features
+            ggml_tensor* txt = nullptr;            // Text features
+            ggml_tensor* vec = nullptr;            // Time/guidance embedding
+            ggml_tensor* pe  = nullptr;            // Positional encoding
+            ggml_tensor* txt_img_mask = nullptr;   // Mask for attention
+
+            // Precomputed modulations (computed once, used by all blocks)
+            std::vector<ModulationOut> ds_img_mods;
+            std::vector<ModulationOut> ds_txt_mods;
+            std::vector<ModulationOut> ss_mods;
+
+            // State tracking
+            int current_double_block = 0;
+            int current_single_block = 0;
+            bool preprocessing_done  = false;
+            bool double_blocks_done  = false;
+            bool single_blocks_done  = false;
+
+            // Concatenated tensor for single blocks
+            ggml_tensor* txt_img = nullptr;
+
+            void reset() {
+                img = txt = vec = pe = txt_img_mask = txt_img = nullptr;
+                ds_img_mods.clear();
+                ds_txt_mods.clear();
+                ss_mods.clear();
+                current_double_block = 0;
+                current_single_block = 0;
+                preprocessing_done = false;
+                double_blocks_done = false;
+                single_blocks_done = false;
+            }
+        };
+
+        void forward_preprocessing(GGMLRunnerContext* ctx,
+                                   StreamingContext& stream_ctx,
+                                   ggml_tensor* img,
+                                   ggml_tensor* txt,
+                                   ggml_tensor* timesteps,
+                                   ggml_tensor* y,
+                                   ggml_tensor* guidance,
+                                   ggml_tensor* pe,
+                                   ggml_tensor* mod_index_arange = nullptr) {
+            auto img_in      = std::dynamic_pointer_cast<Linear>(blocks["img_in"]);
+            auto txt_in      = std::dynamic_pointer_cast<Linear>(blocks["txt_in"]);
+
+            // Image input projection
+            if (img_in) {
+                stream_ctx.img = img_in->forward(ctx, img);
+            } else {
+                stream_ctx.img = img;
+            }
+
+            // Compute vec (time/guidance embedding)
+            if (params.is_chroma) {
+                int64_t mod_index_length = 344;
+                auto approx = std::dynamic_pointer_cast<ChromaApproximator>(blocks["distilled_guidance_layer"]);
+                auto distill_timestep = ggml_ext_timestep_embedding(ctx->ggml_ctx, timesteps, 16, 10000, 1000.f);
+                auto distill_guidance = ggml_ext_timestep_embedding(ctx->ggml_ctx, guidance, 16, 10000, 1000.f);
+
+                GGML_ASSERT(mod_index_arange != nullptr);
+                auto modulation_index = ggml_ext_timestep_embedding(ctx->ggml_ctx, mod_index_arange, 32, 10000, 1000.f);
+                modulation_index = ggml_repeat(ctx->ggml_ctx, modulation_index,
+                    ggml_new_tensor_3d(ctx->ggml_ctx, GGML_TYPE_F32, modulation_index->ne[0], modulation_index->ne[1], img->ne[2]));
+
+                auto timestep_guidance = ggml_concat(ctx->ggml_ctx, distill_timestep, distill_guidance, 0);
+                timestep_guidance = ggml_repeat(ctx->ggml_ctx, timestep_guidance, modulation_index);
+
+                stream_ctx.vec = ggml_concat(ctx->ggml_ctx, timestep_guidance, modulation_index, 0);
+                stream_ctx.vec = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, stream_ctx.vec, 0, 2, 1, 3));
+                stream_ctx.vec = approx->forward(ctx, stream_ctx.vec);
+
+                if (y != nullptr) {
+                    stream_ctx.txt_img_mask = ggml_pad(ctx->ggml_ctx, y, static_cast<int>(img->ne[1]), 0, 0, 0);
+                }
+            } else {
+                auto time_in = std::dynamic_pointer_cast<MLPEmbedder>(blocks["time_in"]);
+                stream_ctx.vec = time_in->forward(ctx, ggml_ext_timestep_embedding(ctx->ggml_ctx, timesteps, 256, 10000, 1000.f));
+
+                if (params.guidance_embed) {
+                    GGML_ASSERT(guidance != nullptr);
+                    auto guidance_in = std::dynamic_pointer_cast<MLPEmbedder>(blocks["guidance_in"]);
+                    auto g_in = ggml_ext_timestep_embedding(ctx->ggml_ctx, guidance, 256, 10000, 1000.f);
+                    stream_ctx.vec = ggml_add(ctx->ggml_ctx, stream_ctx.vec, guidance_in->forward(ctx, g_in));
+                }
+
+                if (params.vec_in_dim > 0) {
+                    auto vector_in = std::dynamic_pointer_cast<MLPEmbedder>(blocks["vector_in"]);
+                    stream_ctx.vec = ggml_add(ctx->ggml_ctx, stream_ctx.vec, vector_in->forward(ctx, y));
+                }
+            }
+
+            // Precompute modulations (used by all blocks)
+            if (params.share_modulation) {
+                auto double_stream_modulation_img = std::dynamic_pointer_cast<Modulation>(blocks["double_stream_modulation_img"]);
+                auto double_stream_modulation_txt = std::dynamic_pointer_cast<Modulation>(blocks["double_stream_modulation_txt"]);
+                auto single_stream_modulation = std::dynamic_pointer_cast<Modulation>(blocks["single_stream_modulation"]);
+
+                stream_ctx.ds_img_mods = double_stream_modulation_img->forward(ctx, stream_ctx.vec);
+                stream_ctx.ds_txt_mods = double_stream_modulation_txt->forward(ctx, stream_ctx.vec);
+                stream_ctx.ss_mods = single_stream_modulation->forward(ctx, stream_ctx.vec);
+            }
+
+            // Text normalization and projection
+            if (params.semantic_txt_norm) {
+                auto semantic_txt_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["txt_norm"]);
+                txt = semantic_txt_norm->forward(ctx, txt);
+            }
+            stream_ctx.txt = txt_in->forward(ctx, txt);
+
+            // Store PE
+            stream_ctx.pe = pe;
+
+            stream_ctx.preprocessing_done = true;
+            stream_ctx.current_double_block = 0;
+            stream_ctx.current_single_block = 0;
+        }
+
+        bool forward_double_block(GGMLRunnerContext* ctx,
+                                  StreamingContext& stream_ctx,
+                                  int block_idx) {
+            GGML_ASSERT(stream_ctx.preprocessing_done);
+            GGML_ASSERT(block_idx < params.depth);
+
+            auto block = std::dynamic_pointer_cast<DoubleStreamBlock>(blocks["double_blocks." + std::to_string(block_idx)]);
+            auto img_txt = block->forward(ctx, stream_ctx.img, stream_ctx.txt, stream_ctx.vec,
+                                          stream_ctx.pe, stream_ctx.txt_img_mask,
+                                          stream_ctx.ds_img_mods, stream_ctx.ds_txt_mods);
+            stream_ctx.img = img_txt.first;
+            stream_ctx.txt = img_txt.second;
+
+            stream_ctx.current_double_block = block_idx + 1;
+            if (stream_ctx.current_double_block >= params.depth) {
+                stream_ctx.double_blocks_done = true;
+                // Prepare for single blocks by concatenating txt and img
+                stream_ctx.txt_img = ggml_concat(ctx->ggml_ctx, stream_ctx.txt, stream_ctx.img, 1);
+                return true;
+            }
+            return false;
+        }
+
+        bool forward_single_block(GGMLRunnerContext* ctx,
+                                  StreamingContext& stream_ctx,
+                                  int block_idx) {
+            GGML_ASSERT(stream_ctx.double_blocks_done);
+            GGML_ASSERT(block_idx < params.depth_single_blocks);
+
+            auto block = std::dynamic_pointer_cast<SingleStreamBlock>(blocks["single_blocks." + std::to_string(block_idx)]);
+            stream_ctx.txt_img = block->forward(ctx, stream_ctx.txt_img, stream_ctx.vec,
+                                                stream_ctx.pe, stream_ctx.txt_img_mask, stream_ctx.ss_mods);
+
+            stream_ctx.current_single_block = block_idx + 1;
+            if (stream_ctx.current_single_block >= params.depth_single_blocks) {
+                stream_ctx.single_blocks_done = true;
+                return true;
+            }
+            return false;
+        }
+
+        ggml_tensor* forward_postprocessing(GGMLRunnerContext* ctx,
+                                            StreamingContext& stream_ctx) {
+            GGML_ASSERT(stream_ctx.single_blocks_done);
+
+            auto final_layer = std::dynamic_pointer_cast<LastLayer>(blocks["final_layer"]);
+
+            // Extract img from txt_img
+            auto img = ggml_view_3d(ctx->ggml_ctx,
+                                    stream_ctx.txt_img,
+                                    stream_ctx.txt_img->ne[0],
+                                    stream_ctx.img->ne[1],
+                                    stream_ctx.txt_img->ne[2],
+                                    stream_ctx.txt_img->nb[1],
+                                    stream_ctx.txt_img->nb[2],
+                                    stream_ctx.txt->ne[1] * stream_ctx.txt_img->nb[1]);
+
+            if (final_layer) {
+                img = final_layer->forward(ctx, img, stream_ctx.vec);
+            }
+
+            return img;
+        }
     };
 
     struct FluxRunner : public GGMLRunner {
@@ -1187,6 +1508,12 @@ namespace Flux {
         sd::Tensor<float> guidance_tensor;
         SDVersion version;
         bool use_mask = false;
+
+        // Static layer cache decided on the first sampling step. -1 = not yet
+        // computed; 0..N = number of "double_blocks.X" / "single_blocks.X"
+        // blocks kept resident on GPU across sampling steps.
+        int resident_double_blocks_ = -1;
+        int resident_single_blocks_ = -1;
 
         FluxRunner(ggml_backend_t backend,
                    bool offload_params_to_cpu,
@@ -1465,6 +1792,101 @@ namespace Flux {
             return gf;
         }
 
+        // Raw tensor build_graph used by streaming infrastructure
+        ggml_cgraph* build_graph(ggml_tensor* x,
+                                 ggml_tensor* timesteps,
+                                 ggml_tensor* context,
+                                 ggml_tensor* c_concat,
+                                 ggml_tensor* y,
+                                 ggml_tensor* guidance,
+                                 std::vector<ggml_tensor*> ref_latents = {},
+                                 bool increase_ref_index               = false,
+                                 std::vector<int> skip_layers          = {}) {
+            GGML_ASSERT(x->ne[3] == 1);
+            ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE);
+
+            x         = to_backend(x);
+            timesteps = to_backend(timesteps);
+            context   = to_backend(context);
+            c_concat  = to_backend(c_concat);
+            y         = to_backend(y);
+            guidance  = to_backend(guidance);
+            for (auto& ref : ref_latents) {
+                ref = to_backend(ref);
+            }
+
+            ggml_tensor* mod_index_arange = nullptr;
+            ggml_tensor* dct              = nullptr;
+
+            if (flux_params.is_chroma) {
+                if (!use_mask) {
+                    y = nullptr;
+                }
+                mod_index_arange_vec = arange(0, 344);
+                mod_index_arange     = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, mod_index_arange_vec.size());
+                set_backend_tensor_data(mod_index_arange, mod_index_arange_vec.data());
+            }
+            std::set<int> txt_arange_dims;
+            if (sd_version_is_flux2(version)) {
+                txt_arange_dims    = {3};
+                increase_ref_index = true;
+            } else if (version == VERSION_OVIS_IMAGE) {
+                txt_arange_dims = {1, 2};
+            }
+
+            pe_vec = Rope::gen_flux_pe(static_cast<int>(x->ne[1]),
+                                       static_cast<int>(x->ne[0]),
+                                       flux_params.patch_size,
+                                       static_cast<int>(x->ne[3]),
+                                       static_cast<int>(context->ne[1]),
+                                       txt_arange_dims,
+                                       ref_latents,
+                                       increase_ref_index,
+                                       flux_params.ref_index_scale,
+                                       flux_params.theta,
+                                       circular_y_enabled,
+                                       circular_x_enabled,
+                                       flux_params.axes_dim);
+            int pos_len = static_cast<int>(pe_vec.size() / flux_params.axes_dim_sum / 2);
+            auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
+            set_backend_tensor_data(pe, pe_vec.data());
+
+            if (version == VERSION_CHROMA_RADIANCE) {
+                int patch_size     = flux_params.patch_size;
+                int nerf_max_freqs = flux_params.chroma_radiance_params.nerf_max_freqs;
+                dct_vec            = fetch_dct_pos(patch_size, nerf_max_freqs);
+                dct                = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, nerf_max_freqs * nerf_max_freqs, patch_size * patch_size);
+                set_backend_tensor_data(dct, dct_vec.data());
+            }
+
+            auto runner_ctx = get_context();
+            ggml_tensor* out = flux.forward(&runner_ctx, x, timesteps, context, c_concat, y,
+                                            guidance, pe, mod_index_arange, dct, ref_latents, skip_layers);
+            ggml_build_forward_expand(gf, out);
+            return gf;
+        }
+
+        // Raw tensor compute used by streaming infrastructure
+        bool compute(int n_threads,
+                     ggml_tensor* x,
+                     ggml_tensor* timesteps,
+                     ggml_tensor* context,
+                     ggml_tensor* c_concat,
+                     ggml_tensor* y,
+                     ggml_tensor* guidance,
+                     std::vector<ggml_tensor*> ref_latents = {},
+                     bool increase_ref_index               = false,
+                     ggml_tensor** output                  = nullptr,
+                     ggml_context* output_ctx              = nullptr,
+                     std::vector<int> skip_layers          = {},
+                     bool skip_param_offload               = false) {
+            auto get_graph = [&]() -> ggml_cgraph* {
+                return build_graph(x, timesteps, context, c_concat, y, guidance,
+                                   ref_latents, increase_ref_index, skip_layers);
+            };
+            return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx, skip_param_offload);
+        }
+
         sd::Tensor<float> compute(int n_threads,
                                   const sd::Tensor<float>& x,
                                   const sd::Tensor<float>& timesteps,
@@ -1584,6 +2006,534 @@ namespace Flux {
             LOG_INFO("flux model loaded");
             flux->test();
         }
+
+        void enable_layer_streaming(const LayerStreaming::StreamingConfig& config = {}) {
+            std::map<std::string, ggml_tensor*> tensor_map;
+            flux.get_param_tensors(tensor_map, "model.diffusion_model");
+            init_streaming(config, tensor_map, LayerStreaming::flux_layer_pattern);
+            LOG_INFO("%s layer streaming enabled with %zu layers",
+                     get_desc().c_str(), streaming_engine_->get_registry().get_layer_count());
+        }
+
+        bool compute_streaming(int n_threads,
+                               struct ggml_tensor* x,
+                               struct ggml_tensor* timesteps,
+                               struct ggml_tensor* context,
+                               struct ggml_tensor* c_concat,
+                               struct ggml_tensor* y,
+                               struct ggml_tensor* guidance,
+                               std::vector<ggml_tensor*> ref_latents = {},
+                               bool increase_ref_index               = false,
+                               struct ggml_tensor** output           = nullptr,
+                               struct ggml_context* output_ctx       = nullptr,
+                               std::vector<int> skip_layers          = std::vector<int>()) {
+            if (!is_streaming_enabled()) {
+                LOG_ERROR("%s streaming not enabled", get_desc().c_str());
+                return false;
+            }
+
+            int64_t t0 = ggml_time_ms();
+            auto analysis = analyze_vram_budget();
+
+            if (analysis.fits_in_vram) {
+                LOG_INFO("%s model fits in VRAM, using coarse-stage streaming", get_desc().c_str());
+                load_all_layers_coarse();
+
+                bool result = compute(n_threads, x, timesteps, context, c_concat, y, guidance,
+                                      ref_latents, increase_ref_index, output, output_ctx,
+                                      skip_layers, true);
+
+                int64_t t1 = ggml_time_ms();
+                LOG_INFO("%s coarse-stage streaming completed in %.2fs", get_desc().c_str(), (t1 - t0) / 1000.0);
+                free_compute_buffer();
+                return result;
+            }
+
+            LOG_INFO("%s remaining %.2f GB exceeds available %.2f GB, using per-layer streaming",
+                     get_desc().c_str(),
+                     analysis.remaining_to_load / (1024.0 * 1024.0 * 1024.0),
+                     analysis.available_vram / (1024.0 * 1024.0 * 1024.0));
+
+            return compute_streaming_true(n_threads, x, timesteps, context, c_concat, y, guidance,
+                                          ref_latents, increase_ref_index, output, output_ctx, skip_layers);
+        }
+
+        bool compute_streaming_true(int n_threads,
+                                    struct ggml_tensor* x,
+                                    struct ggml_tensor* timesteps,
+                                    struct ggml_tensor* context,
+                                    struct ggml_tensor* c_concat,
+                                    struct ggml_tensor* y,
+                                    struct ggml_tensor* guidance,
+                                    std::vector<ggml_tensor*> ref_latents,
+                                    bool increase_ref_index,
+                                    struct ggml_tensor** output,
+                                    struct ggml_context* output_ctx,
+                                    std::vector<int> skip_layers) {
+            auto& registry = streaming_engine_->get_registry();
+            int64_t t_start = ggml_time_ms();
+
+            const int num_double_blocks = flux_params.depth;
+            const int num_single_blocks = flux_params.depth_single_blocks;
+            LOG_INFO("TRUE per-layer streaming - %d double + %d single blocks",
+                     num_double_blocks, num_single_blocks);
+
+            // Load global layers (_global contains input projections, final_layer, etc)
+            LOG_DEBUG("Loading global layers");
+            if (!registry.move_layer_to_gpu("_global")) {
+                LOG_ERROR("Failed to load _global to GPU");
+                return false;
+            }
+            LOG_DEBUG("_global loaded successfully");
+
+            // Set up txt_arange_dims based on version
+            std::set<int> txt_arange_dims;
+            if (sd_version_is_flux2(version)) {
+                txt_arange_dims    = {3};
+                increase_ref_index = true;
+            } else if (version == VERSION_OVIS_IMAGE) {
+                txt_arange_dims = {1, 2};
+            }
+
+            // Pre-generate PE
+            pe_vec = Rope::gen_flux_pe(static_cast<int>(x->ne[1]),
+                                       static_cast<int>(x->ne[0]),
+                                       flux_params.patch_size,
+                                       static_cast<int>(x->ne[3]),
+                                       static_cast<int>(context->ne[1]),
+                                       txt_arange_dims,
+                                       ref_latents,
+                                       increase_ref_index,
+                                       flux_params.ref_index_scale,
+                                       flux_params.theta,
+                                       circular_y_enabled,
+                                       circular_x_enabled,
+                                       flux_params.axes_dim);
+
+            LOG_DEBUG("PE generated");
+
+            // Pre-generate mod_index_arange for Chroma
+            if (flux_params.is_chroma) {
+                mod_index_arange_vec.clear();
+                for (int i = 0; i < 344; i++) {
+                    mod_index_arange_vec.push_back(static_cast<float>(i));
+                }
+            }
+
+            LOG_DEBUG("About to execute input stage");
+
+            // Persistent storage for intermediate tensors. Backed by a single
+            // GPU-pinned host buffer (via ensure_pinned_act_buffers) so the
+            // per-block ggml_backend_tensor_get / set_backend_tensor_data
+            // calls run at full PCIe bandwidth. Falls back to pageable
+            // std::vector if pinned alloc fails.
+            std::vector<float> persistent_img_fallback;
+            std::vector<float> persistent_txt_fallback;
+            std::vector<float> persistent_vec_fallback;
+            std::vector<float> persistent_txt_img_fallback;
+            float* persistent_img     = nullptr;
+            float* persistent_txt     = nullptr;
+            float* persistent_vec     = nullptr;
+            float* persistent_txt_img = nullptr;
+            size_t persistent_img_count     = 0;
+            size_t persistent_txt_count     = 0;
+            size_t persistent_vec_count     = 0;
+            size_t persistent_txt_img_count = 0;
+            int64_t img_ne[4], txt_ne[4], vec_ne[4], txt_img_ne[4];
+            int64_t n_txt_tokens = 0;
+            int64_t n_img_tokens = 0;
+
+            LOG_DEBUG("Executing input stage");
+            {
+                ggml_tensor* img_output = nullptr;
+                ggml_tensor* txt_output = nullptr;
+                ggml_tensor* vec_output = nullptr;
+
+                auto get_input_graph = [&]() -> struct ggml_cgraph* {
+                    struct ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE / 4);
+                    auto runner_ctx = get_context();
+
+                    ggml_tensor* x_patched = DiT::pad_and_patchify(&runner_ctx, to_backend(x),
+                                                                    flux_params.patch_size, flux_params.patch_size);
+                    n_img_tokens = x_patched->ne[1];
+
+                    // Handle ref_latents
+                    for (auto& ref : ref_latents) {
+                        auto ref_patched = DiT::pad_and_patchify(&runner_ctx, to_backend(ref),
+                                                                  flux_params.patch_size, flux_params.patch_size);
+                        x_patched = ggml_concat(compute_ctx, x_patched, ref_patched, 1);
+                    }
+
+                    ggml_tensor* context_backend = to_backend(context);
+                    ggml_tensor* timesteps_backend = to_backend(timesteps);
+                    ggml_tensor* y_backend = y ? to_backend(y) : nullptr;
+                    ggml_tensor* guidance_backend = guidance ? to_backend(guidance) : nullptr;
+
+                    ggml_tensor* mod_index_arange = nullptr;
+                    if (flux_params.is_chroma && !mod_index_arange_vec.empty()) {
+                        mod_index_arange = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, mod_index_arange_vec.size());
+                        set_backend_tensor_data(mod_index_arange, mod_index_arange_vec.data());
+                    }
+
+                    auto result = flux.forward_input_stage(&runner_ctx, x_patched, context_backend,
+                                                           timesteps_backend, y_backend, guidance_backend,
+                                                           mod_index_arange);
+
+                    img_output = result.img;
+                    txt_output = result.txt;
+                    vec_output = result.vec;
+                    n_txt_tokens = result.n_txt_tokens;
+
+                    ggml_build_forward_expand(gf, img_output);
+                    ggml_build_forward_expand(gf, txt_output);
+                    ggml_build_forward_expand(gf, vec_output);
+
+                    return gf;
+                };
+
+                // Don't free compute buffer immediately - we need to read outputs first
+                if (!GGMLRunner::compute(get_input_graph, n_threads, false, nullptr, nullptr, true)) {
+                    LOG_ERROR("Input stage failed");
+                    return false;
+                }
+
+                // Extract to persistent storage
+                if (img_output && txt_output && vec_output) {
+                    size_t img_size = ggml_nelements(img_output);
+                    size_t txt_size = ggml_nelements(txt_output);
+                    size_t vec_size = ggml_nelements(vec_output);
+                    // txt_img region is sized to hold the concatenated
+                    // (txt + img) activations consumed by single blocks.
+                    size_t txt_img_size = txt_size + img_size;
+
+                    persistent_img_count     = img_size;
+                    persistent_txt_count     = txt_size;
+                    persistent_vec_count     = vec_size;
+                    persistent_txt_img_count = txt_img_size;
+
+                    std::vector<float*> ptrs;
+                    if (ensure_pinned_act_buffers({img_size     * sizeof(float),
+                                                   txt_size     * sizeof(float),
+                                                   vec_size     * sizeof(float),
+                                                   txt_img_size * sizeof(float)}, ptrs)) {
+                        persistent_img     = ptrs[0];
+                        persistent_txt     = ptrs[1];
+                        persistent_vec     = ptrs[2];
+                        persistent_txt_img = ptrs[3];
+                    } else {
+                        persistent_img_fallback.resize(img_size);
+                        persistent_txt_fallback.resize(txt_size);
+                        persistent_vec_fallback.resize(vec_size);
+                        persistent_txt_img_fallback.resize(txt_img_size);
+                        persistent_img     = persistent_img_fallback.data();
+                        persistent_txt     = persistent_txt_fallback.data();
+                        persistent_vec     = persistent_vec_fallback.data();
+                        persistent_txt_img = persistent_txt_img_fallback.data();
+                    }
+
+                    ggml_backend_tensor_get(img_output, persistent_img, 0, img_size * sizeof(float));
+                    ggml_backend_tensor_get(txt_output, persistent_txt, 0, txt_size * sizeof(float));
+                    ggml_backend_tensor_get(vec_output, persistent_vec, 0, vec_size * sizeof(float));
+
+                    for (int i = 0; i < 4; i++) {
+                        img_ne[i] = img_output->ne[i];
+                        txt_ne[i] = txt_output->ne[i];
+                        vec_ne[i] = vec_output->ne[i];
+                    }
+                } else {
+                    LOG_ERROR("Failed to get input stage outputs");
+                    free_compute_buffer();
+                    return false;
+                }
+
+                // Now safe to free compute buffer
+                free_compute_buffer();
+            }
+
+            LOG_DEBUG("Input stage done, img=%ldx%ldx%ld, txt=%ldx%ldx%ld",
+                      img_ne[0], img_ne[1], img_ne[2], txt_ne[0], txt_ne[1], txt_ne[2]);
+
+            auto double_name_at = [](int i) { return "double_blocks." + std::to_string(i); };
+
+            if (resident_double_blocks_ < 0 && streaming_engine_) {
+                resident_double_blocks_ = streaming_engine_->compute_resident_block_count(
+                    "double_blocks.0", num_double_blocks);
+                LOG_INFO("%s double_blocks cache: %d resident, %d streamed per step",
+                         get_desc().c_str(),
+                         resident_double_blocks_,
+                         num_double_blocks - resident_double_blocks_);
+            }
+
+            int double_prefetch_start = 0;
+            while (double_prefetch_start < num_double_blocks &&
+                   registry.is_layer_on_gpu(double_name_at(double_prefetch_start))) {
+                double_prefetch_start++;
+            }
+            if (streaming_engine_) {
+                streaming_engine_->prime_prefetch(double_name_at, double_prefetch_start, num_double_blocks);
+            }
+
+            for (int block_idx = 0; block_idx < num_double_blocks; block_idx++) {
+                // Check skip_layers
+                if (skip_layers.size() > 0 && std::find(skip_layers.begin(), skip_layers.end(), block_idx) != skip_layers.end()) {
+                    LOG_DEBUG("Skipping double_block %d", block_idx);
+                    continue;
+                }
+
+                std::string block_name = double_name_at(block_idx);
+                int64_t t_block_start = ggml_time_ms();
+
+                // Wait for this block's prefetch to complete (if async prefetch was started)
+                if (streaming_engine_) {
+                    streaming_engine_->wait_for_prefetch(block_name);
+                }
+
+                // Load this block's weights (sync load if prefetch didn't happen)
+                if (!registry.move_layer_to_gpu(block_name)) {
+                    LOG_ERROR("Failed to load %s", block_name.c_str());
+                    return false;
+                }
+
+                // Keep the prefetch window full
+                if (streaming_engine_) {
+                    streaming_engine_->advance_prefetch(double_name_at, block_idx, num_double_blocks);
+                }
+
+                ggml_tensor* img_out = nullptr;
+                ggml_tensor* txt_out = nullptr;
+
+                auto get_block_graph = [&]() -> struct ggml_cgraph* {
+                    struct ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE / 4);
+
+                    // Create input tensors from persistent storage
+                    ggml_tensor* img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, img_ne[0], img_ne[1], img_ne[2], img_ne[3]);
+                    ggml_tensor* txt_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, txt_ne[0], txt_ne[1], txt_ne[2], txt_ne[3]);
+                    ggml_tensor* vec_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, vec_ne[0], vec_ne[1], vec_ne[2], vec_ne[3]);
+
+                    img_in = to_backend(img_in);
+                    txt_in = to_backend(txt_in);
+                    vec_in = to_backend(vec_in);
+
+                    set_backend_tensor_data(img_in, persistent_img);
+                    set_backend_tensor_data(txt_in, persistent_txt);
+                    set_backend_tensor_data(vec_in, persistent_vec);
+
+                    // PE tensor
+                    int pos_len = static_cast<int>(pe_vec.size() / flux_params.axes_dim_sum / 2);
+                    ggml_tensor* pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
+                    set_backend_tensor_data(pe, pe_vec.data());
+
+                    std::vector<ModulationOut> ds_img_mods, ds_txt_mods;
+                    auto runner_ctx = get_context();
+                    auto result = flux.forward_double_block(&runner_ctx, block_idx, img_in, txt_in, vec_in, pe,
+                                                            nullptr, ds_img_mods, ds_txt_mods);
+
+                    img_out = result.first;
+                    txt_out = result.second;
+
+                    ggml_build_forward_expand(gf, img_out);
+                    ggml_build_forward_expand(gf, txt_out);
+
+                    return gf;
+                };
+
+                // Don't free compute buffer immediately - we need to read outputs first
+                if (!GGMLRunner::compute(get_block_graph, n_threads, false, nullptr, nullptr, true)) {
+                    LOG_ERROR("Double block %d execution failed", block_idx);
+                    return false;
+                }
+
+                // Extract outputs to persistent storage
+                if (img_out && txt_out) {
+                    ggml_backend_tensor_get(img_out, persistent_img, 0, persistent_img_count * sizeof(float));
+                    ggml_backend_tensor_get(txt_out, persistent_txt, 0, persistent_txt_count * sizeof(float));
+
+                    for (int i = 0; i < 4; i++) {
+                        img_ne[i] = img_out->ne[i];
+                        txt_ne[i] = txt_out->ne[i];
+                    }
+                }
+
+                // Now safe to free compute buffer
+                free_compute_buffer();
+
+                // Resident blocks stay on GPU across sampling steps.
+                if (block_idx >= resident_double_blocks_) {
+                    registry.move_layer_to_cpu(block_name);
+                }
+
+                LOG_DEBUG("Double block %d/%d done (%.2fms)",
+                          block_idx + 1, num_double_blocks, (ggml_time_ms() - t_block_start) / 1.0);
+            }
+
+            {
+                // Concatenate txt and img into txt_img
+                size_t txt_img_size = persistent_txt_count + persistent_img_count;
+                // persistent_txt_img was already sized in ensure_pinned_act_buffers
+                // (txt_img region == txt_count + img_count). Just concat into it.
+
+                // txt goes first, then img (along dimension 1)
+                // Since we store flattened, we need to handle this carefully
+                // txt: [hidden_size, n_txt_tokens, N]
+                // img: [hidden_size, n_img_tokens, N]
+                // txt_img: [hidden_size, n_txt_tokens + n_img_tokens, N]
+                std::copy(persistent_txt, persistent_txt + persistent_txt_count, persistent_txt_img);
+                std::copy(persistent_img, persistent_img + persistent_img_count, persistent_txt_img + persistent_txt_count);
+
+                txt_img_ne[0] = img_ne[0];  // hidden_size
+                txt_img_ne[1] = txt_ne[1] + img_ne[1];  // n_txt_tokens + n_img_tokens
+                txt_img_ne[2] = img_ne[2];  // N
+                txt_img_ne[3] = 1;
+            }
+
+            auto single_name_at = [](int i) { return "single_blocks." + std::to_string(i); };
+
+            if (resident_single_blocks_ < 0 && streaming_engine_) {
+                resident_single_blocks_ = streaming_engine_->compute_resident_block_count(
+                    "single_blocks.0", num_single_blocks);
+                LOG_INFO("%s single_blocks cache: %d resident, %d streamed per step",
+                         get_desc().c_str(),
+                         resident_single_blocks_,
+                         num_single_blocks - resident_single_blocks_);
+            }
+
+            int single_prefetch_start = 0;
+            while (single_prefetch_start < num_single_blocks &&
+                   registry.is_layer_on_gpu(single_name_at(single_prefetch_start))) {
+                single_prefetch_start++;
+            }
+            if (streaming_engine_) {
+                streaming_engine_->prime_prefetch(single_name_at, single_prefetch_start, num_single_blocks);
+            }
+
+            for (int block_idx = 0; block_idx < num_single_blocks; block_idx++) {
+                // Check skip_layers (single blocks start at depth offset)
+                int skip_idx = block_idx + flux_params.depth;
+                if (skip_layers.size() > 0 && std::find(skip_layers.begin(), skip_layers.end(), skip_idx) != skip_layers.end()) {
+                    LOG_DEBUG("Skipping single_block %d", block_idx);
+                    continue;
+                }
+
+                std::string block_name = single_name_at(block_idx);
+                int64_t t_block_start = ggml_time_ms();
+
+                // Wait for this block's prefetch to complete (if async prefetch was started)
+                if (streaming_engine_) {
+                    streaming_engine_->wait_for_prefetch(block_name);
+                }
+
+                // Load this block's weights (sync load if prefetch didn't happen)
+                if (!registry.move_layer_to_gpu(block_name)) {
+                    LOG_ERROR("Failed to load %s", block_name.c_str());
+                    return false;
+                }
+
+                // Keep the prefetch window full
+                if (streaming_engine_) {
+                    streaming_engine_->advance_prefetch(single_name_at, block_idx, num_single_blocks);
+                }
+
+                ggml_tensor* txt_img_out = nullptr;
+
+                auto get_block_graph = [&]() -> struct ggml_cgraph* {
+                    struct ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE / 4);
+
+                    // Create input tensors
+                    ggml_tensor* txt_img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                                  txt_img_ne[0], txt_img_ne[1], txt_img_ne[2], txt_img_ne[3]);
+                    ggml_tensor* vec_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, vec_ne[0], vec_ne[1], vec_ne[2], vec_ne[3]);
+
+                    txt_img_in = to_backend(txt_img_in);
+                    vec_in = to_backend(vec_in);
+
+                    set_backend_tensor_data(txt_img_in, persistent_txt_img);
+                    set_backend_tensor_data(vec_in, persistent_vec);
+
+                    // PE tensor
+                    int pos_len = static_cast<int>(pe_vec.size() / flux_params.axes_dim_sum / 2);
+                    ggml_tensor* pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
+                    set_backend_tensor_data(pe, pe_vec.data());
+
+                    std::vector<ModulationOut> ss_mods;
+                    auto runner_ctx = get_context();
+                    txt_img_out = flux.forward_single_block(&runner_ctx, block_idx, txt_img_in, vec_in, pe,
+                                                             nullptr, ss_mods);
+
+                    ggml_build_forward_expand(gf, txt_img_out);
+
+                    return gf;
+                };
+
+                // Don't free compute buffer immediately - we need to read outputs first
+                if (!GGMLRunner::compute(get_block_graph, n_threads, false, nullptr, nullptr, true)) {
+                    LOG_ERROR("Single block %d execution failed", block_idx);
+                    return false;
+                }
+
+                // Extract output to persistent storage
+                if (txt_img_out) {
+                    ggml_backend_tensor_get(txt_img_out, persistent_txt_img, 0, persistent_txt_img_count * sizeof(float));
+
+                    for (int i = 0; i < 4; i++) {
+                        txt_img_ne[i] = txt_img_out->ne[i];
+                    }
+                }
+
+                // Now safe to free compute buffer
+                free_compute_buffer();
+
+                // Resident blocks stay on GPU across sampling steps.
+                if (block_idx >= resident_single_blocks_) {
+                    registry.move_layer_to_cpu(block_name);
+                }
+
+                LOG_DEBUG("Single block %d/%d done (%.2fms)",
+                          block_idx + 1, num_single_blocks, (ggml_time_ms() - t_block_start) / 1.0);
+            }
+
+            LOG_DEBUG("Executing output stage");
+            {
+                auto get_output_graph = [&]() -> struct ggml_cgraph* {
+                    struct ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE / 4);
+
+                    ggml_tensor* txt_img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                                  txt_img_ne[0], txt_img_ne[1], txt_img_ne[2], txt_img_ne[3]);
+                    ggml_tensor* vec_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, vec_ne[0], vec_ne[1], vec_ne[2], vec_ne[3]);
+
+                    txt_img_in = to_backend(txt_img_in);
+                    vec_in = to_backend(vec_in);
+
+                    set_backend_tensor_data(txt_img_in, persistent_txt_img);
+                    set_backend_tensor_data(vec_in, persistent_vec);
+
+                    auto runner_ctx = get_context();
+                    auto final_out = flux.forward_output_stage(&runner_ctx, txt_img_in, vec_in, n_img_tokens, n_txt_tokens);
+
+                    // Unpatchify
+                    int64_t W = x->ne[0];
+                    int64_t H = x->ne[1];
+                    final_out = DiT::unpatchify_and_crop(compute_ctx, final_out, H, W, flux_params.patch_size, flux_params.patch_size);
+
+                    ggml_build_forward_expand(gf, final_out);
+
+                    return gf;
+                };
+
+                if (!GGMLRunner::compute(get_output_graph, n_threads, true, output, output_ctx, true)) {
+                    LOG_ERROR("Output stage failed");
+                    return false;
+                }
+            }
+
+            int64_t t_end = ggml_time_ms();
+            LOG_INFO("TRUE per-layer streaming completed in %.2fs (%d double + %d single blocks)",
+                     (t_end - t_start) / 1000.0, num_double_blocks, num_single_blocks);
+
+            return true;
+        }
+
+    private:
+        Flux::StreamingContext streaming_ctx_;
     };
 
 }  // namespace Flux

@@ -24,8 +24,9 @@ struct LoraModel : public GGMLRunner {
               ggml_backend_t backend,
               const std::string& file_path = "",
               std::string prefix           = "",
-              SDVersion version            = VERSION_COUNT)
-        : lora_id(lora_id), file_path(file_path), GGMLRunner(backend, false) {
+              SDVersion version            = VERSION_COUNT,
+              bool enable_offload          = false)
+        : lora_id(lora_id), file_path(file_path), GGMLRunner(backend, enable_offload) {
         prefix = "lora." + prefix;
         if (!model_loader.init_from_file_and_convert_name(file_path, prefix, version)) {
             load_failed = true;
@@ -91,6 +92,29 @@ struct LoraModel : public GGMLRunner {
         model_loader.load_tensors(on_new_tensor_cb, n_threads);
 
         LOG_DEBUG("finished loaded lora");
+        return true;
+    }
+
+    // Reload params from disk after buffer was freed (for dynamic offloading)
+    // Assumes lora_tensors map is still valid (tensors exist in params_ctx)
+    bool reload_params(int n_threads) {
+        if (lora_tensors.empty()) {
+            return true;  // Nothing to reload
+        }
+
+        alloc_params_buffer();
+
+        auto on_reload_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
+            const std::string& name = tensor_storage.name;
+            auto iter = lora_tensors.find(name);
+            if (iter != lora_tensors.end()) {
+                *dst_tensor = iter->second;
+            }
+            return true;
+        };
+
+        model_loader.load_tensors(on_reload_cb, n_threads);
+        LOG_DEBUG("reloaded lora params from disk");
         return true;
     }
 
