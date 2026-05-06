@@ -108,7 +108,7 @@ namespace LLM {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             ggml_tensor* w = params["weight"];
             if (ctx->weight_adapter) {
-                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, w, prefix + "weight");
+                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
             }
             x           = ggml_rms_norm(ctx->ggml_ctx, x, eps);
             auto scaled = ggml_mul(ctx->ggml_ctx, x, w);
@@ -408,6 +408,7 @@ namespace LLM {
             auto merger      = std::dynamic_pointer_cast<PatchMerger>(blocks["merger"]);
 
             auto x = patch_embed->forward(ctx, pixel_values);
+            sd::ggml_graph_cut::mark_graph_cut(x, "llm.vision.prelude", "x");
 
             x = ggml_reshape_4d(ctx->ggml_ctx, x, x->ne[0] * spatial_merge_size * spatial_merge_size, x->ne[1] / spatial_merge_size / spatial_merge_size, x->ne[2], x->ne[3]);
             x = ggml_get_rows(ctx->ggml_ctx, x, window_index);
@@ -421,9 +422,11 @@ namespace LLM {
                     mask = nullptr;
                 }
                 x = block->forward(ctx, x, pe, mask);
+                sd::ggml_graph_cut::mark_graph_cut(x, "llm.vision.blocks." + std::to_string(i), "x");
             }
 
             x = merger->forward(ctx, x);
+            sd::ggml_graph_cut::mark_graph_cut(x, "llm.vision.final", "x");
 
             x = ggml_get_rows(ctx->ggml_ctx, x, window_inverse_index);
 
@@ -660,6 +663,7 @@ namespace LLM {
             auto norm         = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["norm"]);
 
             auto x = embed_tokens->forward(ctx, input_ids);
+            sd::ggml_graph_cut::mark_graph_cut(x, "llm.text.prelude", "x");
 
             std::vector<ggml_tensor*> intermediate_outputs;
 
@@ -714,6 +718,10 @@ namespace LLM {
                 auto block = std::dynamic_pointer_cast<TransformerBlock>(blocks["layers." + std::to_string(i)]);
 
                 x = block->forward(ctx, x, input_pos, attention_mask, sliding_attention_mask);
+                if (return_all_hidden_states || out_layers.size() > 1) {
+                    x = ggml_cont(ctx->ggml_ctx, x);
+                }
+                sd::ggml_graph_cut::mark_graph_cut(x, "llm.text.layers." + std::to_string(i), "x");
                 if (return_all_hidden_states) {
                     if (i + 1 < num_layers) {
                         intermediate_outputs.push_back(x);

@@ -53,6 +53,7 @@ struct DiffusionModel {
     virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter){};
     virtual int64_t get_adm_in_channels()                            = 0;
     virtual void set_flash_attention_enabled(bool enabled)           = 0;
+    virtual void set_max_graph_vram_bytes(size_t max_vram_bytes)     = 0;
     virtual void set_circular_axes(bool circular_x, bool circular_y) = 0;
 };
 
@@ -100,6 +101,10 @@ struct UNetModel : public DiffusionModel {
 
     void set_flash_attention_enabled(bool enabled) {
         unet.set_flash_attention_enabled(enabled);
+    }
+
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        unet.set_max_graph_vram_bytes(max_vram_bytes);
     }
 
     void set_circular_axes(bool circular_x, bool circular_y) override {
@@ -168,6 +173,10 @@ struct MMDiTModel : public DiffusionModel {
         mmdit.set_flash_attention_enabled(enabled);
     }
 
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        mmdit.set_max_graph_vram_bytes(max_vram_bytes);
+    }
+
     void set_circular_axes(bool circular_x, bool circular_y) override {
         mmdit.set_circular_axes(circular_x, circular_y);
     }
@@ -231,6 +240,10 @@ struct FluxModel : public DiffusionModel {
 
     void set_flash_attention_enabled(bool enabled) {
         flux.set_flash_attention_enabled(enabled);
+    }
+
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        flux.set_max_graph_vram_bytes(max_vram_bytes);
     }
 
     void set_circular_axes(bool circular_x, bool circular_y) override {
@@ -303,6 +316,10 @@ struct AnimaModel : public DiffusionModel {
         anima.set_flash_attention_enabled(enabled);
     }
 
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        anima.set_max_graph_vram_bytes(max_vram_bytes);
+    }
+
     void set_circular_axes(bool circular_x, bool circular_y) override {
         anima.set_circular_axes(circular_x, circular_y);
     }
@@ -366,6 +383,10 @@ struct WanModel : public DiffusionModel {
 
     void set_flash_attention_enabled(bool enabled) {
         wan.set_flash_attention_enabled(enabled);
+    }
+
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        wan.set_max_graph_vram_bytes(max_vram_bytes);
     }
 
     void set_circular_axes(bool circular_x, bool circular_y) override {
@@ -437,6 +458,10 @@ struct QwenImageModel : public DiffusionModel {
         qwen_image.set_flash_attention_enabled(enabled);
     }
 
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        qwen_image.set_max_graph_vram_bytes(max_vram_bytes);
+    }
+
     void set_circular_axes(bool circular_x, bool circular_y) override {
         qwen_image.set_circular_axes(circular_x, circular_y);
     }
@@ -501,6 +526,10 @@ struct ZImageModel : public DiffusionModel {
 
     void set_flash_attention_enabled(bool enabled) {
         z_image.set_flash_attention_enabled(enabled);
+    }
+
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        z_image.set_max_graph_vram_bytes(max_vram_bytes);
     }
 
     void set_circular_axes(bool circular_x, bool circular_y) override {
@@ -568,6 +597,10 @@ struct ErnieImageModel : public DiffusionModel {
         ernie_image.set_flash_attention_enabled(enabled);
     }
 
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        ernie_image.set_max_graph_vram_bytes(max_vram_bytes);
+    }
+
     void set_circular_axes(bool circular_x, bool circular_y) override {
         ernie_image.set_circular_axes(circular_x, circular_y);
     }
@@ -628,6 +661,10 @@ struct LTXAVModel : public DiffusionModel {
 
     void set_flash_attention_enabled(bool enabled) override {
         ltxav.set_flash_attention_enabled(enabled);
+    }
+
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        ltxav.set_max_graph_vram_bytes(max_vram_bytes);
     }
 
     void set_circular_axes(bool circular_x, bool circular_y) override {

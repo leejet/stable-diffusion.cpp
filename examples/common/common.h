@@ -110,6 +110,7 @@ struct SDContextParams {
     rng_type_t rng_type         = CUDA_RNG;
     rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
     bool offload_params_to_cpu  = false;
+    float max_vram              = 0.f;
     bool enable_mmap            = false;
     bool control_net_cpu        = false;
     bool clip_on_cpu            = false;
@@ -250,6 +251,13 @@ struct SDGenerationParams {
 };
 
 std::string version_string();
-std::string get_image_params(const SDContextParams& ctx_params, const SDGenerationParams& gen_params, int64_t seed);
+std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
+                                            const SDGenerationParams& gen_params,
+                                            int64_t seed,
+                                            SDMode mode = IMG_GEN);
+std::string get_image_params(const SDContextParams& ctx_params,
+                             const SDGenerationParams& gen_params,
+                             int64_t seed,
+                             SDMode mode = IMG_GEN);
 
 #endif  // __EXAMPLES_COMMON_COMMON_H__

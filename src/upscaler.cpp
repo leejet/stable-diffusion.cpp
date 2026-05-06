@@ -12,30 +12,20 @@ UpscalerGGML::UpscalerGGML(int n_threads,
       tile_size(tile_size) {
 }
 
+void UpscalerGGML::set_max_graph_vram_bytes(size_t max_vram_bytes) {
+    max_graph_vram_bytes = max_vram_bytes;
+    if (esrgan_upscaler) {
+        esrgan_upscaler->set_max_graph_vram_bytes(max_vram_bytes);
+    }
+}
+
 bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
                                   bool offload_params_to_cpu,
                                   int n_threads) {
     ggml_log_set(ggml_log_callback_default, nullptr);
-#ifdef SD_USE_CUDA
-    LOG_DEBUG("Using CUDA backend");
-    backend = ggml_backend_cuda_init(0);
-#endif
-#ifdef SD_USE_METAL
-    LOG_DEBUG("Using Metal backend");
-    backend = ggml_backend_metal_init();
-#endif
-#ifdef SD_USE_VULKAN
-    LOG_DEBUG("Using Vulkan backend");
-    backend = ggml_backend_vk_init(0);
-#endif
-#ifdef SD_USE_OPENCL
-    LOG_DEBUG("Using OpenCL backend");
-    backend = ggml_backend_opencl_init();
-#endif
-#ifdef SD_USE_SYCL
-    LOG_DEBUG("Using SYCL backend");
-    backend = ggml_backend_sycl_init(0);
-#endif
+
+    backend = sd_get_default_backend();
+
     ModelLoader model_loader;
     if (!model_loader.init_from_file_and_convert_name(esrgan_path)) {
         LOG_ERROR("init model loader from file failed: '%s'", esrgan_path.c_str());
@@ -47,6 +37,7 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
     }
     LOG_INFO("Upscaler weight type: %s", ggml_type_name(model_data_type));
     esrgan_upscaler = std::make_shared<ESRGAN>(backend, offload_params_to_cpu, tile_size, model_loader.get_tensor_storage_map());
+    esrgan_upscaler->set_max_graph_vram_bytes(max_graph_vram_bytes);
     if (direct) {
         esrgan_upscaler->set_conv2d_direct_enabled(true);
     }
