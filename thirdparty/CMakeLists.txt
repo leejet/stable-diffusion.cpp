@@ -37,9 +37,9 @@ if(SD_WEBM AND NOT SD_USE_SYSTEM_WEBM)
     # C++11. Restore the parent flags so the main project keeps its own C++17
     # requirements, then pin the libwebm targets to C++17 explicitly.
     set(CMAKE_CXX_FLAGS "${SD_LIBWEBM_PARENT_CXX_FLAGS}" CACHE STRING "" FORCE)
-    target_compile_features(mkvmuxer PRIVATE cxx_std_17)
-    target_compile_features(mkvparser PRIVATE cxx_std_17)
-    target_compile_features(webm PRIVATE cxx_std_17)
+    set_target_properties(mkvmuxer PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    set_target_properties(mkvparser PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    set_target_properties(webm PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 
     target_include_directories(webm INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/libwebm)
 endif()
