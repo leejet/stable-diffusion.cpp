@@ -1783,6 +1783,11 @@ protected:
             streaming_engine_ = std::make_unique<LayerStreaming::LayerExecutionEngine>(
                 runtime_backend, params_backend);
         }
+        // set_max_graph_vram_bytes() may have been called before this point
+        // (it's set per-runner during model load, while the streaming engine
+        // is created lazily here). Apply the stored cap to the engine's
+        // budget so --max-vram works for our streaming planner too.
+        streaming_engine_->get_budget().set_max_vram_cap_bytes(max_graph_vram_bytes);
         auto cfg = config;
         cfg.enabled = true;
         streaming_engine_->set_config(cfg);
@@ -1809,7 +1814,14 @@ protected:
             result.total_model_size += registry.get_layer_size(name);
         }
 
-        result.available_vram = budget.get_available_vram();
+        // Subtract a compute-buffer reserve from available VRAM. The fits_in_vram
+        // decision picks coarse-stage (load all params resident) when params fit;
+        // without this reserve the planner ignores the runtime compute graph's
+        // alloc, which on tight caps (e.g. SDXL 1024x1024 with --max-vram 6) tips
+        // params + CB over the budget mid-step and crashes cudaMalloc.
+        size_t raw_available    = budget.get_available_vram();
+        size_t cb_reserve       = budget.get_compute_buffer_reserve();
+        result.available_vram   = (raw_available > cb_reserve) ? (raw_available - cb_reserve) : 0;
 
         for (const auto& name : all_layers) {
             if (registry.is_layer_on_gpu(name)) {
@@ -1821,12 +1833,13 @@ protected:
             ? (result.total_model_size - result.already_on_gpu) : 0;
         result.fits_in_vram = (result.remaining_to_load <= result.available_vram);
 
-        LOG_DEBUG("%s model size = %.2f GB, on GPU = %.2f GB, remaining = %.2f GB, available VRAM = %.2f GB",
+        LOG_DEBUG("%s model size = %.2f GB, on GPU = %.2f GB, remaining = %.2f GB, available VRAM = %.2f GB (CB reserve = %.2f GB)",
                   get_desc().c_str(),
                   result.total_model_size / (1024.0 * 1024.0 * 1024.0),
                   result.already_on_gpu / (1024.0 * 1024.0 * 1024.0),
                   result.remaining_to_load / (1024.0 * 1024.0 * 1024.0),
-                  result.available_vram / (1024.0 * 1024.0 * 1024.0));
+                  result.available_vram / (1024.0 * 1024.0 * 1024.0),
+                  cb_reserve / (1024.0 * 1024.0 * 1024.0));
 
         return result;
     }
@@ -3159,6 +3172,12 @@ public:
 
     void set_max_graph_vram_bytes(size_t max_vram_bytes) {
         max_graph_vram_bytes = max_vram_bytes;
+        // Forward to the layer-streaming budget too, so --max-vram caps both
+        // the graph-cut planner (above) and our streaming planner. Lets a
+        // single flag drive the simulated-smaller-card case for both paths.
+        if (streaming_engine_) {
+            streaming_engine_->get_budget().set_max_vram_cap_bytes(max_vram_bytes);
+        }
     }
 
     ggml_backend_t get_runtime_backend() {

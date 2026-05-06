@@ -49,9 +49,34 @@ public:
             total_vram_ = 8ULL * 1024 * 1024 * 1024;
             free_vram_  = total_vram_ / 2;
         }
+        // If the caller set a `--max-vram` budget, treat that as the upper
+        // bound on what our streaming planner is allowed to see, so the
+        // same budget knob drives both leejet's graph-cut path and our
+        // layer-streaming path. Lets users simulate a smaller card without
+        // needing a separate flag.
+        if (max_vram_cap_bytes_ > 0) {
+            if (max_vram_cap_bytes_ < free_vram_) {
+                free_vram_ = max_vram_cap_bytes_;
+            }
+            if (max_vram_cap_bytes_ < total_vram_) {
+                total_vram_ = max_vram_cap_bytes_;
+            }
+        }
         LOG_DEBUG("total VRAM = %.2f GB, free = %.2f GB",
                   total_vram_ / (1024.0 * 1024.0 * 1024.0),
                   free_vram_ / (1024.0 * 1024.0 * 1024.0));
+    }
+
+    void set_max_vram_cap_bytes(size_t bytes) {
+        max_vram_cap_bytes_ = bytes;
+    }
+
+    void set_compute_buffer_reserve(size_t bytes) {
+        compute_buffer_reserve_ = bytes;
+    }
+
+    size_t get_compute_buffer_reserve() const {
+        return compute_buffer_reserve_;
     }
 
     size_t get_free_vram() {
@@ -273,9 +298,15 @@ private:
     TensorRegistry& registry_;
     ggml_backend_t gpu_backend_;
 
-    size_t total_vram_    = 0;
-    size_t free_vram_     = 0;
-    size_t safety_margin_ = 512 * 1024 * 1024;
+    size_t total_vram_              = 0;
+    size_t free_vram_               = 0;
+    size_t safety_margin_           = 512 * 1024 * 1024;
+    size_t max_vram_cap_bytes_      = 0;                  // 0 = no cap; set by --max-vram
+    size_t compute_buffer_reserve_  = 768ULL * 1024 * 1024;  // headroom for the active block's compute graph
+                                                              // alloc; matches compute_resident_block_count default.
+                                                              // Used by analyze_vram_budget() to avoid picking
+                                                              // coarse-stage when params fit but params + CB
+                                                              // would exceed VRAM.
 
     EvictionPolicy eviction_policy_ = EvictionPolicy::LAYER_DISTANCE;
 };
