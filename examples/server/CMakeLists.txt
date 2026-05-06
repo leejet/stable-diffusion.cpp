@@ -101,4 +101,4 @@ if(WIN32 AND NOT MSVC)
     target_link_libraries(${TARGET} PRIVATE ws2_32)
 endif()
 
-target_compile_features(${TARGET} PUBLIC c_std_11 cxx_std_17)
+set_target_properties(${TARGET} PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
