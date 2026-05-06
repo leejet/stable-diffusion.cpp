@@ -253,7 +253,7 @@ add_subdirectory(thirdparty)
 target_link_libraries(${SD_LIB} PUBLIC ggml zip)
 target_include_directories(${SD_LIB} PUBLIC . src include)
 target_include_directories(${SD_LIB} PUBLIC . thirdparty)
-target_compile_features(${SD_LIB} PUBLIC c_std_11 cxx_std_17)
+set_target_properties(${SD_LIB} PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 
 
 if (SD_BUILD_EXAMPLES)
