@@ -112,7 +112,7 @@ private:
     HANDLE hmapping_;
 };
 
-std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename, bool writable) {
     void* mapped_data = nullptr;
     size_t file_size  = 0;
 
@@ -137,14 +137,18 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
 
     file_size = static_cast<size_t>(size.QuadPart);
 
-    HANDLE mapping_handle = CreateFileMapping(file_handle, nullptr, PAGE_READONLY, 0, 0, nullptr);
+    DWORD page_prot = writable ? PAGE_WRITECOPY : PAGE_READONLY;
+
+    HANDLE mapping_handle = CreateFileMapping(file_handle, nullptr, page_prot, 0, 0, nullptr);
 
     if (mapping_handle == nullptr) {
         CloseHandle(file_handle);
         return nullptr;
     }
 
-    mapped_data = MapViewOfFile(mapping_handle, FILE_MAP_READ, 0, 0, file_size);
+    DWORD view_access = writable ? FILE_MAP_COPY : FILE_MAP_READ;
+
+    mapped_data = MapViewOfFile(mapping_handle, view_access, 0, 0, file_size);
 
     if (mapped_data == nullptr) {
         CloseHandle(mapping_handle);
@@ -182,7 +186,7 @@ public:
     }
 };
 
-std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename, bool writable) {
     int file_descriptor = open(filename.c_str(), O_RDONLY);
     if (file_descriptor == -1) {
         return nullptr;
@@ -204,7 +208,9 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
 
     size_t file_size = sb.st_size;
 
-    void* mapped_data = mmap(nullptr, file_size, PROT_READ, mmap_flags, file_descriptor, 0);
+    int mmap_prot = PROT_READ | (writable ? PROT_WRITE : 0);
+
+    void* mapped_data = mmap(nullptr, file_size, mmap_prot, mmap_flags, file_descriptor, 0);
 
     close(file_descriptor);
 
