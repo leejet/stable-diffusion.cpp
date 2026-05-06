@@ -635,14 +635,21 @@ public:
                                       struct ggml_tensor* emb,
                                       struct ggml_tensor* context,
                                       int num_video_frames) {
-        // Get block components - this varies by block
-        std::string res_name = "input_blocks." + std::to_string(block_idx) + ".0";
-        auto res_block = blocks.find(res_name);
-        if (res_block != blocks.end()) {
-            h = resblock_forward(res_name, ctx, h, emb, num_video_frames);
+        // input_blocks.X.0 is either a ResBlock or a DownSampleBlock —
+        // SDXL/SD1.x put the per-stage downsample at indices 3 and 6. The
+        // non-streaming forward() differentiates these inline; the streaming
+        // path does the same here.
+        std::string slot0_name = "input_blocks." + std::to_string(block_idx) + ".0";
+        auto slot0_it = blocks.find(slot0_name);
+        if (slot0_it != blocks.end()) {
+            if (auto downsample = std::dynamic_pointer_cast<DownSampleBlock>(slot0_it->second)) {
+                h = downsample->forward(ctx, h);
+            } else {
+                h = resblock_forward(slot0_name, ctx, h, emb, num_video_frames);
+            }
         }
 
-        // Check for attention layer
+        // input_blocks.X.1 is a SpatialTransformer when attention applies at this resolution.
         std::string attn_name = "input_blocks." + std::to_string(block_idx) + ".1";
         auto attn_block = blocks.find(attn_name);
         if (attn_block != blocks.end()) {
@@ -672,28 +679,26 @@ public:
                                        struct ggml_tensor* emb,
                                        struct ggml_tensor* context,
                                        int num_video_frames) {
-        // Concatenate with skip connection
         h = ggml_concat(ctx->ggml_ctx, h, skip, 2);
 
         std::string res_name = "output_blocks." + std::to_string(block_idx) + ".0";
         h = resblock_forward(res_name, ctx, h, emb, num_video_frames);
 
-        // Check for attention
-        std::string attn_name = "output_blocks." + std::to_string(block_idx) + ".1";
-        auto attn_block = blocks.find(attn_name);
-        if (attn_block != blocks.end()) {
-            h = attention_layer_forward(attn_name, ctx, h, context, num_video_frames);
-        }
-
-        // Check for upsample
+        // output_blocks.X.1/.2 may be SpatialTransformer (attention), UpSampleBlock,
+        // or both: when the resolution has attention, slot .1 = transformer and
+        // slot .2 = upsample; without attention, slot .1 = upsample. Dispatch
+        // by actual block type so SD1.x's deepest output block (no attention)
+        // doesn't end up casting an UpSampleBlock to a SpatialTransformer.
         for (int i = 1; i <= 2; i++) {
-            std::string up_name = "output_blocks." + std::to_string(block_idx) + "." + std::to_string(i);
-            auto up_block = blocks.find(up_name);
-            if (up_block != blocks.end()) {
-                auto upsample = std::dynamic_pointer_cast<UpSampleBlock>(up_block->second);
-                if (upsample) {
-                    h = upsample->forward(ctx, h);
-                }
+            std::string slot_name = "output_blocks." + std::to_string(block_idx) + "." + std::to_string(i);
+            auto slot_it = blocks.find(slot_name);
+            if (slot_it == blocks.end()) {
+                continue;
+            }
+            if (auto upsample = std::dynamic_pointer_cast<UpSampleBlock>(slot_it->second)) {
+                h = upsample->forward(ctx, h);
+            } else {
+                h = attention_layer_forward(slot_name, ctx, h, context, num_video_frames);
             }
         }
 
@@ -711,8 +716,42 @@ public:
         return h;
     }
 
-    int get_num_input_blocks() const { return 12; }  // Standard UNet
-    int get_num_output_blocks() const { return 12; }
+    // Walk the blocks map to find the largest "input_blocks.N.0" index that
+    // actually exists, then return N+1 so callers can iterate [0, count).
+    // SDXL ends at 8 (9 total), SD1/SD2 at 11 (12 total), tiny_unet has gaps
+    // — the streaming loop treats missing indices as "skip" via blocks.find().
+    int get_num_input_blocks() const {
+        return count_blocks_with_prefix("input_blocks.");
+    }
+    int get_num_output_blocks() const {
+        return count_blocks_with_prefix("output_blocks.");
+    }
+
+private:
+    int count_blocks_with_prefix(const std::string& prefix) const {
+        int max_idx = -1;
+        for (const auto& kv : blocks) {
+            const std::string& name = kv.first;
+            if (name.compare(0, prefix.size(), prefix) != 0) {
+                continue;
+            }
+            // name looks like "input_blocks.N.M"; extract N
+            size_t i_start = prefix.size();
+            size_t i_end = name.find('.', i_start);
+            if (i_end == std::string::npos) {
+                continue;
+            }
+            try {
+                int idx = std::stoi(name.substr(i_start, i_end - i_start));
+                if (idx > max_idx) max_idx = idx;
+            } catch (...) {
+                continue;
+            }
+        }
+        return max_idx + 1;
+    }
+
+public:
 };
 
 struct UNetModelRunner : public GGMLRunner {
@@ -765,7 +804,8 @@ struct UNetModelRunner : public GGMLRunner {
             LOG_INFO("%s model fits in VRAM, using coarse-stage streaming", get_desc().c_str());
             load_all_layers_coarse();
             bool result = compute(n_threads, x, timesteps, context, c_concat, y,
-                                  num_video_frames, controls, control_strength, output, output_ctx);
+                                  num_video_frames, controls, control_strength, output, output_ctx,
+                                  /*skip_param_offload=*/true);
             int64_t t1 = ggml_time_ms();
             LOG_INFO("%s coarse-stage streaming completed in %.2fs", get_desc().c_str(), (t1 - t0) / 1000.0);
             free_compute_buffer();
