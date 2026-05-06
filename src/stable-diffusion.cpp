@@ -2657,7 +2657,8 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->chroma_use_dit_mask     = true;
     sd_ctx_params->chroma_use_t5_mask      = false;
     sd_ctx_params->chroma_t5_mask_pad      = 1;
-    sd_ctx_params->flow_shift              = INFINITY;
+    // flow_shift moved out of sd_ctx_params_t in upstream master into
+    // sd_sample_params_t; sd_sample_params_init() initialises it there.
 
     // Dynamic tensor offloading defaults (disabled)
     sd_ctx_params->offload_config.mode               = SD_OFFLOAD_NONE;

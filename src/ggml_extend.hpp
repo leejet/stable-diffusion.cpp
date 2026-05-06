@@ -2678,10 +2678,16 @@ public:
 
     virtual ~GGMLRunner() {
         free_params_buffer();
-        // Also free runtime params buffer (GPU) if allocated
+        // Also free the runtime-side weight buffers if allocated. free_params_buffer()
+        // only releases the CPU-side params_buffer; the runtime backend can hold up to
+        // two more buffers (full + partial) that need explicit cleanup here.
         if (runtime_params_buffer != nullptr) {
             ggml_backend_buffer_free(runtime_params_buffer);
             runtime_params_buffer = nullptr;
+        }
+        if (partial_runtime_params_buffer != nullptr) {
+            ggml_backend_buffer_free(partial_runtime_params_buffer);
+            partial_runtime_params_buffer = nullptr;
         }
         if (persistent_act_host_buf_ != nullptr) {
             ggml_backend_buffer_free(persistent_act_host_buf_);
@@ -2815,7 +2821,7 @@ public:
     void free_params_buffer() {
         // If params are on GPU, move them back to CPU first (this also frees runtime_params_buffer)
         if (params_on_runtime_backend) {
-            offload_params_to_params_backend();
+            restore_all_params();
         }
         if (params_buffer != nullptr) {
             ggml_backend_buffer_free(params_buffer);
@@ -2875,7 +2881,7 @@ public:
             // Already on CPU
             return true;
         }
-        offload_params_to_params_backend();
+        restore_all_params();
         return true;
     }
 
@@ -2890,7 +2896,7 @@ public:
             // Already on GPU
             return true;
         }
-        return offload_params_to_runtime_backend();
+        return offload_all_params();
     }
 
     // Get the size of params buffer (VRAM usage when on GPU)
@@ -2970,7 +2976,7 @@ public:
         // to drop params back to the params backend after each compute (e.g.
         // cond_diffusion / aggressive modes), do that here.
         if (auto_offload_after_compute) {
-            offload_params_to_params_backend();
+            restore_all_params();
         }
     }
 
@@ -3039,7 +3045,7 @@ public:
                  bool skip_param_offload              = false) {
         // In streaming mode, weights are managed by the streaming engine
         // so skip the bulk offload which would fail due to VRAM limits
-        if (!skip_param_offload && !offload_params_to_runtime_backend()) {
+        if (!skip_param_offload && !offload_all_params()) {
             LOG_ERROR("%s offload params to runtime backend failed", get_desc().c_str());
             return false;
         }
