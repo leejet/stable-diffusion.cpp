@@ -210,6 +210,7 @@ public:
         // an internal escalation when the config implies it.
         bool cond_stage_offload_to_cpu = offload_params_to_cpu;
         bool diffusion_offload_to_cpu = offload_params_to_cpu;
+        bool vae_offload_to_cpu       = offload_params_to_cpu;
         if (offload_config.mode != SD_OFFLOAD_NONE) {
             if (offload_config.offload_cond_stage) {
                 cond_stage_offload_to_cpu = true;
@@ -217,6 +218,14 @@ public:
             // Diffusion CPU backend is needed even in cond_only mode so we
             // can temporarily swap it out while loading cond_stage to GPU.
             diffusion_offload_to_cpu = true;
+        }
+        // Layer streaming wants every MB it can get back during sampling, so
+        // give the VAE a CPU-pinned twin too. The VAE is idle for the entire
+        // sampler loop and only used at decode time — moving it to CPU between
+        // the two phases is pure win. Other offload modes keep current
+        // behaviour: VAE on whichever backend the user selected.
+        if (offload_config.mode == SD_OFFLOAD_LAYER_STREAMING) {
+            vae_offload_to_cpu = true;
         }
 
         bool use_tae = false;
@@ -625,7 +634,7 @@ public:
                     sd_version_is_qwen_image(version) ||
                     sd_version_is_anima(version)) {
                     return std::make_shared<TinyVideoAutoEncoder>(vae_backend,
-                                                                  offload_params_to_cpu,
+                                                                  vae_offload_to_cpu,
                                                                   tensor_storage_map,
                                                                   "decoder",
                                                                   vae_decode_only,
@@ -633,7 +642,7 @@ public:
 
                 } else {
                     auto model = std::make_shared<TinyImageAutoEncoder>(vae_backend,
-                                                                        offload_params_to_cpu,
+                                                                        vae_offload_to_cpu,
                                                                         tensor_storage_map,
                                                                         "decoder.layers",
                                                                         vae_decode_only,
@@ -647,14 +656,14 @@ public:
                     sd_version_is_qwen_image(version) ||
                     sd_version_is_anima(version)) {
                     return std::make_shared<WAN::WanVAERunner>(vae_backend,
-                                                               offload_params_to_cpu,
+                                                               vae_offload_to_cpu,
                                                                tensor_storage_map,
                                                                "first_stage_model",
                                                                vae_decode_only,
                                                                version);
                 } else {
                     auto model = std::make_shared<AutoEncoderKL>(vae_backend,
-                                                                 offload_params_to_cpu,
+                                                                 vae_offload_to_cpu,
                                                                  tensor_storage_map,
                                                                  "first_stage_model",
                                                                  vae_decode_only,
@@ -677,7 +686,7 @@ public:
                 LOG_INFO("using FakeVAE");
                 first_stage_model = std::make_shared<FakeVAE>(version,
                                                               vae_backend,
-                                                              offload_params_to_cpu);
+                                                              vae_offload_to_cpu);
             } else if (use_tae && !tae_preview_only) {
                 LOG_INFO("using TAE for encoding / decoding");
                 first_stage_model = create_tae();
@@ -2238,6 +2247,26 @@ public:
         }
     }
 
+    // Park the VAE on CPU pinned memory while diffusion samples. The VAE is
+    // idle for the entire sampler loop and only used at decode time, so its
+    // VRAM footprint is wasted during streaming. Reloads automatically on the
+    // next decode call via the runner's compute path. Only effective when the
+    // VAE was constructed with a CPU-pinned twin (vae_offload_to_cpu == true,
+    // which we escalate under SD_OFFLOAD_LAYER_STREAMING).
+    bool offload_vae_for_streaming() {
+        if (offload_config.mode != SD_OFFLOAD_LAYER_STREAMING) return false;
+        if (!first_stage_model || !first_stage_model->is_params_on_gpu()) return false;
+        size_t vae_vram = first_stage_model->get_params_vram_size();
+        if (!first_stage_model->move_params_to_cpu()) {
+            return false;
+        }
+        if (offload_config.log_offload_events) {
+            LOG_INFO("Layer streaming: parked VAE on CPU pinned (%.2f MB)",
+                     vae_vram / (1024.0 * 1024.0));
+        }
+        return true;
+    }
+
     // Reload diffusion model to GPU before sampling
     bool reload_diffusion_model() {
         if (diffusion_model && !diffusion_model->is_params_on_gpu()) {
@@ -3680,6 +3709,11 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
         sd_ctx->sd->should_offload_cond_stage_for_diffusion(request->width, request->height)) {
         sd_ctx->sd->offload_conditioners();
     }
+
+    // Layer-streaming companion: free the VAE's VRAM for the sampler loop.
+    // It's only needed at decode time, which reloads it via the runner's
+    // normal compute path.
+    sd_ctx->sd->offload_vae_for_streaming();
 
     ImageGenerationEmbeds embeds;
     if (request->use_img_cond) {
