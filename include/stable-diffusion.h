@@ -147,6 +147,53 @@ enum lora_apply_mode_t {
     LORA_APPLY_MODE_COUNT,
 };
 
+// Component identifiers for dynamic tensor offloading
+enum sd_component_t {
+    SD_COMPONENT_COND_STAGE,   // LLM/CLIP text embedder
+    SD_COMPONENT_CLIP_VISION,  // CLIP vision encoder (for SVD/Wan i2v)
+    SD_COMPONENT_DIFFUSION,    // UNet/DiT/Flux diffusion model
+    SD_COMPONENT_VAE,          // VAE encoder/decoder
+    SD_COMPONENT_CONTROL_NET,  // ControlNet (if loaded)
+    SD_COMPONENT_PMID,         // PhotoMaker ID encoder (if loaded)
+    SD_COMPONENT_COUNT
+};
+
+// Offload mode for automatic GPU memory management
+enum sd_offload_mode_t {
+    SD_OFFLOAD_NONE,           // Keep all components on GPU (default, fastest)
+    SD_OFFLOAD_COND_ONLY,      // Offload only conditioning (LLM/CLIP) after use
+    SD_OFFLOAD_COND_DIFFUSION, // Offload conditioning + diffusion, keep VAE
+    SD_OFFLOAD_AGGRESSIVE,     // Offload each component after use (saves most VRAM)
+    SD_OFFLOAD_LAYER_STREAMING, // Stream layers one-by-one (enables models larger than VRAM)
+    SD_OFFLOAD_MODE_COUNT
+};
+
+// VRAM estimation method for smart offloading decisions
+enum sd_vram_estimation_t {
+    SD_VRAM_EST_DRYRUN,        // Dry-run graph allocation for exact size (default, accurate)
+    SD_VRAM_EST_FORMULA,       // Formula-based estimation (faster, approximate)
+    SD_VRAM_EST_COUNT
+};
+
+// Offload configuration for fine-grained control
+typedef struct {
+    enum sd_offload_mode_t mode;          // Offload mode
+    enum sd_vram_estimation_t vram_estimation; // VRAM estimation method
+    bool offload_cond_stage;              // Offload LLM/CLIP after conditioning
+    bool offload_diffusion;               // Offload diffusion model after sampling
+    bool reload_cond_stage;               // Reload LLM/CLIP for next generation
+    bool reload_diffusion;                // Reload diffusion model for next generation
+    bool log_offload_events;              // Log offload/reload events
+    size_t min_offload_size;              // Minimum component size to offload (bytes), 0 = no minimum
+    size_t target_free_vram;              // Target free VRAM before VAE decode (bytes), 0 = always offload when mode is set
+
+    // Layer streaming configuration (for SD_OFFLOAD_LAYER_STREAMING mode)
+    bool layer_streaming_enabled;         // Enable layer-by-layer streaming execution
+    int streaming_prefetch_layers;        // Number of layers to prefetch ahead (default: 1)
+    int streaming_keep_layers_behind;     // Layers to keep after execution (for skip connections)
+    size_t streaming_min_free_vram;       // Minimum VRAM to keep free during streaming (bytes)
+} sd_offload_config_t;
+
 typedef struct {
     bool enabled;
     int tile_size_x;
@@ -203,7 +250,8 @@ typedef struct {
     bool chroma_use_t5_mask;
     int chroma_t5_mask_pad;
     bool qwen_image_zero_cond_t;
-    float max_vram;
+    float max_vram;                       // GiB budget for graph-cut segmented param offload (0 = disabled)
+    sd_offload_config_t offload_config;   // Cross-stage and layer-streaming offload configuration
 } sd_ctx_params_t;
 
 typedef struct {
@@ -393,6 +441,11 @@ SD_API const char* sd_preview_name(enum preview_t preview);
 SD_API enum preview_t str_to_preview(const char* str);
 SD_API const char* sd_lora_apply_mode_name(enum lora_apply_mode_t mode);
 SD_API enum lora_apply_mode_t str_to_lora_apply_mode(const char* str);
+SD_API const char* sd_offload_mode_name(enum sd_offload_mode_t mode);
+SD_API enum sd_offload_mode_t str_to_offload_mode(const char* str);
+SD_API const char* sd_vram_estimation_name(enum sd_vram_estimation_t method);
+SD_API enum sd_vram_estimation_t str_to_vram_estimation(const char* str);
+SD_API void sd_offload_config_init(sd_offload_config_t* config);
 SD_API const char* sd_hires_upscaler_name(enum sd_hires_upscaler_t upscaler);
 SD_API enum sd_hires_upscaler_t str_to_sd_hires_upscaler(const char* str);
 
@@ -410,6 +463,9 @@ SD_API char* sd_sample_params_to_str(const sd_sample_params_t* sample_params);
 
 SD_API enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx);
 SD_API enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_method_t sample_method);
+
+// Get the model architecture/version name (e.g., "SD 1.x", "SDXL", "Flux", "Z-Image", etc.)
+SD_API const char* sd_get_model_version_name(const sd_ctx_t* sd_ctx);
 
 SD_API void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params);
 SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params);
@@ -449,6 +505,34 @@ SD_API bool preprocess_canny(sd_image_t image,
 
 SD_API const char* sd_commit(void);
 SD_API const char* sd_version(void);
+
+// Dynamic tensor offloading API
+// These functions allow runtime GPU memory management by moving model components
+// between CPU and GPU. This enables running larger models on limited VRAM by
+// keeping only the currently-active component on GPU.
+
+// Offload component from GPU to CPU (frees GPU memory)
+// Returns true on success, false if component doesn't exist or is already on CPU
+SD_API bool sd_offload_to_cpu(sd_ctx_t* sd_ctx, enum sd_component_t component);
+
+// Reload component from CPU to GPU (allocates GPU memory)
+// Returns true on success, false if component doesn't exist or allocation failed
+SD_API bool sd_reload_to_gpu(sd_ctx_t* sd_ctx, enum sd_component_t component);
+
+// Query whether component is currently on GPU
+// Returns true if on GPU, false if on CPU or component doesn't exist
+SD_API bool sd_is_on_gpu(sd_ctx_t* sd_ctx, enum sd_component_t component);
+
+// Get component's current memory usage in bytes
+// Returns the buffer size if component exists, 0 otherwise
+SD_API size_t sd_get_component_vram(sd_ctx_t* sd_ctx, enum sd_component_t component);
+
+// Get human-readable name for a component
+SD_API const char* sd_component_name(enum sd_component_t component);
+
+// Free all GPU resources (offload all components to CPU and clear LoRAs)
+// Call this before unloading a model to ensure GPU memory is released
+SD_API void sd_free_gpu_resources(sd_ctx_t* sd_ctx);
 
 #ifdef __cplusplus
 }

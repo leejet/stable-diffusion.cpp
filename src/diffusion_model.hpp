@@ -37,6 +37,43 @@ static inline const sd::Tensor<T>& tensor_or_empty(const sd::Tensor<T>* tensor) 
     return tensor != nullptr ? *tensor : kEmpty;
 }
 
+// Helper to convert sd::Tensor<T> pointers to temporary ggml_tensor* for streaming code paths.
+// The returned ggml_tensors live in the provided ggml_context and point to the sd::Tensor's data.
+struct StreamingParamConverter {
+    ggml_context* ctx = nullptr;
+
+    StreamingParamConverter() {
+        struct ggml_init_params params = {
+            /*.mem_size   =*/ 16 * ggml_tensor_overhead(),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        ctx = ggml_init(params);
+    }
+
+    ~StreamingParamConverter() {
+        if (ctx) ggml_free(ctx);
+    }
+
+    template <typename T>
+    ggml_tensor* convert(const sd::Tensor<T>* tensor) {
+        if (tensor == nullptr || tensor->numel() == 0) return nullptr;
+        ggml_tensor* t = sd::make_ggml_tensor(ctx, *tensor, false);
+        t->data = const_cast<void*>(static_cast<const void*>(tensor->data()));
+        return t;
+    }
+
+    std::vector<ggml_tensor*> convert_vec(const std::vector<sd::Tensor<float>>* tensors) {
+        std::vector<ggml_tensor*> result;
+        if (tensors == nullptr) return result;
+        for (const auto& t : *tensors) {
+            sd::Tensor<float> tmp_ref = t;  // non-const copy for convert
+            result.push_back(convert(&tmp_ref));
+        }
+        return result;
+    }
+};
+
 struct DiffusionModel {
     virtual std::string get_desc()                                               = 0;
     virtual sd::Tensor<float> compute(int n_threads,
@@ -51,6 +88,81 @@ struct DiffusionModel {
     virtual void set_flash_attention_enabled(bool enabled)           = 0;
     virtual void set_max_graph_vram_bytes(size_t max_vram_bytes)     = 0;
     virtual void set_circular_axes(bool circular_x, bool circular_y) = 0;
+
+    // Dynamic tensor offloading interface
+    virtual bool is_params_on_gpu() const { return false; }
+    virtual bool move_params_to_cpu() { return false; }
+    virtual bool move_params_to_gpu() { return false; }
+    virtual size_t get_params_vram_size() const { return 0; }
+
+    // Layer streaming interface (for granular tensor offloading)
+    virtual bool supports_layer_streaming() const { return false; }
+    virtual void enable_layer_streaming(int prefetch_layers = 1, size_t min_free_vram = 512 * 1024 * 1024) {
+        (void)prefetch_layers;
+        (void)min_free_vram;
+    }
+    virtual void disable_layer_streaming() {}
+    virtual bool is_layer_streaming_enabled() const { return false; }
+    virtual bool compute_streaming(int n_threads,
+                                   DiffusionParams diffusion_params,
+                                   struct ggml_tensor** output     = nullptr,
+                                   struct ggml_context* output_ctx = nullptr) {
+        // Default: fall back to regular compute, copy result to output
+        auto result = compute(n_threads, diffusion_params);
+        if (output != nullptr && result.numel() > 0) {
+            if (*output == nullptr && output_ctx != nullptr) {
+                auto shape = result.shape();
+                int n_dims = std::min(static_cast<int>(shape.size()), GGML_MAX_DIMS);
+                std::array<int64_t, GGML_MAX_DIMS> ne = {1, 1, 1, 1};
+                for (int i = 0; i < n_dims; i++) ne[i] = shape[i];
+                *output = ggml_new_tensor(output_ctx, GGML_TYPE_F32, n_dims, ne.data());
+            }
+            if (*output != nullptr) {
+                memcpy((*output)->data, result.data(), result.numel() * sizeof(float));
+            }
+        }
+        return result.numel() > 0;
+    }
+    // Offload all streaming layers to CPU (free GPU memory after diffusion)
+    virtual void offload_streaming_layers() {}
+
+    // Bridge: dispatch to streaming or regular compute based on layer streaming state,
+    // returning sd::Tensor<float> for compatibility with the upstream sample loop.
+    //
+    // Streaming output shape matches the input x shape (diffusion preserves shape).
+    // We pre-allocate the destination sd::Tensor and have the streaming runner write
+    // directly into its memory via a tiny no_alloc ggml_context — no per-step malloc.
+    sd::Tensor<float> compute_dispatch(int n_threads, const DiffusionParams& diffusion_params) {
+        if (!is_layer_streaming_enabled()) {
+            return compute(n_threads, diffusion_params);
+        }
+        if (diffusion_params.x == nullptr) {
+            LOG_ERROR("compute_dispatch: diffusion_params.x is null");
+            return {};
+        }
+
+        // Pre-allocate result with x's shape; stream writes will land here directly.
+        sd::Tensor<float> result(diffusion_params.x->shape());
+
+        // Tiny no_alloc context — only holds tensor metadata, no data backing.
+        ggml_init_params params = {2 * ggml_tensor_overhead(), nullptr, true};
+        ggml_context* out_ctx   = ggml_init(params);
+        if (out_ctx == nullptr) {
+            LOG_ERROR("compute_dispatch: ggml_init failed");
+            return {};
+        }
+
+        // Make a metadata tensor with the same shape as result and point its data
+        // pointer at result's memory. The runner's ggml_ext_backend_tensor_get_and_sync
+        // will copy GPU→here directly. Skip ggml_dup_tensor by passing non-null *output.
+        ggml_tensor* out_tensor = sd::make_ggml_tensor(out_ctx, result, false);
+        out_tensor->data        = result.data();
+
+        bool ok = compute_streaming(n_threads, diffusion_params, &out_tensor, out_ctx);
+        ggml_free(out_ctx);
+        if (!ok) return {};
+        return result;
+    }
 };
 
 struct UNetModel : public DiffusionModel {
@@ -122,6 +234,53 @@ struct UNetModel : public DiffusionModel {
                             diffusion_params.controls ? *diffusion_params.controls : empty_controls,
                             diffusion_params.control_strength);
     }
+
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override { return unet.is_params_on_gpu(); }
+    bool move_params_to_cpu() override { return unet.move_params_to_cpu(); }
+    bool move_params_to_gpu() override { return unet.move_params_to_gpu(); }
+    size_t get_params_vram_size() const override { return unet.get_params_vram_size(); }
+
+    // Layer streaming (coarse-stage for UNet due to skip connections)
+    bool supports_layer_streaming() const override { return true; }
+
+    void enable_layer_streaming(int prefetch_layers, size_t min_free_vram) override {
+        LayerStreaming::StreamingConfig config;
+        config.prefetch_layers = prefetch_layers;
+        config.min_free_vram = min_free_vram;
+        unet.enable_layer_streaming(config);
+    }
+
+    void disable_layer_streaming() override {
+        unet.disable_layer_streaming();
+    }
+
+    bool is_layer_streaming_enabled() const override {
+        return unet.is_streaming_enabled();
+    }
+
+    void offload_streaming_layers() override {
+        unet.offload_streaming_layers();
+    }
+
+    bool compute_streaming(int n_threads,
+                           DiffusionParams diffusion_params,
+                           struct ggml_tensor** output     = nullptr,
+                           struct ggml_context* output_ctx = nullptr) override {
+        StreamingParamConverter cvt;
+        auto controls_vec = cvt.convert_vec(diffusion_params.controls);
+        return unet.compute_streaming(n_threads,
+                                      cvt.convert(diffusion_params.x),
+                                      cvt.convert(diffusion_params.timesteps),
+                                      cvt.convert(diffusion_params.context),
+                                      cvt.convert(diffusion_params.c_concat),
+                                      cvt.convert(diffusion_params.y),
+                                      diffusion_params.num_video_frames,
+                                      controls_vec,
+                                      diffusion_params.control_strength,
+                                      output,
+                                      output_ctx);
+    }
 };
 
 struct MMDiTModel : public DiffusionModel {
@@ -188,6 +347,50 @@ struct MMDiTModel : public DiffusionModel {
                              tensor_or_empty(diffusion_params.context),
                              tensor_or_empty(diffusion_params.y),
                              diffusion_params.skip_layers ? *diffusion_params.skip_layers : empty_skip_layers);
+    }
+
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override { return mmdit.is_params_on_gpu(); }
+    bool move_params_to_cpu() override { return mmdit.move_params_to_cpu(); }
+    bool move_params_to_gpu() override { return mmdit.move_params_to_gpu(); }
+    size_t get_params_vram_size() const override { return mmdit.get_params_vram_size(); }
+
+    // Layer streaming (granular tensor offloading)
+    bool supports_layer_streaming() const override { return true; }
+
+    void enable_layer_streaming(int prefetch_layers, size_t min_free_vram) override {
+        LayerStreaming::StreamingConfig config;
+        config.prefetch_layers = prefetch_layers;
+        config.min_free_vram = min_free_vram;
+        mmdit.enable_layer_streaming(config);
+    }
+
+    void disable_layer_streaming() override {
+        mmdit.disable_layer_streaming();
+    }
+
+    bool is_layer_streaming_enabled() const override {
+        return mmdit.is_streaming_enabled();
+    }
+
+    void offload_streaming_layers() override {
+        mmdit.offload_streaming_layers();
+    }
+
+    bool compute_streaming(int n_threads,
+                           DiffusionParams diffusion_params,
+                           struct ggml_tensor** output     = nullptr,
+                           struct ggml_context* output_ctx = nullptr) override {
+        StreamingParamConverter cvt;
+        auto skip = diffusion_params.skip_layers ? *diffusion_params.skip_layers : std::vector<int>();
+        return mmdit.compute_streaming(n_threads,
+                                       cvt.convert(diffusion_params.x),
+                                       cvt.convert(diffusion_params.timesteps),
+                                       cvt.convert(diffusion_params.context),
+                                       cvt.convert(diffusion_params.y),
+                                       output,
+                                       output_ctx,
+                                       skip);
     }
 };
 
@@ -263,6 +466,55 @@ struct FluxModel : public DiffusionModel {
                             diffusion_params.increase_ref_index,
                             diffusion_params.skip_layers ? *diffusion_params.skip_layers : empty_skip_layers);
     }
+
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override { return flux.is_params_on_gpu(); }
+    bool move_params_to_cpu() override { return flux.move_params_to_cpu(); }
+    bool move_params_to_gpu() override { return flux.move_params_to_gpu(); }
+    size_t get_params_vram_size() const override { return flux.get_params_vram_size(); }
+
+    // Layer streaming (granular tensor offloading)
+    bool supports_layer_streaming() const override { return true; }
+
+    void enable_layer_streaming(int prefetch_layers, size_t min_free_vram) override {
+        LayerStreaming::StreamingConfig config;
+        config.prefetch_layers = prefetch_layers;
+        config.min_free_vram = min_free_vram;
+        flux.enable_layer_streaming(config);
+    }
+
+    void disable_layer_streaming() override {
+        flux.disable_layer_streaming();
+    }
+
+    bool is_layer_streaming_enabled() const override {
+        return flux.is_streaming_enabled();
+    }
+
+    void offload_streaming_layers() override {
+        flux.offload_streaming_layers();
+    }
+
+    bool compute_streaming(int n_threads,
+                           DiffusionParams diffusion_params,
+                           struct ggml_tensor** output     = nullptr,
+                           struct ggml_context* output_ctx = nullptr) override {
+        StreamingParamConverter cvt;
+        auto ref_vec  = cvt.convert_vec(diffusion_params.ref_latents);
+        auto skip     = diffusion_params.skip_layers ? *diffusion_params.skip_layers : std::vector<int>();
+        return flux.compute_streaming(n_threads,
+                                      cvt.convert(diffusion_params.x),
+                                      cvt.convert(diffusion_params.timesteps),
+                                      cvt.convert(diffusion_params.context),
+                                      cvt.convert(diffusion_params.c_concat),
+                                      cvt.convert(diffusion_params.y),
+                                      cvt.convert(diffusion_params.guidance),
+                                      ref_vec,
+                                      diffusion_params.increase_ref_index,
+                                      output,
+                                      output_ctx,
+                                      skip);
+    }
 };
 
 struct AnimaModel : public DiffusionModel {
@@ -330,6 +582,42 @@ struct AnimaModel : public DiffusionModel {
                              tensor_or_empty(diffusion_params.context),
                              tensor_or_empty(diffusion_params.t5_ids),
                              tensor_or_empty(diffusion_params.t5_weights));
+    }
+
+    bool supports_layer_streaming() const override { return true; }
+
+    void enable_layer_streaming(int prefetch_layers, size_t min_free_vram) override {
+        LayerStreaming::StreamingConfig config;
+        config.prefetch_layers = prefetch_layers;
+        config.min_free_vram = min_free_vram;
+        anima.enable_layer_streaming(config);
+    }
+
+    void disable_layer_streaming() override {
+        anima.disable_layer_streaming();
+    }
+
+    bool is_layer_streaming_enabled() const override {
+        return anima.is_streaming_enabled();
+    }
+
+    void offload_streaming_layers() override {
+        anima.offload_streaming_layers();
+    }
+
+    bool compute_streaming(int n_threads,
+                           DiffusionParams diffusion_params,
+                           struct ggml_tensor** output     = nullptr,
+                           struct ggml_context* output_ctx = nullptr) override {
+        StreamingParamConverter cvt;
+        return anima.compute_streaming(n_threads,
+                                       cvt.convert(diffusion_params.x),
+                                       cvt.convert(diffusion_params.timesteps),
+                                       cvt.convert(diffusion_params.context),
+                                       cvt.convert(diffusion_params.t5_ids),
+                                       cvt.convert(diffusion_params.t5_weights),
+                                       output,
+                                       output_ctx);
     }
 };
 
@@ -403,6 +691,52 @@ struct WanModel : public DiffusionModel {
                            tensor_or_empty(diffusion_params.vace_context),
                            diffusion_params.vace_strength);
     }
+
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override { return wan.is_params_on_gpu(); }
+    bool move_params_to_cpu() override { return wan.move_params_to_cpu(); }
+    bool move_params_to_gpu() override { return wan.move_params_to_gpu(); }
+    size_t get_params_vram_size() const override { return wan.get_params_vram_size(); }
+
+    // Layer streaming (granular tensor offloading)
+    bool supports_layer_streaming() const override { return true; }
+
+    void enable_layer_streaming(int prefetch_layers, size_t min_free_vram) override {
+        LayerStreaming::StreamingConfig config;
+        config.prefetch_layers = prefetch_layers;
+        config.min_free_vram = min_free_vram;
+        wan.enable_layer_streaming(config);
+    }
+
+    void disable_layer_streaming() override {
+        wan.disable_layer_streaming();
+    }
+
+    bool is_layer_streaming_enabled() const override {
+        return wan.is_streaming_enabled();
+    }
+
+    void offload_streaming_layers() override {
+        wan.offload_streaming_layers();
+    }
+
+    bool compute_streaming(int n_threads,
+                           DiffusionParams diffusion_params,
+                           struct ggml_tensor** output     = nullptr,
+                           struct ggml_context* output_ctx = nullptr) override {
+        StreamingParamConverter cvt;
+        return wan.compute_streaming(n_threads,
+                                     cvt.convert(diffusion_params.x),
+                                     cvt.convert(diffusion_params.timesteps),
+                                     cvt.convert(diffusion_params.context),
+                                     cvt.convert(diffusion_params.y),
+                                     cvt.convert(diffusion_params.c_concat),
+                                     nullptr,
+                                     cvt.convert(diffusion_params.vace_context),
+                                     diffusion_params.vace_strength,
+                                     output,
+                                     output_ctx);
+    }
 };
 
 struct QwenImageModel : public DiffusionModel {
@@ -474,6 +808,50 @@ struct QwenImageModel : public DiffusionModel {
                                   diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
                                   true);
     }
+
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override { return qwen_image.is_params_on_gpu(); }
+    bool move_params_to_cpu() override { return qwen_image.move_params_to_cpu(); }
+    bool move_params_to_gpu() override { return qwen_image.move_params_to_gpu(); }
+    size_t get_params_vram_size() const override { return qwen_image.get_params_vram_size(); }
+
+    // Layer streaming (granular tensor offloading)
+    bool supports_layer_streaming() const override { return true; }
+
+    void enable_layer_streaming(int prefetch_layers, size_t min_free_vram) override {
+        LayerStreaming::StreamingConfig config;
+        config.prefetch_layers = prefetch_layers;
+        config.min_free_vram = min_free_vram;
+        qwen_image.enable_layer_streaming(config);
+    }
+
+    void disable_layer_streaming() override {
+        qwen_image.disable_layer_streaming();
+    }
+
+    bool is_layer_streaming_enabled() const override {
+        return qwen_image.is_streaming_enabled();
+    }
+
+    bool compute_streaming(int n_threads,
+                           DiffusionParams diffusion_params,
+                           struct ggml_tensor** output     = nullptr,
+                           struct ggml_context* output_ctx = nullptr) override {
+        StreamingParamConverter cvt;
+        auto ref_vec = cvt.convert_vec(diffusion_params.ref_latents);
+        return qwen_image.compute_streaming(n_threads,
+                                            cvt.convert(diffusion_params.x),
+                                            cvt.convert(diffusion_params.timesteps),
+                                            cvt.convert(diffusion_params.context),
+                                            ref_vec,
+                                            true,  // increase_ref_index
+                                            output,
+                                            output_ctx);
+    }
+
+    void offload_streaming_layers() override {
+        qwen_image.offload_streaming_layers();
+    }
 };
 
 struct ZImageModel : public DiffusionModel {
@@ -543,6 +921,50 @@ struct ZImageModel : public DiffusionModel {
                                tensor_or_empty(diffusion_params.context),
                                diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
                                true);
+    }
+
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override { return z_image.is_params_on_gpu(); }
+    bool move_params_to_cpu() override { return z_image.move_params_to_cpu(); }
+    bool move_params_to_gpu() override { return z_image.move_params_to_gpu(); }
+    size_t get_params_vram_size() const override { return z_image.get_params_vram_size(); }
+
+    // Layer streaming (granular tensor offloading)
+    bool supports_layer_streaming() const override { return true; }
+
+    void enable_layer_streaming(int prefetch_layers, size_t min_free_vram) override {
+        LayerStreaming::StreamingConfig config;
+        config.prefetch_layers = prefetch_layers;
+        config.min_free_vram = min_free_vram;
+        z_image.enable_layer_streaming(config);
+    }
+
+    void disable_layer_streaming() override {
+        z_image.disable_layer_streaming();
+    }
+
+    bool is_layer_streaming_enabled() const override {
+        return z_image.is_streaming_enabled();
+    }
+
+    void offload_streaming_layers() override {
+        z_image.offload_streaming_layers();
+    }
+
+    bool compute_streaming(int n_threads,
+                           DiffusionParams diffusion_params,
+                           struct ggml_tensor** output     = nullptr,
+                           struct ggml_context* output_ctx = nullptr) override {
+        StreamingParamConverter cvt;
+        auto ref_vec = cvt.convert_vec(diffusion_params.ref_latents);
+        return z_image.compute_streaming(n_threads,
+                                         cvt.convert(diffusion_params.x),
+                                         cvt.convert(diffusion_params.timesteps),
+                                         cvt.convert(diffusion_params.context),
+                                         ref_vec,
+                                         true,  // increase_ref_index
+                                         output,
+                                         output_ctx);
     }
 };
 
