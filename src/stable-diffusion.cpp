@@ -4011,6 +4011,18 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                   b + 1,
                   request.batch_count,
                   (sampling_end - sampling_start) * 1.0f / 1000);
+        // Mid-stream failures (e.g. compute-buffer cudaMalloc OOM at layer N)
+        // leave the streaming engine's resident layers + warm cache GPU-resident
+        // — the success path's offload_streaming_layers() at the end of
+        // sampling never runs. Without this eviction, the next job starts on a
+        // GPU that's already 8-9 GB full from the previous failed run and
+        // typically hits the same OOM. The swap is cheap (each layer's CPU
+        // pinned twin already exists) so freeing them is just pointer swaps.
+        if (sd_ctx->sd->offload_config.mode == SD_OFFLOAD_LAYER_STREAMING &&
+            sd_ctx->sd->diffusion_model &&
+            sd_ctx->sd->diffusion_model->is_layer_streaming_enabled()) {
+            sd_ctx->sd->diffusion_model->offload_streaming_layers();
+        }
         if (sd_ctx->sd->free_params_immediately) {
             sd_ctx->sd->diffusion_model->free_params_buffer();
         }
@@ -4145,6 +4157,11 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                       b + 1,
                       (int)final_latents.size(),
                       (hires_sample_end - hires_sample_start) * 1.0f / 1000);
+            if (sd_ctx->sd->offload_config.mode == SD_OFFLOAD_LAYER_STREAMING &&
+                sd_ctx->sd->diffusion_model &&
+                sd_ctx->sd->diffusion_model->is_layer_streaming_enabled()) {
+                sd_ctx->sd->diffusion_model->offload_streaming_layers();
+            }
             if (sd_ctx->sd->free_params_immediately) {
                 sd_ctx->sd->diffusion_model->free_params_buffer();
             }
@@ -4535,6 +4552,11 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         int64_t sampling_end          = ggml_time_ms();
         if (x_t_sampled.empty()) {
             LOG_ERROR("sampling(high noise) failed after %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
+            if (sd_ctx->sd->offload_config.mode == SD_OFFLOAD_LAYER_STREAMING &&
+                sd_ctx->sd->high_noise_diffusion_model &&
+                sd_ctx->sd->high_noise_diffusion_model->is_layer_streaming_enabled()) {
+                sd_ctx->sd->high_noise_diffusion_model->offload_streaming_layers();
+            }
             if (sd_ctx->sd->free_params_immediately) {
                 sd_ctx->sd->high_noise_diffusion_model->free_params_buffer();
             }
@@ -4581,6 +4603,11 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     }
     if (final_latent.empty()) {
         LOG_ERROR("sampling failed after %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
+        if (sd_ctx->sd->offload_config.mode == SD_OFFLOAD_LAYER_STREAMING &&
+            sd_ctx->sd->diffusion_model &&
+            sd_ctx->sd->diffusion_model->is_layer_streaming_enabled()) {
+            sd_ctx->sd->diffusion_model->offload_streaming_layers();
+        }
         return nullptr;
     }
     LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
