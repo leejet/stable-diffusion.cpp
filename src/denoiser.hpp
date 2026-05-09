@@ -1879,6 +1879,50 @@ static sd::Tensor<float> sample_euler_ancestral_cfg_pp(denoise_cb_t model,
     return x;
 }
 
+// https://github.com/ToyotaResearchInstitute/gradient-estimation-sampler
+static sd::Tensor<float> sample_gradient_estimation(denoise_cb_t model,
+                                                    sd::Tensor<float> x,
+                                                    const std::vector<float>& sigmas,
+                                                    std::shared_ptr<RNG> rng = nullptr,
+                                                    bool is_flow_denoiser    = false,
+                                                    float eta                = 0.f,
+                                                    float ge_gamma           = 2.0f) {
+    int steps = static_cast<int>(sigmas.size()) - 1;
+    sd::Tensor<float> old_d;
+    bool has_old_d = false;
+    for (int i = 0; i < steps; i++) {
+        float sigma       = sigmas[i];
+        float sigma_to    = sigmas[i + 1];
+        auto denoised_opt = model(x, sigma, i + 1);
+        if (denoised_opt.pred.empty()) {
+            return {};
+        }
+        sd::Tensor<float> denoised = std::move(denoised_opt.pred);
+        if (sigma_to == 0.f) {
+            x = denoised;
+        } else {
+            auto [sigma_down, sigma_up, alpha_scale] = get_ancestral_step(sigma, sigma_to, eta, is_flow_denoiser);
+            sd::Tensor<float> d                      = (x - denoised) / sigma;
+            float dt                                 = sigma_down - sigma;
+            if (has_old_d) {
+                sd::Tensor<float> d_bar = d * ge_gamma + old_d * (1.0f - ge_gamma);
+                x += d_bar * dt;
+            } else {
+                x += d * dt;
+            }
+            old_d     = std::move(d);
+            has_old_d = true;
+            if (sigma_up > 0.f) {
+                if (is_flow_denoiser) {
+                    x *= alpha_scale;
+                }
+                x += sd::Tensor<float>::randn_like(x, rng) * sigma_up;
+            }
+        }
+    }
+    return x;
+}
+
 // k diffusion reverse ODE: dx = (x - D(x;\sigma)) / \sigma dt; \sigma(t) = t
 static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
                                             denoise_cb_t model,
@@ -1927,6 +1971,8 @@ static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
             return sample_euler_cfg_pp(model, std::move(x), sigmas);
         case EULER_A_CFG_PP_SAMPLE_METHOD:
             return sample_euler_ancestral_cfg_pp(model, std::move(x), sigmas, rng, eta);
+        case EULER_GE_SAMPLE_METHOD:
+            return sample_gradient_estimation(model, std::move(x), sigmas, rng, is_flow_denoiser, eta);
         default:
             return {};
     }

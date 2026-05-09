@@ -81,6 +81,7 @@ const char* sampling_methods_str[] = {
     "ER-SDE",
     "Euler CFG++",
     "Euler A CFG++",
+    "Euler GE",
 };
 
 /*================================================== Helper Functions ================================================*/
@@ -2282,6 +2283,7 @@ const char* sample_method_to_str[] = {
     "er_sde",
     "euler_cfg_pp",
     "euler_a_cfg_pp",
+    "euler_ge",
 };
 
 const char* sd_sample_method_name(enum sample_method_t sample_method) {
