@@ -1235,7 +1235,7 @@ static sd::Tensor<float> sample_ipndm_v(denoise_cb_t model,
                 break;
         }
 
-        if (hist.size() == static_cast<size_t>(max_order - 1), nullptr) {
+        if (hist.size() == static_cast<size_t>(max_order - 1)) {
             hist.erase(hist.begin());
         }
         hist.push_back(std::move(d_cur));
