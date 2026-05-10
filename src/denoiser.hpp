@@ -1289,8 +1289,8 @@ static sd::Tensor<float> sample_res_multistep(denoise_cb_t model,
         }
         sd::Tensor<float> denoised = std::move(denoised_opt);
 
-        float sigma_from            = sigmas[i];
-        float sigma_to              = sigmas[i + 1];
+        float sigma_from = sigmas[i];
+        float sigma_to   = sigmas[i + 1];
 
         auto [sigma_down, sigma_up, alpha_scale] = get_ancestral_step(sigma_from, sigma_to, eta, is_flow_denoiser);
 

@@ -27,6 +27,7 @@ namespace LLM {
     enum class LLMArch {
         QWEN2_5_VL,
         QWEN3,
+        QWEN3_VL,
         MISTRAL_SMALL_3_2,
         MINISTRAL_3_3B,
         ARCH_COUNT,
@@ -35,6 +36,7 @@ namespace LLM {
     static const char* llm_arch_to_str[] = {
         "qwen2.5vl",
         "qwen3",
+        "qwen3vl",
         "mistral_small3.2",
         "ministral3.3b",
     };
@@ -430,6 +432,10 @@ namespace LLM {
             } else if (arch == LLMArch::QWEN3) {
                 q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
                 k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+            } else if (arch == LLMArch::QWEN3_VL) {
+                int sections[4] = {24, 20, 20, 0};
+                q               = ggml_rope_multi(ctx->ggml_ctx, q, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_IMROPE, 262144, 5000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+                k               = ggml_rope_multi(ctx->ggml_ctx, k, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_IMROPE, 262144, 5000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
             } else {
                 int sections[4] = {16, 24, 24, 0};
                 q               = ggml_rope_multi(ctx->ggml_ctx, q, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_MROPE, 128000, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
@@ -485,10 +491,11 @@ namespace LLM {
     struct TextModel : public GGMLBlock {
     protected:
         int64_t num_layers;
+        LLMParams params;
 
     public:
         TextModel(const LLMParams& params)
-            : num_layers(params.num_layers) {
+            : num_layers(params.num_layers), params(params) {
             blocks["embed_tokens"] = std::shared_ptr<GGMLBlock>(new Embedding(params.vocab_size, params.hidden_size));
             for (int i = 0; i < num_layers; i++) {
                 blocks["layers." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new TransformerBlock(params));
@@ -496,62 +503,63 @@ namespace LLM {
             blocks["norm"] = std::shared_ptr<GGMLBlock>(new RMSNorm(params.hidden_size, params.rms_norm_eps));
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx,
-                             ggml_tensor* input_ids,
-                             ggml_tensor* input_pos,
-                             ggml_tensor* attention_mask,
-                             std::vector<std::pair<int, ggml_tensor*>> image_embeds,
-                             std::set<int> out_layers) {
-            // input_ids: [N, n_token]
-            // return: [N, n_token, hidden_size]
-
+        ggml_tensor* embed(GGMLRunnerContext* ctx,
+                           ggml_tensor* input_ids) {
             auto embed_tokens = std::dynamic_pointer_cast<Embedding>(blocks["embed_tokens"]);
-            auto norm         = std::dynamic_pointer_cast<RMSNorm>(blocks["norm"]);
+            auto x            = embed_tokens->forward(ctx, input_ids);
+            return x;
+        }
 
-            auto x = embed_tokens->forward(ctx, input_ids);
-            sd::ggml_graph_cut::mark_graph_cut(x, "llm.text.prelude", "x");
-
-            std::vector<ggml_tensor*> intermediate_outputs;
-
-            if (image_embeds.size() > 0) {
-                GGML_ASSERT(x->ne[2] == 1);  // N == 1
-
-                auto raw_x              = ggml_cast(ctx->ggml_ctx, x, image_embeds[0].second->type);
-                int64_t txt_token_start = 0;
-                int64_t txt_token_end   = 0;
-
-                ggml_tensor* input_embed = nullptr;
-
-                for (int i = 0; i < image_embeds.size(); i++) {
-                    if (i == 0) {
-                        txt_token_start = 0;
-                    } else {
-                        txt_token_start = image_embeds[i - 1].first + image_embeds[i - 1].second->ne[1];
-                    }
-                    txt_token_end = image_embeds[i].first;
-
-                    auto txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
-                    if (input_embed == nullptr) {
-                        input_embed = txt_embed;
-                    } else {
-                        input_embed = ggml_concat(ctx->ggml_ctx, input_embed, txt_embed, 1);
-                    }
-
-                    auto image_embed = image_embeds[i].second;
-                    input_embed      = ggml_concat(ctx->ggml_ctx, input_embed, image_embed, 1);
-                }
-
-                txt_token_start = image_embeds[image_embeds.size() - 1].first + image_embeds[image_embeds.size() - 1].second->ne[1];
-                txt_token_end   = raw_x->ne[1];
-
-                auto final_txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
-
-                input_embed = ggml_concat(ctx->ggml_ctx, input_embed, final_txt_embed, 1);
-                GGML_ASSERT(raw_x->ne[1] == input_embed->ne[1]);
-
-                x = input_embed;
+        ggml_tensor* splice_image_embeds(GGMLRunnerContext* ctx,
+                                         ggml_tensor* x,
+                                         std::vector<std::pair<int, ggml_tensor*>> image_embeds) {
+            if (image_embeds.empty()) {
+                return x;
             }
 
+            GGML_ASSERT(x->ne[2] == 1);  // N == 1
+
+            auto raw_x               = ggml_cast(ctx->ggml_ctx, x, image_embeds[0].second->type);
+            int64_t txt_token_start  = 0;
+            int64_t txt_token_end    = 0;
+            ggml_tensor* input_embed = nullptr;
+
+            for (int i = 0; i < image_embeds.size(); i++) {
+                if (i == 0) {
+                    txt_token_start = 0;
+                } else {
+                    txt_token_start = image_embeds[i - 1].first + image_embeds[i - 1].second->ne[1];
+                }
+                txt_token_end = image_embeds[i].first;
+
+                auto txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
+                if (input_embed == nullptr) {
+                    input_embed = txt_embed;
+                } else {
+                    input_embed = ggml_concat(ctx->ggml_ctx, input_embed, txt_embed, 1);
+                }
+
+                input_embed = ggml_concat(ctx->ggml_ctx, input_embed, image_embeds[i].second, 1);
+            }
+
+            txt_token_start = image_embeds[image_embeds.size() - 1].first + image_embeds[image_embeds.size() - 1].second->ne[1];
+            txt_token_end   = raw_x->ne[1];
+
+            auto final_txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
+            input_embed          = ggml_concat(ctx->ggml_ctx, input_embed, final_txt_embed, 1);
+            GGML_ASSERT(raw_x->ne[1] == input_embed->ne[1]);
+            return input_embed;
+        }
+
+        ggml_tensor* forward_embeds(GGMLRunnerContext* ctx,
+                                    ggml_tensor* x,
+                                    ggml_tensor* input_pos,
+                                    ggml_tensor* attention_mask,
+                                    std::set<int> out_layers) {
+            auto norm = std::dynamic_pointer_cast<RMSNorm>(blocks["norm"]);
+            std::vector<ggml_tensor*> intermediate_outputs;
+
+            sd::ggml_graph_cut::mark_graph_cut(x, "llm.text.prelude", "x");
             for (int i = 0; i < num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<TransformerBlock>(blocks["layers." + std::to_string(i)]);
 
@@ -570,10 +578,23 @@ namespace LLM {
                 for (int i = 1; i < intermediate_outputs.size(); i++) {
                     x = ggml_concat(ctx->ggml_ctx, x, intermediate_outputs[i], 0);
                 }
-            } else {
-                x = norm->forward(ctx, x);
+                return x;
             }
-            return x;
+
+            return norm->forward(ctx, x);
+        }
+
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* input_ids,
+                             ggml_tensor* input_pos,
+                             ggml_tensor* attention_mask,
+                             std::vector<std::pair<int, ggml_tensor*>> image_embeds,
+                             std::set<int> out_layers) {
+            // input_ids: [N, n_token]
+            // return: [N, n_token, hidden_size]
+            auto x = embed(ctx, input_ids);
+            x      = splice_image_embeds(ctx, x, std::move(image_embeds));
+            return forward_embeds(ctx, x, input_pos, attention_mask, std::move(out_layers));
         }
     };
 

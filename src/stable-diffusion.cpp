@@ -52,6 +52,7 @@ const char* model_version_to_str[] = {
     "Anima",
     "Flux.2",
     "Flux.2 klein",
+    "HiDream O1",
     "Z-Image",
     "Ovis Image",
     "Ernie Image",
@@ -491,6 +492,12 @@ public:
                                                                    "model.diffusion_model",
                                                                    version,
                                                                    sd_ctx_params->qwen_image_zero_cond_t);
+            } else if (version == VERSION_HIDREAM_O1) {
+                cond_stage_model = std::make_shared<HiDreamO1::HiDreamO1Conditioner>();
+                diffusion_model  = std::make_shared<HiDreamO1Model>(backend,
+                                                                   offload_params_to_cpu,
+                                                                   tensor_storage_map,
+                                                                   "model");
             } else if (sd_version_is_anima(version)) {
                 cond_stage_model = std::make_shared<AnimaConditioner>(clip_backend,
                                                                       offload_params_to_cpu,
@@ -625,7 +632,7 @@ public:
                 }
             };
 
-            if (version == VERSION_CHROMA_RADIANCE) {
+            if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1) {
                 LOG_INFO("using FakeVAE");
                 first_stage_model = std::make_shared<FakeVAE>(version,
                                                               vae_backend,
@@ -796,6 +803,9 @@ public:
             ignore_tensors.insert("text_encoders.llm.vision_tower.");
             ignore_tensors.insert("text_encoders.llm.multi_modal_projector.");
         }
+        if (version == VERSION_HIDREAM_O1) {
+            ignore_tensors.insert("lm_head.");
+        }
         bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap);
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
@@ -898,6 +908,7 @@ public:
                 } else if (sd_version_is_sd3(version) ||
                            sd_version_is_wan(version) ||
                            sd_version_is_qwen_image(version) ||
+                           version == VERSION_HIDREAM_O1 ||
                            sd_version_is_anima(version) ||
                            sd_version_is_ernie_image(version) ||
                            sd_version_is_z_image(version)) {
@@ -1495,6 +1506,9 @@ public:
         if (sd_version_is_anima(version)) {
             return std::vector<float>{t / static_cast<float>(TIMESTEPS)};
         }
+        if (version == VERSION_HIDREAM_O1) {
+            return std::vector<float>{1.0f - (t / static_cast<float>(TIMESTEPS))};
+        }
         if (sd_version_is_z_image(version)) {
             return std::vector<float>{1000.f - t};
         }
@@ -1607,6 +1621,10 @@ public:
             LOG_WARN("SLG is incompatible with this model type");
         }
 
+        if (version == VERSION_HIDREAM_O1 && !noise.empty()) {
+            noise *= eta;
+        }
+
         int64_t t0                   = ggml_time_us();
         sd::Tensor<float> x_t        = !noise.empty()
                                            ? denoiser->noise_scaling(sigmas[0], noise, init_latent)
@@ -1679,12 +1697,19 @@ public:
             auto run_condition = [&](const SDCondition& condition,
                                      const sd::Tensor<float>* c_concat_override = nullptr,
                                      const std::vector<int>* local_skip_layers  = nullptr) -> sd::Tensor<float> {
-                diffusion_params.context     = condition.c_crossattn.empty() ? nullptr : &condition.c_crossattn;
-                diffusion_params.c_concat    = c_concat_override != nullptr ? c_concat_override : (condition.c_concat.empty() ? nullptr : &condition.c_concat);
-                diffusion_params.y           = condition.c_vector.empty() ? nullptr : &condition.c_vector;
-                diffusion_params.t5_ids      = condition.c_t5_ids.empty() ? nullptr : &condition.c_t5_ids;
-                diffusion_params.t5_weights  = condition.c_t5_weights.empty() ? nullptr : &condition.c_t5_weights;
-                diffusion_params.skip_layers = local_skip_layers;
+                diffusion_params.context            = condition.c_crossattn.empty() ? nullptr : &condition.c_crossattn;
+                diffusion_params.c_concat           = c_concat_override != nullptr ? c_concat_override : (condition.c_concat.empty() ? nullptr : &condition.c_concat);
+                diffusion_params.y                  = condition.c_vector.empty() ? nullptr : &condition.c_vector;
+                diffusion_params.t5_ids             = condition.c_t5_ids.empty() ? nullptr : &condition.c_t5_ids;
+                diffusion_params.t5_weights         = condition.c_t5_weights.empty() ? nullptr : &condition.c_t5_weights;
+                diffusion_params.input_ids          = condition.c_input_ids.empty() ? nullptr : &condition.c_input_ids;
+                diffusion_params.input_pos          = condition.c_position_ids.empty() ? nullptr : &condition.c_position_ids;
+                diffusion_params.token_types        = condition.c_token_types.empty() ? nullptr : &condition.c_token_types;
+                diffusion_params.image_embed_ranges = condition.c_image_embed_ranges.empty() ? nullptr : &condition.c_image_embed_ranges;
+                diffusion_params.vinput_mask        = condition.c_vinput_mask.empty() ? nullptr : &condition.c_vinput_mask;
+                diffusion_params.vlm_images         = condition.c_vlm_images.empty() ? nullptr : &condition.c_vlm_images;
+                diffusion_params.ref_latents        = condition.c_ref_images.empty() ? &ref_latents : &condition.c_ref_images;
+                diffusion_params.skip_layers        = local_skip_layers;
 
                 sd::Tensor<float> cached_output;
                 if (step_cache.before_condition(&condition, noised_input, &cached_output)) {
@@ -1831,6 +1856,8 @@ public:
         if (sd_version_is_dit(version)) {
             if (version == VERSION_WAN2_2_TI2V) {
                 latent_channel = 48;
+            } else if (version == VERSION_HIDREAM_O1) {
+                latent_channel = 3;
             } else if (version == VERSION_CHROMA_RADIANCE) {
                 latent_channel = 3;
             } else if (sd_version_uses_flux2_vae(version)) {
@@ -2518,6 +2545,9 @@ static float resolve_eta(sd_ctx_t* sd_ctx,
                          float eta,
                          enum sample_method_t sample_method) {
     if (eta == INFINITY) {
+        if (sd_ctx->sd->version == VERSION_HIDREAM_O1) {
+            return 8.f;
+        }
         switch (sample_method) {
             case DDIM_TRAILING_SAMPLE_METHOD:
             case TCD_SAMPLE_METHOD:
@@ -3009,6 +3039,9 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
 
     std::vector<sd::Tensor<float>> ref_latents;
     for (size_t i = 0; i < ref_images.size(); i++) {
+        if (sd_ctx->sd->version == VERSION_HIDREAM_O1) {
+            continue;
+        }
         sd::Tensor<float> ref_latent;
         if (request->auto_resize_ref_image) {
             LOG_DEBUG("auto resize ref images");
