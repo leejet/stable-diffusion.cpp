@@ -349,6 +349,10 @@ ArgOptions SDContextParams::get_options() {
          "path to standalone vae model",
          &vae_path},
         {"",
+         "--audio-vae",
+         "path to standalone LTX audio vae model",
+         &audio_vae_path},
+        {"",
          "--taesd",
          "path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)",
          &taesd_path},
@@ -667,6 +671,7 @@ std::string SDContextParams::to_string() const {
         << "  high_noise_diffusion_model_path: \"" << high_noise_diffusion_model_path << "\",\n"
         << "  embeddings_connectors_path: \"" << embeddings_connectors_path << "\",\n"
         << "  vae_path: \"" << vae_path << "\",\n"
+        << "  audio_vae_path: \"" << audio_vae_path << "\",\n"
         << "  taesd_path: \"" << taesd_path << "\",\n"
         << "  esrgan_path: \"" << esrgan_path << "\",\n"
         << "  control_net_path: \"" << control_net_path << "\",\n"
@@ -725,6 +730,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         high_noise_diffusion_model_path.c_str(),
         embeddings_connectors_path.c_str(),
         vae_path.c_str(),
+        audio_vae_path.c_str(),
         taesd_path.c_str(),
         control_net_path.c_str(),
         embedding_vec.data(),

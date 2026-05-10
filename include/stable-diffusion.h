@@ -174,6 +174,7 @@ typedef struct {
     const char* high_noise_diffusion_model_path;
     const char* embeddings_connectors_path;
     const char* vae_path;
+    const char* audio_vae_path;
     const char* taesd_path;
     const char* control_net_path;
     const sd_embedding_t* embeddings;
@@ -207,6 +208,13 @@ typedef struct {
     bool qwen_image_zero_cond_t;
     float max_vram;
 } sd_ctx_params_t;
+
+typedef struct {
+    uint32_t sample_rate;
+    uint32_t channels;
+    uint64_t sample_count;
+    float* data;
+} sd_audio_t;
 
 typedef struct {
     uint32_t width;
@@ -407,6 +415,7 @@ SD_API char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params);
 
 SD_API sd_ctx_t* new_sd_ctx(const sd_ctx_params_t* sd_ctx_params);
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
+SD_API void free_sd_audio(sd_audio_t* audio);
 
 SD_API void sd_sample_params_init(sd_sample_params_t* sample_params);
 SD_API char* sd_sample_params_to_str(const sd_sample_params_t* sample_params);
@@ -419,7 +428,11 @@ SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_para
 SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params);
 
 SD_API void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params);
-SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params, int* num_frames_out);
+SD_API bool generate_video(sd_ctx_t* sd_ctx,
+                           const sd_vid_gen_params_t* sd_vid_gen_params,
+                           sd_image_t** frames_out,
+                           int* num_frames_out,
+                           sd_audio_t** audio_out);
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 

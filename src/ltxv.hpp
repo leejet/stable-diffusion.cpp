@@ -1059,7 +1059,6 @@ namespace LTXV {
                     auto v2a_gate        = get_ada_values(ctx, v2a_gate_table, a_cross_gate_timestep, a_dim, 1)[0];
                     ax                   = ggml_add(ctx->ggml_ctx, ax, apply_gate(ctx->ggml_ctx, v2a_out, v2a_gate));
                 }
-
                 auto a_ff_mods = get_ada_values(ctx, a_table, a_timestep, a_dim, cross_attention_adaln ? 9 : 6, 3, 3);
                 auto ax_scaled = rms_norm(ctx->ggml_ctx, ax);
                 ax_scaled      = Flux::modulate(ctx->ggml_ctx, ax_scaled, a_ff_mods[0], a_ff_mods[1], true);
@@ -1183,7 +1182,9 @@ namespace LTXV {
         }
 
         ggml_tensor* patchify_audio(GGMLRunnerContext* ctx, ggml_tensor* ax) {
-            ax = ggml_reshape_3d(ctx->ggml_ctx, ax, ax->ne[0] * ax->ne[2], ax->ne[1], ax->ne[3]);
+            // ax: [b, c, t, f]
+            ax = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, ax, 0, 2, 1, 3));  // [b, t, c, f]
+            ax = ggml_reshape_3d(ctx->ggml_ctx, ax, ax->ne[0] * ax->ne[1], ax->ne[2], ax->ne[3]);  // [b, t, c*f]
             return ax;
         }
 
@@ -1191,7 +1192,9 @@ namespace LTXV {
             if (ax == nullptr) {
                 return nullptr;
             }
-            return ggml_reshape_4d(ctx->ggml_ctx, ax, cfg.audio_frequency_bins, audio_length, cfg.num_audio_channels, ax->ne[2]);
+            ax = ggml_reshape_4d(ctx->ggml_ctx, ax, cfg.audio_frequency_bins, cfg.num_audio_channels, audio_length, ax->ne[2]);  // [b, t, c, f]
+            ax = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, ax, 0, 2, 1, 3));                                // [b, c, t, f]
+            return ax;
         }
 
         std::pair<ggml_tensor*, ggml_tensor*> preprocess_contexts(GGMLRunnerContext* ctx,

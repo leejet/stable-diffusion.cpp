@@ -1698,14 +1698,14 @@ struct WeightAdapter {
 };
 
 struct GGMLRunnerContext {
-    ggml_backend_t backend                                       = nullptr;
-    ggml_context* ggml_ctx                                       = nullptr;
-    bool flash_attn_enabled                                      = false;
-    bool conv2d_direct_enabled                                   = false;
-    bool circular_x_enabled                                      = false;
-    bool circular_y_enabled                                      = false;
-    std::shared_ptr<WeightAdapter> weight_adapter                = nullptr;
-    std::unordered_map<ggml_tensor*, std::string>* debug_tensors = nullptr;
+    ggml_backend_t backend                                           = nullptr;
+    ggml_context* ggml_ctx                                           = nullptr;
+    bool flash_attn_enabled                                          = false;
+    bool conv2d_direct_enabled                                       = false;
+    bool circular_x_enabled                                          = false;
+    bool circular_y_enabled                                          = false;
+    std::shared_ptr<WeightAdapter> weight_adapter                    = nullptr;
+    std::vector<std::pair<ggml_tensor*, std::string>>* debug_tensors = nullptr;
     std::function<ggml_tensor*(const std::string&)> get_cache_tensor;
     std::function<void(const std::string&, ggml_tensor*)> cache_tensor;
 
@@ -1713,8 +1713,14 @@ struct GGMLRunnerContext {
         if (debug_tensors == nullptr || tensor == nullptr) {
             return;
         }
-        ggml_set_output(tensor);
-        (*debug_tensors)[tensor] = name;
+        ggml_tensor* snapshot = tensor;
+        if (!ggml_is_contiguous(snapshot) || snapshot->view_src != nullptr) {
+            snapshot = ggml_cont(ggml_ctx, snapshot);
+        }
+        ggml_tensor* dst = ggml_dup_tensor(ggml_ctx, snapshot);
+        snapshot         = ggml_cpy(ggml_ctx, snapshot, dst);
+        ggml_set_output(snapshot);
+        debug_tensors->push_back({snapshot, name});
     }
 
     ggml_tensor* load_cache_tensor(const std::string& name) const {
@@ -1768,7 +1774,7 @@ protected:
 
     std::map<ggml_tensor*, const void*> backend_tensor_data_map;
     std::map<std::string, ggml_tensor*> cache_tensor_map;  // name -> tensor
-    std::unordered_map<ggml_tensor*, std::string> debug_tensors;
+    std::vector<std::pair<ggml_tensor*, std::string>> debug_tensors;
     const std::string final_result_name = "ggml_runner_final_result_tensor";
 
     bool flash_attn_enabled    = false;
