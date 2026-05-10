@@ -867,6 +867,31 @@ static sd::Tensor<float> sample_euler_flow(denoise_cb_t model,
     return x;
 }
 
+static sd::Tensor<float> sample_euler_flow_flash(denoise_cb_t model,
+                                                 sd::Tensor<float> x,
+                                                 const std::vector<float>& sigmas,
+                                                 std::shared_ptr<RNG> rng,
+                                                 float eta) {
+    float s_noise = eta;
+    int steps     = static_cast<int>(sigmas.size()) - 1;
+    for (int i = 0; i < steps; i++) {
+        float sigma       = sigmas[i];
+        float sigma_next  = sigmas[i + 1];
+        auto denoised_opt = model(x, sigma, i + 1);
+        if (denoised_opt.empty()) {
+            return {};
+        }
+        sd::Tensor<float> denoised = std::move(denoised_opt);
+        if (sigma_next == 0.0f) {
+            x = std::move(denoised);
+            continue;
+        }
+        auto noise = sd::Tensor<float>::randn_like(x, rng);
+        x          = sigma_next * noise * s_noise + (1.0f - sigma_next) * denoised;
+    }
+    return x;
+}
+
 static sd::Tensor<float> sample_euler(denoise_cb_t model,
                                       sd::Tensor<float> x,
                                       const std::vector<float>& sigmas) {
@@ -1658,6 +1683,8 @@ static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
                                             float eta,
                                             bool is_flow_denoiser) {
     switch (method) {
+        case EULER_FLOW_FLASH_SAMPLE_METHOD:
+            return sample_euler_flow_flash(model, std::move(x), sigmas, rng, eta);
         case EULER_A_SAMPLE_METHOD:
             if (is_flow_denoiser)
                 return sample_euler_flow(model, std::move(x), sigmas, rng, eta);

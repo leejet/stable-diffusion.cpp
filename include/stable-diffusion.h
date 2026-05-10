@@ -37,6 +37,7 @@ enum rng_type_t {
 
 enum sample_method_t {
     EULER_SAMPLE_METHOD,
+    EULER_FLOW_FLASH_SAMPLE_METHOD,
     EULER_A_SAMPLE_METHOD,
     HEUN_SAMPLE_METHOD,
     DPM2_SAMPLE_METHOD,

@@ -60,6 +60,7 @@ const char* model_version_to_str[] = {
 
 const char* sampling_methods_str[] = {
     "Euler",
+    "Euler Flow Flash",
     "Euler A",
     "Heun",
     "DPM2",
@@ -1978,6 +1979,7 @@ enum rng_type_t str_to_rng_type(const char* str) {
 
 const char* sample_method_to_str[] = {
     "euler",
+    "euler_flow_flash",
     "euler_a",
     "heun",
     "dpm2",
