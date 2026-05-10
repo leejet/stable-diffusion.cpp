@@ -4199,7 +4199,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
             if (sd_ctx->sd->free_params_immediately) {
                 sd_ctx->sd->high_noise_diffusion_model->free_params_buffer();
             }
-            return nullptr;
+            return false;
         }
 
         x_t   = std::move(x_t_sampled);
