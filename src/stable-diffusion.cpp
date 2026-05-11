@@ -118,6 +118,7 @@ public:
     ggml_backend_t vae_backend         = nullptr;
 
     GGMLBackendPtr main_backend;
+    GGMLBackendPtr cpu_backend;
 
     SDVersion version;
     bool vae_decode_only         = false;
@@ -165,21 +166,18 @@ public:
 
     StableDiffusionGGML() = default;
 
-    ~StableDiffusionGGML() {
-        if (clip_backend != backend) {
-            ggml_backend_free(clip_backend);
-        }
-        if (control_net_backend != backend) {
-            ggml_backend_free(control_net_backend);
-        }
-        if (vae_backend != backend) {
-            ggml_backend_free(vae_backend);
-        }
-    }
+    ~StableDiffusionGGML() = default;
 
     void init_backend() {
         main_backend = sd_get_default_backend();
         backend      = main_backend.get();
+    }
+
+    ggml_backend_t get_cpu_backend() {
+        if (!cpu_backend) {
+            cpu_backend = GGMLBackendPtr(ggml_backend_cpu_init());
+        }
+        return cpu_backend.get();
     }
 
     std::shared_ptr<RNG> get_rng(rng_type_t rng_type) {
@@ -436,7 +434,7 @@ public:
             clip_backend = backend;
             if (clip_on_cpu && !ggml_backend_is_cpu(backend)) {
                 LOG_INFO("CLIP: Using CPU backend");
-                clip_backend = ggml_backend_cpu_init();
+                clip_backend = get_cpu_backend();
             }
             if (sd_version_is_sd3(version)) {
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend,
@@ -622,7 +620,7 @@ public:
 
             if (sd_ctx_params->keep_vae_on_cpu && !ggml_backend_is_cpu(backend)) {
                 LOG_INFO("VAE Autoencoder: Using CPU backend");
-                vae_backend = ggml_backend_cpu_init();
+                vae_backend = get_cpu_backend();
             } else {
                 vae_backend = backend;
             }
@@ -717,7 +715,7 @@ public:
                 ggml_backend_t controlnet_backend = nullptr;
                 if (sd_ctx_params->keep_control_net_on_cpu && !ggml_backend_is_cpu(backend)) {
                     LOG_DEBUG("ControlNet: Using CPU backend");
-                    controlnet_backend = ggml_backend_cpu_init();
+                    controlnet_backend = get_cpu_backend();
                 } else {
                     controlnet_backend = backend;
                 }
