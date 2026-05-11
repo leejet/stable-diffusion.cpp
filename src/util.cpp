@@ -770,7 +770,7 @@ bool sd_backend_is(ggml_backend_t backend, const std::string& name) {
     return dev_name.find(name) != std::string::npos;
 }
 
-ggml_backend_t sd_get_default_backend() {
+GGMLBackendPtr sd_get_default_backend() {
     ggml_backend_load_all_once();
     static std::once_flag once;
     std::call_once(once, []() {
@@ -825,7 +825,7 @@ ggml_backend_t sd_get_default_backend() {
         LOG_DEBUG("Using CPU backend");
     }
 
-    return backend;
+    return GGMLBackendPtr(backend);
 }
 
 // namespace is needed to avoid conflicts with ggml_backend_extend.hpp

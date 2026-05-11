@@ -9,7 +9,7 @@
 #include <string>
 
 struct UpscalerGGML {
-    ggml_backend_t backend    = nullptr;  // general backend
+    GGMLBackendPtr backend;  // general backend
     ggml_type model_data_type = GGML_TYPE_F16;
     std::shared_ptr<ESRGAN> esrgan_upscaler;
     std::string esrgan_path;

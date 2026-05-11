@@ -117,6 +117,8 @@ public:
     ggml_backend_t control_net_backend = nullptr;
     ggml_backend_t vae_backend         = nullptr;
 
+    GGMLBackendPtr main_backend;
+
     SDVersion version;
     bool vae_decode_only         = false;
     bool external_vae_is_invalid = false;
@@ -173,11 +175,11 @@ public:
         if (vae_backend != backend) {
             ggml_backend_free(vae_backend);
         }
-        ggml_backend_free(backend);
     }
 
     void init_backend() {
-        backend = sd_get_default_backend();
+        main_backend = sd_get_default_backend();
+        backend      = main_backend.get();
     }
 
     std::shared_ptr<RNG> get_rng(rng_type_t rng_type) {
