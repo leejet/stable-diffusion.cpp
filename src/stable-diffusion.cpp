@@ -2575,7 +2575,20 @@ static sd_audio_t* waveform_to_sd_audio(const StableDiffusionGGML* sd,
         free(audio);
         return nullptr;
     }
-    std::memcpy(audio->data, waveform.data(), sample_bytes);
+
+    const float* src = waveform.data();
+    float* dst       = audio->data;
+
+    if (channels == 1) {
+        std::memcpy(dst, src, sample_bytes);
+    } else {
+        for (int64_t t = 0; t < sample_count; ++t) {
+            for (int64_t c = 0; c < channels; ++c) {
+                dst[t * channels + c] = src[c * sample_count + t];
+            }
+        }
+    }
+
     return audio;
 }
 
