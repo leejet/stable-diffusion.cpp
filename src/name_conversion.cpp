@@ -1093,6 +1093,20 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
 
     replace_with_prefix_map(name, prefix_map);
 
+    // Qwen-Image GGUF (e.g. from unsloth) may store bare tensor names without
+    // the model.diffusion_model. prefix.  Add it so downstream loaders can find
+    // the tensors when they search with the canonical prefix.
+    if (sd_version_is_qwen_image(version)) {
+        if (!starts_with(name, "model.diffusion_model.") &&
+            !starts_with(name, "text_encoders.") &&
+            !starts_with(name, "first_stage_model.") &&
+            !starts_with(name, "vae.") &&
+            !starts_with(name, "cond_stage_model.") &&
+            !starts_with(name, "lora.")) {
+            name = "model.diffusion_model." + name;
+        }
+    }
+
     // diffusion model
     {
         for (const auto& prefix : diffuison_model_prefix_vec) {
