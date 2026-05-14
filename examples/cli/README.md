@@ -103,6 +103,8 @@ Generation Options:
   --hires-upscaler <string>                highres fix upscaler, Lanczos, Nearest, Latent, Latent (nearest), Latent
                                            (nearest-exact), Latent (antialiased), Latent (bicubic), Latent (bicubic
                                            antialiased), or a model name under --hires-upscalers-dir (default: Latent)
+  --extra-sample-args <string>             extra sampler args, key=value list. Currently lcm supports noise_clip_std,
+                                           noise_scale_start, noise_scale_end
   -H, --height <int>                       image height, in pixel space (default: 512)
   -W, --width <int>                        image width, in pixel space (default: 512)
   --steps <int>                            number of sample steps (default: 20)
