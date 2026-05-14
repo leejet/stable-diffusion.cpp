@@ -17,9 +17,8 @@ struct SDCondition {
     sd::Tensor<int32_t> c_input_ids;
     sd::Tensor<int32_t> c_position_ids;
     sd::Tensor<int32_t> c_token_types;
-    sd::Tensor<int32_t> c_image_embed_ranges;
     sd::Tensor<int32_t> c_vinput_mask;
-    std::vector<sd::Tensor<float>> c_vlm_images;
+    std::vector<std::pair<int, sd::Tensor<float>>> c_image_embeds;
     std::vector<sd::Tensor<float>> c_ref_images;
 
     std::vector<sd::Tensor<float>> extra_c_crossattns;
@@ -35,13 +34,12 @@ struct SDCondition {
         if (!c_crossattn.empty() || !c_vector.empty() || !c_concat.empty() ||
             !c_t5_ids.empty() || !c_t5_weights.empty() ||
             !c_input_ids.empty() || !c_position_ids.empty() ||
-            !c_token_types.empty() || !c_image_embed_ranges.empty() ||
-            !c_vinput_mask.empty()) {
+            !c_token_types.empty() || !c_vinput_mask.empty()) {
             return false;
         }
 
-        for (const auto& tensor : c_vlm_images) {
-            if (!tensor.empty()) {
+        for (const auto& image_embed : c_image_embeds) {
+            if (!image_embed.second.empty()) {
                 return false;
             }
         }

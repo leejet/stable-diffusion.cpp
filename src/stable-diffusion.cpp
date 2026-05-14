@@ -494,7 +494,9 @@ public:
                                                                    version,
                                                                    sd_ctx_params->qwen_image_zero_cond_t);
             } else if (version == VERSION_HIDREAM_O1) {
-                cond_stage_model = std::make_shared<HiDreamO1::HiDreamO1Conditioner>();
+                cond_stage_model = std::make_shared<HiDreamO1::HiDreamO1Conditioner>(clip_backend,
+                                                                                     offload_params_to_cpu,
+                                                                                     tensor_storage_map);
                 diffusion_model  = std::make_shared<HiDreamO1Model>(backend,
                                                                    offload_params_to_cpu,
                                                                    tensor_storage_map,
@@ -806,6 +808,7 @@ public:
         }
         if (version == VERSION_HIDREAM_O1) {
             ignore_tensors.insert("lm_head.");
+            ignore_tensors.insert("model.visual.deepstack_merger_list.");
         }
         bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap);
         if (!success) {
@@ -1698,19 +1701,18 @@ public:
             auto run_condition = [&](const SDCondition& condition,
                                      const sd::Tensor<float>* c_concat_override = nullptr,
                                      const std::vector<int>* local_skip_layers  = nullptr) -> sd::Tensor<float> {
-                diffusion_params.context            = condition.c_crossattn.empty() ? nullptr : &condition.c_crossattn;
-                diffusion_params.c_concat           = c_concat_override != nullptr ? c_concat_override : (condition.c_concat.empty() ? nullptr : &condition.c_concat);
-                diffusion_params.y                  = condition.c_vector.empty() ? nullptr : &condition.c_vector;
-                diffusion_params.t5_ids             = condition.c_t5_ids.empty() ? nullptr : &condition.c_t5_ids;
-                diffusion_params.t5_weights         = condition.c_t5_weights.empty() ? nullptr : &condition.c_t5_weights;
-                diffusion_params.input_ids          = condition.c_input_ids.empty() ? nullptr : &condition.c_input_ids;
-                diffusion_params.input_pos          = condition.c_position_ids.empty() ? nullptr : &condition.c_position_ids;
-                diffusion_params.token_types        = condition.c_token_types.empty() ? nullptr : &condition.c_token_types;
-                diffusion_params.image_embed_ranges = condition.c_image_embed_ranges.empty() ? nullptr : &condition.c_image_embed_ranges;
-                diffusion_params.vinput_mask        = condition.c_vinput_mask.empty() ? nullptr : &condition.c_vinput_mask;
-                diffusion_params.vlm_images         = condition.c_vlm_images.empty() ? nullptr : &condition.c_vlm_images;
-                diffusion_params.ref_latents        = condition.c_ref_images.empty() ? &ref_latents : &condition.c_ref_images;
-                diffusion_params.skip_layers        = local_skip_layers;
+                diffusion_params.context      = condition.c_crossattn.empty() ? nullptr : &condition.c_crossattn;
+                diffusion_params.c_concat     = c_concat_override != nullptr ? c_concat_override : (condition.c_concat.empty() ? nullptr : &condition.c_concat);
+                diffusion_params.y            = condition.c_vector.empty() ? nullptr : &condition.c_vector;
+                diffusion_params.t5_ids       = condition.c_t5_ids.empty() ? nullptr : &condition.c_t5_ids;
+                diffusion_params.t5_weights   = condition.c_t5_weights.empty() ? nullptr : &condition.c_t5_weights;
+                diffusion_params.input_ids    = condition.c_input_ids.empty() ? nullptr : &condition.c_input_ids;
+                diffusion_params.input_pos    = condition.c_position_ids.empty() ? nullptr : &condition.c_position_ids;
+                diffusion_params.token_types  = condition.c_token_types.empty() ? nullptr : &condition.c_token_types;
+                diffusion_params.vinput_mask  = condition.c_vinput_mask.empty() ? nullptr : &condition.c_vinput_mask;
+                diffusion_params.image_embeds = condition.c_image_embeds.empty() ? nullptr : &condition.c_image_embeds;
+                diffusion_params.ref_latents  = condition.c_ref_images.empty() ? &ref_latents : &condition.c_ref_images;
+                diffusion_params.skip_layers  = local_skip_layers;
 
                 sd::Tensor<float> cached_output;
                 if (step_cache.before_condition(&condition, noised_input, &cached_output)) {

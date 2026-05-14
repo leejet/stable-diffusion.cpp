@@ -280,6 +280,9 @@ __STATIC_INLINE__ void print_sd_tensor(const sd::Tensor<T>& tensor, bool shape_o
     if (shape_only) {
         return;
     }
+    if (tensor.empty()) {
+        return;
+    }
     int range                  = 3;
     std::vector<int64_t> shape = tensor.shape();
     while (shape.size() < 4) {
@@ -2021,9 +2024,13 @@ protected:
             ggml_backend_buffer_t src_buf = sd::ggml_graph_cut::tensor_buffer(src);
             ggml_backend_buffer_t dst_buf = sd::ggml_graph_cut::tensor_buffer(dst);
             if (src_buf == nullptr || dst_buf == nullptr) {
-                LOG_ERROR("%s cache copy tensor buffer missing: name=%s src_buffer=%p src_view_src=%p src_view_src_buffer=%p dst_buffer=%p",
+                LOG_ERROR("%s cache copy tensor buffer missing: name=%s op=%s src0=%p src0_name=%s src0_buffer=%p src_buffer=%p src_view_src=%p src_view_src_buffer=%p dst_buffer=%p",
                           get_desc().c_str(),
                           src && src->name[0] != '\0' ? src->name : "<unnamed>",
+                          src ? ggml_op_name(src->op) : "<null>",
+                          src ? src->src[0] : nullptr,
+                          (src && src->src[0] && src->src[0]->name[0] != '\0') ? src->src[0]->name : "<unnamed>",
+                          (src && src->src[0]) ? sd::ggml_graph_cut::tensor_buffer(src->src[0]) : nullptr,
                           src ? src->buffer : nullptr,
                           src ? src->view_src : nullptr,
                           (src && src->view_src) ? src->view_src->buffer : nullptr,
@@ -2055,6 +2062,42 @@ protected:
         return true;
     }
 
+    template <typename T>
+    std::optional<sd::Tensor<T>> read_graph_tensor(ggml_tensor* tensor, const char* label) {
+        if (tensor == nullptr) {
+            LOG_ERROR("%s %s tensor is null", get_desc().c_str(), label);
+            return std::nullopt;
+        }
+        if (tensor->type != sd::GGMLTypeTraits<T>::type) {
+            LOG_ERROR("%s %s tensor type mismatch: got %s",
+                      get_desc().c_str(),
+                      label,
+                      ggml_type_name(tensor->type));
+            return std::nullopt;
+        }
+        ggml_backend_buffer_t buf = sd::ggml_graph_cut::tensor_buffer(tensor);
+        if (buf == nullptr) {
+            LOG_ERROR("%s %s tensor buffer missing: name=%s op=%s buffer=%p view_src=%p view_src_buffer=%p data=%p",
+                      get_desc().c_str(),
+                      label,
+                      tensor->name[0] != '\0' ? tensor->name : "<unnamed>",
+                      ggml_op_name(tensor->op),
+                      tensor->buffer,
+                      tensor->view_src,
+                      tensor->view_src ? tensor->view_src->buffer : nullptr,
+                      tensor->data);
+            return std::nullopt;
+        }
+
+        sd::Tensor<T> result(sd::shape_from_ggml(tensor));
+        if (tensor->view_src != nullptr || !ggml_is_contiguous(tensor) || tensor->buffer == nullptr) {
+            ggml_backend_tensor_get(tensor, result.data(), 0, ggml_nbytes(tensor));
+        } else {
+            ggml_backend_tensor_get(tensor, result.data(), 0, ggml_nbytes(tensor));
+        }
+        return result;
+    }
+
     void copy_data_to_backend_tensor(ggml_cgraph* gf, bool clear_after_copy = true) {
         GGML_ASSERT(gf != nullptr);
         std::unordered_set<const ggml_tensor*> graph_tensor_set;
@@ -2075,6 +2118,9 @@ protected:
                 continue;
             }
             const char* name = ggml_get_name(tensor);
+            if (graph_tensor_set.find(tensor) == graph_tensor_set.end()) {
+                continue;
+            }
             if (tensor->buffer == nullptr) {
                 LOG_WARN("%s skip backend tensor copy: tensor buffer not set, name='%s', ne=[%lld,%lld,%lld,%lld], type=%s",
                          get_desc().c_str(),
@@ -2084,10 +2130,6 @@ protected:
                          (long long)tensor->ne[2],
                          (long long)tensor->ne[3],
                          ggml_type_name(tensor->type));
-                continue;
-            }
-
-            if (graph_tensor_set.find(tensor) == graph_tensor_set.end()) {
                 continue;
             }
 
@@ -2476,9 +2518,30 @@ protected:
             return std::nullopt;
         }
 
+        std::unordered_set<const ggml_tensor*> debug_graph_tensor_set;
+        const int n_debug_leafs = sd::ggml_graph_cut::leaf_count(gf);
+        const int n_debug_nodes = ggml_graph_n_nodes(gf);
+        debug_graph_tensor_set.reserve(static_cast<size_t>(n_debug_leafs + n_debug_nodes));
+        for (int i = 0; i < n_debug_leafs; ++i) {
+            debug_graph_tensor_set.insert(sd::ggml_graph_cut::leaf_tensor(gf, i));
+        }
+        for (int i = 0; i < n_debug_nodes; ++i) {
+            debug_graph_tensor_set.insert(ggml_graph_node(gf, i));
+        }
+
         for (const auto& entry : debug_tensors) {
             auto tensor = entry.first;
             if (tensor == nullptr) {
+                continue;
+            }
+            if (debug_graph_tensor_set.find(tensor) == debug_graph_tensor_set.end()) {
+                continue;
+            }
+            ggml_backend_buffer_t tensor_buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+            if (tensor_buf == nullptr) {
+                LOG_WARN("%s skip debug tensor '%s': tensor buffer not set",
+                         get_desc().c_str(),
+                         entry.second.c_str());
                 continue;
             }
             if (tensor->type != GGML_TYPE_F32) {
@@ -2505,7 +2568,15 @@ protected:
         auto result         = ggml_get_tensor(compute_ctx, final_result_name.c_str());
         std::optional<sd::Tensor<T>> output;
         if (!no_return) {
-            output = sd::make_sd_tensor_from_ggml<T>(result);
+            output = read_graph_tensor<T>(result, "output");
+            if (!output.has_value()) {
+                if (free_compute_buffer_immediately) {
+                    free_compute_buffer();
+                } else if (use_partial_param_offload) {
+                    restore_partial_params();
+                }
+                return std::nullopt;
+            }
         } else {
             output = sd::Tensor<T>();
         }

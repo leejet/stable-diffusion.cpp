@@ -872,8 +872,9 @@ static sd::Tensor<float> sample_euler_flow_flash(denoise_cb_t model,
                                                  const std::vector<float>& sigmas,
                                                  std::shared_ptr<RNG> rng,
                                                  float eta) {
-    float s_noise = eta;
-    int steps     = static_cast<int>(sigmas.size()) - 1;
+    constexpr float noise_clip_std = 2.5f;
+    float s_noise                  = eta;
+    int steps                      = static_cast<int>(sigmas.size()) - 1;
     for (int i = 0; i < steps; i++) {
         float sigma       = sigmas[i];
         float sigma_next  = sigmas[i + 1];
@@ -887,7 +888,24 @@ static sd::Tensor<float> sample_euler_flow_flash(denoise_cb_t model,
             continue;
         }
         auto noise = sd::Tensor<float>::randn_like(x, rng);
-        x          = sigma_next * noise * s_noise + (1.0f - sigma_next) * denoised;
+        if (noise_clip_std > 0.0f && noise.numel() > 0) {
+            double mean = 0.0;
+            for (int64_t j = 0; j < noise.numel(); ++j) {
+                mean += static_cast<double>(noise[j]);
+            }
+            mean /= static_cast<double>(noise.numel());
+
+            double variance = 0.0;
+            for (int64_t j = 0; j < noise.numel(); ++j) {
+                double centered = static_cast<double>(noise[j]) - mean;
+                variance += centered * centered;
+            }
+            variance /= static_cast<double>(noise.numel());
+
+            float clip_val = noise_clip_std * static_cast<float>(std::sqrt(variance));
+            noise          = sd::ops::clamp(noise, -clip_val, clip_val);
+        }
+        x = sigma_next * noise * s_noise + (1.0f - sigma_next) * denoised;
     }
     return x;
 }

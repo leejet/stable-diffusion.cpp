@@ -14,28 +14,28 @@
 #include "z_image.hpp"
 
 struct DiffusionParams {
-    const sd::Tensor<float>* x                        = nullptr;
-    const sd::Tensor<float>* timesteps                = nullptr;
-    const sd::Tensor<float>* context                  = nullptr;
-    const sd::Tensor<float>* c_concat                 = nullptr;
-    const sd::Tensor<float>* y                        = nullptr;
-    const sd::Tensor<int32_t>* t5_ids                 = nullptr;
-    const sd::Tensor<float>* t5_weights               = nullptr;
-    const sd::Tensor<float>* guidance                 = nullptr;
-    const std::vector<sd::Tensor<float>>* ref_latents = nullptr;
-    const sd::Tensor<int32_t>* input_ids              = nullptr;
-    const sd::Tensor<int32_t>* input_pos              = nullptr;
-    const sd::Tensor<int32_t>* token_types            = nullptr;
-    const sd::Tensor<int32_t>* image_embed_ranges     = nullptr;
-    const sd::Tensor<int32_t>* vinput_mask            = nullptr;
-    const std::vector<sd::Tensor<float>>* vlm_images  = nullptr;
-    bool increase_ref_index                           = false;
-    int num_video_frames                              = -1;
-    const std::vector<sd::Tensor<float>>* controls    = nullptr;
-    float control_strength                            = 0.f;
-    const sd::Tensor<float>* vace_context             = nullptr;
-    float vace_strength                               = 1.f;
-    const std::vector<int>* skip_layers               = nullptr;
+    const sd::Tensor<float>* x                                         = nullptr;
+    const sd::Tensor<float>* timesteps                                 = nullptr;
+    const sd::Tensor<float>* context                                   = nullptr;
+    const sd::Tensor<float>* c_concat                                  = nullptr;
+    const sd::Tensor<float>* y                                         = nullptr;
+    const sd::Tensor<int32_t>* t5_ids                                  = nullptr;
+    const sd::Tensor<float>* t5_weights                                = nullptr;
+    const sd::Tensor<float>* guidance                                  = nullptr;
+    const std::vector<sd::Tensor<float>>* ref_latents                  = nullptr;
+    const sd::Tensor<int32_t>* input_ids                               = nullptr;
+    const sd::Tensor<int32_t>* input_pos                               = nullptr;
+    const sd::Tensor<int32_t>* token_types                             = nullptr;
+    const sd::Tensor<int32_t>* vinput_mask                             = nullptr;
+    const std::vector<sd::Tensor<float>>* vlm_images                   = nullptr;
+    const std::vector<std::pair<int, sd::Tensor<float>>>* image_embeds = nullptr;
+    bool increase_ref_index                                            = false;
+    int num_video_frames                                               = -1;
+    const std::vector<sd::Tensor<float>>* controls                     = nullptr;
+    float control_strength                                             = 0.f;
+    const sd::Tensor<float>* vace_context                              = nullptr;
+    float vace_strength                                                = 1.f;
+    const std::vector<int>* skip_layers                                = nullptr;
 };
 
 template <typename T>
@@ -545,17 +545,16 @@ struct HiDreamO1Model : public DiffusionModel {
         GGML_ASSERT(diffusion_params.input_ids != nullptr);
         GGML_ASSERT(diffusion_params.input_pos != nullptr);
         GGML_ASSERT(diffusion_params.token_types != nullptr);
-        static const sd::Tensor<int32_t> empty_image_embed_ranges;
         static const std::vector<sd::Tensor<float>> empty_images;
+        static const std::vector<std::pair<int, sd::Tensor<float>>> empty_image_embeds;
         return hidream_o1.compute(n_threads,
                                   *diffusion_params.x,
                                   *diffusion_params.timesteps,
                                   *diffusion_params.input_ids,
                                   *diffusion_params.input_pos,
                                   *diffusion_params.token_types,
-                                  diffusion_params.image_embed_ranges ? *diffusion_params.image_embed_ranges : empty_image_embed_ranges,
-                                  diffusion_params.vinput_mask ? *diffusion_params.vinput_mask : empty_image_embed_ranges,
-                                  diffusion_params.vlm_images ? *diffusion_params.vlm_images : empty_images,
+                                  tensor_or_empty(diffusion_params.vinput_mask),
+                                  diffusion_params.image_embeds ? *diffusion_params.image_embeds : empty_image_embeds,
                                   diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_images);
     }
 };
