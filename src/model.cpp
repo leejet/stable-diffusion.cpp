@@ -731,7 +731,6 @@ void ModelLoader::set_wtype_override(ggml_type wtype, std::string tensor_type_ru
 }
 
 void ModelLoader::process_model_files(bool enable_mmap, bool writable_mmap) {
-
     if (model_files_processed) {
         return;
     }
@@ -768,15 +767,15 @@ void ModelLoader::process_model_files(bool enable_mmap, bool writable_mmap) {
         }
 
         ModelFileData fdata = {};
-        fdata.path    = file_path;
-        fdata.is_zip  = is_zip;
-        fdata.tensors = std::move(file_tensors);
+        fdata.path          = file_path;
+        fdata.is_zip        = is_zip;
+        fdata.tensors       = std::move(file_tensors);
 
         if (enable_mmap && !is_zip) {
             LOG_DEBUG("using mmap for I/O");
             std::unique_ptr<MmapWrapper> mmapped = MmapWrapper::create(file_path, writable_mmap);
             if (mmapped) {
-                uint8_t * mmap_data = static_cast<uint8_t*>(mmapped->writable_data());
+                uint8_t* mmap_data             = static_cast<uint8_t*>(mmapped->writable_data());
                 ggml_backend_buffer_t buf_mmap = ggml_backend_cpu_buffer_from_ptr(mmap_data, mmapped->size());
                 if (buf_mmap) {
                     LOG_INFO("using mmap for '%s'", file_path.c_str());
@@ -798,15 +797,15 @@ void ModelLoader::process_model_files(bool enable_mmap, bool writable_mmap) {
 
     model_files_processed = true;
 
-    int64_t end_time = ggml_time_ms();
+    int64_t end_time        = ggml_time_ms();
     int64_t process_time_ms = end_time - start_time;
 
     LOG_INFO("model files processing completed in %.2fs", process_time_ms / 1000.f);
 }
 
 std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggml_tensor*>& tensors,
-                                                       std::set<std::string> ignore_tensors, bool writable_mmap)
-{
+                                                       std::set<std::string> ignore_tensors,
+                                                       bool writable_mmap) {
     process_model_files(true, writable_mmap);
 
     std::vector<MmapTensorStore> result;
@@ -818,7 +817,8 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
     int64_t t_start = ggml_time_ms();
 
     for (auto& fdata : file_data) {
-        if (!fdata.mmbuffer) continue;
+        if (!fdata.mmbuffer)
+            continue;
 
         const std::vector<TensorStorage>& file_tensors = fdata.tensors;
 
@@ -856,15 +856,15 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
                 tensor_storage.ne[1] != dst_tensor->ne[1] ||
                 tensor_storage.ne[2] != dst_tensor->ne[2] ||
                 tensor_storage.ne[3] != dst_tensor->ne[3] ||
-                tensor_size          != ggml_nbytes(dst_tensor)) {
+                tensor_size != ggml_nbytes(dst_tensor)) {
                 // let load_tensors worry about this
                 continue;
             }
 
             ggml_backend_buffer_t buf_mmap = fdata.mmbuffer.get();
-            uint8_t * mmap_data = static_cast<uint8_t*>(ggml_backend_buffer_get_base(buf_mmap));
-            dst_tensor->buffer = buf_mmap;
-            dst_tensor->data   = mmap_data + tensor_offset;
+            uint8_t* mmap_data             = static_cast<uint8_t*>(ggml_backend_buffer_get_base(buf_mmap));
+            dst_tensor->buffer             = buf_mmap;
+            dst_tensor->data               = mmap_data + tensor_offset;
 
             file_mapped_bytes += tensor_size;
             file_mapped_tensors++;
@@ -872,12 +872,12 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
 
         if (file_mapped_bytes > 0) {
             mapped_tensors += file_mapped_tensors;
-            mapped_bytes   += file_mapped_bytes;
+            mapped_bytes += file_mapped_bytes;
             result.push_back({fdata.mmapped, fdata.mmbuffer});
         }
     }
 
-    int64_t t_end = ggml_time_ms();
+    int64_t t_end       = ggml_time_ms();
     int64_t duration_ms = t_end - t_start;
 
     LOG_INFO("memory-mapped %zu tensors in %zu files (%.2f MB), taking %.2fs",
@@ -890,7 +890,6 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
 }
 
 bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads_p, bool enable_mmap) {
-
     process_model_files(enable_mmap, false);
 
     std::atomic<int64_t> read_time_ms(0);
@@ -909,16 +908,16 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
         total_tensors_to_process += fdata.tensors.size();
     }
 
-    bool success                          = true;
-    size_t total_tensors_processed        = 0;
-    const int64_t t_start                 = start_time;
-    int last_n_threads                    = 1;
+    bool success                   = true;
+    size_t total_tensors_processed = 0;
+    const int64_t t_start          = start_time;
+    int last_n_threads             = 1;
 
-    for (auto & fdata : file_data) {
-        const std::string & file_path = fdata.path;
+    for (auto& fdata : file_data) {
+        const std::string& file_path = fdata.path;
         LOG_DEBUG("loading tensors from %s", file_path.c_str());
 
-        const std::vector<TensorStorage> & file_tensors = fdata.tensors;
+        const std::vector<TensorStorage>& file_tensors = fdata.tensors;
 
         bool is_zip = fdata.is_zip;
 

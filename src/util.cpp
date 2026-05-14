@@ -184,7 +184,7 @@ struct MmapFlags {
 };
 
 static MmapFlags get_mmap_flags() {
-    MmapFlags result = {};
+    MmapFlags result          = {};
     const char* SD_MMAP_FLAGS = std::getenv("SD_MMAP_FLAGS");
     if (SD_MMAP_FLAGS && *SD_MMAP_FLAGS) {
         std::stringstream ss(SD_MMAP_FLAGS);
