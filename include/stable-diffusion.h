@@ -37,7 +37,6 @@ enum rng_type_t {
 
 enum sample_method_t {
     EULER_SAMPLE_METHOD,
-    EULER_FLOW_FLASH_SAMPLE_METHOD,
     EULER_A_SAMPLE_METHOD,
     HEUN_SAMPLE_METHOD,
     DPM2_SAMPLE_METHOD,
@@ -239,6 +238,7 @@ typedef struct {
     float* custom_sigmas;
     int custom_sigmas_count;
     float flow_shift;
+    const char* extra_sample_args;
 } sd_sample_params_t;
 
 typedef struct {

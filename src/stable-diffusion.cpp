@@ -60,7 +60,6 @@ const char* model_version_to_str[] = {
 
 const char* sampling_methods_str[] = {
     "Euler",
-    "Euler Flow Flash",
     "Euler A",
     "Heun",
     "DPM2",
@@ -1601,6 +1600,7 @@ public:
                              int shifted_timestep,
                              sample_method_t method,
                              bool is_flow_denoiser,
+                             const char* extra_sample_args,
                              const std::vector<float>& sigmas,
                              int start_merge_step,
                              const std::vector<sd::Tensor<float>>& ref_latents,
@@ -1809,7 +1809,7 @@ public:
             return denoised;
         };
 
-        auto x0_opt = sample_k_diffusion(method, denoise, x_t, sigmas, sampler_rng, eta, is_flow_denoiser);
+        auto x0_opt = sample_k_diffusion(method, denoise, x_t, sigmas, sampler_rng, eta, is_flow_denoiser, extra_sample_args);
         if (x0_opt.empty()) {
             LOG_ERROR("Diffusion model sampling failed");
             if (control_net) {
@@ -1981,7 +1981,6 @@ enum rng_type_t str_to_rng_type(const char* str) {
 
 const char* sample_method_to_str[] = {
     "euler",
-    "euler_flow_flash",
     "euler_a",
     "heun",
     "dpm2",
@@ -2301,6 +2300,7 @@ void sd_sample_params_init(sd_sample_params_t* sample_params) {
     sample_params->custom_sigmas               = nullptr;
     sample_params->custom_sigmas_count         = 0;
     sample_params->flow_shift                  = INFINITY;
+    sample_params->extra_sample_args           = nullptr;
 }
 
 char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
@@ -2322,7 +2322,8 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
              "sample_steps: %d, "
              "eta: %.2f, "
              "shifted_timestep: %d, "
-             "flow_shift: %.2f)",
+             "flow_shift: %.2f, "
+             "extra_sample_args: %s)",
              sample_params->guidance.txt_cfg,
              std::isfinite(sample_params->guidance.img_cfg)
                  ? sample_params->guidance.img_cfg
@@ -2337,7 +2338,8 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
              sample_params->sample_steps,
              sample_params->eta,
              sample_params->shifted_timestep,
-             sample_params->flow_shift);
+             sample_params->flow_shift,
+             SAFE_STR(sample_params->extra_sample_args));
 
     return buf;
 }
@@ -2770,6 +2772,8 @@ struct GenerationRequest {
 struct SamplePlan {
     enum sample_method_t sample_method            = SAMPLE_METHOD_COUNT;
     enum sample_method_t high_noise_sample_method = SAMPLE_METHOD_COUNT;
+    const char* extra_sample_args                 = nullptr;
+    const char* high_noise_extra_sample_args      = nullptr;
     float eta                                     = 0.f;
     float high_noise_eta                          = 0.f;
     int sample_steps                              = 0;
@@ -2782,22 +2786,25 @@ struct SamplePlan {
     SamplePlan(sd_ctx_t* sd_ctx,
                const sd_img_gen_params_t* sd_img_gen_params,
                const GenerationRequest& request) {
-        sample_method = sd_img_gen_params->sample_params.sample_method;
-        eta           = sd_img_gen_params->sample_params.eta;
-        sample_steps  = sd_img_gen_params->sample_params.sample_steps;
+        sample_method     = sd_img_gen_params->sample_params.sample_method;
+        extra_sample_args = sd_img_gen_params->sample_params.extra_sample_args;
+        eta               = sd_img_gen_params->sample_params.eta;
+        sample_steps      = sd_img_gen_params->sample_params.sample_steps;
         resolve(sd_ctx, &request, &sd_img_gen_params->sample_params);
     }
 
     SamplePlan(sd_ctx_t* sd_ctx,
                const sd_vid_gen_params_t* sd_vid_gen_params,
                const GenerationRequest& request) {
-        sample_method = sd_vid_gen_params->sample_params.sample_method;
-        eta           = sd_vid_gen_params->sample_params.eta;
-        sample_steps  = sd_vid_gen_params->sample_params.sample_steps;
+        sample_method     = sd_vid_gen_params->sample_params.sample_method;
+        extra_sample_args = sd_vid_gen_params->sample_params.extra_sample_args;
+        eta               = sd_vid_gen_params->sample_params.eta;
+        sample_steps      = sd_vid_gen_params->sample_params.sample_steps;
         if (sd_ctx->sd->high_noise_diffusion_model) {
-            high_noise_sample_steps  = sd_vid_gen_params->high_noise_sample_params.sample_steps;
-            high_noise_sample_method = sd_vid_gen_params->high_noise_sample_params.sample_method;
-            high_noise_eta           = sd_vid_gen_params->high_noise_sample_params.eta;
+            high_noise_sample_steps      = sd_vid_gen_params->high_noise_sample_params.sample_steps;
+            high_noise_sample_method     = sd_vid_gen_params->high_noise_sample_params.sample_method;
+            high_noise_extra_sample_args = sd_vid_gen_params->high_noise_sample_params.extra_sample_args;
+            high_noise_eta               = sd_vid_gen_params->high_noise_sample_params.eta;
         }
         moe_boundary = sd_vid_gen_params->moe_boundary;
         resolve(sd_ctx, &request, &sd_vid_gen_params->sample_params);
@@ -3456,6 +3463,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                                                    request.shifted_timestep,
                                                    plan.sample_method,
                                                    sd_ctx->sd->is_flow_denoiser(),
+                                                   plan.extra_sample_args,
                                                    plan.sigmas,
                                                    plan.start_merge_step,
                                                    latents.ref_latents,
@@ -3581,6 +3589,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                                                             request.shifted_timestep,
                                                             plan.sample_method,
                                                             sd_ctx->sd->is_flow_denoiser(),
+                                                            plan.extra_sample_args,
                                                             hires_sigma_sched,
                                                             plan.start_merge_step,
                                                             latents.ref_latents,
@@ -3945,6 +3954,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                                            request.shifted_timestep,
                                                            plan.high_noise_sample_method,
                                                            sd_ctx->sd->is_flow_denoiser(),
+                                                           plan.high_noise_extra_sample_args,
                                                            high_noise_sigmas,
                                                            -1,
                                                            std::vector<sd::Tensor<float>>{},
@@ -3987,6 +3997,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                                         sd_vid_gen_params->sample_params.shifted_timestep,
                                                         plan.sample_method,
                                                         sd_ctx->sd->is_flow_denoiser(),
+                                                        plan.extra_sample_args,
                                                         plan.sigmas,
                                                         -1,
                                                         std::vector<sd::Tensor<float>>{},
