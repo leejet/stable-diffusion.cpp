@@ -74,6 +74,8 @@ const char* sampling_methods_str[] = {
     "Res Multistep",
     "Res 2s",
     "ER-SDE",
+    "Euler CFG++",
+    "Euler A CFG++",
 };
 
 /*================================================== Helper Functions ================================================*/
@@ -109,6 +111,7 @@ static float get_cache_reuse_threshold(const sd_cache_params_t& params) {
 
 class StableDiffusionGGML {
 public:
+    std::vector<MmapTensorStore> mmap_tensor_store;
     ggml_backend_t backend             = nullptr;  // general backend
     ggml_backend_t clip_backend        = nullptr;
     ggml_backend_t control_net_backend = nullptr;
@@ -361,6 +364,51 @@ public:
             apply_lora_immediately = false;
         }
 
+        std::map<std::string, ggml_tensor*> mmap_able_tensors;
+        bool enable_mmap_tensors = false;
+        bool main_backend_mmap   = false;
+        bool needs_writable_mmap = false;
+        if (sd_ctx_params->enable_mmap) {
+            if (apply_lora_immediately) {
+                needs_writable_mmap = true;
+                LOG_WARN("in mode 'immediately', LoRAs will cause extra memory usage with mmap");
+            }
+            enable_mmap_tensors = true;
+            if (offload_params_to_cpu) {
+                main_backend_mmap = true;
+            } else {
+                ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+                struct ggml_backend_dev_props props;
+                ggml_backend_dev_get_props(dev, &props);
+                main_backend_mmap = props.caps.buffer_from_host_ptr;
+            }
+        }
+
+        // split definition to avoid msvc choking on the extra parameter handling
+        auto get_param_tensors_p = [&](auto&& model, bool force_cpu, const char* prefix) {
+            std::map<std::string, ggml_tensor*> temp;
+            model->get_param_tensors(temp, prefix);
+            bool do_mmap = enable_mmap_tensors && (main_backend_mmap || force_cpu);
+            for (const auto& [key, tensor] : temp) {
+                tensors[key] = tensor;
+                if (do_mmap) {
+                    mmap_able_tensors[key] = tensor;
+                }
+            }
+        };
+
+        auto get_param_tensors = [&](auto&& model, bool force_cpu = false) {
+            std::map<std::string, ggml_tensor*> temp;
+            model->get_param_tensors(temp);
+            bool do_mmap = enable_mmap_tensors && (main_backend_mmap || force_cpu);
+            for (const auto& [key, tensor] : temp) {
+                tensors[key] = tensor;
+                if (do_mmap) {
+                    mmap_able_tensors[key] = tensor;
+                }
+            }
+        };
+
         if (sd_version_is_control(version)) {
             // Might need vae encode for control cond
             vae_decode_only = false;
@@ -472,8 +520,7 @@ public:
                                                                              offload_params_to_cpu,
                                                                              tensor_storage_map);
                     clip_vision->set_max_graph_vram_bytes(max_graph_vram_bytes);
-                    clip_vision->alloc_params_buffer();
-                    clip_vision->get_param_tensors(tensors);
+                    get_param_tensors(clip_vision);
                 }
             } else if (sd_version_is_qwen_image(version)) {
                 bool enable_vision = false;
@@ -557,12 +604,10 @@ public:
             }
 
             cond_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
-            cond_stage_model->alloc_params_buffer();
-            cond_stage_model->get_param_tensors(tensors);
+            get_param_tensors(cond_stage_model, clip_on_cpu);
 
             diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
-            diffusion_model->alloc_params_buffer();
-            diffusion_model->get_param_tensors(tensors);
+            get_param_tensors(diffusion_model);
 
             if (sd_version_is_unet_edit(version)) {
                 vae_decode_only = false;
@@ -570,8 +615,7 @@ public:
 
             if (high_noise_diffusion_model) {
                 high_noise_diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
-                high_noise_diffusion_model->alloc_params_buffer();
-                high_noise_diffusion_model->get_param_tensors(tensors);
+                get_param_tensors(high_noise_diffusion_model);
             }
 
             if (sd_ctx_params->keep_vae_on_cpu && !ggml_backend_is_cpu(backend)) {
@@ -634,6 +678,8 @@ public:
                 }
             };
 
+            bool force_vae_cpu = sd_ctx_params->keep_vae_on_cpu;
+
             if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1) {
                 LOG_INFO("using FakeVAE");
                 first_stage_model = std::make_shared<FakeVAE>(version,
@@ -643,20 +689,17 @@ public:
                 LOG_INFO("using TAE for encoding / decoding");
                 first_stage_model = create_tae();
                 first_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
-                first_stage_model->alloc_params_buffer();
-                first_stage_model->get_param_tensors(tensors, "tae");
+                get_param_tensors_p(first_stage_model, force_vae_cpu, "tae");
             } else {
                 LOG_INFO("using VAE for encoding / decoding");
                 first_stage_model = create_vae();
                 first_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
-                first_stage_model->alloc_params_buffer();
-                first_stage_model->get_param_tensors(tensors, "first_stage_model");
+                get_param_tensors_p(first_stage_model, force_vae_cpu, "first_stage_model");
                 if (use_tae && tae_preview_only) {
                     LOG_INFO("using TAE for preview");
                     preview_vae = create_tae();
                     preview_vae->set_max_graph_vram_bytes(max_graph_vram_bytes);
-                    preview_vae->alloc_params_buffer();
-                    preview_vae->get_param_tensors(tensors, "tae");
+                    get_param_tensors_p(first_stage_model, force_vae_cpu, "vae");
                 }
             }
 
@@ -721,11 +764,7 @@ public:
                 }
             }
             if (use_pmid) {
-                if (!pmid_model->alloc_params_buffer()) {
-                    LOG_ERROR(" pmid model params buffer allocation failed");
-                    return false;
-                }
-                pmid_model->get_param_tensors(tensors, "pmid");
+                get_param_tensors_p(pmid_model, false, "pmid");
             }
 
             if (sd_ctx_params->flash_attn) {
@@ -809,6 +848,41 @@ public:
             ignore_tensors.insert("lm_head.");
             ignore_tensors.insert("model.visual.deepstack_merger_list.");
         }
+
+        if (enable_mmap_tensors) {
+            if (mmap_able_tensors.empty()) {
+                LOG_DEBUG("no tensors could be memory-mapped");
+            } else {
+                mmap_tensor_store = model_loader.mmap_tensors(mmap_able_tensors, ignore_tensors, needs_writable_mmap);
+            }
+        }
+
+        if (clip_vision) {
+            clip_vision->alloc_params_buffer();
+        }
+        if (cond_stage_model) {
+            cond_stage_model->alloc_params_buffer();
+        }
+        if (diffusion_model) {
+            diffusion_model->alloc_params_buffer();
+        }
+        if (high_noise_diffusion_model) {
+            high_noise_diffusion_model->alloc_params_buffer();
+        }
+        if (first_stage_model) {
+            first_stage_model->alloc_params_buffer();
+        }
+        if (preview_vae) {
+            preview_vae->alloc_params_buffer();
+        }
+        if (use_pmid && pmid_model) {
+            if (!pmid_model->alloc_params_buffer()) {
+                LOG_ERROR(" pmid model params buffer allocation failed");
+                ggml_free(ctx);
+                return false;
+            }
+        }
+
         bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap);
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
@@ -1618,8 +1692,17 @@ public:
                                                                                            cache_params,
                                                                                            denoiser.get(),
                                                                                            sigmas);
-        size_t steps                                = sigmas.size() - 1;
-        bool has_skiplayer                          = slg_scale != 0.0f && !skip_layers.empty();
+
+        // Spectrum cache is not supported for CFG++ samplers
+        if (method == EULER_CFG_PP_SAMPLE_METHOD || method == EULER_A_CFG_PP_SAMPLE_METHOD) {
+            if (cache_runtime.spectrum_enabled) {
+                LOG_WARN("Spectrum cache requested but not supported for CFG++ samplers");
+                cache_runtime.spectrum_enabled = false;
+            }
+        }
+
+        size_t steps       = sigmas.size() - 1;
+        bool has_skiplayer = slg_scale != 0.0f && !skip_layers.empty();
         if (has_skiplayer && !sd_version_is_dit(version)) {
             has_skiplayer = false;
             LOG_WARN("SLG is incompatible with this model type");
@@ -1636,7 +1719,7 @@ public:
         sd::Tensor<float> denoised   = x_t;
         SamplePreviewContext preview = prepare_sample_preview_context();
 
-        auto denoise = [&](const sd::Tensor<float>& x, float sigma, int step) -> sd::Tensor<float> {
+        auto denoise = [&](const sd::Tensor<float>& x, float sigma, int step, sd::Tensor<float>* out_uncond_denoised = nullptr) -> sd::Tensor<float> {
             if (step == 1 || step == -1) {
                 pretty_progress(0, (int)steps, 0);
             }
@@ -1659,15 +1742,17 @@ public:
             }
 
             if (cache_runtime.spectrum_enabled && cache_runtime.spectrum.should_predict()) {
-                cache_runtime.spectrum.predict(&denoised);
-                if (!denoise_mask.empty()) {
-                    denoised = denoised * denoise_mask + init_latent * (1.0f - denoise_mask);
+                if (out_uncond_denoised == nullptr) {
+                    cache_runtime.spectrum.predict(&denoised);
+                    if (!denoise_mask.empty()) {
+                        denoised = denoised * denoise_mask + init_latent * (1.0f - denoise_mask);
+                    }
+                    if (sd_should_preview_denoised() && preview.callback != nullptr) {
+                        preview_image(step, denoised, version, preview.mode, preview.callback, preview.data, false);
+                    }
+                    report_sample_progress(step, steps, t0);
+                    return denoised;
                 }
-                if (sd_should_preview_denoised() && preview.callback != nullptr) {
-                    preview_image(step, denoised, version, preview.mode, preview.callback, preview.data, false);
-                }
-                report_sample_progress(step, steps, t0);
-                return denoised;
             }
 
             if (sd_should_preview_noisy() && preview.callback != nullptr) {
@@ -1796,6 +1881,10 @@ public:
                 latent_result += (cond_out - skip_cond_out) * slg_scale;
             }
             denoised = latent_result * c_out + x * c_skip;
+            if (out_uncond_denoised != nullptr) {
+                sd::Tensor<float> base_uncond = !uncond_out.empty() ? uncond_out : cond_out;
+                *out_uncond_denoised          = base_uncond * c_out + x * c_skip;
+            }
             if (cache_runtime.spectrum_enabled) {
                 cache_runtime.spectrum.update(denoised);
             }
@@ -1995,6 +2084,8 @@ const char* sample_method_to_str[] = {
     "res_multistep",
     "res_2s",
     "er_sde",
+    "euler_cfg_pp",
+    "euler_a_cfg_pp",
 };
 
 const char* sd_sample_method_name(enum sample_method_t sample_method) {
@@ -2563,6 +2654,7 @@ static float resolve_eta(sd_ctx_t* sd_ctx,
             case EULER_A_SAMPLE_METHOD:
             case DPMPP2S_A_SAMPLE_METHOD:
             case ER_SDE_SAMPLE_METHOD:
+            case EULER_A_CFG_PP_SAMPLE_METHOD:
                 return 1.0f;
             default:;
         }
