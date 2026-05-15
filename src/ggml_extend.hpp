@@ -2732,6 +2732,9 @@ public:
                 rebuild_params_tensor_set();
                 return true;
             }
+        } else {
+            LOG_DEBUG("%s skipping params allocation (no tensors)", get_desc().c_str());
+            return true;
         }
         params_buffer = ggml_backend_alloc_ctx_tensors(params_ctx, params_backend);
         if (params_buffer == nullptr) {
