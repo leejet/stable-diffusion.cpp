@@ -51,6 +51,8 @@ enum sample_method_t {
     RES_MULTISTEP_SAMPLE_METHOD,
     RES_2S_SAMPLE_METHOD,
     ER_SDE_SAMPLE_METHOD,
+    EULER_CFG_PP_SAMPLE_METHOD,
+    EULER_A_CFG_PP_SAMPLE_METHOD,
     SAMPLE_METHOD_COUNT
 };
 
@@ -286,6 +288,7 @@ typedef struct {
     float* custom_sigmas;
     int custom_sigmas_count;
     float flow_shift;
+    const char* extra_sample_args;
 } sd_sample_params_t;
 
 typedef struct {

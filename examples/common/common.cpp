@@ -905,6 +905,10 @@ ArgOptions SDGenerationParams::get_options() {
          "Latent (antialiased), Latent (bicubic), Latent (bicubic antialiased), or a model name "
          "under --hires-upscalers-dir (default: Latent)",
          &hires_upscaler},
+        {"",
+         "--extra-sample-args",
+         "extra sampler args, key=value list. Currently lcm supports noise_clip_std, noise_scale_start, noise_scale_end",
+         &extra_sample_args},
     };
 
     options.int_options = {
@@ -1342,12 +1346,12 @@ ArgOptions SDGenerationParams::get_options() {
          on_seed_arg},
         {"",
          "--sampling-method",
-         "sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde] "
+         "sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde, euler_cfg_pp, euler_a_cfg_pp]"
          "(default: euler for Flux/SD3/Wan, euler_a otherwise)",
          on_sample_method_arg},
         {"",
          "--high-noise-sampling-method",
-         "(high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde]"
+         "(high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde, euler_cfg_pp, euler_a_cfg_pp]"
          " default: euler for Flux/SD3/Wan, euler_a otherwise",
          on_high_noise_sample_method_arg},
         {"",
@@ -1705,6 +1709,7 @@ bool SDGenerationParams::from_json_str(
 
     auto parse_sample_params_json = [&](const json& sample_json,
                                         sd_sample_params_t& target_params,
+                                        std::string& target_extra_sample_args,
                                         std::vector<int>& target_skip_layers,
                                         std::vector<float>* target_custom_sigmas) {
         if (sample_json.contains("sample_steps") && sample_json["sample_steps"].is_number_integer()) {
@@ -1718,6 +1723,9 @@ bool SDGenerationParams::from_json_str(
         }
         if (sample_json.contains("flow_shift") && sample_json["flow_shift"].is_number()) {
             target_params.flow_shift = sample_json["flow_shift"];
+        }
+        if (sample_json.contains("extra_sample_args") && sample_json["extra_sample_args"].is_string()) {
+            target_extra_sample_args = sample_json["extra_sample_args"].get<std::string>();
         }
         if (target_custom_sigmas != nullptr &&
             sample_json.contains("custom_sigmas") &&
@@ -1766,11 +1774,12 @@ bool SDGenerationParams::from_json_str(
     };
 
     if (j.contains("sample_params") && j["sample_params"].is_object()) {
-        parse_sample_params_json(j["sample_params"], sample_params, skip_layers, &custom_sigmas);
+        parse_sample_params_json(j["sample_params"], sample_params, extra_sample_args, skip_layers, &custom_sigmas);
     }
     if (j.contains("high_noise_sample_params") && j["high_noise_sample_params"].is_object()) {
         parse_sample_params_json(j["high_noise_sample_params"],
                                  high_noise_sample_params,
+                                 high_noise_extra_sample_args,
                                  high_noise_skip_layers,
                                  nullptr);
     }
@@ -2197,6 +2206,8 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     high_noise_sample_params.guidance.slg.layer_count = high_noise_skip_layers.size();
     sample_params.custom_sigmas                       = custom_sigmas.empty() ? nullptr : custom_sigmas.data();
     sample_params.custom_sigmas_count                 = static_cast<int>(custom_sigmas.size());
+    sample_params.extra_sample_args                   = extra_sample_args.empty() ? nullptr : extra_sample_args.c_str();
+    high_noise_sample_params.extra_sample_args        = high_noise_extra_sample_args.empty() ? nullptr : high_noise_extra_sample_args.c_str();
     cache_params.scm_mask                             = scm_mask.empty() ? nullptr : scm_mask.c_str();
 
     sd_pm_params_t pm_params = {
@@ -2266,6 +2277,8 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
     high_noise_sample_params.guidance.slg.layer_count = high_noise_skip_layers.size();
     sample_params.custom_sigmas                       = custom_sigmas.empty() ? nullptr : custom_sigmas.data();
     sample_params.custom_sigmas_count                 = static_cast<int>(custom_sigmas.size());
+    sample_params.extra_sample_args                   = extra_sample_args.empty() ? nullptr : extra_sample_args.c_str();
+    high_noise_sample_params.extra_sample_args        = high_noise_extra_sample_args.empty() ? nullptr : high_noise_extra_sample_args.c_str();
     cache_params.scm_mask                             = scm_mask.empty() ? nullptr : scm_mask.c_str();
 
     params.loras                    = lora_vec.empty() ? nullptr : lora_vec.data();
@@ -2404,6 +2417,7 @@ static json build_sampling_metadata_json(const sd_sample_params_t& sample_params
         {"eta", sample_params.eta},
         {"shifted_timestep", sample_params.shifted_timestep},
         {"flow_shift", sample_params.flow_shift},
+        {"extra_sample_args", safe_json_string(sample_params.extra_sample_args)},
         {"guidance",
          {
              {"txt_cfg", sample_params.guidance.txt_cfg},
@@ -2595,6 +2609,9 @@ std::string get_image_params(const SDContextParams& ctx_params,
     }
     parameter_string += "Guidance: " + std::to_string(gen_params.sample_params.guidance.distilled_guidance) + ", ";
     parameter_string += "Eta: " + std::to_string(gen_params.sample_params.eta) + ", ";
+    if (!gen_params.extra_sample_args.empty()) {
+        parameter_string += "Extra sample args: " + gen_params.extra_sample_args + ", ";
+    }
     parameter_string += "Seed: " + std::to_string(seed) + ", ";
     parameter_string += "Size: " + std::to_string(gen_params.get_resolved_width()) + "x" + std::to_string(gen_params.get_resolved_height()) + ", ";
     parameter_string += "Model: " + sd_basename(ctx_params.model_path) + ", ";
