@@ -626,6 +626,28 @@ inline std::pair<std::string, int> anima_layer_pattern(const std::string& tensor
     return {"_global", -1};
 }
 
+// Extract HiDream O1 layer info: language_model.layers.N, or _global.
+// HiDream O1's diffusion forward pass IS an LLM transformer loop — the
+// per-layer streamable units are the language_model.layers.N transformer
+// blocks. Embedding tables, the final RMSNorm, t_embedder, x_embedder, and
+// the final_layer projection all stay resident as _global.
+inline std::pair<std::string, int> hidream_o1_layer_pattern(const std::string& tensor_name) {
+    static const std::string marker = "language_model.layers.";
+    size_t pos = tensor_name.find(marker);
+    if (pos != std::string::npos) {
+        size_t num_start = pos + marker.size();
+        size_t num_end   = tensor_name.find('.', num_start);
+        if (num_end == std::string::npos) {
+            num_end = tensor_name.length();
+        }
+        std::string num_str = tensor_name.substr(num_start, num_end - num_start);
+        int block_idx       = std::stoi(num_str);
+        return {"language_model.layers." + num_str, block_idx};
+    }
+
+    return {"_global", -1};
+}
+
 }  // namespace LayerStreaming
 
 #endif  // __TENSOR_REGISTRY_HPP__

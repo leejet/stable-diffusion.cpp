@@ -666,6 +666,35 @@ namespace LLM {
             return x;
         }
 
+        int64_t get_num_layers() const {
+            return num_layers;
+        }
+
+        int64_t get_hidden_size() const {
+            return params.hidden_size;
+        }
+
+        // Run a single TransformerBlock at index `layer_idx`. Used by streaming
+        // runners that build one mini-graph per layer instead of one big graph
+        // covering forward_embeds.
+        ggml_tensor* forward_layer_block(GGMLRunnerContext* ctx,
+                                         int layer_idx,
+                                         ggml_tensor* x,
+                                         ggml_tensor* input_pos,
+                                         ggml_tensor* attention_mask) {
+            auto block = std::dynamic_pointer_cast<TransformerBlock>(
+                blocks["layers." + std::to_string(layer_idx)]);
+            return block->forward(ctx, x, input_pos, attention_mask);
+        }
+
+        // Final RMSNorm applied after the last transformer block. Streaming
+        // runners that bypass forward_embeds still need this in their output
+        // stage.
+        ggml_tensor* forward_final_norm(GGMLRunnerContext* ctx, ggml_tensor* x) {
+            auto norm = std::dynamic_pointer_cast<RMSNorm>(blocks["norm"]);
+            return norm->forward(ctx, x);
+        }
+
         ggml_tensor* forward_embeds(GGMLRunnerContext* ctx,
                                     ggml_tensor* x,
                                     ggml_tensor* input_pos,

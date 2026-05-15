@@ -935,6 +935,68 @@ struct HiDreamO1Model : public DiffusionModel {
                                   diffusion_params.image_embeds ? *diffusion_params.image_embeds : empty_image_embeds,
                                   diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_images);
     }
+
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override { return hidream_o1.is_params_on_gpu(); }
+    bool move_params_to_cpu() override { return hidream_o1.move_params_to_cpu(); }
+    bool move_params_to_gpu() override { return hidream_o1.move_params_to_gpu(); }
+    size_t get_params_vram_size() const override { return hidream_o1.get_params_vram_size(); }
+
+    // Layer streaming (granular tensor offloading)
+    bool supports_layer_streaming() const override { return true; }
+
+    void enable_layer_streaming(int prefetch_layers, size_t min_free_vram) override {
+        LayerStreaming::StreamingConfig config;
+        config.prefetch_layers = prefetch_layers;
+        config.min_free_vram   = min_free_vram;
+        hidream_o1.enable_layer_streaming(config);
+    }
+
+    void disable_layer_streaming() override {
+        hidream_o1.disable_layer_streaming();
+    }
+
+    bool is_layer_streaming_enabled() const override {
+        return hidream_o1.is_streaming_enabled();
+    }
+
+    void offload_streaming_layers() override {
+        hidream_o1.offload_streaming_layers();
+    }
+
+    bool compute_streaming(int n_threads,
+                           DiffusionParams diffusion_params,
+                           struct ggml_tensor** output     = nullptr,
+                           struct ggml_context* output_ctx = nullptr) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
+        GGML_ASSERT(diffusion_params.input_ids != nullptr);
+        GGML_ASSERT(diffusion_params.input_pos != nullptr);
+        GGML_ASSERT(diffusion_params.token_types != nullptr);
+
+        StreamingParamConverter cvt;
+        std::vector<std::pair<int, ggml_tensor*>> image_embeds_gg;
+        if (diffusion_params.image_embeds != nullptr) {
+            image_embeds_gg.reserve(diffusion_params.image_embeds->size());
+            for (const auto& ie : *diffusion_params.image_embeds) {
+                sd::Tensor<float> tmp = ie.second;  // non-const for convert()
+                image_embeds_gg.emplace_back(ie.first, cvt.convert(&tmp));
+            }
+        }
+        auto ref_vec = cvt.convert_vec(diffusion_params.ref_latents);
+
+        return hidream_o1.compute_streaming(n_threads,
+                                            cvt.convert(diffusion_params.x),
+                                            cvt.convert(diffusion_params.timesteps),
+                                            cvt.convert(diffusion_params.input_ids),
+                                            cvt.convert(diffusion_params.input_pos),
+                                            cvt.convert(diffusion_params.token_types),
+                                            cvt.convert(diffusion_params.vinput_mask),
+                                            image_embeds_gg,
+                                            ref_vec,
+                                            output,
+                                            output_ctx);
+    }
 };
 
 struct ZImageModel : public DiffusionModel {
