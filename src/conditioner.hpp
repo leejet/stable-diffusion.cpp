@@ -1625,10 +1625,11 @@ struct AnimaConditioner : public Conditioner {
         for (const auto& item : parsed_attention) {
             const std::string& curr_text = item.first;
             float curr_weight            = item.second;
-            std::vector<int> curr_tokens = t5_tokenizer.tokenize(curr_text, nullptr, true);
+            std::vector<int> curr_tokens = t5_tokenizer.encode(curr_text);
             t5_tokens.insert(t5_tokens.end(), curr_tokens.begin(), curr_tokens.end());
             t5_weights.insert(t5_weights.end(), curr_tokens.size(), curr_weight);
         }
+        t5_tokenizer.pad_tokens(t5_tokens, &t5_weights, nullptr);
 
         return {qwen_tokens, qwen_weights, t5_tokens, t5_weights};
     }
