@@ -388,6 +388,14 @@ ArgOptions SDContextParams::get_options() {
          "--upscale-model",
          "path to esrgan model.",
          &esrgan_path},
+        {"",
+         "--backend",
+         "runtime backend assignment, e.g. cpu or clip=cpu,vae=cuda0,diffusion=vulkan0",
+         &backend},
+        {"",
+         "--params-backend",
+         "parameter backend assignment, e.g. cpu or diffusion=cpu,clip=cpu",
+         &params_backend},
     };
 
     options.int_options = {
@@ -686,6 +694,8 @@ std::string SDContextParams::to_string() const {
         << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
         << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
         << "  max_vram: " << max_vram << ",\n"
+        << "  backend: \"" << backend << "\",\n"
+        << "  params_backend: \"" << params_backend << "\",\n"
         << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
         << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
         << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
@@ -763,6 +773,8 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         chroma_t5_mask_pad,
         qwen_image_zero_cond_t,
         max_vram,
+        backend.c_str(),
+        params_backend.c_str(),
     };
     return sd_ctx_params;
 }

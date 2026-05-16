@@ -68,10 +68,10 @@ struct UNetModel : public DiffusionModel {
     UNetModelRunner unet;
 
     UNetModel(ggml_backend_t backend,
-              bool offload_params_to_cpu,
+              ggml_backend_t params_backend,
               const String2TensorStorage& tensor_storage_map = {},
               SDVersion version                              = VERSION_SD1)
-        : unet(backend, offload_params_to_cpu, tensor_storage_map, "model.diffusion_model", version) {
+        : unet(backend, params_backend, tensor_storage_map, "model.diffusion_model", version) {
     }
 
     std::string get_desc() override {
@@ -139,9 +139,9 @@ struct MMDiTModel : public DiffusionModel {
     MMDiTRunner mmdit;
 
     MMDiTModel(ggml_backend_t backend,
-               bool offload_params_to_cpu,
+               ggml_backend_t params_backend,
                const String2TensorStorage& tensor_storage_map = {})
-        : mmdit(backend, offload_params_to_cpu, tensor_storage_map, "model.diffusion_model") {
+        : mmdit(backend, params_backend, tensor_storage_map, "model.diffusion_model") {
     }
 
     std::string get_desc() override {
@@ -206,11 +206,11 @@ struct FluxModel : public DiffusionModel {
     Flux::FluxRunner flux;
 
     FluxModel(ggml_backend_t backend,
-              bool offload_params_to_cpu,
+              ggml_backend_t params_backend,
               const String2TensorStorage& tensor_storage_map = {},
               SDVersion version                              = VERSION_FLUX,
               bool use_mask                                  = false)
-        : flux(backend, offload_params_to_cpu, tensor_storage_map, "model.diffusion_model", version, use_mask) {
+        : flux(backend, params_backend, tensor_storage_map, "model.diffusion_model", version, use_mask) {
     }
 
     std::string get_desc() override {
@@ -281,10 +281,10 @@ struct AnimaModel : public DiffusionModel {
     Anima::AnimaRunner anima;
 
     AnimaModel(ggml_backend_t backend,
-               bool offload_params_to_cpu,
+               ggml_backend_t params_backend,
                const String2TensorStorage& tensor_storage_map = {},
                const std::string prefix                       = "model.diffusion_model")
-        : prefix(prefix), anima(backend, offload_params_to_cpu, tensor_storage_map, prefix) {
+        : prefix(prefix), anima(backend, params_backend, tensor_storage_map, prefix) {
     }
 
     std::string get_desc() override {
@@ -349,11 +349,11 @@ struct WanModel : public DiffusionModel {
     WAN::WanRunner wan;
 
     WanModel(ggml_backend_t backend,
-             bool offload_params_to_cpu,
+             ggml_backend_t params_backend,
              const String2TensorStorage& tensor_storage_map = {},
              const std::string prefix                       = "model.diffusion_model",
              SDVersion version                              = VERSION_WAN2)
-        : prefix(prefix), wan(backend, offload_params_to_cpu, tensor_storage_map, prefix, version) {
+        : prefix(prefix), wan(backend, params_backend, tensor_storage_map, prefix, version) {
     }
 
     std::string get_desc() override {
@@ -421,12 +421,12 @@ struct QwenImageModel : public DiffusionModel {
     Qwen::QwenImageRunner qwen_image;
 
     QwenImageModel(ggml_backend_t backend,
-                   bool offload_params_to_cpu,
+                   ggml_backend_t params_backend,
                    const String2TensorStorage& tensor_storage_map = {},
                    const std::string prefix                       = "model.diffusion_model",
                    SDVersion version                              = VERSION_QWEN_IMAGE,
                    bool zero_cond_t                               = false)
-        : prefix(prefix), qwen_image(backend, offload_params_to_cpu, tensor_storage_map, prefix, version, zero_cond_t) {
+        : prefix(prefix), qwen_image(backend, params_backend, tensor_storage_map, prefix, version, zero_cond_t) {
     }
 
     std::string get_desc() override {
@@ -492,10 +492,10 @@ struct HiDreamO1Model : public DiffusionModel {
     HiDreamO1::HiDreamO1Runner hidream_o1;
 
     HiDreamO1Model(ggml_backend_t backend,
-                   bool offload_params_to_cpu,
+                   ggml_backend_t params_backend,
                    const String2TensorStorage& tensor_storage_map = {},
                    const std::string& prefix                      = "model")
-        : prefix(prefix), hidream_o1(backend, offload_params_to_cpu, tensor_storage_map, prefix) {
+        : prefix(prefix), hidream_o1(backend, params_backend, tensor_storage_map, prefix) {
     }
 
     std::string get_desc() override {
@@ -568,11 +568,11 @@ struct ZImageModel : public DiffusionModel {
     ZImage::ZImageRunner z_image;
 
     ZImageModel(ggml_backend_t backend,
-                bool offload_params_to_cpu,
+                ggml_backend_t params_backend,
                 const String2TensorStorage& tensor_storage_map = {},
                 const std::string prefix                       = "model.diffusion_model",
                 SDVersion version                              = VERSION_Z_IMAGE)
-        : prefix(prefix), z_image(backend, offload_params_to_cpu, tensor_storage_map, prefix, version) {
+        : prefix(prefix), z_image(backend, params_backend, tensor_storage_map, prefix, version) {
     }
 
     std::string get_desc() override {
@@ -638,10 +638,10 @@ struct ErnieImageModel : public DiffusionModel {
     ErnieImage::ErnieImageRunner ernie_image;
 
     ErnieImageModel(ggml_backend_t backend,
-                    bool offload_params_to_cpu,
+                    ggml_backend_t params_backend,
                     const String2TensorStorage& tensor_storage_map = {},
                     const std::string prefix                       = "model.diffusion_model")
-        : prefix(prefix), ernie_image(backend, offload_params_to_cpu, tensor_storage_map, prefix) {
+        : prefix(prefix), ernie_image(backend, params_backend, tensor_storage_map, prefix) {
     }
 
     std::string get_desc() override {
@@ -704,10 +704,10 @@ struct LTXAVModel : public DiffusionModel {
     LTXV::LTXAVRunner ltxav;
 
     LTXAVModel(ggml_backend_t backend,
-               bool offload_params_to_cpu,
+               ggml_backend_t params_backend,
                const String2TensorStorage& tensor_storage_map = {},
                const std::string prefix                       = "model.diffusion_model")
-        : prefix(prefix), ltxav(backend, offload_params_to_cpu, tensor_storage_map, prefix) {
+        : prefix(prefix), ltxav(backend, params_backend, tensor_storage_map, prefix) {
     }
 
     std::string get_desc() override {

@@ -133,9 +133,11 @@ API and command-line option may change frequently.***
 ## Performance
 
 If you want to improve performance or reduce VRAM/RAM usage, please refer to [performance guide](./docs/performance.md).
+For runtime and parameter backend placement, see the [backend selection guide](./docs/backend.md).
 
 ## More Guides
 
+- [Backend selection](./docs/backend.md)
 - [SD1.x/SD2.x/SDXL](./docs/sd.md)
 - [SD3/SD3.5](./docs/sd3.md)
 - [FLUX.1-dev/FLUX.1-schnell](./docs/flux.md)

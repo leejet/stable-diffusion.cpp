@@ -1450,10 +1450,10 @@ namespace LTXV {
         }
 
         LTXAVRunner(ggml_backend_t backend,
-                    bool offload_params_to_cpu,
+                    ggml_backend_t params_backend,
                     const String2TensorStorage& tensor_storage_map = {},
                     const std::string& prefix                      = "model.diffusion_model")
-            : GGMLRunner(backend, offload_params_to_cpu),
+            : GGMLRunner(backend, params_backend),
               prefix(prefix),
               params(),
               model(params) {
@@ -1864,7 +1864,7 @@ namespace LTXV {
 
             auto& tensor_storage_map           = model_loader.get_tensor_storage_map();
             std::shared_ptr<LTXAVRunner> ltxav = std::make_shared<LTXAVRunner>(backend,
-                                                                               false,
+                                                                               backend,
                                                                                tensor_storage_map,
                                                                                "model.diffusion_model");
 

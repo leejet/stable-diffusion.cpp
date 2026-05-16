@@ -1037,7 +1037,7 @@ struct LTXVideoVAE : public VAE {
     LTXVAE::VideoVAE vae;
 
     LTXVideoVAE(ggml_backend_t backend,
-                bool offload_params_to_cpu,
+                ggml_backend_t params_backend,
                 const String2TensorStorage& tensor_storage_map,
                 const std::string& prefix,
                 bool decode_only  = true,
@@ -1053,7 +1053,7 @@ struct LTXVideoVAE : public VAE {
               patch_size,
               tensor_storage_map,
               prefix),
-          VAE(version, backend, offload_params_to_cpu) {
+          VAE(version, backend, params_backend) {
         vae.init(params_ctx, tensor_storage_map, prefix);
         decode_timestep_tensor.values()[0] = vae.decode_timestep;
     }
@@ -1176,7 +1176,7 @@ struct LTXVideoVAE : public VAE {
 
         auto& tensor_storage_map         = model_loader.get_tensor_storage_map();
         std::shared_ptr<LTXVideoVAE> vae = std::make_shared<LTXVideoVAE>(backend,
-                                                                         false,
+                                                                         backend,
                                                                          tensor_storage_map,
                                                                          "first_stage_model",
                                                                          true,
