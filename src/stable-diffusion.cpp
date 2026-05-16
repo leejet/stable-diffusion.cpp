@@ -1,4 +1,5 @@
 #include "ggml_extend.hpp"
+#include "ggml_graph_cut.h"
 
 #include "model.h"
 #include "rng.hpp"
@@ -209,6 +210,7 @@ public:
         ggml_log_set(ggml_log_callback_default, nullptr);
 
         init_backend();
+        max_vram = sd::ggml_graph_cut::resolve_max_vram_gib(max_vram, backend);
 
         ModelLoader model_loader;
 
@@ -426,9 +428,7 @@ public:
 
         bool clip_on_cpu = sd_ctx_params->keep_clip_on_cpu;
 
-        const size_t max_graph_vram_bytes = max_vram <= 0.f
-                                                ? 0
-                                                : static_cast<size_t>(static_cast<double>(max_vram) * 1024.0 * 1024.0 * 1024.0);
+        const size_t max_graph_vram_bytes = sd::ggml_graph_cut::max_vram_gib_to_bytes(max_vram);
 
         {
             clip_backend = backend;
@@ -3597,9 +3597,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
             hires_upscaler                    = std::make_unique<UpscalerGGML>(sd_ctx->sd->n_threads,
                                                             false,
                                                             request.hires.upscale_tile_size);
-            const size_t max_graph_vram_bytes = sd_ctx->sd->max_vram <= 0.f
-                                                    ? 0
-                                                    : static_cast<size_t>(static_cast<double>(sd_ctx->sd->max_vram) * 1024.0 * 1024.0 * 1024.0);
+            const size_t max_graph_vram_bytes = sd::ggml_graph_cut::max_vram_gib_to_bytes(sd_ctx->sd->max_vram);
             hires_upscaler->set_max_graph_vram_bytes(max_graph_vram_bytes);
             if (!hires_upscaler->load_from_file(request.hires.model_path,
                                                 sd_ctx->sd->offload_params_to_cpu,
