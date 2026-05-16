@@ -43,6 +43,7 @@ enum SDVersion {
     VERSION_FLUX2,
     VERSION_FLUX2_KLEIN,
     VERSION_LTXAV,
+    VERSION_HIDREAM_O1,
     VERSION_Z_IMAGE,
     VERSION_OVIS_IMAGE,
     VERSION_ERNIE_IMAGE,
@@ -172,6 +173,7 @@ static inline bool sd_version_is_dit(SDVersion version) {
         sd_version_is_sd3(version) ||
         sd_version_is_wan(version) ||
         sd_version_is_qwen_image(version) ||
+        version == VERSION_HIDREAM_O1 ||
         sd_version_is_anima(version) ||
         sd_version_is_z_image(version) ||
         sd_version_is_ernie_image(version)) {
@@ -202,10 +204,27 @@ using TensorTypeRules = std::vector<std::pair<std::string, ggml_type>>;
 
 TensorTypeRules parse_tensor_type_rules(const std::string& tensor_type_rules);
 
+class MmapWrapper;
+
+struct ModelFileData {
+    std::string path;
+    std::vector<TensorStorage> tensors;
+    std::shared_ptr<MmapWrapper> mmapped;
+    std::shared_ptr<struct ggml_backend_buffer> mmbuffer;
+    bool is_zip;
+};
+
+struct MmapTensorStore {
+    std::shared_ptr<MmapWrapper> mmapped;
+    std::shared_ptr<struct ggml_backend_buffer> mmbuffer;
+};
+
 class ModelLoader {
 protected:
     SDVersion version_ = VERSION_COUNT;
     std::vector<std::string> file_paths_;
+    std::vector<ModelFileData> file_data;
+    bool model_files_processed = false;
     String2TensorStorage tensor_storage_map;
 
     void add_tensor_storage(const TensorStorage& tensor_storage);
@@ -229,6 +248,10 @@ public:
     std::map<ggml_type, uint32_t> get_vae_wtype_stat();
     String2TensorStorage& get_tensor_storage_map() { return tensor_storage_map; }
     void set_wtype_override(ggml_type wtype, std::string tensor_type_rules = "");
+    void process_model_files(bool enable_mmap = false, bool writable_mmap = true);
+    std::vector<MmapTensorStore> mmap_tensors(std::map<std::string, ggml_tensor*>& tensors,
+                                              std::set<std::string> ignore_tensors = {},
+                                              bool writable                        = true);
     bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads = 0, bool use_mmap = false);
     bool load_tensors(std::map<std::string, ggml_tensor*>& tensors,
                       std::set<std::string> ignore_tensors = {},

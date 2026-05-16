@@ -58,6 +58,7 @@ API and command-line option may change frequently.***
     - [Ovis-Image](./docs/ovis_image.md)
     - [Anima](./docs/anima.md)
     - [ERNIE-Image](./docs/ernie_image.md)
+    - [HiDream-O1-Image](./docs/hidream_o1_image.md)
   - Image Edit Models
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
     - [Qwen Image Edit series](./docs/qwen_image_edit.md)
@@ -148,6 +149,7 @@ If you want to improve performance or reduce VRAM/RAM usage, please refer to [pe
 - [Ovis-Image](./docs/ovis_image.md)
 - [Anima](./docs/anima.md)
 - [ERNIE-Image](./docs/ernie_image.md)
+- [HiDream-O1-Image](./docs/hidream_o1_image.md)
 - [LoRA](./docs/lora.md)
 - [LCM/LCM-LoRA](./docs/lcm.md)
 - [Using PhotoMaker to personalize image generation](./docs/photo_maker.md)
@@ -163,6 +165,7 @@ These projects wrap `stable-diffusion.cpp` for easier use in other languages/fra
 
 * Golang (non-cgo): [seasonjs/stable-diffusion](https://github.com/seasonjs/stable-diffusion)
 * Golang (cgo): [Binozo/GoStableDiffusion](https://github.com/Binozo/GoStableDiffusion)
+* Golang (non-cgo): [l8bloom/gosd](https://github.com/l8bloom/gosd)
 * C#: [DarthAffe/StableDiffusion.NET](https://github.com/DarthAffe/StableDiffusion.NET)
 * Python: [william-murray1204/stable-diffusion-cpp-python](https://github.com/william-murray1204/stable-diffusion-cpp-python)
 * Rust: [newfla/diffusion-rs](https://github.com/newfla/diffusion-rs)

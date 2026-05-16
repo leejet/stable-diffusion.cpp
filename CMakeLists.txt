@@ -13,7 +13,9 @@ if (MSVC)
     add_compile_definitions(_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING)
     add_compile_options(
         $<$<COMPILE_LANGUAGE:C>:/MP>
+        $<$<COMPILE_LANGUAGE:C>:/utf-8>
         $<$<COMPILE_LANGUAGE:CXX>:/MP>
+        $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
     )
 endif()
 
@@ -69,6 +71,12 @@ option(SD_BUILD_SHARED_GGML_LIB      "sd: build ggml as a separate shared lib" O
 option(SD_USE_SYSTEM_GGML            "sd: use system-installed GGML library" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED true)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED true)
+
 if(SD_CUDA)
     message("-- Use CUDA as backend stable-diffusion")
     set(GGML_CUDA ON)
@@ -106,19 +114,28 @@ if(SD_WEBP)
           "Or link against system library:\n  cmake (...) -DSD_USE_SYSTEM_WEBP=ON")
     endif()
     if(SD_USE_SYSTEM_WEBP)
-        find_package(WebP REQUIRED)
-        add_library(webp ALIAS WebP::webp)
-        # libwebp CMake target naming is not consistent across versions/distros.
-        # Some export WebP::libwebpmux, others export WebP::webpmux.
-        if(TARGET WebP::libwebpmux)
-            add_library(libwebpmux ALIAS WebP::libwebpmux)
-        elseif(TARGET WebP::webpmux)
-            add_library(libwebpmux ALIAS WebP::webpmux)
+        find_package(WebP)
+        if(WebP_FOUND)
+            add_library(webp ALIAS WebP::webp)
+            # libwebp CMake target naming is not consistent across versions/distros.
+            # Some export WebP::libwebpmux, others export WebP::webpmux.
+            if(TARGET WebP::libwebpmux)
+                add_library(libwebpmux ALIAS WebP::libwebpmux)
+            elseif(TARGET WebP::webpmux)
+                add_library(libwebpmux ALIAS WebP::webpmux)
+            else()
+                message(FATAL_ERROR
+                    "Could not find a compatible webpmux target in system WebP package. "
+                    "Expected WebP::libwebpmux or WebP::webpmux."
+                )
+            endif()
         else()
-            message(FATAL_ERROR
-                "Could not find a compatible webpmux target in system WebP package. "
-                "Expected WebP::libwebpmux or WebP::webpmux."
-            )
+            find_package(PkgConfig REQUIRED)
+            pkg_check_modules(WebP REQUIRED IMPORTED_TARGET GLOBAL libwebp)
+            pkg_check_modules(WebPMux REQUIRED IMPORTED_TARGET GLOBAL libwebpmux)
+            link_libraries(PkgConfig::WebP)
+            link_libraries(PkgConfig::WebPMux)
+            add_library(libwebpmux ALIAS PkgConfig::WebPMux)
         endif()
     endif()
 endif()
@@ -133,18 +150,26 @@ if(SD_WEBM)
           "Or link against system library:\n  cmake (...) -DSD_USE_SYSTEM_WEBM=ON")
     endif()
     if(SD_USE_SYSTEM_WEBM)
-        find_path(WEBM_INCLUDE_DIR
-            NAMES mkvmuxer/mkvmuxer.h mkvparser/mkvparser.h common/webmids.h
-            PATH_SUFFIXES webm
-            REQUIRED)
-        find_library(WEBM_LIBRARY
-            NAMES webm libwebm
-            REQUIRED)
+        find_package(PkgConfig)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(WebM REQUIRED IMPORTED_TARGET GLOBAL libwebm)
+        endif()
+        if(PkgConfig_FOUND AND WebM_FOUND)
+            link_libraries(PkgConfig::WebM)
+        else()
+            find_path(WEBM_INCLUDE_DIR
+                NAMES mkvmuxer/mkvmuxer.h mkvparser/mkvparser.h common/webmids.h
+                PATH_SUFFIXES webm
+                REQUIRED)
+            find_library(WEBM_LIBRARY
+                NAMES webm libwebm
+                REQUIRED)
 
-        add_library(webm UNKNOWN IMPORTED)
-        set_target_properties(webm PROPERTIES
-            IMPORTED_LOCATION "${WEBM_LIBRARY}"
-            INTERFACE_INCLUDE_DIRECTORIES "${WEBM_INCLUDE_DIR}")
+            add_library(webm UNKNOWN IMPORTED)
+            set_target_properties(webm PROPERTIES
+                IMPORTED_LOCATION "${WEBM_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES "${WEBM_INCLUDE_DIR}")
+        endif()
     endif()
 endif()
 

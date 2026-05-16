@@ -16,6 +16,9 @@
 
 namespace sd::ggml_graph_cut {
 
+    static constexpr double MAX_VRAM_BYTES_PER_GIB      = 1024.0 * 1024.0 * 1024.0;
+    static constexpr size_t MAX_VRAM_AUTO_RESERVE_BYTES = 1024ULL * 1024ULL * 1024ULL;
+
     static std::string graph_cut_tensor_display_name(const ggml_tensor* tensor) {
         if (tensor == nullptr) {
             return "<null>";
@@ -45,6 +48,21 @@ namespace sd::ggml_graph_cut {
         return params_tensor_set.find(tensor) != params_tensor_set.end();
     }
 
+    static int graph_node_index_by_name(ggml_cgraph* gf, const char* name) {
+        GGML_ASSERT(gf != nullptr);
+        if (name == nullptr || name[0] == '\0') {
+            return -1;
+        }
+        const int n_nodes = ggml_graph_n_nodes(gf);
+        for (int i = 0; i < n_nodes; ++i) {
+            ggml_tensor* node = ggml_graph_node(gf, i);
+            if (node != nullptr && std::strcmp(node->name, name) == 0) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     static Plan::InputShape input_shape(const ggml_tensor* tensor) {
         Plan::InputShape shape;
         if (tensor == nullptr) {
@@ -62,6 +80,58 @@ namespace sd::ggml_graph_cut {
                segment.input_param_bytes +
                segment.input_previous_cut_bytes +
                segment.output_bytes;
+    }
+
+    size_t max_vram_gib_to_bytes(float max_vram) {
+        if (max_vram <= 0.f) {
+            return 0;
+        }
+        return static_cast<size_t>(static_cast<double>(max_vram) * MAX_VRAM_BYTES_PER_GIB);
+    }
+
+    static float max_vram_bytes_to_gib(size_t max_vram_bytes) {
+        return static_cast<float>(static_cast<double>(max_vram_bytes) / MAX_VRAM_BYTES_PER_GIB);
+    }
+
+    static size_t resolve_auto_max_vram_bytes(ggml_backend_t backend) {
+        if (backend == nullptr) {
+            LOG_WARN("--max-vram -1 requested, but no backend is available; disabling graph splitting");
+            return 0;
+        }
+
+        ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+        if (dev == nullptr) {
+            LOG_WARN("--max-vram -1 requested, but no backend device is available; disabling graph splitting");
+            return 0;
+        }
+        if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+            LOG_WARN("--max-vram -1 requested, but the main backend is CPU; disabling graph splitting");
+            return 0;
+        }
+
+        size_t free_vram  = 0;
+        size_t total_vram = 0;
+        ggml_backend_dev_memory(dev, &free_vram, &total_vram);
+
+        if (free_vram <= MAX_VRAM_AUTO_RESERVE_BYTES) {
+            LOG_WARN("--max-vram -1 requested, but free VRAM is %.2f GiB; reserving 1.00 GiB leaves no graph budget",
+                     free_vram / MAX_VRAM_BYTES_PER_GIB);
+            return 0;
+        }
+
+        const size_t max_vram_bytes = free_vram - MAX_VRAM_AUTO_RESERVE_BYTES;
+        LOG_INFO("--max-vram -1 auto-detected %.2f GiB free VRAM (%.2f GiB total), reserving 1.00 GiB; using %.2f GiB",
+                 free_vram / MAX_VRAM_BYTES_PER_GIB,
+                 total_vram / MAX_VRAM_BYTES_PER_GIB,
+                 max_vram_bytes / MAX_VRAM_BYTES_PER_GIB);
+        return max_vram_bytes;
+    }
+
+    float resolve_max_vram_gib(float max_vram, ggml_backend_t backend) {
+        if (max_vram != -1.f) {
+            return max_vram;
+        }
+        return max_vram_bytes_to_gib(resolve_auto_max_vram_bytes(backend));
     }
 
     static Segment make_segment_seed(const Plan& plan,
@@ -243,6 +313,11 @@ namespace sd::ggml_graph_cut {
     ggml_tensor* cache_source_tensor(ggml_tensor* tensor) {
         if (tensor == nullptr) {
             return nullptr;
+        }
+        if (tensor_buffer(tensor) == nullptr && tensor->src[0] != nullptr &&
+            ggml_nelements(tensor->src[0]) == ggml_nelements(tensor) &&
+            ggml_nbytes(tensor->src[0]) == ggml_nbytes(tensor)) {
+            return cache_source_tensor(tensor->src[0]);
         }
         return tensor->view_src ? tensor->view_src : tensor;
     }
@@ -503,11 +578,15 @@ namespace sd::ggml_graph_cut {
                           log_desc);
         }
 
-        ggml_tensor* final_output = ggml_graph_node(gf, -1);
-        if (final_output != nullptr && available_cut_output_node_indices.find(n_nodes - 1) == available_cut_output_node_indices.end()) {
+        int final_output_index = graph_node_index_by_name(gf, "ggml_runner_final_result_tensor");
+        if (final_output_index < 0) {
+            final_output_index = n_nodes - 1;
+        }
+        ggml_tensor* final_output = final_output_index >= 0 ? ggml_graph_node(gf, final_output_index) : nullptr;
+        if (final_output != nullptr && available_cut_output_node_indices.find(final_output_index) == available_cut_output_node_indices.end()) {
             Segment final_segment;
             final_segment.group_name = "ggml_runner.final";
-            final_segment.output_node_indices.push_back(n_nodes - 1);
+            final_segment.output_node_indices.push_back(final_output_index);
             build_segment(gf,
                           plan,
                           final_segment,
