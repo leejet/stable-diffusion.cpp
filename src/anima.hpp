@@ -8,6 +8,7 @@
 
 #include "common_block.hpp"
 #include "flux.hpp"
+#include "layer_streaming.hpp"
 #include "rope.hpp"
 
 namespace Anima {
@@ -516,6 +517,87 @@ namespace Anima {
 
             return x;
         }
+
+        struct StreamingInputResult {
+            ggml_tensor* x;                        // [N, h*w, hidden_size]
+            ggml_tensor* encoder_hidden_states;   // [N, 512, hidden_size]
+            ggml_tensor* embedded_timestep;       // [N, hidden_size]
+            ggml_tensor* temb;                    // [N, hidden_size * 3]
+        };
+
+        StreamingInputResult forward_input_stage(GGMLRunnerContext* ctx,
+                                                  struct ggml_tensor* x,
+                                                  struct ggml_tensor* timestep,
+                                                  struct ggml_tensor* encoder_hidden_states,
+                                                  struct ggml_tensor* t5_ids,
+                                                  struct ggml_tensor* t5_weights,
+                                                  struct ggml_tensor* adapter_q_pe,
+                                                  struct ggml_tensor* adapter_k_pe,
+                                                  int64_t H, int64_t W) {
+            auto x_embedder       = std::dynamic_pointer_cast<XEmbedder>(blocks["x_embedder"]);
+            auto t_embedder       = std::dynamic_pointer_cast<TimestepEmbedder>(blocks["t_embedder"]);
+            auto t_embedding_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["t_embedding_norm"]);
+            auto llm_adapter      = std::dynamic_pointer_cast<LLMAdapter>(blocks["llm_adapter"]);
+
+            // Add padding mask and patchify
+            auto padding_mask = ggml_ext_zeros(ctx->ggml_ctx, x->ne[0], x->ne[1], 1, x->ne[3]);
+            x                 = ggml_concat(ctx->ggml_ctx, x, padding_mask, 2);  // [N, C + 1, H, W]
+            x = DiT::pad_and_patchify(ctx, x, patch_size, patch_size);  // [N, h*w, (C+1)*ph*pw]
+            x = x_embedder->forward(ctx, x);
+
+            // Timestep embedding
+            auto timestep_proj     = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep, static_cast<int>(hidden_size));
+            auto temb              = t_embedder->forward(ctx, timestep_proj);
+            auto embedded_timestep = t_embedding_norm->forward(ctx, timestep_proj);
+
+            // LLM adapter (if T5 is used)
+            if (t5_ids != nullptr) {
+                auto adapted_context = llm_adapter->forward(ctx, encoder_hidden_states, t5_ids, adapter_q_pe, adapter_k_pe);
+                if (t5_weights != nullptr) {
+                    auto w = t5_weights;
+                    if (ggml_n_dims(w) == 1) {
+                        w = ggml_reshape_3d(ctx->ggml_ctx, w, 1, w->ne[0], 1);
+                    }
+                    w               = ggml_repeat_4d(ctx->ggml_ctx, w, adapted_context->ne[0], adapted_context->ne[1], adapted_context->ne[2], 1);
+                    adapted_context = ggml_mul(ctx->ggml_ctx, adapted_context, w);
+                }
+                if (adapted_context->ne[1] < 512) {
+                    auto pad_ctx    = ggml_ext_zeros(ctx->ggml_ctx,
+                                                     adapted_context->ne[0],
+                                                     512 - adapted_context->ne[1],
+                                                     adapted_context->ne[2],
+                                                     1);
+                    adapted_context = ggml_concat(ctx->ggml_ctx, adapted_context, pad_ctx, 1);
+                } else if (adapted_context->ne[1] > 512) {
+                    adapted_context = ggml_ext_slice(ctx->ggml_ctx, adapted_context, 1, 0, 512);
+                }
+                encoder_hidden_states = adapted_context;
+            }
+
+            return {x, encoder_hidden_states, embedded_timestep, temb};
+        }
+
+        ggml_tensor* forward_block(GGMLRunnerContext* ctx,
+                                    int block_idx,
+                                    struct ggml_tensor* x,
+                                    struct ggml_tensor* encoder_hidden_states,
+                                    struct ggml_tensor* embedded_timestep,
+                                    struct ggml_tensor* temb,
+                                    struct ggml_tensor* image_pe) {
+            auto block = std::dynamic_pointer_cast<TransformerBlock>(blocks["blocks." + std::to_string(block_idx)]);
+            return block->forward(ctx, x, encoder_hidden_states, embedded_timestep, temb, image_pe);
+        }
+
+        ggml_tensor* forward_output_stage(GGMLRunnerContext* ctx,
+                                           struct ggml_tensor* x,
+                                           struct ggml_tensor* embedded_timestep,
+                                           struct ggml_tensor* temb) {
+            auto final_layer = std::dynamic_pointer_cast<FinalLayer>(blocks["final_layer"]);
+            return final_layer->forward(ctx, x, embedded_timestep, temb);  // [N, h*w, ph*pw*C]
+        }
+
+        int64_t get_num_layers() const { return num_layers; }
+        int get_patch_size() const { return patch_size; }
     };
 
     struct AnimaRunner : public GGMLRunner {
@@ -524,6 +606,13 @@ namespace Anima {
         std::vector<float> adapter_q_pe_vec;
         std::vector<float> adapter_k_pe_vec;
         AnimaNet net;
+        int64_t num_layers_ = 28;  // Store for streaming
+
+        // Static layer cache decided on the first sampling step. -1 = not yet
+        // computed; 0..N = number of "blocks.X" kept resident across steps.
+        int resident_blocks_ = -1;
+
+    public:
 
         AnimaRunner(ggml_backend_t backend,
                     bool offload_params_to_cpu,
@@ -549,6 +638,7 @@ namespace Anima {
             if (num_layers <= 0) {
                 num_layers = 28;
             }
+            num_layers_ = num_layers;  // Store for streaming
             LOG_INFO("anima net layers: %" PRId64, num_layers);
 
             net = AnimaNet(num_layers);
@@ -672,6 +762,79 @@ namespace Anima {
             return gf;
         }
 
+        // Raw tensor build_graph used by streaming infrastructure
+        ggml_cgraph* build_graph(ggml_tensor* x,
+                                 ggml_tensor* timesteps,
+                                 ggml_tensor* context,
+                                 ggml_tensor* t5_ids     = nullptr,
+                                 ggml_tensor* t5_weights = nullptr) {
+            GGML_ASSERT(x->ne[3] == 1);
+            ggml_cgraph* gf = new_graph_custom(ANIMA_GRAPH_SIZE);
+
+            x          = to_backend(x);
+            timesteps  = to_backend(timesteps);
+            context    = to_backend(context);
+            t5_ids     = to_backend(t5_ids);
+            t5_weights = to_backend(t5_weights);
+
+            int64_t pad_h = (net.patch_size - x->ne[1] % net.patch_size) % net.patch_size;
+            int64_t pad_w = (net.patch_size - x->ne[0] % net.patch_size) % net.patch_size;
+            int64_t h_pad = x->ne[1] + pad_h;
+            int64_t w_pad = x->ne[0] + pad_w;
+
+            image_pe_vec = gen_anima_image_pe_vec(1,
+                                                   static_cast<int>(h_pad),
+                                                   static_cast<int>(w_pad),
+                                                   static_cast<int>(net.patch_size),
+                                                   net.theta,
+                                                   net.axes_dim,
+                                                   4.0f, 4.0f, 1.0f);
+            int64_t image_pos_len = static_cast<int64_t>(image_pe_vec.size()) / (2 * 2 * (net.head_dim / 2));
+            auto image_pe         = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, net.head_dim / 2, image_pos_len);
+            set_backend_tensor_data(image_pe, image_pe_vec.data());
+
+            ggml_tensor* adapter_q_pe = nullptr;
+            ggml_tensor* adapter_k_pe = nullptr;
+            if (t5_ids != nullptr) {
+                int64_t target_len = t5_ids->ne[0];
+                int64_t source_len = context->ne[1];
+
+                adapter_q_pe_vec = gen_1d_rope_pe_vec(target_len, 64, 10000.f);
+                adapter_k_pe_vec = gen_1d_rope_pe_vec(source_len, 64, 10000.f);
+
+                int64_t target_pos_len = static_cast<int64_t>(adapter_q_pe_vec.size()) / (2 * 2 * 32);
+                int64_t source_pos_len = static_cast<int64_t>(adapter_k_pe_vec.size()) / (2 * 2 * 32);
+
+                adapter_q_pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, 32, target_pos_len);
+                adapter_k_pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, 32, source_pos_len);
+                set_backend_tensor_data(adapter_q_pe, adapter_q_pe_vec.data());
+                set_backend_tensor_data(adapter_k_pe, adapter_k_pe_vec.data());
+            }
+
+            auto runner_ctx = get_context();
+            auto out        = net.forward(&runner_ctx, x, timesteps, context, image_pe,
+                                          t5_ids, t5_weights, adapter_q_pe, adapter_k_pe);
+            ggml_build_forward_expand(gf, out);
+            return gf;
+        }
+
+        // Raw tensor compute used by streaming infrastructure
+        bool compute(int n_threads,
+                     ggml_tensor* x,
+                     ggml_tensor* timesteps,
+                     ggml_tensor* context,
+                     ggml_tensor* t5_ids          = nullptr,
+                     ggml_tensor* t5_weights      = nullptr,
+                     ggml_tensor** output          = nullptr,
+                     ggml_context* output_ctx      = nullptr,
+                     bool skip_param_offload       = false) {
+            auto get_graph = [&]() -> ggml_cgraph* {
+                return build_graph(x, timesteps, context, t5_ids, t5_weights);
+            };
+            return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx, skip_param_offload);
+        }
+
+        // Upstream sd::Tensor compute interface
         sd::Tensor<float> compute(int n_threads,
                                   const sd::Tensor<float>& x,
                                   const sd::Tensor<float>& timesteps,
@@ -682,6 +845,366 @@ namespace Anima {
                 return build_graph(x, timesteps, context, t5_ids, t5_weights);
             };
             return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+        }
+
+        void enable_layer_streaming(const LayerStreaming::StreamingConfig& config = {}) {
+            std::map<std::string, ggml_tensor*> tensor_map;
+            net.get_param_tensors(tensor_map, "model.diffusion_model.net");
+            init_streaming(config, tensor_map, LayerStreaming::anima_layer_pattern);
+            LOG_INFO("%s layer streaming enabled with %zu layers",
+                     get_desc().c_str(), streaming_engine_->get_registry().get_layer_count());
+        }
+
+        bool compute_streaming(int n_threads,
+                               struct ggml_tensor* x,
+                               struct ggml_tensor* timesteps,
+                               struct ggml_tensor* context,
+                               struct ggml_tensor* t5_ids      = nullptr,
+                               struct ggml_tensor* t5_weights  = nullptr,
+                               struct ggml_tensor** output     = nullptr,
+                               struct ggml_context* output_ctx = nullptr) {
+            if (!is_streaming_enabled()) {
+                LOG_ERROR("%s streaming not enabled", get_desc().c_str());
+                return false;
+            }
+
+            int64_t t0 = ggml_time_ms();
+            auto analysis = analyze_vram_budget();
+
+            if (analysis.fits_in_vram) {
+                LOG_INFO("%s model fits in VRAM, using coarse-stage streaming", get_desc().c_str());
+                load_all_layers_coarse();
+                bool result = compute(n_threads, x, timesteps, context, t5_ids, t5_weights,
+                                      output, output_ctx, true);
+                int64_t t1 = ggml_time_ms();
+                LOG_INFO("%s coarse-stage streaming completed in %.2fs", get_desc().c_str(), (t1 - t0) / 1000.0);
+                free_compute_buffer();
+                return result;
+            }
+
+            LOG_INFO("%s remaining %.2f GB exceeds available %.2f GB, using per-layer streaming",
+                     get_desc().c_str(),
+                     analysis.remaining_to_load / (1024.0 * 1024.0 * 1024.0),
+                     analysis.available_vram / (1024.0 * 1024.0 * 1024.0));
+
+            return compute_streaming_true(n_threads, x, timesteps, context, t5_ids, t5_weights, output, output_ctx);
+        }
+
+        bool compute_streaming_true(int n_threads,
+                                     struct ggml_tensor* x,
+                                     struct ggml_tensor* timesteps,
+                                     struct ggml_tensor* context,
+                                     struct ggml_tensor* t5_ids    = nullptr,
+                                     struct ggml_tensor* t5_weights = nullptr,
+                                     struct ggml_tensor** output    = nullptr,
+                                     struct ggml_context* output_ctx = nullptr) {
+            auto& registry = streaming_engine_->get_registry();
+            int64_t t_start = ggml_time_ms();
+
+            const int64_t num_blocks = net.get_num_layers();
+            const int patch_size = net.get_patch_size();
+            const int64_t W = x->ne[0];
+            const int64_t H = x->ne[1];
+
+            LOG_INFO("TRUE per-layer streaming - %lld blocks", num_blocks);
+
+            // Load global layers
+            LOG_DEBUG("Loading global layers");
+            if (!registry.move_layer_to_gpu("_global")) {
+                LOG_ERROR("Failed to load _global to GPU");
+                return false;
+            }
+
+            // Prepare PE tensors
+            int64_t pad_h = (patch_size - H % patch_size) % patch_size;
+            int64_t pad_w = (patch_size - W % patch_size) % patch_size;
+            int64_t h_pad = H + pad_h;
+            int64_t w_pad = W + pad_w;
+            image_pe_vec = gen_anima_image_pe_vec(1,
+                                                   static_cast<int>(h_pad),
+                                                   static_cast<int>(w_pad),
+                                                   patch_size,
+                                                   net.theta,
+                                                   net.axes_dim,
+                                                   4.0f,  // h_extrapolation_ratio
+                                                   4.0f,  // w_extrapolation_ratio
+                                                   1.0f); // t_extrapolation_ratio
+
+            // Persistent storage. Backed by a single GPU-pinned host buffer
+            // (ensure_pinned_act_buffers) so per-block ggml_backend_tensor_get
+            // / set_backend_tensor_data run at full PCIe bandwidth. context
+            // is optional in some Anima variants.
+            std::vector<float> persistent_x_fallback;
+            std::vector<float> persistent_context_fallback;
+            std::vector<float> persistent_embedded_ts_fallback;
+            std::vector<float> persistent_temb_fallback;
+            float* persistent_x           = nullptr;
+            float* persistent_context     = nullptr;
+            float* persistent_embedded_ts = nullptr;
+            float* persistent_temb        = nullptr;
+            size_t persistent_x_count           = 0;
+            size_t persistent_context_count     = 0;
+            size_t persistent_embedded_ts_count = 0;
+            size_t persistent_temb_count        = 0;
+            int64_t x_ne[4], context_ne[4], embedded_ts_ne[4], temb_ne[4];
+
+            LOG_DEBUG("Executing input stage");
+            {
+                ggml_tensor* x_output = nullptr;
+                ggml_tensor* context_output = nullptr;
+                ggml_tensor* embedded_ts_output = nullptr;
+                ggml_tensor* temb_output = nullptr;
+
+                auto get_input_graph = [&]() -> struct ggml_cgraph* {
+                    struct ggml_cgraph* gf = new_graph_custom(ANIMA_GRAPH_SIZE / 4);
+                    auto runner_ctx = get_context();
+
+                    ggml_tensor* x_backend = to_backend(x);
+                    ggml_tensor* timesteps_backend = to_backend(timesteps);
+                    ggml_tensor* context_backend = context ? to_backend(context) : nullptr;
+                    ggml_tensor* t5_ids_backend = t5_ids ? to_backend(t5_ids) : nullptr;
+                    ggml_tensor* t5_weights_backend = t5_weights ? to_backend(t5_weights) : nullptr;
+
+                    // Adapter PE (if needed)
+                    ggml_tensor* adapter_q_pe_t = nullptr;
+                    ggml_tensor* adapter_k_pe_t = nullptr;
+                    if (t5_ids != nullptr && !adapter_q_pe_vec.empty()) {
+                        adapter_q_pe_t = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, 64, 512);
+                        adapter_k_pe_t = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, 64, 512);
+                        set_backend_tensor_data(adapter_q_pe_t, adapter_q_pe_vec.data());
+                        set_backend_tensor_data(adapter_k_pe_t, adapter_k_pe_vec.data());
+                    }
+
+                    auto result = net.forward_input_stage(&runner_ctx, x_backend, timesteps_backend,
+                                                           context_backend, t5_ids_backend, t5_weights_backend,
+                                                           adapter_q_pe_t, adapter_k_pe_t, H, W);
+
+                    x_output = result.x;
+                    context_output = result.encoder_hidden_states;
+                    embedded_ts_output = result.embedded_timestep;
+                    temb_output = result.temb;
+
+                    ggml_build_forward_expand(gf, x_output);
+                    if (context_output) ggml_build_forward_expand(gf, context_output);
+                    ggml_build_forward_expand(gf, embedded_ts_output);
+                    ggml_build_forward_expand(gf, temb_output);
+
+                    return gf;
+                };
+
+                // Don't free compute buffer immediately - we need to read outputs first
+                if (!GGMLRunner::compute(get_input_graph, n_threads, false, nullptr, nullptr, true)) {
+                    LOG_ERROR("Input stage failed");
+                    return false;
+                }
+
+                // Extract to persistent storage
+                if (x_output && embedded_ts_output && temb_output) {
+                    size_t x_size           = ggml_nelements(x_output);
+                    size_t embedded_ts_size = ggml_nelements(embedded_ts_output);
+                    size_t temb_size        = ggml_nelements(temb_output);
+                    size_t context_size     = context_output ? ggml_nelements(context_output) : 0;
+
+                    persistent_x_count           = x_size;
+                    persistent_embedded_ts_count = embedded_ts_size;
+                    persistent_temb_count        = temb_size;
+                    persistent_context_count     = context_size;
+
+                    std::vector<float*> ptrs;
+                    if (ensure_pinned_act_buffers({x_size           * sizeof(float),
+                                                   embedded_ts_size * sizeof(float),
+                                                   temb_size        * sizeof(float),
+                                                   context_size     * sizeof(float)}, ptrs)) {
+                        persistent_x           = ptrs[0];
+                        persistent_embedded_ts = ptrs[1];
+                        persistent_temb        = ptrs[2];
+                        persistent_context     = context_size ? ptrs[3] : nullptr;
+                    } else {
+                        persistent_x_fallback.resize(x_size);
+                        persistent_embedded_ts_fallback.resize(embedded_ts_size);
+                        persistent_temb_fallback.resize(temb_size);
+                        persistent_x           = persistent_x_fallback.data();
+                        persistent_embedded_ts = persistent_embedded_ts_fallback.data();
+                        persistent_temb        = persistent_temb_fallback.data();
+                        if (context_size) {
+                            persistent_context_fallback.resize(context_size);
+                            persistent_context = persistent_context_fallback.data();
+                        }
+                    }
+
+                    ggml_backend_tensor_get(x_output, persistent_x, 0, x_size * sizeof(float));
+                    ggml_backend_tensor_get(embedded_ts_output, persistent_embedded_ts, 0, embedded_ts_size * sizeof(float));
+                    ggml_backend_tensor_get(temb_output, persistent_temb, 0, temb_size * sizeof(float));
+
+                    for (int i = 0; i < 4; i++) {
+                        x_ne[i] = x_output->ne[i];
+                        embedded_ts_ne[i] = embedded_ts_output->ne[i];
+                        temb_ne[i] = temb_output->ne[i];
+                    }
+
+                    if (context_output) {
+                        ggml_backend_tensor_get(context_output, persistent_context, 0, context_size * sizeof(float));
+                        for (int i = 0; i < 4; i++) {
+                            context_ne[i] = context_output->ne[i];
+                        }
+                    }
+                } else {
+                    LOG_ERROR("Failed to get input stage outputs");
+                    free_compute_buffer();
+                    return false;
+                }
+
+                // Now safe to free compute buffer
+                free_compute_buffer();
+            }
+
+            LOG_DEBUG("Input stage done, x=%ldx%ldx%ld", x_ne[0], x_ne[1], x_ne[2]);
+
+            auto block_name_at = [](int i) { return "blocks." + std::to_string(i); };
+
+            if (resident_blocks_ < 0 && streaming_engine_) {
+                resident_blocks_ = streaming_engine_->compute_resident_block_count(
+                    "blocks.0", static_cast<int>(num_blocks));
+                LOG_INFO("%s blocks cache: %d resident, %d streamed per step",
+                         get_desc().c_str(),
+                         resident_blocks_,
+                         static_cast<int>(num_blocks) - resident_blocks_);
+            }
+
+            int prefetch_start = 0;
+            while (prefetch_start < static_cast<int>(num_blocks) &&
+                   registry.is_layer_on_gpu(block_name_at(prefetch_start))) {
+                prefetch_start++;
+            }
+            if (streaming_engine_) {
+                streaming_engine_->prime_prefetch(block_name_at, prefetch_start, static_cast<int>(num_blocks));
+            }
+
+            for (int64_t block_idx = 0; block_idx < num_blocks; block_idx++) {
+                std::string block_name = block_name_at(static_cast<int>(block_idx));
+                int64_t t_block_start = ggml_time_ms();
+
+                // Wait for this block's prefetch to complete (if async prefetch was started)
+                if (streaming_engine_) {
+                    streaming_engine_->wait_for_prefetch(block_name);
+                }
+
+                // Load this block's weights (sync load if prefetch didn't happen)
+                if (!registry.move_layer_to_gpu(block_name)) {
+                    LOG_ERROR("Failed to load %s", block_name.c_str());
+                    return false;
+                }
+
+                // Keep the prefetch window full
+                if (streaming_engine_) {
+                    streaming_engine_->advance_prefetch(block_name_at, static_cast<int>(block_idx),
+                                                        static_cast<int>(num_blocks));
+                }
+
+                ggml_tensor* x_out = nullptr;
+
+                auto get_block_graph = [&]() -> struct ggml_cgraph* {
+                    struct ggml_cgraph* gf = new_graph_custom(ANIMA_GRAPH_SIZE / 4);
+
+                    // Create input tensors from persistent storage
+                    ggml_tensor* x_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, x_ne[0], x_ne[1], x_ne[2], x_ne[3]);
+                    ggml_tensor* embedded_ts_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, embedded_ts_ne[0], embedded_ts_ne[1], embedded_ts_ne[2], embedded_ts_ne[3]);
+                    ggml_tensor* temb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, temb_ne[0], temb_ne[1], temb_ne[2], temb_ne[3]);
+
+                    x_in = to_backend(x_in);
+                    embedded_ts_in = to_backend(embedded_ts_in);
+                    temb_in = to_backend(temb_in);
+
+                    set_backend_tensor_data(x_in, persistent_x);
+                    set_backend_tensor_data(embedded_ts_in, persistent_embedded_ts);
+                    set_backend_tensor_data(temb_in, persistent_temb);
+
+                    ggml_tensor* context_in = nullptr;
+                    if (persistent_context_count > 0) {
+                        context_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, context_ne[0], context_ne[1], context_ne[2], context_ne[3]);
+                        context_in = to_backend(context_in);
+                        set_backend_tensor_data(context_in, persistent_context);
+                    }
+
+                    // Image PE tensor (shape matches [2, 2, head_dim/2, pos_len])
+                    int64_t image_pos_len = static_cast<int64_t>(image_pe_vec.size()) / (2 * 2 * (net.head_dim / 2));
+                    ggml_tensor* image_pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, net.head_dim / 2, image_pos_len);
+                    set_backend_tensor_data(image_pe, image_pe_vec.data());
+
+                    auto runner_ctx = get_context();
+                    x_out = net.forward_block(&runner_ctx, static_cast<int>(block_idx), x_in, context_in,
+                                              embedded_ts_in, temb_in, image_pe);
+
+                    ggml_build_forward_expand(gf, x_out);
+
+                    return gf;
+                };
+
+                // Don't free compute buffer immediately - we need to read outputs first
+                if (!GGMLRunner::compute(get_block_graph, n_threads, false, nullptr, nullptr, true)) {
+                    LOG_ERROR("Block %lld execution failed", block_idx);
+                    return false;
+                }
+
+                // Extract output to persistent storage
+                if (x_out) {
+                    ggml_backend_tensor_get(x_out, persistent_x, 0, persistent_x_count * sizeof(float));
+                    for (int i = 0; i < 4; i++) {
+                        x_ne[i] = x_out->ne[i];
+                    }
+                }
+
+                // Now safe to free compute buffer
+                free_compute_buffer();
+
+                // Resident blocks stay on GPU across sampling steps.
+                if (static_cast<int>(block_idx) >= resident_blocks_) {
+                    registry.move_layer_to_cpu(block_name);
+                }
+
+                LOG_DEBUG("Block %lld/%lld done (%.2fms)",
+                          block_idx + 1, num_blocks, (ggml_time_ms() - t_block_start) / 1.0);
+            }
+
+            LOG_DEBUG("Executing output stage");
+            {
+                auto get_output_graph = [&]() -> struct ggml_cgraph* {
+                    struct ggml_cgraph* gf = new_graph_custom(ANIMA_GRAPH_SIZE / 4);
+
+                    ggml_tensor* x_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, x_ne[0], x_ne[1], x_ne[2], x_ne[3]);
+                    ggml_tensor* embedded_ts_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, embedded_ts_ne[0], embedded_ts_ne[1], embedded_ts_ne[2], embedded_ts_ne[3]);
+                    ggml_tensor* temb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, temb_ne[0], temb_ne[1], temb_ne[2], temb_ne[3]);
+
+                    x_in = to_backend(x_in);
+                    embedded_ts_in = to_backend(embedded_ts_in);
+                    temb_in = to_backend(temb_in);
+
+                    set_backend_tensor_data(x_in, persistent_x);
+                    set_backend_tensor_data(embedded_ts_in, persistent_embedded_ts);
+                    set_backend_tensor_data(temb_in, persistent_temb);
+
+                    auto runner_ctx = get_context();
+                    auto final_out = net.forward_output_stage(&runner_ctx, x_in, embedded_ts_in, temb_in);
+
+                    // Unpatchify
+                    final_out = DiT::unpatchify_and_crop(compute_ctx, final_out, H, W, patch_size, patch_size, false);
+
+                    ggml_build_forward_expand(gf, final_out);
+
+                    return gf;
+                };
+
+                if (!GGMLRunner::compute(get_output_graph, n_threads, true, output, output_ctx, true)) {
+                    LOG_ERROR("Output stage failed");
+                    return false;
+                }
+            }
+
+            int64_t t_end = ggml_time_ms();
+            LOG_INFO("TRUE per-layer streaming completed in %.2fs (%lld blocks)",
+                     (t_end - t_start) / 1000.0, num_blocks);
+
+            return true;
         }
     };
 }  // namespace Anima

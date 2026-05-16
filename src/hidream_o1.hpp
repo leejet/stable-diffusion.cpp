@@ -332,15 +332,20 @@ namespace HiDreamO1 {
     struct HiDreamO1Runner : public GGMLRunner {
         HiDreamO1Params params;
         HiDreamO1Model model;
+        std::string params_prefix;
 
         std::vector<float> attention_mask_vec;
+        std::vector<int32_t> persistent_input_pos_vec;
+        std::vector<float> persistent_inputs_embeds_fallback;
+        std::vector<float> persistent_hidden_fallback;
 
         HiDreamO1Runner(ggml_backend_t backend,
                         bool offload_params_to_cpu,
                         const String2TensorStorage& tensor_storage_map = {},
                         const std::string& prefix                      = "model")
             : GGMLRunner(backend, offload_params_to_cpu),
-              params(make_hidream_o1_params()) {
+              params(make_hidream_o1_params()),
+              params_prefix(prefix) {
             model = HiDreamO1Model(params);
             model.init(params_ctx, tensor_storage_map, prefix);
         }
@@ -351,6 +356,10 @@ namespace HiDreamO1 {
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) {
             model.get_param_tensors(tensors, prefix);
+        }
+
+        int get_num_layers() const {
+            return static_cast<int>(params.llm.num_layers);
         }
 
         ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor,
@@ -453,6 +462,399 @@ namespace HiDreamO1 {
                 return build_graph(x, timestep, input_ids, input_pos, token_types, vinput_mask, image_embeds, ref_images);
             };
             return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+        }
+
+        // ---- layer streaming -------------------------------------------------
+
+        void enable_layer_streaming(const LayerStreaming::StreamingConfig& config = {}) {
+            std::map<std::string, ggml_tensor*> tensor_map;
+            model.get_param_tensors(tensor_map, params_prefix);
+            init_streaming(config, tensor_map, LayerStreaming::hidream_o1_layer_pattern);
+            LOG_INFO("%s layer streaming enabled (%zu layers)",
+                     get_desc().c_str(),
+                     streaming_engine_->get_registry().get_layer_count());
+        }
+
+        // Streaming entry point. Coarse-stage path when everything fits, true
+        // per-layer path otherwise. Inputs are sd::Tensors converted to
+        // ggml_tensor* metadata (data ptrs point into the original sd::Tensor
+        // buffers) by the diffusion-model wrapper's StreamingParamConverter.
+        bool compute_streaming(int n_threads,
+                               ggml_tensor* x,
+                               ggml_tensor* timestep,
+                               ggml_tensor* input_ids,
+                               ggml_tensor* input_pos,
+                               ggml_tensor* token_types,
+                               ggml_tensor* vinput_mask,
+                               const std::vector<std::pair<int, ggml_tensor*>>& image_embeds,
+                               const std::vector<ggml_tensor*>& ref_images,
+                               ggml_tensor** output,
+                               ggml_context* output_ctx) {
+            if (!is_streaming_enabled()) {
+                LOG_ERROR("%s streaming not enabled", get_desc().c_str());
+                return false;
+            }
+
+            int64_t t0    = ggml_time_ms();
+            auto analysis = analyze_vram_budget();
+
+            if (analysis.fits_in_vram) {
+                LOG_INFO("%s model fits in VRAM, using coarse-stage streaming",
+                         get_desc().c_str());
+                load_all_layers_coarse();
+
+                // Coarse path delegates to the regular single-graph compute().
+                // Materialize ggml inputs back into sd::Tensors that compute()
+                // expects. The metadata ggml_tensors here carry data pointers
+                // into the original sd::Tensor buffers, so we can just rewrap.
+                auto rewrap_float = [](ggml_tensor* t) -> sd::Tensor<float> {
+                    if (t == nullptr) return {};
+                    sd::Tensor<float> r(sd::shape_from_ggml(t));
+                    std::memcpy(r.data(), t->data, r.numel() * sizeof(float));
+                    return r;
+                };
+                auto rewrap_int32 = [](ggml_tensor* t) -> sd::Tensor<int32_t> {
+                    if (t == nullptr) return {};
+                    sd::Tensor<int32_t> r(sd::shape_from_ggml(t));
+                    std::memcpy(r.data(), t->data, r.numel() * sizeof(int32_t));
+                    return r;
+                };
+
+                std::vector<std::pair<int, sd::Tensor<float>>> image_embeds_sd;
+                image_embeds_sd.reserve(image_embeds.size());
+                for (auto& ie : image_embeds) {
+                    image_embeds_sd.emplace_back(ie.first, rewrap_float(ie.second));
+                }
+                std::vector<sd::Tensor<float>> ref_images_sd;
+                ref_images_sd.reserve(ref_images.size());
+                for (auto* r : ref_images) {
+                    ref_images_sd.push_back(rewrap_float(r));
+                }
+
+                auto result = compute(n_threads,
+                                      rewrap_float(x),
+                                      rewrap_float(timestep),
+                                      rewrap_int32(input_ids),
+                                      rewrap_int32(input_pos),
+                                      rewrap_int32(token_types),
+                                      rewrap_int32(vinput_mask),
+                                      image_embeds_sd,
+                                      ref_images_sd);
+
+                if (output != nullptr && result.numel() > 0) {
+                    if (*output == nullptr && output_ctx != nullptr) {
+                        auto shape = result.shape();
+                        int n_dims = std::min(static_cast<int>(shape.size()), GGML_MAX_DIMS);
+                        std::array<int64_t, GGML_MAX_DIMS> ne = {1, 1, 1, 1};
+                        for (int i = 0; i < n_dims; i++) ne[i] = shape[i];
+                        *output = ggml_new_tensor(output_ctx, GGML_TYPE_F32, n_dims, ne.data());
+                    }
+                    if (*output != nullptr) {
+                        std::memcpy((*output)->data, result.data(), result.numel() * sizeof(float));
+                    }
+                }
+                int64_t t1 = ggml_time_ms();
+                LOG_INFO("%s coarse-stage streaming completed in %.2fs",
+                         get_desc().c_str(), (t1 - t0) / 1000.0);
+                free_compute_buffer();
+                return result.numel() > 0;
+            }
+
+            LOG_INFO("%s remaining %.2f GB exceeds available %.2f GB, using per-layer streaming",
+                     get_desc().c_str(),
+                     analysis.remaining_to_load / (1024.0 * 1024.0 * 1024.0),
+                     analysis.available_vram / (1024.0 * 1024.0 * 1024.0));
+
+            return compute_streaming_true(n_threads, x, timestep, input_ids, input_pos,
+                                          token_types, vinput_mask, image_embeds, ref_images,
+                                          output, output_ctx);
+        }
+
+        // True per-layer streaming for HiDream O1.
+        //
+        // HiDream O1's diffusion forward pass is unusual: it is an LLM
+        // transformer applied to a concatenated [text-tokens | image-tokens]
+        // sequence, with three small heads on either side (t_embedder,
+        // x_embedder up front; final_layer2 + slice + unpatchify at the end).
+        //
+        // We exploit this by streaming only the language_model.layers.N
+        // weights, which dominate the param size. The three stages:
+        //
+        //   Stage 1  build inputs_embeds (token embed + image splice + t_emb
+        //            concat + patchify x + ref concat + x_embedder + final
+        //            concat). Output read back to pinned host buffer.
+        //   Stage 2  for each LLM layer i: build a graph that runs only
+        //            text_model->forward_layer_block(i, x, input_pos, mask).
+        //            Stream layer.N weights in, compute, read x out, evict.
+        //   Stage 3  build final_norm + final_layer2 + slice + unpatchify +
+        //            velocity-prediction graph using the resident _global
+        //            weights and the streamed-in head weights.
+        //
+        // attention_mask and input_pos stay constant for every layer (they
+        // depend only on token_types/input_pos inputs), so we precompute them
+        // once on host and re-bind their CPU buffer into each per-layer graph.
+        bool compute_streaming_true(int n_threads,
+                                    ggml_tensor* x_in,
+                                    ggml_tensor* timestep_in,
+                                    ggml_tensor* input_ids_in,
+                                    ggml_tensor* input_pos_in,
+                                    ggml_tensor* token_types_in,
+                                    ggml_tensor* vinput_mask_in,
+                                    const std::vector<std::pair<int, ggml_tensor*>>& image_embeds_in,
+                                    const std::vector<ggml_tensor*>& ref_images_in,
+                                    ggml_tensor** output,
+                                    ggml_context* output_ctx) {
+            auto& registry  = streaming_engine_->get_registry();
+            int64_t t_start = ggml_time_ms();
+
+            const int num_layers = get_num_layers();
+
+            LOG_INFO("%s TRUE per-layer streaming - %d LLM layers",
+                     get_desc().c_str(), num_layers);
+
+            if (!registry.move_layer_to_gpu("_global")) {
+                LOG_ERROR("%s failed to load _global to GPU", get_desc().c_str());
+                return false;
+            }
+
+            // ---- Precompute CPU-side inputs --------------------------------
+
+            // attention_mask: token_types > 0 marks a "gen" token (image side).
+            // Non-gen tokens get a causal mask (no attention beyond self);
+            // gen tokens see the full sequence. This matches build_graph.
+            const int32_t* token_types_data = static_cast<const int32_t*>(token_types_in->data);
+            const int64_t total_seq_len     = token_types_in->ne[0];
+            attention_mask_vec.assign(static_cast<size_t>(total_seq_len * total_seq_len), 0.0f);
+            for (int64_t q = 0; q < total_seq_len; ++q) {
+                bool is_gen = token_types_data[q] > 0;
+                for (int64_t k = 0; k < total_seq_len; ++k) {
+                    if (!is_gen && k > q) {
+                        attention_mask_vec[static_cast<size_t>(q * total_seq_len + k)] = -INFINITY;
+                    }
+                }
+            }
+
+            // input_pos: copy CPU-side so per-layer graphs can re-bind it.
+            const int32_t* input_pos_data = static_cast<const int32_t*>(input_pos_in->data);
+            persistent_input_pos_vec.assign(input_pos_data,
+                                            input_pos_data + input_pos_in->ne[0]);
+
+            // Scalars derived from inputs that we need in Stage 3.
+            const int64_t txt_seq_len    = input_ids_in->ne[0];
+            const int64_t H              = x_in->ne[1];
+            const int64_t W              = x_in->ne[0];
+            const int64_t target_tokens  = (W / PATCH_SIZE) * (H / PATCH_SIZE);
+            int64_t x_pred_start         = txt_seq_len;
+            if (vinput_mask_in != nullptr && vinput_mask_in->ne[0] > 0) {
+                const int32_t* vmask = static_cast<const int32_t*>(vinput_mask_in->data);
+                int64_t seq_len      = vinput_mask_in->ne[0];
+                int64_t first_vinput = 0;
+                while (first_vinput < seq_len && vmask[first_vinput] == 0) {
+                    first_vinput++;
+                }
+                x_pred_start = first_vinput;
+            }
+            float sigma = 1.0f - static_cast<const float*>(timestep_in->data)[0];
+            sigma       = std::max(1e-6f, sigma);
+
+            // ---- Stage 1: inputs_embeds prelude ----------------------------
+
+            ggml_tensor* inputs_embeds_out = nullptr;
+            int64_t inputs_embeds_ne[4]    = {0, 0, 0, 0};
+
+            auto get_input_graph = [&]() -> struct ggml_cgraph* {
+                struct ggml_cgraph* gf = new_graph_custom(HIDREAM_O1_GRAPH_SIZE / 2);
+                auto runner_ctx        = get_context();
+
+                ggml_tensor* x_be         = to_backend(x_in);
+                ggml_tensor* timestep_be  = to_backend(timestep_in);
+                ggml_tensor* input_ids_be = to_backend(input_ids_in);
+
+                auto text_model   = model.text_model();
+                auto t_embedder1  = model.timestep_embedder();
+                auto x_embedder   = model.patch_embedder();
+
+                std::vector<std::pair<int, ggml_tensor*>> image_embeds_be;
+                image_embeds_be.reserve(image_embeds_in.size());
+                for (const auto& ie : image_embeds_in) {
+                    image_embeds_be.emplace_back(ie.first, to_backend(ie.second));
+                }
+                std::vector<ggml_tensor*> ref_images_be;
+                ref_images_be.reserve(ref_images_in.size());
+                for (auto* r : ref_images_in) {
+                    ref_images_be.push_back(to_backend(r));
+                }
+
+                auto txt = text_model->embed(&runner_ctx, input_ids_be);
+                txt      = LLM::splice_image_embeds(&runner_ctx, txt, image_embeds_be);
+
+                auto t_emb = t_embedder1->forward(&runner_ctx, timestep_be);
+                if (txt_seq_len > 1) {
+                    auto prefix = ggml_ext_slice(compute_ctx, txt, 1, 0, txt_seq_len - 1);
+                    txt         = ggml_concat(compute_ctx,
+                                              prefix,
+                                              ggml_reshape_3d(compute_ctx, t_emb, t_emb->ne[0], 1, 1),
+                                              1);
+                } else {
+                    txt = ggml_reshape_3d(compute_ctx, t_emb, t_emb->ne[0], 1, 1);
+                }
+
+                auto vinputs = DiT::pad_and_patchify(&runner_ctx, x_be, PATCH_SIZE, PATCH_SIZE);
+                for (ggml_tensor* ref : ref_images_be) {
+                    auto rp = DiT::pad_and_patchify(&runner_ctx, ref, PATCH_SIZE, PATCH_SIZE);
+                    vinputs = ggml_concat(compute_ctx, vinputs, rp, 1);
+                }
+                auto vis           = x_embedder->forward(&runner_ctx, vinputs);
+                auto inputs_embeds = ggml_concat(compute_ctx, txt, vis, 1);
+                ggml_set_name(inputs_embeds, "inputs_embeds_out");
+                inputs_embeds_out = inputs_embeds;
+
+                ggml_build_forward_expand(gf, inputs_embeds);
+                return gf;
+            };
+
+            if (!GGMLRunner::compute(get_input_graph, n_threads, false, nullptr, nullptr, true)) {
+                LOG_ERROR("%s Stage 1 (inputs_embeds) failed", get_desc().c_str());
+                return false;
+            }
+
+            if (inputs_embeds_out == nullptr) {
+                LOG_ERROR("%s Stage 1 produced no output", get_desc().c_str());
+                free_compute_buffer();
+                return false;
+            }
+
+            const size_t inputs_embeds_n = ggml_nelements(inputs_embeds_out);
+            for (int i = 0; i < 4; ++i) {
+                inputs_embeds_ne[i] = inputs_embeds_out->ne[i];
+            }
+
+            // Persistent host buffers. Try pinned host (member-scoped); fall
+            // back to pageable. Two buffers because Stage 2 reads "old" hidden
+            // states into one and the layer graph writes "new" into the same
+            // (we just memcpy back). Single buffer suffices since the LLM
+            // layer preserves shape.
+            float* persistent_hidden = nullptr;
+            std::vector<float*> ptrs;
+            if (ensure_pinned_act_buffers({inputs_embeds_n * sizeof(float)}, ptrs)) {
+                persistent_hidden = ptrs[0];
+            } else {
+                persistent_hidden_fallback.resize(inputs_embeds_n);
+                persistent_hidden = persistent_hidden_fallback.data();
+            }
+            ggml_backend_tensor_get(inputs_embeds_out, persistent_hidden,
+                                    0, inputs_embeds_n * sizeof(float));
+            free_compute_buffer();
+
+            // ---- Stage 2: per-layer LLM forward ----------------------------
+
+            auto layer_name_at = [](int i) {
+                return "language_model.layers." + std::to_string(i);
+            };
+
+            if (streaming_engine_) {
+                streaming_engine_->prime_prefetch(layer_name_at, 0, num_layers);
+            }
+
+            for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
+                std::string layer_name = layer_name_at(layer_idx);
+
+                if (streaming_engine_) {
+                    streaming_engine_->wait_for_prefetch(layer_name);
+                }
+                if (!registry.move_layer_to_gpu(layer_name)) {
+                    LOG_ERROR("%s failed to load %s", get_desc().c_str(), layer_name.c_str());
+                    return false;
+                }
+                if (streaming_engine_) {
+                    streaming_engine_->advance_prefetch(layer_name_at, layer_idx, num_layers);
+                }
+
+                ggml_tensor* hidden_out = nullptr;
+
+                auto get_layer_graph = [&]() -> struct ggml_cgraph* {
+                    struct ggml_cgraph* gf = new_graph_custom(HIDREAM_O1_GRAPH_SIZE / 4);
+                    auto runner_ctx        = get_context();
+
+                    ggml_tensor* hidden_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                                inputs_embeds_ne[0],
+                                                                inputs_embeds_ne[1],
+                                                                inputs_embeds_ne[2],
+                                                                inputs_embeds_ne[3]);
+                    set_backend_tensor_data(hidden_in, persistent_hidden);
+
+                    ggml_tensor* input_pos_t = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_I32,
+                                                                  persistent_input_pos_vec.size());
+                    set_backend_tensor_data(input_pos_t, persistent_input_pos_vec.data());
+
+                    ggml_tensor* attention_mask_t = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32,
+                                                                       total_seq_len, total_seq_len);
+                    set_backend_tensor_data(attention_mask_t, attention_mask_vec.data());
+
+                    auto text_model = model.text_model();
+                    hidden_out      = text_model->forward_layer_block(&runner_ctx,
+                                                                       layer_idx,
+                                                                       hidden_in,
+                                                                       input_pos_t,
+                                                                       attention_mask_t);
+                    ggml_build_forward_expand(gf, hidden_out);
+                    return gf;
+                };
+
+                if (!GGMLRunner::compute(get_layer_graph, n_threads, false, nullptr, nullptr, true)) {
+                    LOG_ERROR("%s layer %d execution failed", get_desc().c_str(), layer_idx);
+                    return false;
+                }
+
+                if (hidden_out != nullptr) {
+                    ggml_backend_tensor_get(hidden_out, persistent_hidden, 0, ggml_nbytes(hidden_out));
+                }
+
+                registry.move_layer_to_cpu(layer_name);
+            }
+
+            free_compute_buffer();
+
+            // ---- Stage 3: final norm + final_layer2 + slice + unpatchify ---
+
+            auto get_output_graph = [&]() -> struct ggml_cgraph* {
+                struct ggml_cgraph* gf = new_graph_custom(HIDREAM_O1_GRAPH_SIZE / 2);
+                auto runner_ctx        = get_context();
+
+                ggml_tensor* hidden_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                            inputs_embeds_ne[0],
+                                                            inputs_embeds_ne[1],
+                                                            inputs_embeds_ne[2],
+                                                            inputs_embeds_ne[3]);
+                set_backend_tensor_data(hidden_in, persistent_hidden);
+
+                ggml_tensor* x_be = to_backend(x_in);
+
+                auto text_model   = model.text_model();
+                auto final_layer2 = model.final_layer();
+
+                auto hs         = text_model->forward_final_norm(&runner_ctx, hidden_in);
+                auto x_pred_all = final_layer2->forward(&runner_ctx, hs);
+                auto x_pred     = ggml_ext_slice(compute_ctx, x_pred_all, 1,
+                                                  x_pred_start, x_pred_start + target_tokens);
+                x_pred          = DiT::unpatchify_and_crop(compute_ctx, x_pred, H, W,
+                                                            PATCH_SIZE, PATCH_SIZE);
+
+                auto out = ggml_scale(compute_ctx, ggml_sub(compute_ctx, x_be, x_pred), 1.0f / sigma);
+                ggml_build_forward_expand(gf, out);
+                return gf;
+            };
+
+            if (!GGMLRunner::compute(get_output_graph, n_threads, true, output, output_ctx, true)) {
+                LOG_ERROR("%s Stage 3 (output) failed", get_desc().c_str());
+                return false;
+            }
+
+            int64_t t_end = ggml_time_ms();
+            LOG_INFO("%s TRUE per-layer streaming completed in %.2fs (%d LLM layers)",
+                     get_desc().c_str(), (t_end - t_start) / 1000.0, num_layers);
+
+            return true;
         }
     };
 

@@ -135,6 +135,12 @@ struct SDContextParams {
     bool force_sdxl_vae_conv_scale = false;
 
     float flow_shift = INFINITY;
+
+    // Dynamic tensor offloading configuration
+    sd_offload_config_t offload_config = {SD_OFFLOAD_NONE, SD_VRAM_EST_DRYRUN, true, false, false, true, true,
+                                          0, 2ULL * 1024 * 1024 * 1024,
+                                          false, 1, 0, 512ULL * 1024 * 1024};
+
     ArgOptions get_options();
     void build_embedding_map();
     bool resolve(SDMode mode);

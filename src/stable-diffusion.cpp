@@ -1,5 +1,10 @@
 #include "ggml_extend.hpp"
 
+#ifdef SD_USE_CUDA
+#include "ggml-cuda.h"
+#include <cuda_runtime.h>
+#endif
+
 #include "model.h"
 #include "rng.hpp"
 #include "rng_mt19937.hpp"
@@ -150,6 +155,11 @@ public:
     bool offload_params_to_cpu           = false;
     float max_vram                       = 0.f;
     bool use_pmid                        = false;
+    sd_offload_config_t offload_config   = {};  // Dynamic tensor offloading config
+
+    // Track which components were intentionally kept on CPU (don't try to move to GPU)
+    bool cond_stage_on_cpu_only = false;  // true if keep_clip_on_cpu was set
+    bool vae_on_cpu_only        = false;  // true if keep_vae_on_cpu was set
 
     bool is_using_v_parameterization     = false;
     bool is_using_edm_v_parameterization = false;
@@ -196,6 +206,31 @@ public:
         free_params_immediately = sd_ctx_params->free_params_immediately;
         offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
         max_vram                = sd_ctx_params->max_vram;
+        offload_config          = sd_ctx_params->offload_config;
+
+        // When the offload_config selects a cross-stage mode, also force the
+        // affected models onto the CPU backend so we can shuffle them between
+        // stages. offload_params_to_cpu remains the user-facing knob; this is
+        // an internal escalation when the config implies it.
+        bool cond_stage_offload_to_cpu = offload_params_to_cpu;
+        bool diffusion_offload_to_cpu = offload_params_to_cpu;
+        bool vae_offload_to_cpu       = offload_params_to_cpu;
+        if (offload_config.mode != SD_OFFLOAD_NONE) {
+            if (offload_config.offload_cond_stage) {
+                cond_stage_offload_to_cpu = true;
+            }
+            // Diffusion CPU backend is needed even in cond_only mode so we
+            // can temporarily swap it out while loading cond_stage to GPU.
+            diffusion_offload_to_cpu = true;
+        }
+        // Layer streaming wants every MB it can get back during sampling, so
+        // give the VAE a CPU-pinned twin too. The VAE is idle for the entire
+        // sampler loop and only used at decode time — moving it to CPU between
+        // the two phases is pure win. Other offload modes keep current
+        // behaviour: VAE on whichever backend the user selected.
+        if (offload_config.mode == SD_OFFLOAD_LAYER_STREAMING) {
+            vae_offload_to_cpu = true;
+        }
 
         bool use_tae = false;
 
@@ -425,6 +460,7 @@ public:
         }
 
         bool clip_on_cpu = sd_ctx_params->keep_clip_on_cpu;
+        cond_stage_on_cpu_only = clip_on_cpu;  // Track for offload decisions
 
         const size_t max_graph_vram_bytes = max_vram <= 0.f
                                                 ? 0
@@ -438,10 +474,10 @@ public:
             }
             if (sd_version_is_sd3(version)) {
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend,
-                                                                     offload_params_to_cpu,
+                                                                     cond_stage_offload_to_cpu,
                                                                      tensor_storage_map);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend,
-                                                               offload_params_to_cpu,
+                                                               diffusion_offload_to_cpu,
                                                                tensor_storage_map);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
@@ -462,53 +498,53 @@ public:
                     }
 
                     cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
-                                                                        offload_params_to_cpu,
+                                                                        cond_stage_offload_to_cpu,
                                                                         tensor_storage_map,
                                                                         sd_ctx_params->chroma_use_t5_mask,
                                                                         sd_ctx_params->chroma_t5_mask_pad);
                 } else if (version == VERSION_OVIS_IMAGE) {
                     cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
-                                                                     offload_params_to_cpu,
+                                                                     cond_stage_offload_to_cpu,
                                                                      tensor_storage_map,
                                                                      version,
                                                                      "",
                                                                      false);
                 } else {
                     cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend,
-                                                                          offload_params_to_cpu,
+                                                                          cond_stage_offload_to_cpu,
                                                                           tensor_storage_map);
                 }
                 diffusion_model = std::make_shared<FluxModel>(backend,
-                                                              offload_params_to_cpu,
+                                                              diffusion_offload_to_cpu,
                                                               tensor_storage_map,
                                                               version,
                                                               sd_ctx_params->chroma_use_dit_mask);
             } else if (sd_version_is_flux2(version)) {
                 bool is_chroma   = false;
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
-                                                                 offload_params_to_cpu,
+                                                                 cond_stage_offload_to_cpu,
                                                                  tensor_storage_map,
                                                                  version);
                 diffusion_model  = std::make_shared<FluxModel>(backend,
-                                                              offload_params_to_cpu,
+                                                              diffusion_offload_to_cpu,
                                                               tensor_storage_map,
                                                               version,
                                                               sd_ctx_params->chroma_use_dit_mask);
             } else if (sd_version_is_wan(version)) {
                 cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
-                                                                    offload_params_to_cpu,
+                                                                    cond_stage_offload_to_cpu,
                                                                     tensor_storage_map,
                                                                     true,
                                                                     0,
                                                                     true);
                 diffusion_model  = std::make_shared<WanModel>(backend,
-                                                             offload_params_to_cpu,
+                                                             diffusion_offload_to_cpu,
                                                              tensor_storage_map,
                                                              "model.diffusion_model",
                                                              version);
                 if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
                     high_noise_diffusion_model = std::make_shared<WanModel>(backend,
-                                                                            offload_params_to_cpu,
+                                                                            diffusion_offload_to_cpu,
                                                                             tensor_storage_map,
                                                                             "model.high_noise_diffusion_model",
                                                                             version);
@@ -517,7 +553,7 @@ public:
                     diffusion_model->get_desc() == "Wan2.1-FLF2V-14B" ||
                     diffusion_model->get_desc() == "Wan2.1-I2V-1.3B") {
                     clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(backend,
-                                                                             offload_params_to_cpu,
+                                                                             diffusion_offload_to_cpu,
                                                                              tensor_storage_map);
                     clip_vision->set_max_graph_vram_bytes(max_graph_vram_bytes);
                     get_param_tensors(clip_vision);
@@ -528,40 +564,40 @@ public:
                     enable_vision = true;
                 }
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
-                                                                 offload_params_to_cpu,
+                                                                 cond_stage_offload_to_cpu,
                                                                  tensor_storage_map,
                                                                  version,
                                                                  "",
                                                                  enable_vision);
                 diffusion_model  = std::make_shared<QwenImageModel>(backend,
-                                                                   offload_params_to_cpu,
+                                                                   diffusion_offload_to_cpu,
                                                                    tensor_storage_map,
                                                                    "model.diffusion_model",
                                                                    version,
                                                                    sd_ctx_params->qwen_image_zero_cond_t);
             } else if (version == VERSION_HIDREAM_O1) {
                 cond_stage_model = std::make_shared<HiDreamO1::HiDreamO1Conditioner>(clip_backend,
-                                                                                     offload_params_to_cpu,
+                                                                                     cond_stage_offload_to_cpu,
                                                                                      tensor_storage_map);
                 diffusion_model  = std::make_shared<HiDreamO1Model>(backend,
-                                                                   offload_params_to_cpu,
+                                                                   diffusion_offload_to_cpu,
                                                                    tensor_storage_map,
                                                                    "model");
             } else if (sd_version_is_anima(version)) {
                 cond_stage_model = std::make_shared<AnimaConditioner>(clip_backend,
-                                                                      offload_params_to_cpu,
+                                                                      cond_stage_offload_to_cpu,
                                                                       tensor_storage_map);
                 diffusion_model  = std::make_shared<AnimaModel>(backend,
-                                                               offload_params_to_cpu,
+                                                               diffusion_offload_to_cpu,
                                                                tensor_storage_map,
                                                                "model.diffusion_model");
             } else if (sd_version_is_z_image(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
-                                                                 offload_params_to_cpu,
+                                                                 cond_stage_offload_to_cpu,
                                                                  tensor_storage_map,
                                                                  version);
                 diffusion_model  = std::make_shared<ZImageModel>(backend,
-                                                                offload_params_to_cpu,
+                                                                diffusion_offload_to_cpu,
                                                                 tensor_storage_map,
                                                                 "model.diffusion_model",
                                                                 version);
@@ -581,20 +617,20 @@ public:
                 }
                 if (strstr(SAFE_STR(sd_ctx_params->photo_maker_path), "v2")) {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
-                                                                                           offload_params_to_cpu,
+                                                                                           cond_stage_offload_to_cpu,
                                                                                            tensor_storage_map,
                                                                                            embbeding_map,
                                                                                            version,
                                                                                            PM_VERSION_2);
                 } else {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
-                                                                                           offload_params_to_cpu,
+                                                                                           cond_stage_offload_to_cpu,
                                                                                            tensor_storage_map,
                                                                                            embbeding_map,
                                                                                            version);
                 }
                 diffusion_model = std::make_shared<UNetModel>(backend,
-                                                              offload_params_to_cpu,
+                                                              diffusion_offload_to_cpu,
                                                               tensor_storage_map,
                                                               version);
                 if (sd_ctx_params->diffusion_conv_direct) {
@@ -609,6 +645,26 @@ public:
             diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
             get_param_tensors(diffusion_model);
 
+            // Enable layer streaming if configured
+            if (offload_config.mode == SD_OFFLOAD_LAYER_STREAMING) {
+                LOG_INFO("Mode is layer_streaming, checking model support...");
+                if (diffusion_model->supports_layer_streaming()) {
+                    LOG_INFO("Enabling layer-by-layer streaming for diffusion model");
+                    LOG_INFO("Prefetch layers: %d, Min free VRAM: %.0f MB",
+                             offload_config.streaming_prefetch_layers,
+                             offload_config.streaming_min_free_vram / (1024.0 * 1024.0));
+                    diffusion_model->enable_layer_streaming(
+                        offload_config.streaming_prefetch_layers,
+                        offload_config.streaming_min_free_vram);
+                    LOG_INFO("is_layer_streaming_enabled() = %s",
+                             diffusion_model->is_layer_streaming_enabled() ? "true" : "false");
+                } else {
+                    LOG_WARN("Diffusion model does not support layer streaming, falling back to normal mode");
+                }
+            } else {
+                LOG_DEBUG("Mode is not layer_streaming (mode=%d)", offload_config.mode);
+            }
+
             if (sd_version_is_unet_edit(version)) {
                 vae_decode_only = false;
             }
@@ -618,6 +674,7 @@ public:
                 get_param_tensors(high_noise_diffusion_model);
             }
 
+            vae_on_cpu_only = sd_ctx_params->keep_vae_on_cpu;  // Track for offload decisions
             if (sd_ctx_params->keep_vae_on_cpu && !ggml_backend_is_cpu(backend)) {
                 LOG_INFO("VAE Autoencoder: Using CPU backend");
                 vae_backend = ggml_backend_cpu_init();
@@ -630,7 +687,7 @@ public:
                     sd_version_is_qwen_image(version) ||
                     sd_version_is_anima(version)) {
                     return std::make_shared<TinyVideoAutoEncoder>(vae_backend,
-                                                                  offload_params_to_cpu,
+                                                                  vae_offload_to_cpu,
                                                                   tensor_storage_map,
                                                                   "decoder",
                                                                   vae_decode_only,
@@ -638,7 +695,7 @@ public:
 
                 } else {
                     auto model = std::make_shared<TinyImageAutoEncoder>(vae_backend,
-                                                                        offload_params_to_cpu,
+                                                                        vae_offload_to_cpu,
                                                                         tensor_storage_map,
                                                                         "decoder.layers",
                                                                         vae_decode_only,
@@ -652,14 +709,14 @@ public:
                     sd_version_is_qwen_image(version) ||
                     sd_version_is_anima(version)) {
                     return std::make_shared<WAN::WanVAERunner>(vae_backend,
-                                                               offload_params_to_cpu,
+                                                               vae_offload_to_cpu,
                                                                tensor_storage_map,
                                                                "first_stage_model",
                                                                vae_decode_only,
                                                                version);
                 } else {
                     auto model = std::make_shared<AutoEncoderKL>(vae_backend,
-                                                                 offload_params_to_cpu,
+                                                                 vae_offload_to_cpu,
                                                                  tensor_storage_map,
                                                                  "first_stage_model",
                                                                  vae_decode_only,
@@ -684,7 +741,7 @@ public:
                 LOG_INFO("using FakeVAE");
                 first_stage_model = std::make_shared<FakeVAE>(version,
                                                               vae_backend,
-                                                              offload_params_to_cpu);
+                                                              vae_offload_to_cpu);
             } else if (use_tae && !tae_preview_only) {
                 LOG_INFO("using TAE for encoding / decoding");
                 first_stage_model = create_tae();
@@ -891,6 +948,53 @@ public:
         }
 
         LOG_DEBUG("finished loaded file");
+
+        // For layer streaming mode, offload all diffusion model layers to CPU immediately
+        // This frees VRAM for the LLM/CLIP during conditioning
+        // Layers will be loaded on-demand during streaming execution
+        if (offload_config.mode == SD_OFFLOAD_LAYER_STREAMING &&
+            diffusion_model && diffusion_model->is_layer_streaming_enabled()) {
+            LOG_INFO("Offloading diffusion model layers to CPU for layer streaming");
+            diffusion_model->offload_streaming_layers();
+        }
+
+        // When dynamic offloading is enabled and user didn't want clip on CPU,
+        // we forced CPU backend creation but now TRY to move params to GPU for execution.
+        // This gives us the best of both: fast GPU execution with ability to offload later.
+        // Skip if cond_stage was intentionally kept on CPU (keep_clip_on_cpu=true).
+        if (offload_config.mode != SD_OFFLOAD_NONE &&
+            offload_config.offload_cond_stage &&
+            !cond_stage_on_cpu_only) {
+            // Disable automatic offloading - we control offload/reload timing explicitly
+            cond_stage_model->set_auto_offload(false);
+
+            // Check if there's enough VRAM to load cond_stage now
+            // If not, keep it on CPU - it will be loaded on-demand before conditioning
+            size_t cond_stage_size = cond_stage_model->get_params_buffer_size();
+            size_t free_vram = 0;
+#ifdef SD_USE_CUDA
+            size_t total_vram = 0;
+            ggml_backend_cuda_get_device_memory(0, &free_vram, &total_vram);
+#endif
+            // Need safety margin for compute buffers
+            size_t safety_margin = 500 * 1024 * 1024;
+
+            if (free_vram >= cond_stage_size + safety_margin) {
+                LOG_WARN("Moving cond_stage params to GPU (%.2f MB free, %.2f MB needed)",
+                         free_vram / (1024.0f * 1024.0f), cond_stage_size / (1024.0f * 1024.0f));
+                if (cond_stage_model->move_params_to_gpu()) {
+                    LOG_WARN("cond_stage now on GPU (%.2f MB), auto-offload disabled for explicit control",
+                             cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f));
+                } else {
+                    // GPU allocation failed despite having enough reported free VRAM (fragmentation?)
+                    // Keep on CPU - it will work, just with on-demand loading
+                    LOG_WARN("cond_stage GPU allocation failed (fragmentation?), keeping on CPU for on-demand loading");
+                }
+            } else {
+                LOG_WARN("Not enough VRAM for cond_stage at load time (%.2f MB free, %.2f MB needed), keeping on CPU for on-demand loading",
+                         free_vram / (1024.0f * 1024.0f), cond_stage_size / (1024.0f * 1024.0f));
+            }
+        }
 
         {
             size_t clip_params_mem_size = cond_stage_model->get_params_buffer_size();
@@ -1102,7 +1206,11 @@ public:
             is_high_noise = true;
             LOG_DEBUG("high noise lora: %s", lora_path.c_str());
         }
-        auto lora = std::make_shared<LoraModel>(lora_id, backend, lora_path, is_high_noise ? "model.high_noise_" : "", version);
+        // Enable CPU offload for LoRA when dynamic offloading is active
+        bool enable_lora_offload = (offload_config.mode != SD_OFFLOAD_NONE);
+        auto lora = std::make_shared<LoraModel>(lora_id, backend, lora_path,
+                                                is_high_noise ? "model.high_noise_" : "",
+                                                version, enable_lora_offload);
         if (!lora->load_from_file(n_threads, lora_tensor_filter)) {
             LOG_WARN("load lora tensors from %s failed", lora_path.c_str());
             return nullptr;
@@ -1804,7 +1912,7 @@ public:
                     return std::move(cached_output);
                 }
 
-                auto output_opt = work_diffusion_model->compute(n_threads, diffusion_params);
+                auto output_opt = work_diffusion_model->compute_dispatch(n_threads, diffusion_params);
                 if (output_opt.empty()) {
                     LOG_ERROR("diffusion model compute failed");
                     return sd::Tensor<float>();
@@ -2002,6 +2110,352 @@ public:
             latents = first_stage_model->vae_to_diffusion_latents(latents);
         }
         return latents;
+    }
+
+    // Estimate VRAM needed for VAE decode operation (formula-based)
+    size_t estimate_vae_decode_vram(int width, int height) {
+        if (first_stage_model == nullptr) {
+            return static_cast<size_t>(width) * height * 12;
+        }
+        size_t vae_weights = first_stage_model->get_params_buffer_size();
+        size_t compute_estimate = static_cast<size_t>(width) * height * 48;
+        return vae_weights + compute_estimate;
+    }
+
+    // Smart offload before VAE decode - only offload what's needed
+    bool smart_offload_for_vae(int width, int height, bool decode_video = false) {
+        if (offload_config.mode == SD_OFFLOAD_NONE) {
+            return false;
+        }
+
+        // In layer_streaming mode, skip smart offload for diffusion model
+        if (offload_config.mode == SD_OFFLOAD_LAYER_STREAMING) {
+            if (offload_config.offload_cond_stage && cond_stage_model && cond_stage_model->is_params_on_gpu()) {
+                if (offload_config.log_offload_events) {
+                    LOG_INFO("Layer streaming: moving cond_stage to CPU for VAE decode");
+                }
+                cond_stage_model->move_params_to_cpu();
+                return true;
+            }
+            return false;
+        }
+
+        size_t vae_vram_needed = estimate_vae_decode_vram(width, height);
+
+        size_t target_free = offload_config.target_free_vram;
+        size_t vram_to_free = vae_vram_needed > target_free ? 0 : vae_vram_needed;
+
+        size_t cond_vram = 0;
+        size_t diffusion_vram = 0;
+        bool cond_on_gpu = cond_stage_model && cond_stage_model->is_params_on_gpu();
+        bool diffusion_on_gpu = diffusion_model && diffusion_model->is_params_on_gpu();
+
+        if (cond_on_gpu) {
+            cond_vram = cond_stage_model->get_params_buffer_size();
+        }
+        if (diffusion_on_gpu) {
+            diffusion_vram = diffusion_model->get_params_buffer_size();
+        }
+
+        bool offloaded_anything = false;
+
+        if (offload_config.offload_cond_stage && cond_on_gpu && cond_vram >= offload_config.min_offload_size) {
+            if (offload_config.log_offload_events) {
+                LOG_INFO("Smart offload: moving cond_stage to CPU (%.2f MB) for VAE decode",
+                         cond_vram / (1024.0f * 1024.0f));
+            }
+            cond_stage_model->move_params_to_cpu();
+            offloaded_anything = true;
+            vram_to_free = (vram_to_free > cond_vram) ? vram_to_free - cond_vram : 0;
+        }
+
+        if (offload_config.offload_diffusion && diffusion_on_gpu && vram_to_free > 0 &&
+            diffusion_vram >= offload_config.min_offload_size) {
+            if (offload_config.log_offload_events) {
+                LOG_INFO("Smart offload: moving diffusion to CPU (%.2f MB) for VAE decode",
+                         diffusion_vram / (1024.0f * 1024.0f));
+            }
+            diffusion_model->move_params_to_cpu();
+            offloaded_anything = true;
+        }
+
+        return offloaded_anything;
+    }
+
+    // Smart offload before VAE encode - only offload what's needed
+    bool smart_offload_for_vae_encode(int width, int height) {
+        if (offload_config.mode == SD_OFFLOAD_NONE) {
+            return false;
+        }
+
+        if (offload_config.mode == SD_OFFLOAD_LAYER_STREAMING) {
+            bool offloaded = false;
+
+            if (offload_config.offload_cond_stage && cond_stage_model && cond_stage_model->is_params_on_gpu()) {
+                if (offload_config.log_offload_events) {
+                    LOG_INFO("Layer streaming: moving cond_stage to CPU for VAE encode");
+                }
+                cond_stage_model->move_params_to_cpu();
+                offloaded = true;
+            }
+
+            if (offload_config.offload_diffusion && diffusion_model && diffusion_model->is_params_on_gpu()) {
+                if (offload_config.log_offload_events) {
+                    LOG_INFO("Layer streaming: moving diffusion to CPU for VAE encode");
+                }
+                diffusion_model->move_params_to_cpu();
+                offloaded = true;
+            }
+
+            return offloaded;
+        }
+
+        size_t vae_vram_needed = 0;
+        if (first_stage_model == nullptr) {
+            vae_vram_needed = static_cast<size_t>(width) * height * 12;
+        } else {
+            size_t vae_weights = first_stage_model->get_params_buffer_size();
+            size_t compute_estimate = static_cast<size_t>(width) * height * 40;
+            vae_vram_needed = vae_weights + compute_estimate;
+        }
+
+        size_t target_free = offload_config.target_free_vram;
+        size_t vram_to_free = vae_vram_needed > target_free ? 0 : vae_vram_needed;
+
+        size_t cond_vram = 0;
+        size_t diffusion_vram = 0;
+        bool cond_on_gpu = cond_stage_model && cond_stage_model->is_params_on_gpu();
+        bool diffusion_on_gpu = diffusion_model && diffusion_model->is_params_on_gpu();
+
+        if (cond_on_gpu) {
+            cond_vram = cond_stage_model->get_params_buffer_size();
+        }
+        if (diffusion_on_gpu) {
+            diffusion_vram = diffusion_model->get_params_buffer_size();
+        }
+
+        bool offloaded_anything = false;
+
+        if (offload_config.offload_cond_stage && cond_on_gpu && cond_vram >= offload_config.min_offload_size) {
+            if (offload_config.log_offload_events) {
+                LOG_INFO("Smart offload: moving cond_stage to CPU (%.2f MB) for VAE encode",
+                         cond_vram / (1024.0f * 1024.0f));
+            }
+            cond_stage_model->move_params_to_cpu();
+            offloaded_anything = true;
+            vram_to_free = (vram_to_free > cond_vram) ? vram_to_free - cond_vram : 0;
+        }
+
+        if (offload_config.offload_diffusion && diffusion_on_gpu && vram_to_free > 0 &&
+            diffusion_vram >= offload_config.min_offload_size) {
+            if (offload_config.log_offload_events) {
+                LOG_INFO("Smart offload: moving diffusion to CPU (%.2f MB) for VAE encode",
+                         diffusion_vram / (1024.0f * 1024.0f));
+            }
+            diffusion_model->move_params_to_cpu();
+            offloaded_anything = true;
+        }
+
+        return offloaded_anything;
+    }
+
+    // Get current free VRAM on the primary GPU
+    size_t get_free_vram() {
+        size_t free_vram = 0;
+#ifdef SD_USE_CUDA
+        size_t total_vram = 0;
+        ggml_backend_cuda_get_device_memory(0, &free_vram, &total_vram);
+#endif
+        return free_vram;
+    }
+
+    // Estimate VRAM needed for diffusion sampling
+    size_t estimate_diffusion_vram(int width, int height) {
+        if (!diffusion_model) {
+            return 0;
+        }
+        size_t params_size = diffusion_model->get_params_buffer_size();
+        int latent_w = width / get_vae_scale_factor();
+        int latent_h = height / get_vae_scale_factor();
+        size_t compute_estimate = latent_w * latent_h * 64;
+        return params_size + compute_estimate;
+    }
+
+    // Smart check: Should we offload cond_stage after conditioning?
+    bool should_offload_cond_stage_for_diffusion(int width, int height) {
+        if (offload_config.mode == SD_OFFLOAD_NONE || !offload_config.offload_cond_stage) {
+            return false;
+        }
+        if (!cond_stage_model || !cond_stage_model->is_params_on_gpu()) {
+            return false;
+        }
+
+        if (offload_config.mode == SD_OFFLOAD_LAYER_STREAMING) {
+            LOG_INFO("Layer streaming mode: will offload cond_stage to free VRAM for layer loading");
+            return true;
+        }
+
+        size_t cond_stage_vram = cond_stage_model->get_params_vram_size();
+        if (cond_stage_vram < offload_config.min_offload_size) {
+            return false;
+        }
+
+        size_t free_vram = get_free_vram();
+        size_t diffusion_needs = estimate_diffusion_vram(width, height);
+        size_t safety_margin = 300 * 1024 * 1024;
+
+        bool vram_is_tight = free_vram < (diffusion_needs + safety_margin);
+
+        if (offload_config.log_offload_events) {
+            LOG_INFO("Smart check (cond->diffusion): free=%.2f MB, diffusion_needs=%.2f MB, cond_stage=%.2f MB, tight=%s",
+                     free_vram / (1024.0f * 1024.0f),
+                     diffusion_needs / (1024.0f * 1024.0f),
+                     cond_stage_vram / (1024.0f * 1024.0f),
+                     vram_is_tight ? "yes" : "no");
+        }
+
+        return vram_is_tight;
+    }
+
+    // Smart check: Should we offload diffusion after sampling?
+    bool should_offload_diffusion_for_vae(int width, int height) {
+        if (offload_config.mode != SD_OFFLOAD_AGGRESSIVE &&
+            offload_config.mode != SD_OFFLOAD_COND_DIFFUSION) {
+            return false;
+        }
+        if (!offload_config.offload_diffusion) {
+            return false;
+        }
+        if (!diffusion_model || !diffusion_model->is_params_on_gpu()) {
+            return false;
+        }
+
+        size_t diffusion_vram = diffusion_model->get_params_vram_size();
+        if (diffusion_vram < offload_config.min_offload_size) {
+            return false;
+        }
+
+        size_t free_vram = get_free_vram();
+        size_t vae_needs = estimate_vae_decode_vram(width, height);
+        size_t safety_margin = 300 * 1024 * 1024;
+
+        bool vram_is_tight = free_vram < (vae_needs + safety_margin);
+
+        if (offload_config.log_offload_events) {
+            LOG_INFO("Smart check (diffusion->VAE): free=%.2f MB, vae_needs=%.2f MB, diffusion=%.2f MB, tight=%s",
+                     free_vram / (1024.0f * 1024.0f),
+                     vae_needs / (1024.0f * 1024.0f),
+                     diffusion_vram / (1024.0f * 1024.0f),
+                     vram_is_tight ? "yes" : "no");
+        }
+
+        return vram_is_tight;
+    }
+
+    // Offload conditioners to CPU after conditioning phase
+    void offload_conditioners() {
+        if (offload_config.offload_cond_stage && cond_stage_model && cond_stage_model->is_params_on_gpu()) {
+            cond_stage_model->move_params_to_cpu();
+        }
+    }
+
+    // Offload diffusion model to CPU after sampling phase
+    void offload_diffusion_model() {
+        if (offload_config.offload_diffusion && diffusion_model && diffusion_model->is_params_on_gpu()) {
+            diffusion_model->move_params_to_cpu();
+        }
+    }
+
+    // Park the VAE on CPU pinned memory while diffusion samples. The VAE is
+    // idle for the entire sampler loop and only used at decode time, so its
+    // VRAM footprint is wasted during streaming. Reloads automatically on the
+    // next decode call via the runner's compute path. Only effective when the
+    // VAE was constructed with a CPU-pinned twin (vae_offload_to_cpu == true,
+    // which we escalate under SD_OFFLOAD_LAYER_STREAMING).
+    bool offload_vae_for_streaming() {
+        if (offload_config.mode != SD_OFFLOAD_LAYER_STREAMING) return false;
+        if (!first_stage_model || !first_stage_model->is_params_on_gpu()) return false;
+        size_t vae_vram = first_stage_model->get_params_vram_size();
+        if (!first_stage_model->move_params_to_cpu()) {
+            return false;
+        }
+        if (offload_config.log_offload_events) {
+            LOG_INFO("Layer streaming: parked VAE on CPU pinned (%.2f MB)",
+                     vae_vram / (1024.0 * 1024.0));
+        }
+        return true;
+    }
+
+    // Reload diffusion model to GPU before sampling
+    bool reload_diffusion_model() {
+        if (diffusion_model && !diffusion_model->is_params_on_gpu()) {
+            return diffusion_model->move_params_to_gpu();
+        }
+        return true;
+    }
+
+    // Reload cond_stage model to GPU before conditioning
+    bool reload_cond_stage_model() {
+        if (cond_stage_model && !cond_stage_model->is_params_on_gpu()) {
+            return cond_stage_model->move_params_to_gpu();
+        }
+        return true;
+    }
+
+    // Post-generation reload of models to GPU
+    void post_generation_reload() {
+        if (offload_config.mode == SD_OFFLOAD_NONE || free_params_immediately) {
+            return;
+        }
+
+        int64_t reload_start = ggml_time_ms();
+        bool reloaded_any = false;
+
+        // Reload diffusion if configured (skip for layer_streaming)
+        if (offload_config.reload_diffusion &&
+            offload_config.mode != SD_OFFLOAD_LAYER_STREAMING &&
+            diffusion_model && !diffusion_model->is_params_on_gpu()) {
+            if (offload_config.log_offload_events) {
+                LOG_WARN("Reloading diffusion to GPU after generation...");
+            }
+            if (diffusion_model->move_params_to_gpu()) {
+                if (offload_config.log_offload_events) {
+                    LOG_WARN("diffusion reloaded to GPU (%.2f MB)",
+                             diffusion_model->get_params_vram_size() / (1024.0f * 1024.0f));
+                }
+                reloaded_any = true;
+            } else {
+                LOG_WARN("Failed to reload diffusion to GPU - will load on-demand");
+            }
+        }
+
+        // Reload cond_stage if configured and enough VRAM
+        if (offload_config.reload_cond_stage &&
+            cond_stage_model && !cond_stage_model->is_params_on_gpu()) {
+            size_t cond_stage_size = cond_stage_model->get_params_buffer_size();
+            size_t free_vram = get_free_vram();
+            size_t safety_margin = 500 * 1024 * 1024;
+
+            if (free_vram >= cond_stage_size + safety_margin) {
+                if (offload_config.log_offload_events) {
+                    LOG_WARN("Reloading cond_stage to GPU after generation...");
+                }
+                if (cond_stage_model->move_params_to_gpu()) {
+                    if (offload_config.log_offload_events) {
+                        LOG_WARN("cond_stage reloaded to GPU (%.2f MB)",
+                                 cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f));
+                    }
+                    reloaded_any = true;
+                }
+            } else if (offload_config.log_offload_events) {
+                LOG_WARN("Not enough VRAM to reload cond_stage - will load on-demand");
+            }
+        }
+
+        if (reloaded_any && offload_config.log_offload_events) {
+            int64_t reload_end = ggml_time_ms();
+            LOG_WARN("Post-generation reload completed in %" PRId64 " ms", reload_end - reload_start);
+        }
     }
 
     sd::Tensor<float> decode_first_stage(const sd::Tensor<float>& x, bool decode_video = false) {
@@ -2204,6 +2658,63 @@ enum lora_apply_mode_t str_to_lora_apply_mode(const char* str) {
     return LORA_APPLY_MODE_COUNT;
 }
 
+const char* offload_mode_to_str[] = {
+    "none",
+    "cond_only",
+    "cond_diffusion",
+    "aggressive",
+    "layer_streaming",
+};
+
+const char* sd_offload_mode_name(enum sd_offload_mode_t mode) {
+    if (mode < SD_OFFLOAD_MODE_COUNT) {
+        return offload_mode_to_str[mode];
+    }
+    return NONE_STR;
+}
+
+enum sd_offload_mode_t str_to_offload_mode(const char* str) {
+    for (int i = 0; i < SD_OFFLOAD_MODE_COUNT; i++) {
+        if (!strcmp(str, offload_mode_to_str[i])) {
+            return (enum sd_offload_mode_t)i;
+        }
+    }
+    return SD_OFFLOAD_MODE_COUNT;
+}
+
+const char* vram_estimation_to_str[] = {
+    "dryrun",
+    "formula",
+};
+
+const char* sd_vram_estimation_name(enum sd_vram_estimation_t method) {
+    if (method < SD_VRAM_EST_COUNT) {
+        return vram_estimation_to_str[method];
+    }
+    return NONE_STR;
+}
+
+enum sd_vram_estimation_t str_to_vram_estimation(const char* str) {
+    for (int i = 0; i < SD_VRAM_EST_COUNT; i++) {
+        if (!strcmp(str, vram_estimation_to_str[i])) {
+            return (enum sd_vram_estimation_t)i;
+        }
+    }
+    return SD_VRAM_EST_COUNT;
+}
+
+void sd_offload_config_init(sd_offload_config_t* config) {
+    config->mode               = SD_OFFLOAD_NONE;
+    config->vram_estimation    = SD_VRAM_EST_DRYRUN;  // Dry-run is default (accurate)
+    config->offload_cond_stage = true;
+    config->offload_diffusion  = false;
+    config->reload_cond_stage  = false;
+    config->reload_diffusion   = true;  // Default: reload diffusion for next generation
+    config->log_offload_events = true;
+    config->min_offload_size   = 0;
+    config->target_free_vram   = 2ULL * 1024 * 1024 * 1024;  // 2 GB
+}
+
 const char* hires_upscaler_to_str[] = {
     "None",
     "Latent",
@@ -2296,6 +2807,17 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->chroma_use_dit_mask     = true;
     sd_ctx_params->chroma_use_t5_mask      = false;
     sd_ctx_params->chroma_t5_mask_pad      = 1;
+    // flow_shift moved out of sd_ctx_params_t in upstream master into
+    // sd_sample_params_t; sd_sample_params_init() initialises it there.
+
+    // Dynamic tensor offloading defaults (disabled)
+    sd_ctx_params->offload_config.mode               = SD_OFFLOAD_NONE;
+    sd_ctx_params->offload_config.offload_cond_stage = true;
+    sd_ctx_params->offload_config.offload_diffusion  = false;
+    sd_ctx_params->offload_config.reload_cond_stage  = false;  // Let on-demand reload handle it (safer)
+    sd_ctx_params->offload_config.log_offload_events = true;
+    sd_ctx_params->offload_config.min_offload_size   = 0;                  // No minimum - offload any size
+    sd_ctx_params->offload_config.target_free_vram   = 2ULL * 1024 * 1024 * 1024;  // 2 GB target for VAE
 }
 
 char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
@@ -2612,6 +3134,15 @@ enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_me
         return SIMPLE_SCHEDULER;
     }
     return DISCRETE_SCHEDULER;
+}
+
+const char* sd_get_model_version_name(const sd_ctx_t* sd_ctx) {
+    if (sd_ctx != nullptr && sd_ctx->sd != nullptr) {
+        if (sd_ctx->sd->version < VERSION_COUNT) {
+            return model_version_to_str[sd_ctx->sd->version];
+        }
+    }
+    return "Unknown";
 }
 
 static int64_t resolve_seed(int64_t seed) {
@@ -3110,6 +3641,8 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
     if (init_image_tensor.empty()) {
         init_latent = sd_ctx->sd->generate_init_latent(request->width, request->height);
     } else {
+        // Smart offload before VAE encode to free VRAM
+        sd_ctx->sd->smart_offload_for_vae_encode(request->width, request->height);
         init_latent = sd_ctx->sd->encode_first_stage(init_image_tensor);
         if (init_latent.empty()) {
             LOG_ERROR("failed to encode init image");
@@ -3307,6 +3840,17 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
         sd_ctx->sd->cond_stage_model->free_params_buffer();
     }
 
+    // Smart offload: move cond_stage to CPU if VRAM is tight for diffusion sampling
+    if (!sd_ctx->sd->free_params_immediately &&
+        sd_ctx->sd->should_offload_cond_stage_for_diffusion(request->width, request->height)) {
+        sd_ctx->sd->offload_conditioners();
+    }
+
+    // Layer-streaming companion: free the VAE's VRAM for the sampler loop.
+    // It's only needed at decode time, which reloads it via the runner's
+    // normal compute path.
+    sd_ctx->sd->offload_vae_for_streaming();
+
     ImageGenerationEmbeds embeds;
     if (request->use_img_cond) {
         embeds.img_cond = SDCondition(uncond.c_crossattn, uncond.c_vector, cond.c_concat);
@@ -3325,6 +3869,15 @@ static sd_image_t* decode_image_outputs(sd_ctx_t* sd_ctx,
         LOG_ERROR("expected %d latents, got %zu", request.batch_count, final_latents.size());
         return nullptr;
     }
+    // Smart offload before VAE decode
+    sd_ctx->sd->smart_offload_for_vae(request.width, request.height);
+
+    // For layer_streaming mode: offload streaming layers before VAE decode
+    if (sd_ctx->sd->offload_config.mode == SD_OFFLOAD_LAYER_STREAMING &&
+        sd_ctx->sd->diffusion_model && sd_ctx->sd->diffusion_model->is_layer_streaming_enabled()) {
+        sd_ctx->sd->diffusion_model->offload_streaming_layers();
+    }
+
     LOG_INFO("decoding %zu latents", final_latents.size());
     std::vector<sd::Tensor<float>> decoded_images;
     int64_t t0 = ggml_time_ms();
@@ -3505,6 +4058,16 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
     sd_ctx->sd->rng->manual_seed(request.seed);
     sd_ctx->sd->sampler_rng->manual_seed(request.seed);
     sd_ctx->sd->set_flow_shift(sd_img_gen_params->sample_params.flow_shift);
+
+    // When offload mode is enabled and we have LoRAs, offload cond_stage first to free VRAM
+    if (sd_ctx->sd->offload_config.mode != SD_OFFLOAD_NONE &&
+        sd_ctx->sd->offload_config.offload_cond_stage &&
+        sd_img_gen_params->lora_count > 0 &&
+        sd_ctx->sd->cond_stage_model && sd_ctx->sd->cond_stage_model->is_params_on_gpu()) {
+        LOG_WARN("Offloading cond_stage before LoRA application to free VRAM");
+        sd_ctx->sd->offload_conditioners();
+    }
+
     sd_ctx->sd->apply_loras(sd_img_gen_params->loras, sd_img_gen_params->lora_count);
 
     ImageVaeAxesGuard axes_guard(sd_ctx, sd_img_gen_params, request);
@@ -3528,6 +4091,16 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
         return nullptr;
     }
     ImageGenerationEmbeds embeds = std::move(*embeds_opt);
+
+    // Ensure diffusion model is on GPU before sampling (may have been offloaded for cond_stage)
+    // Skip for layer_streaming - streaming engine loads layers individually
+    if (sd_ctx->sd->offload_config.mode != SD_OFFLOAD_NONE &&
+        sd_ctx->sd->offload_config.mode != SD_OFFLOAD_LAYER_STREAMING) {
+        if (!sd_ctx->sd->reload_diffusion_model()) {
+            LOG_ERROR("Failed to reload diffusion model to GPU for sampling");
+            return nullptr;
+        }
+    }
 
     std::vector<sd::Tensor<float>> final_latents;
     int64_t denoise_start = ggml_time_ms();
@@ -3575,6 +4148,18 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                   b + 1,
                   request.batch_count,
                   (sampling_end - sampling_start) * 1.0f / 1000);
+        // Mid-stream failures (e.g. compute-buffer cudaMalloc OOM at layer N)
+        // leave the streaming engine's resident layers + warm cache GPU-resident
+        // — the success path's offload_streaming_layers() at the end of
+        // sampling never runs. Without this eviction, the next job starts on a
+        // GPU that's already 8-9 GB full from the previous failed run and
+        // typically hits the same OOM. The swap is cheap (each layer's CPU
+        // pinned twin already exists) so freeing them is just pointer swaps.
+        if (sd_ctx->sd->offload_config.mode == SD_OFFLOAD_LAYER_STREAMING &&
+            sd_ctx->sd->diffusion_model &&
+            sd_ctx->sd->diffusion_model->is_layer_streaming_enabled()) {
+            sd_ctx->sd->diffusion_model->offload_streaming_layers();
+        }
         if (sd_ctx->sd->free_params_immediately) {
             sd_ctx->sd->diffusion_model->free_params_buffer();
         }
@@ -3587,6 +4172,12 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
     LOG_INFO("generating %zu latent images completed, taking %.2fs",
              final_latents.size(),
              (denoise_end - denoise_start) * 1.0f / 1000);
+
+    // Smart offload: move diffusion to CPU if VRAM is tight for VAE decode
+    if (!sd_ctx->sd->free_params_immediately &&
+        sd_ctx->sd->should_offload_diffusion_for_vae(request.width, request.height)) {
+        sd_ctx->sd->offload_diffusion_model();
+    }
 
     if (request.hires.enabled && request.hires.target_width > 0) {
         LOG_INFO("hires fix: upscaling to %dx%d", request.hires.target_width, request.hires.target_height);
@@ -3704,6 +4295,11 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                       b + 1,
                       (int)final_latents.size(),
                       (hires_sample_end - hires_sample_start) * 1.0f / 1000);
+            if (sd_ctx->sd->offload_config.mode == SD_OFFLOAD_LAYER_STREAMING &&
+                sd_ctx->sd->diffusion_model &&
+                sd_ctx->sd->diffusion_model->is_layer_streaming_enabled()) {
+                sd_ctx->sd->diffusion_model->offload_streaming_layers();
+            }
             if (sd_ctx->sd->free_params_immediately) {
                 sd_ctx->sd->diffusion_model->free_params_buffer();
             }
@@ -3724,6 +4320,9 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
     }
 
     sd_ctx->sd->lora_stat();
+
+    // Post-generation reload of models to GPU
+    sd_ctx->sd->post_generation_reload();
 
     int64_t t1 = ggml_time_ms();
     LOG_INFO("generate_image completed in %.2fs", (t1 - t0) * 1.0f / 1000);
@@ -3794,6 +4393,9 @@ static std::optional<ImageGenerationLatents> prepare_video_generation_latents(sd
             sd::ops::slice_assign(&image, 2, request->frames - 1, request->frames, end_image.unsqueeze(2));
         }
 
+        // Smart offload before VAE encode to free VRAM
+        sd_ctx->sd->smart_offload_for_vae_encode(request->width, request->height);
+
         auto concat_latent = sd_ctx->sd->encode_first_stage(image);  // [b, c, t, h/vae_scale_factor, w/vae_scale_factor]
         if (concat_latent.empty()) {
             LOG_ERROR("failed to encode video conditioning frames");
@@ -3843,6 +4445,9 @@ static std::optional<ImageGenerationLatents> prepare_video_generation_latents(sd
         int64_t t1 = ggml_time_ms();
         sd::Tensor<float> ref_image_latent;
         if (!start_image.empty()) {
+            // Smart offload before VAE encode to free VRAM
+            sd_ctx->sd->smart_offload_for_vae_encode(request->width, request->height);
+
             auto ref_img     = start_image.reshape({start_image.shape()[0], start_image.shape()[1], 1, start_image.shape()[2], 1});
             auto encoded_ref = sd_ctx->sd->encode_first_stage(ref_img);  // [b, c, 1, h/vae_scale_factor, w/vae_scale_factor]
             if (encoded_ref.empty()) {
@@ -3864,6 +4469,9 @@ static std::optional<ImageGenerationLatents> prepare_video_generation_latents(sd
         control_video              = control_video - 0.5f;
         sd::Tensor<float> inactive = control_video * (1.0f - mask) + 0.5f;
         sd::Tensor<float> reactive = control_video * mask + 0.5f;
+
+        // Smart offload before VAE encode to free VRAM
+        sd_ctx->sd->smart_offload_for_vae_encode(request->width, request->height);
 
         inactive = sd_ctx->sd->encode_first_stage(inactive);  // [b, c, t, h/vae_scale_factor, w/vae_scale_factor]
         if (inactive.empty()) {
@@ -3924,6 +4532,14 @@ static ImageGenerationEmbeds prepare_video_generation_embeds(sd_ctx_t* sd_ctx,
                                                              const sd_vid_gen_params_t* sd_vid_gen_params,
                                                              const GenerationRequest& request,
                                                              const ImageGenerationLatents& latents) {
+    // On-demand GPU reload for cond_stage before conditioning
+    if (sd_ctx->sd->offload_config.mode != SD_OFFLOAD_NONE &&
+        sd_ctx->sd->offload_config.offload_cond_stage &&
+        !sd_ctx->sd->free_params_immediately &&
+        !sd_ctx->sd->cond_stage_on_cpu_only) {
+        sd_ctx->sd->reload_cond_stage_model();
+    }
+
     ImageGenerationEmbeds embeds;
     ConditionerParams condition_params;
     condition_params.clip_skip       = request.clip_skip;
@@ -3949,6 +4565,13 @@ static ImageGenerationEmbeds prepare_video_generation_embeds(sd_ctx_t* sd_ctx,
     if (sd_ctx->sd->free_params_immediately) {
         sd_ctx->sd->cond_stage_model->free_params_buffer();
     }
+
+    // Smart offload: move cond_stage to CPU if VRAM is tight for diffusion sampling
+    if (!sd_ctx->sd->free_params_immediately &&
+        sd_ctx->sd->should_offload_cond_stage_for_diffusion(request.width, request.height)) {
+        sd_ctx->sd->offload_conditioners();
+    }
+
     return embeds;
 }
 
@@ -3959,6 +4582,16 @@ static sd_image_t* decode_video_outputs(sd_ctx_t* sd_ctx,
         LOG_ERROR("no latent video to decode");
         return nullptr;
     }
+
+    // Smart offload before VAE decode
+    sd_ctx->sd->smart_offload_for_vae(0, 0, true);
+
+    // For layer_streaming mode: offload streaming layers before VAE decode
+    if (sd_ctx->sd->offload_config.mode == SD_OFFLOAD_LAYER_STREAMING &&
+        sd_ctx->sd->diffusion_model && sd_ctx->sd->diffusion_model->is_layer_streaming_enabled()) {
+        sd_ctx->sd->diffusion_model->offload_streaming_layers();
+    }
+
     int64_t t4            = ggml_time_ms();
     sd::Tensor<float> vid = sd_ctx->sd->decode_first_stage(final_latent, true);
     int64_t t5            = ggml_time_ms();
@@ -4058,6 +4691,11 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         int64_t sampling_end          = ggml_time_ms();
         if (x_t_sampled.empty()) {
             LOG_ERROR("sampling(high noise) failed after %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
+            if (sd_ctx->sd->offload_config.mode == SD_OFFLOAD_LAYER_STREAMING &&
+                sd_ctx->sd->high_noise_diffusion_model &&
+                sd_ctx->sd->high_noise_diffusion_model->is_layer_streaming_enabled()) {
+                sd_ctx->sd->high_noise_diffusion_model->offload_streaming_layers();
+            }
             if (sd_ctx->sd->free_params_immediately) {
                 sd_ctx->sd->high_noise_diffusion_model->free_params_buffer();
             }
@@ -4105,9 +4743,20 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     }
     if (final_latent.empty()) {
         LOG_ERROR("sampling failed after %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
+        if (sd_ctx->sd->offload_config.mode == SD_OFFLOAD_LAYER_STREAMING &&
+            sd_ctx->sd->diffusion_model &&
+            sd_ctx->sd->diffusion_model->is_layer_streaming_enabled()) {
+            sd_ctx->sd->diffusion_model->offload_streaming_layers();
+        }
         return nullptr;
     }
     LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
+
+    // Smart offload: move diffusion to CPU if VRAM is tight for VAE decode
+    if (!sd_ctx->sd->free_params_immediately &&
+        sd_ctx->sd->should_offload_diffusion_for_vae(request.width, request.height)) {
+        sd_ctx->sd->offload_diffusion_model();
+    }
 
     if (latents.ref_image_num > 0) {
         final_latent = sd::ops::slice(final_latent, 2, latents.ref_image_num, final_latent.shape()[2]);
@@ -4123,7 +4772,336 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 
     sd_ctx->sd->lora_stat();
 
+    // Post-generation reload of models to GPU
+    sd_ctx->sd->post_generation_reload();
+
     int64_t t1 = ggml_time_ms();
     LOG_INFO("generate_video completed in %.2fs", (t1 - t0) * 1.0f / 1000);
     return result;
+}
+
+/*================================================ Dynamic Tensor Offloading API ================================================*/
+
+static const char* component_names[] = {
+    "cond_stage",    // SD_COMPONENT_COND_STAGE
+    "clip_vision",   // SD_COMPONENT_CLIP_VISION
+    "diffusion",     // SD_COMPONENT_DIFFUSION
+    "vae",           // SD_COMPONENT_VAE
+    "control_net",   // SD_COMPONENT_CONTROL_NET
+    "pmid",          // SD_COMPONENT_PMID
+};
+
+const char* sd_component_name(sd_component_t component) {
+    if (component >= 0 && component < SD_COMPONENT_COUNT) {
+        return component_names[component];
+    }
+    return "unknown";
+}
+
+bool sd_offload_to_cpu(sd_ctx_t* sd_ctx, sd_component_t component) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr) {
+        return false;
+    }
+
+    bool success = false;
+    switch (component) {
+        case SD_COMPONENT_COND_STAGE:
+            if (sd_ctx->sd->cond_stage_model) {
+                success = sd_ctx->sd->cond_stage_model->move_params_to_cpu();
+                if (success) {
+                    LOG_INFO("Offloaded %s to CPU", sd_component_name(component));
+                }
+            }
+            break;
+        case SD_COMPONENT_CLIP_VISION:
+            if (sd_ctx->sd->clip_vision) {
+                success = sd_ctx->sd->clip_vision->move_params_to_cpu();
+                if (success) {
+                    LOG_INFO("Offloaded %s to CPU", sd_component_name(component));
+                }
+            }
+            break;
+        case SD_COMPONENT_DIFFUSION:
+            if (sd_ctx->sd->diffusion_model) {
+                success = sd_ctx->sd->diffusion_model->move_params_to_cpu();
+                if (success) {
+                    LOG_INFO("Offloaded %s to CPU", sd_component_name(component));
+                }
+            }
+            break;
+        case SD_COMPONENT_VAE:
+            if (sd_ctx->sd->first_stage_model) {
+                success = sd_ctx->sd->first_stage_model->move_params_to_cpu();
+                if (success) {
+                    LOG_INFO("Offloaded %s to CPU", sd_component_name(component));
+                }
+            }
+            break;
+        case SD_COMPONENT_CONTROL_NET:
+            if (sd_ctx->sd->control_net) {
+                success = sd_ctx->sd->control_net->move_params_to_cpu();
+                if (success) {
+                    LOG_INFO("Offloaded %s to CPU", sd_component_name(component));
+                }
+            }
+            break;
+        case SD_COMPONENT_PMID:
+            if (sd_ctx->sd->pmid_model) {
+                success = sd_ctx->sd->pmid_model->move_params_to_cpu();
+                if (success) {
+                    LOG_INFO("Offloaded %s to CPU", sd_component_name(component));
+                }
+            }
+            break;
+        default:
+            LOG_WARN("Unknown component: %d", component);
+            break;
+    }
+    return success;
+}
+
+bool sd_reload_to_gpu(sd_ctx_t* sd_ctx, sd_component_t component) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr) {
+        return false;
+    }
+
+    bool success = false;
+    switch (component) {
+        case SD_COMPONENT_COND_STAGE:
+            if (sd_ctx->sd->cond_stage_model) {
+                success = sd_ctx->sd->cond_stage_model->move_params_to_gpu();
+                if (success) {
+                    LOG_INFO("Reloaded %s to GPU", sd_component_name(component));
+                }
+            }
+            break;
+        case SD_COMPONENT_CLIP_VISION:
+            if (sd_ctx->sd->clip_vision) {
+                success = sd_ctx->sd->clip_vision->move_params_to_gpu();
+                if (success) {
+                    LOG_INFO("Reloaded %s to GPU", sd_component_name(component));
+                }
+            }
+            break;
+        case SD_COMPONENT_DIFFUSION:
+            if (sd_ctx->sd->diffusion_model) {
+                success = sd_ctx->sd->diffusion_model->move_params_to_gpu();
+                if (success) {
+                    LOG_INFO("Reloaded %s to GPU", sd_component_name(component));
+                }
+            }
+            break;
+        case SD_COMPONENT_VAE:
+            if (sd_ctx->sd->first_stage_model) {
+                success = sd_ctx->sd->first_stage_model->move_params_to_gpu();
+                if (success) {
+                    LOG_INFO("Reloaded %s to GPU", sd_component_name(component));
+                }
+            }
+            break;
+        case SD_COMPONENT_CONTROL_NET:
+            if (sd_ctx->sd->control_net) {
+                success = sd_ctx->sd->control_net->move_params_to_gpu();
+                if (success) {
+                    LOG_INFO("Reloaded %s to GPU", sd_component_name(component));
+                }
+            }
+            break;
+        case SD_COMPONENT_PMID:
+            if (sd_ctx->sd->pmid_model) {
+                success = sd_ctx->sd->pmid_model->move_params_to_gpu();
+                if (success) {
+                    LOG_INFO("Reloaded %s to GPU", sd_component_name(component));
+                }
+            }
+            break;
+        default:
+            LOG_WARN("Unknown component: %d", component);
+            break;
+    }
+    return success;
+}
+
+bool sd_is_on_gpu(sd_ctx_t* sd_ctx, sd_component_t component) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr) {
+        return false;
+    }
+
+    switch (component) {
+        case SD_COMPONENT_COND_STAGE:
+            if (sd_ctx->sd->cond_stage_model) {
+                return sd_ctx->sd->cond_stage_model->is_params_on_gpu();
+            }
+            break;
+        case SD_COMPONENT_CLIP_VISION:
+            if (sd_ctx->sd->clip_vision) {
+                return sd_ctx->sd->clip_vision->is_params_on_gpu();
+            }
+            break;
+        case SD_COMPONENT_DIFFUSION:
+            if (sd_ctx->sd->diffusion_model) {
+                return sd_ctx->sd->diffusion_model->is_params_on_gpu();
+            }
+            break;
+        case SD_COMPONENT_VAE:
+            if (sd_ctx->sd->first_stage_model) {
+                return sd_ctx->sd->first_stage_model->is_params_on_gpu();
+            }
+            break;
+        case SD_COMPONENT_CONTROL_NET:
+            if (sd_ctx->sd->control_net) {
+                return sd_ctx->sd->control_net->is_params_on_gpu();
+            }
+            break;
+        case SD_COMPONENT_PMID:
+            if (sd_ctx->sd->pmid_model) {
+                return sd_ctx->sd->pmid_model->is_params_on_gpu();
+            }
+            break;
+        default:
+            break;
+    }
+    return false;
+}
+
+size_t sd_get_component_vram(sd_ctx_t* sd_ctx, sd_component_t component) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr) {
+        return 0;
+    }
+
+    switch (component) {
+        case SD_COMPONENT_COND_STAGE:
+            if (sd_ctx->sd->cond_stage_model) {
+                return sd_ctx->sd->cond_stage_model->get_params_vram_size();
+            }
+            break;
+        case SD_COMPONENT_CLIP_VISION:
+            if (sd_ctx->sd->clip_vision) {
+                return sd_ctx->sd->clip_vision->get_params_vram_size();
+            }
+            break;
+        case SD_COMPONENT_DIFFUSION:
+            if (sd_ctx->sd->diffusion_model) {
+                return sd_ctx->sd->diffusion_model->get_params_vram_size();
+            }
+            break;
+        case SD_COMPONENT_VAE:
+            if (sd_ctx->sd->first_stage_model) {
+                return sd_ctx->sd->first_stage_model->get_params_vram_size();
+            }
+            break;
+        case SD_COMPONENT_CONTROL_NET:
+            if (sd_ctx->sd->control_net) {
+                return sd_ctx->sd->control_net->get_params_vram_size();
+            }
+            break;
+        case SD_COMPONENT_PMID:
+            if (sd_ctx->sd->pmid_model) {
+                return sd_ctx->sd->pmid_model->get_params_vram_size();
+            }
+            break;
+        default:
+            break;
+    }
+    return 0;
+}
+
+void sd_free_gpu_resources(sd_ctx_t* sd_ctx) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr) {
+        return;
+    }
+
+    LOG_WARN("[Cleanup] Freeing all GPU resources before unload");
+
+    size_t total_freed = 0;
+
+    // Helper macro to free component GPU memory
+    #define FREE_COMPONENT_GPU(model_ptr, name) do { \
+        auto* model = (model_ptr); \
+        if (model) { \
+            size_t size = model->get_params_vram_size(); \
+            if (size == 0) size = model->get_params_buffer_size(); \
+            if (size > 0) { \
+                if (!model->move_params_to_cpu()) { \
+                    model->free_params_buffer(); \
+                    LOG_WARN("[Cleanup] %s freed GPU buffer (%.2f MB) - no offload backend", name, size / (1024.0f * 1024.0f)); \
+                } else { \
+                    LOG_WARN("[Cleanup] %s offloaded to CPU (%.2f MB)", name, size / (1024.0f * 1024.0f)); \
+                } \
+                total_freed += size; \
+            } \
+        } \
+    } while(0)
+
+    // Free all model components
+    FREE_COMPONENT_GPU(sd_ctx->sd->cond_stage_model.get(), "cond_stage");
+    FREE_COMPONENT_GPU(sd_ctx->sd->diffusion_model.get(), "diffusion");
+    FREE_COMPONENT_GPU(sd_ctx->sd->high_noise_diffusion_model.get(), "high_noise_diffusion");
+    FREE_COMPONENT_GPU(sd_ctx->sd->first_stage_model.get(), "VAE");
+    FREE_COMPONENT_GPU(sd_ctx->sd->control_net.get(), "ControlNet");
+    FREE_COMPONENT_GPU(sd_ctx->sd->clip_vision.get(), "CLIP_Vision");
+    FREE_COMPONENT_GPU(sd_ctx->sd->pmid_model.get(), "PhotoMaker");
+
+    #undef FREE_COMPONENT_GPU
+
+    // Clear LoRA models to free their GPU buffers
+    size_t lora_freed = 0;
+    for (auto& lora : sd_ctx->sd->cond_stage_lora_models) {
+        if (lora) {
+            size_t size = lora->get_params_buffer_size();
+            if (size > 0) {
+                if (!lora->move_params_to_cpu()) {
+                    lora->free_params_buffer();
+                }
+                lora_freed += size;
+            }
+        }
+    }
+    for (auto& lora : sd_ctx->sd->diffusion_lora_models) {
+        if (lora) {
+            size_t size = lora->get_params_buffer_size();
+            if (size > 0) {
+                if (!lora->move_params_to_cpu()) {
+                    lora->free_params_buffer();
+                }
+                lora_freed += size;
+            }
+        }
+    }
+    for (auto& lora : sd_ctx->sd->first_stage_lora_models) {
+        if (lora) {
+            size_t size = lora->get_params_buffer_size();
+            if (size > 0) {
+                if (!lora->move_params_to_cpu()) {
+                    lora->free_params_buffer();
+                }
+                lora_freed += size;
+            }
+        }
+    }
+    if (sd_ctx->sd->pmid_lora) {
+        size_t size = sd_ctx->sd->pmid_lora->get_params_buffer_size();
+        if (size > 0) {
+            if (!sd_ctx->sd->pmid_lora->move_params_to_cpu()) {
+                sd_ctx->sd->pmid_lora->free_params_buffer();
+            }
+            lora_freed += size;
+        }
+    }
+    if (lora_freed > 0) {
+        total_freed += lora_freed;
+        LOG_WARN("[Cleanup] LoRAs freed (%.2f MB)", lora_freed / (1024.0f * 1024.0f));
+    }
+
+    // Clear LoRA vectors entirely to trigger destructor cleanup
+    sd_ctx->sd->cond_stage_lora_models.clear();
+    sd_ctx->sd->diffusion_lora_models.clear();
+    sd_ctx->sd->first_stage_lora_models.clear();
+
+    // Synchronize CUDA to ensure all deallocations complete
+#ifdef SD_USE_CUDA
+    cudaDeviceSynchronize();
+#endif
+
+    LOG_WARN("[Cleanup] GPU resources freed, total: %.2f MB", total_freed / (1024.0f * 1024.0f));
 }
