@@ -102,6 +102,11 @@ cmake --build . --config Release
 ## Build with Vulkan
 
 Install Vulkan SDK from https://www.lunarg.com/vulkan-sdk/.
+On Ubuntu, install the Vulkan development packages and SPIR-V headers:
+
+```shell
+sudo apt-get install build-essential libvulkan-dev glslc spirv-headers
+```
 
 ```shell
 mkdir build && cd build
