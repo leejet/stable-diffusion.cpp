@@ -1127,18 +1127,33 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_conv_3d(ggml_context* ctx,
                                                 ggml_tensor* w,
                                                 ggml_tensor* b,
                                                 int64_t IC,
-                                                int s0 = 1,
-                                                int s1 = 1,
-                                                int s2 = 1,
-                                                int p0 = 0,
-                                                int p1 = 0,
-                                                int p2 = 0,
-                                                int d0 = 1,
-                                                int d1 = 1,
-                                                int d2 = 1) {
-    int64_t OC = w->ne[3] / IC;
-    int64_t N  = x->ne[3] / IC;
-    x          = ggml_conv_3d(ctx, w, x, IC, s0, s1, s2, p0, p1, p2, d0, d1, d2);
+                                                int s0              = 1,
+                                                int s1              = 1,
+                                                int s2              = 1,
+                                                int p0              = 0,
+                                                int p1              = 0,
+                                                int p2              = 0,
+                                                int d0              = 1,
+                                                int d1              = 1,
+                                                int d2              = 1,
+                                                bool force_prec_f32 = false) {
+    if (force_prec_f32) {
+        ggml_tensor* im2col = ggml_im2col_3d(ctx, w, x, IC, s0, s1, s2, p0, p1, p2, d0, d1, d2, w->type);
+
+        int64_t OC = w->ne[3] / IC;
+        int64_t N  = x->ne[3] / IC;
+        x          = ggml_mul_mat(ctx,
+                                  ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[3] * im2col->ne[2] * im2col->ne[1]),
+                                  ggml_reshape_2d(ctx, w, w->ne[0] * w->ne[1] * w->ne[2] * IC, OC));
+        ggml_mul_mat_set_prec(x, GGML_PREC_F32);
+
+        int64_t OD = im2col->ne[3] / N;
+        x          = ggml_reshape_4d(ctx, x, im2col->ne[1] * im2col->ne[2], OD, N, OC);
+        x          = ggml_cont(ctx, ggml_permute(ctx, x, 0, 1, 3, 2));
+        x          = ggml_reshape_4d(ctx, x, im2col->ne[1], im2col->ne[2], OD, OC * N);
+    } else {
+        x = ggml_conv_3d(ctx, w, x, IC, s0, s1, s2, p0, p1, p2, d0, d1, d2);
+    }
 
     if (b != nullptr) {
         b = ggml_reshape_4d(ctx, b, 1, 1, 1, b->ne[0]);  // [OC, 1, 1, 1]
@@ -3133,6 +3148,7 @@ protected:
     std::tuple<int, int, int> padding;
     std::tuple<int, int, int> dilation;
     bool bias;
+    bool force_prec_f32;
     std::string prefix;
 
     void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
@@ -3156,14 +3172,16 @@ public:
            std::tuple<int, int, int> stride   = {1, 1, 1},
            std::tuple<int, int, int> padding  = {0, 0, 0},
            std::tuple<int, int, int> dilation = {1, 1, 1},
-           bool bias                          = true)
+           bool bias                          = true,
+           bool force_prec_f32                = false)
         : in_channels(in_channels),
           out_channels(out_channels),
           kernel_size(kernel_size),
           stride(stride),
           padding(padding),
           dilation(dilation),
-          bias(bias) {}
+          bias(bias),
+          force_prec_f32(force_prec_f32) {}
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
         ggml_tensor* w = params["weight"];
@@ -3183,7 +3201,8 @@ public:
         return ggml_ext_conv_3d(ctx->ggml_ctx, x, w, b, in_channels,
                                 std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
                                 std::get<2>(padding), std::get<1>(padding), std::get<0>(padding),
-                                std::get<2>(dilation), std::get<1>(dilation), std::get<0>(dilation));
+                                std::get<2>(dilation), std::get<1>(dilation), std::get<0>(dilation),
+                                force_prec_f32);
     }
 };
 

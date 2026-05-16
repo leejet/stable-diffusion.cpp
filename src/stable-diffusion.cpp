@@ -458,10 +458,6 @@ public:
             // Might need vae encode for control cond
             vae_decode_only = false;
         }
-        if (sd_version_is_ltxav(version)) {
-            vae_decode_only = true;
-        }
-
         bool tae_preview_only = sd_ctx_params->tae_preview_only;
         if (version == VERSION_SDXS_512_DS || version == VERSION_SDXS_09) {
             tae_preview_only = false;
@@ -705,7 +701,7 @@ public:
                                                          params_backend_for(SDBackendModule::VAE),
                                                          tensor_storage_map,
                                                          "first_stage_model",
-                                                         true,
+                                                         vae_decode_only,
                                                          version);
                 } else if (sd_version_is_wan(version) ||
                            sd_version_is_qwen_image(version) ||
@@ -1570,6 +1566,38 @@ public:
         }
     }
 
+    std::vector<float> process_ltxav_video_timesteps(const std::vector<float>& timesteps,
+                                                     const sd::Tensor<float>& init_latent,
+                                                     const sd::Tensor<float>& denoise_mask) {
+        if (timesteps.empty() || denoise_mask.empty() || init_latent.dim() < 4 || denoise_mask.dim() < 4) {
+            return timesteps;
+        }
+
+        int64_t width  = init_latent.shape()[0];
+        int64_t height = init_latent.shape()[1];
+        int64_t frames = init_latent.shape()[2];
+        if (denoise_mask.shape()[0] != width ||
+            denoise_mask.shape()[1] != height ||
+            denoise_mask.shape()[2] != frames ||
+            denoise_mask.shape()[3] < 1) {
+            LOG_WARN("unexpected LTXAV denoise mask shape for timestep processing");
+            return timesteps;
+        }
+
+        std::vector<float> video_timesteps(static_cast<size_t>(width * height * frames));
+        size_t idx = 0;
+        for (int64_t t = 0; t < frames; ++t) {
+            for (int64_t h = 0; h < height; ++h) {
+                for (int64_t w = 0; w < width; ++w) {
+                    float mask             = denoise_mask.dim() == 5 ? denoise_mask.index(w, h, t, 0, 0)
+                                                                     : denoise_mask.index(w, h, t, 0);
+                    video_timesteps[idx++] = mask * timesteps[0];
+                }
+            }
+        }
+        return video_timesteps;
+    }
+
     void preview_image(int step,
                        const sd::Tensor<float>& latents,
                        enum SDVersion version,
@@ -1846,14 +1874,24 @@ public:
             float c_out  = scaling[1];
             float c_in   = scaling[2];
 
-            std::vector<float> timesteps_vec = prepare_sample_timesteps(sigma, shifted_timestep);
-            timesteps_vec                    = process_timesteps(timesteps_vec, init_latent, denoise_mask);
-            adjust_sample_step_scalings(shifted_timestep, timesteps_vec, c_in, &c_skip, &c_out);
+            std::vector<float> base_timesteps_vec = prepare_sample_timesteps(sigma, shifted_timestep);
+            std::vector<float> timesteps_vec      = base_timesteps_vec;
+            sd::Tensor<float> audio_timesteps_tensor;
+            if (sd_version_is_ltxav(version) && !denoise_mask.empty()) {
+                timesteps_vec          = process_ltxav_video_timesteps(base_timesteps_vec, init_latent, denoise_mask);
+                audio_timesteps_tensor = sd::Tensor<float>({static_cast<int64_t>(base_timesteps_vec.size())}, base_timesteps_vec);
+            } else {
+                timesteps_vec = process_timesteps(timesteps_vec, init_latent, denoise_mask);
+            }
+            const std::vector<float>& scaling_timesteps_vec = (sd_version_is_ltxav(version) && !denoise_mask.empty())
+                                                                  ? base_timesteps_vec
+                                                                  : timesteps_vec;
+            adjust_sample_step_scalings(shifted_timestep, scaling_timesteps_vec, c_in, &c_skip, &c_out);
 
             sd::Tensor<float> timesteps_tensor({static_cast<int64_t>(timesteps_vec.size())}, timesteps_vec);
             sd::Tensor<float> guidance_tensor({1}, std::vector<float>{guidance.distilled_guidance});
             sd::Tensor<float> noised_input = x * c_in;
-            if (!denoise_mask.empty() && version == VERSION_WAN2_2_TI2V) {
+            if (!denoise_mask.empty() && (version == VERSION_WAN2_2_TI2V || sd_version_is_ltxav(version))) {
                 noised_input = noised_input * denoise_mask + init_latent * (1.0f - denoise_mask);
             }
 
@@ -1884,6 +1922,7 @@ public:
             DiffusionParams diffusion_params;
             diffusion_params.x                  = &noised_input;
             diffusion_params.timesteps          = &timesteps_tensor;
+            diffusion_params.audio_timesteps    = audio_timesteps_tensor.empty() ? nullptr : &audio_timesteps_tensor;
             diffusion_params.guidance           = &guidance_tensor;
             diffusion_params.ref_latents        = &ref_latents;
             diffusion_params.increase_ref_index = increase_ref_index;
@@ -2916,6 +2955,7 @@ struct GenerationRequest {
         vae_scale_factor            = sd_ctx->sd->get_vae_scale_factor();
         diffusion_model_down_factor = sd_ctx->sd->get_diffusion_model_down_factor();
         seed                        = sd_vid_gen_params->seed;
+        strength                    = sd_vid_gen_params->strength;
         cache_params                = &sd_vid_gen_params->cache;
         vace_strength               = sd_vid_gen_params->vace_strength;
         guidance                    = sd_vid_gen_params->sample_params.guidance;
@@ -3202,6 +3242,55 @@ static sd::Tensor<float> pack_ltxav_audio_and_video_latents(const sd::Tensor<flo
     std::copy_n(video_latent.data(), video_latent.numel(), packed.data());
     std::copy_n(audio_latent.data(), audio_latent.numel(), packed.data() + video_latent.numel());
     return packed;
+}
+
+static sd::Tensor<float> pack_ltxav_audio_and_video_denoise_mask(const sd::Tensor<float>& video_mask,
+                                                                 const sd::Tensor<float>& video_latent,
+                                                                 const sd::Tensor<float>& audio_latent) {
+    if (video_mask.empty() || audio_latent.empty()) {
+        return video_mask;
+    }
+
+    GGML_ASSERT(video_latent.dim() == 4 || video_latent.dim() == 5);
+    GGML_ASSERT(audio_latent.dim() == 3 || audio_latent.dim() == 4);
+    if (video_latent.dim() == 5) {
+        GGML_ASSERT(video_latent.shape()[4] == 1);
+    }
+    if (audio_latent.dim() == 4) {
+        GGML_ASSERT(audio_latent.shape()[3] == 1);
+    }
+
+    int64_t width        = video_latent.shape()[0];
+    int64_t height       = video_latent.shape()[1];
+    int64_t frames       = video_latent.shape()[2];
+    int64_t video_ch     = video_latent.shape()[3];
+    int64_t spatial_size = width * height * frames;
+    int64_t audio_values = audio_latent.numel();
+    int64_t extra_ch     = (audio_values + spatial_size - 1) / spatial_size;
+
+    GGML_ASSERT(video_mask.dim() == video_latent.dim());
+    GGML_ASSERT(video_mask.shape()[0] == width);
+    GGML_ASSERT(video_mask.shape()[1] == height);
+    GGML_ASSERT(video_mask.shape()[2] == frames);
+    if (video_mask.dim() == 5) {
+        GGML_ASSERT(video_mask.shape()[4] == video_latent.shape()[4]);
+    }
+
+    int64_t mask_ch = video_mask.shape()[3];
+    if (mask_ch == video_ch + extra_ch) {
+        return video_mask;
+    }
+    GGML_ASSERT(mask_ch == 1 || mask_ch == video_ch);
+
+    sd::Tensor<float> video_mask_full = video_mask;
+    if (mask_ch == 1 && video_ch != 1) {
+        video_mask_full = video_mask * sd::Tensor<float>::ones(video_latent.shape());
+    }
+
+    std::vector<int64_t> audio_mask_shape = video_latent.shape();
+    audio_mask_shape[3]                   = extra_ch;
+    auto audio_mask                       = sd::Tensor<float>::ones(audio_mask_shape);
+    return sd::ops::concat(video_mask_full, audio_mask, 3);
 }
 
 static sd::Tensor<float> unpack_ltxav_audio_latent(const sd::Tensor<float>& packed_latent,
@@ -4030,9 +4119,46 @@ static std::optional<ImageGenerationLatents> prepare_video_generation_latents(sd
     }
 
     if (sd_version_is_ltxav(sd_ctx->sd->version)) {
-        if (!start_image.empty() || !end_image.empty() || sd_vid_gen_params->control_frames_size > 0) {
-            LOG_ERROR("LTXAV currently supports txt2vid only; init_image, end_image, and control_frames are not implemented");
+        if (!end_image.empty() || sd_vid_gen_params->control_frames_size > 0) {
+            LOG_ERROR("LTXAV currently supports txt2vid and init_image i2v only; end_image and control_frames are not implemented");
             return std::nullopt;
+        }
+
+        if (!start_image.empty()) {
+            if (sd_ctx->sd->vae_decode_only) {
+                LOG_ERROR("LTXAV init_image i2v requires VAE encoder weights; create the context with vae_decode_only=false");
+                return std::nullopt;
+            }
+
+            LOG_INFO("IMG2VID");
+
+            int64_t t1             = ggml_time_ms();
+            auto init_img          = start_image.reshape({start_image.shape()[0],
+                                                          start_image.shape()[1],
+                                                          1,
+                                                          start_image.shape()[2],
+                                                          start_image.shape()[3]});
+            auto init_image_latent = sd_ctx->sd->encode_first_stage(init_img);
+            if (init_image_latent.empty()) {
+                LOG_ERROR("failed to encode LTXAV init image");
+                return std::nullopt;
+            }
+
+            latents.init_latent = sd_ctx->sd->generate_init_latent(request->width, request->height, request->frames, true);
+            sd::ops::slice_assign(&latents.init_latent, 2, 0, init_image_latent.shape()[2], init_image_latent);
+
+            float conditioning_strength = std::clamp(request->strength, 0.f, 1.f);
+            float conditioned_mask      = 1.0f - conditioning_strength;
+            latents.denoise_mask        = sd::full<float>({latents.init_latent.shape()[0],
+                                                           latents.init_latent.shape()[1],
+                                                           latents.init_latent.shape()[2],
+                                                           1,
+                                                           1},
+                                                   1.f);
+            sd::ops::fill_slice(&latents.denoise_mask, 2, 0, init_image_latent.shape()[2], conditioned_mask);
+
+            int64_t t2 = ggml_time_ms();
+            LOG_INFO("encode_first_stage completed, taking %" PRId64 " ms", t2 - t1);
         }
     }
 
@@ -4207,6 +4333,11 @@ static std::optional<ImageGenerationLatents> prepare_video_generation_latents(sd
     }
 
     if (sd_version_is_ltxav(sd_ctx->sd->version) && !latents.audio_latent.empty()) {
+        if (!latents.denoise_mask.empty()) {
+            latents.denoise_mask = pack_ltxav_audio_and_video_denoise_mask(latents.denoise_mask,
+                                                                           latents.init_latent,
+                                                                           latents.audio_latent);
+        }
         latents.init_latent = pack_ltxav_audio_and_video_latents(latents.init_latent, latents.audio_latent);
     }
 

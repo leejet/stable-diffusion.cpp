@@ -89,7 +89,8 @@ namespace LTXVAE {
                      int kernel_size                  = 3,
                      std::tuple<int, int, int> stride = {1, 1, 1},
                      int dilation                     = 1,
-                     bool bias                        = true) {
+                     bool bias                        = true,
+                     bool force_prec_f32              = false) {
             time_kernel_size = kernel_size;
             blocks["conv"]   = std::shared_ptr<GGMLBlock>(new Conv3d(in_channels,
                                                                      out_channels,
@@ -97,7 +98,8 @@ namespace LTXVAE {
                                                                      stride,
                                                                      {0, kernel_size / 2, kernel_size / 2},
                                                                      {dilation, 1, 1},
-                                                                     bias));
+                                                                     bias,
+                                                                     force_prec_f32));
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -469,7 +471,8 @@ namespace LTXVAE {
         SpaceToDepthDownsample(int64_t in_channels,
                                int64_t out_channels,
                                int factor_t,
-                               int factor_s)
+                               int factor_s,
+                               bool force_conv_prec_f32 = false)
             : in_channels(in_channels),
               out_channels(out_channels),
               factor_t(factor_t),
@@ -477,7 +480,13 @@ namespace LTXVAE {
             const int64_t factor = static_cast<int64_t>(factor_t) * static_cast<int64_t>(factor_s) * static_cast<int64_t>(factor_s);
             GGML_ASSERT(out_channels % factor == 0);
 
-            blocks["conv"]            = std::make_shared<CausalConv3d>(in_channels, out_channels / factor, 3);
+            blocks["conv"]            = std::make_shared<CausalConv3d>(in_channels,
+                                                            out_channels / factor,
+                                                            3,
+                                                            std::tuple<int, int, int>{1, 1, 1},
+                                                            1,
+                                                            true,
+                                                            force_conv_prec_f32);
             blocks["skip_downsample"] = std::make_shared<WAN::AvgDown3D>(in_channels, out_channels, factor_t, factor_s);
             blocks["conv_downsample"] = std::make_shared<WAN::AvgDown3D>(out_channels / factor, out_channels, factor_t, factor_s);
         }
@@ -492,7 +501,7 @@ namespace LTXVAE {
             if (factor_t > 1 && x->ne[2] > 0) {
                 auto first_frame     = ggml_ext_slice(ctx->ggml_ctx, x, 2, 0, 1);
                 auto first_frame_pad = first_frame;
-                for (int i = 1; i < factor_t; ++i) {
+                for (int i = 1; i < factor_t - 1; ++i) {
                     first_frame_pad = ggml_concat(ctx->ggml_ctx, first_frame_pad, first_frame, 2);
                 }
                 x = ggml_concat(ctx->ggml_ctx, first_frame_pad, x, 2);
@@ -549,6 +558,8 @@ namespace LTXVAE {
 
         std::vector<Block> blocks;
     };
+
+    static inline EncoderConfig get_default_encoder_config(int version);
 
     static inline bool has_tensor(const String2TensorStorage& tensor_storage_map,
                                   const std::string& name) {
@@ -633,6 +644,84 @@ namespace LTXVAE {
         return cfg;
     }
 
+    static inline EncoderConfig infer_encoder_config_from_weights(const String2TensorStorage& tensor_storage_map,
+                                                                  const std::string& prefix,
+                                                                  int version) {
+        EncoderConfig cfg;
+        const std::string encoder_prefix = prefix + ".encoder.down_blocks.";
+
+        int64_t current_channels = get_tensor_ne0(tensor_storage_map,
+                                                  prefix + ".encoder.conv_in.conv.bias",
+                                                  0);
+        for (int block_idx = 0;; ++block_idx) {
+            const std::string block_prefix = encoder_prefix + std::to_string(block_idx);
+            const std::string res0_bias    = block_prefix + ".res_blocks.0.conv1.conv.bias";
+            const std::string conv_bias    = block_prefix + ".conv.conv.bias";
+
+            if (has_tensor(tensor_storage_map, res0_bias)) {
+                int num_layers = 0;
+                while (has_tensor(tensor_storage_map,
+                                  block_prefix + ".res_blocks." + std::to_string(num_layers) + ".conv1.conv.bias")) {
+                    num_layers++;
+                }
+                cfg.blocks.push_back({"res_x", num_layers, 1});
+                current_channels = get_tensor_ne0(tensor_storage_map, res0_bias, current_channels);
+                continue;
+            }
+
+            if (!has_tensor(tensor_storage_map, conv_bias)) {
+                break;
+            }
+
+            const int64_t conv_channels = get_tensor_ne0(tensor_storage_map, conv_bias);
+            int64_t next_channels       = 0;
+            for (int next_idx = block_idx + 1;; ++next_idx) {
+                const std::string next_res0_bias = encoder_prefix + std::to_string(next_idx) + ".res_blocks.0.conv1.conv.bias";
+                const std::string next_conv_bias = encoder_prefix + std::to_string(next_idx) + ".conv.conv.bias";
+                if (has_tensor(tensor_storage_map, next_res0_bias)) {
+                    next_channels = get_tensor_ne0(tensor_storage_map, next_res0_bias);
+                    break;
+                }
+                if (!has_tensor(tensor_storage_map, next_conv_bias)) {
+                    break;
+                }
+            }
+
+            const int64_t multiplier = current_channels > 0 && next_channels > 0 && next_channels % current_channels == 0
+                                           ? std::max<int64_t>(1, next_channels / current_channels)
+                                           : 1;
+            const int64_t factor     = conv_channels > 0 && next_channels > 0 && next_channels % conv_channels == 0
+                                           ? next_channels / conv_channels
+                                           : 0;
+
+            if (factor == 8) {
+                cfg.blocks.push_back({"compress_all_res", 0, static_cast<int>(multiplier)});
+            } else if (factor == 4) {
+                cfg.blocks.push_back({"compress_space_res", 0, static_cast<int>(multiplier)});
+            } else if (factor == 2) {
+                cfg.blocks.push_back({"compress_time_res", 0, static_cast<int>(multiplier)});
+            } else {
+                LOG_WARN("unexpected LTX VAE encoder downsample factor at '%s': conv_out=%lld current=%lld next=%lld, falling back to compress_all_res x%d",
+                         block_prefix.c_str(),
+                         (long long)conv_channels,
+                         (long long)current_channels,
+                         (long long)next_channels,
+                         (int)multiplier);
+                cfg.blocks.push_back({"compress_all_res", 0, static_cast<int>(multiplier)});
+            }
+            if (next_channels > 0) {
+                current_channels = next_channels;
+            } else if (current_channels > 0) {
+                current_channels *= multiplier;
+            }
+        }
+
+        if (cfg.blocks.empty()) {
+            return get_default_encoder_config(version);
+        }
+        return cfg;
+    }
+
     static inline int detect_ltx_vae_version(const String2TensorStorage& tensor_storage_map,
                                              const std::string& prefix) {
         const std::string v2_probe = prefix + ".encoder.down_blocks.1.conv.conv.bias";
@@ -647,7 +736,7 @@ namespace LTXVAE {
         return tensor_storage_map.find(prefix + ".decoder.timestep_scale_multiplier") != tensor_storage_map.end();
     }
 
-    static inline EncoderConfig get_encoder_config(int version) {
+    static inline EncoderConfig get_default_encoder_config(int version) {
         EncoderConfig cfg;
         if (version < 2) {
             GGML_ABORT("LTX VAE encoder is only implemented for version >= 2");
@@ -674,6 +763,8 @@ namespace LTXVAE {
         int64_t latent_channels;
 
         Encoder(int version,
+                const String2TensorStorage& tensor_storage_map,
+                const std::string& prefix,
                 int patch_size          = 4,
                 int64_t in_channels     = 3,
                 int64_t latent_channels = 128)
@@ -681,9 +772,12 @@ namespace LTXVAE {
               patch_size(patch_size),
               in_channels(in_channels),
               latent_channels(latent_channels) {
-            auto cfg         = get_encoder_config(version);
-            int64_t channels = 128;
-            int64_t in_dim   = in_channels * patch_size * patch_size;
+            auto cfg         = infer_encoder_config_from_weights(tensor_storage_map, prefix, version);
+            int64_t channels = get_tensor_ne0(tensor_storage_map,
+                                              prefix + ".encoder.conv_in.conv.bias",
+                                              0);
+            GGML_ASSERT(channels > 0);
+            int64_t in_dim = in_channels * patch_size * patch_size;
 
             blocks["conv_in"] = std::make_shared<CausalConv3d>(in_dim, channels, 3);
 
@@ -708,11 +802,14 @@ namespace LTXVAE {
                                                                                                                   1);
                     channels                                           = next_channels;
                 } else if (block.type == "compress_all_res") {
-                    int64_t next_channels                              = channels * block.multiplier;
+                    int64_t next_channels = channels * block.multiplier;
+                    // LTX 2.3 encoder down_blocks.7.conv overflows with fp16 accumulation.
+                    bool force_conv_prec_f32                           = block_idx == 7;
                     blocks["down_blocks." + std::to_string(block_idx)] = std::make_shared<SpaceToDepthDownsample>(channels,
                                                                                                                   next_channels,
                                                                                                                   2,
-                                                                                                                  2);
+                                                                                                                  2,
+                                                                                                                  force_conv_prec_f32);
                     channels                                           = next_channels;
                 } else {
                     GGML_ABORT("Unsupported LTX VAE encoder block");
@@ -956,7 +1053,10 @@ namespace LTXVAE {
               patch_size(patch_size),
               decode_only(decode_only) {
             if (!decode_only) {
-                blocks["encoder"] = std::make_shared<Encoder>(version, patch_size);
+                blocks["encoder"] = std::make_shared<Encoder>(version,
+                                                              tensor_storage_map,
+                                                              prefix,
+                                                              patch_size);
             }
             blocks["decoder"]                = std::make_shared<Decoder>(version,
                                                           tensor_storage_map,
@@ -1096,7 +1196,7 @@ struct LTXVideoVAE : public VAE {
                                const sd::Tensor<float>& z,
                                bool decode_graph) override {
         if (!decode_graph && decode_only) {
-            LOG_ERROR("LTX video VAE encoder is not implemented yet");
+            LOG_ERROR("LTX video VAE encode requires encoder weights; create the context with vae_decode_only=false");
             return {};
         }
         sd::Tensor<float> input = z;
