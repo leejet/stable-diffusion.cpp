@@ -413,7 +413,7 @@ ArgOptions SDContextParams::get_options() {
     options.float_options = {
         {"",
          "--max-vram",
-         "maximum VRAM budget in GiB for graph-cut segmented execution. 0 disables graph splitting; -1 auto-detects free VRAM minus 1 GiB",
+         "maximum VRAM budget in GiB for graph-cut segmented execution. 0 disables graph splitting; a negative value auto-detects free VRAM, sparing the specified value (e.g. -0.5 will keep at least 0.5 GiB free)",
          &max_vram},
     };
 
