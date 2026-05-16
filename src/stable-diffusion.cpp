@@ -577,10 +577,10 @@ public:
                                                                    sd_ctx_params->qwen_image_zero_cond_t);
             } else if (version == VERSION_HIDREAM_O1) {
                 cond_stage_model = std::make_shared<HiDreamO1::HiDreamO1Conditioner>(clip_backend,
-                                                                                     offload_params_to_cpu,
+                                                                                     cond_stage_offload_to_cpu,
                                                                                      tensor_storage_map);
                 diffusion_model  = std::make_shared<HiDreamO1Model>(backend,
-                                                                   offload_params_to_cpu,
+                                                                   diffusion_offload_to_cpu,
                                                                    tensor_storage_map,
                                                                    "model");
             } else if (sd_version_is_anima(version)) {
