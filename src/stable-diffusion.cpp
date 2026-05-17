@@ -1606,17 +1606,32 @@ public:
                        void* step_callback_data,
                        bool is_noisy) {
         if (preview_mode == PREVIEW_PROJ) {
+            sd::Tensor<float> _latents       = latents;
             int patch_sz                     = 1;
             const float(*latent_rgb_proj)[3] = nullptr;
             float* latent_rgb_bias           = nullptr;
             bool is_video                    = preview_latent_tensor_is_video(latents);
             uint32_t dim                     = is_video ? static_cast<uint32_t>(latents.shape()[3]) : static_cast<uint32_t>(latents.shape()[2]);
+            if (version == VERSION_LTXAV) {
+                if (is_video) {
+                    _latents = sd::ops::slice(_latents, 3, 0, 128);
+                } else {
+                    _latents = sd::ops::slice(_latents, 2, 0, 128);
+                }
+                dim = 128;
+            }
 
             if (dim == 128) {
                 if (sd_version_uses_flux2_vae(version)) {
                     latent_rgb_proj = flux2_latent_rgb_proj;
                     latent_rgb_bias = flux2_latent_rgb_bias;
                     patch_sz        = 2;
+                } else if (version == VERSION_LTXAV) {
+                    latent_rgb_proj = ltxav_latent_rgb_proj;
+                    latent_rgb_bias = ltxav_latent_rgb_bias;
+                } else {
+                    LOG_WARN("No latent to RGB projection known for this model");
+                    return;
                 }
             } else if (dim == 48) {
                 if (sd_version_is_wan(version)) {
@@ -1656,13 +1671,13 @@ public:
                 return;
             }
 
-            uint32_t frames     = is_video ? static_cast<uint32_t>(latents.shape()[2]) : 1;
-            uint32_t img_width  = static_cast<uint32_t>(latents.shape()[0]) * patch_sz;
-            uint32_t img_height = static_cast<uint32_t>(latents.shape()[1]) * patch_sz;
+            uint32_t frames     = is_video ? static_cast<uint32_t>(_latents.shape()[2]) : 1;
+            uint32_t img_width  = static_cast<uint32_t>(_latents.shape()[0]) * patch_sz;
+            uint32_t img_height = static_cast<uint32_t>(_latents.shape()[1]) * patch_sz;
 
             uint8_t* data = (uint8_t*)malloc(frames * img_width * img_height * 3 * sizeof(uint8_t));
             GGML_ASSERT(data != nullptr);
-            preview_latent_video(data, latents, latent_rgb_proj, latent_rgb_bias, patch_sz);
+            preview_latent_video(data, _latents, latent_rgb_proj, latent_rgb_bias, patch_sz);
             sd_image_t* images = (sd_image_t*)malloc(frames * sizeof(sd_image_t));
             GGML_ASSERT(images != nullptr);
             for (uint32_t i = 0; i < frames; i++) {
