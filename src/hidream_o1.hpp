@@ -279,10 +279,10 @@ namespace HiDreamO1 {
         std::array<std::vector<float>, 4> pos_embed_weight_data_;
 
         HiDreamO1VisionRunner(ggml_backend_t backend,
-                              bool offload_params_to_cpu,
+                              ggml_backend_t params_backend,
                               const String2TensorStorage& tensor_storage_map = {},
                               const std::string& prefix                      = "model.visual")
-            : GGMLRunner(backend, offload_params_to_cpu),
+            : GGMLRunner(backend, params_backend),
               params(make_hidream_o1_params()),
               model(std::make_shared<LLM::VisionModel>(false, params.llm.vision)) {
             model->init(params_ctx, tensor_storage_map, prefix);
@@ -340,10 +340,10 @@ namespace HiDreamO1 {
         std::vector<float> persistent_hidden_fallback;
 
         HiDreamO1Runner(ggml_backend_t backend,
-                        bool offload_params_to_cpu,
+                        ggml_backend_t params_backend,
                         const String2TensorStorage& tensor_storage_map = {},
                         const std::string& prefix                      = "model")
-            : GGMLRunner(backend, offload_params_to_cpu),
+            : GGMLRunner(backend, params_backend),
               params(make_hidream_o1_params()),
               params_prefix(prefix) {
             model = HiDreamO1Model(params);
@@ -706,6 +706,17 @@ namespace HiDreamO1 {
                 }
                 auto vis           = x_embedder->forward(&runner_ctx, vinputs);
                 auto inputs_embeds = ggml_concat(compute_ctx, txt, vis, 1);
+
+                // Match LLM::TextModel::forward_embeds: scale the input at the
+                // start of the layer loop when the arch requests it. HiDream O1
+                // uses Qwen3-VL which has normalize_input=false (default), so
+                // this is a no-op today, but keep it for parity with
+                // forward_embeds in case the param ever changes.
+                if (params.llm.normalize_input) {
+                    inputs_embeds = ggml_ext_scale(compute_ctx, inputs_embeds,
+                                                    std::sqrt(static_cast<float>(params.llm.hidden_size)),
+                                                    true);
+                }
                 ggml_set_name(inputs_embeds, "inputs_embeds_out");
                 inputs_embeds_out = inputs_embeds;
 
@@ -863,9 +874,9 @@ namespace HiDreamO1 {
         std::shared_ptr<HiDreamO1VisionRunner> vision_runner;
 
         HiDreamO1Conditioner(ggml_backend_t backend,
-                             bool offload_params_to_cpu,
+                             ggml_backend_t params_backend,
                              const String2TensorStorage& tensor_storage_map = {})
-            : vision_runner(std::make_shared<HiDreamO1VisionRunner>(backend, offload_params_to_cpu, tensor_storage_map)) {}
+            : vision_runner(std::make_shared<HiDreamO1VisionRunner>(backend, params_backend, tensor_storage_map)) {}
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
             vision_runner->get_param_tensors(tensors);

@@ -1516,12 +1516,12 @@ namespace Flux {
         int resident_single_blocks_ = -1;
 
         FluxRunner(ggml_backend_t backend,
-                   bool offload_params_to_cpu,
+                   ggml_backend_t params_backend,
                    const String2TensorStorage& tensor_storage_map = {},
                    const std::string prefix                       = "",
                    SDVersion version                              = VERSION_FLUX,
                    bool use_mask                                  = false)
-            : GGMLRunner(backend, offload_params_to_cpu), version(version), use_mask(use_mask) {
+            : GGMLRunner(backend, params_backend), version(version), use_mask(use_mask) {
             flux_params.version             = version;
             flux_params.guidance_embed      = false;
             flux_params.depth               = 0;
@@ -1986,7 +1986,7 @@ namespace Flux {
             }
 
             std::shared_ptr<FluxRunner> flux = std::make_shared<FluxRunner>(backend,
-                                                                            false,
+                                                                            backend,
                                                                             tensor_storage_map,
                                                                             "model.diffusion_model",
                                                                             VERSION_FLUX2,

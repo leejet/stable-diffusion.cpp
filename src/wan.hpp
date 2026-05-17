@@ -973,10 +973,10 @@ namespace WAN {
             blocks["conv2"]   = std::shared_ptr<GGMLBlock>(new CausalConv3d(z_dim, z_dim, {1, 1, 1}));
         }
 
-        ggml_tensor* patchify(ggml_context* ctx,
-                              ggml_tensor* x,
-                              int64_t patch_size,
-                              int64_t b = 1) {
+        static ggml_tensor* patchify(ggml_context* ctx,
+                                     ggml_tensor* x,
+                                     int64_t patch_size,
+                                     int64_t b = 1) {
             // x: [b*c, f, h*q, w*r]
             // return: [b*c*r*q, f, h, w]
             if (patch_size == 1) {
@@ -1000,10 +1000,10 @@ namespace WAN {
             return x;
         }
 
-        ggml_tensor* unpatchify(ggml_context* ctx,
-                                ggml_tensor* x,
-                                int64_t patch_size,
-                                int64_t b = 1) {
+        static ggml_tensor* unpatchify(ggml_context* ctx,
+                                       ggml_tensor* x,
+                                       int64_t patch_size,
+                                       int64_t b = 1) {
             // x: [b*c*r*q, f, h, w]
             // return: [b*c, f, h*q, w*r]
             if (patch_size == 1) {
@@ -1127,12 +1127,12 @@ namespace WAN {
         WanVAE ae;
 
         WanVAERunner(ggml_backend_t backend,
-                     bool offload_params_to_cpu,
+                     ggml_backend_t params_backend,
                      const String2TensorStorage& tensor_storage_map = {},
                      const std::string prefix                       = "",
                      bool decode_only                               = false,
                      SDVersion version                              = VERSION_WAN2)
-            : decode_only(decode_only), ae(decode_only, version == VERSION_WAN2_2_TI2V), VAE(version, backend, offload_params_to_cpu) {
+            : decode_only(decode_only), ae(decode_only, version == VERSION_WAN2_2_TI2V), VAE(version, backend, params_backend) {
             ae.init(params_ctx, tensor_storage_map, prefix);
         }
 
@@ -1330,7 +1330,7 @@ namespace WAN {
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
             ggml_backend_t backend            = ggml_backend_cpu_init();
             ggml_type model_data_type         = GGML_TYPE_F16;
-            std::shared_ptr<WanVAERunner> vae = std::make_shared<WanVAERunner>(backend, false, String2TensorStorage{}, "", false, VERSION_WAN2_2_TI2V);
+            std::shared_ptr<WanVAERunner> vae = std::make_shared<WanVAERunner>(backend, backend, String2TensorStorage{}, "", false, VERSION_WAN2_2_TI2V);
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
 
@@ -2144,11 +2144,11 @@ namespace WAN {
         SDVersion version;
 
         WanRunner(ggml_backend_t backend,
-                  bool offload_params_to_cpu,
+                  ggml_backend_t params_backend,
                   const String2TensorStorage& tensor_storage_map = {},
                   const std::string prefix                       = "",
                   SDVersion version                              = VERSION_WAN2)
-            : GGMLRunner(backend, offload_params_to_cpu) {
+            : GGMLRunner(backend, params_backend) {
             wan_params.num_layers = 0;
             for (auto pair : tensor_storage_map) {
                 std::string tensor_name = pair.first;
@@ -2614,7 +2614,7 @@ namespace WAN {
             }
 
             std::shared_ptr<WanRunner> wan = std::make_shared<WanRunner>(backend,
-                                                                         false,
+                                                                         backend,
                                                                          tensor_storage_map,
                                                                          "model.diffusion_model",
                                                                          VERSION_WAN2_2_TI2V);

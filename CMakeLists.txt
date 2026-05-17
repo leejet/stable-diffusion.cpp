@@ -13,7 +13,9 @@ if (MSVC)
     add_compile_definitions(_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING)
     add_compile_options(
         $<$<COMPILE_LANGUAGE:C>:/MP>
+        $<$<COMPILE_LANGUAGE:C>:/utf-8>
         $<$<COMPILE_LANGUAGE:CXX>:/MP>
+        $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
     )
 endif()
 
@@ -68,6 +70,12 @@ option(SD_BUILD_SHARED_LIBS          "sd: build shared libs" OFF)
 option(SD_BUILD_SHARED_GGML_LIB      "sd: build ggml as a separate shared lib" OFF)
 option(SD_USE_SYSTEM_GGML            "sd: use system-installed GGML library" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED true)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED true)
 
 if(SD_CUDA)
     message("-- Use CUDA as backend stable-diffusion")

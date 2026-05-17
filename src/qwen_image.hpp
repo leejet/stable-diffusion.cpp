@@ -579,12 +579,12 @@ namespace Qwen {
         int resident_transformer_blocks_ = -1;
 
         QwenImageRunner(ggml_backend_t backend,
-                        bool offload_params_to_cpu,
+                        ggml_backend_t params_backend,
                         const String2TensorStorage& tensor_storage_map = {},
                         const std::string prefix                       = "",
                         SDVersion version                              = VERSION_QWEN_IMAGE,
                         bool zero_cond_t                               = false)
-            : GGMLRunner(backend, offload_params_to_cpu) {
+            : GGMLRunner(backend, params_backend) {
             qwen_image_params.num_layers  = 0;
             qwen_image_params.zero_cond_t = zero_cond_t;
             for (auto pair : tensor_storage_map) {
@@ -1277,7 +1277,7 @@ namespace Qwen {
             }
 
             std::shared_ptr<QwenImageRunner> qwen_image = std::make_shared<QwenImageRunner>(backend,
-                                                                                            false,
+                                                                                            backend,
                                                                                             tensor_storage_map,
                                                                                             "model.diffusion_model",
                                                                                             VERSION_QWEN_IMAGE);

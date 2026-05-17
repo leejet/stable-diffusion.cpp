@@ -7,6 +7,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -21,6 +22,7 @@
 #include "json.hpp"
 #include "rope.hpp"
 #include "tokenizers/bpe_tokenizer.h"
+#include "tokenizers/gemma_tokenizer.h"
 #include "tokenizers/mistral_tokenizer.h"
 #include "tokenizers/qwen2_tokenizer.h"
 
@@ -33,6 +35,7 @@ namespace LLM {
         QWEN3_VL,
         MISTRAL_SMALL_3_2,
         MINISTRAL_3_3B,
+        GEMMA3_12B,
         ARCH_COUNT,
     };
 
@@ -42,6 +45,12 @@ namespace LLM {
         "qwen3vl",
         "mistral_small3.2",
         "ministral3.3b",
+        "gemma3_12b",
+    };
+
+    enum class MLPActivation {
+        SILU,
+        GELU_TANH,
     };
 
     enum class LLMVisionArch {
@@ -66,23 +75,71 @@ namespace LLM {
     };
 
     struct LLMParams {
-        LLMArch arch              = LLMArch::QWEN2_5_VL;
-        int64_t num_layers        = 28;
-        int64_t hidden_size       = 3584;
-        int64_t intermediate_size = 18944;
-        int num_heads             = 28;
-        int num_kv_heads          = 4;
-        int head_dim              = 128;
-        bool qkv_bias             = true;
-        bool qk_norm              = false;
-        int64_t vocab_size        = 152064;
-        float rms_norm_eps        = 1e-06f;
+        LLMArch arch                    = LLMArch::QWEN2_5_VL;
+        int64_t num_layers              = 28;
+        int64_t hidden_size             = 3584;
+        int64_t intermediate_size       = 18944;
+        int num_heads                   = 28;
+        int num_kv_heads                = 4;
+        int head_dim                    = 128;
+        bool qkv_bias                   = true;
+        bool qk_norm                    = false;
+        bool rms_norm_add               = false;
+        bool normalize_input            = false;
+        int64_t vocab_size              = 152064;
+        int64_t max_position_embeddings = 128000;
+        float rms_norm_eps              = 1e-06f;
+        MLPActivation mlp_activation    = MLPActivation::SILU;
+        std::vector<float> rope_thetas  = {1000000.f};
+        std::vector<float> rope_scales  = {1.f};
+        std::vector<int> sliding_attention;
         LLMVisionParams vision;
     };
 
-    struct MLP : public GGMLBlock {
+    struct LLMRMSNorm : public UnaryBlock {
+    protected:
+        int64_t hidden_size;
+        float eps;
+        bool add_unit_offset;
+        std::string prefix;
+
+        void init_params(ggml_context* ctx,
+                         const String2TensorStorage& tensor_storage_map = {},
+                         std::string prefix                             = "") override {
+            this->prefix     = prefix;
+            params["weight"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden_size);
+        }
+
     public:
-        MLP(int64_t hidden_size, int64_t intermediate_size, bool bias = false) {
+        LLMRMSNorm(int64_t hidden_size,
+                   float eps            = 1e-06f,
+                   bool add_unit_offset = false)
+            : hidden_size(hidden_size), eps(eps), add_unit_offset(add_unit_offset) {}
+
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+            ggml_tensor* w = params["weight"];
+            if (ctx->weight_adapter) {
+                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
+            }
+            x           = ggml_rms_norm(ctx->ggml_ctx, x, eps);
+            auto scaled = ggml_mul(ctx->ggml_ctx, x, w);
+            if (add_unit_offset) {
+                scaled = ggml_add_inplace(ctx->ggml_ctx, scaled, x);
+            }
+            return scaled;
+        }
+    };
+
+    struct MLP : public GGMLBlock {
+    protected:
+        MLPActivation activation;
+
+    public:
+        MLP(int64_t hidden_size,
+            int64_t intermediate_size,
+            bool bias                 = false,
+            MLPActivation activation_ = MLPActivation::SILU)
+            : activation(activation_) {
             blocks["gate_proj"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, intermediate_size, bias));
             blocks["up_proj"]   = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, intermediate_size, bias));
             blocks["down_proj"] = std::shared_ptr<GGMLBlock>(new Linear(intermediate_size, hidden_size, bias));
@@ -95,9 +152,13 @@ namespace LLM {
             auto down_proj = std::dynamic_pointer_cast<Linear>(blocks["down_proj"]);
 
             auto h = gate_proj->forward(ctx, x);
-            h      = ggml_silu_inplace(ctx->ggml_ctx, h);
-            h      = ggml_mul_inplace(ctx->ggml_ctx, h, up_proj->forward(ctx, x));
-            h      = down_proj->forward(ctx, h);
+            if (activation == MLPActivation::GELU_TANH) {
+                h = ggml_ext_gelu(ctx->ggml_ctx, h, true);
+            } else {
+                h = ggml_silu_inplace(ctx->ggml_ctx, h);
+            }
+            h = ggml_mul_inplace(ctx->ggml_ctx, h, up_proj->forward(ctx, x));
+            h = down_proj->forward(ctx, h);
             return h;
         }
     };
@@ -537,24 +598,35 @@ namespace LLM {
         int64_t num_heads;
         int64_t num_kv_heads;
         bool qk_norm;
+        int64_t max_position_embeddings;
+        std::vector<float> rope_thetas;
+        std::vector<float> rope_scales;
 
     public:
         Attention(const LLMParams& params)
-            : arch(params.arch), num_heads(params.num_heads), num_kv_heads(params.num_kv_heads), head_dim(params.head_dim), qk_norm(params.qk_norm) {
+            : arch(params.arch),
+              num_heads(params.num_heads),
+              num_kv_heads(params.num_kv_heads),
+              head_dim(params.head_dim),
+              qk_norm(params.qk_norm),
+              max_position_embeddings(params.max_position_embeddings),
+              rope_thetas(params.rope_thetas),
+              rope_scales(params.rope_scales) {
             blocks["q_proj"] = std::make_shared<Linear>(params.hidden_size, num_heads * head_dim, params.qkv_bias);
             blocks["k_proj"] = std::make_shared<Linear>(params.hidden_size, num_kv_heads * head_dim, params.qkv_bias);
             blocks["v_proj"] = std::make_shared<Linear>(params.hidden_size, num_kv_heads * head_dim, params.qkv_bias);
             blocks["o_proj"] = std::make_shared<Linear>(num_heads * head_dim, params.hidden_size, false);
             if (params.qk_norm) {
-                blocks["q_norm"] = std::make_shared<RMSNorm>(head_dim, params.rms_norm_eps);
-                blocks["k_norm"] = std::make_shared<RMSNorm>(head_dim, params.rms_norm_eps);
+                blocks["q_norm"] = std::make_shared<LLMRMSNorm>(head_dim, params.rms_norm_eps, params.rms_norm_add);
+                blocks["k_norm"] = std::make_shared<LLMRMSNorm>(head_dim, params.rms_norm_eps, params.rms_norm_add);
             }
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* x,
                              ggml_tensor* input_pos,
-                             ggml_tensor* attention_mask = nullptr) {
+                             ggml_tensor* attention_mask = nullptr,
+                             int rope_index              = 0) {
             // x: [N, n_token, hidden_size]
             int64_t n_token = x->ne[1];
             int64_t N       = x->ne[2];
@@ -572,8 +644,8 @@ namespace LLM {
             v = ggml_reshape_4d(ctx->ggml_ctx, v, head_dim, num_kv_heads, n_token, N);  // [N, n_token, num_kv_heads, head_dim]
 
             if (qk_norm) {
-                auto q_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["q_norm"]);
-                auto k_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["k_norm"]);
+                auto q_norm = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["q_norm"]);
+                auto k_norm = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["k_norm"]);
 
                 q = q_norm->forward(ctx, q);
                 k = k_norm->forward(ctx, k);
@@ -588,6 +660,36 @@ namespace LLM {
             } else if (arch == LLMArch::QWEN3) {
                 q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
                 k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+            } else if (arch == LLMArch::GEMMA3_12B) {
+                float rope_theta = (rope_index == 1 ? 10000.0f : 1000000.0f);
+                float rope_scale = (rope_index == 1 ? 1.f : 8.f);
+                float freq_scale = 1.f / rope_scale;
+                q                = ggml_rope_ext(ctx->ggml_ctx,
+                                                 q,
+                                                 input_pos,
+                                                 nullptr,
+                                                 head_dim,
+                                                 GGML_ROPE_TYPE_NORMAL,
+                                                 0,
+                                                 rope_theta,
+                                                 freq_scale,
+                                                 0.f,
+                                                 1.f,
+                                                 32.f,
+                                                 1.f);
+                k                = ggml_rope_ext(ctx->ggml_ctx,
+                                                 k,
+                                                 input_pos,
+                                                 nullptr,
+                                                 head_dim,
+                                                 GGML_ROPE_TYPE_NORMAL,
+                                                 0,
+                                                 rope_theta,
+                                                 freq_scale,
+                                                 0.f,
+                                                 1.f,
+                                                 32.f,
+                                                 1.f);
             } else if (arch == LLMArch::QWEN3_VL) {
                 int sections[4] = {24, 20, 20, 0};
                 q               = ggml_rope_multi(ctx->ggml_ctx, q, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_IMROPE, 262144, 5000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
@@ -612,33 +714,76 @@ namespace LLM {
     };
 
     struct TransformerBlock : public GGMLBlock {
+    protected:
+        LLMArch arch;
+        int sliding_attention;
+        bool has_post_attention_norm;
+        bool has_post_ffw_norm;
+
     public:
-        TransformerBlock(const LLMParams& params) {
+        TransformerBlock(const LLMParams& params, int layer_index)
+            : arch(params.arch),
+              sliding_attention(0),
+              has_post_attention_norm(params.arch == LLMArch::GEMMA3_12B),
+              has_post_ffw_norm(params.arch == LLMArch::GEMMA3_12B) {
             blocks["self_attn"]                = std::make_shared<Attention>(params);
-            blocks["mlp"]                      = std::make_shared<MLP>(params.hidden_size, params.intermediate_size);
-            blocks["input_layernorm"]          = std::make_shared<RMSNorm>(params.hidden_size, params.rms_norm_eps);
-            blocks["post_attention_layernorm"] = std::make_shared<RMSNorm>(params.hidden_size, params.rms_norm_eps);
+            blocks["mlp"]                      = std::make_shared<MLP>(params.hidden_size,
+                                                  params.intermediate_size,
+                                                  false,
+                                                  params.mlp_activation);
+            blocks["input_layernorm"]          = std::make_shared<LLMRMSNorm>(params.hidden_size, params.rms_norm_eps, params.rms_norm_add);
+            blocks["post_attention_layernorm"] = std::make_shared<LLMRMSNorm>(params.hidden_size, params.rms_norm_eps, params.rms_norm_add);
+            if (has_post_attention_norm) {
+                blocks["post_attention_norm"] = std::make_shared<LLMRMSNorm>(params.hidden_size, params.rms_norm_eps, params.rms_norm_add);
+            }
+            if (has_post_ffw_norm) {
+                blocks["post_ffw_norm"] = std::make_shared<LLMRMSNorm>(params.hidden_size, params.rms_norm_eps, params.rms_norm_add);
+            }
+            if (!params.sliding_attention.empty()) {
+                sliding_attention = params.sliding_attention[layer_index % params.sliding_attention.size()];
+            }
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* x,
                              ggml_tensor* input_pos,
-                             ggml_tensor* attention_mask = nullptr) {
+                             ggml_tensor* attention_mask         = nullptr,
+                             ggml_tensor* sliding_attention_mask = nullptr) {
             // x: [N, n_token, hidden_size]
-            auto self_attn                = std::dynamic_pointer_cast<Attention>(blocks["self_attn"]);
-            auto mlp                      = std::dynamic_pointer_cast<MLP>(blocks["mlp"]);
-            auto input_layernorm          = std::dynamic_pointer_cast<RMSNorm>(blocks["input_layernorm"]);
-            auto post_attention_layernorm = std::dynamic_pointer_cast<RMSNorm>(blocks["post_attention_layernorm"]);
+            auto self_attn                                  = std::dynamic_pointer_cast<Attention>(blocks["self_attn"]);
+            auto mlp                                        = std::dynamic_pointer_cast<MLP>(blocks["mlp"]);
+            auto input_layernorm                            = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["input_layernorm"]);
+            auto post_attention_layernorm                   = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["post_attention_layernorm"]);
+            std::shared_ptr<LLMRMSNorm> post_attention_norm = nullptr;
+            std::shared_ptr<LLMRMSNorm> post_ffw_norm       = nullptr;
+            if (has_post_attention_norm) {
+                post_attention_norm = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["post_attention_norm"]);
+            }
+            if (has_post_ffw_norm) {
+                post_ffw_norm = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["post_ffw_norm"]);
+            }
+            ggml_tensor* block_attention_mask = attention_mask;
+            int rope_index                    = 0;
+            if (arch == LLMArch::GEMMA3_12B && sliding_attention > 0) {
+                block_attention_mask = sliding_attention_mask;
+                rope_index           = 1;
+            }
 
             auto residual = x;
             x             = input_layernorm->forward(ctx, x);
-            x             = self_attn->forward(ctx, x, input_pos, attention_mask);
-            x             = ggml_add_inplace(ctx->ggml_ctx, x, residual);
+            x             = self_attn->forward(ctx, x, input_pos, block_attention_mask, rope_index);
+            if (post_attention_norm != nullptr) {
+                x = post_attention_norm->forward(ctx, x);
+            }
+            x = ggml_add_inplace(ctx->ggml_ctx, x, residual);
 
             residual = x;
             x        = post_attention_layernorm->forward(ctx, x);
             x        = mlp->forward(ctx, x);
-            x        = ggml_add_inplace(ctx->ggml_ctx, x, residual);
+            if (post_ffw_norm != nullptr) {
+                x = post_ffw_norm->forward(ctx, x);
+            }
+            x = ggml_add_inplace(ctx->ggml_ctx, x, residual);
 
             return x;
         }
@@ -654,9 +799,9 @@ namespace LLM {
             : num_layers(params.num_layers), params(params) {
             blocks["embed_tokens"] = std::shared_ptr<GGMLBlock>(new Embedding(params.vocab_size, params.hidden_size));
             for (int i = 0; i < num_layers; i++) {
-                blocks["layers." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new TransformerBlock(params));
+                blocks["layers." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new TransformerBlock(params, i));
             }
-            blocks["norm"] = std::shared_ptr<GGMLBlock>(new RMSNorm(params.hidden_size, params.rms_norm_eps));
+            blocks["norm"] = std::shared_ptr<GGMLBlock>(new LLMRMSNorm(params.hidden_size, params.rms_norm_eps, params.rms_norm_add));
         }
 
         ggml_tensor* embed(GGMLRunnerContext* ctx,
@@ -689,9 +834,11 @@ namespace LLM {
 
         // Final RMSNorm applied after the last transformer block. Streaming
         // runners that bypass forward_embeds still need this in their output
-        // stage.
+        // stage. The block was registered as LLMRMSNorm in TextModel's
+        // constructor, so cast to that exact type (a plain RMSNorm cast
+        // returns nullptr and crashes).
         ggml_tensor* forward_final_norm(GGMLRunnerContext* ctx, ggml_tensor* x) {
-            auto norm = std::dynamic_pointer_cast<RMSNorm>(blocks["norm"]);
+            auto norm = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["norm"]);
             return norm->forward(ctx, x);
         }
 
@@ -699,46 +846,78 @@ namespace LLM {
                                     ggml_tensor* x,
                                     ggml_tensor* input_pos,
                                     ggml_tensor* attention_mask,
-                                    std::set<int> out_layers) {
-            auto norm = std::dynamic_pointer_cast<RMSNorm>(blocks["norm"]);
+                                    std::set<int> out_layers,
+                                    ggml_tensor* sliding_attention_mask = nullptr,
+                                    bool return_all_hidden_states       = false) {
+            auto norm = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["norm"]);
             std::vector<ggml_tensor*> intermediate_outputs;
+
+            if (params.normalize_input) {
+                x = ggml_ext_scale(ctx->ggml_ctx, x, std::sqrt(static_cast<float>(params.hidden_size)), true);
+            }
+            if (return_all_hidden_states) {
+                intermediate_outputs.push_back(x);
+            }
 
             sd::ggml_graph_cut::mark_graph_cut(x, "llm.text.prelude", "x");
             for (int i = 0; i < num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<TransformerBlock>(blocks["layers." + std::to_string(i)]);
 
-                x = block->forward(ctx, x, input_pos, attention_mask);
-                if (out_layers.size() > 1) {
+                x = block->forward(ctx, x, input_pos, attention_mask, sliding_attention_mask);
+                if (return_all_hidden_states || out_layers.size() > 1) {
                     x = ggml_cont(ctx->ggml_ctx, x);
                 }
                 sd::ggml_graph_cut::mark_graph_cut(x, "llm.text.layers." + std::to_string(i), "x");
-                if (out_layers.find(i + 1) != out_layers.end()) {
+                if (return_all_hidden_states) {
+                    if (i + 1 < num_layers) {
+                        intermediate_outputs.push_back(x);
+                    }
+                } else if (out_layers.find(i + 1) != out_layers.end()) {
                     intermediate_outputs.push_back(x);
                 }
             }
 
-            if (!intermediate_outputs.empty()) {
+            auto normed_x = norm->forward(ctx, x);
+            if (return_all_hidden_states) {
+                intermediate_outputs.push_back(normed_x);
                 x = intermediate_outputs[0];
                 for (int i = 1; i < intermediate_outputs.size(); i++) {
                     x = ggml_concat(ctx->ggml_ctx, x, intermediate_outputs[i], 0);
                 }
-                return x;
+            } else if (!intermediate_outputs.empty()) {
+                if (out_layers.find(static_cast<int>(num_layers + 1)) != out_layers.end()) {
+                    intermediate_outputs.push_back(normed_x);
+                }
+                x = intermediate_outputs[0];
+                for (int i = 1; i < intermediate_outputs.size(); i++) {
+                    x = ggml_concat(ctx->ggml_ctx, x, intermediate_outputs[i], 0);
+                }
+            } else {
+                x = normed_x;
             }
 
-            return norm->forward(ctx, x);
+            return x;
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* input_ids,
                              ggml_tensor* input_pos,
                              ggml_tensor* attention_mask,
+                             ggml_tensor* sliding_attention_mask,
                              std::vector<std::pair<int, ggml_tensor*>> image_embeds,
-                             std::set<int> out_layers) {
+                             std::set<int> out_layers,
+                             bool return_all_hidden_states = false) {
             // input_ids: [N, n_token]
             // return: [N, n_token, hidden_size]
             auto x = embed(ctx, input_ids);
             x      = splice_image_embeds(ctx, x, image_embeds);
-            return forward_embeds(ctx, x, input_pos, attention_mask, std::move(out_layers));
+            return forward_embeds(ctx,
+                                  x,
+                                  input_pos,
+                                  attention_mask,
+                                  std::move(out_layers),
+                                  sliding_attention_mask,
+                                  return_all_hidden_states);
         }
     };
 
@@ -760,12 +939,21 @@ namespace LLM {
                              ggml_tensor* input_ids,
                              ggml_tensor* input_pos,
                              ggml_tensor* attention_mask,
+                             ggml_tensor* sliding_attention_mask,
                              std::vector<std::pair<int, ggml_tensor*>> image_embeds,
-                             std::set<int> out_layers) {
+                             std::set<int> out_layers,
+                             bool return_all_hidden_states = false) {
             // input_ids: [N, n_token]
             auto model = std::dynamic_pointer_cast<TextModel>(blocks["model"]);
 
-            auto x = model->forward(ctx, input_ids, input_pos, attention_mask, image_embeds, out_layers);
+            auto x = model->forward(ctx,
+                                    input_ids,
+                                    input_pos,
+                                    attention_mask,
+                                    sliding_attention_mask,
+                                    image_embeds,
+                                    out_layers,
+                                    return_all_hidden_states);
             return x;
         }
 
@@ -793,6 +981,7 @@ namespace LLM {
 
         std::vector<int> input_pos_vec;
         std::vector<float> attention_mask_vec;
+        std::vector<float> sliding_attention_mask_vec;
         std::vector<float> window_mask_vec;
         std::vector<int> window_index_vec;
         std::vector<int> window_inverse_index_vec;
@@ -1008,11 +1197,11 @@ namespace LLM {
     public:
         LLMRunner(LLMArch arch,
                   ggml_backend_t backend,
-                  bool offload_params_to_cpu,
+                  ggml_backend_t params_backend,
                   const String2TensorStorage& tensor_storage_map,
                   const std::string prefix,
                   bool enable_vision_ = false)
-            : GGMLRunner(backend, offload_params_to_cpu), enable_vision(enable_vision_) {
+            : GGMLRunner(backend, params_backend), enable_vision(enable_vision_) {
             params.arch = arch;
             if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
                 params.head_dim     = 128;
@@ -1027,6 +1216,23 @@ namespace LLM {
                 params.qkv_bias     = false;
                 params.qk_norm      = true;
                 params.rms_norm_eps = 1e-6f;
+            } else if (arch == LLMArch::GEMMA3_12B) {
+                params.head_dim     = 256;
+                params.num_heads    = 16;
+                params.num_kv_heads = 8;
+                params.qkv_bias     = false;
+                params.qk_norm      = true;
+                params.rms_norm_eps = 1e-6f;
+                // llama.cpp adds +1 to Gemma3 norm.weight when exporting GGUF, so GGUF loading
+                // must keep rms_norm_add disabled here or the offset gets applied twice.
+                // Convenient for the converter, less convenient for whoever gets to debug it later.
+                params.rms_norm_add            = false;
+                params.normalize_input         = true;
+                params.max_position_embeddings = 131072;
+                params.mlp_activation          = MLPActivation::GELU_TANH;
+                params.rope_thetas             = {1000000.f, 10000.f};
+                params.rope_scales             = {8.f, 1.f};
+                params.sliding_attention       = {1024, 1024, 1024, 1024, 1024, 0};
             }
             bool have_vision_weight = false;
             bool llama_cpp_style    = false;
@@ -1096,9 +1302,18 @@ namespace LLM {
                              ggml_tensor* input_ids,
                              ggml_tensor* input_pos,
                              ggml_tensor* attention_mask,
+                             ggml_tensor* sliding_attention_mask,
                              std::vector<std::pair<int, ggml_tensor*>> image_embeds,
-                             std::set<int> out_layers) {
-            auto hidden_states = model.forward(ctx, input_ids, input_pos, attention_mask, image_embeds, out_layers);  // [N, n_token, hidden_size]
+                             std::set<int> out_layers,
+                             bool return_all_hidden_states = false) {
+            auto hidden_states = model.forward(ctx,
+                                               input_ids,
+                                               input_pos,
+                                               attention_mask,
+                                               sliding_attention_mask,
+                                               image_embeds,
+                                               out_layers,
+                                               return_all_hidden_states);  // [N, n_token, hidden_size]
             return hidden_states;
         }
 
@@ -1116,8 +1331,9 @@ namespace LLM {
         ggml_cgraph* build_graph(const sd::Tensor<int32_t>& input_ids_tensor,
                                  const sd::Tensor<float>& attention_mask_tensor,
                                  const std::vector<std::pair<int, sd::Tensor<float>>>& image_embeds_tensor,
-                                 std::set<int> out_layers) {
-            ggml_cgraph* gf        = ggml_new_graph(compute_ctx);
+                                 std::set<int> out_layers,
+                                 bool return_all_hidden_states = false) {
+            ggml_cgraph* gf        = new_graph_custom(LLM_GRAPH_SIZE);
             ggml_tensor* input_ids = make_input(input_ids_tensor);
             std::vector<std::pair<int, ggml_tensor*>> image_embeds;
             image_embeds.reserve(image_embeds_tensor.size());
@@ -1127,7 +1343,10 @@ namespace LLM {
             }
 
             int64_t n_tokens = input_ids->ne[0];
-            if (params.arch == LLMArch::MISTRAL_SMALL_3_2 || params.arch == LLMArch::MINISTRAL_3_3B || params.arch == LLMArch::QWEN3) {
+            if (params.arch == LLMArch::MISTRAL_SMALL_3_2 ||
+                params.arch == LLMArch::MINISTRAL_3_3B ||
+                params.arch == LLMArch::QWEN3 ||
+                params.arch == LLMArch::GEMMA3_12B) {
                 input_pos_vec.resize(n_tokens);
                 for (int i = 0; i < n_tokens; ++i) {
                     input_pos_vec[i] = i;
@@ -1147,7 +1366,8 @@ namespace LLM {
                                                 input_pos_vec.size());
             set_backend_tensor_data(input_pos, input_pos_vec.data());
 
-            ggml_tensor* attention_mask = nullptr;
+            ggml_tensor* attention_mask         = nullptr;
+            ggml_tensor* sliding_attention_mask = nullptr;
             if (!attention_mask_tensor.empty()) {
                 attention_mask = make_input(attention_mask_tensor);
             } else {
@@ -1165,9 +1385,36 @@ namespace LLM {
                 set_backend_tensor_data(attention_mask, attention_mask_vec.data());
             }
 
+            if (params.arch == LLMArch::GEMMA3_12B) {
+                sliding_attention_mask_vec.resize(n_tokens * n_tokens);
+                if (!attention_mask_tensor.empty()) {
+                    GGML_ASSERT(attention_mask_tensor.numel() == n_tokens * n_tokens);
+                    sliding_attention_mask_vec = attention_mask_tensor.values();
+                } else {
+                    sliding_attention_mask_vec = attention_mask_vec;
+                }
+                for (int i0 = 0; i0 < n_tokens; i0++) {
+                    for (int i1 = 0; i1 < n_tokens; i1++) {
+                        if (i0 + 1024 <= i1) {
+                            LOG_DEBUG("xxxxxxxxxxxxxx");
+                            sliding_attention_mask_vec[i1 * n_tokens + i0] = -INFINITY;
+                        }
+                    }
+                }
+                sliding_attention_mask = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, n_tokens, n_tokens);
+                set_backend_tensor_data(sliding_attention_mask, sliding_attention_mask_vec.data());
+            }
+
             auto runner_ctx = get_context();
 
-            ggml_tensor* hidden_states = forward(&runner_ctx, input_ids, input_pos, attention_mask, image_embeds, out_layers);
+            ggml_tensor* hidden_states = forward(&runner_ctx,
+                                                 input_ids,
+                                                 input_pos,
+                                                 attention_mask,
+                                                 sliding_attention_mask,
+                                                 image_embeds,
+                                                 out_layers,
+                                                 return_all_hidden_states);
 
             ggml_build_forward_expand(gf, hidden_states);
 
@@ -1178,9 +1425,14 @@ namespace LLM {
                                   const sd::Tensor<int32_t>& input_ids,
                                   const sd::Tensor<float>& attention_mask,
                                   const std::vector<std::pair<int, sd::Tensor<float>>>& image_embeds,
-                                  std::set<int> out_layers) {
+                                  std::set<int> out_layers,
+                                  bool return_all_hidden_states = false) {
             auto get_graph = [&]() -> ggml_cgraph* {
-                return build_graph(input_ids, attention_mask, image_embeds, out_layers);
+                return build_graph(input_ids,
+                                   attention_mask,
+                                   image_embeds,
+                                   out_layers,
+                                   return_all_hidden_states);
             };
             return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, true));
         }
@@ -1256,11 +1508,11 @@ namespace LLM {
 
         LLMEmbedder(LLMArch arch,
                     ggml_backend_t backend,
-                    bool offload_params_to_cpu,
+                    ggml_backend_t params_backend,
                     const String2TensorStorage& tensor_storage_map = {},
                     const std::string prefix                       = "",
                     bool enable_vision                             = false)
-            : model(arch, backend, offload_params_to_cpu, tensor_storage_map, prefix, enable_vision) {
+            : model(arch, backend, params_backend, tensor_storage_map, prefix, enable_vision) {
             if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
                 tokenizer = std::make_shared<MistralTokenizer>();
             } else {
@@ -1510,7 +1762,7 @@ namespace LLM {
 
             std::shared_ptr<LLMEmbedder> llm = std::make_shared<LLMEmbedder>(arch,
                                                                              backend,
-                                                                             true,
+                                                                             backend,
                                                                              tensor_storage_map,
                                                                              "text_encoders.llm",
                                                                              true);

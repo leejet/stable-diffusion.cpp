@@ -341,9 +341,17 @@ ArgOptions SDContextParams::get_options() {
          "path to the standalone high noise diffusion model",
          &high_noise_diffusion_model_path},
         {"",
+         "--embeddings-connectors",
+         "path to LTXAV embeddings connectors",
+         &embeddings_connectors_path},
+        {"",
          "--vae",
          "path to standalone vae model",
          &vae_path},
+        {"",
+         "--audio-vae",
+         "path to standalone LTX audio vae model",
+         &audio_vae_path},
         {"",
          "--taesd",
          "path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)",
@@ -380,6 +388,14 @@ ArgOptions SDContextParams::get_options() {
          "--upscale-model",
          "path to esrgan model.",
          &esrgan_path},
+        {"",
+         "--backend",
+         "runtime backend assignment, e.g. cpu or clip=cpu,vae=cuda0,diffusion=vulkan0",
+         &backend},
+        {"",
+         "--params-backend",
+         "parameter backend assignment, e.g. cpu or diffusion=cpu,clip=cpu",
+         &params_backend},
     };
 
     options.int_options = {
@@ -397,7 +413,7 @@ ArgOptions SDContextParams::get_options() {
     options.float_options = {
         {"",
          "--max-vram",
-         "maximum VRAM budget in GiB for graph-cut segmented execution. 0 disables graph splitting",
+         "maximum VRAM budget in GiB for graph-cut segmented execution. 0 disables graph splitting; -1 auto-detects free VRAM minus 1 GiB",
          &max_vram},
     };
 
@@ -751,7 +767,9 @@ std::string SDContextParams::to_string() const {
         << "  llm_vision_path: \"" << llm_vision_path << "\",\n"
         << "  diffusion_model_path: \"" << diffusion_model_path << "\",\n"
         << "  high_noise_diffusion_model_path: \"" << high_noise_diffusion_model_path << "\",\n"
+        << "  embeddings_connectors_path: \"" << embeddings_connectors_path << "\",\n"
         << "  vae_path: \"" << vae_path << "\",\n"
+        << "  audio_vae_path: \"" << audio_vae_path << "\",\n"
         << "  taesd_path: \"" << taesd_path << "\",\n"
         << "  esrgan_path: \"" << esrgan_path << "\",\n"
         << "  control_net_path: \"" << control_net_path << "\",\n"
@@ -766,6 +784,8 @@ std::string SDContextParams::to_string() const {
         << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
         << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
         << "  max_vram: " << max_vram << ",\n"
+        << "  backend: \"" << backend << "\",\n"
+        << "  params_backend: \"" << params_backend << "\",\n"
         << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
         << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
         << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
@@ -815,7 +835,9 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         llm_vision_path.c_str(),
         diffusion_model_path.c_str(),
         high_noise_diffusion_model_path.c_str(),
+        embeddings_connectors_path.c_str(),
         vae_path.c_str(),
+        audio_vae_path.c_str(),
         taesd_path.c_str(),
         control_net_path.c_str(),
         embedding_vec.data(),
@@ -849,6 +871,8 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         qwen_image_zero_cond_t,
         max_vram,
         offload_config,
+        backend.c_str(),
+        params_backend.c_str(),
     };
     return sd_ctx_params;
 }
@@ -907,7 +931,7 @@ ArgOptions SDGenerationParams::get_options() {
          &hires_upscaler},
         {"",
          "--extra-sample-args",
-         "extra sampler args, key=value list. Currently lcm supports noise_clip_std, noise_scale_start, noise_scale_end",
+         "extra sampler/scheduler args, key=value list. lcm supports noise_clip_std, noise_scale_start, noise_scale_end; ltx2 supports max_shift, base_shift, stretch, terminal",
          &extra_sample_args},
     };
 
@@ -1092,6 +1116,11 @@ ArgOptions SDGenerationParams::get_options() {
          "process vae in tiles to reduce memory usage",
          true,
          &vae_tiling_params.enabled},
+        {"",
+         "--temporal-tiling",
+         "enable temporal tiling for LTX video VAE decode",
+         true,
+         &vae_tiling_params.temporal_tiling},
         {"",
          "--hires",
          "enable highres fix",
@@ -1356,7 +1385,7 @@ ArgOptions SDGenerationParams::get_options() {
          on_high_noise_sample_method_arg},
         {"",
          "--scheduler",
-         "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm, bong_tangent], default: discrete",
+         "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm, bong_tangent, ltx2], default: model-specific",
          on_scheduler_arg},
         {"",
          "--sigmas",
@@ -1788,6 +1817,9 @@ bool SDGenerationParams::from_json_str(
         const json& tiling_json = j["vae_tiling_params"];
         if (tiling_json.contains("enabled") && tiling_json["enabled"].is_boolean()) {
             vae_tiling_params.enabled = tiling_json["enabled"];
+        }
+        if (tiling_json.contains("temporal_tiling") && tiling_json["temporal_tiling"].is_boolean()) {
+            vae_tiling_params.temporal_tiling = tiling_json["temporal_tiling"];
         }
         if (tiling_json.contains("tile_size_x") && tiling_json["tile_size_x"].is_number_integer()) {
             vae_tiling_params.tile_size_x = tiling_json["tile_size_x"];
@@ -2298,6 +2330,7 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
     params.strength                 = strength;
     params.seed                     = seed;
     params.video_frames             = video_frames;
+    params.fps                      = fps;
     params.vace_strength            = vace_strength;
     params.vae_tiling_params        = vae_tiling_params;
     params.cache                    = cache_params;
@@ -2386,6 +2419,7 @@ std::string SDGenerationParams::to_string() const {
         << ", upscale_tile_size: " << hires_upscale_tile_size << " },\n"
         << "  vae_tiling_params: { "
         << vae_tiling_params.enabled << ", "
+        << vae_tiling_params.temporal_tiling << ", "
         << vae_tiling_params.tile_size_x << ", "
         << vae_tiling_params.tile_size_y << ", "
         << vae_tiling_params.target_overlap << ", "

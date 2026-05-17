@@ -24,7 +24,7 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml.h"
-#include "ggml_extend_backend.hpp"
+#include "ggml_extend_backend.h"
 #include "zip.h"
 
 #include "name_conversion.h"
@@ -461,6 +461,9 @@ SDVersion ModelLoader::get_sd_version() {
         }
         if (tensor_storage.name.find("model.diffusion_model.layers.0.adaLN_sa_ln.weight") != std::string::npos) {
             return VERSION_ERNIE_IMAGE;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.adaln_single.emb.timestep_embedder.linear_1.bias") != std::string::npos) {
+            return VERSION_LTXAV;
         }
         if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
             is_wan = true;
