@@ -177,7 +177,7 @@ jobs:
   build-and-push-docker-images:
     name: Build and push container images
     if: ${{ github.event_name != 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
 
     permissions:
       contents: read
@@ -189,6 +189,20 @@ jobs:
     strategy:
       matrix:
         variant: [musa, sycl, vulkan, cuda]
+        platform: [linux/amd64]
+        runner: [ubuntu-latest]
+        build-args: [""]
+        tag-suffix: [""]
+        include:
+          - variant: cuda
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            tag-suffix: "-spark"
+            build-args: |
+              CUDA_VERSION=13.0.0
+              UBUNTU_VERSION=24.04
+              CUDA_ARCHITECTURES=121
+              GGML_CUDA_FA_ALL_QUANTS=ON
 
     env:
       REGISTRY: ghcr.io
@@ -243,12 +257,13 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           push: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
           file: Dockerfile.${{ matrix.variant }}
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.BRANCH_NAME }}-${{ matrix.variant }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.BRANCH_NAME }}-${{ matrix.variant }}${{ matrix.tag-suffix }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
+          build-args: ${{ matrix.build-args }}
 
   macOS-latest-cmake:
     runs-on: macos-latest
