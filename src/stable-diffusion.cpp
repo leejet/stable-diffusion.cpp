@@ -2789,7 +2789,10 @@ static sd_audio_t* waveform_to_sd_audio(const StableDiffusionGGML* sd,
         free(audio);
         return nullptr;
     }
-    std::memcpy(audio->data, waveform.data(), sample_bytes);
+
+    auto wavaform_t = waveform.permute({1, 0, 2, 3});
+    std::memcpy(audio->data, wavaform_t.data(), sample_bytes);
+
     return audio;
 }
 
