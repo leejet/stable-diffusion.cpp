@@ -171,7 +171,7 @@ namespace LTXV {
                                                                  int64_t frames,
                                                                  int dim,
                                                                  int num_heads                                      = 1,
-                                                                 float frame_rate                                   = 25.f,
+                                                                 float frame_rate                                   = 24.f,
                                                                  float theta                                        = 10000.f,
                                                                  const std::vector<int>& max_pos                    = {20, 2048, 2048},
                                                                  const std::tuple<int, int, int>& vae_scale_factors = {8, 32, 32},
@@ -1663,7 +1663,8 @@ namespace LTXV {
                                  const sd::Tensor<float>& context_tensor         = {},
                                  const sd::Tensor<float>& audio_x_tensor         = {},
                                  const sd::Tensor<float>& audio_timesteps_tensor = {},
-                                 int audio_length                                = 0) {
+                                 int audio_length                                = 0,
+                                 float frame_rate                                = 24.f) {
             auto split_inputs = split_av_latents(x_tensor, audio_length);
             vx_input_cache    = split_inputs.first;
             if (!audio_x_tensor.empty()) {
@@ -1680,18 +1681,19 @@ namespace LTXV {
 
             ggml_cgraph* gf = new_graph_custom(LTXAV_GRAPH_SIZE);
 
-            video_pe_vec  = build_video_rope_matrix(vx->ne[0],
-                                                    vx->ne[1],
-                                                    vx->ne[2],
-                                                    static_cast<int>(params.hidden_size),
-                                                    static_cast<int>(params.num_attention_heads),
-                                                    24.f,
-                                                    params.positional_embedding_theta,
-                                                    params.positional_embedding_max_pos,
-                                                    params.vae_scale_factors,
-                                                    params.causal_temporal_positioning,
-                                                    params.use_middle_indices_grid);
-            auto video_pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, params.attention_head_dim / 2, vx->ne[0] * vx->ne[1] * vx->ne[2] * params.num_attention_heads);
+            float video_frame_rate = frame_rate > 0.f ? frame_rate : 24.f;
+            video_pe_vec           = build_video_rope_matrix(vx->ne[0],
+                                                             vx->ne[1],
+                                                             vx->ne[2],
+                                                             static_cast<int>(params.hidden_size),
+                                                             static_cast<int>(params.num_attention_heads),
+                                                             video_frame_rate,
+                                                             params.positional_embedding_theta,
+                                                             params.positional_embedding_max_pos,
+                                                             params.vae_scale_factors,
+                                                             params.causal_temporal_positioning,
+                                                             params.use_middle_indices_grid);
+            auto video_pe          = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, params.attention_head_dim / 2, vx->ne[0] * vx->ne[1] * vx->ne[2] * params.num_attention_heads);
             ggml_set_name(video_pe, "ltxav_video_pe");
             set_backend_tensor_data(video_pe, video_pe_vec.data());
 
@@ -1715,7 +1717,7 @@ namespace LTXV {
                                                                         vx->ne[2],
                                                                         static_cast<int>(params.audio_cross_attention_dim),
                                                                         static_cast<int>(params.audio_num_attention_heads),
-                                                                        25.f,
+                                                                        video_frame_rate,
                                                                         params.positional_embedding_theta,
                                                                         temporal_max_pos,
                                                                         std::get<0>(params.vae_scale_factors),
@@ -1803,9 +1805,10 @@ namespace LTXV {
                                   const sd::Tensor<float>& context         = {},
                                   const sd::Tensor<float>& audio_x         = {},
                                   const sd::Tensor<float>& audio_timesteps = {},
-                                  int audio_length                         = 0) {
+                                  int audio_length                         = 0,
+                                  float frame_rate                         = 24.f) {
             auto get_graph = [&]() -> ggml_cgraph* {
-                return build_graph(x, timesteps, context, audio_x, audio_timesteps, audio_length);
+                return build_graph(x, timesteps, context, audio_x, audio_timesteps, audio_length, frame_rate);
             };
             auto out = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
             return out;

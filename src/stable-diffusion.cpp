@@ -1826,6 +1826,7 @@ public:
                              const sd::Tensor<float>& vace_context,
                              float vace_strength,
                              int audio_length,
+                             float frame_rate,
                              const sd_cache_params_t* cache_params) {
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
         float cfg_scale     = guidance.txt_cfg;
@@ -1931,6 +1932,7 @@ public:
             diffusion_params.vace_context       = vace_context.empty() ? nullptr : &vace_context;
             diffusion_params.vace_strength      = vace_strength;
             diffusion_params.audio_length       = audio_length;
+            diffusion_params.frame_rate         = frame_rate;
             diffusion_params.skip_layers        = nullptr;
 
             compute_sample_controls(control_image,
@@ -3926,6 +3928,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                                                    sd::Tensor<float>(),
                                                    1.f,
                                                    0,
+                                                   static_cast<float>(request.fps),
                                                    request.cache_params);
         int64_t sampling_end  = ggml_time_ms();
         if (!x_0.empty()) {
@@ -4053,6 +4056,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                                                             sd::Tensor<float>(),
                                                             1.f,
                                                             0,
+                                                            static_cast<float>(request.fps),
                                                             request.cache_params);
             int64_t hires_sample_end   = ggml_time_ms();
             if (!x_0.empty()) {
@@ -4510,6 +4514,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                                            latents.vace_context,
                                                            request.vace_strength,
                                                            latents.audio_length,
+                                                           static_cast<float>(request.fps),
                                                            request.cache_params);
         int64_t sampling_end          = ggml_time_ms();
         if (x_t_sampled.empty()) {
@@ -4554,6 +4559,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                                         latents.vace_context,
                                                         request.vace_strength,
                                                         latents.audio_length,
+                                                        static_cast<float>(request.fps),
                                                         request.cache_params);
 
     int64_t sampling_end = ggml_time_ms();
