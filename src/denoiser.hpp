@@ -1853,10 +1853,33 @@ static sd::Tensor<float> sample_euler_ancestral_cfg_pp(denoise_cb_t model,
 static sd::Tensor<float> sample_gradient_estimation(denoise_cb_t model,
                                                     sd::Tensor<float> x,
                                                     const std::vector<float>& sigmas,
-                                                    std::shared_ptr<RNG> rng = nullptr,
-                                                    bool is_flow_denoiser    = false,
-                                                    float eta                = 0.f,
-                                                    float ge_gamma           = 2.0f) {
+                                                    std::shared_ptr<RNG> rng,
+                                                    bool is_flow_denoiser,
+                                                    float eta,
+                                                    const SamplerExtraArgs& extra_sample_args) {
+    float ge_gamma = 2.0f;
+
+    for (const auto& [key, value] : extra_sample_args) {
+        float parsed = 0.0f;
+        try {
+            size_t consumed = 0;
+            parsed          = std::stof(value, &consumed);
+            if (trim(value.substr(consumed)).size() != 0) {
+                LOG_WARN("ignoring invalid euler_ge extra sample arg '%s'", key.c_str());
+                continue;
+            }
+        } catch (const std::exception&) {
+            LOG_WARN("ignoring invalid euler_ge extra sample arg '%s'", key.c_str());
+            continue;
+        }
+        if (key == "gamma") {
+            LOG_DEBUG("setting euler_ge gamma to %.2f", parsed);
+            ge_gamma = parsed;
+        } else {
+            LOG_WARN("ignoring unknown euler_ge extra sample arg '%s'", key.c_str());
+        }
+    }
+
     int steps = static_cast<int>(sigmas.size()) - 1;
     sd::Tensor<float> old_d;
     bool has_old_d = false;
@@ -1983,7 +2006,7 @@ static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
         case EULER_A_CFG_PP_SAMPLE_METHOD:
             return sample_euler_ancestral_cfg_pp(model, std::move(x), sigmas, rng, eta);
         case EULER_GE_SAMPLE_METHOD:
-            return sample_gradient_estimation(model, std::move(x), sigmas, rng, is_flow_denoiser, eta);
+            return sample_gradient_estimation(model, std::move(x), sigmas, rng, is_flow_denoiser, eta, extra_args);
         default:
             return {};
     }
