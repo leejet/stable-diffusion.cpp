@@ -833,7 +833,7 @@ ArgOptions SDGenerationParams::get_options() {
          &hires_upscaler},
         {"",
          "--extra-sample-args",
-         "extra sampler args, key=value list. Currently lcm supports noise_clip_std, noise_scale_start, noise_scale_end",
+         "extra sampler/scheduler args, key=value list. lcm supports noise_clip_std, noise_scale_start, noise_scale_end; ltx2 supports max_shift, base_shift, stretch, terminal",
          &extra_sample_args},
     };
 
@@ -1287,7 +1287,7 @@ ArgOptions SDGenerationParams::get_options() {
          on_high_noise_sample_method_arg},
         {"",
          "--scheduler",
-         "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm, bong_tangent], default: discrete",
+         "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm, bong_tangent, ltx2], default: model-specific",
          on_scheduler_arg},
         {"",
          "--sigmas",

@@ -2290,6 +2290,7 @@ const char* scheduler_to_str[] = {
     "kl_optimal",
     "lcm",
     "bong_tangent",
+    "ltx2",
 };
 
 const char* sd_scheduler_name(enum scheduler_t scheduler) {
@@ -2835,6 +2836,8 @@ enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_me
         return LCM_SCHEDULER;
     } else if (sample_method == DDIM_TRAILING_SAMPLE_METHOD) {
         return SIMPLE_SCHEDULER;
+    } else if (sd_ctx != nullptr && sd_ctx->sd != nullptr && sd_version_is_ltxav(sd_ctx->sd->version)) {
+        return LTX2_SCHEDULER;
     }
     return DISCRETE_SCHEDULER;
 }
@@ -3166,10 +3169,16 @@ struct SamplePlan {
             scheduler_t scheduler = resolve_scheduler(sd_ctx,
                                                       sample_params->scheduler,
                                                       sample_method);
-            sigmas                = sd_ctx->sd->denoiser->get_sigmas(total_steps,
-                                                                     sd_ctx->sd->get_image_seq_len(request->height, request->width),
-                                                                     scheduler,
-                                                                     sd_ctx->sd->version);
+            int sample_seq_len    = sd_ctx->sd->get_image_seq_len(request->height, request->width);
+            if (sd_version_is_ltxav(sd_ctx->sd->version) && request->frames > 0) {
+                int latent_frames = ((request->frames - 1) / 8) + 1;
+                sample_seq_len *= latent_frames;
+            }
+            sigmas = sd_ctx->sd->denoiser->get_sigmas(total_steps,
+                                                      sample_seq_len,
+                                                      scheduler,
+                                                      sd_ctx->sd->version,
+                                                      sample_params->extra_sample_args);
         }
 
         eta = resolve_eta(sd_ctx, eta, sample_method);
@@ -3988,7 +3997,8 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
             hires_steps,
             sd_ctx->sd->get_image_seq_len(request.hires.target_height, request.hires.target_width),
             sd_img_gen_params->sample_params.scheduler,
-            sd_ctx->sd->version);
+            sd_ctx->sd->version,
+            sd_img_gen_params->sample_params.extra_sample_args);
 
         size_t t_enc = static_cast<size_t>(hires_steps * request.hires.denoising_strength);
         if (t_enc >= static_cast<size_t>(hires_steps)) {
