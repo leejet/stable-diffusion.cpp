@@ -1,13 +1,12 @@
-#ifndef __SD_LAYER_STREAMING_EXECUTOR_HPP__
-#define __SD_LAYER_STREAMING_EXECUTOR_HPP__
+#ifndef __LAYER_STREAMING_EXECUTOR_HPP__
+#define __LAYER_STREAMING_EXECUTOR_HPP__
 
 #include <functional>
 #include <string>
-#include <ggml.h>
 
 #include "layer_streaming.hpp"
 
-class GGMLRunner;
+struct GGMLRunner;
 
 namespace LayerStreaming {
 
@@ -21,8 +20,12 @@ namespace LayerStreaming {
 //   post_compute  - optional. Called after the executor runs the graph.
 //                   Use ggml_backend_tensor_get on the captured output
 //                   handles to copy results into runner-owned pinned host
-//                   buffers. Skipped by the executor for intermediate
-//                   layers inside a chunk-K resident span.
+//                   buffers. Leave default-constructed (empty std::function)
+//                   if no readback is needed; the executor checks
+//                   bool(post_compute) before invoking. Skipped by the
+//                   executor for intermediate layers inside a chunk-K
+//                   resident span — only the final chunk layer's
+//                   post_compute fires.
 struct Stage {
     std::function<ggml_cgraph*()> build_graph;
     std::function<void()>         post_compute;
@@ -45,9 +48,12 @@ using PerLayerStageFactory =
 //   2. Load _global params.
 //   3. Run input_stage (build -> compute -> post_compute).
 //   4. Build/cache and run the chunk-K resident mega-graph if any layers are
-//      resident.
+//      resident. Only the final chunk layer's post_compute is invoked;
+//      intermediate layers feed each other on-GPU.
 //   5. Per-layer loop for non-resident layers, with async prefetch.
-//   6. Run output_stage (build -> compute), writing into *output_out via output_ctx.
+//   6. Run output_stage (build -> compute), writing into *output_out via
+//      output_ctx. output_stage.post_compute is not called — the executor
+//      writes results directly into the caller's buffer.
 //   7. On any failure, evict and free buffers, return false.
 //
 // Returns true on success, false on any failure (with side effects already
@@ -65,4 +71,4 @@ bool run_streaming(GGMLRunner*                     runner,
 
 }  // namespace LayerStreaming
 
-#endif  // __SD_LAYER_STREAMING_EXECUTOR_HPP__
+#endif  // __LAYER_STREAMING_EXECUTOR_HPP__
