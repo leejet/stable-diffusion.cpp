@@ -207,7 +207,7 @@ Default Generation Options:
                                            antialiased), or a model name under --hires-upscalers-dir (default: Latent)
   --extra-sample-args <string>             extra sampler/scheduler args, key=value list. lcm supports noise_clip_std,
                                            noise_scale_start, noise_scale_end; ltx2 supports max_shift, base_shift,
-                                           stretch, terminal
+                                           stretch, terminal; euler_ge supports gamma
   -H, --height <int>                       image height, in pixel space (default: 512)
   -W, --width <int>                        image width, in pixel space (default: 512)
   --steps <int>                            number of sample steps (default: 20)
