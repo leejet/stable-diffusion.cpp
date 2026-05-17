@@ -6,6 +6,7 @@
 #include "ernie_image.hpp"
 #include "flux.hpp"
 #include "hidream_o1.hpp"
+#include "ltxv.hpp"
 #include "mmdit.hpp"
 #include "qwen_image.hpp"
 #include "tensor_ggml.hpp"
@@ -16,6 +17,8 @@
 struct DiffusionParams {
     const sd::Tensor<float>* x                                         = nullptr;
     const sd::Tensor<float>* timesteps                                 = nullptr;
+    const sd::Tensor<float>* audio_x                                   = nullptr;
+    const sd::Tensor<float>* audio_timesteps                           = nullptr;
     const sd::Tensor<float>* context                                   = nullptr;
     const sd::Tensor<float>* c_concat                                  = nullptr;
     const sd::Tensor<float>* y                                         = nullptr;
@@ -35,6 +38,8 @@ struct DiffusionParams {
     float control_strength                                             = 0.f;
     const sd::Tensor<float>* vace_context                              = nullptr;
     float vace_strength                                                = 1.f;
+    int audio_length                                                   = 0;
+    float frame_rate                                                   = 24.f;
     const std::vector<int>* skip_layers                                = nullptr;
 };
 
@@ -692,6 +697,76 @@ struct ErnieImageModel : public DiffusionModel {
                                    *diffusion_params.x,
                                    *diffusion_params.timesteps,
                                    tensor_or_empty(diffusion_params.context));
+    }
+};
+
+struct LTXAVModel : public DiffusionModel {
+    std::string prefix;
+    LTXV::LTXAVRunner ltxav;
+
+    LTXAVModel(ggml_backend_t backend,
+               ggml_backend_t params_backend,
+               const String2TensorStorage& tensor_storage_map = {},
+               const std::string prefix                       = "model.diffusion_model")
+        : prefix(prefix), ltxav(backend, params_backend, tensor_storage_map, prefix) {
+    }
+
+    std::string get_desc() override {
+        return ltxav.get_desc();
+    }
+
+    void alloc_params_buffer() override {
+        ltxav.alloc_params_buffer();
+    }
+
+    void free_params_buffer() override {
+        ltxav.free_params_buffer();
+    }
+
+    void free_compute_buffer() override {
+        ltxav.free_compute_buffer();
+    }
+
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        ltxav.get_param_tensors(tensors, prefix);
+    }
+
+    size_t get_params_buffer_size() override {
+        return ltxav.get_params_buffer_size();
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        ltxav.set_weight_adapter(adapter);
+    }
+
+    int64_t get_adm_in_channels() override {
+        return 0;
+    }
+
+    void set_flash_attention_enabled(bool enabled) override {
+        ltxav.set_flash_attention_enabled(enabled);
+    }
+
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        ltxav.set_max_graph_vram_bytes(max_vram_bytes);
+    }
+
+    void set_circular_axes(bool circular_x, bool circular_y) override {
+        ltxav.set_circular_axes(circular_x, circular_y);
+    }
+
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
+        return ltxav.compute(n_threads,
+                             *diffusion_params.x,
+                             *diffusion_params.timesteps,
+                             tensor_or_empty(diffusion_params.context),
+                             tensor_or_empty(diffusion_params.audio_x),
+                             tensor_or_empty(diffusion_params.audio_timesteps),
+                             diffusion_params.audio_length,
+                             diffusion_params.frame_rate);
     }
 };
 

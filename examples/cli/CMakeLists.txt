@@ -7,6 +7,10 @@ add_executable(${TARGET}
     image_metadata.cpp
     main.cpp
 )
+target_include_directories(${TARGET} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    "${PROJECT_SOURCE_DIR}/src"
+)
 install(TARGETS ${TARGET} RUNTIME)
 target_link_libraries(${TARGET} PRIVATE stable-diffusion zip ${CMAKE_THREAD_LIBS_INIT})
 if(SD_WEBP)

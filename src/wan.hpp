@@ -972,10 +972,10 @@ namespace WAN {
             blocks["conv2"]   = std::shared_ptr<GGMLBlock>(new CausalConv3d(z_dim, z_dim, {1, 1, 1}));
         }
 
-        ggml_tensor* patchify(ggml_context* ctx,
-                              ggml_tensor* x,
-                              int64_t patch_size,
-                              int64_t b = 1) {
+        static ggml_tensor* patchify(ggml_context* ctx,
+                                     ggml_tensor* x,
+                                     int64_t patch_size,
+                                     int64_t b = 1) {
             // x: [b*c, f, h*q, w*r]
             // return: [b*c*r*q, f, h, w]
             if (patch_size == 1) {
@@ -999,10 +999,10 @@ namespace WAN {
             return x;
         }
 
-        ggml_tensor* unpatchify(ggml_context* ctx,
-                                ggml_tensor* x,
-                                int64_t patch_size,
-                                int64_t b = 1) {
+        static ggml_tensor* unpatchify(ggml_context* ctx,
+                                       ggml_tensor* x,
+                                       int64_t patch_size,
+                                       int64_t b = 1) {
             // x: [b*c*r*q, f, h, w]
             // return: [b*c, f, h*q, w*r]
             if (patch_size == 1) {

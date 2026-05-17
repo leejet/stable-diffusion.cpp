@@ -1,5 +1,7 @@
 #include "vocab.h"
 #include "clip_t5.hpp"
+#include "gemma_merges.hpp"
+#include "gemma_vocab.hpp"
 #include "mistral.hpp"
 #include "qwen.hpp"
 #include "umt5.hpp"
@@ -31,5 +33,15 @@ std::string load_t5_tokenizer_json() {
 
 std::string load_umt5_tokenizer_json() {
     std::string json_str(reinterpret_cast<const char*>(umt5_tokenizer_json_str), sizeof(umt5_tokenizer_json_str));
+    return json_str;
+}
+
+std::string load_gemma_merges() {
+    std::string merges_utf8_str(reinterpret_cast<const char*>(gemma_merges_utf8_c_str), sizeof(gemma_merges_utf8_c_str));
+    return merges_utf8_str;
+}
+
+std::string load_gemma_vocab_json() {
+    std::string json_str(reinterpret_cast<const char*>(gemma_vocab_json_utf8_c_str), sizeof(gemma_vocab_json_utf8_c_str));
     return json_str;
 }

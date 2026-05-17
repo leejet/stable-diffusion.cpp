@@ -20,8 +20,10 @@ protected:
     std::map<std::u32string, int> encoder;
     std::map<int, std::u32string> decoder;
     std::map<std::pair<std::u32string, std::u32string>, int> bpe_ranks;
-    int encoder_len = 0;
-    int bpe_len     = 0;
+    int encoder_len     = 0;
+    int bpe_len         = 0;
+    bool byte_level_bpe = true;
+    bool byte_fallback  = false;
 
 protected:
     static std::vector<std::pair<int, std::u32string>> bytes_to_unicode();

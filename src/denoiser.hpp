@@ -1,6 +1,8 @@
 #ifndef __DENOISER_HPP__
 #define __DENOISER_HPP__
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <string>
 #include <utility>
@@ -480,6 +482,141 @@ struct KLOptimalScheduler : SigmaScheduler {
     }
 };
 
+struct LTX2Scheduler : SigmaScheduler {
+    int token_count  = 4096;
+    float max_shift  = 2.05f;
+    float base_shift = 0.95f;
+    bool stretch     = true;
+    float terminal   = 0.1f;
+
+    explicit LTX2Scheduler(int token_count, const char* extra_sample_args = nullptr)
+        : token_count(token_count > 0 ? token_count : 4096) {
+        parse_extra_sample_args(extra_sample_args);
+    }
+
+    static std::string trim(std::string value) {
+        const char* whitespace = " \t\r\n";
+        size_t begin           = value.find_first_not_of(whitespace);
+        if (begin == std::string::npos) {
+            return "";
+        }
+        size_t end = value.find_last_not_of(whitespace);
+        return value.substr(begin, end - begin + 1);
+    }
+
+    void parse_extra_sample_args(const char* extra_sample_args) {
+        if (extra_sample_args == nullptr || extra_sample_args[0] == '\0') {
+            return;
+        }
+
+        std::string raw(extra_sample_args);
+        size_t start   = 0;
+        auto parse_arg = [&](const std::string& item) {
+            std::string token = trim(item);
+            if (token.empty()) {
+                return;
+            }
+            size_t eq = token.find('=');
+            if (eq == std::string::npos) {
+                LOG_WARN("ignoring invalid ltx2 scheduler arg '%s'", token.c_str());
+                return;
+            }
+
+            std::string key   = trim(token.substr(0, eq));
+            std::string value = trim(token.substr(eq + 1));
+            auto parse_float  = [&](float* out) -> bool {
+                try {
+                    size_t consumed = 0;
+                    float parsed    = std::stof(value, &consumed);
+                    if (!trim(value.substr(consumed)).empty()) {
+                        return false;
+                    }
+                    *out = parsed;
+                    return true;
+                } catch (const std::exception&) {
+                    return false;
+                }
+            };
+            try {
+                if (key == "max_shift") {
+                    if (!parse_float(&max_shift)) {
+                        LOG_WARN("ignoring invalid ltx2 scheduler arg '%s'", token.c_str());
+                    }
+                } else if (key == "base_shift") {
+                    if (!parse_float(&base_shift)) {
+                        LOG_WARN("ignoring invalid ltx2 scheduler arg '%s'", token.c_str());
+                    }
+                } else if (key == "terminal") {
+                    if (!parse_float(&terminal)) {
+                        LOG_WARN("ignoring invalid ltx2 scheduler arg '%s'", token.c_str());
+                    }
+                } else if (key == "stretch") {
+                    std::string v = value;
+                    std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                    if (v == "1" || v == "true" || v == "yes" || v == "on") {
+                        stretch = true;
+                    } else if (v == "0" || v == "false" || v == "no" || v == "off") {
+                        stretch = false;
+                    } else {
+                        LOG_WARN("ignoring invalid ltx2 scheduler arg '%s'", token.c_str());
+                    }
+                } else {
+                    LOG_WARN("ignoring unknown ltx2 scheduler arg '%s'", key.c_str());
+                }
+            } catch (const std::exception&) {
+                LOG_WARN("ignoring invalid ltx2 scheduler arg '%s'", token.c_str());
+            }
+        };
+
+        for (size_t pos = 0; pos <= raw.size(); ++pos) {
+            if (pos == raw.size() || raw[pos] == ',' || raw[pos] == ';') {
+                parse_arg(raw.substr(start, pos - start));
+                start = pos + 1;
+            }
+        }
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, float /*sigma_min*/, float /*sigma_max*/, t_to_sigma_t /*t_to_sigma*/) override {
+        std::vector<float> sigmas;
+        if (n == 0) {
+            sigmas.push_back(0.0f);
+            return sigmas;
+        }
+
+        constexpr float base_shift_anchor = 1024.0f;
+        constexpr float max_shift_anchor  = 4096.0f;
+        float m                           = (max_shift - base_shift) / (max_shift_anchor - base_shift_anchor);
+        float b                           = base_shift - m * base_shift_anchor;
+        float sigma_shift                 = static_cast<float>(token_count) * m + b;
+        float exp_shift                   = std::exp(sigma_shift);
+        float target_terminal             = std::clamp(terminal, 0.0f, 0.99f);
+
+        LOG_DEBUG("LTX2 scheduler: tokens=%d, shift=%.4f, stretch=%d, terminal=%.4f", token_count, sigma_shift, stretch ? 1 : 0, target_terminal);
+
+        sigmas.reserve(n + 1);
+        for (uint32_t i = 0; i <= n; ++i) {
+            float sigma = 1.0f - static_cast<float>(i) / static_cast<float>(n);
+            if (sigma != 0.0f) {
+                sigma = exp_shift / (exp_shift + (1.0f / sigma - 1.0f));
+            }
+            sigmas.push_back(sigma);
+        }
+
+        if (stretch && sigmas.size() > 2) {
+            float one_minus_last = 1.0f - sigmas[n - 1];
+            float scale_factor   = one_minus_last / (1.0f - target_terminal);
+            if (scale_factor > 1e-8f) {
+                for (uint32_t i = 0; i < n; ++i) {
+                    sigmas[i] = 1.0f - (1.0f - sigmas[i]) / scale_factor;
+                }
+            }
+        }
+
+        sigmas[n] = 0.0f;
+        return sigmas;
+    }
+};
+
 struct Denoiser {
     virtual float sigma_min()                                                        = 0;
     virtual float sigma_max()                                                        = 0;
@@ -492,7 +629,7 @@ struct Denoiser {
     virtual sd::Tensor<float> inverse_noise_scaling(float sigma,
                                                     const sd::Tensor<float>& latent) = 0;
 
-    virtual std::vector<float> get_sigmas(uint32_t n, int /*image_seq_len*/, scheduler_t scheduler_type, SDVersion version) {
+    virtual std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler_type, SDVersion version, const char* extra_sample_args = nullptr) {
         auto bound_t_to_sigma = std::bind(&Denoiser::t_to_sigma, this, std::placeholders::_1);
         std::shared_ptr<SigmaScheduler> scheduler;
         switch (scheduler_type) {
@@ -539,6 +676,10 @@ struct Denoiser {
             case LCM_SCHEDULER:
                 LOG_INFO("get_sigmas with LCM scheduler");
                 scheduler = std::make_shared<LCMScheduler>();
+                break;
+            case LTX2_SCHEDULER:
+                LOG_INFO("get_sigmas with LTX2 scheduler");
+                scheduler = std::make_shared<LTX2Scheduler>(image_seq_len, extra_sample_args);
                 break;
             default:
                 LOG_INFO("get_sigmas with discrete scheduler (default)");
@@ -745,11 +886,11 @@ struct Flux2FlowDenoiser : public FluxFlowDenoiser {
         return mu;
     }
 
-    std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler_type, SDVersion version) override {
+    std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler_type, SDVersion version, const char* extra_sample_args = nullptr) override {
         float mu = compute_empirical_mu(n, image_seq_len);
         LOG_DEBUG("Flux2FlowDenoiser: set shift to %.3f", mu);
         set_shift(mu);
-        return Denoiser::get_sigmas(n, image_seq_len, scheduler_type, version);
+        return Denoiser::get_sigmas(n, image_seq_len, scheduler_type, version, extra_sample_args);
     }
 };
 

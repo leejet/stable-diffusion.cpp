@@ -104,7 +104,7 @@ namespace sd {
             throw std::invalid_argument("tensor file type does not match requested sd::Tensor type");
         }
 
-        std::vector<int64_t> shape(4, 1);
+        std::vector<int64_t> shape(n_dims, 1);
         for (int i = 0; i < n_dims; ++i) {
             int32_t dim = 1;
             file.read(reinterpret_cast<char*>(&dim), sizeof(dim));

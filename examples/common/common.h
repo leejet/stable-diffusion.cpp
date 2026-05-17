@@ -92,7 +92,9 @@ struct SDContextParams {
     std::string llm_vision_path;
     std::string diffusion_model_path;
     std::string high_noise_diffusion_model_path;
+    std::string embeddings_connectors_path;
     std::string vae_path;
+    std::string audio_vae_path;
     std::string taesd_path;
     std::string esrgan_path;
     std::string control_net_path;
@@ -187,7 +189,7 @@ struct SDGenerationParams {
     int video_frames                     = 1;
     int fps                              = 16;
     float vace_strength                  = 1.f;
-    sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
+    sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f};
 
     std::string pm_id_images_dir;
     std::string pm_id_embed_path;
