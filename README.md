@@ -15,29 +15,15 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
+* **2026/05/17** 🚀 stable-diffusion.cpp now supports **LTX-2.3**
 * **2026/04/11** 🚀 stable-diffusion.cpp now uses a brand-new embedded web UI.  
-  👉 Details: [PR #1408](https://github.com/leejet/stable-diffusion.cpp/pull/1408)
-
 * **2026/01/18** 🚀 stable-diffusion.cpp now supports **FLUX.2-klein**  
-  👉 Details: [PR #1193](https://github.com/leejet/stable-diffusion.cpp/pull/1193)
-
 * **2025/12/01** 🚀 stable-diffusion.cpp now supports **Z-Image**  
-  👉 Details: [PR #1020](https://github.com/leejet/stable-diffusion.cpp/pull/1020)
-
 * **2025/11/30** 🚀 stable-diffusion.cpp now supports **FLUX.2-dev**  
-  👉 Details: [PR #1016](https://github.com/leejet/stable-diffusion.cpp/pull/1016)
-
 * **2025/10/13** 🚀 stable-diffusion.cpp now supports **Qwen-Image-Edit / Qwen-Image-Edit 2509**  
-  👉 Details: [PR #877](https://github.com/leejet/stable-diffusion.cpp/pull/877)
-
 * **2025/10/12** 🚀 stable-diffusion.cpp now supports **Qwen-Image**  
-  👉 Details: [PR #851](https://github.com/leejet/stable-diffusion.cpp/pull/851)
-
 * **2025/09/14** 🚀 stable-diffusion.cpp now supports **Wan2.1 Vace**  
-  👉 Details: [PR #819](https://github.com/leejet/stable-diffusion.cpp/pull/819)
-
 * **2025/09/06** 🚀 stable-diffusion.cpp now supports **Wan2.1 / Wan2.2**  
-  👉 Details: [PR #778](https://github.com/leejet/stable-diffusion.cpp/pull/778)
 
 ## Features
 
