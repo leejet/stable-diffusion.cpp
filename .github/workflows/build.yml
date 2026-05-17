@@ -449,7 +449,7 @@ jobs:
 
     env:
       ROCM_VERSION: "7.13.0"
-      GPU_TARGETS: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201"
+      GPU_TARGETS: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
 
     steps:
       - uses: actions/checkout@v3
@@ -648,7 +648,7 @@ jobs:
             gpu_targets: "gfx908;gfx90a;gfx942;gfx1030;gfx1031;gfx1032;gfx1100;gfx1101;gfx1102;gfx1151;gfx1150;gfx1200;gfx1201"
             build: 'x64'
           - ROCM_VERSION: "7.13.0"
-            gpu_targets: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201"
+            gpu_targets: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
             build: x64
 
     steps:
