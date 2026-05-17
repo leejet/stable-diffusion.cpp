@@ -720,7 +720,7 @@ namespace LTXV {
         int64_t audio_num_attention_heads                   = 32;
         int64_t audio_attention_head_dim                    = 64;
         std::vector<int> audio_positional_embedding_max_pos = {20};
-        float av_ca_timestep_scale_multiplier               = 1.f;
+        float av_ca_timestep_scale_multiplier               = 1000.f;
         int64_t num_audio_channels                          = 8;
         int64_t audio_frequency_bins                        = 16;
 
