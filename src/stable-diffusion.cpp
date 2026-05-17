@@ -14,6 +14,7 @@
 #include "denoiser.hpp"
 #include "diffusion_model.hpp"
 #include "esrgan.hpp"
+#include "guidance.h"
 #include "lora.hpp"
 #include "ltx_audio_vae.h"
 #include "ltx_vae.hpp"
@@ -1854,8 +1855,9 @@ public:
                                                                                            denoiser.get(),
                                                                                            sigmas);
 
+        bool needs_uncond_denoised = method == EULER_CFG_PP_SAMPLE_METHOD || method == EULER_A_CFG_PP_SAMPLE_METHOD;
         // Spectrum cache is not supported for CFG++ samplers
-        if (method == EULER_CFG_PP_SAMPLE_METHOD || method == EULER_A_CFG_PP_SAMPLE_METHOD) {
+        if (needs_uncond_denoised) {
             if (cache_runtime.spectrum_enabled) {
                 LOG_WARN("Spectrum cache requested but not supported for CFG++ samplers");
                 cache_runtime.spectrum_enabled = false;
@@ -1868,6 +1870,11 @@ public:
             has_skiplayer = false;
             LOG_WARN("SLG is incompatible with this model type");
         }
+        sd::guidance::ClassifierFreeGuidance classifier_free_guidance(cfg_scale, img_cfg_scale);
+        sd::guidance::SkipLayerGuidance skip_layer_guidance(has_skiplayer ? skip_layers : std::vector<int>(),
+                                                            has_skiplayer ? slg_scale : 0.0f,
+                                                            guidance.slg.layer_start,
+                                                            guidance.slg.layer_end);
 
         if (version == VERSION_HIDREAM_O1 && !noise.empty()) {
             noise *= eta;
@@ -1880,7 +1887,7 @@ public:
         sd::Tensor<float> denoised   = x_t;
         SamplePreviewContext preview = prepare_sample_preview_context();
 
-        auto denoise = [&](const sd::Tensor<float>& x, float sigma, int step, sd::Tensor<float>* out_uncond_denoised = nullptr) -> sd::Tensor<float> {
+        auto denoise = [&](const sd::Tensor<float>& x, float sigma, int step) -> sd::guidance::GuiderOutput {
             if (step == 1 || step == -1) {
                 pretty_progress(0, (int)steps, 0);
             }
@@ -1913,17 +1920,17 @@ public:
             }
 
             if (cache_runtime.spectrum_enabled && cache_runtime.spectrum.should_predict()) {
-                if (out_uncond_denoised == nullptr) {
-                    cache_runtime.spectrum.predict(&denoised);
-                    if (!denoise_mask.empty()) {
-                        denoised = denoised * denoise_mask + init_latent * (1.0f - denoise_mask);
-                    }
-                    if (sd_should_preview_denoised() && preview.callback != nullptr) {
-                        preview_image(step, denoised, version, preview.mode, preview.callback, preview.data, false);
-                    }
-                    report_sample_progress(step, steps, t0);
-                    return denoised;
+                cache_runtime.spectrum.predict(&denoised);
+                if (!denoise_mask.empty()) {
+                    denoised = denoised * denoise_mask + init_latent * (1.0f - denoise_mask);
                 }
+                if (sd_should_preview_denoised() && preview.callback != nullptr) {
+                    preview_image(step, denoised, version, preview.mode, preview.callback, preview.data, false);
+                }
+                report_sample_progress(step, steps, t0);
+                sd::guidance::GuiderOutput output;
+                output.pred = denoised;
+                return output;
             }
 
             if (sd_should_preview_noisy() && preview.callback != nullptr) {
@@ -1933,7 +1940,6 @@ public:
             sd::Tensor<float> cond_out;
             sd::Tensor<float> uncond_out;
             sd::Tensor<float> img_cond_out;
-            sd::Tensor<float> skip_cond_out;
             sd_sample::SampleStepCacheDispatcher step_cache(cache_runtime, step, sigma);
             std::vector<sd::Tensor<float>> controls;
             DiffusionParams diffusion_params;
@@ -2023,42 +2029,40 @@ public:
                     return {};
                 }
             }
-            bool is_skiplayer_step = has_skiplayer &&
-                                     step > (int)(guidance.slg.layer_start * static_cast<int>(sigmas.size())) &&
-                                     step < (int)(guidance.slg.layer_end * static_cast<int>(sigmas.size()));
-            if (is_skiplayer_step) {
+            sd::guidance::GuidanceInput guidance_input;
+            guidance_input.step          = step;
+            guidance_input.schedule_size = sigmas.size();
+            guidance_input.pred_cond     = &cond_out;
+            guidance_input.pred_uncond   = uncond_out.empty() ? nullptr : &uncond_out;
+            guidance_input.pred_img_cond = img_cond_out.empty() ? nullptr : &img_cond_out;
+
+            sd::guidance::GuiderOutput guided = classifier_free_guidance.forward(guidance_input, {});
+            if (guided.pred.empty()) {
+                return {};
+            }
+
+            if (skip_layer_guidance.is_enabled_for_step(guidance_input)) {
                 LOG_DEBUG("Skipping layers at step %d\n", step);
                 if (!step_cache.is_step_skipped()) {
-                    skip_cond_out = run_condition(cond,
-                                                  cond.c_concat.empty() ? nullptr : &cond.c_concat,
-                                                  &skip_layers);
-                    if (skip_cond_out.empty()) {
-                        return {};
-                    }
+                    guidance_input.predict_skip_layer = [&]() -> sd::Tensor<float> {
+                        return run_condition(cond,
+                                             cond.c_concat.empty() ? nullptr : &cond.c_concat,
+                                             &skip_layer_guidance.layers());
+                    };
                 }
             }
 
-            GGML_ASSERT(!cond_out.empty());
-            sd::Tensor<float> latent_result = cond_out;
-            if (!uncond_out.empty()) {
-                if (!img_cond_out.empty()) {
-                    latent_result = uncond_out +
-                                    img_cfg_scale * (img_cond_out - uncond_out) +
-                                    cfg_scale * (cond_out - img_cond_out);
-                } else {
-                    latent_result = uncond_out + cfg_scale * (cond_out - uncond_out);
-                }
-            } else if (!img_cond_out.empty()) {
-                latent_result = img_cond_out + cfg_scale * (cond_out - img_cond_out);
+            guided = skip_layer_guidance.forward(guidance_input, std::move(guided));
+            if (guided.pred.empty()) {
+                return {};
             }
 
-            if (is_skiplayer_step && !skip_cond_out.empty()) {
-                latent_result += (cond_out - skip_cond_out) * slg_scale;
-            }
-            denoised = latent_result * c_out + x * c_skip;
-            if (out_uncond_denoised != nullptr) {
-                sd::Tensor<float> base_uncond = !uncond_out.empty() ? uncond_out : cond_out;
-                *out_uncond_denoised          = base_uncond * c_out + x * c_skip;
+            denoised = guided.pred * c_out + x * c_skip;
+            sd::guidance::GuiderOutput output;
+            output.pred = denoised;
+            if (needs_uncond_denoised) {
+                const sd::Tensor<float>& base_uncond = !uncond_out.empty() ? uncond_out : cond_out;
+                output.pred_uncond                   = base_uncond * c_out + x * c_skip;
             }
             if (cache_runtime.spectrum_enabled) {
                 cache_runtime.spectrum.update(denoised);
@@ -2070,7 +2074,8 @@ public:
                 preview_image(step, denoised, version, preview.mode, preview.callback, preview.data, false);
             }
             report_sample_progress(step, steps, t0);
-            return denoised;
+            output.pred = denoised;
+            return output;
         };
 
         auto x0_opt = sample_k_diffusion(method, denoise, x_t, sigmas, sampler_rng, eta, is_flow_denoiser, extra_sample_args);
