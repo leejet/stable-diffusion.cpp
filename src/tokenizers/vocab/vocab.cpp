@@ -1,9 +1,11 @@
 #include "vocab.h"
-#include "clip_t5.hpp"
+#include "clip_merges.hpp"
 #include "gemma_merges.hpp"
 #include "gemma_vocab.hpp"
-#include "mistral.hpp"
-#include "qwen.hpp"
+#include "mistral_merges.hpp"
+#include "mistral_vocab.hpp"
+#include "qwen_merges.hpp"
+#include "t5.hpp"
 #include "umt5.hpp"
 
 std::string load_clip_merges() {
