@@ -135,7 +135,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libvulkan-dev glslc
+          sudo apt-get install build-essential libvulkan-dev glslc spirv-headers
 
       - name: Build
         id: cmake_build
