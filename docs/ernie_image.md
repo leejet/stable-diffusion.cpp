@@ -11,6 +11,7 @@ You can run ERNIE-Image with stable-diffusion.cpp on GPUs with 4GB of VRAM — o
 - Download ERNIE-Image
     - safetensors: https://huggingface.co/Comfy-Org/ERNIE-Image/tree/main/diffusion_models
     - gguf: https://huggingface.co/unsloth/ERNIE-Image-GGUF/tree/main
+    - gguf (fix white screen): https://huggingface.co/Solictous/ERNIE-Image-GGUF/tree/main (also disable diffusion-fa)
 - Download vae
     - safetensors: https://huggingface.co/Comfy-Org/ERNIE-Image/tree/main/vae
 - Download ministral 3b
