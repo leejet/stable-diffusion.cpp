@@ -327,8 +327,9 @@ public:
             LOG_INFO("loading tae from '%s'", sd_ctx_params->taesd_path);
             if (!model_loader.init_from_file(sd_ctx_params->taesd_path, "tae.")) {
                 LOG_WARN("loading tae from '%s' failed", sd_ctx_params->taesd_path);
+            } else {
+                use_tae = true;
             }
-            use_tae = true;
         }
 
         if (strlen(SAFE_STR(sd_ctx_params->embeddings_connectors_path)) > 0) {
