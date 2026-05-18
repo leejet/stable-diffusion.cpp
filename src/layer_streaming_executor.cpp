@@ -1,8 +1,5 @@
 #include "layer_streaming_executor.hpp"
 
-#include <cstdlib>
-#include <cstring>
-
 #include "ggml_extend.hpp"
 #include "tensor_registry.hpp"
 
@@ -99,6 +96,7 @@ bool run_streaming(GGMLRunner*                     runner,
             LOG_ERROR("%s: failed to load %s",
                       runner->get_desc().c_str(),
                       layer_name.c_str());
+            runner->free_compute_buffer();
             return false;
         }
         if (runner->streaming_engine_) {
@@ -118,6 +116,7 @@ bool run_streaming(GGMLRunner*                     runner,
             LOG_ERROR("%s: layer %d execution failed",
                       runner->get_desc().c_str(),
                       layer_idx);
+            runner->free_compute_buffer();
             return false;
         }
 
@@ -126,8 +125,12 @@ bool run_streaming(GGMLRunner*                     runner,
 
     runner->free_compute_buffer();
 
-    // Stage 3: output. Writes directly into *output_out via output_ctx;
-    // post_compute is intentionally skipped (executor owns the readback).
+    // Stage 3 — writes directly into *output_out via output_ctx; no post_compute.
+    if (output_stage.post_compute) {
+        LOG_WARN("%s: output_stage.post_compute is set but will not be called; "
+                 "the executor writes directly into the caller's buffer",
+                 runner->get_desc().c_str());
+    }
     if (!run_stage(runner,
                    n_threads,
                    output_stage,

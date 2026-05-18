@@ -54,10 +54,13 @@ using PerLayerStageFactory =
 //   6. Run output_stage (build -> compute), writing into *output_out via
 //      output_ctx. output_stage.post_compute is not called — the executor
 //      writes results directly into the caller's buffer.
-//   7. On any failure, evict and free buffers, return false.
+//   7. On any failure: free the per-layer compute buffer if allocated,
+//      return false. Layer eviction is the caller's responsibility — the
+//      outer pipeline calls offload_streaming_layers() at the per-step
+//      level to clean up any GPU-resident layers from this run.
 //
-// Returns true on success, false on any failure (with side effects already
-// rolled back).
+// Returns true on success, false on failure. The caller must handle layer
+// eviction (typically via offload_streaming_layers() at the per-step boundary).
 bool run_streaming(GGMLRunner*                     runner,
                    int                             n_threads,
                    const StreamingConfig&          cfg,
