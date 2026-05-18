@@ -30,6 +30,7 @@
 #include "ggml_graph_cut.h"
 
 #include "layer_streaming.hpp"
+#include "layer_streaming_executor.hpp"
 #include "model.h"
 #include "tensor.hpp"
 
@@ -1680,6 +1681,22 @@ struct GGMLRunnerContext {
 };
 
 struct GGMLRunner {
+    // Shared layer-streaming executor needs access to the protected
+    // streaming_engine_ handle and analyze_vram_budget() helper. The executor
+    // is the only out-of-class consumer; everything else either goes through
+    // the public is_streaming_enabled() / get_streaming_engine() accessors or
+    // is invoked from runner subclasses.
+    friend bool LayerStreaming::run_streaming(GGMLRunner*                            runner,
+                                              int                                    n_threads,
+                                              const LayerStreaming::StreamingConfig& cfg,
+                                              LayerStreaming::Stage                  input_stage,
+                                              LayerStreaming::PerLayerStageFactory   per_layer_stage_factory,
+                                              LayerStreaming::Stage                  output_stage,
+                                              int                                    num_layers,
+                                              std::function<std::string(int)>        layer_name_at,
+                                              ggml_tensor**                          output_out,
+                                              ggml_context*                          output_ctx);
+
 protected:
     typedef std::function<ggml_cgraph*()> get_graph_cb_t;
     using GraphCutSegment = sd::ggml_graph_cut::Segment;
