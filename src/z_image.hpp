@@ -8,6 +8,7 @@
 #include "flux.hpp"
 #include "ggml_extend.hpp"
 #include "layer_streaming.hpp"
+#include "layer_streaming_executor.hpp"
 #include "mmdit.hpp"
 
 // Ref: https://github.com/Alpha-VLLM/Lumina-Image-2.0/blob/main/models/model.py
@@ -577,6 +578,22 @@ namespace ZImage {
         // token counts). See chunk_graph.hpp for the shared helper.
         LayerStreaming::ChunkGraph chunk_graph_;
 
+        // Captured tensor handles + persistent host buffers used by the
+        // streaming-executor migration (Task 6). Stage 1 writes the txt_img
+        // and t_emb output tensor pointers + shapes; post_compute copies them
+        // to host via persistent_txt_img_/persistent_t_emb_. The per-layer
+        // factory reads/writes these on every streamed layer. Stage 3 reads
+        // the final values to build its input.
+        ggml_tensor* stage1_txt_img_out_ = nullptr;
+        ggml_tensor* stage1_t_emb_out_   = nullptr;
+        ggml_tensor* layer_txt_img_out_  = nullptr;
+        int64_t      txt_img_ne_[4]      = {0, 0, 0, 0};
+        int64_t      t_emb_ne_[4]        = {0, 0, 0, 0};
+        float*       persistent_txt_img_ = nullptr;
+        float*       persistent_t_emb_   = nullptr;
+        std::vector<float> persistent_txt_img_fallback_;
+        std::vector<float> persistent_t_emb_fallback_;
+
     public:
 
         ZImageRunner(ggml_backend_t backend,
@@ -734,38 +751,18 @@ namespace ZImage {
                                      bool increase_ref_index               = false,
                                      struct ggml_tensor** output           = nullptr,
                                      struct ggml_context* output_ctx       = nullptr) {
-            auto& registry = streaming_engine_->get_registry();
-            int64_t t_start = ggml_time_ms();
-
             const int num_refiner_layers = z_image.get_num_refiner_layers();
-            const int num_layers = z_image.get_num_layers();
-            const int patch_size = z_image.get_patch_size();
-            const int64_t W = x->ne[0];
-            const int64_t H = x->ne[1];
+            const int num_layers         = z_image.get_num_layers();
+            const int patch_size         = z_image.get_patch_size();
+            const int64_t W              = x->ne[0];
+            const int64_t H              = x->ne[1];
 
-            LOG_INFO("TRUE per-layer streaming - %d refiners + %d layers",
-                     num_refiner_layers, num_layers);
+            LOG_INFO("%s: streaming dispatch (%d refiners + %d layers)",
+                     get_desc().c_str(), num_refiner_layers, num_layers);
 
-            // Load global layers
-            if (!registry.move_layer_to_gpu("_global")) {
-                LOG_ERROR("Failed to load _global to GPU");
-                return false;
-            }
-
-            // Load refiner layers (context_refiner and noise_refiner)
-            for (int i = 0; i < num_refiner_layers; i++) {
-                std::string cr_name = "context_refiner." + std::to_string(i);
-                std::string nr_name = "noise_refiner." + std::to_string(i);
-                if (!registry.move_layer_to_gpu(cr_name)) {
-                    LOG_ERROR("Failed to load %s to GPU", cr_name.c_str());
-                    return false;
-                }
-                if (!registry.move_layer_to_gpu(nr_name)) {
-                    LOG_ERROR("Failed to load %s to GPU", nr_name.c_str());
-                    return false;
-                }
-            }
-            // Generate PE
+            // CPU-side prep: generate PE vector. The executor will load
+            // _global before Stage 1; refiner layers are loaded inside
+            // Stage 1's build_graph (right before they are used).
             pe_vec = Rope::gen_z_image_pe(static_cast<int>(H),
                                            static_cast<int>(W),
                                            z_image_params.patch_size,
@@ -778,366 +775,255 @@ namespace ZImage {
                                            circular_y_enabled,
                                            circular_x_enabled,
                                            z_image_params.axes_dim);
-            // For ZImage with refiners, we'll execute refiners with global,
-            // then stream main layers one at a time
-            // This is a simplified approach - refiners are usually small
 
-            // Persistent storage. Pinned host buffer (member-scoped, reused
-            // across sampling steps) so the per-layer ggml_backend_tensor_get
-            // and copy_data_to_backend_tensor calls run at full PCIe bandwidth.
-            // Falls back to pageable std::vector if pinned alloc fails.
-            std::vector<float> persistent_txt_img_fallback;
-            std::vector<float> persistent_t_emb_fallback;
-            float* persistent_txt_img = nullptr;
-            float* persistent_t_emb   = nullptr;
-            int64_t txt_img_ne[4], t_emb_ne[4];
-            int64_t n_txt_token = 0, n_txt_pad_token = 0, n_img_token_val = 0;
+            // Scalars produced by Stage 1's forward_input_stage that Stage 3
+            // needs for its slice arguments. Captured by reference in both
+            // lambdas; Stage 1 writes, Stage 3 reads.
+            int64_t n_txt_token     = 0;
+            int64_t n_txt_pad_token = 0;
+            int64_t n_img_token_val = 0;
 
-            // Stage 1: Input + Refiners (all in one graph since refiners are small)
-            {
-                ggml_tensor* txt_img_output = nullptr;
-                ggml_tensor* t_emb_output = nullptr;
-
-                auto get_refiner_graph = [&]() -> struct ggml_cgraph* {
-                    struct ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE / 2);
-                    auto runner_ctx = get_context();
-
-                    ggml_tensor* x_backend = to_backend(x);
-                    ggml_tensor* context_backend = to_backend(context);
-                    ggml_tensor* timesteps_backend = to_backend(timesteps);
-
-                    // Patchify
-                    auto img = DiT::pad_and_patchify(&runner_ctx, x_backend, patch_size, patch_size, false);
-                    n_img_token_val = img->ne[1];
-
-                    // Handle ref_latents
-                    for (auto& ref : ref_latents) {
-                        auto ref_backend = to_backend(ref);
-                        ref_backend = DiT::pad_and_patchify(&runner_ctx, ref_backend, patch_size, patch_size, false);
-                        img = ggml_concat(compute_ctx, img, ref_backend, 1);
+            // ---- Stage 1: input + refiners ------------------------------
+            LayerStreaming::Stage input_stage;
+            input_stage.build_graph = [&]() -> ggml_cgraph* {
+                // Load refiner layers (context_refiner.N and noise_refiner.N).
+                // The executor already loaded _global before invoking this
+                // build_graph. Refiners aren't part of the streamed [0..N)
+                // main-layer set; they stay resident for the whole run.
+                auto& registry = streaming_engine_->get_registry();
+                for (int i = 0; i < num_refiner_layers; ++i) {
+                    std::string cr_name = "context_refiner." + std::to_string(i);
+                    std::string nr_name = "noise_refiner." + std::to_string(i);
+                    if (!registry.move_layer_to_gpu(cr_name)) {
+                        LOG_ERROR("z_image: failed to load %s", cr_name.c_str());
+                        return nullptr;
                     }
-
-                    // PE tensor
-                    int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
-                    auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, z_image_params.axes_dim_sum / 2, pos_len);
-                    set_backend_tensor_data(pe, pe_vec.data());
-
-                    // Input stage
-                    auto input_result = z_image.forward_input_stage(&runner_ctx, img, timesteps_backend, context_backend, pe);
-                    auto txt = input_result.txt;
-                    img = input_result.img;
-                    auto t_emb = input_result.t_emb;
-                    auto txt_pe = input_result.txt_pe;
-                    auto img_pe = input_result.img_pe;
-                    n_txt_token = input_result.n_txt_token;
-                    n_txt_pad_token = input_result.n_txt_pad_token;
-
-                    // Verify PE size
-                    int64_t total_tokens = txt->ne[1] + img->ne[1];
-                    if (pe->ne[3] != total_tokens) {
-                        LOG_ERROR("ZImage PE mismatch: PE has %ld positions but model needs %ld tokens",
-                                  pe->ne[3], total_tokens);
+                    if (!registry.move_layer_to_gpu(nr_name)) {
+                        LOG_ERROR("z_image: failed to load %s", nr_name.c_str());
+                        return nullptr;
                     }
-
-                    // Context refiners
-                    for (int i = 0; i < num_refiner_layers; i++) {
-                        txt = z_image.forward_context_refiner_block(&runner_ctx, i, txt, txt_pe);
-                    }
-
-                    // Noise refiners
-                    for (int i = 0; i < num_refiner_layers; i++) {
-                        img = z_image.forward_noise_refiner_block(&runner_ctx, i, img, img_pe, t_emb);
-                    }
-
-                    // Concat for main layers
-                    txt_img_output = ggml_concat(compute_ctx, txt, img, 1);
-
-                    // Create explicit copy of t_emb to prevent buffer aliasing
-                    // The allocator may reuse t_emb's buffer after noise refiners use it
-                    auto t_emb_copy = ggml_new_tensor(compute_ctx, t_emb->type, ggml_n_dims(t_emb), t_emb->ne);
-                    t_emb_copy = ggml_cpy(compute_ctx, t_emb, t_emb_copy);
-                    ggml_set_name(t_emb_copy, "t_emb_output_copy");
-                    t_emb_output = t_emb_copy;
-
-                    ggml_build_forward_expand(gf, txt_img_output);
-                    ggml_build_forward_expand(gf, t_emb_output);
-
-                    return gf;
-                };
-
-                // Don't free compute buffer immediately - we need to read outputs first
-                if (!GGMLRunner::compute(get_refiner_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("Refiner stage failed");
-                    return false;
                 }
 
-                // Extract to persistent storage
-                if (txt_img_output && t_emb_output) {
-                    size_t txt_img_size = ggml_nelements(txt_img_output);
-                    size_t t_emb_size = ggml_nelements(t_emb_output);
+                ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE / 2);
+                auto runner_ctx = get_context();
 
-                    std::vector<float*> ptrs;
-                    if (ensure_pinned_act_buffers({txt_img_size * sizeof(float),
-                                                   t_emb_size   * sizeof(float)}, ptrs)) {
-                        persistent_txt_img = ptrs[0];
-                        persistent_t_emb   = ptrs[1];
-                    } else {
-                        persistent_txt_img_fallback.resize(txt_img_size);
-                        persistent_t_emb_fallback.resize(t_emb_size);
-                        persistent_txt_img = persistent_txt_img_fallback.data();
-                        persistent_t_emb   = persistent_t_emb_fallback.data();
-                    }
+                ggml_tensor* x_backend         = to_backend(x);
+                ggml_tensor* context_backend   = to_backend(context);
+                ggml_tensor* timesteps_backend = to_backend(timesteps);
 
-                    ggml_backend_tensor_get(txt_img_output, persistent_txt_img, 0, txt_img_size * sizeof(float));
-                    ggml_backend_tensor_get(t_emb_output, persistent_t_emb, 0, t_emb_size * sizeof(float));
+                // Patchify
+                auto img = DiT::pad_and_patchify(&runner_ctx, x_backend, patch_size, patch_size, false);
+                n_img_token_val = img->ne[1];
 
-                    for (int i = 0; i < 4; i++) {
-                        txt_img_ne[i] = txt_img_output->ne[i];
-                        t_emb_ne[i] = t_emb_output->ne[i];
-                    }
+                // Handle ref_latents
+                for (auto& ref : ref_latents) {
+                    auto ref_backend = to_backend(ref);
+                    ref_backend = DiT::pad_and_patchify(&runner_ctx, ref_backend, patch_size, patch_size, false);
+                    img = ggml_concat(compute_ctx, img, ref_backend, 1);
+                }
+
+                // PE tensor
+                int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
+                auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, z_image_params.axes_dim_sum / 2, pos_len);
+                set_backend_tensor_data(pe, pe_vec.data());
+
+                // Input stage
+                auto input_result = z_image.forward_input_stage(&runner_ctx, img, timesteps_backend, context_backend, pe);
+                auto txt    = input_result.txt;
+                img         = input_result.img;
+                auto t_emb  = input_result.t_emb;
+                auto txt_pe = input_result.txt_pe;
+                auto img_pe = input_result.img_pe;
+                n_txt_token     = input_result.n_txt_token;
+                n_txt_pad_token = input_result.n_txt_pad_token;
+
+                // Verify PE size
+                int64_t total_tokens = txt->ne[1] + img->ne[1];
+                if (pe->ne[3] != total_tokens) {
+                    LOG_ERROR("ZImage PE mismatch: PE has %ld positions but model needs %ld tokens",
+                              pe->ne[3], total_tokens);
+                }
+
+                // Context refiners
+                for (int i = 0; i < num_refiner_layers; i++) {
+                    txt = z_image.forward_context_refiner_block(&runner_ctx, i, txt, txt_pe);
+                }
+
+                // Noise refiners
+                for (int i = 0; i < num_refiner_layers; i++) {
+                    img = z_image.forward_noise_refiner_block(&runner_ctx, i, img, img_pe, t_emb);
+                }
+
+                // Concat for main layers
+                ggml_tensor* txt_img_output = ggml_concat(compute_ctx, txt, img, 1);
+
+                // Create explicit copy of t_emb to prevent buffer aliasing.
+                // The allocator may reuse t_emb's buffer after noise refiners
+                // use it, so we materialize a fresh allocation owned by
+                // t_emb_output.
+                auto t_emb_copy = ggml_new_tensor(compute_ctx, t_emb->type, ggml_n_dims(t_emb), t_emb->ne);
+                t_emb_copy = ggml_cpy(compute_ctx, t_emb, t_emb_copy);
+                ggml_set_name(t_emb_copy, "t_emb_output_copy");
+                ggml_tensor* t_emb_output = t_emb_copy;
+
+                stage1_txt_img_out_ = txt_img_output;
+                stage1_t_emb_out_   = t_emb_output;
+
+                ggml_build_forward_expand(gf, stage1_txt_img_out_);
+                ggml_build_forward_expand(gf, stage1_t_emb_out_);
+                return gf;
+            };
+
+            input_stage.post_compute = [&]() {
+                // ---- Read txt_img + t_emb back to host ------------------
+                const size_t txt_img_n = ggml_nelements(stage1_txt_img_out_);
+                const size_t t_emb_n   = ggml_nelements(stage1_t_emb_out_);
+
+                std::vector<float*> ptrs;
+                if (ensure_pinned_act_buffers({txt_img_n * sizeof(float),
+                                               t_emb_n   * sizeof(float)}, ptrs)) {
+                    persistent_txt_img_ = ptrs[0];
+                    persistent_t_emb_   = ptrs[1];
                 } else {
-                    LOG_ERROR("Failed to get refiner stage outputs");
-                    free_compute_buffer();
-                    return false;
+                    persistent_txt_img_fallback_.resize(txt_img_n);
+                    persistent_t_emb_fallback_.resize(t_emb_n);
+                    persistent_txt_img_ = persistent_txt_img_fallback_.data();
+                    persistent_t_emb_   = persistent_t_emb_fallback_.data();
                 }
+                ggml_backend_tensor_get(stage1_txt_img_out_, persistent_txt_img_, 0,
+                                         txt_img_n * sizeof(float));
+                ggml_backend_tensor_get(stage1_t_emb_out_, persistent_t_emb_, 0,
+                                         t_emb_n * sizeof(float));
+                for (int i = 0; i < 4; ++i) txt_img_ne_[i] = stage1_txt_img_out_->ne[i];
+                for (int i = 0; i < 4; ++i) t_emb_ne_[i]   = stage1_t_emb_out_->ne[i];
 
-                // Now safe to free compute buffer
-                free_compute_buffer();
-            }
-
-            // Refiners stay resident across sampling steps. Their weights are
-            // identical every step, so evicting and re-streaming them was
-            // pure waste. They cost ~4 layers worth of VRAM (small).
-
-            // On the first sampling step, decide how many main layers we can
-            // keep permanently resident. Layers [0..K-1] become a static cache;
-            // layers [K..N-1] continue to stream and evict each step.
-            if (resident_layer_count_ < 0 && streaming_engine_) {
-                resident_layer_count_ = streaming_engine_->compute_resident_block_count("layers.0", num_layers);
-                LOG_INFO("%s layer cache: %d resident, %d streamed per step",
-                         get_desc().c_str(),
-                         resident_layer_count_,
-                         num_layers - resident_layer_count_);
-            }
-
-            // Stage 2: Main layers (one at a time)
-            // Debug: limit layers if env var set (to isolate where grid pattern appears)
-            const char* limit_layers_env = std::getenv("SDCPP_LIMIT_MAIN_LAYERS");
-            int layers_to_run = num_layers;
-            if (limit_layers_env) {
-                int limit = std::atoi(limit_layers_env);
-                if (limit >= 0 && limit < num_layers) {
-                    layers_to_run = limit;
-                    LOG_WARN("SDCPP_LIMIT_MAIN_LAYERS=%d: Running only %d of %d main layers (debug mode)",
-                             limit, layers_to_run, num_layers);
+                // ---- Chunk-K dispatch ----------------------------------
+                // Decide K on the first invocation; persisted across
+                // sampling steps. Now that _global + refiners are GPU-
+                // resident the free-VRAM measurement is accurate.
+                if (resident_layer_count_ < 0 && streaming_engine_) {
+                    resident_layer_count_ = streaming_engine_->compute_resident_block_count(
+                        "layers.0", num_layers);
+                    LOG_INFO("%s layer cache: %d resident, %d streamed per step",
+                             get_desc().c_str(),
+                             resident_layer_count_,
+                             num_layers - resident_layer_count_);
                 }
-            }
-
-            auto layer_name_at = [](int i) { return "layers." + std::to_string(i); };
-
-            // Phase 4: dispatch the K resident layers as a single mega-graph
-            // (one ggml_backend_graph_compute call instead of K). On the first
-            // sampling step we pre-load all K resident weights and build the
-            // cached graph; subsequent steps reuse it.
-            int chunk_K = std::min(resident_layer_count_ < 0 ? 0 : resident_layer_count_,
-                                    layers_to_run);
-            if (chunk_K > 0) {
-                for (int i = 0; i < chunk_K; i++) {
-                    std::string nm = layer_name_at(i);
-                    if (!registry.is_layer_on_gpu(nm)) {
-                        if (!registry.move_layer_to_gpu(nm)) {
-                            LOG_ERROR("Failed to load resident %s for chunk", nm.c_str());
-                            return false;
+                int chunk_K = std::min(resident_layer_count_ < 0 ? 0 : resident_layer_count_,
+                                        num_layers);
+                if (chunk_K > 0) {
+                    auto& registry = streaming_engine_->get_registry();
+                    for (int i = 0; i < chunk_K; ++i) {
+                        std::string nm = "layers." + std::to_string(i);
+                        if (!registry.is_layer_on_gpu(nm)) {
+                            if (!registry.move_layer_to_gpu(nm)) {
+                                LOG_ERROR("z_image: failed to load resident %s", nm.c_str());
+                                return;  // post_compute is void; failure logged
+                            }
                         }
                     }
-                }
-                // The shared ChunkGraph helper (chunk_graph.hpp) handles cache
-                // reuse and shape-mismatch rebuild automatically.
-                if (!dispatch_resident_chunk(chunk_K, txt_img_ne, t_emb_ne,
-                                              persistent_txt_img, persistent_t_emb)) {
-                    return false;
-                }
-                // The chunk output has the same shape as the last resident
-                // layer's output; ne carries through unchanged.
-                for (int i = 0; i < 4; i++) {
-                    txt_img_ne[i] = chunk_graph_.output()->ne[i];
-                }
-            }
-
-            // Begin prefetch at the first non-resident layer. With chunk_K > 0
-            // the resident prefix is already loaded, so prefetch starts at K.
-            int prefetch_start = chunk_K;
-            while (prefetch_start < num_layers &&
-                   registry.is_layer_on_gpu(layer_name_at(prefetch_start))) {
-                prefetch_start++;
-            }
-            if (streaming_engine_) {
-                streaming_engine_->prime_prefetch(layer_name_at, prefetch_start, num_layers);
-            }
-
-            // Phase 3 profiling: per-stage cumulative timings, dumped after the
-            // main loop. Set SDCPP_STREAM_PROFILE=1 to enable.
-            int64_t prof_wait_us    = 0;
-            int64_t prof_load_us    = 0;
-            int64_t prof_advance_us = 0;
-            int64_t prof_build_us   = 0;
-            int64_t prof_compute_us = 0;
-            int64_t prof_get_us     = 0;
-            int64_t prof_evict_us   = 0;
-            const bool prof_enabled = std::getenv("SDCPP_STREAM_PROFILE") != nullptr;
-            auto prof_now = []() { return ggml_time_us(); };
-
-            // Phase 4: skip layers already covered by the chunk dispatch.
-            for (int layer_idx = chunk_K; layer_idx < layers_to_run; layer_idx++) {
-                std::string layer_name = layer_name_at(layer_idx);
-
-                int64_t t0 = prof_enabled ? prof_now() : 0;
-
-                // Wait for this layer's prefetch to complete (if async prefetch was started)
-                if (streaming_engine_) {
-                    streaming_engine_->wait_for_prefetch(layer_name);
-                }
-                int64_t t1 = prof_enabled ? prof_now() : 0;
-
-                // Load this layer's weights (sync load if prefetch didn't happen)
-                if (!registry.move_layer_to_gpu(layer_name)) {
-                    LOG_ERROR("Failed to load %s", layer_name.c_str());
-                    return false;
-                }
-                int64_t t2 = prof_enabled ? prof_now() : 0;
-
-                // Keep the prefetch window full
-                if (streaming_engine_) {
-                    streaming_engine_->advance_prefetch(layer_name_at, layer_idx, num_layers);
-                }
-                int64_t t3 = prof_enabled ? prof_now() : 0;
-
-                ggml_tensor* txt_img_out = nullptr;
-
-                auto get_layer_graph = [&]() -> struct ggml_cgraph* {
-                    struct ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE / 4);
-
-                    // Create input tensors in compute_ctx - no need for to_backend() since
-                    // these are created fresh and will be allocated by the graph allocator
-                    ggml_tensor* txt_img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
-                                                                  txt_img_ne[0], txt_img_ne[1], txt_img_ne[2], txt_img_ne[3]);
-                    ggml_tensor* t_emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
-                                                                t_emb_ne[0], t_emb_ne[1], t_emb_ne[2], t_emb_ne[3]);
-
-                    // Schedule data copy from CPU to GPU (happens after graph allocation)
-                    set_backend_tensor_data(txt_img_in, persistent_txt_img);
-                    set_backend_tensor_data(t_emb_in, persistent_t_emb);
-
-                    // PE tensor
-                    int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
-                    auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, z_image_params.axes_dim_sum / 2, pos_len);
-                    set_backend_tensor_data(pe, pe_vec.data());
-
-                    auto runner_ctx = get_context();
-                    txt_img_out = z_image.forward_layer_block(&runner_ctx, layer_idx, txt_img_in, pe, t_emb_in);
-
-                    ggml_build_forward_expand(gf, txt_img_out);
-
-                    return gf;
-                };
-
-                if (!GGMLRunner::compute(get_layer_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("Layer %d execution failed", layer_idx);
-                    return false;
-                }
-                int64_t t4 = prof_enabled ? prof_now() : 0;
-
-                // Extract output
-                if (txt_img_out) {
-                    ggml_backend_tensor_get(txt_img_out, persistent_txt_img, 0, ggml_nbytes(txt_img_out));
-                    for (int i = 0; i < 4; i++) {
-                        txt_img_ne[i] = txt_img_out->ne[i];
+                    // dispatch_resident_chunk writes the K-th layer's output
+                    // into persistent_txt_img_ in place. txt_img_ne_ is
+                    // unchanged by the chunk graph (same shape carries
+                    // through), but refresh from the cached output tensor
+                    // for symmetry with the per-layer post_compute path.
+                    if (!dispatch_resident_chunk(chunk_K, txt_img_ne_, t_emb_ne_,
+                                                  persistent_txt_img_, persistent_t_emb_)) {
+                        LOG_ERROR("z_image: chunk dispatch failed");
+                        return;
+                    }
+                    for (int i = 0; i < 4; ++i) {
+                        txt_img_ne_[i] = chunk_graph_.output()->ne[i];
                     }
                 }
-                int64_t t5 = prof_enabled ? prof_now() : 0;
+            };
 
-                if (prof_enabled) {
-                    prof_wait_us    += t1 - t0;
-                    prof_load_us    += t2 - t1;
-                    prof_advance_us += t3 - t2;
-                    // build+compute happens together inside GGMLRunner::compute;
-                    // we can't separate them without instrumenting ggml_extend.
-                    prof_compute_us += t4 - t3;
-                    prof_get_us     += t5 - t4;
-                }
-
-                // Don't free compute buffer here — every main layer has the same shape
-                // so the gallocr can be reused for the entire sampling step. Freeing here
-                // forces a destroy-and-recreate cycle that idles the GPU between layers.
-
-                // Resident layers stay on GPU across sampling steps; only evict
-                // streamed layers (idx >= resident_layer_count_).
-                if (layer_idx >= resident_layer_count_) {
-                    registry.move_layer_to_cpu(layer_name);
-                }
-            }
-
-            if (prof_enabled) {
-                int64_t total = prof_wait_us + prof_load_us + prof_advance_us +
-                                prof_compute_us + prof_get_us;
-                LOG_INFO("[stream-profile] %d layers: total=%.2fms wait=%.2fms load=%.2fms "
-                         "advance=%.2fms compute=%.2fms tensor_get=%.2fms",
-                         layers_to_run,
-                         total / 1000.0,
-                         prof_wait_us / 1000.0,
-                         prof_load_us / 1000.0,
-                         prof_advance_us / 1000.0,
-                         prof_compute_us / 1000.0,
-                         prof_get_us / 1000.0);
-            }
-
-            // After all main layers are done, free the compute buffer so the output stage
-            // (different graph topology) can allocate a fresh one.
-            free_compute_buffer();
-
-            // Stage 3: Output
-            {
-                auto get_output_graph = [&]() -> struct ggml_cgraph* {
-                    struct ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE / 4);
-
-                    // Create input tensors in compute_ctx - no to_backend() needed
-                    ggml_tensor* txt_img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
-                                                                  txt_img_ne[0], txt_img_ne[1], txt_img_ne[2], txt_img_ne[3]);
-                    ggml_tensor* t_emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
-                                                                t_emb_ne[0], t_emb_ne[1], t_emb_ne[2], t_emb_ne[3]);
-
-                    // Schedule data copy from CPU to GPU
-                    set_backend_tensor_data(txt_img_in, persistent_txt_img);
-                    set_backend_tensor_data(t_emb_in, persistent_t_emb);
-
+            // ---- Stage 2: per-layer factory (streamed layers [K..N)) ----
+            auto layer_factory = [&](int layer_idx, ggml_tensor* prev_gpu_output) -> LayerStreaming::Stage {
+                LayerStreaming::Stage s;
+                s.build_graph = [&, layer_idx, prev_gpu_output]() -> ggml_cgraph* {
+                    ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE / 4);
                     auto runner_ctx = get_context();
-                    auto final_out = z_image.forward_output_stage(&runner_ctx, txt_img_in, t_emb_in);
 
-                    // Extract img portion and unpatchify
-                    int64_t n_img_token = n_img_token_val;
-                    final_out = ggml_ext_slice(compute_ctx, final_out, 1,
-                                               n_txt_token + n_txt_pad_token,
-                                               n_txt_token + n_txt_pad_token + n_img_token);
+                    ggml_tensor* txt_img_in;
+                    if (prev_gpu_output != nullptr) {
+                        // Chained resident-block input (currently unused for
+                        // z_image because chunk-K runs entirely inside
+                        // Stage 1's post_compute, but kept for executor
+                        // contract parity).
+                        txt_img_in = prev_gpu_output;
+                    } else {
+                        txt_img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                        txt_img_ne_[0], txt_img_ne_[1],
+                                                        txt_img_ne_[2], txt_img_ne_[3]);
+                        set_backend_tensor_data(txt_img_in, persistent_txt_img_);
+                    }
 
-                    final_out = DiT::unpatchify_and_crop(compute_ctx, final_out, H, W, patch_size, patch_size, false);
-                    final_out = ggml_ext_scale(compute_ctx, final_out, -1.f);
+                    // t_emb is layer-invariant — always rebind from host.
+                    ggml_tensor* t_emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                                t_emb_ne_[0], t_emb_ne_[1],
+                                                                t_emb_ne_[2], t_emb_ne_[3]);
+                    set_backend_tensor_data(t_emb_in, persistent_t_emb_);
 
-                    ggml_build_forward_expand(gf, final_out);
+                    // PE tensor.
+                    int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
+                    auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2,
+                                                  z_image_params.axes_dim_sum / 2, pos_len);
+                    set_backend_tensor_data(pe, pe_vec.data());
 
+                    layer_txt_img_out_ = z_image.forward_layer_block(&runner_ctx, layer_idx,
+                                                                      txt_img_in, pe, t_emb_in);
+                    ggml_build_forward_expand(gf, layer_txt_img_out_);
                     return gf;
                 };
+                s.post_compute = [&]() {
+                    ggml_backend_tensor_get(layer_txt_img_out_, persistent_txt_img_, 0,
+                                             ggml_nbytes(layer_txt_img_out_));
+                    for (int i = 0; i < 4; ++i) txt_img_ne_[i] = layer_txt_img_out_->ne[i];
+                };
+                return s;
+            };
 
-                if (!GGMLRunner::compute(get_output_graph, n_threads, true, output, output_ctx, true)) {
-                    LOG_ERROR("Output stage failed");
-                    return false;
-                }
-            }
+            // ---- Stage 3: output ----------------------------------------
+            LayerStreaming::Stage output_stage;
+            output_stage.build_graph = [&]() -> ggml_cgraph* {
+                ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE / 4);
+                auto runner_ctx = get_context();
 
-            int64_t t_end = ggml_time_ms();
-            LOG_INFO("TRUE per-layer streaming completed in %.2fs (%d refiners + %d layers)",
-                     (t_end - t_start) / 1000.0, num_refiner_layers, num_layers);
+                ggml_tensor* txt_img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                              txt_img_ne_[0], txt_img_ne_[1],
+                                                              txt_img_ne_[2], txt_img_ne_[3]);
+                set_backend_tensor_data(txt_img_in, persistent_txt_img_);
 
-            return true;
+                ggml_tensor* t_emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                            t_emb_ne_[0], t_emb_ne_[1],
+                                                            t_emb_ne_[2], t_emb_ne_[3]);
+                set_backend_tensor_data(t_emb_in, persistent_t_emb_);
+
+                auto final_out = z_image.forward_output_stage(&runner_ctx, txt_img_in, t_emb_in);
+
+                int64_t n_img_token = n_img_token_val;
+                final_out = ggml_ext_slice(compute_ctx, final_out, 1,
+                                            n_txt_token + n_txt_pad_token,
+                                            n_txt_token + n_txt_pad_token + n_img_token);
+                final_out = DiT::unpatchify_and_crop(compute_ctx, final_out, H, W,
+                                                      patch_size, patch_size, false);
+                final_out = ggml_ext_scale(compute_ctx, final_out, -1.f);
+
+                ggml_build_forward_expand(gf, final_out);
+                return gf;
+            };
+
+            int chunk_K_for_start = std::min(resident_layer_count_ < 0 ? 0 : resident_layer_count_,
+                                              num_layers);
+
+            return LayerStreaming::run_streaming(
+                this, n_threads, streaming_engine_->get_config(),
+                input_stage, layer_factory, output_stage,
+                num_layers,
+                [](int i) { return "layers." + std::to_string(i); },
+                /*start_layer_idx=*/chunk_K_for_start,
+                output, output_ctx);
         }
 
         // Raw pointer overload used by streaming code paths
