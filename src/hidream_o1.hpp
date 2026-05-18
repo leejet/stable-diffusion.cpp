@@ -12,6 +12,7 @@
 
 #include "common_dit.hpp"
 #include "conditioner.hpp"
+#include "layer_streaming_executor.hpp"
 #include "llm.hpp"
 #include "util.h"
 
@@ -339,6 +340,13 @@ namespace HiDreamO1 {
         std::vector<float> persistent_inputs_embeds_fallback;
         std::vector<float> persistent_hidden_fallback;
 
+        // Captured output handles for the three executor stages. build_graph
+        // lambdas write these; post_compute lambdas read them.
+        ggml_tensor* stage1_hidden_out_ = nullptr;
+        ggml_tensor* layer_hidden_out_  = nullptr;
+        int64_t      hidden_ne_[4]      = {0, 0, 0, 0};
+        float*       persistent_hidden_ = nullptr;
+
         HiDreamO1Runner(ggml_backend_t backend,
                         ggml_backend_t params_backend,
                         const String2TensorStorage& tensor_storage_map = {},
@@ -604,18 +612,7 @@ namespace HiDreamO1 {
                                     const std::vector<ggml_tensor*>& ref_images_in,
                                     ggml_tensor** output,
                                     ggml_context* output_ctx) {
-            auto& registry  = streaming_engine_->get_registry();
-            int64_t t_start = ggml_time_ms();
-
             const int num_layers = get_num_layers();
-
-            LOG_INFO("%s TRUE per-layer streaming - %d LLM layers",
-                     get_desc().c_str(), num_layers);
-
-            if (!registry.move_layer_to_gpu("_global")) {
-                LOG_ERROR("%s failed to load _global to GPU", get_desc().c_str());
-                return false;
-            }
 
             // ---- Precompute CPU-side inputs --------------------------------
 
@@ -659,12 +656,10 @@ namespace HiDreamO1 {
 
             // ---- Stage 1: inputs_embeds prelude ----------------------------
 
-            ggml_tensor* inputs_embeds_out = nullptr;
-            int64_t inputs_embeds_ne[4]    = {0, 0, 0, 0};
-
-            auto get_input_graph = [&]() -> struct ggml_cgraph* {
-                struct ggml_cgraph* gf = new_graph_custom(HIDREAM_O1_GRAPH_SIZE / 2);
-                auto runner_ctx        = get_context();
+            LayerStreaming::Stage input_stage;
+            input_stage.build_graph = [&]() -> ggml_cgraph* {
+                ggml_cgraph* gf = new_graph_custom(HIDREAM_O1_GRAPH_SIZE / 2);
+                auto runner_ctx = get_context();
 
                 ggml_tensor* x_be         = to_backend(x_in);
                 ggml_tensor* timestep_be  = to_backend(timestep_in);
@@ -718,126 +713,80 @@ namespace HiDreamO1 {
                                                     true);
                 }
                 ggml_set_name(inputs_embeds, "inputs_embeds_out");
-                inputs_embeds_out = inputs_embeds;
-
-                ggml_build_forward_expand(gf, inputs_embeds);
+                stage1_hidden_out_ = inputs_embeds;
+                ggml_build_forward_expand(gf, stage1_hidden_out_);
                 return gf;
             };
+            input_stage.post_compute = [&]() {
+                const size_t inputs_embeds_n = ggml_nelements(stage1_hidden_out_);
+                for (int i = 0; i < 4; ++i) hidden_ne_[i] = stage1_hidden_out_->ne[i];
 
-            if (!GGMLRunner::compute(get_input_graph, n_threads, false, nullptr, nullptr, true)) {
-                LOG_ERROR("%s Stage 1 (inputs_embeds) failed", get_desc().c_str());
-                return false;
-            }
-
-            if (inputs_embeds_out == nullptr) {
-                LOG_ERROR("%s Stage 1 produced no output", get_desc().c_str());
-                free_compute_buffer();
-                return false;
-            }
-
-            const size_t inputs_embeds_n = ggml_nelements(inputs_embeds_out);
-            for (int i = 0; i < 4; ++i) {
-                inputs_embeds_ne[i] = inputs_embeds_out->ne[i];
-            }
-
-            // Persistent host buffers. Try pinned host (member-scoped); fall
-            // back to pageable. Two buffers because Stage 2 reads "old" hidden
-            // states into one and the layer graph writes "new" into the same
-            // (we just memcpy back). Single buffer suffices since the LLM
-            // layer preserves shape.
-            float* persistent_hidden = nullptr;
-            std::vector<float*> ptrs;
-            if (ensure_pinned_act_buffers({inputs_embeds_n * sizeof(float)}, ptrs)) {
-                persistent_hidden = ptrs[0];
-            } else {
-                persistent_hidden_fallback.resize(inputs_embeds_n);
-                persistent_hidden = persistent_hidden_fallback.data();
-            }
-            ggml_backend_tensor_get(inputs_embeds_out, persistent_hidden,
-                                    0, inputs_embeds_n * sizeof(float));
-            free_compute_buffer();
-
-            // ---- Stage 2: per-layer LLM forward ----------------------------
-
-            auto layer_name_at = [](int i) {
-                return "language_model.layers." + std::to_string(i);
+                std::vector<float*> ptrs;
+                if (ensure_pinned_act_buffers({inputs_embeds_n * sizeof(float)}, ptrs)) {
+                    persistent_hidden_ = ptrs[0];
+                } else {
+                    persistent_hidden_fallback.resize(inputs_embeds_n);
+                    persistent_hidden_ = persistent_hidden_fallback.data();
+                }
+                ggml_backend_tensor_get(stage1_hidden_out_, persistent_hidden_, 0,
+                                        inputs_embeds_n * sizeof(float));
             };
 
-            if (streaming_engine_) {
-                streaming_engine_->prime_prefetch(layer_name_at, 0, num_layers);
-            }
+            // ---- Stage 2: per-layer factory --------------------------------
 
-            for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
-                std::string layer_name = layer_name_at(layer_idx);
+            const int64_t total_seq_len_capture = total_seq_len;
+            auto layer_factory = [&, total_seq_len_capture](int layer_idx,
+                                                            ggml_tensor* prev_gpu_output) -> LayerStreaming::Stage {
+                LayerStreaming::Stage s;
+                s.build_graph = [&, layer_idx, prev_gpu_output, total_seq_len_capture]() -> ggml_cgraph* {
+                    ggml_cgraph* gf = new_graph_custom(HIDREAM_O1_GRAPH_SIZE / 4);
+                    auto runner_ctx = get_context();
 
-                if (streaming_engine_) {
-                    streaming_engine_->wait_for_prefetch(layer_name);
-                }
-                if (!registry.move_layer_to_gpu(layer_name)) {
-                    LOG_ERROR("%s failed to load %s", get_desc().c_str(), layer_name.c_str());
-                    return false;
-                }
-                if (streaming_engine_) {
-                    streaming_engine_->advance_prefetch(layer_name_at, layer_idx, num_layers);
-                }
-
-                ggml_tensor* hidden_out = nullptr;
-
-                auto get_layer_graph = [&]() -> struct ggml_cgraph* {
-                    struct ggml_cgraph* gf = new_graph_custom(HIDREAM_O1_GRAPH_SIZE / 4);
-                    auto runner_ctx        = get_context();
-
-                    ggml_tensor* hidden_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
-                                                                inputs_embeds_ne[0],
-                                                                inputs_embeds_ne[1],
-                                                                inputs_embeds_ne[2],
-                                                                inputs_embeds_ne[3]);
-                    set_backend_tensor_data(hidden_in, persistent_hidden);
+                    ggml_tensor* hidden_in;
+                    if (prev_gpu_output != nullptr) {
+                        hidden_in = prev_gpu_output;
+                    } else {
+                        hidden_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                       hidden_ne_[0], hidden_ne_[1],
+                                                       hidden_ne_[2], hidden_ne_[3]);
+                        set_backend_tensor_data(hidden_in, persistent_hidden_);
+                    }
 
                     ggml_tensor* input_pos_t = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_I32,
                                                                   persistent_input_pos_vec.size());
                     set_backend_tensor_data(input_pos_t, persistent_input_pos_vec.data());
 
                     ggml_tensor* attention_mask_t = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32,
-                                                                       total_seq_len, total_seq_len);
+                                                                       total_seq_len_capture, total_seq_len_capture);
                     set_backend_tensor_data(attention_mask_t, attention_mask_vec.data());
 
                     auto text_model = model.text_model();
-                    hidden_out      = text_model->forward_layer_block(&runner_ctx,
-                                                                       layer_idx,
-                                                                       hidden_in,
-                                                                       input_pos_t,
-                                                                       attention_mask_t);
-                    ggml_build_forward_expand(gf, hidden_out);
+                    layer_hidden_out_ = text_model->forward_layer_block(&runner_ctx,
+                                                                         layer_idx,
+                                                                         hidden_in,
+                                                                         input_pos_t,
+                                                                         attention_mask_t);
+                    ggml_build_forward_expand(gf, layer_hidden_out_);
                     return gf;
                 };
-
-                if (!GGMLRunner::compute(get_layer_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("%s layer %d execution failed", get_desc().c_str(), layer_idx);
-                    return false;
-                }
-
-                if (hidden_out != nullptr) {
-                    ggml_backend_tensor_get(hidden_out, persistent_hidden, 0, ggml_nbytes(hidden_out));
-                }
-
-                registry.move_layer_to_cpu(layer_name);
-            }
-
-            free_compute_buffer();
+                s.post_compute = [&]() {
+                    ggml_backend_tensor_get(layer_hidden_out_, persistent_hidden_, 0,
+                                            ggml_nbytes(layer_hidden_out_));
+                };
+                return s;
+            };
 
             // ---- Stage 3: final norm + final_layer2 + slice + unpatchify ---
 
-            auto get_output_graph = [&]() -> struct ggml_cgraph* {
-                struct ggml_cgraph* gf = new_graph_custom(HIDREAM_O1_GRAPH_SIZE / 2);
-                auto runner_ctx        = get_context();
+            LayerStreaming::Stage output_stage;
+            output_stage.build_graph = [&]() -> ggml_cgraph* {
+                ggml_cgraph* gf = new_graph_custom(HIDREAM_O1_GRAPH_SIZE / 2);
+                auto runner_ctx = get_context();
 
                 ggml_tensor* hidden_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
-                                                            inputs_embeds_ne[0],
-                                                            inputs_embeds_ne[1],
-                                                            inputs_embeds_ne[2],
-                                                            inputs_embeds_ne[3]);
-                set_backend_tensor_data(hidden_in, persistent_hidden);
+                                                            hidden_ne_[0], hidden_ne_[1],
+                                                            hidden_ne_[2], hidden_ne_[3]);
+                set_backend_tensor_data(hidden_in, persistent_hidden_);
 
                 ggml_tensor* x_be = to_backend(x_in);
 
@@ -855,17 +804,15 @@ namespace HiDreamO1 {
                 ggml_build_forward_expand(gf, out);
                 return gf;
             };
+            // output_stage.post_compute left unset; executor writes directly via *output.
 
-            if (!GGMLRunner::compute(get_output_graph, n_threads, true, output, output_ctx, true)) {
-                LOG_ERROR("%s Stage 3 (output) failed", get_desc().c_str());
-                return false;
-            }
-
-            int64_t t_end = ggml_time_ms();
-            LOG_INFO("%s TRUE per-layer streaming completed in %.2fs (%d LLM layers)",
-                     get_desc().c_str(), (t_end - t_start) / 1000.0, num_layers);
-
-            return true;
+            return LayerStreaming::run_streaming(
+                this, n_threads, streaming_engine_->get_config(),
+                input_stage, layer_factory, output_stage,
+                num_layers,
+                [](int i) { return "language_model.layers." + std::to_string(i); },
+                /*start_layer_idx=*/0,
+                output, output_ctx);
         }
     };
 

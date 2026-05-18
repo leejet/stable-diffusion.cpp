@@ -19,16 +19,24 @@ bool run_stage(GGMLRunner*   runner,
                bool          free_buffer_after,
                bool          invoke_post_compute) {
     auto get_graph = stage.build_graph;
+    // If a post_compute will run, defer the compute-buffer free until after
+    // it executes — otherwise ggml_backend_tensor_get on captured output
+    // handles would read from a freed allocation.
+    const bool will_post   = invoke_post_compute && static_cast<bool>(stage.post_compute);
+    const bool free_in_run = free_buffer_after && !will_post;
     if (!runner->GGMLRunner::compute(get_graph,
                                      n_threads,
-                                     /*free_compute_buffer_immediately=*/free_buffer_after,
+                                     /*free_compute_buffer_immediately=*/free_in_run,
                                      output_out,
                                      output_ctx,
                                      /*skip_param_offload=*/true)) {
         return false;
     }
-    if (invoke_post_compute && stage.post_compute) {
+    if (will_post) {
         stage.post_compute();
+        if (free_buffer_after) {
+            runner->free_compute_buffer();
+        }
     }
     return true;
 }
