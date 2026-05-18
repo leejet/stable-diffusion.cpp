@@ -57,11 +57,13 @@ int create_mjpg_avi_from_sd_images(const char* filename,
                                    sd_image_t* images,
                                    int num_images,
                                    int fps,
-                                   int quality = 90);
+                                   int quality             = 90,
+                                   const sd_audio_t* audio = nullptr);
 std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(sd_image_t* images,
                                                               int num_images,
                                                               int fps,
-                                                              int quality = 90);
+                                                              int quality             = 90,
+                                                              const sd_audio_t* audio = nullptr);
 
 #ifdef SD_USE_WEBP
 int create_animated_webp_from_sd_images(const char* filename,
@@ -80,22 +82,32 @@ int create_webm_from_sd_images(const char* filename,
                                sd_image_t* images,
                                int num_images,
                                int fps,
-                               int quality = 90);
+                               int quality             = 90,
+                               const sd_audio_t* audio = nullptr);
 std::vector<uint8_t> create_webm_from_sd_images_to_vector(sd_image_t* images,
                                                           int num_images,
                                                           int fps,
-                                                          int quality = 90);
+                                                          int quality             = 90,
+                                                          const sd_audio_t* audio = nullptr);
 #endif
 
 int create_video_from_sd_images(const char* filename,
                                 sd_image_t* images,
                                 int num_images,
                                 int fps,
-                                int quality = 90);
+                                int quality             = 90,
+                                const sd_audio_t* audio = nullptr);
 std::vector<uint8_t> create_video_from_sd_images_to_vector(const std::string& output_format,
                                                            sd_image_t* images,
                                                            int num_images,
                                                            int fps,
-                                                           int quality = 90);
+                                                           int quality             = 90,
+                                                           const sd_audio_t* audio = nullptr);
+
+bool write_wav_to_file(const std::string& path,
+                       const float* interleaved_samples,
+                       uint64_t sample_count,
+                       uint32_t channels,
+                       uint32_t sample_rate);
 
 #endif  // __MEDIA_IO_H__

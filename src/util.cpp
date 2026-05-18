@@ -25,7 +25,7 @@
 
 #include "ggml-backend.h"
 #include "ggml.h"
-#include "ggml_extend_backend.hpp"
+#include "ggml_extend_backend.h"
 #include "stable-diffusion.h"
 
 bool ends_with(const std::string& str, const std::string& ending) {
@@ -112,7 +112,7 @@ private:
     HANDLE hmapping_;
 };
 
-std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename, bool writable) {
     void* mapped_data = nullptr;
     size_t file_size  = 0;
 
@@ -137,14 +137,18 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
 
     file_size = static_cast<size_t>(size.QuadPart);
 
-    HANDLE mapping_handle = CreateFileMapping(file_handle, nullptr, PAGE_READONLY, 0, 0, nullptr);
+    DWORD page_prot = writable ? PAGE_WRITECOPY : PAGE_READONLY;
+
+    HANDLE mapping_handle = CreateFileMapping(file_handle, nullptr, page_prot, 0, 0, nullptr);
 
     if (mapping_handle == nullptr) {
         CloseHandle(file_handle);
         return nullptr;
     }
 
-    mapped_data = MapViewOfFile(mapping_handle, FILE_MAP_READ, 0, 0, file_size);
+    DWORD view_access = writable ? FILE_MAP_COPY : FILE_MAP_READ;
+
+    mapped_data = MapViewOfFile(mapping_handle, view_access, 0, 0, file_size);
 
     if (mapped_data == nullptr) {
         CloseHandle(mapping_handle);
@@ -172,28 +176,85 @@ bool is_directory(const std::string& path) {
     return (stat(path.c_str(), &buffer) == 0 && S_ISDIR(buffer.st_mode));
 }
 
-class MmapWrapperImpl : public MmapWrapper {
-public:
-    MmapWrapperImpl(void* data, size_t size)
-        : MmapWrapper(data, size) {}
-
-    ~MmapWrapperImpl() override {
-        munmap(data_, size_);
-    }
+struct MmapFlags {
+    bool sequential;
+    bool populate;
+    bool willneed;
+    bool dontneed;
 };
 
-std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
+static MmapFlags get_mmap_flags() {
+    MmapFlags result          = {};
+    const char* SD_MMAP_FLAGS = std::getenv("SD_MMAP_FLAGS");
+    if (SD_MMAP_FLAGS && *SD_MMAP_FLAGS) {
+        std::stringstream ss(SD_MMAP_FLAGS);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            std::string ntoken = trim(token);
+            std::transform(ntoken.begin(), ntoken.end(), ntoken.begin(), ::tolower);
+            if (ntoken == "sequential") {
+                result.sequential = true;
+            } else if (ntoken == "populate") {
+                result.populate = true;
+            } else if (ntoken == "willneed") {
+                result.willneed = true;
+            } else if (ntoken == "dontneed") {
+                result.dontneed = true;
+            }
+        }
+    }
+    return result;
+}
+
+class MmapWrapperImpl : public MmapWrapper {
+public:
+    MmapWrapperImpl(void* data, size_t size, int fd)
+        : MmapWrapper(data, size), fd_(fd) {}
+
+    ~MmapWrapperImpl() override {
+#ifdef __linux__
+        auto cfg_flags = get_mmap_flags();
+
+        // Drop the kernel pagecache pages for this file. madvise(DONTNEED)
+        // alone only unmaps from the process address space; pagecache
+        // entries persist (`free` reports them as buff/cache and the OOM
+        // killer doesn't touch them, but they ARE counted against
+        // overcommit and can starve other allocations on tight-RAM
+        // systems). posix_fadvise(POSIX_FADV_DONTNEED) is the documented
+        // way to evict pagecache for a specific fd's pages.
+        if (cfg_flags.dontneed) {
+            madvise(data_, size_, MADV_DONTNEED);
+            posix_fadvise(fd_, 0, 0, POSIX_FADV_DONTNEED);
+        }
+#endif
+        munmap(data_, size_);
+        close(fd_);
+    }
+
+private:
+    int fd_;
+};
+
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename, bool writable) {
     int file_descriptor = open(filename.c_str(), O_RDONLY);
     if (file_descriptor == -1) {
         return nullptr;
     }
 
+    auto cfg_flags = get_mmap_flags();
+
     int mmap_flags = MAP_PRIVATE;
 
 #ifdef __linux__
-    // performance flags used by llama.cpp
-    // posix_fadvise(file_descriptor, 0, 0, POSIX_FADV_SEQUENTIAL);
-    // mmap_flags |= MAP_POPULATE;
+    // Sequential access hint helps the kernel read-ahead efficiently and
+    // also encourages eviction of already-read pages (the kernel keeps
+    // a smaller working set when this is set).
+    if (cfg_flags.sequential) {
+        posix_fadvise(file_descriptor, 0, 0, POSIX_FADV_SEQUENTIAL);
+    }
+    if (cfg_flags.populate) {
+        mmap_flags |= MAP_POPULATE;
+    }
 #endif
 
     struct stat sb;
@@ -204,20 +265,27 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
 
     size_t file_size = sb.st_size;
 
-    void* mapped_data = mmap(nullptr, file_size, PROT_READ, mmap_flags, file_descriptor, 0);
+    if (file_size == 0) {
+        close(file_descriptor);
+        return nullptr;
+    }
 
-    close(file_descriptor);
+    int mmap_prot = PROT_READ | (writable ? PROT_WRITE : 0);
+
+    void* mapped_data = mmap(nullptr, file_size, mmap_prot, mmap_flags, file_descriptor, 0);
 
     if (mapped_data == MAP_FAILED) {
+        close(file_descriptor);
         return nullptr;
     }
 
 #ifdef __linux__
-    // performance flags used by llama.cpp
-    // posix_madvise(mapped_data, file_size, POSIX_MADV_WILLNEED);
+    if (cfg_flags.willneed) {
+        posix_madvise(mapped_data, file_size, POSIX_MADV_WILLNEED);
+    }
 #endif
 
-    return std::make_unique<MmapWrapperImpl>(mapped_data, file_size);
+    return std::make_unique<MmapWrapperImpl>(mapped_data, file_size, file_descriptor);
 }
 
 #endif
@@ -688,76 +756,6 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
     }
 
     return res;
-}
-
-// test if the backend is a specific one, e.g. "CUDA", "ROCm", "Vulkan" etc.
-bool sd_backend_is(ggml_backend_t backend, const std::string& name) {
-    if (!backend) {
-        return false;
-    }
-    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
-    if (!dev)
-        return false;
-    std::string dev_name = ggml_backend_dev_name(dev);
-    return dev_name.find(name) != std::string::npos;
-}
-
-ggml_backend_t sd_get_default_backend() {
-    ggml_backend_load_all_once();
-    static std::once_flag once;
-    std::call_once(once, []() {
-        size_t dev_count = ggml_backend_dev_count();
-        if (dev_count == 0) {
-            LOG_ERROR("No devices found!");
-        } else {
-            LOG_DEBUG("Found %zu backend devices:", dev_count);
-            for (size_t i = 0; i < dev_count; ++i) {
-                auto dev = ggml_backend_dev_get(i);
-                LOG_DEBUG("#%zu: %s", i, ggml_backend_dev_name(dev));
-            }
-        }
-    });
-    ggml_backend_t backend   = nullptr;
-    const char* SD_VK_DEVICE = getenv("SD_VK_DEVICE");
-    if (SD_VK_DEVICE != nullptr) {
-        std::string sd_vk_device_str = SD_VK_DEVICE;
-        try {
-            unsigned long long device  = std::stoull(sd_vk_device_str);
-            std::string vk_device_name = "Vulkan" + std::to_string(device);
-            if (backend_name_exists(vk_device_name)) {
-                LOG_INFO("Selecting %s as main device by env var SD_VK_DEVICE", vk_device_name.c_str());
-                backend = init_named_backend(vk_device_name);
-                if (!backend) {
-                    LOG_WARN("Device %s requested by SD_VK_DEVICE failed to init. Falling back to the default device.", vk_device_name.c_str());
-                }
-            } else {
-                LOG_WARN("Device %s requested by SD_VK_DEVICE was not found. Falling back to the default device.", vk_device_name.c_str());
-            }
-        } catch (const std::invalid_argument&) {
-            LOG_WARN("SD_VK_DEVICE environment variable is not a valid integer (%s). Falling back to the default device.", SD_VK_DEVICE);
-        } catch (const std::out_of_range&) {
-            LOG_WARN("SD_VK_DEVICE environment variable value is out of range for `unsigned long long` type (%s). Falling back to the default device.", SD_VK_DEVICE);
-        }
-    }
-
-    if (!backend) {
-        std::string dev_name = get_default_backend_name();
-        backend              = init_named_backend(dev_name);
-        if (!backend && !dev_name.empty()) {
-            LOG_WARN("device %s failed to init", dev_name.c_str());
-        }
-    }
-
-    if (!backend) {
-        LOG_WARN("loading CPU backend");
-        backend = ggml_backend_cpu_init();
-    }
-
-    if (ggml_backend_is_cpu(backend)) {
-        LOG_DEBUG("Using CPU backend");
-    }
-
-    return backend;
 }
 
 // namespace is needed to avoid conflicts with ggml_backend_extend.hpp

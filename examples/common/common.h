@@ -92,7 +92,9 @@ struct SDContextParams {
     std::string llm_vision_path;
     std::string diffusion_model_path;
     std::string high_noise_diffusion_model_path;
+    std::string embeddings_connectors_path;
     std::string vae_path;
+    std::string audio_vae_path;
     std::string taesd_path;
     std::string esrgan_path;
     std::string control_net_path;
@@ -110,14 +112,16 @@ struct SDContextParams {
     rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
     bool offload_params_to_cpu  = false;
     float max_vram              = 0.f;
-    bool enable_mmap            = false;
-    bool control_net_cpu        = false;
-    bool clip_on_cpu            = false;
-    bool vae_on_cpu             = false;
-    bool flash_attn             = false;
-    bool diffusion_flash_attn   = false;
-    bool diffusion_conv_direct  = false;
-    bool vae_conv_direct        = false;
+    std::string backend;
+    std::string params_backend;
+    bool enable_mmap           = false;
+    bool control_net_cpu       = false;
+    bool clip_on_cpu           = false;
+    bool vae_on_cpu            = false;
+    bool flash_attn            = false;
+    bool diffusion_flash_attn  = false;
+    bool diffusion_conv_direct = false;
+    bool vae_conv_direct       = false;
 
     bool circular   = false;
     bool circular_x = false;
@@ -168,6 +172,8 @@ struct SDGenerationParams {
 
     sd_sample_params_t sample_params;
     sd_sample_params_t high_noise_sample_params;
+    std::string extra_sample_args;
+    std::string high_noise_extra_sample_args;
     std::vector<int> skip_layers            = {7, 8, 9};
     std::vector<int> high_noise_skip_layers = {7, 8, 9};
 
@@ -183,7 +189,7 @@ struct SDGenerationParams {
     int video_frames                     = 1;
     int fps                              = 16;
     float vace_strength                  = 1.f;
-    sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
+    sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f};
 
     std::string pm_id_images_dir;
     std::string pm_id_embed_path;

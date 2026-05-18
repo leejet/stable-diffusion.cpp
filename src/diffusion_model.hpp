@@ -5,6 +5,8 @@
 #include "anima.hpp"
 #include "ernie_image.hpp"
 #include "flux.hpp"
+#include "hidream_o1.hpp"
+#include "ltxv.hpp"
 #include "mmdit.hpp"
 #include "qwen_image.hpp"
 #include "tensor_ggml.hpp"
@@ -13,22 +15,33 @@
 #include "z_image.hpp"
 
 struct DiffusionParams {
-    const sd::Tensor<float>* x                        = nullptr;
-    const sd::Tensor<float>* timesteps                = nullptr;
-    const sd::Tensor<float>* context                  = nullptr;
-    const sd::Tensor<float>* c_concat                 = nullptr;
-    const sd::Tensor<float>* y                        = nullptr;
-    const sd::Tensor<int32_t>* t5_ids                 = nullptr;
-    const sd::Tensor<float>* t5_weights               = nullptr;
-    const sd::Tensor<float>* guidance                 = nullptr;
-    const std::vector<sd::Tensor<float>>* ref_latents = nullptr;
-    bool increase_ref_index                           = false;
-    int num_video_frames                              = -1;
-    const std::vector<sd::Tensor<float>>* controls    = nullptr;
-    float control_strength                            = 0.f;
-    const sd::Tensor<float>* vace_context             = nullptr;
-    float vace_strength                               = 1.f;
-    const std::vector<int>* skip_layers               = nullptr;
+    const sd::Tensor<float>* x                                         = nullptr;
+    const sd::Tensor<float>* timesteps                                 = nullptr;
+    const sd::Tensor<float>* audio_x                                   = nullptr;
+    const sd::Tensor<float>* audio_timesteps                           = nullptr;
+    const sd::Tensor<float>* context                                   = nullptr;
+    const sd::Tensor<float>* c_concat                                  = nullptr;
+    const sd::Tensor<float>* y                                         = nullptr;
+    const sd::Tensor<int32_t>* t5_ids                                  = nullptr;
+    const sd::Tensor<float>* t5_weights                                = nullptr;
+    const sd::Tensor<float>* guidance                                  = nullptr;
+    const std::vector<sd::Tensor<float>>* ref_latents                  = nullptr;
+    const sd::Tensor<int32_t>* input_ids                               = nullptr;
+    const sd::Tensor<int32_t>* input_pos                               = nullptr;
+    const sd::Tensor<int32_t>* token_types                             = nullptr;
+    const sd::Tensor<int32_t>* vinput_mask                             = nullptr;
+    const std::vector<sd::Tensor<float>>* vlm_images                   = nullptr;
+    const std::vector<std::pair<int, sd::Tensor<float>>>* image_embeds = nullptr;
+    bool increase_ref_index                                            = false;
+    int num_video_frames                                               = -1;
+    const std::vector<sd::Tensor<float>>* controls                     = nullptr;
+    float control_strength                                             = 0.f;
+    const sd::Tensor<float>* vace_context                              = nullptr;
+    float vace_strength                                                = 1.f;
+    int audio_length                                                   = 0;
+    float frame_rate                                                   = 24.f;
+    const sd::Tensor<float>* video_positions                           = nullptr;
+    const std::vector<int>* skip_layers                                = nullptr;
 };
 
 template <typename T>
@@ -57,10 +70,10 @@ struct UNetModel : public DiffusionModel {
     UNetModelRunner unet;
 
     UNetModel(ggml_backend_t backend,
-              bool offload_params_to_cpu,
+              ggml_backend_t params_backend,
               const String2TensorStorage& tensor_storage_map = {},
               SDVersion version                              = VERSION_SD1)
-        : unet(backend, offload_params_to_cpu, tensor_storage_map, "model.diffusion_model", version) {
+        : unet(backend, params_backend, tensor_storage_map, "model.diffusion_model", version) {
     }
 
     std::string get_desc() override {
@@ -128,9 +141,9 @@ struct MMDiTModel : public DiffusionModel {
     MMDiTRunner mmdit;
 
     MMDiTModel(ggml_backend_t backend,
-               bool offload_params_to_cpu,
+               ggml_backend_t params_backend,
                const String2TensorStorage& tensor_storage_map = {})
-        : mmdit(backend, offload_params_to_cpu, tensor_storage_map, "model.diffusion_model") {
+        : mmdit(backend, params_backend, tensor_storage_map, "model.diffusion_model") {
     }
 
     std::string get_desc() override {
@@ -195,11 +208,11 @@ struct FluxModel : public DiffusionModel {
     Flux::FluxRunner flux;
 
     FluxModel(ggml_backend_t backend,
-              bool offload_params_to_cpu,
+              ggml_backend_t params_backend,
               const String2TensorStorage& tensor_storage_map = {},
               SDVersion version                              = VERSION_FLUX,
               bool use_mask                                  = false)
-        : flux(backend, offload_params_to_cpu, tensor_storage_map, "model.diffusion_model", version, use_mask) {
+        : flux(backend, params_backend, tensor_storage_map, "model.diffusion_model", version, use_mask) {
     }
 
     std::string get_desc() override {
@@ -270,10 +283,10 @@ struct AnimaModel : public DiffusionModel {
     Anima::AnimaRunner anima;
 
     AnimaModel(ggml_backend_t backend,
-               bool offload_params_to_cpu,
+               ggml_backend_t params_backend,
                const String2TensorStorage& tensor_storage_map = {},
                const std::string prefix                       = "model.diffusion_model")
-        : prefix(prefix), anima(backend, offload_params_to_cpu, tensor_storage_map, prefix) {
+        : prefix(prefix), anima(backend, params_backend, tensor_storage_map, prefix) {
     }
 
     std::string get_desc() override {
@@ -338,11 +351,11 @@ struct WanModel : public DiffusionModel {
     WAN::WanRunner wan;
 
     WanModel(ggml_backend_t backend,
-             bool offload_params_to_cpu,
+             ggml_backend_t params_backend,
              const String2TensorStorage& tensor_storage_map = {},
              const std::string prefix                       = "model.diffusion_model",
              SDVersion version                              = VERSION_WAN2)
-        : prefix(prefix), wan(backend, offload_params_to_cpu, tensor_storage_map, prefix, version) {
+        : prefix(prefix), wan(backend, params_backend, tensor_storage_map, prefix, version) {
     }
 
     std::string get_desc() override {
@@ -410,12 +423,12 @@ struct QwenImageModel : public DiffusionModel {
     Qwen::QwenImageRunner qwen_image;
 
     QwenImageModel(ggml_backend_t backend,
-                   bool offload_params_to_cpu,
+                   ggml_backend_t params_backend,
                    const String2TensorStorage& tensor_storage_map = {},
                    const std::string prefix                       = "model.diffusion_model",
                    SDVersion version                              = VERSION_QWEN_IMAGE,
                    bool zero_cond_t                               = false)
-        : prefix(prefix), qwen_image(backend, offload_params_to_cpu, tensor_storage_map, prefix, version, zero_cond_t) {
+        : prefix(prefix), qwen_image(backend, params_backend, tensor_storage_map, prefix, version, zero_cond_t) {
     }
 
     std::string get_desc() override {
@@ -476,16 +489,92 @@ struct QwenImageModel : public DiffusionModel {
     }
 };
 
+struct HiDreamO1Model : public DiffusionModel {
+    std::string prefix;
+    HiDreamO1::HiDreamO1Runner hidream_o1;
+
+    HiDreamO1Model(ggml_backend_t backend,
+                   ggml_backend_t params_backend,
+                   const String2TensorStorage& tensor_storage_map = {},
+                   const std::string& prefix                      = "model")
+        : prefix(prefix), hidream_o1(backend, params_backend, tensor_storage_map, prefix) {
+    }
+
+    std::string get_desc() override {
+        return hidream_o1.get_desc();
+    }
+
+    void alloc_params_buffer() override {
+        hidream_o1.alloc_params_buffer();
+    }
+
+    void free_params_buffer() override {
+        hidream_o1.free_params_buffer();
+    }
+
+    void free_compute_buffer() override {
+        hidream_o1.free_compute_buffer();
+    }
+
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        hidream_o1.get_param_tensors(tensors, prefix);
+    }
+
+    size_t get_params_buffer_size() override {
+        return hidream_o1.get_params_buffer_size();
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        hidream_o1.set_weight_adapter(adapter);
+    }
+
+    int64_t get_adm_in_channels() override {
+        return 0;
+    }
+
+    void set_flash_attention_enabled(bool enabled) {
+        hidream_o1.set_flash_attention_enabled(enabled);
+    }
+
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        hidream_o1.set_max_graph_vram_bytes(max_vram_bytes);
+    }
+
+    void set_circular_axes(bool circular_x, bool circular_y) override {
+        hidream_o1.set_circular_axes(circular_x, circular_y);
+    }
+
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
+        GGML_ASSERT(diffusion_params.input_ids != nullptr);
+        GGML_ASSERT(diffusion_params.input_pos != nullptr);
+        GGML_ASSERT(diffusion_params.token_types != nullptr);
+        static const std::vector<sd::Tensor<float>> empty_images;
+        static const std::vector<std::pair<int, sd::Tensor<float>>> empty_image_embeds;
+        return hidream_o1.compute(n_threads,
+                                  *diffusion_params.x,
+                                  *diffusion_params.timesteps,
+                                  *diffusion_params.input_ids,
+                                  *diffusion_params.input_pos,
+                                  *diffusion_params.token_types,
+                                  tensor_or_empty(diffusion_params.vinput_mask),
+                                  diffusion_params.image_embeds ? *diffusion_params.image_embeds : empty_image_embeds,
+                                  diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_images);
+    }
+};
+
 struct ZImageModel : public DiffusionModel {
     std::string prefix;
     ZImage::ZImageRunner z_image;
 
     ZImageModel(ggml_backend_t backend,
-                bool offload_params_to_cpu,
+                ggml_backend_t params_backend,
                 const String2TensorStorage& tensor_storage_map = {},
                 const std::string prefix                       = "model.diffusion_model",
                 SDVersion version                              = VERSION_Z_IMAGE)
-        : prefix(prefix), z_image(backend, offload_params_to_cpu, tensor_storage_map, prefix, version) {
+        : prefix(prefix), z_image(backend, params_backend, tensor_storage_map, prefix, version) {
     }
 
     std::string get_desc() override {
@@ -551,10 +640,10 @@ struct ErnieImageModel : public DiffusionModel {
     ErnieImage::ErnieImageRunner ernie_image;
 
     ErnieImageModel(ggml_backend_t backend,
-                    bool offload_params_to_cpu,
+                    ggml_backend_t params_backend,
                     const String2TensorStorage& tensor_storage_map = {},
                     const std::string prefix                       = "model.diffusion_model")
-        : prefix(prefix), ernie_image(backend, offload_params_to_cpu, tensor_storage_map, prefix) {
+        : prefix(prefix), ernie_image(backend, params_backend, tensor_storage_map, prefix) {
     }
 
     std::string get_desc() override {
@@ -609,6 +698,77 @@ struct ErnieImageModel : public DiffusionModel {
                                    *diffusion_params.x,
                                    *diffusion_params.timesteps,
                                    tensor_or_empty(diffusion_params.context));
+    }
+};
+
+struct LTXAVModel : public DiffusionModel {
+    std::string prefix;
+    LTXV::LTXAVRunner ltxav;
+
+    LTXAVModel(ggml_backend_t backend,
+               ggml_backend_t params_backend,
+               const String2TensorStorage& tensor_storage_map = {},
+               const std::string prefix                       = "model.diffusion_model")
+        : prefix(prefix), ltxav(backend, params_backend, tensor_storage_map, prefix) {
+    }
+
+    std::string get_desc() override {
+        return ltxav.get_desc();
+    }
+
+    void alloc_params_buffer() override {
+        ltxav.alloc_params_buffer();
+    }
+
+    void free_params_buffer() override {
+        ltxav.free_params_buffer();
+    }
+
+    void free_compute_buffer() override {
+        ltxav.free_compute_buffer();
+    }
+
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        ltxav.get_param_tensors(tensors, prefix);
+    }
+
+    size_t get_params_buffer_size() override {
+        return ltxav.get_params_buffer_size();
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        ltxav.set_weight_adapter(adapter);
+    }
+
+    int64_t get_adm_in_channels() override {
+        return 0;
+    }
+
+    void set_flash_attention_enabled(bool enabled) override {
+        ltxav.set_flash_attention_enabled(enabled);
+    }
+
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        ltxav.set_max_graph_vram_bytes(max_vram_bytes);
+    }
+
+    void set_circular_axes(bool circular_x, bool circular_y) override {
+        ltxav.set_circular_axes(circular_x, circular_y);
+    }
+
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
+        return ltxav.compute(n_threads,
+                             *diffusion_params.x,
+                             *diffusion_params.timesteps,
+                             tensor_or_empty(diffusion_params.context),
+                             tensor_or_empty(diffusion_params.audio_x),
+                             tensor_or_empty(diffusion_params.audio_timesteps),
+                             diffusion_params.audio_length,
+                             diffusion_params.frame_rate,
+                             tensor_or_empty(diffusion_params.video_positions));
     }
 };
 

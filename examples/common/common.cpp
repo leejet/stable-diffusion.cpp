@@ -341,9 +341,17 @@ ArgOptions SDContextParams::get_options() {
          "path to the standalone high noise diffusion model",
          &high_noise_diffusion_model_path},
         {"",
+         "--embeddings-connectors",
+         "path to LTXAV embeddings connectors",
+         &embeddings_connectors_path},
+        {"",
          "--vae",
          "path to standalone vae model",
          &vae_path},
+        {"",
+         "--audio-vae",
+         "path to standalone LTX audio vae model",
+         &audio_vae_path},
         {"",
          "--taesd",
          "path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)",
@@ -380,6 +388,14 @@ ArgOptions SDContextParams::get_options() {
          "--upscale-model",
          "path to esrgan model.",
          &esrgan_path},
+        {"",
+         "--backend",
+         "runtime backend assignment, e.g. cpu or clip=cpu,vae=cuda0,diffusion=vulkan0",
+         &backend},
+        {"",
+         "--params-backend",
+         "parameter backend assignment, e.g. cpu or diffusion=cpu,clip=cpu",
+         &params_backend},
     };
 
     options.int_options = {
@@ -397,7 +413,7 @@ ArgOptions SDContextParams::get_options() {
     options.float_options = {
         {"",
          "--max-vram",
-         "maximum VRAM budget in GiB for graph-cut segmented execution. 0 disables graph splitting",
+         "maximum VRAM budget in GiB for graph-cut segmented execution. 0 disables graph splitting; -1 auto-detects free VRAM minus 1 GiB",
          &max_vram},
     };
 
@@ -661,7 +677,9 @@ std::string SDContextParams::to_string() const {
         << "  llm_vision_path: \"" << llm_vision_path << "\",\n"
         << "  diffusion_model_path: \"" << diffusion_model_path << "\",\n"
         << "  high_noise_diffusion_model_path: \"" << high_noise_diffusion_model_path << "\",\n"
+        << "  embeddings_connectors_path: \"" << embeddings_connectors_path << "\",\n"
         << "  vae_path: \"" << vae_path << "\",\n"
+        << "  audio_vae_path: \"" << audio_vae_path << "\",\n"
         << "  taesd_path: \"" << taesd_path << "\",\n"
         << "  esrgan_path: \"" << esrgan_path << "\",\n"
         << "  control_net_path: \"" << control_net_path << "\",\n"
@@ -676,6 +694,8 @@ std::string SDContextParams::to_string() const {
         << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
         << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
         << "  max_vram: " << max_vram << ",\n"
+        << "  backend: \"" << backend << "\",\n"
+        << "  params_backend: \"" << params_backend << "\",\n"
         << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
         << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
         << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
@@ -718,7 +738,9 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         llm_vision_path.c_str(),
         diffusion_model_path.c_str(),
         high_noise_diffusion_model_path.c_str(),
+        embeddings_connectors_path.c_str(),
         vae_path.c_str(),
+        audio_vae_path.c_str(),
         taesd_path.c_str(),
         control_net_path.c_str(),
         embedding_vec.data(),
@@ -751,6 +773,8 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         chroma_t5_mask_pad,
         qwen_image_zero_cond_t,
         max_vram,
+        backend.c_str(),
+        params_backend.c_str(),
     };
     return sd_ctx_params;
 }
@@ -807,6 +831,10 @@ ArgOptions SDGenerationParams::get_options() {
          "Latent (antialiased), Latent (bicubic), Latent (bicubic antialiased), or a model name "
          "under --hires-upscalers-dir (default: Latent)",
          &hires_upscaler},
+        {"",
+         "--extra-sample-args",
+         "extra sampler/scheduler args, key=value list. lcm supports noise_clip_std, noise_scale_start, noise_scale_end; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma",
+         &extra_sample_args},
     };
 
     options.int_options = {
@@ -990,6 +1018,11 @@ ArgOptions SDGenerationParams::get_options() {
          "process vae in tiles to reduce memory usage",
          true,
          &vae_tiling_params.enabled},
+        {"",
+         "--temporal-tiling",
+         "enable temporal tiling for LTX video VAE decode",
+         true,
+         &vae_tiling_params.temporal_tiling},
         {"",
          "--hires",
          "enable highres fix",
@@ -1244,17 +1277,17 @@ ArgOptions SDGenerationParams::get_options() {
          on_seed_arg},
         {"",
          "--sampling-method",
-         "sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde] "
+         "sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde, euler_cfg_pp, euler_a_cfg_pp]"
          "(default: euler for Flux/SD3/Wan, euler_a otherwise)",
          on_sample_method_arg},
         {"",
          "--high-noise-sampling-method",
-         "(high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde]"
+         "(high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde, euler_cfg_pp, euler_a_cfg_pp]"
          " default: euler for Flux/SD3/Wan, euler_a otherwise",
          on_high_noise_sample_method_arg},
         {"",
          "--scheduler",
-         "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm, bong_tangent], default: discrete",
+         "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm, bong_tangent, ltx2], default: model-specific",
          on_scheduler_arg},
         {"",
          "--sigmas",
@@ -1607,6 +1640,7 @@ bool SDGenerationParams::from_json_str(
 
     auto parse_sample_params_json = [&](const json& sample_json,
                                         sd_sample_params_t& target_params,
+                                        std::string& target_extra_sample_args,
                                         std::vector<int>& target_skip_layers,
                                         std::vector<float>* target_custom_sigmas) {
         if (sample_json.contains("sample_steps") && sample_json["sample_steps"].is_number_integer()) {
@@ -1620,6 +1654,9 @@ bool SDGenerationParams::from_json_str(
         }
         if (sample_json.contains("flow_shift") && sample_json["flow_shift"].is_number()) {
             target_params.flow_shift = sample_json["flow_shift"];
+        }
+        if (sample_json.contains("extra_sample_args") && sample_json["extra_sample_args"].is_string()) {
+            target_extra_sample_args = sample_json["extra_sample_args"].get<std::string>();
         }
         if (target_custom_sigmas != nullptr &&
             sample_json.contains("custom_sigmas") &&
@@ -1668,11 +1705,12 @@ bool SDGenerationParams::from_json_str(
     };
 
     if (j.contains("sample_params") && j["sample_params"].is_object()) {
-        parse_sample_params_json(j["sample_params"], sample_params, skip_layers, &custom_sigmas);
+        parse_sample_params_json(j["sample_params"], sample_params, extra_sample_args, skip_layers, &custom_sigmas);
     }
     if (j.contains("high_noise_sample_params") && j["high_noise_sample_params"].is_object()) {
         parse_sample_params_json(j["high_noise_sample_params"],
                                  high_noise_sample_params,
+                                 high_noise_extra_sample_args,
                                  high_noise_skip_layers,
                                  nullptr);
     }
@@ -1681,6 +1719,9 @@ bool SDGenerationParams::from_json_str(
         const json& tiling_json = j["vae_tiling_params"];
         if (tiling_json.contains("enabled") && tiling_json["enabled"].is_boolean()) {
             vae_tiling_params.enabled = tiling_json["enabled"];
+        }
+        if (tiling_json.contains("temporal_tiling") && tiling_json["temporal_tiling"].is_boolean()) {
+            vae_tiling_params.temporal_tiling = tiling_json["temporal_tiling"];
         }
         if (tiling_json.contains("tile_size_x") && tiling_json["tile_size_x"].is_number_integer()) {
             vae_tiling_params.tile_size_x = tiling_json["tile_size_x"];
@@ -2099,6 +2140,8 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     high_noise_sample_params.guidance.slg.layer_count = high_noise_skip_layers.size();
     sample_params.custom_sigmas                       = custom_sigmas.empty() ? nullptr : custom_sigmas.data();
     sample_params.custom_sigmas_count                 = static_cast<int>(custom_sigmas.size());
+    sample_params.extra_sample_args                   = extra_sample_args.empty() ? nullptr : extra_sample_args.c_str();
+    high_noise_sample_params.extra_sample_args        = high_noise_extra_sample_args.empty() ? nullptr : high_noise_extra_sample_args.c_str();
     cache_params.scm_mask                             = scm_mask.empty() ? nullptr : scm_mask.c_str();
 
     sd_pm_params_t pm_params = {
@@ -2168,6 +2211,8 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
     high_noise_sample_params.guidance.slg.layer_count = high_noise_skip_layers.size();
     sample_params.custom_sigmas                       = custom_sigmas.empty() ? nullptr : custom_sigmas.data();
     sample_params.custom_sigmas_count                 = static_cast<int>(custom_sigmas.size());
+    sample_params.extra_sample_args                   = extra_sample_args.empty() ? nullptr : extra_sample_args.c_str();
+    high_noise_sample_params.extra_sample_args        = high_noise_extra_sample_args.empty() ? nullptr : high_noise_extra_sample_args.c_str();
     cache_params.scm_mask                             = scm_mask.empty() ? nullptr : scm_mask.c_str();
 
     params.loras                    = lora_vec.empty() ? nullptr : lora_vec.data();
@@ -2187,6 +2232,7 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
     params.strength                 = strength;
     params.seed                     = seed;
     params.video_frames             = video_frames;
+    params.fps                      = fps;
     params.vace_strength            = vace_strength;
     params.vae_tiling_params        = vae_tiling_params;
     params.cache                    = cache_params;
@@ -2275,6 +2321,7 @@ std::string SDGenerationParams::to_string() const {
         << ", upscale_tile_size: " << hires_upscale_tile_size << " },\n"
         << "  vae_tiling_params: { "
         << vae_tiling_params.enabled << ", "
+        << vae_tiling_params.temporal_tiling << ", "
         << vae_tiling_params.tile_size_x << ", "
         << vae_tiling_params.tile_size_y << ", "
         << vae_tiling_params.target_overlap << ", "
@@ -2306,6 +2353,7 @@ static json build_sampling_metadata_json(const sd_sample_params_t& sample_params
         {"eta", sample_params.eta},
         {"shifted_timestep", sample_params.shifted_timestep},
         {"flow_shift", sample_params.flow_shift},
+        {"extra_sample_args", safe_json_string(sample_params.extra_sample_args)},
         {"guidance",
          {
              {"txt_cfg", sample_params.guidance.txt_cfg},
@@ -2497,6 +2545,9 @@ std::string get_image_params(const SDContextParams& ctx_params,
     }
     parameter_string += "Guidance: " + std::to_string(gen_params.sample_params.guidance.distilled_guidance) + ", ";
     parameter_string += "Eta: " + std::to_string(gen_params.sample_params.eta) + ", ";
+    if (!gen_params.extra_sample_args.empty()) {
+        parameter_string += "Extra sample args: " + gen_params.extra_sample_args + ", ";
+    }
     parameter_string += "Seed: " + std::to_string(seed) + ", ";
     parameter_string += "Size: " + std::to_string(gen_params.get_resolved_width()) + "x" + std::to_string(gen_params.get_resolved_height()) + ", ";
     parameter_string += "Model: " + sd_basename(ctx_params.model_path) + ", ";
