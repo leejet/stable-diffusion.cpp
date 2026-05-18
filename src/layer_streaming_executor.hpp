@@ -47,10 +47,12 @@ using PerLayerStageFactory =
 //   1. analyze_vram_budget() -> coarse fallback when model fits, else per-layer.
 //   2. Load _global params.
 //   3. Run input_stage (build -> compute -> post_compute).
-//   4. Build/cache and run the chunk-K resident mega-graph if any layers are
-//      resident. Only the final chunk layer's post_compute is invoked;
-//      intermediate layers feed each other on-GPU.
-//   5. Per-layer loop for non-resident layers, with async prefetch.
+//   4. (Caller's responsibility) — if the model dispatches a chunk-K resident
+//      mega-graph for layers [0..K-1] before calling run_streaming, it passes
+//      start_layer_idx=K so the executor's per-layer loop and prefetch begin
+//      at K. The model owns chunk-graph construction, caching, and dispatch;
+//      typically via the LayerStreaming::ChunkGraph helper in chunk_graph.hpp.
+//   5. Per-layer loop [start_layer_idx, num_layers), with async prefetch.
 //   6. Run output_stage (build -> compute), writing into *output_out via
 //      output_ctx. output_stage.post_compute is not called — the executor
 //      writes results directly into the caller's buffer.
@@ -69,8 +71,13 @@ bool run_streaming(GGMLRunner*                     runner,
                    Stage                           output_stage,
                    int                             num_layers,
                    std::function<std::string(int)> layer_name_at,
-                   ggml_tensor**                   output_out,
-                   ggml_context*                   output_ctx);
+                   // First layer index to stream. Callers using chunk-K
+                   // resident dispatch pass start_layer_idx = K so the
+                   // executor skips the already-dispatched resident block.
+                   // Default 0 = stream every layer.
+                   int                             start_layer_idx = 0,
+                   ggml_tensor**                   output_out      = nullptr,
+                   ggml_context*                   output_ctx      = nullptr);
 
 }  // namespace LayerStreaming
 

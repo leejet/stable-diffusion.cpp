@@ -41,6 +41,7 @@ bool run_streaming(GGMLRunner*                     runner,
                    Stage                           output_stage,
                    int                             num_layers,
                    std::function<std::string(int)> layer_name_at,
+                   int                             start_layer_idx,
                    ggml_tensor**                   output_out,
                    ggml_context*                   output_ctx) {
     (void)cfg;  // Reserved for future executor-level config; per-engine config
@@ -50,9 +51,24 @@ bool run_streaming(GGMLRunner*                     runner,
         LOG_ERROR("LayerStreaming::run_streaming: runner null or streaming not enabled");
         return false;
     }
+    if (start_layer_idx < 0 || start_layer_idx > num_layers) {
+        LOG_ERROR("LayerStreaming::run_streaming: invalid start_layer_idx=%d "
+                  "(num_layers=%d)",
+                  start_layer_idx,
+                  num_layers);
+        return false;
+    }
 
     int64_t t_start = ggml_time_ms();
-    LOG_INFO("%s layer-streaming start (%d layers)", runner->get_desc().c_str(), num_layers);
+    if (start_layer_idx > 0) {
+        LOG_INFO("%s layer-streaming start (layers %d..%d of %d; %d pre-dispatched)",
+                 runner->get_desc().c_str(),
+                 start_layer_idx, num_layers - 1, num_layers,
+                 start_layer_idx);
+    } else {
+        LOG_INFO("%s layer-streaming start (%d layers)",
+                 runner->get_desc().c_str(), num_layers);
+    }
 
     auto analysis = runner->analyze_vram_budget();
     if (analysis.fits_in_vram) {
@@ -82,11 +98,12 @@ bool run_streaming(GGMLRunner*                     runner,
 
     // Prime prefetch for the per-layer loop.
     if (runner->streaming_engine_) {
-        runner->streaming_engine_->prime_prefetch(layer_name_at, 0, num_layers);
+        runner->streaming_engine_->prime_prefetch(layer_name_at, start_layer_idx, num_layers);
     }
 
-    // Per-layer loop (chunk-K resident span lands in Task 3).
-    for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
+    // Per-layer loop. Layers [0..start_layer_idx) are assumed to have been
+    // pre-dispatched by the caller as a chunk-K resident mega-graph.
+    for (int layer_idx = start_layer_idx; layer_idx < num_layers; ++layer_idx) {
         std::string layer_name = layer_name_at(layer_idx);
 
         if (runner->streaming_engine_) {
@@ -143,10 +160,10 @@ bool run_streaming(GGMLRunner*                     runner,
     }
 
     int64_t t_end = ggml_time_ms();
-    LOG_INFO("%s layer-streaming completed in %.2fs (%d layers)",
+    LOG_INFO("%s layer-streaming completed in %.2fs (%d streamed layers)",
              runner->get_desc().c_str(),
              (t_end - t_start) / 1000.0,
-             num_layers);
+             num_layers - start_layer_idx);
 
     return true;
 }

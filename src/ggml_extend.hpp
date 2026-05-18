@@ -1694,6 +1694,7 @@ struct GGMLRunner {
                                               LayerStreaming::Stage                  output_stage,
                                               int                                    num_layers,
                                               std::function<std::string(int)>        layer_name_at,
+                                              int                                    start_layer_idx,
                                               ggml_tensor**                          output_out,
                                               ggml_context*                          output_ctx);
 
