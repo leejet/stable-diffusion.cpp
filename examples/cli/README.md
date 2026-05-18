@@ -55,7 +55,8 @@ Context Options:
                                            then threads will be set to the number of CPU physical cores
   --chroma-t5-mask-pad <int>               t5 mask pad size of chroma
   --max-vram <float>                       maximum VRAM budget in GiB for graph-cut segmented execution. 0 disables
-                                           graph splitting; -1 auto-detects free VRAM minus 1 GiB
+                                           graph splitting; a negative value auto-detects free VRAM, sparing the
+                                           specified value (e.g. -0.5 will keep at least 0.5 GiB free)
   --force-sdxl-vae-conv-scale              force use of conv scale on sdxl vae
   --offload-to-cpu                         place the weights in RAM to save VRAM, and automatically load them into VRAM
                                            when needed
