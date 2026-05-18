@@ -1,5 +1,7 @@
 #include "layer_streaming_executor.hpp"
 
+#include <cstdlib>
+
 #include "ggml_extend.hpp"
 #include "tensor_registry.hpp"
 
@@ -60,6 +62,13 @@ bool run_streaming(GGMLRunner*                     runner,
     }
 
     int64_t t_start = ggml_time_ms();
+    const bool prof_enabled = std::getenv("SDCPP_STREAM_PROFILE") != nullptr;
+    auto prof_now = []() { return ggml_time_us(); };
+    int64_t prof_wait_us    = 0;
+    int64_t prof_load_us    = 0;
+    int64_t prof_advance_us = 0;
+    int64_t prof_compute_us = 0;
+    int64_t prof_evict_us   = 0;
     if (start_layer_idx > 0) {
         LOG_INFO("%s layer-streaming start (layers %d..%d of %d; %d pre-dispatched)",
                  runner->get_desc().c_str(),
@@ -106,9 +115,13 @@ bool run_streaming(GGMLRunner*                     runner,
     for (int layer_idx = start_layer_idx; layer_idx < num_layers; ++layer_idx) {
         std::string layer_name = layer_name_at(layer_idx);
 
+        int64_t t0 = prof_enabled ? prof_now() : 0;
+
         if (runner->streaming_engine_) {
             runner->streaming_engine_->wait_for_prefetch(layer_name);
         }
+        int64_t t1 = prof_enabled ? prof_now() : 0;
+
         if (!registry.move_layer_to_gpu(layer_name)) {
             LOG_ERROR("%s: failed to load %s",
                       runner->get_desc().c_str(),
@@ -116,9 +129,12 @@ bool run_streaming(GGMLRunner*                     runner,
             runner->free_compute_buffer();
             return false;
         }
+        int64_t t2 = prof_enabled ? prof_now() : 0;
+
         if (runner->streaming_engine_) {
             runner->streaming_engine_->advance_prefetch(layer_name_at, layer_idx, num_layers);
         }
+        int64_t t3 = prof_enabled ? prof_now() : 0;
 
         Stage layer_stage = per_layer_stage_factory(layer_idx, /*prev_gpu_output=*/nullptr);
 
@@ -136,8 +152,18 @@ bool run_streaming(GGMLRunner*                     runner,
             runner->free_compute_buffer();
             return false;
         }
+        int64_t t4 = prof_enabled ? prof_now() : 0;
 
         registry.move_layer_to_cpu(layer_name);
+        int64_t t5 = prof_enabled ? prof_now() : 0;
+
+        if (prof_enabled) {
+            prof_wait_us    += t1 - t0;
+            prof_load_us    += t2 - t1;
+            prof_advance_us += t3 - t2;
+            prof_compute_us += t4 - t3;
+            prof_evict_us   += t5 - t4;
+        }
     }
 
     runner->free_compute_buffer();
@@ -164,6 +190,21 @@ bool run_streaming(GGMLRunner*                     runner,
              runner->get_desc().c_str(),
              (t_end - t_start) / 1000.0,
              num_layers - start_layer_idx);
+
+    if (prof_enabled) {
+        int64_t total_us = prof_wait_us + prof_load_us + prof_advance_us +
+                           prof_compute_us + prof_evict_us;
+        LOG_INFO("[stream-profile] %s %d streamed layers: total=%.2fms "
+                 "wait=%.2fms load=%.2fms advance=%.2fms compute=%.2fms evict=%.2fms",
+                 runner->get_desc().c_str(),
+                 num_layers - start_layer_idx,
+                 total_us / 1000.0,
+                 prof_wait_us / 1000.0,
+                 prof_load_us / 1000.0,
+                 prof_advance_us / 1000.0,
+                 prof_compute_us / 1000.0,
+                 prof_evict_us / 1000.0);
+    }
 
     return true;
 }
