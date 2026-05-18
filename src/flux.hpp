@@ -6,6 +6,7 @@
 
 #include "common_dit.hpp"
 #include "layer_streaming.hpp"
+#include "layer_streaming_executor.hpp"
 #include "model.h"
 #include "rope.hpp"
 
@@ -1515,6 +1516,37 @@ namespace Flux {
         int resident_double_blocks_ = -1;
         int resident_single_blocks_ = -1;
 
+        // Captured output handles for executor stages. build_graph writes
+        // these; post_compute reads them back into host buffers.
+        ggml_tensor* stage1_img_out_     = nullptr;
+        ggml_tensor* stage1_txt_out_     = nullptr;
+        ggml_tensor* stage1_vec_out_     = nullptr;
+        ggml_tensor* layer_img_out_      = nullptr;
+        ggml_tensor* layer_txt_out_      = nullptr;  // double_blocks phase only
+        ggml_tensor* layer_txt_img_out_  = nullptr;  // single_blocks phase only
+
+        int64_t img_ne_[4]     = {0, 0, 0, 0};
+        int64_t txt_ne_[4]     = {0, 0, 0, 0};
+        int64_t vec_ne_[4]     = {0, 0, 0, 0};
+        int64_t txt_img_ne_[4] = {0, 0, 0, 0};
+
+        // Persistent host buffers backing the per-layer ggml_backend_tensor_get
+        // / set_backend_tensor_data round trips. Pinned via
+        // ensure_pinned_act_buffers when possible, fallback to pageable
+        // std::vector otherwise.
+        float* persistent_img_     = nullptr;
+        float* persistent_txt_     = nullptr;
+        float* persistent_vec_     = nullptr;
+        float* persistent_txt_img_ = nullptr;
+        size_t persistent_img_count_     = 0;
+        size_t persistent_txt_count_     = 0;
+        size_t persistent_vec_count_     = 0;
+        size_t persistent_txt_img_count_ = 0;
+        std::vector<float> persistent_img_fallback_;
+        std::vector<float> persistent_txt_fallback_;
+        std::vector<float> persistent_vec_fallback_;
+        std::vector<float> persistent_txt_img_fallback_;
+
         FluxRunner(ggml_backend_t backend,
                    ggml_backend_t params_backend,
                    const String2TensorStorage& tensor_storage_map = {},
@@ -2070,23 +2102,14 @@ namespace Flux {
                                     struct ggml_tensor** output,
                                     struct ggml_context* output_ctx,
                                     std::vector<int> skip_layers) {
-            auto& registry = streaming_engine_->get_registry();
-            int64_t t_start = ggml_time_ms();
-
             const int num_double_blocks = flux_params.depth;
             const int num_single_blocks = flux_params.depth_single_blocks;
-            LOG_INFO("TRUE per-layer streaming - %d double + %d single blocks",
-                     num_double_blocks, num_single_blocks);
+            const int num_layers        = num_double_blocks + num_single_blocks;
+            LOG_INFO("%s: streaming dispatch (%d double + %d single blocks)",
+                     get_desc().c_str(), num_double_blocks, num_single_blocks);
 
-            // Load global layers (_global contains input projections, final_layer, etc)
-            LOG_DEBUG("Loading global layers");
-            if (!registry.move_layer_to_gpu("_global")) {
-                LOG_ERROR("Failed to load _global to GPU");
-                return false;
-            }
-            LOG_DEBUG("_global loaded successfully");
-
-            // Set up txt_arange_dims based on version
+            // ---- CPU-side prep ---------------------------------------------
+            // Set up txt_arange_dims based on version.
             std::set<int> txt_arange_dims;
             if (sd_version_is_flux2(version)) {
                 txt_arange_dims    = {3};
@@ -2095,7 +2118,7 @@ namespace Flux {
                 txt_arange_dims = {1, 2};
             }
 
-            // Pre-generate PE
+            // Pre-generate PE.
             pe_vec = Rope::gen_flux_pe(static_cast<int>(x->ne[1]),
                                        static_cast<int>(x->ne[0]),
                                        flux_params.patch_size,
@@ -2110,9 +2133,7 @@ namespace Flux {
                                        circular_x_enabled,
                                        flux_params.axes_dim);
 
-            LOG_DEBUG("PE generated");
-
-            // Pre-generate mod_index_arange for Chroma
+            // Pre-generate mod_index_arange for Chroma.
             if (flux_params.is_chroma) {
                 mod_index_arange_vec.clear();
                 for (int i = 0; i < 344; i++) {
@@ -2120,416 +2141,302 @@ namespace Flux {
                 }
             }
 
-            LOG_DEBUG("About to execute input stage");
-
-            // Persistent storage for intermediate tensors. Backed by a single
-            // GPU-pinned host buffer (via ensure_pinned_act_buffers) so the
-            // per-block ggml_backend_tensor_get / set_backend_tensor_data
-            // calls run at full PCIe bandwidth. Falls back to pageable
-            // std::vector if pinned alloc fails.
-            std::vector<float> persistent_img_fallback;
-            std::vector<float> persistent_txt_fallback;
-            std::vector<float> persistent_vec_fallback;
-            std::vector<float> persistent_txt_img_fallback;
-            float* persistent_img     = nullptr;
-            float* persistent_txt     = nullptr;
-            float* persistent_vec     = nullptr;
-            float* persistent_txt_img = nullptr;
-            size_t persistent_img_count     = 0;
-            size_t persistent_txt_count     = 0;
-            size_t persistent_vec_count     = 0;
-            size_t persistent_txt_img_count = 0;
-            int64_t img_ne[4], txt_ne[4], vec_ne[4], txt_img_ne[4];
-            int64_t n_txt_tokens = 0;
+            // Capture token counts produced by Stage 1; needed by Stage 3.
             int64_t n_img_tokens = 0;
+            int64_t n_txt_tokens = 0;
 
-            LOG_DEBUG("Executing input stage");
-            {
-                ggml_tensor* img_output = nullptr;
-                ggml_tensor* txt_output = nullptr;
-                ggml_tensor* vec_output = nullptr;
+            // ---- Stage 1: input prelude ------------------------------------
+            LayerStreaming::Stage input_stage;
+            input_stage.build_graph = [&]() -> ggml_cgraph* {
+                ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE / 4);
+                auto runner_ctx = get_context();
 
-                auto get_input_graph = [&]() -> struct ggml_cgraph* {
-                    struct ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE / 4);
-                    auto runner_ctx = get_context();
+                ggml_tensor* x_patched = DiT::pad_and_patchify(&runner_ctx, to_backend(x),
+                                                                flux_params.patch_size,
+                                                                flux_params.patch_size);
+                n_img_tokens = x_patched->ne[1];
 
-                    ggml_tensor* x_patched = DiT::pad_and_patchify(&runner_ctx, to_backend(x),
-                                                                    flux_params.patch_size, flux_params.patch_size);
-                    n_img_tokens = x_patched->ne[1];
-
-                    // Handle ref_latents
-                    for (auto& ref : ref_latents) {
-                        auto ref_patched = DiT::pad_and_patchify(&runner_ctx, to_backend(ref),
-                                                                  flux_params.patch_size, flux_params.patch_size);
-                        x_patched = ggml_concat(compute_ctx, x_patched, ref_patched, 1);
-                    }
-
-                    ggml_tensor* context_backend = to_backend(context);
-                    ggml_tensor* timesteps_backend = to_backend(timesteps);
-                    ggml_tensor* y_backend = y ? to_backend(y) : nullptr;
-                    ggml_tensor* guidance_backend = guidance ? to_backend(guidance) : nullptr;
-
-                    ggml_tensor* mod_index_arange = nullptr;
-                    if (flux_params.is_chroma && !mod_index_arange_vec.empty()) {
-                        mod_index_arange = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, mod_index_arange_vec.size());
-                        set_backend_tensor_data(mod_index_arange, mod_index_arange_vec.data());
-                    }
-
-                    auto result = flux.forward_input_stage(&runner_ctx, x_patched, context_backend,
-                                                           timesteps_backend, y_backend, guidance_backend,
-                                                           mod_index_arange);
-
-                    img_output = result.img;
-                    txt_output = result.txt;
-                    vec_output = result.vec;
-                    n_txt_tokens = result.n_txt_tokens;
-
-                    ggml_build_forward_expand(gf, img_output);
-                    ggml_build_forward_expand(gf, txt_output);
-                    ggml_build_forward_expand(gf, vec_output);
-
-                    return gf;
-                };
-
-                // Don't free compute buffer immediately - we need to read outputs first
-                if (!GGMLRunner::compute(get_input_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("Input stage failed");
-                    return false;
+                // Handle ref_latents.
+                for (auto& ref : ref_latents) {
+                    auto ref_patched = DiT::pad_and_patchify(&runner_ctx, to_backend(ref),
+                                                              flux_params.patch_size,
+                                                              flux_params.patch_size);
+                    x_patched = ggml_concat(compute_ctx, x_patched, ref_patched, 1);
                 }
 
-                // Extract to persistent storage
-                if (img_output && txt_output && vec_output) {
-                    size_t img_size = ggml_nelements(img_output);
-                    size_t txt_size = ggml_nelements(txt_output);
-                    size_t vec_size = ggml_nelements(vec_output);
-                    // txt_img region is sized to hold the concatenated
-                    // (txt + img) activations consumed by single blocks.
-                    size_t txt_img_size = txt_size + img_size;
+                ggml_tensor* context_backend   = to_backend(context);
+                ggml_tensor* timesteps_backend = to_backend(timesteps);
+                ggml_tensor* y_backend         = y ? to_backend(y) : nullptr;
+                ggml_tensor* guidance_backend  = guidance ? to_backend(guidance) : nullptr;
 
-                    persistent_img_count     = img_size;
-                    persistent_txt_count     = txt_size;
-                    persistent_vec_count     = vec_size;
-                    persistent_txt_img_count = txt_img_size;
+                ggml_tensor* mod_index_arange = nullptr;
+                if (flux_params.is_chroma && !mod_index_arange_vec.empty()) {
+                    mod_index_arange = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32,
+                                                           mod_index_arange_vec.size());
+                    set_backend_tensor_data(mod_index_arange, mod_index_arange_vec.data());
+                }
 
-                    std::vector<float*> ptrs;
-                    if (ensure_pinned_act_buffers({img_size     * sizeof(float),
-                                                   txt_size     * sizeof(float),
-                                                   vec_size     * sizeof(float),
-                                                   txt_img_size * sizeof(float)}, ptrs)) {
-                        persistent_img     = ptrs[0];
-                        persistent_txt     = ptrs[1];
-                        persistent_vec     = ptrs[2];
-                        persistent_txt_img = ptrs[3];
-                    } else {
-                        persistent_img_fallback.resize(img_size);
-                        persistent_txt_fallback.resize(txt_size);
-                        persistent_vec_fallback.resize(vec_size);
-                        persistent_txt_img_fallback.resize(txt_img_size);
-                        persistent_img     = persistent_img_fallback.data();
-                        persistent_txt     = persistent_txt_fallback.data();
-                        persistent_vec     = persistent_vec_fallback.data();
-                        persistent_txt_img = persistent_txt_img_fallback.data();
-                    }
+                auto result = flux.forward_input_stage(&runner_ctx, x_patched, context_backend,
+                                                        timesteps_backend, y_backend, guidance_backend,
+                                                        mod_index_arange);
+                stage1_img_out_ = result.img;
+                stage1_txt_out_ = result.txt;
+                stage1_vec_out_ = result.vec;
+                n_txt_tokens    = result.n_txt_tokens;
 
-                    ggml_backend_tensor_get(img_output, persistent_img, 0, img_size * sizeof(float));
-                    ggml_backend_tensor_get(txt_output, persistent_txt, 0, txt_size * sizeof(float));
-                    ggml_backend_tensor_get(vec_output, persistent_vec, 0, vec_size * sizeof(float));
+                ggml_build_forward_expand(gf, stage1_img_out_);
+                ggml_build_forward_expand(gf, stage1_txt_out_);
+                ggml_build_forward_expand(gf, stage1_vec_out_);
+                return gf;
+            };
+            input_stage.post_compute = [&]() {
+                const size_t img_n     = ggml_nelements(stage1_img_out_);
+                const size_t txt_n     = ggml_nelements(stage1_txt_out_);
+                const size_t vec_n     = ggml_nelements(stage1_vec_out_);
+                // txt_img region holds the concatenated (txt + img) activations
+                // consumed by single_blocks.
+                const size_t txt_img_n = txt_n + img_n;
 
-                    for (int i = 0; i < 4; i++) {
-                        img_ne[i] = img_output->ne[i];
-                        txt_ne[i] = txt_output->ne[i];
-                        vec_ne[i] = vec_output->ne[i];
-                    }
+                persistent_img_count_     = img_n;
+                persistent_txt_count_     = txt_n;
+                persistent_vec_count_     = vec_n;
+                persistent_txt_img_count_ = txt_img_n;
+
+                std::vector<float*> ptrs;
+                if (ensure_pinned_act_buffers({img_n     * sizeof(float),
+                                               txt_n     * sizeof(float),
+                                               vec_n     * sizeof(float),
+                                               txt_img_n * sizeof(float)}, ptrs)) {
+                    persistent_img_     = ptrs[0];
+                    persistent_txt_     = ptrs[1];
+                    persistent_vec_     = ptrs[2];
+                    persistent_txt_img_ = ptrs[3];
                 } else {
-                    LOG_ERROR("Failed to get input stage outputs");
-                    free_compute_buffer();
-                    return false;
+                    persistent_img_fallback_.resize(img_n);
+                    persistent_txt_fallback_.resize(txt_n);
+                    persistent_vec_fallback_.resize(vec_n);
+                    persistent_txt_img_fallback_.resize(txt_img_n);
+                    persistent_img_     = persistent_img_fallback_.data();
+                    persistent_txt_     = persistent_txt_fallback_.data();
+                    persistent_vec_     = persistent_vec_fallback_.data();
+                    persistent_txt_img_ = persistent_txt_img_fallback_.data();
                 }
 
-                // Now safe to free compute buffer
-                free_compute_buffer();
-            }
+                ggml_backend_tensor_get(stage1_img_out_, persistent_img_, 0, img_n * sizeof(float));
+                ggml_backend_tensor_get(stage1_txt_out_, persistent_txt_, 0, txt_n * sizeof(float));
+                ggml_backend_tensor_get(stage1_vec_out_, persistent_vec_, 0, vec_n * sizeof(float));
 
-            LOG_DEBUG("Input stage done, img=%ldx%ldx%ld, txt=%ldx%ldx%ld",
-                      img_ne[0], img_ne[1], img_ne[2], txt_ne[0], txt_ne[1], txt_ne[2]);
+                for (int i = 0; i < 4; ++i) img_ne_[i] = stage1_img_out_->ne[i];
+                for (int i = 0; i < 4; ++i) txt_ne_[i] = stage1_txt_out_->ne[i];
+                for (int i = 0; i < 4; ++i) vec_ne_[i] = stage1_vec_out_->ne[i];
 
-            auto double_name_at = [](int i) { return "double_blocks." + std::to_string(i); };
+                // Decide resident block counts on the first invocation; persisted
+                // across sampling steps. Kept for logging parity with the previous
+                // implementation; the executor currently evicts every streamed
+                // layer unconditionally (no chunk-K dispatch for Flux today).
+                if (resident_double_blocks_ < 0 && streaming_engine_) {
+                    resident_double_blocks_ = streaming_engine_->compute_resident_block_count(
+                        "double_blocks.0", num_double_blocks);
+                    LOG_INFO("%s double_blocks cache: %d resident, %d streamed per step",
+                             get_desc().c_str(),
+                             resident_double_blocks_,
+                             num_double_blocks - resident_double_blocks_);
+                }
+                if (resident_single_blocks_ < 0 && streaming_engine_ && num_single_blocks > 0) {
+                    resident_single_blocks_ = streaming_engine_->compute_resident_block_count(
+                        "single_blocks.0", num_single_blocks);
+                    LOG_INFO("%s single_blocks cache: %d resident, %d streamed per step",
+                             get_desc().c_str(),
+                             resident_single_blocks_,
+                             num_single_blocks - resident_single_blocks_);
+                }
+            };
 
-            if (resident_double_blocks_ < 0 && streaming_engine_) {
-                resident_double_blocks_ = streaming_engine_->compute_resident_block_count(
-                    "double_blocks.0", num_double_blocks);
-                LOG_INFO("%s double_blocks cache: %d resident, %d streamed per step",
-                         get_desc().c_str(),
-                         resident_double_blocks_,
-                         num_double_blocks - resident_double_blocks_);
-            }
+            // ---- Stage 2: per-layer factory --------------------------------
+            auto layer_factory = [&, num_double_blocks](int layer_idx,
+                                                         ggml_tensor* prev_gpu_output)
+                -> LayerStreaming::Stage {
+                LayerStreaming::Stage s;
 
-            int double_prefetch_start = 0;
-            while (double_prefetch_start < num_double_blocks &&
-                   registry.is_layer_on_gpu(double_name_at(double_prefetch_start))) {
-                double_prefetch_start++;
-            }
-            if (streaming_engine_) {
-                streaming_engine_->prime_prefetch(double_name_at, double_prefetch_start, num_double_blocks);
-            }
+                // Honor skip_layers: re-use the matching no-op stage by returning
+                // empty build_graph / post_compute that the executor treats as a
+                // skipped layer. The executor doesn't have a skip API though, so
+                // we approximate by building a graph that produces no work and
+                // a post_compute that doesn't change persistent buffers. The
+                // previous implementation used `continue` inside the inline loop;
+                // we mirror that semantic by leaving persistent_* unchanged.
+                const int skip_idx = (layer_idx < num_double_blocks)
+                                          ? layer_idx
+                                          : (layer_idx - num_double_blocks + flux_params.depth);
+                const bool is_skipped =
+                    skip_layers.size() > 0 &&
+                    std::find(skip_layers.begin(), skip_layers.end(), skip_idx) != skip_layers.end();
 
-            for (int block_idx = 0; block_idx < num_double_blocks; block_idx++) {
-                // Check skip_layers
-                if (skip_layers.size() > 0 && std::find(skip_layers.begin(), skip_layers.end(), block_idx) != skip_layers.end()) {
-                    LOG_DEBUG("Skipping double_block %d", block_idx);
-                    continue;
+                if (is_skipped) {
+                    s.build_graph = [this]() -> ggml_cgraph* {
+                        // Build a trivial graph that only touches a small CPU-side
+                        // op so the executor's compute call has something to run.
+                        ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE / 16);
+                        ggml_tensor* dummy = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, 1);
+                        ggml_build_forward_expand(gf, dummy);
+                        return gf;
+                    };
+                    s.post_compute = [layer_idx, num_double_blocks]() {
+                        LOG_DEBUG("Skipping %s %d",
+                                  layer_idx < num_double_blocks ? "double_block" : "single_block",
+                                  layer_idx < num_double_blocks ? layer_idx : layer_idx - num_double_blocks);
+                    };
+                    return s;
                 }
 
-                std::string block_name = double_name_at(block_idx);
-                int64_t t_block_start = ggml_time_ms();
+                s.build_graph = [this, layer_idx, prev_gpu_output, num_double_blocks]() -> ggml_cgraph* {
+                    ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE / 4);
+                    auto runner_ctx = get_context();
 
-                // Wait for this block's prefetch to complete (if async prefetch was started)
-                if (streaming_engine_) {
-                    streaming_engine_->wait_for_prefetch(block_name);
-                }
+                    // No chunk-K for Flux; always nullptr.
+                    (void)prev_gpu_output;
 
-                // Load this block's weights (sync load if prefetch didn't happen)
-                if (!registry.move_layer_to_gpu(block_name)) {
-                    LOG_ERROR("Failed to load %s", block_name.c_str());
-                    return false;
-                }
+                    // vec is layer-invariant — rebind from host each layer.
+                    ggml_tensor* vec_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                              vec_ne_[0], vec_ne_[1],
+                                                              vec_ne_[2], vec_ne_[3]);
+                    set_backend_tensor_data(vec_in, persistent_vec_);
 
-                // Keep the prefetch window full
-                if (streaming_engine_) {
-                    streaming_engine_->advance_prefetch(double_name_at, block_idx, num_double_blocks);
-                }
-
-                ggml_tensor* img_out = nullptr;
-                ggml_tensor* txt_out = nullptr;
-
-                auto get_block_graph = [&]() -> struct ggml_cgraph* {
-                    struct ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE / 4);
-
-                    // Create input tensors from persistent storage
-                    ggml_tensor* img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, img_ne[0], img_ne[1], img_ne[2], img_ne[3]);
-                    ggml_tensor* txt_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, txt_ne[0], txt_ne[1], txt_ne[2], txt_ne[3]);
-                    ggml_tensor* vec_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, vec_ne[0], vec_ne[1], vec_ne[2], vec_ne[3]);
-
-                    img_in = to_backend(img_in);
-                    txt_in = to_backend(txt_in);
-                    vec_in = to_backend(vec_in);
-
-                    set_backend_tensor_data(img_in, persistent_img);
-                    set_backend_tensor_data(txt_in, persistent_txt);
-                    set_backend_tensor_data(vec_in, persistent_vec);
-
-                    // PE tensor
+                    // PE tensor.
                     int pos_len = static_cast<int>(pe_vec.size() / flux_params.axes_dim_sum / 2);
-                    ggml_tensor* pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
+                    ggml_tensor* pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2,
+                                                          flux_params.axes_dim_sum / 2, pos_len);
                     set_backend_tensor_data(pe, pe_vec.data());
 
-                    std::vector<ModulationOut> ds_img_mods, ds_txt_mods;
-                    auto runner_ctx = get_context();
-                    auto result = flux.forward_double_block(&runner_ctx, block_idx, img_in, txt_in, vec_in, pe,
-                                                            nullptr, ds_img_mods, ds_txt_mods);
+                    if (layer_idx < num_double_blocks) {
+                        // Double block: separate img + txt inputs, returns updated pair.
+                        ggml_tensor* img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                                  img_ne_[0], img_ne_[1],
+                                                                  img_ne_[2], img_ne_[3]);
+                        set_backend_tensor_data(img_in, persistent_img_);
 
-                    img_out = result.first;
-                    txt_out = result.second;
+                        ggml_tensor* txt_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                                  txt_ne_[0], txt_ne_[1],
+                                                                  txt_ne_[2], txt_ne_[3]);
+                        set_backend_tensor_data(txt_in, persistent_txt_);
 
-                    ggml_build_forward_expand(gf, img_out);
-                    ggml_build_forward_expand(gf, txt_out);
+                        std::vector<ModulationOut> ds_img_mods, ds_txt_mods;
+                        auto result = flux.forward_double_block(&runner_ctx, layer_idx,
+                                                                  img_in, txt_in, vec_in, pe,
+                                                                  /*txt_img_mask=*/nullptr,
+                                                                  ds_img_mods, ds_txt_mods);
+                        layer_img_out_     = result.first;
+                        layer_txt_out_     = result.second;
+                        layer_txt_img_out_ = nullptr;
 
-                    return gf;
-                };
+                        ggml_build_forward_expand(gf, layer_img_out_);
+                        ggml_build_forward_expand(gf, layer_txt_out_);
+                    } else {
+                        // Single block: operates on concatenated (txt|img) tensor
+                        // assembled by the previous post_compute (either the
+                        // last double_block, or the prior single_block).
+                        ggml_tensor* txt_img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                                      txt_img_ne_[0], txt_img_ne_[1],
+                                                                      txt_img_ne_[2], txt_img_ne_[3]);
+                        set_backend_tensor_data(txt_img_in, persistent_txt_img_);
 
-                // Don't free compute buffer immediately - we need to read outputs first
-                if (!GGMLRunner::compute(get_block_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("Double block %d execution failed", block_idx);
-                    return false;
-                }
+                        const int single_idx = layer_idx - num_double_blocks;
+                        std::vector<ModulationOut> ss_mods;
+                        layer_txt_img_out_ = flux.forward_single_block(&runner_ctx, single_idx,
+                                                                         txt_img_in, vec_in, pe,
+                                                                         /*txt_img_mask=*/nullptr,
+                                                                         ss_mods);
+                        layer_img_out_ = nullptr;
+                        layer_txt_out_ = nullptr;
 
-                // Extract outputs to persistent storage
-                if (img_out && txt_out) {
-                    ggml_backend_tensor_get(img_out, persistent_img, 0, persistent_img_count * sizeof(float));
-                    ggml_backend_tensor_get(txt_out, persistent_txt, 0, persistent_txt_count * sizeof(float));
-
-                    for (int i = 0; i < 4; i++) {
-                        img_ne[i] = img_out->ne[i];
-                        txt_ne[i] = txt_out->ne[i];
+                        ggml_build_forward_expand(gf, layer_txt_img_out_);
                     }
-                }
-
-                // Now safe to free compute buffer
-                free_compute_buffer();
-
-                // Resident blocks stay on GPU across sampling steps.
-                if (block_idx >= resident_double_blocks_) {
-                    registry.move_layer_to_cpu(block_name);
-                }
-
-                LOG_DEBUG("Double block %d/%d done (%.2fms)",
-                          block_idx + 1, num_double_blocks, (ggml_time_ms() - t_block_start) / 1.0);
-            }
-
-            {
-                // Concatenate txt and img into txt_img
-                size_t txt_img_size = persistent_txt_count + persistent_img_count;
-                // persistent_txt_img was already sized in ensure_pinned_act_buffers
-                // (txt_img region == txt_count + img_count). Just concat into it.
-
-                // txt goes first, then img (along dimension 1)
-                // Since we store flattened, we need to handle this carefully
-                // txt: [hidden_size, n_txt_tokens, N]
-                // img: [hidden_size, n_img_tokens, N]
-                // txt_img: [hidden_size, n_txt_tokens + n_img_tokens, N]
-                std::copy(persistent_txt, persistent_txt + persistent_txt_count, persistent_txt_img);
-                std::copy(persistent_img, persistent_img + persistent_img_count, persistent_txt_img + persistent_txt_count);
-
-                txt_img_ne[0] = img_ne[0];  // hidden_size
-                txt_img_ne[1] = txt_ne[1] + img_ne[1];  // n_txt_tokens + n_img_tokens
-                txt_img_ne[2] = img_ne[2];  // N
-                txt_img_ne[3] = 1;
-            }
-
-            auto single_name_at = [](int i) { return "single_blocks." + std::to_string(i); };
-
-            if (resident_single_blocks_ < 0 && streaming_engine_) {
-                resident_single_blocks_ = streaming_engine_->compute_resident_block_count(
-                    "single_blocks.0", num_single_blocks);
-                LOG_INFO("%s single_blocks cache: %d resident, %d streamed per step",
-                         get_desc().c_str(),
-                         resident_single_blocks_,
-                         num_single_blocks - resident_single_blocks_);
-            }
-
-            int single_prefetch_start = 0;
-            while (single_prefetch_start < num_single_blocks &&
-                   registry.is_layer_on_gpu(single_name_at(single_prefetch_start))) {
-                single_prefetch_start++;
-            }
-            if (streaming_engine_) {
-                streaming_engine_->prime_prefetch(single_name_at, single_prefetch_start, num_single_blocks);
-            }
-
-            for (int block_idx = 0; block_idx < num_single_blocks; block_idx++) {
-                // Check skip_layers (single blocks start at depth offset)
-                int skip_idx = block_idx + flux_params.depth;
-                if (skip_layers.size() > 0 && std::find(skip_layers.begin(), skip_layers.end(), skip_idx) != skip_layers.end()) {
-                    LOG_DEBUG("Skipping single_block %d", block_idx);
-                    continue;
-                }
-
-                std::string block_name = single_name_at(block_idx);
-                int64_t t_block_start = ggml_time_ms();
-
-                // Wait for this block's prefetch to complete (if async prefetch was started)
-                if (streaming_engine_) {
-                    streaming_engine_->wait_for_prefetch(block_name);
-                }
-
-                // Load this block's weights (sync load if prefetch didn't happen)
-                if (!registry.move_layer_to_gpu(block_name)) {
-                    LOG_ERROR("Failed to load %s", block_name.c_str());
-                    return false;
-                }
-
-                // Keep the prefetch window full
-                if (streaming_engine_) {
-                    streaming_engine_->advance_prefetch(single_name_at, block_idx, num_single_blocks);
-                }
-
-                ggml_tensor* txt_img_out = nullptr;
-
-                auto get_block_graph = [&]() -> struct ggml_cgraph* {
-                    struct ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE / 4);
-
-                    // Create input tensors
-                    ggml_tensor* txt_img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
-                                                                  txt_img_ne[0], txt_img_ne[1], txt_img_ne[2], txt_img_ne[3]);
-                    ggml_tensor* vec_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, vec_ne[0], vec_ne[1], vec_ne[2], vec_ne[3]);
-
-                    txt_img_in = to_backend(txt_img_in);
-                    vec_in = to_backend(vec_in);
-
-                    set_backend_tensor_data(txt_img_in, persistent_txt_img);
-                    set_backend_tensor_data(vec_in, persistent_vec);
-
-                    // PE tensor
-                    int pos_len = static_cast<int>(pe_vec.size() / flux_params.axes_dim_sum / 2);
-                    ggml_tensor* pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
-                    set_backend_tensor_data(pe, pe_vec.data());
-
-                    std::vector<ModulationOut> ss_mods;
-                    auto runner_ctx = get_context();
-                    txt_img_out = flux.forward_single_block(&runner_ctx, block_idx, txt_img_in, vec_in, pe,
-                                                             nullptr, ss_mods);
-
-                    ggml_build_forward_expand(gf, txt_img_out);
-
                     return gf;
                 };
 
-                // Don't free compute buffer immediately - we need to read outputs first
-                if (!GGMLRunner::compute(get_block_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("Single block %d execution failed", block_idx);
-                    return false;
-                }
+                s.post_compute = [this, layer_idx, num_double_blocks]() {
+                    if (layer_idx < num_double_blocks) {
+                        // Read back img + txt for the next double_block input.
+                        ggml_backend_tensor_get(layer_img_out_, persistent_img_, 0,
+                                                 persistent_img_count_ * sizeof(float));
+                        ggml_backend_tensor_get(layer_txt_out_, persistent_txt_, 0,
+                                                 persistent_txt_count_ * sizeof(float));
+                        for (int i = 0; i < 4; ++i) img_ne_[i] = layer_img_out_->ne[i];
+                        for (int i = 0; i < 4; ++i) txt_ne_[i] = layer_txt_out_->ne[i];
 
-                // Extract output to persistent storage
-                if (txt_img_out) {
-                    ggml_backend_tensor_get(txt_img_out, persistent_txt_img, 0, persistent_txt_img_count * sizeof(float));
+                        // After the final double_block, CPU-concat txt + img
+                        // into the txt_img buffer that single_blocks consume.
+                        // Layout: txt: [hidden, n_txt, N], img: [hidden, n_img, N]
+                        //   -> txt_img: [hidden, n_txt+n_img, N]. Stored flat,
+                        // txt then img, which matches the GPU-side ggml_concat
+                        // along dim 1 used in the non-streaming path.
+                        if (layer_idx == num_double_blocks - 1) {
+                            std::copy(persistent_txt_,
+                                       persistent_txt_ + persistent_txt_count_,
+                                       persistent_txt_img_);
+                            std::copy(persistent_img_,
+                                       persistent_img_ + persistent_img_count_,
+                                       persistent_txt_img_ + persistent_txt_count_);
 
-                    for (int i = 0; i < 4; i++) {
-                        txt_img_ne[i] = txt_img_out->ne[i];
+                            txt_img_ne_[0] = img_ne_[0];                 // hidden_size
+                            txt_img_ne_[1] = txt_ne_[1] + img_ne_[1];    // n_txt + n_img
+                            txt_img_ne_[2] = img_ne_[2];                 // batch
+                            txt_img_ne_[3] = 1;
+                        }
+                    } else {
+                        // Single block: read back the concatenated tensor.
+                        ggml_backend_tensor_get(layer_txt_img_out_, persistent_txt_img_, 0,
+                                                 persistent_txt_img_count_ * sizeof(float));
+                        for (int i = 0; i < 4; ++i) txt_img_ne_[i] = layer_txt_img_out_->ne[i];
                     }
-                }
-
-                // Now safe to free compute buffer
-                free_compute_buffer();
-
-                // Resident blocks stay on GPU across sampling steps.
-                if (block_idx >= resident_single_blocks_) {
-                    registry.move_layer_to_cpu(block_name);
-                }
-
-                LOG_DEBUG("Single block %d/%d done (%.2fms)",
-                          block_idx + 1, num_single_blocks, (ggml_time_ms() - t_block_start) / 1.0);
-            }
-
-            LOG_DEBUG("Executing output stage");
-            {
-                auto get_output_graph = [&]() -> struct ggml_cgraph* {
-                    struct ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE / 4);
-
-                    ggml_tensor* txt_img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
-                                                                  txt_img_ne[0], txt_img_ne[1], txt_img_ne[2], txt_img_ne[3]);
-                    ggml_tensor* vec_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, vec_ne[0], vec_ne[1], vec_ne[2], vec_ne[3]);
-
-                    txt_img_in = to_backend(txt_img_in);
-                    vec_in = to_backend(vec_in);
-
-                    set_backend_tensor_data(txt_img_in, persistent_txt_img);
-                    set_backend_tensor_data(vec_in, persistent_vec);
-
-                    auto runner_ctx = get_context();
-                    auto final_out = flux.forward_output_stage(&runner_ctx, txt_img_in, vec_in, n_img_tokens, n_txt_tokens);
-
-                    // Unpatchify
-                    int64_t W = x->ne[0];
-                    int64_t H = x->ne[1];
-                    final_out = DiT::unpatchify_and_crop(compute_ctx, final_out, H, W, flux_params.patch_size, flux_params.patch_size);
-
-                    ggml_build_forward_expand(gf, final_out);
-
-                    return gf;
                 };
+                return s;
+            };
 
-                if (!GGMLRunner::compute(get_output_graph, n_threads, true, output, output_ctx, true)) {
-                    LOG_ERROR("Output stage failed");
-                    return false;
+            // ---- Stage 3: output -------------------------------------------
+            LayerStreaming::Stage output_stage;
+            output_stage.build_graph = [&]() -> ggml_cgraph* {
+                ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE / 4);
+                auto runner_ctx = get_context();
+
+                ggml_tensor* txt_img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                              txt_img_ne_[0], txt_img_ne_[1],
+                                                              txt_img_ne_[2], txt_img_ne_[3]);
+                set_backend_tensor_data(txt_img_in, persistent_txt_img_);
+
+                ggml_tensor* vec_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                          vec_ne_[0], vec_ne_[1],
+                                                          vec_ne_[2], vec_ne_[3]);
+                set_backend_tensor_data(vec_in, persistent_vec_);
+
+                auto final_out = flux.forward_output_stage(&runner_ctx, txt_img_in, vec_in,
+                                                            n_img_tokens, n_txt_tokens);
+
+                int64_t W = x->ne[0];
+                int64_t H = x->ne[1];
+                final_out = DiT::unpatchify_and_crop(compute_ctx, final_out, H, W,
+                                                      flux_params.patch_size,
+                                                      flux_params.patch_size);
+
+                ggml_build_forward_expand(gf, final_out);
+                return gf;
+            };
+
+            // Layer naming: double_blocks.N for [0..num_double_blocks),
+            // single_blocks.M for [num_double_blocks..num_layers).
+            auto layer_name_at = [num_double_blocks](int i) -> std::string {
+                if (i < num_double_blocks) {
+                    return "double_blocks." + std::to_string(i);
                 }
-            }
+                return "single_blocks." + std::to_string(i - num_double_blocks);
+            };
 
-            int64_t t_end = ggml_time_ms();
-            LOG_INFO("TRUE per-layer streaming completed in %.2fs (%d double + %d single blocks)",
-                     (t_end - t_start) / 1000.0, num_double_blocks, num_single_blocks);
-
-            return true;
+            return LayerStreaming::run_streaming(
+                this, n_threads, streaming_engine_->get_config(),
+                input_stage, layer_factory, output_stage,
+                num_layers, layer_name_at,
+                /*start_layer_idx=*/0,
+                output, output_ctx);
         }
 
     private:
