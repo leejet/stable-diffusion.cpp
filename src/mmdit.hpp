@@ -6,6 +6,7 @@
 #include "common_dit.hpp"
 #include "ggml_extend.hpp"
 #include "layer_streaming.hpp"
+#include "layer_streaming_executor.hpp"
 #include "model.h"
 
 #define MMDIT_GRAPH_SIZE 10240
@@ -891,6 +892,35 @@ struct MMDiTRunner : public GGMLRunner {
     // computed; 0..N = number of joint_blocks kept resident on GPU.
     int resident_joint_blocks_ = -1;
 
+    // ---- Streaming state captured across executor stages ----------------
+    // Stage 1 produces x / context (optional) / c_mod; per-block stages
+    // produce updated x and context. post_compute reads these GPU tensors
+    // back into the persistent_* host buffers below.
+    ggml_tensor* stage1_x_out_       = nullptr;
+    ggml_tensor* stage1_context_out_ = nullptr;
+    ggml_tensor* stage1_c_mod_out_   = nullptr;
+    ggml_tensor* layer_x_out_        = nullptr;
+    ggml_tensor* layer_context_out_  = nullptr;
+
+    int64_t x_ne_[4]       = {0, 0, 0, 0};
+    int64_t context_ne_[4] = {0, 0, 0, 0};
+    int64_t c_mod_ne_[4]   = {0, 0, 0, 0};
+
+    // Persistent host buffers backing per-block ggml_backend_tensor_get /
+    // set_backend_tensor_data round trips. Pinned via ensure_pinned_act_buffers
+    // when possible; fallback to pageable std::vector otherwise.
+    // persistent_context_ is only populated when Stage 1 produces a non-null
+    // encoder context (i.e. the caller passed context).
+    float* persistent_x_       = nullptr;
+    float* persistent_context_ = nullptr;
+    float* persistent_c_mod_   = nullptr;
+    size_t persistent_x_count_       = 0;
+    size_t persistent_context_count_ = 0;
+    size_t persistent_c_mod_count_   = 0;
+    std::vector<float> persistent_x_fallback_;
+    std::vector<float> persistent_context_fallback_;
+    std::vector<float> persistent_c_mod_fallback_;
+
     MMDiTRunner(ggml_backend_t backend,
                 ggml_backend_t params_backend,
                 const String2TensorStorage& tensor_storage_map = {},
@@ -957,130 +987,87 @@ struct MMDiTRunner : public GGMLRunner {
                                 ggml_tensor** output          = nullptr,
                                 ggml_context* output_ctx      = nullptr,
                                 std::vector<int> skip_layers  = std::vector<int>()) {
-        auto& registry = streaming_engine_->get_registry();
-        int64_t t_start = ggml_time_ms();
-
         const int num_blocks = mmdit.get_depth();
         const int patch_size = mmdit.get_patch_size();
-        const int64_t W = x->ne[0];
-        const int64_t H = x->ne[1];
+        const int64_t W      = x->ne[0];
+        const int64_t H      = x->ne[1];
 
-        LOG_INFO("TRUE per-layer streaming - %d joint_blocks", num_blocks);
+        LOG_INFO("%s: streaming dispatch (%d joint_blocks)",
+                 get_desc().c_str(), num_blocks);
 
-        // Load global layers
-        LOG_DEBUG("Loading global layers");
-        if (!registry.move_layer_to_gpu("_global")) {
-            LOG_ERROR("Failed to load _global to GPU");
-            return false;
-        }
+        // ---- Stage 1: input prelude ------------------------------------
+        // pos embed + x_embedder + context_embedder + y_embedder + t_embedder.
+        LayerStreaming::Stage input_stage;
+        input_stage.build_graph = [&]() -> ggml_cgraph* {
+            ggml_cgraph* gf = new_graph_custom(MMDIT_GRAPH_SIZE / 4);
+            auto runner_ctx = get_context();
 
-        // Persistent storage for intermediate tensors. Backed by a single
-        // GPU-pinned host buffer (ensure_pinned_act_buffers) so per-block
-        // ggml_backend_tensor_get / set_backend_tensor_data run at full
-        // PCIe bandwidth. context is optional (some MMDiT variants omit it).
-        std::vector<float> persistent_x_fallback;
-        std::vector<float> persistent_context_fallback;
-        std::vector<float> persistent_c_mod_fallback;
-        float* persistent_x       = nullptr;
-        float* persistent_context = nullptr;
-        float* persistent_c_mod   = nullptr;
-        size_t persistent_x_count       = 0;
-        size_t persistent_context_count = 0;
-        size_t persistent_c_mod_count   = 0;
-        int64_t x_ne[4], context_ne[4], c_mod_ne[4];
+            ggml_tensor* x_backend         = to_backend(x);
+            ggml_tensor* timesteps_backend = to_backend(timesteps);
+            ggml_tensor* y_backend         = y ? to_backend(y) : nullptr;
+            ggml_tensor* context_backend   = context ? to_backend(context) : nullptr;
 
-        LOG_DEBUG("Executing input stage");
-        {
-            ggml_tensor* x_output = nullptr;
-            ggml_tensor* context_output = nullptr;
-            ggml_tensor* c_mod_output = nullptr;
+            auto result = mmdit.forward_input_stage(&runner_ctx, x_backend, timesteps_backend,
+                                                    y_backend, context_backend, H, W);
 
-            auto get_input_graph = [&]() -> struct ggml_cgraph* {
-                struct ggml_cgraph* gf = new_graph_custom(MMDIT_GRAPH_SIZE / 4);
-                auto runner_ctx = get_context();
+            stage1_x_out_       = result.x;
+            stage1_context_out_ = result.context;
+            stage1_c_mod_out_   = result.c_mod;
 
-                ggml_tensor* x_backend = to_backend(x);
-                ggml_tensor* timesteps_backend = to_backend(timesteps);
-                ggml_tensor* y_backend = y ? to_backend(y) : nullptr;
-                ggml_tensor* context_backend = context ? to_backend(context) : nullptr;
-
-                auto result = mmdit.forward_input_stage(&runner_ctx, x_backend, timesteps_backend,
-                                                         y_backend, context_backend, H, W);
-
-                x_output = result.x;
-                context_output = result.context;
-                c_mod_output = result.c_mod;
-
-                ggml_build_forward_expand(gf, x_output);
-                if (context_output) ggml_build_forward_expand(gf, context_output);
-                ggml_build_forward_expand(gf, c_mod_output);
-
-                return gf;
-            };
-
-            // Don't free compute buffer immediately - we need to read outputs first
-            if (!GGMLRunner::compute(get_input_graph, n_threads, false, nullptr, nullptr, true)) {
-                LOG_ERROR("Input stage failed");
-                return false;
+            ggml_build_forward_expand(gf, stage1_x_out_);
+            if (stage1_context_out_) {
+                ggml_build_forward_expand(gf, stage1_context_out_);
             }
+            ggml_build_forward_expand(gf, stage1_c_mod_out_);
+            return gf;
+        };
 
-            // Extract to persistent storage
-            if (x_output && c_mod_output) {
-                size_t x_size       = ggml_nelements(x_output);
-                size_t c_mod_size   = ggml_nelements(c_mod_output);
-                size_t context_size = context_output ? ggml_nelements(context_output) : 0;
+        input_stage.post_compute = [&]() {
+            const size_t x_n       = ggml_nelements(stage1_x_out_);
+            const size_t c_mod_n   = ggml_nelements(stage1_c_mod_out_);
+            const size_t context_n = stage1_context_out_ ? ggml_nelements(stage1_context_out_) : 0;
 
-                persistent_x_count       = x_size;
-                persistent_c_mod_count   = c_mod_size;
-                persistent_context_count = context_size;
+            persistent_x_count_       = x_n;
+            persistent_c_mod_count_   = c_mod_n;
+            persistent_context_count_ = context_n;
 
-                std::vector<float*> ptrs;
-                if (ensure_pinned_act_buffers({x_size       * sizeof(float),
-                                               c_mod_size   * sizeof(float),
-                                               context_size * sizeof(float)}, ptrs)) {
-                    persistent_x       = ptrs[0];
-                    persistent_c_mod   = ptrs[1];
-                    persistent_context = context_size ? ptrs[2] : nullptr;
-                } else {
-                    persistent_x_fallback.resize(x_size);
-                    persistent_c_mod_fallback.resize(c_mod_size);
-                    persistent_x     = persistent_x_fallback.data();
-                    persistent_c_mod = persistent_c_mod_fallback.data();
-                    if (context_size) {
-                        persistent_context_fallback.resize(context_size);
-                        persistent_context = persistent_context_fallback.data();
-                    }
-                }
-
-                ggml_backend_tensor_get(x_output, persistent_x, 0, x_size * sizeof(float));
-                ggml_backend_tensor_get(c_mod_output, persistent_c_mod, 0, c_mod_size * sizeof(float));
-
-                for (int i = 0; i < 4; i++) {
-                    x_ne[i] = x_output->ne[i];
-                    c_mod_ne[i] = c_mod_output->ne[i];
-                }
-
-                if (context_output) {
-                    ggml_backend_tensor_get(context_output, persistent_context, 0, context_size * sizeof(float));
-                    for (int i = 0; i < 4; i++) {
-                        context_ne[i] = context_output->ne[i];
-                    }
-                }
+            std::vector<float*> ptrs;
+            if (ensure_pinned_act_buffers({x_n       * sizeof(float),
+                                           c_mod_n   * sizeof(float),
+                                           context_n * sizeof(float)}, ptrs)) {
+                persistent_x_       = ptrs[0];
+                persistent_c_mod_   = ptrs[1];
+                persistent_context_ = context_n ? ptrs[2] : nullptr;
             } else {
-                LOG_ERROR("Failed to get input stage outputs");
-                free_compute_buffer();
-                return false;
+                persistent_x_fallback_.resize(x_n);
+                persistent_c_mod_fallback_.resize(c_mod_n);
+                persistent_x_     = persistent_x_fallback_.data();
+                persistent_c_mod_ = persistent_c_mod_fallback_.data();
+                if (context_n) {
+                    persistent_context_fallback_.resize(context_n);
+                    persistent_context_ = persistent_context_fallback_.data();
+                } else {
+                    persistent_context_ = nullptr;
+                }
             }
 
-            // Now safe to free compute buffer
-            free_compute_buffer();
-        }
+            ggml_backend_tensor_get(stage1_x_out_, persistent_x_, 0, x_n * sizeof(float));
+            ggml_backend_tensor_get(stage1_c_mod_out_, persistent_c_mod_, 0, c_mod_n * sizeof(float));
 
-        LOG_DEBUG("Input stage done, x=%ldx%ldx%ld", x_ne[0], x_ne[1], x_ne[2]);
+            for (int i = 0; i < 4; ++i) x_ne_[i]     = stage1_x_out_->ne[i];
+            for (int i = 0; i < 4; ++i) c_mod_ne_[i] = stage1_c_mod_out_->ne[i];
 
-        auto block_name_at = [](int i) { return "joint_blocks." + std::to_string(i); };
-        if (streaming_engine_) {
-            if (resident_joint_blocks_ < 0) {
+            if (stage1_context_out_) {
+                ggml_backend_tensor_get(stage1_context_out_, persistent_context_, 0,
+                                         context_n * sizeof(float));
+                for (int i = 0; i < 4; ++i) context_ne_[i] = stage1_context_out_->ne[i];
+            }
+
+            // Decide resident block count on the first invocation; persisted
+            // across sampling steps. Kept for logging parity with the previous
+            // implementation; the executor currently evicts every streamed
+            // layer unconditionally (no chunk-K dispatch for MMDiT today).
+            if (resident_joint_blocks_ < 0 && streaming_engine_) {
                 resident_joint_blocks_ = streaming_engine_->compute_resident_block_count(
                     "joint_blocks.0", num_blocks);
                 LOG_INFO("%s joint_blocks cache: %d resident, %d streamed per step",
@@ -1088,144 +1075,116 @@ struct MMDiTRunner : public GGMLRunner {
                          resident_joint_blocks_,
                          num_blocks - resident_joint_blocks_);
             }
+        };
 
-            int prefetch_start = 0;
-            while (prefetch_start < num_blocks &&
-                   registry.is_layer_on_gpu(block_name_at(prefetch_start))) {
-                prefetch_start++;
-            }
-            streaming_engine_->prime_prefetch(block_name_at, prefetch_start, num_blocks);
-        }
+        // ---- Stage 2: per-block factory --------------------------------
+        // Rebuild x_in / c_mod_in / context_in from host buffers each
+        // iteration. prev_gpu_output is ignored (no chunk-K dispatch path
+        // for MMDiT today). skip_layers is honored by returning a trivial
+        // no-op stage (matching Flux's pattern) so persistent_* activations
+        // are passed through unchanged — mirroring the previous `continue`
+        // inside the inline loop.
+        auto layer_factory = [this, &skip_layers](int block_idx, ggml_tensor* prev_gpu_output)
+            -> LayerStreaming::Stage {
+            (void)prev_gpu_output;
+            LayerStreaming::Stage s;
 
-        for (int block_idx = 0; block_idx < num_blocks; block_idx++) {
-            // Check skip_layers
-            if (skip_layers.size() > 0 && std::find(skip_layers.begin(), skip_layers.end(), block_idx) != skip_layers.end()) {
-                LOG_DEBUG("Skipping joint_block %d", block_idx);
-                continue;
-            }
+            const bool is_skipped = (!skip_layers.empty() &&
+                                     std::find(skip_layers.begin(), skip_layers.end(), block_idx) != skip_layers.end());
 
-            std::string block_name = block_name_at(block_idx);
-            int64_t t_block_start = ggml_time_ms();
-
-            // Wait for this block's prefetch to complete (if async prefetch was started)
-            if (streaming_engine_) {
-                streaming_engine_->wait_for_prefetch(block_name);
-            }
-
-            // Load this block's weights (sync load if prefetch didn't happen)
-            if (!registry.move_layer_to_gpu(block_name)) {
-                LOG_ERROR("Failed to load %s", block_name.c_str());
-                return false;
-            }
-
-            // Keep the prefetch window full
-            if (streaming_engine_) {
-                streaming_engine_->advance_prefetch(block_name_at, block_idx, num_blocks);
+            if (is_skipped) {
+                s.build_graph = [this]() -> ggml_cgraph* {
+                    ggml_cgraph* gf = new_graph_custom(MMDIT_GRAPH_SIZE / 16);
+                    ggml_tensor* dummy = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, 1);
+                    ggml_build_forward_expand(gf, dummy);
+                    return gf;
+                };
+                s.post_compute = [block_idx]() {
+                    LOG_DEBUG("Skipping joint_block %d", block_idx);
+                };
+                return s;
             }
 
-            ggml_tensor* x_out = nullptr;
-            ggml_tensor* context_out = nullptr;
+            s.build_graph = [this, block_idx]() -> ggml_cgraph* {
+                ggml_cgraph* gf = new_graph_custom(MMDIT_GRAPH_SIZE / 4);
+                auto runner_ctx = get_context();
 
-            auto get_block_graph = [&]() -> struct ggml_cgraph* {
-                struct ggml_cgraph* gf = new_graph_custom(MMDIT_GRAPH_SIZE / 4);
+                ggml_tensor* x_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                       x_ne_[0], x_ne_[1],
+                                                       x_ne_[2], x_ne_[3]);
+                set_backend_tensor_data(x_in, persistent_x_);
 
-                // Create input tensors from persistent storage
-                ggml_tensor* x_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, x_ne[0], x_ne[1], x_ne[2], x_ne[3]);
-                ggml_tensor* c_mod_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, c_mod_ne[0], c_mod_ne[1], c_mod_ne[2], c_mod_ne[3]);
-
-                x_in = to_backend(x_in);
-                c_mod_in = to_backend(c_mod_in);
-
-                set_backend_tensor_data(x_in, persistent_x);
-                set_backend_tensor_data(c_mod_in, persistent_c_mod);
+                ggml_tensor* c_mod_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                           c_mod_ne_[0], c_mod_ne_[1],
+                                                           c_mod_ne_[2], c_mod_ne_[3]);
+                set_backend_tensor_data(c_mod_in, persistent_c_mod_);
 
                 ggml_tensor* context_in = nullptr;
-                if (persistent_context_count > 0) {
-                    context_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, context_ne[0], context_ne[1], context_ne[2], context_ne[3]);
-                    context_in = to_backend(context_in);
-                    set_backend_tensor_data(context_in, persistent_context);
+                if (persistent_context_count_ > 0) {
+                    context_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                    context_ne_[0], context_ne_[1],
+                                                    context_ne_[2], context_ne_[3]);
+                    set_backend_tensor_data(context_in, persistent_context_);
                 }
 
-                auto runner_ctx = get_context();
-                auto result = mmdit.forward_joint_block(&runner_ctx, block_idx, context_in, x_in, c_mod_in);
+                auto result = mmdit.forward_joint_block(&runner_ctx, block_idx,
+                                                         context_in, x_in, c_mod_in);
+                layer_context_out_ = result.first;
+                layer_x_out_       = result.second;
 
-                context_out = result.first;
-                x_out = result.second;
-
-                if (context_out) ggml_build_forward_expand(gf, context_out);
-                ggml_build_forward_expand(gf, x_out);
-
+                if (layer_context_out_) {
+                    ggml_build_forward_expand(gf, layer_context_out_);
+                }
+                ggml_build_forward_expand(gf, layer_x_out_);
                 return gf;
             };
 
-            // Don't free compute buffer immediately - we need to read outputs first
-            if (!GGMLRunner::compute(get_block_graph, n_threads, false, nullptr, nullptr, true)) {
-                LOG_ERROR("Joint block %d execution failed", block_idx);
-                return false;
-            }
+            s.post_compute = [this]() {
+                ggml_backend_tensor_get(layer_x_out_, persistent_x_, 0,
+                                         persistent_x_count_ * sizeof(float));
+                for (int i = 0; i < 4; ++i) x_ne_[i] = layer_x_out_->ne[i];
 
-            // Extract outputs to persistent storage
-            if (x_out) {
-                ggml_backend_tensor_get(x_out, persistent_x, 0, persistent_x_count * sizeof(float));
-                for (int i = 0; i < 4; i++) {
-                    x_ne[i] = x_out->ne[i];
+                if (layer_context_out_ && persistent_context_count_ > 0) {
+                    ggml_backend_tensor_get(layer_context_out_, persistent_context_, 0,
+                                             persistent_context_count_ * sizeof(float));
+                    for (int i = 0; i < 4; ++i) context_ne_[i] = layer_context_out_->ne[i];
                 }
-            }
-            if (context_out && persistent_context_count > 0) {
-                ggml_backend_tensor_get(context_out, persistent_context, 0, persistent_context_count * sizeof(float));
-                for (int i = 0; i < 4; i++) {
-                    context_ne[i] = context_out->ne[i];
-                }
-            }
-
-            // Now safe to free compute buffer
-            free_compute_buffer();
-
-            // Resident blocks stay on GPU across sampling steps.
-            if (block_idx >= resident_joint_blocks_) {
-                registry.move_layer_to_cpu(block_name);
-            }
-
-            LOG_DEBUG("Joint block %d/%d done (%.2fms)",
-                      block_idx + 1, num_blocks, (ggml_time_ms() - t_block_start) / 1.0);
-        }
-
-        LOG_DEBUG("Executing output stage");
-        {
-            auto get_output_graph = [&]() -> struct ggml_cgraph* {
-                struct ggml_cgraph* gf = new_graph_custom(MMDIT_GRAPH_SIZE / 4);
-
-                ggml_tensor* x_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, x_ne[0], x_ne[1], x_ne[2], x_ne[3]);
-                ggml_tensor* c_mod_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, c_mod_ne[0], c_mod_ne[1], c_mod_ne[2], c_mod_ne[3]);
-
-                x_in = to_backend(x_in);
-                c_mod_in = to_backend(c_mod_in);
-
-                set_backend_tensor_data(x_in, persistent_x);
-                set_backend_tensor_data(c_mod_in, persistent_c_mod);
-
-                auto runner_ctx = get_context();
-                auto final_out = mmdit.forward_output_stage(&runner_ctx, x_in, c_mod_in);
-
-                // Unpatchify
-                final_out = DiT::unpatchify_and_crop(compute_ctx, final_out, H, W, patch_size, patch_size, /*patch_last*/ false);
-
-                ggml_build_forward_expand(gf, final_out);
-
-                return gf;
             };
+            return s;
+        };
 
-            if (!GGMLRunner::compute(get_output_graph, n_threads, true, output, output_ctx, true)) {
-                LOG_ERROR("Output stage failed");
-                return false;
-            }
-        }
+        // ---- Stage 3: output -------------------------------------------
+        LayerStreaming::Stage output_stage;
+        output_stage.build_graph = [&]() -> ggml_cgraph* {
+            ggml_cgraph* gf = new_graph_custom(MMDIT_GRAPH_SIZE / 4);
+            auto runner_ctx = get_context();
 
-        int64_t t_end = ggml_time_ms();
-        LOG_INFO("TRUE per-layer streaming completed in %.2fs (%d joint_blocks)",
-                 (t_end - t_start) / 1000.0, num_blocks);
+            ggml_tensor* x_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                   x_ne_[0], x_ne_[1],
+                                                   x_ne_[2], x_ne_[3]);
+            set_backend_tensor_data(x_in, persistent_x_);
 
-        return true;
+            ggml_tensor* c_mod_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                       c_mod_ne_[0], c_mod_ne_[1],
+                                                       c_mod_ne_[2], c_mod_ne_[3]);
+            set_backend_tensor_data(c_mod_in, persistent_c_mod_);
+
+            auto final_out = mmdit.forward_output_stage(&runner_ctx, x_in, c_mod_in);
+            final_out = DiT::unpatchify_and_crop(compute_ctx, final_out, H, W,
+                                                  patch_size, patch_size,
+                                                  /*patch_last*/ false);
+
+            ggml_build_forward_expand(gf, final_out);
+            return gf;
+        };
+
+        return LayerStreaming::run_streaming(
+            this, n_threads, streaming_engine_->get_config(),
+            input_stage, layer_factory, output_stage,
+            num_blocks,
+            [](int i) { return "joint_blocks." + std::to_string(i); },
+            /*start_layer_idx=*/0,
+            output, output_ctx);
     }
 
     // Old-style build_graph for streaming code that uses raw ggml_tensor pointers
