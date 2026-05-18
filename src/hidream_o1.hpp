@@ -337,7 +337,6 @@ namespace HiDreamO1 {
 
         std::vector<float> attention_mask_vec;
         std::vector<int32_t> persistent_input_pos_vec;
-        std::vector<float> persistent_inputs_embeds_fallback;
         std::vector<float> persistent_hidden_fallback;
 
         // Captured output handles for the three executor stages. build_graph

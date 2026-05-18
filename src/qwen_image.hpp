@@ -575,10 +575,6 @@ namespace Qwen {
         std::vector<float> modulate_index_vec;
         SDVersion version;
 
-        // Static layer cache decided on the first sampling step. -1 = not yet
-        // computed; 0..N = number of "transformer_blocks.X" kept resident.
-        int resident_transformer_blocks_ = -1;
-
         // Captured output handles for the executor stages. build_graph lambdas
         // write these; post_compute lambdas read them.
         ggml_tensor* stage1_img_out_   = nullptr;
@@ -686,43 +682,6 @@ namespace Qwen {
         }
 
     private:
-        // Persistent storage for intermediate tensors between layer executions
-        struct StreamingState {
-            std::vector<float> img_data;
-            std::vector<float> txt_data;
-            std::vector<float> t_emb_data;
-            std::vector<float> pe_data;
-            std::vector<float> modulate_index_data;
-
-            // Tensor dimensions
-            int64_t img_ne[4];
-            int64_t txt_ne[4];
-            int64_t t_emb_ne[4];
-            int64_t pe_ne[4];
-            int64_t modulate_index_ne[4];
-            bool has_modulate_index = false;
-        };
-
-        void copy_tensor_to_storage(ggml_tensor* tensor, std::vector<float>& storage, int64_t* ne) {
-            size_t nelements = ggml_nelements(tensor);
-            storage.resize(nelements);
-
-            // Copy to CPU if needed
-            ggml_backend_tensor_get(tensor, storage.data(), 0, nelements * sizeof(float));
-
-            // Store dimensions
-            for (int i = 0; i < 4; i++) {
-                ne[i] = tensor->ne[i];
-            }
-        }
-
-        ggml_tensor* create_tensor_from_storage(ggml_context* ctx, const std::vector<float>& storage,
-                                                 const int64_t* ne, const char* name) {
-            ggml_tensor* tensor = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], ne[3]);
-            ggml_set_name(tensor, name);
-            return tensor;
-        }
-
         bool compute_streaming_true(int n_threads,
                                     ggml_tensor* x,
                                     ggml_tensor* timesteps,
@@ -830,19 +789,6 @@ namespace Qwen {
                 for (int i = 0; i < 4; ++i) img_ne_[i]   = stage1_img_out_->ne[i];
                 for (int i = 0; i < 4; ++i) txt_ne_[i]   = stage1_txt_out_->ne[i];
                 for (int i = 0; i < 4; ++i) t_emb_ne_[i] = stage1_t_emb_out_->ne[i];
-
-                // Decide resident block count on the first invocation; persisted
-                // across sampling steps. Reuses the existing field (semantically
-                // a "Stage 1 cache decision") even though Qwen has no chunk-K
-                // dispatch — only used by the executor's eviction policy.
-                if (resident_transformer_blocks_ < 0 && streaming_engine_) {
-                    resident_transformer_blocks_ = streaming_engine_->compute_resident_block_count(
-                        "transformer_blocks.0", num_layers);
-                    LOG_INFO("%s transformer_blocks cache: %d resident, %d streamed per step",
-                             get_desc().c_str(),
-                             resident_transformer_blocks_,
-                             num_layers - resident_transformer_blocks_);
-                }
             };
 
             // ---- Stage 2: per-layer factory ----------------------------

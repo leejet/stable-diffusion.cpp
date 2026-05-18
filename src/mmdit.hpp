@@ -888,10 +888,6 @@ public:
 struct MMDiTRunner : public GGMLRunner {
     MMDiT mmdit;
 
-    // Static layer cache decided on the first sampling step. -1 = not yet
-    // computed; 0..N = number of joint_blocks kept resident on GPU.
-    int resident_joint_blocks_ = -1;
-
     // ---- Streaming state captured across executor stages ----------------
     // Stage 1 produces x / context (optional) / c_mod; per-block stages
     // produce updated x and context. post_compute reads these GPU tensors
@@ -1063,18 +1059,6 @@ struct MMDiTRunner : public GGMLRunner {
                 for (int i = 0; i < 4; ++i) context_ne_[i] = stage1_context_out_->ne[i];
             }
 
-            // Decide resident block count on the first invocation; persisted
-            // across sampling steps. Kept for logging parity with the previous
-            // implementation; the executor currently evicts every streamed
-            // layer unconditionally (no chunk-K dispatch for MMDiT today).
-            if (resident_joint_blocks_ < 0 && streaming_engine_) {
-                resident_joint_blocks_ = streaming_engine_->compute_resident_block_count(
-                    "joint_blocks.0", num_blocks);
-                LOG_INFO("%s joint_blocks cache: %d resident, %d streamed per step",
-                         get_desc().c_str(),
-                         resident_joint_blocks_,
-                         num_blocks - resident_joint_blocks_);
-            }
         };
 
         // ---- Stage 2: per-block factory --------------------------------

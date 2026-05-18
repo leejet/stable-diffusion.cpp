@@ -609,10 +609,6 @@ namespace Anima {
         AnimaNet net;
         int64_t num_layers_ = 28;  // Store for streaming
 
-        // Static layer cache decided on the first sampling step. -1 = not yet
-        // computed; 0..N = number of "blocks.X" kept resident across steps.
-        int resident_blocks_ = -1;
-
         // ---- Streaming state captured across executor stages ----------------
         // build_graph stages write the captured tensors; post_compute reads
         // them back into the persistent_* host buffers below. Stage 1 produces
@@ -1051,19 +1047,6 @@ namespace Anima {
                     for (int i = 0; i < 4; ++i) context_ne_[i] = stage1_context_out_->ne[i];
                 }
 
-                // Decide resident block count on the first invocation; persisted
-                // across sampling steps. Kept for logging parity with the
-                // previous implementation; the executor currently evicts every
-                // streamed layer unconditionally (no chunk-K dispatch for
-                // Anima today).
-                if (resident_blocks_ < 0 && streaming_engine_) {
-                    resident_blocks_ = streaming_engine_->compute_resident_block_count(
-                        "blocks.0", static_cast<int>(num_blocks));
-                    LOG_INFO("%s blocks cache: %d resident, %d streamed per step",
-                             get_desc().c_str(),
-                             resident_blocks_,
-                             static_cast<int>(num_blocks) - resident_blocks_);
-                }
             };
 
             // ---- Stage 2: per-block factory --------------------------------

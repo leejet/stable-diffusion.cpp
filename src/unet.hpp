@@ -801,13 +801,10 @@ struct UNetModelRunner : public GGMLRunner {
         return "unet";
     }
 
-    // UNet needs keep_layers_behind=12 for skip connections
     void enable_layer_streaming(const LayerStreaming::StreamingConfig& config = {}) {
-        LayerStreaming::StreamingConfig cfg = config;
-        cfg.keep_layers_behind = 12;
         std::map<std::string, ggml_tensor*> tensor_map;
         unet.get_param_tensors(tensor_map, "model.diffusion_model");
-        init_streaming(cfg, tensor_map, LayerStreaming::unet_layer_pattern);
+        init_streaming(config, tensor_map, LayerStreaming::unet_layer_pattern);
         LOG_INFO("%s layer streaming enabled (coarse-stage mode)", get_desc().c_str());
     }
 
