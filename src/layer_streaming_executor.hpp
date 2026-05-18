@@ -74,10 +74,10 @@ bool run_streaming(GGMLRunner*                     runner,
                    // First layer index to stream. Callers using chunk-K
                    // resident dispatch pass start_layer_idx = K so the
                    // executor skips the already-dispatched resident block.
-                   // Default 0 = stream every layer.
-                   int                             start_layer_idx = 0,
-                   ggml_tensor**                   output_out      = nullptr,
-                   ggml_context*                   output_ctx      = nullptr);
+                   // Pass 0 to stream every layer.
+                   int                             start_layer_idx,
+                   ggml_tensor**                   output_out,
+                   ggml_context*                   output_ctx);
 
 }  // namespace LayerStreaming
 
