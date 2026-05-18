@@ -8,6 +8,7 @@
 #include "common_block.hpp"
 #include "flux.hpp"
 #include "layer_streaming.hpp"
+#include "layer_streaming_executor.hpp"
 #include "rope.hpp"
 #include "vae.hpp"
 
@@ -2131,7 +2132,67 @@ namespace WAN {
             return head->forward(ctx, x, e);  // [N, t_len*h_len*w_len, pt*ph*pw*out_dim]
         }
 
+        // Lifted prelude from forward_orig: patch_embedding + time/text/vace
+        // embedders. Produces all per-block-invariant tensors plus the initial
+        // x/c streams that the per-block factory will iterate on.
+        StreamingInputResult forward_input_stage(GGMLRunnerContext* ctx,
+                                                 ggml_tensor* x,
+                                                 ggml_tensor* timestep,
+                                                 ggml_tensor* context,
+                                                 ggml_tensor* pe,
+                                                 ggml_tensor* clip_fea     = nullptr,
+                                                 ggml_tensor* vace_context = nullptr,
+                                                 int64_t N                 = 1) {
+            GGML_ASSERT(N == 1);
+
+            auto patch_embedding   = std::dynamic_pointer_cast<Conv3d>(blocks["patch_embedding"]);
+            auto text_embedding_0  = std::dynamic_pointer_cast<Linear>(blocks["text_embedding.0"]);
+            auto text_embedding_2  = std::dynamic_pointer_cast<Linear>(blocks["text_embedding.2"]);
+            auto time_embedding_0  = std::dynamic_pointer_cast<Linear>(blocks["time_embedding.0"]);
+            auto time_embedding_2  = std::dynamic_pointer_cast<Linear>(blocks["time_embedding.2"]);
+            auto time_projection_1 = std::dynamic_pointer_cast<Linear>(blocks["time_projection.1"]);
+
+            x = patch_embedding->forward(ctx, x);                                                    // [N*dim, t_len, h_len, w_len]
+            x = ggml_reshape_3d(ctx->ggml_ctx, x, x->ne[0] * x->ne[1] * x->ne[2], x->ne[3] / N, N);  // [N, dim, t_len*h_len*w_len]
+            x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [N, t_len*h_len*w_len, dim]
+
+            auto e = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep, params.freq_dim);
+            e      = time_embedding_0->forward(ctx, e);
+            e      = ggml_silu_inplace(ctx->ggml_ctx, e);
+            e      = time_embedding_2->forward(ctx, e);
+
+            auto e0 = ggml_silu(ctx->ggml_ctx, e);
+            e0      = time_projection_1->forward(ctx, e0);
+            e0      = ggml_reshape_4d(ctx->ggml_ctx, e0, e0->ne[0] / 6, 6, e0->ne[1], e0->ne[2]);
+
+            context = text_embedding_0->forward(ctx, context);
+            context = ggml_ext_gelu(ctx->ggml_ctx, context);
+            context = text_embedding_2->forward(ctx, context);
+
+            int64_t context_img_len = 0;
+            if (clip_fea != nullptr) {
+                if (params.model_type == "i2v") {
+                    auto img_emb     = std::dynamic_pointer_cast<MLPProj>(blocks["img_emb"]);
+                    auto context_img = img_emb->forward(ctx, clip_fea);
+                    context          = ggml_concat(ctx->ggml_ctx, context_img, context, 1);
+                }
+                context_img_len = clip_fea->ne[1];
+            }
+
+            ggml_tensor* c = nullptr;
+            if (params.vace_layers > 0) {
+                auto vace_patch_embedding = std::dynamic_pointer_cast<Conv3d>(blocks["vace_patch_embedding"]);
+                c = vace_patch_embedding->forward(ctx, vace_context);
+                c = ggml_reshape_3d(ctx->ggml_ctx, c, c->ne[0] * c->ne[1] * c->ne[2], c->ne[3] / N, N);
+                c = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, c, 1, 0, 2, 3));
+            }
+
+            return {x, x, c, e0, e, pe, context, context_img_len};
+        }
+
         int get_num_layers() const { return params.num_layers; }
+        int get_vace_layers() const { return params.vace_layers; }
+        const std::map<int, int>& get_vace_layers_mapping() const { return params.vace_layers_mapping; }
         const std::tuple<int, int, int>& get_patch_size() const { return params.patch_size; }
     };
 
@@ -2142,6 +2203,49 @@ namespace WAN {
         Wan wan;
         std::vector<float> pe_vec;
         SDVersion version;
+
+        // Captured tensor handles + persistent host buffers used by the
+        // streaming-executor migration (Task 9). Stage 1 writes the input
+        // tensors (x, c if vace, e0, e, context) and their shapes; post_compute
+        // copies them to host. The per-block factory reads/writes persistent_x_
+        // (and persistent_c_ when vace_layers > 0) on every streamed block.
+        // Stage 3 reads the final x + e to build its input. x_orig stays
+        // constant across blocks (== the post-prelude x); it shares
+        // persistent_x_orig_ which is written once in Stage 1's post_compute.
+        ggml_tensor* stage1_x_out_       = nullptr;
+        ggml_tensor* stage1_c_out_       = nullptr;
+        ggml_tensor* stage1_e0_out_      = nullptr;
+        ggml_tensor* stage1_e_out_       = nullptr;
+        ggml_tensor* stage1_context_out_ = nullptr;
+        ggml_tensor* layer_x_out_        = nullptr;
+        ggml_tensor* layer_c_out_        = nullptr;
+        int64_t      x_ne_[4]            = {0, 0, 0, 0};
+        int64_t      c_ne_[4]            = {0, 0, 0, 0};
+        int64_t      e0_ne_[4]           = {0, 0, 0, 0};
+        int64_t      e_ne_[4]            = {0, 0, 0, 0};
+        int64_t      context_ne_[4]      = {0, 0, 0, 0};
+        int64_t      context_img_len_    = 0;
+        // Shape of the un-time-dim-concat input x captured in Stage 1, used by
+        // Stage 3 unpatchify + slice to recover the pre-pad video dimensions.
+        int64_t      orig_W_             = 0;
+        int64_t      orig_H_             = 0;
+        int64_t      orig_T_             = 0;
+        int64_t      t_len_              = 0;
+        int64_t      h_len_              = 0;
+        int64_t      w_len_              = 0;
+        float        captured_vace_strength_ = 1.f;
+        float*       persistent_x_       = nullptr;
+        float*       persistent_x_orig_  = nullptr;
+        float*       persistent_c_       = nullptr;
+        float*       persistent_e0_      = nullptr;
+        float*       persistent_e_       = nullptr;
+        float*       persistent_context_ = nullptr;
+        std::vector<float> persistent_x_fallback_;
+        std::vector<float> persistent_x_orig_fallback_;
+        std::vector<float> persistent_c_fallback_;
+        std::vector<float> persistent_e0_fallback_;
+        std::vector<float> persistent_e_fallback_;
+        std::vector<float> persistent_context_fallback_;
 
         WanRunner(ggml_backend_t backend,
                   ggml_backend_t params_backend,
@@ -2321,27 +2425,27 @@ namespace WAN {
                                      float vace_strength                 = 1.f,
                                      struct ggml_tensor** output         = nullptr,
                                      struct ggml_context* output_ctx     = nullptr) {
-            auto& registry = streaming_engine_->get_registry();
-            int64_t t_start = ggml_time_ms();
-
             const int num_blocks = wan.get_num_layers();
             const auto& patch_size = wan.get_patch_size();
-            const int64_t W = x->ne[0];
-            const int64_t H = x->ne[1];
-            const int64_t T = x->ne[2];
+            const bool has_vace = (vace_context != nullptr) && (wan.get_vace_layers() > 0);
+            captured_vace_strength_ = vace_strength;
 
-            LOG_INFO("TRUE per-layer streaming - %d blocks", num_blocks);
+            LOG_INFO("%s: streaming dispatch (%d blocks%s)",
+                     get_desc().c_str(),
+                     num_blocks,
+                     has_vace ? ", vace" : "");
 
-            // Load global layers (includes embedders)
-            if (!registry.move_layer_to_gpu("_global")) {
-                LOG_ERROR("Failed to load _global to GPU");
-                return false;
-            }
+            // ---- CPU-side prep ---------------------------------------------
+            // Capture the original (pre-concat) video dims; Stage 3's slice
+            // restores them after unpatchify.
+            orig_W_ = x->ne[0];
+            orig_H_ = x->ne[1];
+            orig_T_ = x->ne[2];
 
-            // Generate PE
-            pe_vec = Rope::gen_wan_pe(static_cast<int>(T),
-                                       static_cast<int>(H),
-                                       static_cast<int>(W),
+            // Pre-generate PE (matches build_graph / compute paths).
+            pe_vec = Rope::gen_wan_pe(static_cast<int>(orig_T_),
+                                       static_cast<int>(orig_H_),
+                                       static_cast<int>(orig_W_),
                                        std::get<0>(patch_size),
                                        std::get<1>(patch_size),
                                        std::get<2>(patch_size),
@@ -2349,74 +2453,250 @@ namespace WAN {
                                        wan_params.theta,
                                        wan_params.axes_dim);
 
-            // Persistent storage
-            std::vector<float> persistent_x;
-            std::vector<float> persistent_x_orig;
-            std::vector<float> persistent_c;  // vace context
-            std::vector<float> persistent_e0;
-            std::vector<float> persistent_e;
-            int64_t x_ne[4], x_orig_ne[4], c_ne[4], e0_ne[4], e_ne[4];
-            bool has_vace = (vace_context != nullptr);
-            int64_t context_img_len = 0;
-            int64_t t_len = 0, h_len = 0, w_len = 0;
+            // ---- Stage 1: input prelude ------------------------------------
+            // Loads vace_blocks (kept resident — small count) alongside the
+            // executor-loaded _global, then runs patch_embedding + time/text/
+            // vace embedders. The persistent host buffers populated in
+            // post_compute drive the per-block factory.
+            LayerStreaming::Stage input_stage;
+            input_stage.build_graph = [&]() -> ggml_cgraph* {
+                // Pre-load vace_blocks (paired with a subset of main blocks).
+                // They're typically 8 small blocks; cheap to keep resident
+                // across the whole step. The executor only auto-loads _global
+                // and the per-block layer_name_at(i).
+                if (has_vace) {
+                    auto& registry = streaming_engine_->get_registry();
+                    const int vace_layers = wan.get_vace_layers();
+                    for (int i = 0; i < vace_layers; ++i) {
+                        std::string vb_name = "vace_blocks." + std::to_string(i);
+                        if (!registry.move_layer_to_gpu(vb_name)) {
+                            LOG_ERROR("%s: failed to load %s",
+                                      get_desc().c_str(), vb_name.c_str());
+                            return nullptr;
+                        }
+                    }
+                }
 
-            // Stage 1: Input stage - execute full input pipeline
-            LOG_DEBUG("Executing input stage");
-            {
-                ggml_tensor* x_output = nullptr;
-                ggml_tensor* x_orig_output = nullptr;
-                ggml_tensor* c_output = nullptr;
-                ggml_tensor* e0_output = nullptr;
-                ggml_tensor* e_output = nullptr;
+                ggml_cgraph* gf = new_graph_custom(WAN_GRAPH_SIZE / 2);
+                auto runner_ctx = get_context();
 
-                auto get_input_graph = [&]() -> struct ggml_cgraph* {
-                    struct ggml_cgraph* gf = new_graph_custom(WAN_GRAPH_SIZE / 2);
+                ggml_tensor* x_b               = to_backend(x);
+                ggml_tensor* timesteps_b       = to_backend(timesteps);
+                ggml_tensor* context_b         = to_backend(context);
+                ggml_tensor* clip_fea_b        = clip_fea ? to_backend(clip_fea) : nullptr;
+                ggml_tensor* c_concat_b        = c_concat ? to_backend(c_concat) : nullptr;
+                ggml_tensor* time_dim_concat_b = time_dim_concat ? to_backend(time_dim_concat) : nullptr;
+                ggml_tensor* vace_context_b    = vace_context ? to_backend(vace_context) : nullptr;
+
+                // c_concat is concatenated along channel dim before padding.
+                if (c_concat_b != nullptr) {
+                    x_b = ggml_concat(compute_ctx, x_b, c_concat_b, 3);
+                }
+
+                // Lifted from Wan::forward (outer wrapper) — handles pad +
+                // optional time_dim_concat. Recompute t_len/h_len/w_len so
+                // Stage 3 unpatchify gets the right dims.
+                x_b = wan.pad_to_patch_size(&runner_ctx, x_b);
+                t_len_ = ((orig_T_ + (std::get<0>(patch_size) / 2)) / std::get<0>(patch_size));
+                h_len_ = ((orig_H_ + (std::get<1>(patch_size) / 2)) / std::get<1>(patch_size));
+                w_len_ = ((orig_W_ + (std::get<2>(patch_size) / 2)) / std::get<2>(patch_size));
+                if (time_dim_concat_b != nullptr) {
+                    time_dim_concat_b = wan.pad_to_patch_size(&runner_ctx, time_dim_concat_b);
+                    x_b   = ggml_concat(compute_ctx, x_b, time_dim_concat_b, 2);
+                    t_len_ = ((x_b->ne[2] + (std::get<0>(patch_size) / 2)) / std::get<0>(patch_size));
+                }
+
+                int pos_len = static_cast<int>(pe_vec.size() / wan_params.axes_dim_sum / 2);
+                auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2,
+                                              wan_params.axes_dim_sum / 2, pos_len);
+                set_backend_tensor_data(pe, pe_vec.data());
+
+                auto input_result = wan.forward_input_stage(&runner_ctx,
+                                                             x_b, timesteps_b, context_b, pe,
+                                                             clip_fea_b, vace_context_b, 1);
+
+                stage1_x_out_       = input_result.x;
+                stage1_c_out_       = input_result.c;
+                stage1_e0_out_      = input_result.e0;
+                stage1_e_out_       = input_result.e;
+                stage1_context_out_ = input_result.context;
+                context_img_len_    = input_result.context_img_len;
+
+                ggml_build_forward_expand(gf, stage1_x_out_);
+                ggml_build_forward_expand(gf, stage1_e0_out_);
+                ggml_build_forward_expand(gf, stage1_e_out_);
+                ggml_build_forward_expand(gf, stage1_context_out_);
+                if (stage1_c_out_ != nullptr) {
+                    ggml_build_forward_expand(gf, stage1_c_out_);
+                }
+                return gf;
+            };
+
+            input_stage.post_compute = [&]() {
+                const size_t x_n       = ggml_nelements(stage1_x_out_);
+                const size_t e0_n      = ggml_nelements(stage1_e0_out_);
+                const size_t e_n       = ggml_nelements(stage1_e_out_);
+                const size_t context_n = ggml_nelements(stage1_context_out_);
+                const size_t c_n       = stage1_c_out_ ? ggml_nelements(stage1_c_out_) : 0;
+
+                std::vector<size_t> sizes = {
+                    x_n       * sizeof(float),
+                    x_n       * sizeof(float),  // x_orig — same shape as x
+                    e0_n      * sizeof(float),
+                    e_n       * sizeof(float),
+                    context_n * sizeof(float),
+                };
+                if (c_n > 0) sizes.push_back(c_n * sizeof(float));
+
+                std::vector<float*> ptrs;
+                if (ensure_pinned_act_buffers(sizes, ptrs)) {
+                    persistent_x_       = ptrs[0];
+                    persistent_x_orig_  = ptrs[1];
+                    persistent_e0_      = ptrs[2];
+                    persistent_e_       = ptrs[3];
+                    persistent_context_ = ptrs[4];
+                    persistent_c_       = (c_n > 0) ? ptrs[5] : nullptr;
+                } else {
+                    persistent_x_fallback_.resize(x_n);
+                    persistent_x_orig_fallback_.resize(x_n);
+                    persistent_e0_fallback_.resize(e0_n);
+                    persistent_e_fallback_.resize(e_n);
+                    persistent_context_fallback_.resize(context_n);
+                    persistent_x_       = persistent_x_fallback_.data();
+                    persistent_x_orig_  = persistent_x_orig_fallback_.data();
+                    persistent_e0_      = persistent_e0_fallback_.data();
+                    persistent_e_       = persistent_e_fallback_.data();
+                    persistent_context_ = persistent_context_fallback_.data();
+                    if (c_n > 0) {
+                        persistent_c_fallback_.resize(c_n);
+                        persistent_c_ = persistent_c_fallback_.data();
+                    } else {
+                        persistent_c_ = nullptr;
+                    }
+                }
+
+                ggml_backend_tensor_get(stage1_x_out_,       persistent_x_,       0, x_n       * sizeof(float));
+                ggml_backend_tensor_get(stage1_x_out_,       persistent_x_orig_,  0, x_n       * sizeof(float));
+                ggml_backend_tensor_get(stage1_e0_out_,      persistent_e0_,      0, e0_n      * sizeof(float));
+                ggml_backend_tensor_get(stage1_e_out_,       persistent_e_,       0, e_n       * sizeof(float));
+                ggml_backend_tensor_get(stage1_context_out_, persistent_context_, 0, context_n * sizeof(float));
+                if (stage1_c_out_ != nullptr) {
+                    ggml_backend_tensor_get(stage1_c_out_, persistent_c_, 0, c_n * sizeof(float));
+                }
+
+                for (int i = 0; i < 4; ++i) x_ne_[i]       = stage1_x_out_->ne[i];
+                for (int i = 0; i < 4; ++i) e0_ne_[i]      = stage1_e0_out_->ne[i];
+                for (int i = 0; i < 4; ++i) e_ne_[i]       = stage1_e_out_->ne[i];
+                for (int i = 0; i < 4; ++i) context_ne_[i] = stage1_context_out_->ne[i];
+                if (stage1_c_out_ != nullptr) {
+                    for (int i = 0; i < 4; ++i) c_ne_[i] = stage1_c_out_->ne[i];
+                } else {
+                    for (int i = 0; i < 4; ++i) c_ne_[i] = 0;
+                }
+            };
+
+            // ---- Stage 2: per-block factory --------------------------------
+            auto layer_factory = [&](int block_idx,
+                                      ggml_tensor* prev_gpu_output) -> LayerStreaming::Stage {
+                LayerStreaming::Stage s;
+                s.build_graph = [this, block_idx, prev_gpu_output, has_vace]() -> ggml_cgraph* {
+                    ggml_cgraph* gf = new_graph_custom(WAN_GRAPH_SIZE / 4);
                     auto runner_ctx = get_context();
 
-                    ggml_tensor* x_b = to_backend(x);
-                    ggml_tensor* timesteps_b = to_backend(timesteps);
-                    ggml_tensor* context_b = to_backend(context);
-                    ggml_tensor* clip_fea_b = clip_fea ? to_backend(clip_fea) : nullptr;
-                    ggml_tensor* c_concat_b = c_concat ? to_backend(c_concat) : nullptr;
-                    ggml_tensor* time_dim_concat_b = time_dim_concat ? to_backend(time_dim_concat) : nullptr;
-                    ggml_tensor* vace_context_b = vace_context ? to_backend(vace_context) : nullptr;
+                    // No chunk-K for WAN (no resident layer span).
+                    (void)prev_gpu_output;
 
-                    if (c_concat_b != nullptr) {
-                        x_b = ggml_concat(compute_ctx, x_b, c_concat_b, 3);
-                    }
+                    ggml_tensor* x_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                            x_ne_[0], x_ne_[1], x_ne_[2], x_ne_[3]);
+                    set_backend_tensor_data(x_in, persistent_x_);
+
+                    // x_orig is layer-invariant — captured once in Stage 1.
+                    ggml_tensor* x_orig_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                                  x_ne_[0], x_ne_[1], x_ne_[2], x_ne_[3]);
+                    set_backend_tensor_data(x_orig_in, persistent_x_orig_);
+
+                    ggml_tensor* e0_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                              e0_ne_[0], e0_ne_[1], e0_ne_[2], e0_ne_[3]);
+                    set_backend_tensor_data(e0_in, persistent_e0_);
+
+                    ggml_tensor* context_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                                  context_ne_[0], context_ne_[1],
+                                                                  context_ne_[2], context_ne_[3]);
+                    set_backend_tensor_data(context_in, persistent_context_);
 
                     int pos_len = static_cast<int>(pe_vec.size() / wan_params.axes_dim_sum / 2);
-                    auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, wan_params.axes_dim_sum / 2, pos_len);
+                    auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2,
+                                                  wan_params.axes_dim_sum / 2, pos_len);
                     set_backend_tensor_data(pe, pe_vec.data());
 
-                    struct ggml_tensor* out = wan.forward(&runner_ctx,
-                                                          x_b,
-                                                          timesteps_b,
-                                                          context_b,
-                                                          pe,
-                                                          clip_fea_b,
-                                                          time_dim_concat_b,
-                                                          vace_context_b,
-                                                          vace_strength,
-                                                          1);
+                    ggml_tensor* c_in = nullptr;
+                    if (has_vace && persistent_c_ != nullptr) {
+                        c_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                    c_ne_[0], c_ne_[1], c_ne_[2], c_ne_[3]);
+                        set_backend_tensor_data(c_in, persistent_c_);
+                    }
 
-                    ggml_build_forward_expand(gf, out);
-                    x_output = out;
+                    auto result = wan.forward_block(&runner_ctx, block_idx,
+                                                     x_in, x_orig_in, c_in,
+                                                     e0_in, pe, context_in,
+                                                     context_img_len_,
+                                                     captured_vace_strength_);
+                    layer_x_out_ = result.first;
+                    layer_c_out_ = result.second;
 
+                    ggml_build_forward_expand(gf, layer_x_out_);
+                    if (layer_c_out_ != nullptr && layer_c_out_ != c_in) {
+                        ggml_build_forward_expand(gf, layer_c_out_);
+                    }
                     return gf;
                 };
 
-                if (!GGMLRunner::compute(get_input_graph, n_threads, true, output, output_ctx, true)) {
-                    LOG_ERROR("Compute failed");
-                    return false;
-                }
-            }
+                s.post_compute = [this]() {
+                    ggml_backend_tensor_get(layer_x_out_, persistent_x_, 0,
+                                             ggml_nbytes(layer_x_out_));
+                    for (int i = 0; i < 4; ++i) x_ne_[i] = layer_x_out_->ne[i];
 
-            int64_t t_end = ggml_time_ms();
-            LOG_INFO("Streaming completed in %.2fs (%d blocks)",
-                     (t_end - t_start) / 1000.0, num_blocks);
+                    if (layer_c_out_ != nullptr && persistent_c_ != nullptr) {
+                        ggml_backend_tensor_get(layer_c_out_, persistent_c_, 0,
+                                                 ggml_nbytes(layer_c_out_));
+                        for (int i = 0; i < 4; ++i) c_ne_[i] = layer_c_out_->ne[i];
+                    }
+                };
+                return s;
+            };
 
-            return true;
+            // ---- Stage 3: output -------------------------------------------
+            LayerStreaming::Stage output_stage;
+            output_stage.build_graph = [&]() -> ggml_cgraph* {
+                ggml_cgraph* gf = new_graph_custom(WAN_GRAPH_SIZE / 4);
+                auto runner_ctx = get_context();
+
+                ggml_tensor* x_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                        x_ne_[0], x_ne_[1], x_ne_[2], x_ne_[3]);
+                set_backend_tensor_data(x_in, persistent_x_);
+
+                ggml_tensor* e_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                        e_ne_[0], e_ne_[1], e_ne_[2], e_ne_[3]);
+                set_backend_tensor_data(e_in, persistent_e_);
+
+                ggml_tensor* out = wan.forward_output_stage(&runner_ctx, x_in, e_in);
+                // unpatchify + slice mirror Wan::forward (outer wrapper).
+                out = wan.unpatchify(compute_ctx, out, t_len_, h_len_, w_len_);
+                out = ggml_ext_slice(compute_ctx, out, 2, 0, orig_T_);
+                out = ggml_ext_slice(compute_ctx, out, 1, 0, orig_H_);
+                out = ggml_ext_slice(compute_ctx, out, 0, 0, orig_W_);
+
+                ggml_build_forward_expand(gf, out);
+                return gf;
+            };
+
+            return LayerStreaming::run_streaming(
+                this, n_threads, streaming_engine_->get_config(),
+                input_stage, layer_factory, output_stage,
+                num_blocks,
+                [](int i) { return "blocks." + std::to_string(i); },
+                /*start_layer_idx=*/0,
+                output, output_ctx);
         }
 
         ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor,
