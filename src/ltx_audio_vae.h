@@ -349,42 +349,66 @@ namespace LTXV {
         return type == GGML_TYPE_BF16 ? GGML_TYPE_F16 : type;
     }
 
-    static ggml_tensor* repeat_1d_value(ggml_context* ctx, ggml_tensor* x, int64_t count) {
-        GGML_ASSERT(x->ne[0] == 1);
-        ggml_tensor* target = ggml_new_tensor_4d(ctx, x->type, count, x->ne[1], x->ne[2], x->ne[3]);
-        return ggml_repeat(ctx, x, target);
+    static ggml_tensor* repeat_with_vulkan_f32_workaround(ggml_backend_t backend,
+                                                          ggml_context* ctx,
+                                                          ggml_tensor* x,
+                                                          int64_t ne0,
+                                                          int64_t ne1,
+                                                          int64_t ne2,
+                                                          int64_t ne3) {
+        if (x->type != GGML_TYPE_F32 &&
+            (x->type == GGML_TYPE_F16 || x->type == GGML_TYPE_BF16) &&
+            sd_backend_is(backend, "vulkan")) {
+            auto x_f32    = ggml_cast(ctx, x, GGML_TYPE_F32);
+            auto repeated = ggml_repeat_4d(ctx,
+                                           x_f32,
+                                           ne0,
+                                           ne1,
+                                           ne2,
+                                           ne3);
+            return ggml_cast(ctx, repeated, x->type);
+        }
+        return ggml_repeat_4d(ctx, x, ne0, ne1, ne2, ne3);
     }
 
-    static ggml_tensor* replicate_pad_1d(ggml_context* ctx, ggml_tensor* x, int64_t left, int64_t right) {
+    static ggml_tensor* repeat_1d_value(GGMLRunnerContext* runner_ctx, ggml_tensor* x, int64_t count) {
+        auto ctx = runner_ctx->ggml_ctx;
+        GGML_ASSERT(x->ne[0] == 1);
+        return repeat_with_vulkan_f32_workaround(runner_ctx->backend, ctx, x, count, x->ne[1], x->ne[2], x->ne[3]);
+    }
+
+    static ggml_tensor* replicate_pad_1d(GGMLRunnerContext* runner_ctx, ggml_tensor* x, int64_t left, int64_t right) {
+        auto ctx = runner_ctx->ggml_ctx;
         if (left > 0) {
             auto first = ggml_ext_slice(ctx, x, 0, 0, 1);
-            x          = ggml_concat(ctx, repeat_1d_value(ctx, first, left), x, 0);
+            x          = ggml_concat(ctx, repeat_1d_value(runner_ctx, first, left), x, 0);
         }
         if (right > 0) {
             auto last = ggml_ext_slice(ctx, x, 0, x->ne[0] - 1, x->ne[0]);
-            x         = ggml_concat(ctx, x, repeat_1d_value(ctx, last, right), 0);
+            x         = ggml_concat(ctx, x, repeat_1d_value(runner_ctx, last, right), 0);
         }
         return x;
     }
 
-    static ggml_tensor* tile_depthwise_filter_1d(ggml_context* ctx, ggml_tensor* filter, int64_t channels) {
+    static ggml_tensor* tile_depthwise_filter_1d(GGMLRunnerContext* runner_ctx, ggml_tensor* filter, int64_t channels) {
+        auto ctx          = runner_ctx->ggml_ctx;
         ggml_tensor* base = filter;
         if (ggml_n_dims(base) == 3) {
             base = ggml_reshape_4d(ctx, base, base->ne[0], 1, 1, 1);
         } else if (ggml_n_dims(base) == 1) {
             base = ggml_reshape_4d(ctx, base, base->ne[0], 1, 1, 1);
         }
-        ggml_tensor* target = ggml_new_tensor_4d(ctx, base->type, base->ne[0], 1, channels, 1);
-        return ggml_repeat(ctx, base, target);
+        return repeat_with_vulkan_f32_workaround(runner_ctx->backend, ctx, base, base->ne[0], 1, channels, 1);
     }
 
-    static ggml_tensor* depthwise_conv1d(ggml_context* ctx,
+    static ggml_tensor* depthwise_conv1d(GGMLRunnerContext* runner_ctx,
                                          ggml_tensor* x,
                                          ggml_tensor* filter,
                                          int stride,
                                          int padding) {
+        auto ctx = runner_ctx->ggml_ctx;
         GGML_ASSERT(x->ne[3] == 1);
-        auto tiled = tile_depthwise_filter_1d(ctx, filter, x->ne[1]);
+        auto tiled = tile_depthwise_filter_1d(runner_ctx, filter, x->ne[1]);
         auto out   = ggml_conv_1d_dw(ctx, tiled, x, stride, padding, 1);
         return ggml_reshape_4d(ctx, out, out->ne[0], out->ne[1], 1, 1);
     }
@@ -654,7 +678,7 @@ namespace LTXV {
             int up_pad_left  = up_pad * up_ratio + (up_kernel_size - up_ratio) / 2;
             int up_pad_right = up_pad * up_ratio + (up_kernel_size - up_ratio + 1) / 2;
 
-            x = replicate_pad_1d(ctx->ggml_ctx, x, up_pad, up_pad);
+            x = replicate_pad_1d(ctx, x, up_pad, up_pad);
             x = depthwise_conv_transpose1d(ctx->ggml_ctx, x, up_filter, up_ratio);
             x = ggml_ext_slice(ctx->ggml_ctx, x, 0, up_pad_left, x->ne[0] - up_pad_right);
 
@@ -662,8 +686,8 @@ namespace LTXV {
 
             int down_pad_left  = down_kernel_size / 2 - (down_kernel_size % 2 == 0 ? 1 : 0);
             int down_pad_right = down_kernel_size / 2;
-            x                  = replicate_pad_1d(ctx->ggml_ctx, x, down_pad_left, down_pad_right);
-            x                  = depthwise_conv1d(ctx->ggml_ctx, x, down_filter, down_ratio, 0);
+            x                  = replicate_pad_1d(ctx, x, down_pad_left, down_pad_right);
+            x                  = depthwise_conv1d(ctx, x, down_filter, down_ratio, 0);
             return x;
         }
     };
