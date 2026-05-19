@@ -16,7 +16,7 @@
 
 namespace sd::ggml_graph_cut {
 
-    static constexpr double MAX_VRAM_BYTES_PER_GIB      = 1024.0 * 1024.0 * 1024.0;
+    static constexpr double MAX_VRAM_BYTES_PER_GIB = 1024.0 * 1024.0 * 1024.0;
 
     static std::string graph_cut_tensor_display_name(const ggml_tensor* tensor) {
         if (tensor == nullptr) {
