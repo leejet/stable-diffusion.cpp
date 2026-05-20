@@ -325,7 +325,7 @@ public:
     int t_downscale = 1;
     TinyVideoEncoder(int z_channels = 4, int patch_size = 1, std::vector<bool> time_downscale = {true, true, false})
         : z_channels(z_channels), patch_size(patch_size) {
-            //         self.t_downscale = 2**sum(t.stride == 2 for t in self.encoder if isinstance(t, TPool))
+        //         self.t_downscale = 2**sum(t.stride == 2 for t in self.encoder if isinstance(t, TPool))
         t_downscale = 1;
         for (bool downscale : time_downscale) {
             if (downscale) {
@@ -383,7 +383,7 @@ class TinyVideoDecoder : public UnaryBlock {
     static const int num_layers  = 3;
     int channels[num_layers + 1] = {256, 128, 64, 64};
     int patch_size               = 1;
-    int t_upscale              = 1;
+    int t_upscale                = 1;
 
 public:
     TinyVideoDecoder(int z_channels = 4, int patch_size = 1, std::vector<bool> time_upscale = {false, true, true})
@@ -419,7 +419,7 @@ public:
                                                   ggml_ext_scale(ctx->ggml_ctx, z, 1.0f / 3.0f)),
                                 3.0f,
                                 true);
-                                
+
         h         = first_conv->forward(ctx, h);
         h         = ggml_relu_inplace(ctx->ggml_ctx, h);
         int index = 3;

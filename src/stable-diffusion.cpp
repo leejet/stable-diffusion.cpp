@@ -680,8 +680,7 @@ public:
                 if (sd_version_is_wan(version) ||
                     sd_version_is_qwen_image(version) ||
                     sd_version_is_anima(version) ||
-                    sd_version_is_ltxav(version)
-                ) {
+                    sd_version_is_ltxav(version)) {
                     return std::make_shared<TinyVideoAutoEncoder>(backend_for(SDBackendModule::VAE),
                                                                   params_backend_for(SDBackendModule::VAE),
                                                                   tensor_storage_map,
