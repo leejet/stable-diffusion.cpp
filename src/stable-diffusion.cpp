@@ -1211,7 +1211,7 @@ public:
         }
         auto lora = std::make_shared<LoraModel>(lora_id,
                                                 backend_for(module),
-                                                params_backend_for(module),
+                                                backend_for(module),
                                                 lora_path,
                                                 is_high_noise ? "model.high_noise_" : "",
                                                 version);
