@@ -532,6 +532,7 @@ Shared default fields used by both `img_gen` and `vid_gen`:
 | `hires.target_height` | `integer` |
 | `hires.steps` | `integer` |
 | `hires.denoising_strength` | `number` |
+| `hires.custom_sigmas` | `array<number>` |
 | `hires.upscale_tile_size` | `integer` |
 
 `vid_gen`-specific default fields:
@@ -685,6 +686,7 @@ Example:
     "target_height": 0,
     "steps": 0,
     "denoising_strength": 0.7,
+    "custom_sigmas": [],
     "upscale_tile_size": 128
   },
 
@@ -799,6 +801,7 @@ Other native fields:
 | `hires.target_height` | `integer` |
 | `hires.steps` | `integer` |
 | `hires.denoising_strength` | `number` |
+| `hires.custom_sigmas` | `array<number>` |
 | `hires.upscale_tile_size` | `integer` |
 | `vae_tiling_params` | `object` |
 | `cache_mode` | `string` |
@@ -806,7 +809,7 @@ Other native fields:
 | `scm_mask` | `string` |
 | `scm_policy_dynamic` | `boolean` |
 
-For `hires.upscaler`, use `Lanczos`, `Nearest`, `Latent`, `Latent (nearest)`, `Latent (nearest-exact)`, `Latent (antialiased)`, `Latent (bicubic)`, `Latent (bicubic antialiased)`, or an `upscalers[].name` value from `GET /sdcpp/v1/capabilities`. Model-backed upscalers are resolved as `--hires-upscalers-dir / (name + ext)` and must live directly in that directory.
+For `hires.upscaler`, use `Lanczos`, `Nearest`, `Latent`, `Latent (nearest)`, `Latent (nearest-exact)`, `Latent (antialiased)`, `Latent (bicubic)`, `Latent (bicubic antialiased)`, or an `upscalers[].name` value from `GET /sdcpp/v1/capabilities`. Model-backed upscalers are resolved as `--hires-upscalers-dir / (name + ext)` and must live directly in that directory. `hires.custom_sigmas`, when present, overrides the generated second-pass hires sigma schedule; otherwise the hires schedule is trimmed by `hires.denoising_strength`.
 
 HTTP-only output fields:
 

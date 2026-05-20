@@ -1123,6 +1123,18 @@ namespace LTXVAE {
             mean      = ggml_cont(ctx->ggml_ctx, mean);
             return processor->normalize(ctx, mean);
         }
+
+        ggml_tensor* normalize_latents(GGMLRunnerContext* ctx,
+                                       ggml_tensor* x) {
+            auto processor = std::dynamic_pointer_cast<PerChannelStatistics>(blocks["per_channel_statistics"]);
+            return processor->normalize(ctx, x);
+        }
+
+        ggml_tensor* un_normalize_latents(GGMLRunnerContext* ctx,
+                                          ggml_tensor* x) {
+            auto processor = std::dynamic_pointer_cast<PerChannelStatistics>(blocks["per_channel_statistics"]);
+            return processor->un_normalize(ctx, x);
+        }
     };
 
 }  // namespace LTXVAE
@@ -1192,6 +1204,17 @@ struct LTXVideoVAE : public VAE {
         return gf;
     }
 
+    ggml_cgraph* build_latent_statistics_graph(const sd::Tensor<float>& z_tensor, bool normalize) {
+        ggml_cgraph* gf = new_graph_custom(1024);
+        ggml_tensor* z  = make_input(z_tensor);
+
+        auto runner_ctx  = get_context();
+        ggml_tensor* out = normalize ? vae.normalize_latents(&runner_ctx, z)
+                                     : vae.un_normalize_latents(&runner_ctx, z);
+        ggml_build_forward_expand(gf, out);
+        return gf;
+    }
+
     sd::Tensor<float> _compute(const int n_threads,
                                const sd::Tensor<float>& z,
                                bool decode_graph) override {
@@ -1224,6 +1247,26 @@ struct LTXVideoVAE : public VAE {
             return {};
         }
         return result;
+    }
+
+    sd::Tensor<float> apply_latent_statistics(const int n_threads,
+                                              const sd::Tensor<float>& z,
+                                              bool normalize) {
+        auto get_graph = [&]() -> ggml_cgraph* {
+            return build_latent_statistics_graph(z, normalize);
+        };
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false),
+                                               static_cast<size_t>(z.dim()));
+    }
+
+    sd::Tensor<float> normalize_latents(const int n_threads,
+                                        const sd::Tensor<float>& z) {
+        return apply_latent_statistics(n_threads, z, true);
+    }
+
+    sd::Tensor<float> un_normalize_latents(const int n_threads,
+                                           const sd::Tensor<float>& z) {
+        return apply_latent_statistics(n_threads, z, false);
     }
 
     int get_encoder_output_channels(int input_channels) override {
