@@ -277,6 +277,8 @@ Default Generation Options:
                                            model-specific
   --sigmas                                 custom sigma values for the sampler, comma-separated (e.g.,
                                            "14.61,7.8,3.5,0.0").
+  --hires-sigmas                           custom sigma values for the highres fix second pass, comma-separated (e.g.,
+                                           "0.85,0.725,0.421875,0.0").
   --skip-layers                            layers to skip for SLG steps (default: [7,8,9])
   --high-noise-skip-layers                 (high noise) layers to skip for SLG steps (default: [7,8,9])
   -r, --ref-image                          reference image for Flux Kontext models (can be used multiple times)

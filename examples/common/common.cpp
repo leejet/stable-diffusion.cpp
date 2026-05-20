@@ -1134,11 +1134,11 @@ ArgOptions SDGenerationParams::get_options() {
         return 1;
     };
 
-    auto on_sigmas_arg = [&](int argc, const char** argv, int index) {
-        if (++index >= argc) {
+    auto parse_sigmas_arg = [&](const char* value, std::vector<float>* target, const char* option_name) {
+        if (target == nullptr || value == nullptr) {
             return -1;
         }
-        std::string sigmas_str = argv[index];
+        std::string sigmas_str = value;
         if (!sigmas_str.empty() && sigmas_str.front() == '[') {
             sigmas_str.erase(0, 1);
         }
@@ -1146,6 +1146,7 @@ ArgOptions SDGenerationParams::get_options() {
             sigmas_str.pop_back();
         }
 
+        size_t before = target->size();
         std::stringstream ss(sigmas_str);
         std::string item;
         while (std::getline(ss, item, ',')) {
@@ -1153,22 +1154,36 @@ ArgOptions SDGenerationParams::get_options() {
             item.erase(item.find_last_not_of(" \t\n\r\f\v") + 1);
             if (!item.empty()) {
                 try {
-                    custom_sigmas.push_back(std::stof(item));
+                    target->push_back(std::stof(item));
                 } catch (const std::invalid_argument&) {
-                    LOG_ERROR("error: invalid float value '%s' in --sigmas", item.c_str());
+                    LOG_ERROR("error: invalid float value '%s' in %s", item.c_str(), option_name);
                     return -1;
                 } catch (const std::out_of_range&) {
-                    LOG_ERROR("error: float value '%s' out of range in --sigmas", item.c_str());
+                    LOG_ERROR("error: float value '%s' out of range in %s", item.c_str(), option_name);
                     return -1;
                 }
             }
         }
 
-        if (custom_sigmas.empty() && !sigmas_str.empty()) {
-            LOG_ERROR("error: could not parse any sigma values from '%s'", argv[index]);
+        if (target->size() == before && !sigmas_str.empty()) {
+            LOG_ERROR("error: could not parse any sigma values from '%s'", value);
             return -1;
         }
         return 1;
+    };
+
+    auto on_sigmas_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        return parse_sigmas_arg(argv[index], &custom_sigmas, "--sigmas");
+    };
+
+    auto on_hires_sigmas_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        return parse_sigmas_arg(argv[index], &hires_custom_sigmas, "--hires-sigmas");
     };
 
     auto on_ref_image_arg = [&](int argc, const char** argv, int index) {
@@ -1293,6 +1308,10 @@ ArgOptions SDGenerationParams::get_options() {
          "--sigmas",
          "custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\").",
          on_sigmas_arg},
+        {"",
+         "--hires-sigmas",
+         "custom sigma values for the highres fix second pass, comma-separated (e.g., \"0.85,0.725,0.421875,0.0\").",
+         on_hires_sigmas_arg},
         {"",
          "--skip-layers",
          "layers to skip for SLG steps (default: [7,8,9])",
@@ -1525,11 +1544,31 @@ static bool resolve_model_file_from_dir(const std::string& model_name,
         LOG_ERROR("%s directory is empty", label);
         return false;
     }
+    auto ends_with_valid_ext = [&]() {
+        for (const auto& ext : valid_ext) {
+            if (model_name.size() < ext.size()) {
+                continue;
+            }
+            auto suffix = model_name.substr(model_name.size() - ext.size());
+            std::transform(suffix.begin(), suffix.end(), suffix.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            std::string lower_ext = ext;
+            std::transform(lower_ext.begin(), lower_ext.end(), lower_ext.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            if (suffix == lower_ext) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     if (model_name.empty() ||
         model_name.find('/') != std::string::npos ||
         model_name.find('\\') != std::string::npos ||
         fs::path(model_name).has_root_path() ||
-        fs::path(model_name).has_extension()) {
+        ends_with_valid_ext()) {
         LOG_ERROR("%s must be a model name without path or extension: %s", label, model_name.c_str());
         return false;
     }
@@ -1632,6 +1671,9 @@ bool SDGenerationParams::from_json_str(
         }
         if (hires_json.contains("denoising_strength") && hires_json["denoising_strength"].is_number()) {
             hires_denoising_strength = hires_json["denoising_strength"];
+        }
+        if (hires_json.contains("custom_sigmas") && hires_json["custom_sigmas"].is_array()) {
+            hires_custom_sigmas = hires_json["custom_sigmas"].get<std::vector<float>>();
         }
         if (hires_json.contains("upscale_tile_size") && hires_json["upscale_tile_size"].is_number_integer()) {
             hires_upscale_tile_size = hires_json["upscale_tile_size"];
@@ -2080,6 +2122,10 @@ bool SDGenerationParams::validate(SDMode mode) {
             LOG_ERROR("error: hires denoising strength must be in (0.0, 1.0]");
             return false;
         }
+        if (!hires_custom_sigmas.empty() && hires_custom_sigmas.size() < 2) {
+            LOG_ERROR("error: hires custom sigmas must contain at least two values");
+            return false;
+        }
         if (hires_upscale_tile_size < 1) {
             LOG_ERROR("error: hires upscale tile size must be positive");
             return false;
@@ -2174,15 +2220,17 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     params.vae_tiling_params     = vae_tiling_params;
     params.cache                 = cache_params;
 
-    params.hires.enabled            = hires_enabled;
-    params.hires.upscaler           = resolved_hires_upscaler;
-    params.hires.model_path         = hires_upscaler_model_path.empty() ? nullptr : hires_upscaler_model_path.c_str();
-    params.hires.scale              = hires_scale;
-    params.hires.target_width       = hires_width;
-    params.hires.target_height      = hires_height;
-    params.hires.steps              = hires_steps;
-    params.hires.denoising_strength = hires_denoising_strength;
-    params.hires.upscale_tile_size  = hires_upscale_tile_size;
+    params.hires.enabled             = hires_enabled;
+    params.hires.upscaler            = resolved_hires_upscaler;
+    params.hires.model_path          = hires_upscaler_model_path.empty() ? nullptr : hires_upscaler_model_path.c_str();
+    params.hires.scale               = hires_scale;
+    params.hires.target_width        = hires_width;
+    params.hires.target_height       = hires_height;
+    params.hires.steps               = hires_steps;
+    params.hires.denoising_strength  = hires_denoising_strength;
+    params.hires.upscale_tile_size   = hires_upscale_tile_size;
+    params.hires.custom_sigmas       = hires_custom_sigmas.empty() ? nullptr : hires_custom_sigmas.data();
+    params.hires.custom_sigmas_count = static_cast<int>(hires_custom_sigmas.size());
     return params;
 }
 
@@ -2215,27 +2263,38 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
     high_noise_sample_params.extra_sample_args        = high_noise_extra_sample_args.empty() ? nullptr : high_noise_extra_sample_args.c_str();
     cache_params.scm_mask                             = scm_mask.empty() ? nullptr : scm_mask.c_str();
 
-    params.loras                    = lora_vec.empty() ? nullptr : lora_vec.data();
-    params.lora_count               = static_cast<uint32_t>(lora_vec.size());
-    params.prompt                   = prompt.c_str();
-    params.negative_prompt          = negative_prompt.c_str();
-    params.clip_skip                = clip_skip;
-    params.init_image               = init_image.get();
-    params.end_image                = end_image.get();
-    params.control_frames           = control_frame_views.empty() ? nullptr : control_frame_views.data();
-    params.control_frames_size      = static_cast<int>(control_frame_views.size());
-    params.width                    = get_resolved_width();
-    params.height                   = get_resolved_height();
-    params.sample_params            = sample_params;
-    params.high_noise_sample_params = high_noise_sample_params;
-    params.moe_boundary             = moe_boundary;
-    params.strength                 = strength;
-    params.seed                     = seed;
-    params.video_frames             = video_frames;
-    params.fps                      = fps;
-    params.vace_strength            = vace_strength;
-    params.vae_tiling_params        = vae_tiling_params;
-    params.cache                    = cache_params;
+    params.loras                     = lora_vec.empty() ? nullptr : lora_vec.data();
+    params.lora_count                = static_cast<uint32_t>(lora_vec.size());
+    params.prompt                    = prompt.c_str();
+    params.negative_prompt           = negative_prompt.c_str();
+    params.clip_skip                 = clip_skip;
+    params.init_image                = init_image.get();
+    params.end_image                 = end_image.get();
+    params.control_frames            = control_frame_views.empty() ? nullptr : control_frame_views.data();
+    params.control_frames_size       = static_cast<int>(control_frame_views.size());
+    params.width                     = get_resolved_width();
+    params.height                    = get_resolved_height();
+    params.sample_params             = sample_params;
+    params.high_noise_sample_params  = high_noise_sample_params;
+    params.moe_boundary              = moe_boundary;
+    params.strength                  = strength;
+    params.seed                      = seed;
+    params.video_frames              = video_frames;
+    params.fps                       = fps;
+    params.vace_strength             = vace_strength;
+    params.vae_tiling_params         = vae_tiling_params;
+    params.cache                     = cache_params;
+    params.hires.enabled             = hires_enabled;
+    params.hires.upscaler            = resolved_hires_upscaler;
+    params.hires.model_path          = hires_upscaler_model_path.empty() ? nullptr : hires_upscaler_model_path.c_str();
+    params.hires.scale               = hires_scale;
+    params.hires.target_width        = hires_width;
+    params.hires.target_height       = hires_height;
+    params.hires.steps               = hires_steps;
+    params.hires.denoising_strength  = hires_denoising_strength;
+    params.hires.upscale_tile_size   = hires_upscale_tile_size;
+    params.hires.custom_sigmas       = hires_custom_sigmas.empty() ? nullptr : hires_custom_sigmas.data();
+    params.hires.custom_sigmas_count = static_cast<int>(hires_custom_sigmas.size());
     return params;
 }
 
@@ -2318,6 +2377,7 @@ std::string SDGenerationParams::to_string() const {
         << ", target_height: " << hires_height
         << ", steps: " << hires_steps
         << ", denoising_strength: " << hires_denoising_strength
+        << ", custom_sigmas: " << vec_to_string(hires_custom_sigmas)
         << ", upscale_tile_size: " << hires_upscale_tile_size << " },\n"
         << "  vae_tiling_params: { "
         << vae_tiling_params.enabled << ", "
@@ -2469,6 +2529,7 @@ std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
             {"target_height", gen_params.hires_height},
             {"steps", gen_params.hires_steps},
             {"denoising_strength", gen_params.hires_denoising_strength},
+            {"custom_sigmas", gen_params.hires_custom_sigmas},
             {"upscale_tile_size", gen_params.hires_upscale_tile_size},
         };
     }
@@ -2588,6 +2649,9 @@ std::string get_image_params(const SDContextParams& ctx_params,
         parameter_string += "Hires resize: " + std::to_string(gen_params.hires_width) + "x" + std::to_string(gen_params.hires_height) + ", ";
         parameter_string += "Hires steps: " + std::to_string(gen_params.hires_steps) + ", ";
         parameter_string += "Denoising strength: " + std::to_string(gen_params.hires_denoising_strength) + ", ";
+        if (!gen_params.hires_custom_sigmas.empty()) {
+            parameter_string += "Hires custom sigmas: " + vec_to_string(gen_params.hires_custom_sigmas) + ", ";
+        }
     }
     parameter_string += "Version: stable-diffusion.cpp";
     parameter_string += ", SDCPP: " + build_sdcpp_image_metadata_json(ctx_params, gen_params, seed, mode);

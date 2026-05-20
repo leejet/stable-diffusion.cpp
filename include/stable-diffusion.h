@@ -332,6 +332,8 @@ typedef struct {
     int steps;
     float denoising_strength;
     int upscale_tile_size;
+    float* custom_sigmas;
+    int custom_sigmas_count;
 } sd_hires_params_t;
 
 typedef struct {
@@ -382,6 +384,7 @@ typedef struct {
     float vace_strength;
     sd_tiling_params_t vae_tiling_params;
     sd_cache_params_t cache;
+    sd_hires_params_t hires;
 } sd_vid_gen_params_t;
 
 typedef struct sd_ctx_t sd_ctx_t;
