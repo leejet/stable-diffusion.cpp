@@ -1,6 +1,7 @@
 #ifndef __SD_LTX_VAE_HPP__
 #define __SD_LTX_VAE_HPP__
 
+#include <algorithm>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -143,16 +144,25 @@ namespace LTXVAE {
                              std::vector<ggml_tensor*>& feat_map,
                              int& feat_idx,
                              int chunk_idx,
-                             bool causal = true) {
+                             bool causal      = true,
+                             int temporal_pad = 0) {
             auto conv     = std::dynamic_pointer_cast<Conv3d>(blocks["conv"]);
             const int pad = causal ? (time_kernel_size - 1) : (time_kernel_size - 1) / 2;
 
             ggml_tensor* prev = (feat_idx < (int)feat_map.size()) ? feat_map[feat_idx] : nullptr;
 
+            GGML_ASSERT(x->ne[2] >= temporal_pad);
+
+            int end_idx   = x->ne[2] - temporal_pad;
+            int start_idx = std::max(end_idx - pad, 0);
+
             // Save a contiguous copy of the last `pad` frames so the large `x`
             // tensor is not kept alive across iterations by a dangling view.
-            if (feat_idx < (int)feat_map.size() && pad > 0 && x->ne[2] >= pad) {
-                auto slice         = ggml_ext_slice(ctx->ggml_ctx, x, 2, x->ne[2] - pad, x->ne[2]);
+            if (feat_idx < (int)feat_map.size() && end_idx - start_idx > 0) {
+                GGML_ASSERT(start_idx >= 0);
+                GGML_ASSERT(end_idx > 0);
+
+                auto slice         = ggml_ext_slice(ctx->ggml_ctx, x, 2, start_idx, end_idx);
                 feat_map[feat_idx] = ggml_cont(ctx->ggml_ctx, slice);
             }
             feat_idx++;
@@ -284,7 +294,8 @@ namespace LTXVAE {
                              bool causal,
                              std::vector<ggml_tensor*>& feat_map,
                              int& feat_idx,
-                             int chunk_idx) {
+                             int chunk_idx,
+                             int temporal_pad = 0) {
             auto norm1 = std::dynamic_pointer_cast<PixelNorm3D>(blocks["norm1"]);
             auto conv1 = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv1"]);
             auto norm2 = std::dynamic_pointer_cast<PixelNorm3D>(blocks["norm2"]);
@@ -311,14 +322,14 @@ namespace LTXVAE {
                 h = apply_scale_shift(ctx->ggml_ctx, h, scale1, shift1);
             }
             h = ggml_silu_inplace(ctx->ggml_ctx, h);
-            h = conv1->forward(ctx, h, feat_map, feat_idx, chunk_idx, causal);
+            h = conv1->forward(ctx, h, feat_map, feat_idx, chunk_idx, causal, temporal_pad);
 
             h = norm2->forward(ctx, h);
             if (timestep_conditioning) {
                 h = apply_scale_shift(ctx->ggml_ctx, h, scale2, shift2);
             }
             h = ggml_silu_inplace(ctx->ggml_ctx, h);
-            h = conv2->forward(ctx, h, feat_map, feat_idx, chunk_idx, causal);
+            h = conv2->forward(ctx, h, feat_map, feat_idx, chunk_idx, causal, temporal_pad);
 
             return ggml_add(ctx->ggml_ctx, h, x);
         }
@@ -367,7 +378,8 @@ namespace LTXVAE {
                              bool causal,
                              std::vector<ggml_tensor*>& feat_map,
                              int& feat_idx,
-                             int chunk_idx) {
+                             int chunk_idx,
+                             int temporal_pad = 0) {
             ggml_tensor* timestep_embed = nullptr;
             if (timestep_conditioning) {
                 GGML_ASSERT(timestep != nullptr);
@@ -376,7 +388,7 @@ namespace LTXVAE {
             }
             for (int i = 0; i < num_layers; i++) {
                 auto resnet = std::dynamic_pointer_cast<ResnetBlock3D>(blocks["res_blocks." + std::to_string(i)]);
-                x           = resnet->forward(ctx, x, timestep_embed, causal, feat_map, feat_idx, chunk_idx);
+                x           = resnet->forward(ctx, x, timestep_embed, causal, feat_map, feat_idx, chunk_idx, temporal_pad);
             }
             return x;
         }
@@ -437,7 +449,8 @@ namespace LTXVAE {
                              bool causal,
                              std::vector<ggml_tensor*>& feat_map,
                              int& feat_idx,
-                             int chunk_idx) {
+                             int chunk_idx,
+                             int temporal_pad = 0) {
             auto conv = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv"]);
 
             bool drop_first = (chunk_idx == 0) && (factor_t > 1);
@@ -453,7 +466,7 @@ namespace LTXVAE {
                 x_in = res;
             }
 
-            x = conv->forward(ctx, x, feat_map, feat_idx, chunk_idx, causal);
+            x = conv->forward(ctx, x, feat_map, feat_idx, chunk_idx, causal, temporal_pad);
             x = depth_to_space_3d(ctx->ggml_ctx, x, get_output_channels(), factor_t, factor_s, drop_first);
             if (residual) {
                 x = ggml_add(ctx->ggml_ctx, x, x_in);
@@ -986,7 +999,8 @@ namespace LTXVAE {
                                          ggml_tensor* timestep,
                                          std::vector<ggml_tensor*>& feat_map,
                                          int& feat_idx,
-                                         int chunk_idx) {
+                                         int chunk_idx,
+                                         int& temporal_pad) {
             auto conv_in       = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv_in"]);
             auto conv_norm_out = std::dynamic_pointer_cast<PixelNorm3D>(blocks["conv_norm_out"]);
             auto conv_out      = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv_out"]);
@@ -998,7 +1012,7 @@ namespace LTXVAE {
             }
 
             // conv_in with feat_map for left temporal context
-            x = conv_in->forward(ctx, x, feat_map, feat_idx, chunk_idx, causal_decoder);
+            x = conv_in->forward(ctx, x, feat_map, feat_idx, chunk_idx, causal_decoder, temporal_pad);
 
             // up_blocks
             int block_idx = 0;
@@ -1006,12 +1020,13 @@ namespace LTXVAE {
                 auto mid_block = std::dynamic_pointer_cast<UNetMidBlock3D>(blocks["up_blocks." + std::to_string(block_idx)]);
                 if (mid_block) {
                     x = mid_block->forward(ctx, x, scaled_timestep, causal_decoder,
-                                           feat_map, feat_idx, chunk_idx);
+                                           feat_map, feat_idx, chunk_idx, temporal_pad);
                 } else {
                     auto upsample = std::dynamic_pointer_cast<DepthToSpaceUpsample>(
                         blocks["up_blocks." + std::to_string(block_idx)]);
                     x = upsample->forward(ctx, x, causal_decoder,
-                                          feat_map, feat_idx, chunk_idx);
+                                          feat_map, feat_idx, chunk_idx, temporal_pad);
+                    temporal_pad *= upsample->factor_t;
                 }
                 block_idx++;
             }
@@ -1028,7 +1043,7 @@ namespace LTXVAE {
                 x                       = apply_scale_shift(ctx->ggml_ctx, x, scale, shift);
             }
             x = ggml_silu_inplace(ctx->ggml_ctx, x);
-            x = conv_out->forward(ctx, x, feat_map, feat_idx, chunk_idx, causal_decoder);
+            x = conv_out->forward(ctx, x, feat_map, feat_idx, chunk_idx, causal_decoder, temporal_pad);
             return x;
         }
     };
@@ -1084,7 +1099,9 @@ namespace LTXVAE {
         // tensors can be freed by GGML before the next iteration starts.
         ggml_tensor* decode_tiled(GGMLRunnerContext* ctx,
                                   ggml_tensor* z,
-                                  ggml_tensor* timestep) {
+                                  ggml_tensor* timestep,
+                                  int temporal_window_size  = 1,
+                                  int temporal_tile_overlap = 0) {
             auto decoder   = std::dynamic_pointer_cast<Decoder>(blocks["decoder"]);
             auto processor = std::dynamic_pointer_cast<PerChannelStatistics>(blocks["per_channel_statistics"]);
             auto latents   = processor->un_normalize(ctx, z);
@@ -1099,13 +1116,43 @@ namespace LTXVAE {
             // 128 slots is generous enough for any supported decoder configuration.
             std::vector<ggml_tensor*> feat_map(128, nullptr);
 
+            // Ensure window size is at least 1
+            int window  = std::max(1, temporal_window_size);
+            int overlap = std::max(0, temporal_tile_overlap);
+
+            if (overlap >= window) {
+                LOG_WARN("temporal_tile_overlap (%d) is greater than or equal to temporal_tile_frames (%d), adjusting values to avoid empty decode windows",
+                         overlap, window);
+                overlap = window - 1;
+            }
+            LOG_DEBUG("Using temporal tiling: temporal_tile_frames = %d, temporal_tile_overlap = %d, total frames = %d, resulting in %d tiles",
+                      window,
+                      overlap,
+                      (int)T,
+                      (T + window - overlap - 1) / (window - overlap));
             ggml_tensor* out = nullptr;
-            for (int i = 0; i < (int)T; i++) {
+            for (int i = 0; i < (int)T - overlap; i += (window - overlap)) {
                 int feat_idx = 0;
-                auto z_i     = ggml_ext_slice(ctx->ggml_ctx, latents, 2, i, i + 1);
-                auto out_i   = decoder->forward_tiled_frame(ctx, z_i, timestep,
-                                                            feat_map, feat_idx, i);
-                out          = (out == nullptr) ? out_i : ggml_concat(ctx->ggml_ctx, out, out_i, 2);
+
+                // Calculate the end index for the current temporal chunk
+                int end_i = std::min((int)T, i + window);
+                if (end_i >= (int)T) {
+                    overlap = 0;  // avoid overlap issues in the last chunk
+                }
+
+                int chunk_overlap = overlap;  // modified by forward_tiled_frame temporal inflation
+
+                auto z_chunk = ggml_ext_slice(ctx->ggml_ctx, latents, 2, i, end_i);
+
+                auto out_chunk = decoder->forward_tiled_frame(ctx, z_chunk, timestep,
+                                                              feat_map, feat_idx, i, chunk_overlap);
+
+                // discard overlap frames if it's not the final chunk
+                if (overlap > 0 && end_i < (int)T) {
+                    out_chunk = ggml_ext_slice(ctx->ggml_ctx, out_chunk, 2, 0, out_chunk->ne[2] - chunk_overlap);
+                }
+
+                out = (out == nullptr) ? out_chunk : ggml_concat(ctx->ggml_ctx, out, out_chunk, 2);
             }
 
             return WAN::WanVAE::unpatchify(ctx->ggml_ctx, out, patch_size, 1);
@@ -1140,8 +1187,13 @@ namespace LTXVAE {
 }  // namespace LTXVAE
 
 struct LTXVideoVAE : public VAE {
+    static constexpr int DEFAULT_TEMPORAL_TILE_FRAMES  = 4;
+    static constexpr int DEFAULT_TEMPORAL_TILE_OVERLAP = 1;
+
     bool decode_only;
     bool temporal_tiling_enabled = false;
+    int temporal_tile_frames     = DEFAULT_TEMPORAL_TILE_FRAMES;
+    int temporal_tile_overlap    = DEFAULT_TEMPORAL_TILE_OVERLAP;
     int ltx_vae_version;
     bool timestep_conditioning;
     int patch_size;
@@ -1178,6 +1230,68 @@ struct LTXVideoVAE : public VAE {
         temporal_tiling_enabled = enabled;
     }
 
+    static std::string trim_tiling_arg(std::string value) {
+        const char* whitespace = " \t\r\n";
+        size_t begin           = value.find_first_not_of(whitespace);
+        if (begin == std::string::npos) {
+            return "";
+        }
+        size_t end = value.find_last_not_of(whitespace);
+        return value.substr(begin, end - begin + 1);
+    }
+
+    static bool parse_tiling_int(const std::string& value, int& parsed) {
+        try {
+            size_t consumed = 0;
+            parsed          = std::stoi(value, &consumed);
+            return trim_tiling_arg(value.substr(consumed)).empty();
+        } catch (...) {
+            return false;
+        }
+    }
+
+    void set_tiling_params(const sd_tiling_params_t& params) override {
+        temporal_tiling_enabled = params.temporal_tiling;
+        temporal_tile_frames    = DEFAULT_TEMPORAL_TILE_FRAMES;
+        temporal_tile_overlap   = DEFAULT_TEMPORAL_TILE_OVERLAP;
+
+        const char* extra_tiling_args = params.extra_tiling_args;
+        if (extra_tiling_args == nullptr || extra_tiling_args[0] == '\0') {
+            return;
+        }
+
+        std::string raw(extra_tiling_args);
+        size_t start = 0;
+        for (size_t pos = 0; pos <= raw.size(); ++pos) {
+            if (pos != raw.size() && raw[pos] != ',' && raw[pos] != ';') {
+                continue;
+            }
+
+            std::string token = trim_tiling_arg(raw.substr(start, pos - start));
+            if (!token.empty()) {
+                size_t eq = token.find('=');
+                if (eq == std::string::npos) {
+                    LOG_WARN("ignoring malformed LTX VAE extra tiling arg '%s'", token.c_str());
+                } else {
+                    std::string key   = trim_tiling_arg(token.substr(0, eq));
+                    std::string value = trim_tiling_arg(token.substr(eq + 1));
+                    int parsed        = 0;
+                    if (!parse_tiling_int(value, parsed)) {
+                        LOG_WARN("ignoring invalid LTX VAE extra tiling arg '%s=%s'", key.c_str(), value.c_str());
+                    } else if (key == "temporal_tile_frames") {
+                        temporal_tile_frames = std::max(1, parsed);
+                    } else if (key == "temporal_tile_overlap") {
+                        temporal_tile_overlap = std::max(0, parsed);
+                    } else {
+                        LOG_WARN("ignoring unknown LTX VAE extra tiling arg '%s'", key.c_str());
+                    }
+                }
+            }
+
+            start = pos + 1;
+        }
+    }
+
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) override {
         vae.get_param_tensors(tensors, prefix);
     }
@@ -1195,7 +1309,10 @@ struct LTXVideoVAE : public VAE {
         bool use_tiled = decode_graph && temporal_tiling_enabled &&
                          z_tensor.dim() == 5 && z_tensor.shape()[2] > 1;
         if (use_tiled) {
-            out = vae.decode_tiled(&runner_ctx, z, timestep);
+            LOG_DEBUG("Using LTX VAE temporal tiling params: temporal_tile_frames=%d, temporal_tile_overlap=%d",
+                      temporal_tile_frames,
+                      temporal_tile_overlap);
+            out = vae.decode_tiled(&runner_ctx, z, timestep, temporal_tile_frames, temporal_tile_overlap);
         } else {
             out = decode_graph ? vae.decode(&runner_ctx, z, timestep) : vae.encode(&runner_ctx, z);
         }

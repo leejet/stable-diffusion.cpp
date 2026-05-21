@@ -209,6 +209,8 @@ Default Generation Options:
   --extra-sample-args <string>             extra sampler/scheduler args, key=value list. lcm supports noise_clip_std,
                                            noise_scale_start, noise_scale_end; ltx2 supports max_shift, base_shift,
                                            stretch, terminal; euler_ge supports gamma
+  --extra-tiling-args <string>             extra VAE tiling args, key=value list. LTX video VAE supports
+                                           temporal_tile_frames (default: 4), temporal_tile_overlap (default: 1)
   -H, --height <int>                       image height, in pixel space (default: 512)
   -W, --width <int>                        image width, in pixel space (default: 512)
   --steps <int>                            number of sample steps (default: 20)
@@ -264,6 +266,7 @@ Default Generation Options:
   --disable-auto-resize-ref-image          disable auto resize of ref images
   --disable-image-metadata                 do not embed generation metadata on image files
   --vae-tiling                             process vae in tiles to reduce memory usage
+  --temporal-tiling                        enable temporal tiling for LTX video VAE decode
   --hires                                  enable highres fix
   -s, --seed                               RNG seed (default: 42, use random seed for < 0)
   --sampling-method                        sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m,

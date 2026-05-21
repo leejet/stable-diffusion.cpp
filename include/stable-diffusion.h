@@ -160,6 +160,7 @@ typedef struct {
     float target_overlap;
     float rel_size_x;
     float rel_size_y;
+    const char* extra_tiling_args;
 } sd_tiling_params_t;
 
 typedef struct {

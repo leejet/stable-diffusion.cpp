@@ -56,11 +56,13 @@ static const char* capability_sample_method_name(enum sample_method_t sample_met
 static json make_vae_tiling_json(const sd_tiling_params_t& params) {
     return {
         {"enabled", params.enabled},
+        {"temporal_tiling", params.temporal_tiling},
         {"tile_size_x", params.tile_size_x},
         {"tile_size_y", params.tile_size_y},
         {"target_overlap", params.target_overlap},
         {"rel_size_x", params.rel_size_x},
         {"rel_size_y", params.rel_size_y},
+        {"extra_tiling_args", params.extra_tiling_args ? params.extra_tiling_args : ""},
     };
 }
 
