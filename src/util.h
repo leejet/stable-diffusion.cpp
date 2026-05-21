@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "ggml-backend.h"
@@ -65,6 +66,15 @@ protected:
 
 std::string path_join(const std::string& p1, const std::string& p2);
 std::vector<std::string> split_string(const std::string& str, char delimiter);
+
+using KeyValueArgs = std::vector<std::pair<std::string, std::string>>;
+
+KeyValueArgs parse_key_value_args(const char* args, const char* context = "key=value arg");
+KeyValueArgs parse_key_value_args(const std::string& args, const char* context = "key=value arg");
+bool parse_strict_float(const std::string& text, float& value);
+bool parse_strict_int(const std::string& text, int& value);
+bool parse_strict_bool(const std::string& text, bool& value);
+
 void pretty_progress(int step, int steps, float time);
 void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds);
 
