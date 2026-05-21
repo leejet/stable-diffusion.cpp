@@ -1251,65 +1251,22 @@ struct LTXVideoVAE : public VAE {
         temporal_tiling_enabled = enabled;
     }
 
-    static std::string trim_tiling_arg(std::string value) {
-        const char* whitespace = " \t\r\n";
-        size_t begin           = value.find_first_not_of(whitespace);
-        if (begin == std::string::npos) {
-            return "";
-        }
-        size_t end = value.find_last_not_of(whitespace);
-        return value.substr(begin, end - begin + 1);
-    }
-
-    static bool parse_tiling_int(const std::string& value, int& parsed) {
-        try {
-            size_t consumed = 0;
-            parsed          = std::stoi(value, &consumed);
-            return trim_tiling_arg(value.substr(consumed)).empty();
-        } catch (...) {
-            return false;
-        }
-    }
-
     void set_tiling_params(const sd_tiling_params_t& params) override {
         temporal_tiling_enabled = params.temporal_tiling;
         temporal_tile_frames    = DEFAULT_TEMPORAL_TILE_FRAMES;
         temporal_tile_overlap   = DEFAULT_TEMPORAL_TILE_OVERLAP;
 
-        const char* extra_tiling_args = params.extra_tiling_args;
-        if (extra_tiling_args == nullptr || extra_tiling_args[0] == '\0') {
-            return;
-        }
-
-        std::string raw(extra_tiling_args);
-        size_t start = 0;
-        for (size_t pos = 0; pos <= raw.size(); ++pos) {
-            if (pos != raw.size() && raw[pos] != ',' && raw[pos] != ';') {
-                continue;
+        for (const auto& [key, value] : parse_key_value_args(params.extra_tiling_args, "LTX VAE extra tiling arg")) {
+            int parsed = 0;
+            if (!parse_strict_int(value, parsed)) {
+                LOG_WARN("ignoring invalid LTX VAE extra tiling arg '%s=%s'", key.c_str(), value.c_str());
+            } else if (key == "temporal_tile_frames") {
+                temporal_tile_frames = std::max(1, parsed);
+            } else if (key == "temporal_tile_overlap") {
+                temporal_tile_overlap = std::max(0, parsed);
+            } else {
+                LOG_WARN("ignoring unknown LTX VAE extra tiling arg '%s'", key.c_str());
             }
-
-            std::string token = trim_tiling_arg(raw.substr(start, pos - start));
-            if (!token.empty()) {
-                size_t eq = token.find('=');
-                if (eq == std::string::npos) {
-                    LOG_WARN("ignoring malformed LTX VAE extra tiling arg '%s'", token.c_str());
-                } else {
-                    std::string key   = trim_tiling_arg(token.substr(0, eq));
-                    std::string value = trim_tiling_arg(token.substr(eq + 1));
-                    int parsed        = 0;
-                    if (!parse_tiling_int(value, parsed)) {
-                        LOG_WARN("ignoring invalid LTX VAE extra tiling arg '%s=%s'", key.c_str(), value.c_str());
-                    } else if (key == "temporal_tile_frames") {
-                        temporal_tile_frames = std::max(1, parsed);
-                    } else if (key == "temporal_tile_overlap") {
-                        temporal_tile_overlap = std::max(0, parsed);
-                    } else {
-                        LOG_WARN("ignoring unknown LTX VAE extra tiling arg '%s'", key.c_str());
-                    }
-                }
-            }
-
-            start = pos + 1;
         }
     }
 

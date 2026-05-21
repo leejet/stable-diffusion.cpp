@@ -496,84 +496,26 @@ struct LTX2Scheduler : SigmaScheduler {
         parse_extra_sample_args(extra_sample_args);
     }
 
-    static std::string trim(std::string value) {
-        const char* whitespace = " \t\r\n";
-        size_t begin           = value.find_first_not_of(whitespace);
-        if (begin == std::string::npos) {
-            return "";
-        }
-        size_t end = value.find_last_not_of(whitespace);
-        return value.substr(begin, end - begin + 1);
-    }
-
     void parse_extra_sample_args(const char* extra_sample_args) {
-        if (extra_sample_args == nullptr || extra_sample_args[0] == '\0') {
-            return;
-        }
-
-        std::string raw(extra_sample_args);
-        size_t start   = 0;
-        auto parse_arg = [&](const std::string& item) {
-            std::string token = trim(item);
-            if (token.empty()) {
-                return;
-            }
-            size_t eq = token.find('=');
-            if (eq == std::string::npos) {
-                LOG_WARN("ignoring invalid ltx2 scheduler arg '%s'", token.c_str());
-                return;
-            }
-
-            std::string key   = trim(token.substr(0, eq));
-            std::string value = trim(token.substr(eq + 1));
-            auto parse_float  = [&](float* out) -> bool {
-                try {
-                    size_t consumed = 0;
-                    float parsed    = std::stof(value, &consumed);
-                    if (!trim(value.substr(consumed)).empty()) {
-                        return false;
-                    }
-                    *out = parsed;
-                    return true;
-                } catch (const std::exception&) {
-                    return false;
+        for (const auto& [key, value] : parse_key_value_args(extra_sample_args, "ltx2 scheduler arg")) {
+            if (key == "max_shift") {
+                if (!parse_strict_float(value, max_shift)) {
+                    LOG_WARN("ignoring invalid ltx2 scheduler arg '%s=%s'", key.c_str(), value.c_str());
                 }
-            };
-            try {
-                if (key == "max_shift") {
-                    if (!parse_float(&max_shift)) {
-                        LOG_WARN("ignoring invalid ltx2 scheduler arg '%s'", token.c_str());
-                    }
-                } else if (key == "base_shift") {
-                    if (!parse_float(&base_shift)) {
-                        LOG_WARN("ignoring invalid ltx2 scheduler arg '%s'", token.c_str());
-                    }
-                } else if (key == "terminal") {
-                    if (!parse_float(&terminal)) {
-                        LOG_WARN("ignoring invalid ltx2 scheduler arg '%s'", token.c_str());
-                    }
-                } else if (key == "stretch") {
-                    std::string v = value;
-                    std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                    if (v == "1" || v == "true" || v == "yes" || v == "on") {
-                        stretch = true;
-                    } else if (v == "0" || v == "false" || v == "no" || v == "off") {
-                        stretch = false;
-                    } else {
-                        LOG_WARN("ignoring invalid ltx2 scheduler arg '%s'", token.c_str());
-                    }
-                } else {
-                    LOG_WARN("ignoring unknown ltx2 scheduler arg '%s'", key.c_str());
+            } else if (key == "base_shift") {
+                if (!parse_strict_float(value, base_shift)) {
+                    LOG_WARN("ignoring invalid ltx2 scheduler arg '%s=%s'", key.c_str(), value.c_str());
                 }
-            } catch (const std::exception&) {
-                LOG_WARN("ignoring invalid ltx2 scheduler arg '%s'", token.c_str());
-            }
-        };
-
-        for (size_t pos = 0; pos <= raw.size(); ++pos) {
-            if (pos == raw.size() || raw[pos] == ',' || raw[pos] == ';') {
-                parse_arg(raw.substr(start, pos - start));
-                start = pos + 1;
+            } else if (key == "terminal") {
+                if (!parse_strict_float(value, terminal)) {
+                    LOG_WARN("ignoring invalid ltx2 scheduler arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            } else if (key == "stretch") {
+                if (!parse_strict_bool(value, stretch)) {
+                    LOG_WARN("ignoring invalid ltx2 scheduler arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            } else {
+                LOG_WARN("ignoring unknown ltx2 scheduler arg '%s'", key.c_str());
             }
         }
     }
@@ -1276,7 +1218,7 @@ static sd::Tensor<float> sample_dpmpp_2m_v2(denoise_cb_t model,
     return x;
 }
 
-using SamplerExtraArgs = std::vector<std::pair<std::string, std::string>>;
+using SamplerExtraArgs = KeyValueArgs;
 
 static sd::Tensor<float> sample_lcm(denoise_cb_t model,
                                     sd::Tensor<float> x,
@@ -1296,15 +1238,8 @@ static sd::Tensor<float> sample_lcm(denoise_cb_t model,
 
     for (const auto& [key, value] : extra_sample_args) {
         float parsed = 0.0f;
-        try {
-            size_t consumed = 0;
-            parsed          = std::stof(value, &consumed);
-            if (trim(value.substr(consumed)).size() != 0) {
-                LOG_WARN("ignoring invalid lcm extra sample arg '%s'", key.c_str());
-                continue;
-            }
-        } catch (const std::exception&) {
-            LOG_WARN("ignoring invalid lcm extra sample arg '%s=%s'", key.c_str());
+        if (!parse_strict_float(value, parsed)) {
+            LOG_WARN("ignoring invalid lcm extra sample arg '%s=%s'", key.c_str(), value.c_str());
             continue;
         }
         if (key == "noise_clip_std") {
@@ -1861,15 +1796,8 @@ static sd::Tensor<float> sample_gradient_estimation(denoise_cb_t model,
 
     for (const auto& [key, value] : extra_sample_args) {
         float parsed = 0.0f;
-        try {
-            size_t consumed = 0;
-            parsed          = std::stof(value, &consumed);
-            if (trim(value.substr(consumed)).size() != 0) {
-                LOG_WARN("ignoring invalid euler_ge extra sample arg '%s'", key.c_str());
-                continue;
-            }
-        } catch (const std::exception&) {
-            LOG_WARN("ignoring invalid euler_ge extra sample arg '%s'", key.c_str());
+        if (!parse_strict_float(value, parsed)) {
+            LOG_WARN("ignoring invalid euler_ge extra sample arg '%s=%s'", key.c_str(), value.c_str());
             continue;
         }
         if (key == "gamma") {
@@ -1916,46 +1844,6 @@ static sd::Tensor<float> sample_gradient_estimation(denoise_cb_t model,
     return x;
 }
 
-static SamplerExtraArgs parse_sampler_args(const char* extra_sample_args) {
-    SamplerExtraArgs pairs;
-
-    if (extra_sample_args == nullptr || extra_sample_args[0] == '\0') {
-        return pairs;
-    }
-
-    auto trim = [](std::string value) -> std::string {
-        const char* whitespace = " \t\r\n";
-        size_t begin           = value.find_first_not_of(whitespace);
-        if (begin == std::string::npos) {
-            return "";
-        }
-        size_t end = value.find_last_not_of(whitespace);
-        return value.substr(begin, end - begin + 1);
-    };
-
-    std::string raw(extra_sample_args);
-    size_t start = 0;
-
-    for (size_t pos = 0; pos <= raw.size(); ++pos) {
-        if (pos == raw.size() || raw[pos] == ',' || raw[pos] == ';') {
-            std::string item  = raw.substr(start, pos - start);
-            std::string token = trim(item);
-
-            if (!token.empty()) {
-                size_t eq = token.find('=');
-                if (eq != std::string::npos) {
-                    std::string key   = trim(token.substr(0, eq));
-                    std::string value = trim(token.substr(eq + 1));
-                    pairs.emplace_back(std::move(key), std::move(value));
-                }
-            }
-            start = pos + 1;
-        }
-    }
-
-    return pairs;
-}
-
 // k diffusion reverse ODE: dx = (x - D(x;\sigma)) / \sigma dt; \sigma(t) = t
 static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
                                             denoise_cb_t model,
@@ -1965,7 +1853,7 @@ static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
                                             float eta,
                                             bool is_flow_denoiser,
                                             const char* extra_sample_args) {
-    SamplerExtraArgs extra_args = parse_sampler_args(extra_sample_args);
+    SamplerExtraArgs extra_args = parse_key_value_args(extra_sample_args, "extra sample arg");
     switch (method) {
         case EULER_A_SAMPLE_METHOD:
             return sample_euler_ancestral(model, std::move(x), sigmas, rng, is_flow_denoiser, eta);
