@@ -259,10 +259,54 @@ public:
     }
 };
 
-ggml_tensor* patchify(ggml_context* ctx,
-                      ggml_tensor* x,
-                      int64_t patch_size,
-                      int64_t b = 1) {
+class WideMemBlock : public GGMLBlock {
+    bool has_skip_conv = false;
+
+public:
+    WideMemBlock(int channels, int out_channels)
+        : has_skip_conv(channels != out_channels) {
+        int groups   = std::max(1, out_channels / 64);
+        blocks["conv.0"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels * 2, out_channels, {1, 1}, {1, 1}));
+        blocks["conv.2"] = std::shared_ptr<GGMLBlock>(new Conv2d_grouped(out_channels, out_channels, groups, {3, 3}, {1, 1}, {1, 1}));
+        blocks["conv.4"] = std::shared_ptr<GGMLBlock>(new Conv2d(out_channels, out_channels, {1, 1}, {1, 1}));
+        blocks["conv.6"] = std::shared_ptr<GGMLBlock>(new Conv2d_grouped(out_channels, out_channels, groups, {3, 3}, {1, 1}, {1, 1}));
+        if (has_skip_conv) {
+            blocks["skip"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, out_channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, false));
+        }
+    }
+
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* past) {
+        // x: [n, channels, h, w]
+        auto conv0 = std::dynamic_pointer_cast<Conv2d>(blocks["conv.0"]);
+        auto conv1 = std::dynamic_pointer_cast<Conv2d_grouped>(blocks["conv.2"]);
+        auto conv2 = std::dynamic_pointer_cast<Conv2d>(blocks["conv.4"]);
+        auto conv3 = std::dynamic_pointer_cast<Conv2d_grouped>(blocks["conv.6"]);
+
+        auto h = ggml_concat(ctx->ggml_ctx, x, past, 2);
+        h      = conv0->forward(ctx, h);
+        h      = ggml_relu_inplace(ctx->ggml_ctx, h);
+        h      = conv1->forward(ctx, h);
+        h      = ggml_relu_inplace(ctx->ggml_ctx, h);
+        h      = conv2->forward(ctx, h);
+        h      = ggml_relu_inplace(ctx->ggml_ctx, h);
+        h      = conv3->forward(ctx, h);
+
+        auto skip = x;
+        if (has_skip_conv) {
+            auto skip_conv = std::dynamic_pointer_cast<Conv2d>(blocks["skip"]);
+            skip           = skip_conv->forward(ctx, x);
+        }
+        h = ggml_add_inplace(ctx->ggml_ctx, h, skip);
+        h = ggml_relu_inplace(ctx->ggml_ctx, h);
+        return h;
+    }
+};
+
+ggml_tensor*
+patchify(ggml_context* ctx,
+         ggml_tensor* x,
+         int64_t patch_size,
+         int64_t b = 1) {
     // x: [f, b*c, h*q, w*r]
     // return: [f, b*c*r*q, h, w]
     if (patch_size == 1) {
@@ -325,7 +369,6 @@ public:
     int t_downscale = 1;
     TinyVideoEncoder(int z_channels = 4, int patch_size = 1, std::vector<bool> time_downscale = {true, true, false})
         : z_channels(z_channels), patch_size(patch_size) {
-        //         self.t_downscale = 2**sum(t.stride == 2 for t in self.encoder if isinstance(t, TPool))
         t_downscale = 1;
         for (bool downscale : time_downscale) {
             if (downscale) {
@@ -384,11 +427,18 @@ class TinyVideoDecoder : public UnaryBlock {
     int channels[num_layers + 1] = {256, 128, 64, 64};
     int patch_size               = 1;
     int t_upscale                = 1;
+    bool is_wide                 = false;
 
 public:
-    TinyVideoDecoder(int z_channels = 4, int patch_size = 1, std::vector<bool> time_upscale = {false, true, true})
-        : z_channels(z_channels), patch_size(patch_size) {
+    TinyVideoDecoder(int z_channels = 4, int patch_size = 1, std::vector<bool> time_upscale = {false, true, true}, bool is_wide = false)
+        : z_channels(z_channels), patch_size(patch_size), is_wide(is_wide) {
         t_upscale = 1;
+        if (is_wide) {
+            channels[0] = 1024;
+            channels[1] = 512;
+            channels[2] = 256;
+        }
+
         for (bool upscale : time_upscale) {
             if (upscale) {
                 t_upscale *= 2;
@@ -400,7 +450,11 @@ public:
         for (int i = 0; i < num_layers; i++) {
             int stride = time_upscale[i] ? 2 : 1;
             for (int j = 0; j < num_blocks; j++) {
-                blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new MemBlock(channels[i], channels[i]));
+                if (is_wide) {
+                    blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new WideMemBlock(channels[i], channels[i]));
+                } else {
+                    blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new MemBlock(channels[i], channels[i]));
+                }
             }
             index++;  // nn.Upsample()
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TGrow(channels[i], stride));
@@ -425,10 +479,15 @@ public:
         int index = 3;
         for (int i = 0; i < num_layers; i++) {
             for (int j = 0; j < num_blocks; j++) {
-                auto block = std::dynamic_pointer_cast<MemBlock>(blocks[std::to_string(index++)]);
                 auto mem   = ggml_pad_ext(ctx->ggml_ctx, h, 0, 0, 0, 0, 0, 0, 1, 0);
                 mem        = ggml_view_4d(ctx->ggml_ctx, mem, h->ne[0], h->ne[1], h->ne[2], h->ne[3], h->nb[1], h->nb[2], h->nb[3], 0);
-                h          = block->forward(ctx, h, mem);
+                if (is_wide) {
+                    auto block = std::dynamic_pointer_cast<WideMemBlock>(blocks[std::to_string(index++)]);
+                    h          = block->forward(ctx, h, mem);
+                } else{
+                    auto block = std::dynamic_pointer_cast<MemBlock>(blocks[std::to_string(index++)]);
+                    h          = block->forward(ctx, h, mem);
+                }
             }
             // upsample
             index++;
@@ -455,6 +514,7 @@ class TAEHV : public GGMLBlock {
 protected:
     bool decode_only;
     SDVersion version;
+    bool is_wide;
 
 public:
     int z_channels                   = 16;
@@ -462,8 +522,8 @@ public:
     std::vector<bool> time_upscale   = {false, true, true};
 
 public:
-    TAEHV(bool decode_only = true, SDVersion version = VERSION_WAN2)
-        : decode_only(decode_only), version(version) {
+    TAEHV(bool decode_only = true, SDVersion version = VERSION_WAN2, bool is_wide = false)
+        : decode_only(decode_only), version(version), is_wide(is_wide) {
         int patch = 1;
         if (version == VERSION_WAN2_2_TI2V) {
             z_channels = 48;
@@ -474,7 +534,7 @@ public:
             time_downscale = {true, true, true};
             time_upscale   = {true, true, true};
         }
-        blocks["decoder"] = std::shared_ptr<GGMLBlock>(new TinyVideoDecoder(z_channels, patch, time_upscale));
+        blocks["decoder"] = std::shared_ptr<GGMLBlock>(new TinyVideoDecoder(z_channels, patch, time_upscale, is_wide));
         if (!decode_only) {
             blocks["encoder"] = std::shared_ptr<GGMLBlock>(new TinyVideoEncoder(z_channels, patch, time_downscale));
         }
@@ -623,7 +683,8 @@ struct TinyImageAutoEncoder : public VAE {
 struct TinyVideoAutoEncoder : public VAE {
     TAEHV taehv;
     bool decode_only = false;
-
+    bool is_wide = false;
+    
     TinyVideoAutoEncoder(ggml_backend_t backend,
                          ggml_backend_t params_backend,
                          const String2TensorStorage& tensor_storage_map,
@@ -631,8 +692,14 @@ struct TinyVideoAutoEncoder : public VAE {
                          bool decoder_only = true,
                          SDVersion version = VERSION_WAN2)
         : decode_only(decoder_only),
-          taehv(decoder_only, version),
           VAE(version, backend, params_backend) {
+        for (auto tensor_storage : tensor_storage_map) {
+            if (tensor_storage.first.find(prefix + ".3.conv.6.weight") != std::string::npos) {
+                is_wide = true;
+                break;
+            }
+        }
+        taehv = TAEHV(decoder_only, version, is_wide);
         scale_input = false;
         taehv.init(params_ctx, tensor_storage_map, prefix);
     }
@@ -663,7 +730,8 @@ struct TinyVideoAutoEncoder : public VAE {
     }
 
     ggml_cgraph* build_graph(const sd::Tensor<float>& z_tensor, bool decode_graph) {
-        ggml_cgraph* gf  = ggml_new_graph(compute_ctx);
+        ggml_cgraph* gf  = decode_graph && is_wide ? ggml_new_graph_custom(compute_ctx, 4096, false)
+                                                   : ggml_new_graph(compute_ctx);
         ggml_tensor* z   = make_input(z_tensor);
         auto runner_ctx  = get_context();
         ggml_tensor* out = decode_graph ? taehv.decode(&runner_ctx, z) : taehv.encode(&runner_ctx, z);
