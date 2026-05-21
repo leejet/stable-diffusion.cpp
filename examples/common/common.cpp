@@ -835,6 +835,10 @@ ArgOptions SDGenerationParams::get_options() {
          "--extra-sample-args",
          "extra sampler/scheduler args, key=value list. lcm supports noise_clip_std, noise_scale_start, noise_scale_end; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma",
          &extra_sample_args},
+        {"",
+         "--extra-tiling-args",
+         "extra VAE tiling args, key=value list. LTX video VAE supports temporal_tile_frames (default: 4), temporal_tile_overlap (default: 1)",
+         &extra_tiling_args},
     };
 
     options.int_options = {
@@ -1780,6 +1784,9 @@ bool SDGenerationParams::from_json_str(
         if (tiling_json.contains("rel_size_y") && tiling_json["rel_size_y"].is_number()) {
             vae_tiling_params.rel_size_y = tiling_json["rel_size_y"];
         }
+        if (tiling_json.contains("extra_tiling_args") && tiling_json["extra_tiling_args"].is_string()) {
+            extra_tiling_args = tiling_json["extra_tiling_args"].get<std::string>();
+        }
     }
 
     if (!parse_lora_json_field(j, lora_path_resolver, lora_map, high_noise_lora_map)) {
@@ -2002,6 +2009,8 @@ bool SDGenerationParams::initialize_cache_params() {
 }
 
 bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::string& hires_upscalers_dir, bool strict) {
+    vae_tiling_params.extra_tiling_args = extra_tiling_args.empty() ? nullptr : extra_tiling_args.c_str();
+
     if (high_noise_sample_params.sample_steps <= 0) {
         high_noise_sample_params.sample_steps = -1;
     }
@@ -2188,6 +2197,7 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     sample_params.custom_sigmas_count                 = static_cast<int>(custom_sigmas.size());
     sample_params.extra_sample_args                   = extra_sample_args.empty() ? nullptr : extra_sample_args.c_str();
     high_noise_sample_params.extra_sample_args        = high_noise_extra_sample_args.empty() ? nullptr : high_noise_extra_sample_args.c_str();
+    vae_tiling_params.extra_tiling_args               = extra_tiling_args.empty() ? nullptr : extra_tiling_args.c_str();
     cache_params.scm_mask                             = scm_mask.empty() ? nullptr : scm_mask.c_str();
 
     sd_pm_params_t pm_params = {
@@ -2261,6 +2271,7 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
     sample_params.custom_sigmas_count                 = static_cast<int>(custom_sigmas.size());
     sample_params.extra_sample_args                   = extra_sample_args.empty() ? nullptr : extra_sample_args.c_str();
     high_noise_sample_params.extra_sample_args        = high_noise_extra_sample_args.empty() ? nullptr : high_noise_extra_sample_args.c_str();
+    vae_tiling_params.extra_tiling_args               = extra_tiling_args.empty() ? nullptr : extra_tiling_args.c_str();
     cache_params.scm_mask                             = scm_mask.empty() ? nullptr : scm_mask.c_str();
 
     params.loras                     = lora_vec.empty() ? nullptr : lora_vec.data();
@@ -2386,7 +2397,8 @@ std::string SDGenerationParams::to_string() const {
         << vae_tiling_params.tile_size_y << ", "
         << vae_tiling_params.target_overlap << ", "
         << vae_tiling_params.rel_size_x << ", "
-        << vae_tiling_params.rel_size_y << " },\n"
+        << vae_tiling_params.rel_size_y << ", "
+        << "\"" << extra_tiling_args << "\" },\n"
         << "}";
     return oss.str();
 }
@@ -2565,14 +2577,18 @@ std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
         };
     }
 
-    if (gen_params.vae_tiling_params.enabled) {
+    if (gen_params.vae_tiling_params.enabled ||
+        gen_params.vae_tiling_params.temporal_tiling ||
+        !gen_params.extra_tiling_args.empty()) {
         root["vae_tiling"] = {
             {"enabled", gen_params.vae_tiling_params.enabled},
+            {"temporal_tiling", gen_params.vae_tiling_params.temporal_tiling},
             {"tile_size_x", gen_params.vae_tiling_params.tile_size_x},
             {"tile_size_y", gen_params.vae_tiling_params.tile_size_y},
             {"target_overlap", gen_params.vae_tiling_params.target_overlap},
             {"rel_size_x", gen_params.vae_tiling_params.rel_size_x},
             {"rel_size_y", gen_params.vae_tiling_params.rel_size_y},
+            {"extra_tiling_args", gen_params.extra_tiling_args},
         };
     }
 

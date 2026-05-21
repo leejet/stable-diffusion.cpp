@@ -265,7 +265,7 @@ class WideMemBlock : public GGMLBlock {
 public:
     WideMemBlock(int channels, int out_channels)
         : has_skip_conv(channels != out_channels) {
-        int groups   = std::max(1, out_channels / 64);
+        int groups       = std::max(1, out_channels / 64);
         blocks["conv.0"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels * 2, out_channels, {1, 1}, {1, 1}));
         blocks["conv.2"] = std::shared_ptr<GGMLBlock>(new Conv2d_grouped(out_channels, out_channels, groups, {3, 3}, {1, 1}, {1, 1}));
         blocks["conv.4"] = std::shared_ptr<GGMLBlock>(new Conv2d(out_channels, out_channels, {1, 1}, {1, 1}));
@@ -479,12 +479,12 @@ public:
         int index = 3;
         for (int i = 0; i < num_layers; i++) {
             for (int j = 0; j < num_blocks; j++) {
-                auto mem   = ggml_pad_ext(ctx->ggml_ctx, h, 0, 0, 0, 0, 0, 0, 1, 0);
-                mem        = ggml_view_4d(ctx->ggml_ctx, mem, h->ne[0], h->ne[1], h->ne[2], h->ne[3], h->nb[1], h->nb[2], h->nb[3], 0);
+                auto mem = ggml_pad_ext(ctx->ggml_ctx, h, 0, 0, 0, 0, 0, 0, 1, 0);
+                mem      = ggml_view_4d(ctx->ggml_ctx, mem, h->ne[0], h->ne[1], h->ne[2], h->ne[3], h->nb[1], h->nb[2], h->nb[3], 0);
                 if (is_wide) {
                     auto block = std::dynamic_pointer_cast<WideMemBlock>(blocks[std::to_string(index++)]);
                     h          = block->forward(ctx, h, mem);
-                } else{
+                } else {
                     auto block = std::dynamic_pointer_cast<MemBlock>(blocks[std::to_string(index++)]);
                     h          = block->forward(ctx, h, mem);
                 }
@@ -683,8 +683,8 @@ struct TinyImageAutoEncoder : public VAE {
 struct TinyVideoAutoEncoder : public VAE {
     TAEHV taehv;
     bool decode_only = false;
-    bool is_wide = false;
-    
+    bool is_wide     = false;
+
     TinyVideoAutoEncoder(ggml_backend_t backend,
                          ggml_backend_t params_backend,
                          const String2TensorStorage& tensor_storage_map,
@@ -699,7 +699,7 @@ struct TinyVideoAutoEncoder : public VAE {
                 break;
             }
         }
-        taehv = TAEHV(decoder_only, version, is_wide);
+        taehv       = TAEHV(decoder_only, version, is_wide);
         scale_input = false;
         taehv.init(params_ctx, tensor_storage_map, prefix);
     }

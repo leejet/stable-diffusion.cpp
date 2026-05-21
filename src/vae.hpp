@@ -167,6 +167,7 @@ public:
         int64_t t0              = ggml_time_ms();
         sd::Tensor<float> input = x;
         sd::Tensor<float> output;
+        set_tiling_params(tiling_params);
 
         if (tiling_params.enabled) {
             const int scale_factor = get_scale_factor();
@@ -216,6 +217,9 @@ public:
     virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix)         = 0;
     virtual void set_conv2d_scale(float scale) { SD_UNUSED(scale); };
     virtual void set_temporal_tiling_enabled(bool enabled) { SD_UNUSED(enabled); };
+    virtual void set_tiling_params(const sd_tiling_params_t& params) {
+        set_temporal_tiling_enabled(params.temporal_tiling);
+    };
 };
 
 struct FakeVAE : public VAE {

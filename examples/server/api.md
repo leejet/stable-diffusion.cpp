@@ -504,17 +504,21 @@ Shared default fields used by both `img_gen` and `vid_gen`:
 | `sample_params.guidance.slg.scale` | `number` |
 | `vae_tiling_params` | `object` |
 | `vae_tiling_params.enabled` | `boolean` |
+| `vae_tiling_params.temporal_tiling` | `boolean` |
 | `vae_tiling_params.tile_size_x` | `integer` |
 | `vae_tiling_params.tile_size_y` | `integer` |
 | `vae_tiling_params.target_overlap` | `number` |
 | `vae_tiling_params.rel_size_x` | `number` |
 | `vae_tiling_params.rel_size_y` | `number` |
+| `vae_tiling_params.extra_tiling_args` | `string` |
 | `cache_mode` | `string` |
 | `cache_option` | `string` |
 | `scm_mask` | `string` |
 | `scm_policy_dynamic` | `boolean` |
 | `output_format` | `string` |
 | `output_compression` | `integer` |
+
+`vae_tiling_params.extra_tiling_args` accepts a key=value list. For LTX video VAE temporal tiling, `temporal_tile_frames` defaults to `4` and `temporal_tile_overlap` defaults to `1`.
 
 `img_gen`-specific default fields:
 
@@ -692,11 +696,13 @@ Example:
 
   "vae_tiling_params": {
     "enabled": false,
+    "temporal_tiling": false,
     "tile_size_x": 0,
     "tile_size_y": 0,
     "target_overlap": 0.5,
     "rel_size_x": 0.0,
-    "rel_size_y": 0.0
+    "rel_size_y": 0.0,
+    "extra_tiling_args": ""
   },
 
   "cache_mode": "disabled",
@@ -804,6 +810,14 @@ Other native fields:
 | `hires.custom_sigmas` | `array<number>` |
 | `hires.upscale_tile_size` | `integer` |
 | `vae_tiling_params` | `object` |
+| `vae_tiling_params.enabled` | `boolean` |
+| `vae_tiling_params.temporal_tiling` | `boolean` |
+| `vae_tiling_params.tile_size_x` | `integer` |
+| `vae_tiling_params.tile_size_y` | `integer` |
+| `vae_tiling_params.target_overlap` | `number` |
+| `vae_tiling_params.rel_size_x` | `number` |
+| `vae_tiling_params.rel_size_y` | `number` |
+| `vae_tiling_params.extra_tiling_args` | `string` |
 | `cache_mode` | `string` |
 | `cache_option` | `string` |
 | `scm_mask` | `string` |
@@ -1012,11 +1026,13 @@ Example:
 
   "vae_tiling_params": {
     "enabled": false,
+    "temporal_tiling": false,
     "tile_size_x": 0,
     "tile_size_y": 0,
     "target_overlap": 0.5,
     "rel_size_x": 0.0,
-    "rel_size_y": 0.0
+    "rel_size_y": 0.0,
+    "extra_tiling_args": ""
   },
 
   "cache_mode": "disabled",
@@ -1134,6 +1150,14 @@ Other native fields:
 | Field | Type |
 | --- | --- |
 | `vae_tiling_params` | `object` |
+| `vae_tiling_params.enabled` | `boolean` |
+| `vae_tiling_params.temporal_tiling` | `boolean` |
+| `vae_tiling_params.tile_size_x` | `integer` |
+| `vae_tiling_params.tile_size_y` | `integer` |
+| `vae_tiling_params.target_overlap` | `number` |
+| `vae_tiling_params.rel_size_x` | `number` |
+| `vae_tiling_params.rel_size_y` | `number` |
+| `vae_tiling_params.extra_tiling_args` | `string` |
 | `cache_mode` | `string` |
 | `cache_option` | `string` |
 | `scm_mask` | `string` |

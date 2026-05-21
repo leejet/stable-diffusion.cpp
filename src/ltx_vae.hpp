@@ -1,6 +1,7 @@
 #ifndef __SD_LTX_VAE_HPP__
 #define __SD_LTX_VAE_HPP__
 
+#include <algorithm>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -1099,8 +1100,8 @@ namespace LTXVAE {
         ggml_tensor* decode_tiled(GGMLRunnerContext* ctx,
                                   ggml_tensor* z,
                                   ggml_tensor* timestep,
-                                  int temporal_window_size = 1,
-                                  int temporal_pad         = 0) {
+                                  int temporal_window_size  = 1,
+                                  int temporal_tile_overlap = 0) {
             auto decoder   = std::dynamic_pointer_cast<Decoder>(blocks["decoder"]);
             auto processor = std::dynamic_pointer_cast<PerChannelStatistics>(blocks["per_channel_statistics"]);
             auto latents   = processor->un_normalize(ctx, z);
@@ -1116,34 +1117,39 @@ namespace LTXVAE {
             std::vector<ggml_tensor*> feat_map(128, nullptr);
 
             // Ensure window size is at least 1
-            int window = std::max(1, temporal_window_size);
+            int window  = std::max(1, temporal_window_size);
+            int overlap = std::max(0, temporal_tile_overlap);
 
-            if (temporal_pad >= window) {
-                LOG_WARN("temporal_pad (%d) is greater than or equal to temporal_window_size (%d), adjusting values to avoid empty decode windows",
-                         temporal_pad, window);
-                temporal_pad = window - 1;
+            if (overlap >= window) {
+                LOG_WARN("temporal_tile_overlap (%d) is greater than or equal to temporal_tile_frames (%d), adjusting values to avoid empty decode windows",
+                         overlap, window);
+                overlap = window - 1;
             }
-            LOG_DEBUG("Using temporal tiling: tile size = %d frames, padding/overlap = %d frames, total frames = %d, resulting in %d tiles", window, temporal_pad, (int)T, (T + window - temporal_pad - 1) / (window - temporal_pad));
+            LOG_DEBUG("Using temporal tiling: temporal_tile_frames = %d, temporal_tile_overlap = %d, total frames = %d, resulting in %d tiles",
+                      window,
+                      overlap,
+                      (int)T,
+                      (T + window - overlap - 1) / (window - overlap));
             ggml_tensor* out = nullptr;
-            for (int i = 0; i < (int)T - temporal_pad; i += (window - temporal_pad)) {
+            for (int i = 0; i < (int)T - overlap; i += (window - overlap)) {
                 int feat_idx = 0;
 
                 // Calculate the end index for the current temporal chunk
                 int end_i = std::min((int)T, i + window);
                 if (end_i >= (int)T) {
-                    temporal_pad = 0;  // to avoid any padding related issue (e.g. padding more than the number of frames in the chunk) in the last chunk
+                    overlap = 0;  // avoid overlap issues in the last chunk
                 }
 
-                int chunck_pad = temporal_pad;  // modified by forward_tiled_frame temporal inflation
+                int chunk_overlap = overlap;  // modified by forward_tiled_frame temporal inflation
 
                 auto z_chunk = ggml_ext_slice(ctx->ggml_ctx, latents, 2, i, end_i);
 
                 auto out_chunk = decoder->forward_tiled_frame(ctx, z_chunk, timestep,
-                                                              feat_map, feat_idx, i, chunck_pad);
+                                                              feat_map, feat_idx, i, chunk_overlap);
 
-                // discard last frames if it's not the final chunk and temporal_pad > 0
-                if (temporal_pad > 0 && end_i < (int)T) {
-                    out_chunk = ggml_ext_slice(ctx->ggml_ctx, out_chunk, 2, 0, out_chunk->ne[2] - chunck_pad);
+                // discard overlap frames if it's not the final chunk
+                if (overlap > 0 && end_i < (int)T) {
+                    out_chunk = ggml_ext_slice(ctx->ggml_ctx, out_chunk, 2, 0, out_chunk->ne[2] - chunk_overlap);
                 }
 
                 out = (out == nullptr) ? out_chunk : ggml_concat(ctx->ggml_ctx, out, out_chunk, 2);
@@ -1181,8 +1187,13 @@ namespace LTXVAE {
 }  // namespace LTXVAE
 
 struct LTXVideoVAE : public VAE {
+    static constexpr int DEFAULT_TEMPORAL_TILE_FRAMES  = 4;
+    static constexpr int DEFAULT_TEMPORAL_TILE_OVERLAP = 1;
+
     bool decode_only;
     bool temporal_tiling_enabled = false;
+    int temporal_tile_frames     = DEFAULT_TEMPORAL_TILE_FRAMES;
+    int temporal_tile_overlap    = DEFAULT_TEMPORAL_TILE_OVERLAP;
     int ltx_vae_version;
     bool timestep_conditioning;
     int patch_size;
@@ -1219,6 +1230,68 @@ struct LTXVideoVAE : public VAE {
         temporal_tiling_enabled = enabled;
     }
 
+    static std::string trim_tiling_arg(std::string value) {
+        const char* whitespace = " \t\r\n";
+        size_t begin           = value.find_first_not_of(whitespace);
+        if (begin == std::string::npos) {
+            return "";
+        }
+        size_t end = value.find_last_not_of(whitespace);
+        return value.substr(begin, end - begin + 1);
+    }
+
+    static bool parse_tiling_int(const std::string& value, int& parsed) {
+        try {
+            size_t consumed = 0;
+            parsed          = std::stoi(value, &consumed);
+            return trim_tiling_arg(value.substr(consumed)).empty();
+        } catch (...) {
+            return false;
+        }
+    }
+
+    void set_tiling_params(const sd_tiling_params_t& params) override {
+        temporal_tiling_enabled = params.temporal_tiling;
+        temporal_tile_frames    = DEFAULT_TEMPORAL_TILE_FRAMES;
+        temporal_tile_overlap   = DEFAULT_TEMPORAL_TILE_OVERLAP;
+
+        const char* extra_tiling_args = params.extra_tiling_args;
+        if (extra_tiling_args == nullptr || extra_tiling_args[0] == '\0') {
+            return;
+        }
+
+        std::string raw(extra_tiling_args);
+        size_t start = 0;
+        for (size_t pos = 0; pos <= raw.size(); ++pos) {
+            if (pos != raw.size() && raw[pos] != ',' && raw[pos] != ';') {
+                continue;
+            }
+
+            std::string token = trim_tiling_arg(raw.substr(start, pos - start));
+            if (!token.empty()) {
+                size_t eq = token.find('=');
+                if (eq == std::string::npos) {
+                    LOG_WARN("ignoring malformed LTX VAE extra tiling arg '%s'", token.c_str());
+                } else {
+                    std::string key   = trim_tiling_arg(token.substr(0, eq));
+                    std::string value = trim_tiling_arg(token.substr(eq + 1));
+                    int parsed        = 0;
+                    if (!parse_tiling_int(value, parsed)) {
+                        LOG_WARN("ignoring invalid LTX VAE extra tiling arg '%s=%s'", key.c_str(), value.c_str());
+                    } else if (key == "temporal_tile_frames") {
+                        temporal_tile_frames = std::max(1, parsed);
+                    } else if (key == "temporal_tile_overlap") {
+                        temporal_tile_overlap = std::max(0, parsed);
+                    } else {
+                        LOG_WARN("ignoring unknown LTX VAE extra tiling arg '%s'", key.c_str());
+                    }
+                }
+            }
+
+            start = pos + 1;
+        }
+    }
+
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) override {
         vae.get_param_tensors(tensors, prefix);
     }
@@ -1236,22 +1309,10 @@ struct LTXVideoVAE : public VAE {
         bool use_tiled = decode_graph && temporal_tiling_enabled &&
                          z_tensor.dim() == 5 && z_tensor.shape()[2] > 1;
         if (use_tiled) {
-            // TODO: pass as args
-            int tile_frames = 1;
-            int tile_pad    = 0;
-            // use env variables for now
-            const char* env_tile_frames = std::getenv("VAE_TILE_FRAMES");
-            const char* env_tile_pad    = std::getenv("VAE_TILE_PAD");
-            if (env_tile_frames) {
-                tile_frames = std::max(1, std::atoi(env_tile_frames));
-                LOG_DEBUG("Using temporal tiling with tile_frames=%d", tile_frames);
-            }
-            if (env_tile_pad) {
-                tile_pad = std::max(0, std::atoi(env_tile_pad));
-                LOG_DEBUG("Using temporal tiling with tile_pad=%d", tile_pad);
-            }
-
-            out = vae.decode_tiled(&runner_ctx, z, timestep, tile_frames, tile_pad);
+            LOG_DEBUG("Using LTX VAE temporal tiling params: temporal_tile_frames=%d, temporal_tile_overlap=%d",
+                      temporal_tile_frames,
+                      temporal_tile_overlap);
+            out = vae.decode_tiled(&runner_ctx, z, timestep, temporal_tile_frames, temporal_tile_overlap);
         } else {
             out = decode_graph ? vae.decode(&runner_ctx, z, timestep) : vae.encode(&runner_ctx, z);
         }

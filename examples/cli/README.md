@@ -107,6 +107,8 @@ Generation Options:
   --extra-sample-args <string>             extra sampler/scheduler args, key=value list. lcm supports noise_clip_std,
                                            noise_scale_start, noise_scale_end; ltx2 supports max_shift, base_shift,
                                            stretch, terminal; euler_ge supports gamma
+  --extra-tiling-args <string>             extra VAE tiling args, key=value list. LTX video VAE supports
+                                           temporal_tile_frames (default: 4), temporal_tile_overlap (default: 1)
   -H, --height <int>                       image height, in pixel space (default: 512)
   -W, --width <int>                        image width, in pixel space (default: 512)
   --steps <int>                            number of sample steps (default: 20)
