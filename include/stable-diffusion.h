@@ -126,7 +126,8 @@ enum sd_type_t {
     // SD_TYPE_IQ4_NL_8_8 = 38,
     SD_TYPE_MXFP4 = 39,  // MXFP4 (1 block)
     SD_TYPE_NVFP4 = 40,  // NVFP4 (4 blocks, E4M3 scale)
-    SD_TYPE_COUNT = 41,
+    SD_TYPE_Q1_0  = 41,
+    SD_TYPE_COUNT = 42,
 };
 
 enum sd_log_level_t {
@@ -331,6 +332,8 @@ typedef struct {
     int steps;
     float denoising_strength;
     int upscale_tile_size;
+    float* custom_sigmas;
+    int custom_sigmas_count;
 } sd_hires_params_t;
 
 typedef struct {
@@ -381,6 +384,7 @@ typedef struct {
     float vace_strength;
     sd_tiling_params_t vae_tiling_params;
     sd_cache_params_t cache;
+    sd_hires_params_t hires;
 } sd_vid_gen_params_t;
 
 typedef struct sd_ctx_t sd_ctx_t;

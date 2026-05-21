@@ -14,6 +14,8 @@ on:
     paths:
       [
         ".github/workflows/**",
+        ".dockerignore",
+        "Dockerfile*",
         "**/CMakeLists.txt",
         "**/Makefile",
         "**/*.h",
@@ -29,6 +31,8 @@ on:
     paths:
       [
         ".github/workflows/**",
+        ".dockerignore",
+        "Dockerfile*",
         "**/CMakeLists.txt",
         "**/Makefile",
         "**/*.h",
@@ -177,7 +181,7 @@ jobs:
   build-and-push-docker-images:
     name: Build and push container images
     if: ${{ github.event_name != 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
 
     permissions:
       contents: read
@@ -189,6 +193,20 @@ jobs:
     strategy:
       matrix:
         variant: [musa, sycl, vulkan, cuda]
+        platform: [linux/amd64]
+        runner: [ubuntu-latest]
+        build-args: [""]
+        tag-suffix: [""]
+        include:
+          - variant: cuda
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            tag-suffix: "-spark"
+            build-args: |
+              CUDA_VERSION=13.0.0
+              UBUNTU_VERSION=24.04
+              CUDA_ARCHITECTURES=121
+              GGML_CUDA_FA_ALL_QUANTS=ON
 
     env:
       REGISTRY: ghcr.io
@@ -243,12 +261,13 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           push: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
           file: Dockerfile.${{ matrix.variant }}
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.BRANCH_NAME }}-${{ matrix.variant }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.BRANCH_NAME }}-${{ matrix.variant }}${{ matrix.tag-suffix }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
+          build-args: ${{ matrix.build-args }}
 
   macOS-latest-cmake:
     runs-on: macos-latest
@@ -449,12 +468,22 @@ jobs:
 
     env:
       ROCM_VERSION: "7.13.0"
-      GPU_TARGETS: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201"
+      GPU_TARGETS: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
 
     steps:
       - uses: actions/checkout@v3
         with:
           submodules: recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
 
       - name: Cache ROCm Installation
         id: cache-rocm
@@ -648,7 +677,7 @@ jobs:
             gpu_targets: "gfx908;gfx90a;gfx942;gfx1030;gfx1031;gfx1032;gfx1100;gfx1101;gfx1102;gfx1151;gfx1150;gfx1200;gfx1201"
             build: 'x64'
           - ROCM_VERSION: "7.13.0"
-            gpu_targets: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201"
+            gpu_targets: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
             build: x64
 
     steps:
