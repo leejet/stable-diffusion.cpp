@@ -5218,14 +5218,24 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
         sd_ctx->sd->diffusion_model->free_params_buffer();
     }
 
+    int64_t latent_end = ggml_time_ms();
+    LOG_INFO("generating latent video completed, taking %.2fs", (latent_end - latent_start) * 1.0f / 1000);
+
     sd_audio_t* generated_audio = nullptr;
     if (sd_version_is_ltxav(sd_ctx->sd->version) &&
         latents.audio_length > 0 &&
         sd_ctx->sd->audio_vae_model != nullptr) {
+        int64_t audio_latent_decode_start = ggml_time_ms();
+
         auto audio_latent = unpack_ltxav_audio_latent(final_latent,
                                                       latents.audio_length,
                                                       sd_ctx->sd->get_latent_channel());
         if (!audio_latent.empty()) {
+            LOG_DEBUG("decode audio latent %dx%dx%dx%d",
+                      (int)audio_latent.shape()[0],
+                      (int)audio_latent.shape()[1],
+                      (int)audio_latent.shape()[2],
+                      (int)audio_latent.shape()[3]);
             auto waveform = sd_ctx->sd->decode_ltx_audio_latent(audio_latent);
             if (!waveform.empty()) {
                 generated_audio = waveform_to_sd_audio(sd_ctx->sd, waveform);
@@ -5233,6 +5243,8 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                 LOG_WARN("LTX audio latent decode failed; continuing with silent video output");
             }
         }
+        int64_t audio_latent_decode_end = ggml_time_ms();
+        LOG_INFO("decoding audio latent completed, taking %.2fs", (audio_latent_decode_end - audio_latent_decode_start) * 1.0f / 1000);
     }
 
     if (latents.video_conditioning_frame_count > 0) {
@@ -5244,9 +5256,6 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
     if (latents.ref_image_num > 0) {
         final_latent = sd::ops::slice(final_latent, 2, latents.ref_image_num, final_latent.shape()[2]);
     }
-
-    int64_t latent_end = ggml_time_ms();
-    LOG_INFO("generating latent video completed, taking %.2fs", (latent_end - latent_start) * 1.0f / 1000);
 
     auto result = decode_video_outputs(sd_ctx, latent_upscale_enabled ? hires_request : request, final_latent, num_frames_out);
     if (result == nullptr) {
