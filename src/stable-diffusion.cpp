@@ -2153,17 +2153,39 @@ public:
         int vae_scale_factor = get_vae_scale_factor();
         int W                = width / vae_scale_factor;
         int H                = height / vae_scale_factor;
-        int T                = frames;
-        if (sd_version_is_ltxav(version)) {
-            T = ((T - 1) / 8) + 1;
-        } else if (sd_version_is_wan(version)) {
-            T = ((T - 1) / 4) + 1;
-        }
-        int C = get_latent_channel();
+        int T                = video_frames_to_latent_frames(frames);
+        int C                = get_latent_channel();
         if (video) {
             return sd::zeros<float>({W, H, T, C, 1});
         }
         return sd::zeros<float>({W, H, C, 1});
+    }
+
+    int video_frames_to_latent_frames(int frames) {
+        int latent_frames = frames;
+        if (sd_version_is_ltxav(version)) {
+            latent_frames = ((frames - 1) / 8) + 1;
+        } else if (sd_version_is_wan(version)) {
+            latent_frames = ((frames - 1) / 4) + 1;
+        }
+        return latent_frames;
+    }
+
+    int latent_frames_to_video_frames(int latent_frames) {
+        if (latent_frames <= 0) {
+            return latent_frames;
+        }
+        if (sd_version_is_ltxav(version)) {
+            return (latent_frames - 1) * 8 + 1;
+        }
+        if (sd_version_is_wan(version)) {
+            return (latent_frames - 1) * 4 + 1;
+        }
+        return latent_frames;
+    }
+
+    int align_video_frames(int frames) {
+        return latent_frames_to_video_frames(video_frames_to_latent_frames(frames));
     }
 
     sd::Tensor<float> encode_to_vae_latents(const sd::Tensor<float>& x) {
@@ -3000,16 +3022,12 @@ struct GenerationRequest {
     }
 
     GenerationRequest(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params) {
-        prompt           = SAFE_STR(sd_vid_gen_params->prompt);
-        negative_prompt  = SAFE_STR(sd_vid_gen_params->negative_prompt);
-        width            = sd_vid_gen_params->width;
-        height           = sd_vid_gen_params->height;
-        requested_frames = std::max(1, sd_vid_gen_params->video_frames);
-        if (sd_version_is_ltxav(sd_ctx->sd->version)) {
-            frames = ((requested_frames - 1 + 7) / 8) * 8 + 1;
-        } else {
-            frames = (requested_frames - 1) / 4 * 4 + 1;
-        }
+        prompt                      = SAFE_STR(sd_vid_gen_params->prompt);
+        negative_prompt             = SAFE_STR(sd_vid_gen_params->negative_prompt);
+        width                       = sd_vid_gen_params->width;
+        height                      = sd_vid_gen_params->height;
+        requested_frames            = std::max(1, sd_vid_gen_params->video_frames);
+        frames                      = sd_ctx->sd->align_video_frames(requested_frames);
         clip_skip                   = sd_vid_gen_params->clip_skip;
         fps                         = std::max(1, sd_vid_gen_params->fps);
         vae_scale_factor            = sd_ctx->sd->get_vae_scale_factor();
@@ -3565,6 +3583,30 @@ static sd::Tensor<float> unpack_ltxav_audio_latent(const sd::Tensor<float>& pack
     const float* audio_src = packed_latent.data() + static_cast<size_t>(video_channels) * static_cast<size_t>(spatial_size);
     std::copy_n(audio_src, static_cast<size_t>(required_values), audio_latent.data());
     return audio_latent;
+}
+
+static sd::Tensor<float> make_ltxav_empty_audio_latent(int audio_length) {
+    if (audio_length <= 0) {
+        return {};
+    }
+    constexpr int kLtxavAudioFrequencyBins = 16;
+    constexpr int kLtxavAudioChannels      = 8;
+    return sd::zeros<float>({kLtxavAudioFrequencyBins, audio_length, kLtxavAudioChannels, 1});
+}
+
+static sd::Tensor<float> resize_ltxav_audio_latent(const sd::Tensor<float>& audio_latent,
+                                                   int target_audio_length) {
+    auto resized = make_ltxav_empty_audio_latent(target_audio_length);
+    if (resized.empty() || audio_latent.empty()) {
+        return resized;
+    }
+    GGML_ASSERT(audio_latent.dim() == 3 || audio_latent.dim() == 4);
+    int copy_length = std::min(static_cast<int>(audio_latent.shape()[1]), target_audio_length);
+    if (copy_length > 0) {
+        auto copied = sd::ops::slice(audio_latent, 1, 0, copy_length);
+        sd::ops::slice_assign(&resized, 1, 0, copy_length, copied);
+    }
+    return resized;
 }
 
 static int get_ltxav_num_audio_latents(int frames, int fps) {
@@ -4396,10 +4438,8 @@ static std::optional<ImageGenerationLatents> prepare_video_generation_latents(sd
     }
 
     if (sd_version_is_ltxav(sd_ctx->sd->version)) {
-        constexpr int kLtxavAudioFrequencyBins = 16;
-        constexpr int kLtxavAudioChannels      = 8;
-        latents.audio_length                   = get_ltxav_num_audio_latents(request->frames, request->fps);
-        latents.audio_latent                   = sd::zeros<float>({kLtxavAudioFrequencyBins, latents.audio_length, kLtxavAudioChannels, 1});
+        latents.audio_length = get_ltxav_num_audio_latents(request->frames, request->fps);
+        latents.audio_latent = make_ltxav_empty_audio_latent(latents.audio_length);
     }
 
     if (sd_version_is_ltxav(sd_ctx->sd->version)) {
@@ -4749,9 +4789,9 @@ static sd_image_t* decode_video_outputs(sd_ctx_t* sd_ctx,
               (int)vid.shape()[1],
               (int)vid.shape()[2],
               (int)vid.shape()[3]);
-    if (request.requested_frames > 0 &&
-        vid.shape()[2] > request.requested_frames) {
-        vid = sd::ops::slice(vid, 2, 0, request.requested_frames);
+    if (request.frames > 0 &&
+        vid.shape()[2] > request.frames) {
+        vid = sd::ops::slice(vid, 2, 0, request.frames);
     }
 
     sd_image_t* result_images = (sd_image_t*)calloc(vid.shape()[2], sizeof(sd_image_t));
@@ -5118,9 +5158,46 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
         LOG_INFO("LTX latent spatial upscale completed, taking %.2fs",
                  (upscale_end - upscale_start) * 1.0f / 1000);
 
-        x_t                  = std::move(upscaled_latent);
-        hires_request.width  = static_cast<int>(x_t.shape()[0]) * hires_request.vae_scale_factor;
-        hires_request.height = static_cast<int>(x_t.shape()[1]) * hires_request.vae_scale_factor;
+        x_t                        = std::move(upscaled_latent);
+        hires_request.width        = static_cast<int>(x_t.shape()[0]) * hires_request.vae_scale_factor;
+        hires_request.height       = static_cast<int>(x_t.shape()[1]) * hires_request.vae_scale_factor;
+        int upscaled_latent_frames = static_cast<int>(x_t.shape()[2]);
+        int upscaled_frames        = sd_ctx->sd->latent_frames_to_video_frames(upscaled_latent_frames);
+        if (upscaled_frames != hires_request.frames) {
+            LOG_INFO("LTX latent upsampler output latent frames %d, frames %d -> %d",
+                     upscaled_latent_frames,
+                     hires_request.frames,
+                     upscaled_frames);
+            hires_request.frames = upscaled_frames;
+        }
+        if (sd_version_is_ltxav(sd_ctx->sd->version) && latents.audio_length > 0) {
+            int target_audio_length = get_ltxav_num_audio_latents(hires_request.frames, hires_request.fps);
+            if (target_audio_length != latents.audio_length) {
+                int latent_channels            = sd_ctx->sd->get_latent_channel();
+                sd::Tensor<float> video_latent = x_t;
+                sd::Tensor<float> audio_latent = latents.audio_latent;
+                if (x_t.shape()[3] > latent_channels) {
+                    video_latent = sd::ops::slice(x_t, 3, 0, latent_channels);
+                    audio_latent = unpack_ltxav_audio_latent(x_t, latents.audio_length, latent_channels);
+                }
+                audio_latent = resize_ltxav_audio_latent(audio_latent, target_audio_length);
+                if (audio_latent.empty()) {
+                    LOG_ERROR("failed to resize LTX audio latent for latent upscale: %d -> %d",
+                              latents.audio_length,
+                              target_audio_length);
+                    if (sd_ctx->sd->free_params_immediately) {
+                        sd_ctx->sd->diffusion_model->free_params_buffer();
+                    }
+                    return false;
+                }
+                x_t                  = pack_ltxav_audio_and_video_latents(video_latent, audio_latent);
+                latents.audio_latent = std::move(audio_latent);
+                LOG_INFO("LTX audio latent length adjusted for latent upscale: %d -> %d",
+                         latents.audio_length,
+                         target_audio_length);
+                latents.audio_length = target_audio_length;
+            }
+        }
         if ((request.hires.target_width > 0 || request.hires.target_height > 0) &&
             (request.hires.target_width != hires_request.width || request.hires.target_height != hires_request.height)) {
             LOG_WARN("LTX latent spatial upsampler output is %dx%d; ignoring hires target %dx%d",

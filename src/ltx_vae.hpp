@@ -153,7 +153,7 @@ namespace LTXVAE {
 
             GGML_ASSERT(x->ne[2] >= temporal_pad);
 
-            int end_idx   = x->ne[2] - temporal_pad;
+            int end_idx   = (int)x->ne[2] - temporal_pad;
             int start_idx = std::max(end_idx - pad, 0);
 
             // Save a contiguous copy of the last `pad` frames so the large `x`
