@@ -157,7 +157,8 @@ Context Options:
                                            then threads will be set to the number of CPU physical cores
   --chroma-t5-mask-pad <int>               t5 mask pad size of chroma
   --max-vram <float>                       maximum VRAM budget in GiB for graph-cut segmented execution. 0 disables
-                                           graph splitting; -1 auto-detects free VRAM minus 1 GiB
+                                           graph splitting; a negative value auto-detects free VRAM, sparing the
+                                           specified value (e.g. -0.5 will keep at least 0.5 GiB free)
   --force-sdxl-vae-conv-scale              force use of conv scale on sdxl vae
   --offload-to-cpu                         place the weights in RAM to save VRAM, and automatically load them into VRAM
                                            when needed
@@ -207,7 +208,9 @@ Default Generation Options:
                                            antialiased), or a model name under --hires-upscalers-dir (default: Latent)
   --extra-sample-args <string>             extra sampler/scheduler args, key=value list. lcm supports noise_clip_std,
                                            noise_scale_start, noise_scale_end; ltx2 supports max_shift, base_shift,
-                                           stretch, terminal
+                                           stretch, terminal; euler_ge supports gamma
+  --extra-tiling-args <string>             extra VAE tiling args, key=value list. LTX video VAE supports
+                                           temporal_tile_frames (default: 4), temporal_tile_overlap (default: 1)
   -H, --height <int>                       image height, in pixel space (default: 512)
   -W, --width <int>                        image width, in pixel space (default: 512)
   --steps <int>                            number of sample steps (default: 20)
@@ -263,6 +266,7 @@ Default Generation Options:
   --disable-auto-resize-ref-image          disable auto resize of ref images
   --disable-image-metadata                 do not embed generation metadata on image files
   --vae-tiling                             process vae in tiles to reduce memory usage
+  --temporal-tiling                        enable temporal tiling for LTX video VAE decode
   --hires                                  enable highres fix
   -s, --seed                               RNG seed (default: 42, use random seed for < 0)
   --sampling-method                        sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m,
@@ -276,6 +280,8 @@ Default Generation Options:
                                            model-specific
   --sigmas                                 custom sigma values for the sampler, comma-separated (e.g.,
                                            "14.61,7.8,3.5,0.0").
+  --hires-sigmas                           custom sigma values for the highres fix second pass, comma-separated (e.g.,
+                                           "0.85,0.725,0.421875,0.0").
   --skip-layers                            layers to skip for SLG steps (default: [7,8,9])
   --high-noise-skip-layers                 (high noise) layers to skip for SLG steps (default: [7,8,9])
   -r, --ref-image                          reference image for Flux Kontext models (can be used multiple times)

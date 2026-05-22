@@ -243,6 +243,56 @@ namespace LTXV {
         return build_rope_matrix_from_frequencies(freqs, dim);
     }
 
+    __STATIC_INLINE__ std::vector<float> build_video_rope_matrix_from_positions(const sd::Tensor<float>& positions,
+                                                                                int dim,
+                                                                                int num_heads,
+                                                                                float theta,
+                                                                                const std::vector<int>& max_pos,
+                                                                                bool use_middle_indices_grid) {
+        GGML_ASSERT(max_pos.size() == 3);
+        GGML_ASSERT(dim % num_heads == 0);
+        GGML_ASSERT(positions.dim() == 3 || positions.dim() == 4);
+        GGML_ASSERT(positions.shape()[0] == 2);
+        GGML_ASSERT(positions.shape()[1] == 3);
+        if (positions.dim() == 4) {
+            GGML_ASSERT(positions.shape()[3] == 1);
+        }
+
+        const int64_t tokens             = positions.shape()[2];
+        const std::vector<float> indices = generate_freq_grid(theta, 3, dim);
+        const int half_dim               = dim / 2;
+        const int pad_size               = half_dim - static_cast<int>(indices.size()) * 3;
+        std::vector<std::vector<float>> freqs(static_cast<size_t>(tokens), std::vector<float>(half_dim, 0.f));
+
+        for (int64_t token = 0; token < tokens; token++) {
+            int out_idx = 0;
+            for (int i = 0; i < pad_size; i++) {
+                freqs[token][out_idx++] = 0.f;
+            }
+
+            float coords[3];
+            for (int axis = 0; axis < 3; axis++) {
+                float start  = positions.dim() == 4 ? positions.index(0, axis, token, 0)
+                                                    : positions.index(0, axis, token);
+                float end    = positions.dim() == 4 ? positions.index(1, axis, token, 0)
+                                                    : positions.index(1, axis, token);
+                float coord  = use_middle_indices_grid ? 0.5f * (start + end) : start;
+                coords[axis] = coord / static_cast<float>(max_pos[axis]);
+            }
+
+            for (float index : indices) {
+                for (int axis = 0; axis < 3; axis++) {
+                    freqs[token][out_idx++] = index * (coords[axis] * 2.f - 1.f);
+                }
+            }
+        }
+
+        if (num_heads > 1) {
+            return build_rope_matrix_from_frequencies(split_frequencies_by_heads(freqs, dim, num_heads), dim / num_heads);
+        }
+        return build_rope_matrix_from_frequencies(freqs, dim);
+    }
+
     __STATIC_INLINE__ std::vector<float> build_1d_rope_matrix(int64_t seq_len,
                                                               int dim,
                                                               int num_heads          = 1,
@@ -848,6 +898,31 @@ namespace LTXV {
         return build_1d_rope_matrix_from_coords(coords, dim, num_heads, theta, static_cast<float>(max_pos_t));
     }
 
+    __STATIC_INLINE__ std::vector<float> build_video_temporal_rope_matrix_from_positions(const sd::Tensor<float>& positions,
+                                                                                         int dim,
+                                                                                         int num_heads,
+                                                                                         float theta,
+                                                                                         int max_pos_t,
+                                                                                         bool use_middle_indices_grid) {
+        GGML_ASSERT(positions.dim() == 3 || positions.dim() == 4);
+        GGML_ASSERT(positions.shape()[0] == 2);
+        GGML_ASSERT(positions.shape()[1] >= 1);
+        if (positions.dim() == 4) {
+            GGML_ASSERT(positions.shape()[3] == 1);
+        }
+
+        std::vector<float> coords;
+        coords.reserve(static_cast<size_t>(positions.shape()[2]));
+        for (int64_t token = 0; token < positions.shape()[2]; token++) {
+            float start = positions.dim() == 4 ? positions.index(0, 0, token, 0)
+                                               : positions.index(0, 0, token);
+            float end   = positions.dim() == 4 ? positions.index(1, 0, token, 0)
+                                               : positions.index(1, 0, token);
+            coords.push_back(use_middle_indices_grid ? 0.5f * (start + end) : start);
+        }
+        return build_1d_rope_matrix_from_coords(coords, dim, num_heads, theta, static_cast<float>(max_pos_t));
+    }
+
     __STATIC_INLINE__ float audio_latent_start_time_sec(int64_t latent_index,
                                                         int audio_latent_downsample_factor = 4,
                                                         int hop_length                     = 160,
@@ -1412,6 +1487,9 @@ namespace LTXV {
                     ->forward(ctx, ggml_ext_scale(ctx->ggml_ctx, av_ca_audio_timestep, av_ca_factor))
                     .first;
 
+            sd::ggml_graph_cut::mark_graph_cut(vx, "ltxav.prelude", "vx");
+            sd::ggml_graph_cut::mark_graph_cut(ax, "ltxav.prelude", "ax");
+
             for (int i = 0; i < cfg.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<BasicAVTransformerBlock>(blocks["transformer_blocks." + std::to_string(i)]);
                 auto out   = block->forward(ctx,
@@ -1434,6 +1512,8 @@ namespace LTXV {
                                             a_prompt_timestep_mod);
                 vx         = out.first;
                 ax         = out.second;
+                sd::ggml_graph_cut::mark_graph_cut(vx, "ltxav.transformer_blocks." + std::to_string(i), "vx");
+                sd::ggml_graph_cut::mark_graph_cut(ax, "ltxav.transformer_blocks." + std::to_string(i), "ax");
             }
 
             auto v_shift_scale = get_output_scale_shift(ctx, params["scale_shift_table"], v_embedded_time, cfg.hidden_size);
@@ -1664,7 +1744,8 @@ namespace LTXV {
                                  const sd::Tensor<float>& audio_x_tensor         = {},
                                  const sd::Tensor<float>& audio_timesteps_tensor = {},
                                  int audio_length                                = 0,
-                                 float frame_rate                                = 24.f) {
+                                 float frame_rate                                = 24.f,
+                                 const sd::Tensor<float>& video_positions_tensor = {}) {
             auto split_inputs = split_av_latents(x_tensor, audio_length);
             vx_input_cache    = split_inputs.first;
             if (!audio_x_tensor.empty()) {
@@ -1681,19 +1762,31 @@ namespace LTXV {
 
             ggml_cgraph* gf = new_graph_custom(LTXAV_GRAPH_SIZE);
 
-            float video_frame_rate = frame_rate > 0.f ? frame_rate : 24.f;
-            video_pe_vec           = build_video_rope_matrix(vx->ne[0],
-                                                             vx->ne[1],
-                                                             vx->ne[2],
-                                                             static_cast<int>(params.hidden_size),
-                                                             static_cast<int>(params.num_attention_heads),
-                                                             video_frame_rate,
-                                                             params.positional_embedding_theta,
-                                                             params.positional_embedding_max_pos,
-                                                             params.vae_scale_factors,
-                                                             params.causal_temporal_positioning,
-                                                             params.use_middle_indices_grid);
-            auto video_pe          = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, params.attention_head_dim / 2, vx->ne[0] * vx->ne[1] * vx->ne[2] * params.num_attention_heads);
+            float video_frame_rate    = frame_rate > 0.f ? frame_rate : 24.f;
+            int64_t video_token_count = vx->ne[0] * vx->ne[1] * vx->ne[2];
+            bool has_video_positions  = !video_positions_tensor.empty();
+            if (has_video_positions) {
+                GGML_ASSERT(video_positions_tensor.shape()[2] == video_token_count);
+                video_pe_vec = build_video_rope_matrix_from_positions(video_positions_tensor,
+                                                                      static_cast<int>(params.hidden_size),
+                                                                      static_cast<int>(params.num_attention_heads),
+                                                                      params.positional_embedding_theta,
+                                                                      params.positional_embedding_max_pos,
+                                                                      params.use_middle_indices_grid);
+            } else {
+                video_pe_vec = build_video_rope_matrix(vx->ne[0],
+                                                       vx->ne[1],
+                                                       vx->ne[2],
+                                                       static_cast<int>(params.hidden_size),
+                                                       static_cast<int>(params.num_attention_heads),
+                                                       video_frame_rate,
+                                                       params.positional_embedding_theta,
+                                                       params.positional_embedding_max_pos,
+                                                       params.vae_scale_factors,
+                                                       params.causal_temporal_positioning,
+                                                       params.use_middle_indices_grid);
+            }
+            auto video_pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, params.attention_head_dim / 2, video_token_count * params.num_attention_heads);
             ggml_set_name(video_pe, "ltxav_video_pe");
             set_backend_tensor_data(video_pe, video_pe_vec.data());
 
@@ -1712,18 +1805,27 @@ namespace LTXV {
                 set_backend_tensor_data(audio_pe, audio_pe_vec.data());
 
                 int temporal_max_pos = std::max(params.positional_embedding_max_pos[0], params.audio_positional_embedding_max_pos[0]);
-                video_cross_pe_vec   = build_video_temporal_rope_matrix(vx->ne[0],
-                                                                        vx->ne[1],
-                                                                        vx->ne[2],
-                                                                        static_cast<int>(params.audio_cross_attention_dim),
-                                                                        static_cast<int>(params.audio_num_attention_heads),
-                                                                        video_frame_rate,
-                                                                        params.positional_embedding_theta,
-                                                                        temporal_max_pos,
-                                                                        std::get<0>(params.vae_scale_factors),
-                                                                        params.causal_temporal_positioning,
-                                                                        true);
-                video_cross_pe       = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, params.audio_attention_head_dim / 2, vx->ne[0] * vx->ne[1] * vx->ne[2] * params.audio_num_attention_heads);
+                if (has_video_positions) {
+                    video_cross_pe_vec = build_video_temporal_rope_matrix_from_positions(video_positions_tensor,
+                                                                                         static_cast<int>(params.audio_cross_attention_dim),
+                                                                                         static_cast<int>(params.audio_num_attention_heads),
+                                                                                         params.positional_embedding_theta,
+                                                                                         temporal_max_pos,
+                                                                                         true);
+                } else {
+                    video_cross_pe_vec = build_video_temporal_rope_matrix(vx->ne[0],
+                                                                          vx->ne[1],
+                                                                          vx->ne[2],
+                                                                          static_cast<int>(params.audio_cross_attention_dim),
+                                                                          static_cast<int>(params.audio_num_attention_heads),
+                                                                          video_frame_rate,
+                                                                          params.positional_embedding_theta,
+                                                                          temporal_max_pos,
+                                                                          std::get<0>(params.vae_scale_factors),
+                                                                          params.causal_temporal_positioning,
+                                                                          true);
+                }
+                video_cross_pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, params.audio_attention_head_dim / 2, video_token_count * params.audio_num_attention_heads);
                 ggml_set_name(video_cross_pe, "ltxav_video_cross_pe");
                 set_backend_tensor_data(video_cross_pe, video_cross_pe_vec.data());
 
@@ -1806,9 +1908,10 @@ namespace LTXV {
                                   const sd::Tensor<float>& audio_x         = {},
                                   const sd::Tensor<float>& audio_timesteps = {},
                                   int audio_length                         = 0,
-                                  float frame_rate                         = 24.f) {
+                                  float frame_rate                         = 24.f,
+                                  const sd::Tensor<float>& video_positions = {}) {
             auto get_graph = [&]() -> ggml_cgraph* {
-                return build_graph(x, timesteps, context, audio_x, audio_timesteps, audio_length, frame_rate);
+                return build_graph(x, timesteps, context, audio_x, audio_timesteps, audio_length, frame_rate, video_positions);
             };
             auto out = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
             return out;

@@ -56,11 +56,13 @@ static const char* capability_sample_method_name(enum sample_method_t sample_met
 static json make_vae_tiling_json(const sd_tiling_params_t& params) {
     return {
         {"enabled", params.enabled},
+        {"temporal_tiling", params.temporal_tiling},
         {"tile_size_x", params.tile_size_x},
         {"tile_size_y", params.tile_size_y},
         {"target_overlap", params.target_overlap},
         {"rel_size_x", params.rel_size_x},
         {"rel_size_y", params.rel_size_y},
+        {"extra_tiling_args", params.extra_tiling_args ? params.extra_tiling_args : ""},
     };
 }
 
@@ -100,6 +102,20 @@ static json make_sample_params_json(const sd_sample_params_t& sample_params, con
     };
 }
 
+static json make_hires_json(const SDGenerationParams& defaults) {
+    return {
+        {"enabled", defaults.hires_enabled},
+        {"upscaler", defaults.hires_upscaler},
+        {"scale", defaults.hires_scale},
+        {"target_width", defaults.hires_width},
+        {"target_height", defaults.hires_height},
+        {"steps", defaults.hires_steps},
+        {"denoising_strength", defaults.hires_denoising_strength},
+        {"custom_sigmas", defaults.hires_custom_sigmas},
+        {"upscale_tile_size", defaults.hires_upscale_tile_size},
+    };
+}
+
 static json make_img_gen_defaults_json(const SDGenerationParams& defaults, const std::string& output_format) {
     return {
         {"prompt", defaults.prompt},
@@ -114,17 +130,7 @@ static json make_img_gen_defaults_json(const SDGenerationParams& defaults, const
         {"increase_ref_index", defaults.increase_ref_index},
         {"control_strength", defaults.control_strength},
         {"sample_params", make_sample_params_json(defaults.sample_params, defaults.skip_layers)},
-        {"hires",
-         {
-             {"enabled", defaults.hires_enabled},
-             {"upscaler", defaults.hires_upscaler},
-             {"scale", defaults.hires_scale},
-             {"target_width", defaults.hires_width},
-             {"target_height", defaults.hires_height},
-             {"steps", defaults.hires_steps},
-             {"denoising_strength", defaults.hires_denoising_strength},
-             {"upscale_tile_size", defaults.hires_upscale_tile_size},
-         }},
+        {"hires", make_hires_json(defaults)},
         {"vae_tiling_params", make_vae_tiling_json(defaults.vae_tiling_params)},
         {"cache_mode", defaults.cache_mode},
         {"cache_option", defaults.cache_option},
@@ -150,6 +156,7 @@ static json make_vid_gen_defaults_json(const SDGenerationParams& defaults, const
         {"vace_strength", defaults.vace_strength},
         {"sample_params", make_sample_params_json(defaults.sample_params, defaults.skip_layers)},
         {"high_noise_sample_params", make_sample_params_json(defaults.high_noise_sample_params, defaults.high_noise_skip_layers)},
+        {"hires", make_hires_json(defaults)},
         {"vae_tiling_params", make_vae_tiling_json(defaults.vae_tiling_params)},
         {"cache_mode", defaults.cache_mode},
         {"cache_option", defaults.cache_option},

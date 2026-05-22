@@ -1604,6 +1604,23 @@ __STATIC_INLINE__ size_t ggml_tensor_num(ggml_context* ctx) {
     return num;
 }
 
+__STATIC_INLINE__ ggml_tensor* ggml_ext_vec_concat(ggml_context* ctx,
+                                                   std::vector<ggml_tensor*>& tensors,
+                                                   int dim) {
+    while (tensors.size() > 1) {
+        std::vector<ggml_tensor*> next_level;
+        for (size_t i = 0; i < tensors.size(); i += 2) {
+            if (i + 1 < tensors.size()) {
+                next_level.push_back(ggml_concat(ctx, tensors[i], tensors[i + 1], dim));
+            } else {
+                next_level.push_back(tensors[i]);
+            }
+        }
+        tensors = std::move(next_level);
+    }
+    return tensors[0];
+}
+
 /* SDXL with LoRA requires more space */
 #define MAX_PARAMS_TENSOR_NUM 32768
 #define MAX_GRAPH_SIZE 327680
@@ -3612,6 +3629,163 @@ public:
                                 ctx->circular_x_enabled,
                                 ctx->circular_y_enabled,
                                 scale);
+    }
+};
+
+class Conv2d_grouped : public UnaryBlock {
+protected:
+    int64_t in_channels;
+    int64_t out_channels;
+    int groups;
+    std::pair<int, int> kernel_size;
+    std::pair<int, int> stride;
+    std::pair<int, int> padding;
+    std::pair<int, int> dilation;
+    bool bias;
+    float scale = 1.f;
+    std::string prefix;
+
+    void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
+        this->prefix         = prefix;
+        enum ggml_type wtype = GGML_TYPE_F16;
+        params["weight"]     = ggml_new_tensor_4d(ctx, wtype, kernel_size.second, kernel_size.first, in_channels / groups, out_channels);
+        if (bias) {
+            enum ggml_type wtype = GGML_TYPE_F32;
+            params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_channels);
+        }
+    }
+
+public:
+    Conv2d_grouped(int64_t in_channels,
+                   int64_t out_channels,
+                   int groups,
+                   std::pair<int, int> kernel_size,
+                   std::pair<int, int> stride   = {1, 1},
+                   std::pair<int, int> padding  = {0, 0},
+                   std::pair<int, int> dilation = {1, 1},
+                   bool bias                    = true)
+        : in_channels(in_channels),
+          out_channels(out_channels),
+          groups(groups),
+          kernel_size(kernel_size),
+          stride(stride),
+          padding(padding),
+          dilation(dilation),
+          bias(bias) {}
+
+    void set_scale(float scale_value) {
+        scale = scale_value;
+    }
+
+    std::string get_desc() {
+        return "Conv2d_grouped";
+    }
+
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+        ggml_tensor* w = params["weight"];
+        ggml_tensor* b = nullptr;
+        if (bias) {
+            b = params["bias"];
+        }
+
+        if (groups == 1) {
+            if (ctx->weight_adapter) {
+                WeightAdapter::ForwardParams forward_params;
+                forward_params.op_type           = WeightAdapter::ForwardParams::op_type_t::OP_CONV2D;
+                forward_params.conv2d.s0         = stride.second;
+                forward_params.conv2d.s1         = stride.first;
+                forward_params.conv2d.p0         = padding.second;
+                forward_params.conv2d.p1         = padding.first;
+                forward_params.conv2d.d0         = dilation.second;
+                forward_params.conv2d.d1         = dilation.first;
+                forward_params.conv2d.direct     = ctx->conv2d_direct_enabled;
+                forward_params.conv2d.circular_x = ctx->circular_x_enabled;
+                forward_params.conv2d.circular_y = ctx->circular_y_enabled;
+                forward_params.conv2d.scale      = scale;
+                return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, ctx->backend, x, w, b, prefix, forward_params);
+            }
+            return ggml_ext_conv_2d(ctx->ggml_ctx, x, w, b,
+                                    stride.second, stride.first,
+                                    padding.second, padding.first,
+                                    dilation.second, dilation.first,
+                                    ctx->conv2d_direct_enabled,
+                                    ctx->circular_x_enabled,
+                                    ctx->circular_y_enabled,
+                                    scale);
+        }
+
+        if (groups == in_channels && groups == out_channels) {
+            ggml_tensor* res;
+            if (ctx->conv2d_direct_enabled) {
+                res = ggml_conv_2d_dw_direct(ctx->ggml_ctx, x, w,
+                                             stride.second, stride.first,
+                                             padding.second, padding.first,
+                                             dilation.second, dilation.first);
+            } else {
+                res = ggml_conv_2d_dw(ctx->ggml_ctx, x, w,
+                                      stride.second, stride.first,
+                                      padding.second, padding.first,
+                                      dilation.second, dilation.first);
+            }
+            if (b) {
+                res = ggml_add(ctx->ggml_ctx, res, b);
+            }
+            return res;
+        }
+
+        int64_t ic_g = in_channels / groups;
+        int64_t oc_g = out_channels / groups;
+
+        std::vector<ggml_tensor*> out_slices(groups);
+
+        for (int i = 0; i < groups; ++i) {
+            size_t x_offset  = i * ic_g * x->nb[2];
+            ggml_tensor* x_i = ggml_view_4d(ctx->ggml_ctx, x,
+                                            x->ne[0], x->ne[1], ic_g, x->ne[3],
+                                            x->nb[1], x->nb[2], x->nb[3],
+                                            x_offset);
+
+            size_t w_offset  = i * oc_g * w->nb[3];
+            ggml_tensor* w_i = ggml_view_4d(ctx->ggml_ctx, w,
+                                            w->ne[0], w->ne[1], w->ne[2], oc_g,
+                                            w->nb[1], w->nb[2], w->nb[3],
+                                            w_offset);
+
+            ggml_tensor* b_i = nullptr;
+            if (b) {
+                size_t b_offset = i * oc_g * b->nb[0];
+                b_i             = ggml_view_1d(ctx->ggml_ctx, b, oc_g, b_offset);
+            }
+
+            if (ctx->weight_adapter) {
+                WeightAdapter::ForwardParams forward_params;
+                forward_params.op_type           = WeightAdapter::ForwardParams::op_type_t::OP_CONV2D;
+                forward_params.conv2d.s0         = stride.second;
+                forward_params.conv2d.s1         = stride.first;
+                forward_params.conv2d.p0         = padding.second;
+                forward_params.conv2d.p1         = padding.first;
+                forward_params.conv2d.d0         = dilation.second;
+                forward_params.conv2d.d1         = dilation.first;
+                forward_params.conv2d.direct     = ctx->conv2d_direct_enabled;
+                forward_params.conv2d.circular_x = ctx->circular_x_enabled;
+                forward_params.conv2d.circular_y = ctx->circular_y_enabled;
+                forward_params.conv2d.scale      = scale;
+                out_slices[i]                    = ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, ctx->backend, x_i, w_i, b_i, prefix, forward_params);
+            } else {
+                out_slices[i] = ggml_ext_conv_2d(ctx->ggml_ctx, x_i, w_i, b_i,
+                                                 stride.second, stride.first,
+                                                 padding.second, padding.first,
+                                                 dilation.second, dilation.first,
+                                                 ctx->conv2d_direct_enabled,
+                                                 ctx->circular_x_enabled,
+                                                 ctx->circular_y_enabled,
+                                                 scale);
+            }
+        }
+
+        ggml_tensor* out = ggml_ext_vec_concat(ctx->ggml_ctx, out_slices, 2);
+
+        return out;
     }
 };
 

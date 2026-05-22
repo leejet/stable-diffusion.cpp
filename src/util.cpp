@@ -1,8 +1,10 @@
 #include "util.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <codecvt>
 #include <cstdarg>
+#include <exception>
 #include <fstream>
 #include <locale>
 #include <regex>
@@ -404,6 +406,88 @@ std::vector<std::string> split_string(const std::string& str, char delimiter) {
     result.push_back(str.substr(start));
 
     return result;
+}
+
+KeyValueArgs parse_key_value_args(const char* args, const char* context) {
+    KeyValueArgs pairs;
+
+    if (args == nullptr || args[0] == '\0') {
+        return pairs;
+    }
+
+    std::string raw(args);
+    size_t start = 0;
+    for (size_t pos = 0; pos <= raw.size(); ++pos) {
+        if (pos != raw.size() && raw[pos] != ',' && raw[pos] != ';') {
+            continue;
+        }
+
+        std::string token = trim(raw.substr(start, pos - start));
+        if (!token.empty()) {
+            size_t eq = token.find('=');
+            if (eq == std::string::npos) {
+                const char* log_context = context ? context : "key=value arg";
+                LOG_WARN("ignoring malformed %s '%s'", log_context, token.c_str());
+            } else {
+                std::string key   = trim(token.substr(0, eq));
+                std::string value = trim(token.substr(eq + 1));
+                pairs.emplace_back(std::move(key), std::move(value));
+            }
+        }
+
+        start = pos + 1;
+    }
+
+    return pairs;
+}
+
+KeyValueArgs parse_key_value_args(const std::string& args, const char* context) {
+    return parse_key_value_args(args.c_str(), context);
+}
+
+bool parse_strict_float(const std::string& text, float& value) {
+    try {
+        size_t consumed = 0;
+        float parsed    = std::stof(text, &consumed);
+        if (!trim(text.substr(consumed)).empty()) {
+            return false;
+        }
+        value = parsed;
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool parse_strict_int(const std::string& text, int& value) {
+    try {
+        size_t consumed = 0;
+        int parsed      = std::stoi(text, &consumed);
+        if (!trim(text.substr(consumed)).empty()) {
+            return false;
+        }
+        value = parsed;
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool parse_strict_bool(const std::string& text, bool& value) {
+    std::string lowered = trim(text);
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+
+    if (lowered == "1" || lowered == "true" || lowered == "yes" || lowered == "on") {
+        value = true;
+        return true;
+    }
+    if (lowered == "0" || lowered == "false" || lowered == "no" || lowered == "off") {
+        value = false;
+        return true;
+    }
+    return false;
 }
 
 static std::string build_progress_bar(int step, int steps) {

@@ -19,8 +19,10 @@
 #include "denoiser.hpp"
 #include "diffusion_model.hpp"
 #include "esrgan.hpp"
+#include "guidance.h"
 #include "lora.hpp"
 #include "ltx_audio_vae.h"
+#include "ltx_latent_upscaler.hpp"
 #include "ltx_vae.hpp"
 #include "pmid.hpp"
 #include "sample-cache.h"
@@ -85,6 +87,7 @@ const char* sampling_methods_str[] = {
     "ER-SDE",
     "Euler CFG++",
     "Euler A CFG++",
+    "Euler GE",
 };
 
 /*================================================== Helper Functions ================================================*/
@@ -153,7 +156,7 @@ public:
     bool apply_lora_immediately = false;
 
     std::string taesd_path;
-    sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0, 0};
+    sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0, 0, nullptr};
     bool offload_params_to_cpu           = false;
     float max_vram                       = 0.f;
     bool use_pmid                        = false;
@@ -360,8 +363,9 @@ public:
             LOG_INFO("loading tae from '%s'", sd_ctx_params->taesd_path);
             if (!model_loader.init_from_file(sd_ctx_params->taesd_path, "tae.")) {
                 LOG_WARN("loading tae from '%s' failed", sd_ctx_params->taesd_path);
+            } else {
+                use_tae = true;
             }
-            use_tae = true;
         }
 
         if (strlen(SAFE_STR(sd_ctx_params->embeddings_connectors_path)) > 0) {
@@ -734,7 +738,8 @@ public:
             auto create_tae = [&]() -> std::shared_ptr<VAE> {
                 if (sd_version_is_wan(version) ||
                     sd_version_is_qwen_image(version) ||
-                    sd_version_is_anima(version)) {
+                    sd_version_is_anima(version) ||
+                    sd_version_is_ltxav(version)) {
                     return std::make_shared<TinyVideoAutoEncoder>(backend_for(SDBackendModule::VAE),
                                                                   params_backend_for(SDBackendModule::VAE),
                                                                   tensor_storage_map,
@@ -1313,7 +1318,7 @@ public:
         }
         auto lora = std::make_shared<LoraModel>(lora_id,
                                                 backend_for(module),
-                                                params_backend_for(module),
+                                                backend_for(module),
                                                 lora_path,
                                                 is_high_noise ? "model.high_noise_" : "",
                                                 version);
@@ -1947,7 +1952,8 @@ public:
                              float vace_strength,
                              int audio_length,
                              float frame_rate,
-                             const sd_cache_params_t* cache_params) {
+                             const sd_cache_params_t* cache_params,
+                             const sd::Tensor<float>& video_positions = {}) {
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
         float cfg_scale     = guidance.txt_cfg;
         float img_cfg_scale = guidance.img_cfg;
@@ -1958,8 +1964,9 @@ public:
                                                                                            denoiser.get(),
                                                                                            sigmas);
 
+        bool needs_uncond_denoised = method == EULER_CFG_PP_SAMPLE_METHOD || method == EULER_A_CFG_PP_SAMPLE_METHOD;
         // Spectrum cache is not supported for CFG++ samplers
-        if (method == EULER_CFG_PP_SAMPLE_METHOD || method == EULER_A_CFG_PP_SAMPLE_METHOD) {
+        if (needs_uncond_denoised) {
             if (cache_runtime.spectrum_enabled) {
                 LOG_WARN("Spectrum cache requested but not supported for CFG++ samplers");
                 cache_runtime.spectrum_enabled = false;
@@ -1972,6 +1979,11 @@ public:
             has_skiplayer = false;
             LOG_WARN("SLG is incompatible with this model type");
         }
+        sd::guidance::ClassifierFreeGuidance classifier_free_guidance(cfg_scale, img_cfg_scale);
+        sd::guidance::SkipLayerGuidance skip_layer_guidance(has_skiplayer ? skip_layers : std::vector<int>(),
+                                                            has_skiplayer ? slg_scale : 0.0f,
+                                                            guidance.slg.layer_start,
+                                                            guidance.slg.layer_end);
 
         if (version == VERSION_HIDREAM_O1 && !noise.empty()) {
             noise *= eta;
@@ -1984,7 +1996,7 @@ public:
         sd::Tensor<float> denoised   = x_t;
         SamplePreviewContext preview = prepare_sample_preview_context();
 
-        auto denoise = [&](const sd::Tensor<float>& x, float sigma, int step, sd::Tensor<float>* out_uncond_denoised = nullptr) -> sd::Tensor<float> {
+        auto denoise = [&](const sd::Tensor<float>& x, float sigma, int step) -> sd::guidance::GuiderOutput {
             if (step == 1 || step == -1) {
                 pretty_progress(0, (int)steps, 0);
             }
@@ -2017,17 +2029,17 @@ public:
             }
 
             if (cache_runtime.spectrum_enabled && cache_runtime.spectrum.should_predict()) {
-                if (out_uncond_denoised == nullptr) {
-                    cache_runtime.spectrum.predict(&denoised);
-                    if (!denoise_mask.empty()) {
-                        denoised = denoised * denoise_mask + init_latent * (1.0f - denoise_mask);
-                    }
-                    if (sd_should_preview_denoised() && preview.callback != nullptr) {
-                        preview_image(step, denoised, version, preview.mode, preview.callback, preview.data, false);
-                    }
-                    report_sample_progress(step, steps, t0);
-                    return denoised;
+                cache_runtime.spectrum.predict(&denoised);
+                if (!denoise_mask.empty()) {
+                    denoised = denoised * denoise_mask + init_latent * (1.0f - denoise_mask);
                 }
+                if (sd_should_preview_denoised() && preview.callback != nullptr) {
+                    preview_image(step, denoised, version, preview.mode, preview.callback, preview.data, false);
+                }
+                report_sample_progress(step, steps, t0);
+                sd::guidance::GuiderOutput output;
+                output.pred = denoised;
+                return output;
             }
 
             if (sd_should_preview_noisy() && preview.callback != nullptr) {
@@ -2037,7 +2049,6 @@ public:
             sd::Tensor<float> cond_out;
             sd::Tensor<float> uncond_out;
             sd::Tensor<float> img_cond_out;
-            sd::Tensor<float> skip_cond_out;
             sd_sample::SampleStepCacheDispatcher step_cache(cache_runtime, step, sigma);
             std::vector<sd::Tensor<float>> controls;
             DiffusionParams diffusion_params;
@@ -2053,6 +2064,7 @@ public:
             diffusion_params.vace_strength      = vace_strength;
             diffusion_params.audio_length       = audio_length;
             diffusion_params.frame_rate         = frame_rate;
+            diffusion_params.video_positions    = video_positions.empty() ? nullptr : &video_positions;
             diffusion_params.skip_layers        = nullptr;
 
             compute_sample_controls(control_image,
@@ -2126,42 +2138,40 @@ public:
                     return {};
                 }
             }
-            bool is_skiplayer_step = has_skiplayer &&
-                                     step > (int)(guidance.slg.layer_start * static_cast<int>(sigmas.size())) &&
-                                     step < (int)(guidance.slg.layer_end * static_cast<int>(sigmas.size()));
-            if (is_skiplayer_step) {
+            sd::guidance::GuidanceInput guidance_input;
+            guidance_input.step          = step;
+            guidance_input.schedule_size = sigmas.size();
+            guidance_input.pred_cond     = &cond_out;
+            guidance_input.pred_uncond   = uncond_out.empty() ? nullptr : &uncond_out;
+            guidance_input.pred_img_cond = img_cond_out.empty() ? nullptr : &img_cond_out;
+
+            sd::guidance::GuiderOutput guided = classifier_free_guidance.forward(guidance_input, {});
+            if (guided.pred.empty()) {
+                return {};
+            }
+
+            if (skip_layer_guidance.is_enabled_for_step(guidance_input)) {
                 LOG_DEBUG("Skipping layers at step %d\n", step);
                 if (!step_cache.is_step_skipped()) {
-                    skip_cond_out = run_condition(cond,
-                                                  cond.c_concat.empty() ? nullptr : &cond.c_concat,
-                                                  &skip_layers);
-                    if (skip_cond_out.empty()) {
-                        return {};
-                    }
+                    guidance_input.predict_skip_layer = [&]() -> sd::Tensor<float> {
+                        return run_condition(cond,
+                                             cond.c_concat.empty() ? nullptr : &cond.c_concat,
+                                             &skip_layer_guidance.layers());
+                    };
                 }
             }
 
-            GGML_ASSERT(!cond_out.empty());
-            sd::Tensor<float> latent_result = cond_out;
-            if (!uncond_out.empty()) {
-                if (!img_cond_out.empty()) {
-                    latent_result = uncond_out +
-                                    img_cfg_scale * (img_cond_out - uncond_out) +
-                                    cfg_scale * (cond_out - img_cond_out);
-                } else {
-                    latent_result = uncond_out + cfg_scale * (cond_out - uncond_out);
-                }
-            } else if (!img_cond_out.empty()) {
-                latent_result = img_cond_out + cfg_scale * (cond_out - img_cond_out);
+            guided = skip_layer_guidance.forward(guidance_input, std::move(guided));
+            if (guided.pred.empty()) {
+                return {};
             }
 
-            if (is_skiplayer_step && !skip_cond_out.empty()) {
-                latent_result += (cond_out - skip_cond_out) * slg_scale;
-            }
-            denoised = latent_result * c_out + x * c_skip;
-            if (out_uncond_denoised != nullptr) {
-                sd::Tensor<float> base_uncond = !uncond_out.empty() ? uncond_out : cond_out;
-                *out_uncond_denoised          = base_uncond * c_out + x * c_skip;
+            denoised = guided.pred * c_out + x * c_skip;
+            sd::guidance::GuiderOutput output;
+            output.pred = denoised;
+            if (needs_uncond_denoised) {
+                const sd::Tensor<float>& base_uncond = !uncond_out.empty() ? uncond_out : cond_out;
+                output.pred_uncond                   = base_uncond * c_out + x * c_skip;
             }
             if (cache_runtime.spectrum_enabled) {
                 cache_runtime.spectrum.update(denoised);
@@ -2173,7 +2183,8 @@ public:
                 preview_image(step, denoised, version, preview.mode, preview.callback, preview.data, false);
             }
             report_sample_progress(step, steps, t0);
-            return denoised;
+            output.pred = denoised;
+            return output;
         };
 
         auto x0_opt = sample_k_diffusion(method, denoise, x_t, sigmas, sampler_rng, eta, is_flow_denoiser, extra_sample_args);
@@ -2638,6 +2649,24 @@ public:
         return first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
     }
 
+    sd::Tensor<float> normalize_ltx_video_latents(const sd::Tensor<float>& x) {
+        auto ltx_vae = std::dynamic_pointer_cast<LTXVideoVAE>(first_stage_model);
+        if (!ltx_vae) {
+            LOG_ERROR("LTX latent normalization requires LTX video VAE");
+            return {};
+        }
+        return ltx_vae->normalize_latents(n_threads, x);
+    }
+
+    sd::Tensor<float> un_normalize_ltx_video_latents(const sd::Tensor<float>& x) {
+        auto ltx_vae = std::dynamic_pointer_cast<LTXVideoVAE>(first_stage_model);
+        if (!ltx_vae) {
+            LOG_ERROR("LTX latent un-normalization requires LTX video VAE");
+            return {};
+        }
+        return ltx_vae->un_normalize_latents(n_threads, x);
+    }
+
     sd::Tensor<float> decode_ltx_audio_latent(const sd::Tensor<float>& audio_latent) {
         if (audio_vae_model == nullptr || audio_latent.empty()) {
             return {};
@@ -2726,6 +2755,7 @@ const char* sample_method_to_str[] = {
     "er_sde",
     "euler_cfg_pp",
     "euler_a_cfg_pp",
+    "euler_ge",
 };
 
 const char* sd_sample_method_name(enum sample_method_t sample_method) {
@@ -2960,16 +2990,18 @@ void sd_cache_params_init(sd_cache_params_t* cache_params) {
 }
 
 void sd_hires_params_init(sd_hires_params_t* hires_params) {
-    *hires_params                    = {};
-    hires_params->enabled            = false;
-    hires_params->upscaler           = SD_HIRES_UPSCALER_LATENT;
-    hires_params->model_path         = nullptr;
-    hires_params->scale              = 2.0f;
-    hires_params->target_width       = 0;
-    hires_params->target_height      = 0;
-    hires_params->steps              = 0;
-    hires_params->denoising_strength = 0.7f;
-    hires_params->upscale_tile_size  = 128;
+    *hires_params                     = {};
+    hires_params->enabled             = false;
+    hires_params->upscaler            = SD_HIRES_UPSCALER_LATENT;
+    hires_params->model_path          = nullptr;
+    hires_params->scale               = 2.0f;
+    hires_params->target_width        = 0;
+    hires_params->target_height       = 0;
+    hires_params->steps               = 0;
+    hires_params->denoising_strength  = 0.7f;
+    hires_params->upscale_tile_size   = 128;
+    hires_params->custom_sigmas       = nullptr;
+    hires_params->custom_sigmas_count = 0;
 }
 
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
@@ -3163,7 +3195,7 @@ void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     sd_img_gen_params->batch_count       = 1;
     sd_img_gen_params->control_strength  = 0.9f;
     sd_img_gen_params->pm_params         = {nullptr, 0, nullptr, 20.f};
-    sd_img_gen_params->vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f};
+    sd_img_gen_params->vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
     sd_cache_params_init(&sd_img_gen_params->cache);
     sd_hires_params_init(&sd_img_gen_params->hires);
 }
@@ -3192,7 +3224,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "increase_ref_index: %s\n"
              "control_strength: %.2f\n"
              "photo maker: {style_strength = %.2f, id_images_count = %d, id_embed_path = %s}\n"
-             "VAE tiling: %s (temporal=%s)\n"
+             "VAE tiling: %s (temporal=%s, extra_tiling_args=%s)\n"
              "hires: {enabled=%s, upscaler=%s, model_path=%s, scale=%.2f, target=%dx%d, steps=%d, denoising_strength=%.2f}\n",
              SAFE_STR(sd_img_gen_params->prompt),
              SAFE_STR(sd_img_gen_params->negative_prompt),
@@ -3212,6 +3244,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              SAFE_STR(sd_img_gen_params->pm_params.id_embed_path),
              BOOL_STR(sd_img_gen_params->vae_tiling_params.enabled),
              BOOL_STR(sd_img_gen_params->vae_tiling_params.temporal_tiling),
+             SAFE_STR(sd_img_gen_params->vae_tiling_params.extra_tiling_args),
              BOOL_STR(sd_img_gen_params->hires.enabled),
              sd_hires_upscaler_name(sd_img_gen_params->hires.upscaler),
              SAFE_STR(sd_img_gen_params->hires.model_path),
@@ -3249,7 +3282,17 @@ void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
     sd_vid_gen_params->fps                                   = 16;
     sd_vid_gen_params->moe_boundary                          = 0.875f;
     sd_vid_gen_params->vace_strength                         = 1.f;
-    sd_vid_gen_params->vae_tiling_params                     = {false, false, 0, 0, 0.5f, 0.0f, 0.0f};
+    sd_vid_gen_params->vae_tiling_params                     = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
+    sd_vid_gen_params->hires.enabled                         = false;
+    sd_vid_gen_params->hires.upscaler                        = SD_HIRES_UPSCALER_LATENT;
+    sd_vid_gen_params->hires.scale                           = 2.f;
+    sd_vid_gen_params->hires.target_width                    = 0;
+    sd_vid_gen_params->hires.target_height                   = 0;
+    sd_vid_gen_params->hires.steps                           = 0;
+    sd_vid_gen_params->hires.denoising_strength              = 0.7f;
+    sd_vid_gen_params->hires.upscale_tile_size               = 128;
+    sd_vid_gen_params->hires.custom_sigmas                   = nullptr;
+    sd_vid_gen_params->hires.custom_sigmas_count             = 0;
     sd_cache_params_init(&sd_vid_gen_params->cache);
 }
 
@@ -3508,6 +3551,7 @@ struct GenerationRequest {
         vace_strength               = sd_vid_gen_params->vace_strength;
         guidance                    = sd_vid_gen_params->sample_params.guidance;
         high_noise_guidance         = sd_vid_gen_params->high_noise_sample_params.guidance;
+        hires                       = sd_vid_gen_params->hires;
         resolve(sd_ctx);
         if (frames != requested_frames) {
             LOG_WARN("align video frames from %d to %d for %s",
@@ -3565,6 +3609,20 @@ struct GenerationRequest {
             LOG_WARN("hires scale must be positive when no target size is set, disabling hires");
             hires.enabled = false;
             return;
+        }
+        if (hires.custom_sigmas_count < 0) {
+            LOG_WARN("hires custom sigmas count is negative, ignoring custom sigmas");
+            hires.custom_sigmas       = nullptr;
+            hires.custom_sigmas_count = 0;
+        }
+        if (hires.custom_sigmas_count > 0 && hires.custom_sigmas == nullptr) {
+            LOG_WARN("hires custom sigmas count is positive but custom sigmas are null, ignoring custom sigmas");
+            hires.custom_sigmas_count = 0;
+        }
+        if (hires.custom_sigmas_count == 1) {
+            LOG_WARN("hires custom sigmas requires at least two values, ignoring custom sigmas");
+            hires.custom_sigmas       = nullptr;
+            hires.custom_sigmas_count = 0;
         }
         hires.denoising_strength = std::clamp(hires.denoising_strength, 0.0001f, 1.f);
         hires.steps              = std::max(0, hires.steps);
@@ -3756,15 +3814,98 @@ struct ImageGenerationLatents {
     sd::Tensor<float> concat_latent;
     sd::Tensor<float> uncond_concat_latent;
     sd::Tensor<float> audio_latent;
+    sd::Tensor<float> video_positions;
     sd::Tensor<float> control_image;
     std::vector<sd::Tensor<float>> ref_images;
     std::vector<sd::Tensor<float>> ref_latents;
     sd::Tensor<float> denoise_mask;
     sd::Tensor<float> clip_vision_output;
     sd::Tensor<float> vace_context;
-    int64_t ref_image_num = 0;
-    int audio_length      = 0;
+    int64_t ref_image_num                  = 0;
+    int64_t video_conditioning_frame_count = 0;
+    int64_t video_target_frame_count       = 0;
+    int audio_length                       = 0;
 };
+
+static float ltxv_latent_corner_to_pixel_frame(int64_t corner_index,
+                                               int temporal_scale,
+                                               bool causal_temporal_positioning) {
+    float pixel_t = static_cast<float>(corner_index * temporal_scale);
+    if (causal_temporal_positioning) {
+        pixel_t = std::max(0.f, pixel_t + 1.f - static_cast<float>(temporal_scale));
+    }
+    return pixel_t;
+}
+
+static void set_ltxv_video_position(sd::Tensor<float>* positions,
+                                    int64_t token,
+                                    float t_start,
+                                    float t_end,
+                                    float h_start,
+                                    float h_end,
+                                    float w_start,
+                                    float w_end) {
+    positions->index(0, 0, token, 0) = t_start;
+    positions->index(1, 0, token, 0) = t_end;
+    positions->index(0, 1, token, 0) = h_start;
+    positions->index(1, 1, token, 0) = h_end;
+    positions->index(0, 2, token, 0) = w_start;
+    positions->index(1, 2, token, 0) = w_end;
+}
+
+static sd::Tensor<float> build_ltxv_video_positions(int64_t width,
+                                                    int64_t height,
+                                                    int64_t target_latent_frames,
+                                                    int64_t keyframe_latent_frames,
+                                                    int keyframe_frame_idx,
+                                                    int keyframe_pixel_frames,
+                                                    int fps,
+                                                    int spatial_scale,
+                                                    int temporal_scale,
+                                                    bool causal_temporal_positioning) {
+    GGML_ASSERT(width > 0 && height > 0 && target_latent_frames > 0);
+    GGML_ASSERT(keyframe_latent_frames > 0);
+    GGML_ASSERT(fps > 0);
+
+    int64_t total_tokens = width * height * (target_latent_frames + keyframe_latent_frames);
+    sd::Tensor<float> positions({2, 3, total_tokens, 1});
+    int64_t token = 0;
+
+    for (int64_t t = 0; t < target_latent_frames; t++) {
+        float t_start = ltxv_latent_corner_to_pixel_frame(t, temporal_scale, causal_temporal_positioning) / static_cast<float>(fps);
+        float t_end   = ltxv_latent_corner_to_pixel_frame(t + 1, temporal_scale, causal_temporal_positioning) / static_cast<float>(fps);
+        for (int64_t h = 0; h < height; h++) {
+            float h_start = static_cast<float>(h * spatial_scale);
+            float h_end   = static_cast<float>((h + 1) * spatial_scale);
+            for (int64_t w = 0; w < width; w++) {
+                float w_start = static_cast<float>(w * spatial_scale);
+                float w_end   = static_cast<float>((w + 1) * spatial_scale);
+                set_ltxv_video_position(&positions, token++, t_start, t_end, h_start, h_end, w_start, w_end);
+            }
+        }
+    }
+
+    for (int64_t t = 0; t < keyframe_latent_frames; t++) {
+        float t_start = static_cast<float>(keyframe_frame_idx + t * temporal_scale);
+        float t_end   = static_cast<float>(keyframe_frame_idx + (t + 1) * temporal_scale);
+        if (keyframe_pixel_frames == 1) {
+            t_end = t_start + 1.f;
+        }
+        t_start /= static_cast<float>(fps);
+        t_end /= static_cast<float>(fps);
+        for (int64_t h = 0; h < height; h++) {
+            float h_start = static_cast<float>(h * spatial_scale);
+            float h_end   = static_cast<float>((h + 1) * spatial_scale);
+            for (int64_t w = 0; w < width; w++) {
+                float w_start = static_cast<float>(w * spatial_scale);
+                float w_end   = static_cast<float>((w + 1) * spatial_scale);
+                set_ltxv_video_position(&positions, token++, t_start, t_end, h_start, h_end, w_start, w_end);
+            }
+        }
+    }
+
+    return positions;
+}
 
 static sd::Tensor<float> pack_ltxav_audio_and_video_latents(const sd::Tensor<float>& video_latent,
                                                             const sd::Tensor<float>& audio_latent) {
@@ -3845,6 +3986,85 @@ static sd::Tensor<float> pack_ltxav_audio_and_video_denoise_mask(const sd::Tenso
     audio_mask_shape[3]                   = extra_ch;
     auto audio_mask                       = sd::Tensor<float>::ones(audio_mask_shape);
     return sd::ops::concat(video_mask_full, audio_mask, 3);
+}
+
+static sd::Tensor<float> make_ltxav_video_denoise_mask(const sd::Tensor<float>& video_latent, float value = 1.f) {
+    if (video_latent.empty()) {
+        return {};
+    }
+    return sd::full<float>({video_latent.shape()[0],
+                            video_latent.shape()[1],
+                            video_latent.shape()[2],
+                            1,
+                            1},
+                           value);
+}
+
+static sd::Tensor<float> encode_ltxav_condition_image(sd_ctx_t* sd_ctx,
+                                                      const sd::Tensor<float>& image,
+                                                      const char* name) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || image.empty()) {
+        return {};
+    }
+    auto condition_image  = image.reshape({image.shape()[0],
+                                           image.shape()[1],
+                                           1,
+                                           image.shape()[2],
+                                           image.shape()[3]});
+    auto condition_latent = sd_ctx->sd->encode_first_stage(condition_image);
+    if (condition_latent.empty()) {
+        LOG_ERROR("failed to encode LTXAV %s image", name);
+    }
+    return condition_latent;
+}
+
+static bool apply_ltxav_condition_by_latent_index(sd::Tensor<float>* video_latent,
+                                                  sd::Tensor<float>* video_mask,
+                                                  const sd::Tensor<float>& condition_latent,
+                                                  int64_t latent_idx,
+                                                  const char* name,
+                                                  float conditioned_mask) {
+    if (video_latent == nullptr || video_mask == nullptr || video_latent->empty() || video_mask->empty()) {
+        return false;
+    }
+    if (condition_latent.empty() ||
+        condition_latent.shape()[0] != video_latent->shape()[0] ||
+        condition_latent.shape()[1] != video_latent->shape()[1] ||
+        condition_latent.shape()[3] != video_latent->shape()[3]) {
+        LOG_ERROR("invalid LTXAV %s condition latent shape", name);
+        return false;
+    }
+    int64_t latent_frames    = video_latent->shape()[2];
+    int64_t condition_frames = condition_latent.shape()[2];
+    if (latent_idx < 0 || condition_frames <= 0 || latent_idx + condition_frames > latent_frames) {
+        LOG_ERROR("invalid LTXAV %s image latent range: start=%" PRId64 ", length=%" PRId64 ", latent_frames=%" PRId64,
+                  name,
+                  latent_idx,
+                  condition_frames,
+                  latent_frames);
+        return false;
+    }
+
+    sd::ops::slice_assign(video_latent, 2, latent_idx, latent_idx + condition_frames, condition_latent);
+    sd::ops::fill_slice(video_mask, 2, latent_idx, latent_idx + condition_frames, conditioned_mask);
+    return true;
+}
+
+static bool apply_ltxav_condition_image_by_latent_index(sd_ctx_t* sd_ctx,
+                                                        const sd::Tensor<float>& image,
+                                                        sd::Tensor<float>* video_latent,
+                                                        sd::Tensor<float>* video_mask,
+                                                        int64_t latent_idx,
+                                                        const char* name,
+                                                        float strength) {
+    auto condition_latent = encode_ltxav_condition_image(sd_ctx, image, name);
+    return !condition_latent.empty() &&
+           apply_ltxav_condition_by_latent_index(video_latent,
+                                                 video_mask,
+                                                 condition_latent,
+                                                 latent_idx,
+                                                 name,
+                                                 1.0f - std::clamp(strength, 0.f, 1.f));
 }
 
 static sd::Tensor<float> unpack_ltxav_audio_latent(const sd::Tensor<float>& packed_latent,
@@ -4430,6 +4650,53 @@ static sd::Tensor<float> upscale_hires_latent(sd_ctx_t* sd_ctx,
     return {};
 }
 
+static std::vector<float> make_hires_sigma_schedule(sd_ctx_t* sd_ctx,
+                                                    const sd_hires_params_t& hires,
+                                                    const sd_sample_params_t& sample_params,
+                                                    sample_method_t sample_method,
+                                                    int default_steps,
+                                                    int sample_seq_len,
+                                                    int* scheduler_steps_out) {
+    if (scheduler_steps_out != nullptr) {
+        *scheduler_steps_out = 0;
+    }
+
+    if (hires.custom_sigmas_count > 0 && hires.custom_sigmas != nullptr) {
+        std::vector<float> custom_sigmas(hires.custom_sigmas,
+                                         hires.custom_sigmas + hires.custom_sigmas_count);
+        if (scheduler_steps_out != nullptr) {
+            *scheduler_steps_out = static_cast<int>(custom_sigmas.size()) - 1;
+        }
+        return custom_sigmas;
+    }
+
+    int effective_steps = hires.steps > 0 ? hires.steps : default_steps;
+    effective_steps     = std::max(1, effective_steps);
+
+    // sd-webui behavior: scale up total steps so trimming by denoising_strength yields exactly hires_steps effective steps,
+    // unlike img2img which trims from a fixed step count.
+    int scheduler_steps = static_cast<int>(effective_steps / hires.denoising_strength);
+    scheduler_steps     = std::max(1, scheduler_steps);
+
+    scheduler_t scheduler     = resolve_scheduler(sd_ctx,
+                                                  sample_params.scheduler,
+                                                  sample_method);
+    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(scheduler_steps,
+                                                                 sample_seq_len,
+                                                                 scheduler,
+                                                                 sd_ctx->sd->version,
+                                                                 sample_params.extra_sample_args);
+    size_t t_enc              = static_cast<size_t>(scheduler_steps * hires.denoising_strength);
+    if (t_enc >= static_cast<size_t>(scheduler_steps)) {
+        t_enc = static_cast<size_t>(scheduler_steps) - 1;
+    }
+    if (scheduler_steps_out != nullptr) {
+        *scheduler_steps_out = scheduler_steps;
+    }
+    return std::vector<float>(sigmas.begin() + scheduler_steps - static_cast<int>(t_enc) - 1,
+                              sigmas.end());
+}
+
 SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params) {
     if (sd_ctx == nullptr || sd_img_gen_params == nullptr) {
         return nullptr;
@@ -4590,29 +4857,20 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
             }
         }
 
-        int hires_steps = request.hires.steps > 0 ? request.hires.steps : plan.sample_steps;
-
-        // sd-webui behavior: scale up total steps so trimming by denoising_strength yields exactly hires_steps effective steps,
-        // unlike img2img which trims from a fixed step count
-        hires_steps = static_cast<int>(hires_steps / request.hires.denoising_strength);
-
-        std::vector<float> hires_sigmas = sd_ctx->sd->denoiser->get_sigmas(
-            hires_steps,
-            sd_ctx->sd->get_image_seq_len(request.hires.target_height, request.hires.target_width),
-            sd_img_gen_params->sample_params.scheduler,
-            sd_ctx->sd->version,
-            sd_img_gen_params->sample_params.extra_sample_args);
-
-        size_t t_enc = static_cast<size_t>(hires_steps * request.hires.denoising_strength);
-        if (t_enc >= static_cast<size_t>(hires_steps)) {
-            t_enc = static_cast<size_t>(hires_steps) - 1;
-        }
-        std::vector<float> hires_sigma_sched(hires_sigmas.begin() + hires_steps - static_cast<int>(t_enc) - 1,
-                                             hires_sigmas.end());
-        LOG_INFO("hires fix: %d steps, denoising_strength=%.2f, sigma_sched_size=%zu",
-                 hires_steps,
+        int hires_scheduler_steps = 0;
+        std::vector<float> hires_sigma_sched =
+            make_hires_sigma_schedule(sd_ctx,
+                                      request.hires,
+                                      sd_img_gen_params->sample_params,
+                                      plan.sample_method,
+                                      plan.sample_steps,
+                                      sd_ctx->sd->get_image_seq_len(request.hires.target_height, request.hires.target_width),
+                                      &hires_scheduler_steps);
+        LOG_INFO("hires fix: scheduler_steps=%d, denoising_strength=%.2f, sigma_sched_size=%zu%s",
+                 hires_scheduler_steps,
                  request.hires.denoising_strength,
-                 hires_sigma_sched.size());
+                 hires_sigma_sched.size(),
+                 request.hires.custom_sigmas_count > 0 ? ", custom_sigmas=true" : "");
 
         std::vector<sd::Tensor<float>> hires_final_latents;
         int64_t hires_denoise_start = ggml_time_ms();
@@ -4744,43 +5002,97 @@ static std::optional<ImageGenerationLatents> prepare_video_generation_latents(sd
     }
 
     if (sd_version_is_ltxav(sd_ctx->sd->version)) {
-        if (!end_image.empty() || sd_vid_gen_params->control_frames_size > 0) {
-            LOG_ERROR("LTXAV currently supports txt2vid and init_image i2v only; end_image and control_frames are not implemented");
+        if (sd_vid_gen_params->control_frames_size > 0) {
+            LOG_ERROR("LTXAV control_frames are not implemented");
             return std::nullopt;
         }
 
-        if (!start_image.empty()) {
+        if (!start_image.empty() || !end_image.empty()) {
             if (sd_ctx->sd->vae_decode_only) {
-                LOG_ERROR("LTXAV init_image i2v requires VAE encoder weights; create the context with vae_decode_only=false");
+                LOG_ERROR("LTXAV image conditioning requires VAE encoder weights; create the context with vae_decode_only=false");
                 return std::nullopt;
             }
 
-            LOG_INFO("IMG2VID");
-
-            int64_t t1             = ggml_time_ms();
-            auto init_img          = start_image.reshape({start_image.shape()[0],
-                                                          start_image.shape()[1],
-                                                          1,
-                                                          start_image.shape()[2],
-                                                          start_image.shape()[3]});
-            auto init_image_latent = sd_ctx->sd->encode_first_stage(init_img);
-            if (init_image_latent.empty()) {
-                LOG_ERROR("failed to encode LTXAV init image");
-                return std::nullopt;
+            if (!start_image.empty() && !end_image.empty()) {
+                LOG_INFO("FLF2V");
+            } else if (!start_image.empty()) {
+                LOG_INFO("IMG2VID");
+            } else {
+                LOG_INFO("END2VID");
             }
 
+            int64_t t1          = ggml_time_ms();
             latents.init_latent = sd_ctx->sd->generate_init_latent(request->width, request->height, request->frames, true);
-            sd::ops::slice_assign(&latents.init_latent, 2, 0, init_image_latent.shape()[2], init_image_latent);
 
             float conditioning_strength = std::clamp(request->strength, 0.f, 1.f);
             float conditioned_mask      = 1.0f - conditioning_strength;
-            latents.denoise_mask        = sd::full<float>({latents.init_latent.shape()[0],
-                                                           latents.init_latent.shape()[1],
-                                                           latents.init_latent.shape()[2],
+            latents.denoise_mask        = make_ltxav_video_denoise_mask(latents.init_latent, 1.f);
+
+            auto apply_video_condition_by_keyframe_index = [&](const sd::Tensor<float>& keyframes,
+                                                               int frame_idx,
+                                                               const char* name) -> bool {
+                int64_t keyframe_frames = keyframes.shape()[2];
+                if (keyframe_frames <= 0 || keyframes.shape()[0] != latents.init_latent.shape()[0] ||
+                    keyframes.shape()[1] != latents.init_latent.shape()[1] ||
+                    keyframes.shape()[3] != latents.init_latent.shape()[3]) {
+                    LOG_ERROR("invalid LTXAV %s keyframe latent shape", name);
+                    return false;
+                }
+
+                latents.video_target_frame_count       = latents.init_latent.shape()[2];
+                latents.video_conditioning_frame_count = keyframe_frames;
+                latents.init_latent                    = sd::ops::concat(latents.init_latent, keyframes, 2);
+
+                auto keyframe_mask      = sd::full<float>({keyframes.shape()[0],
+                                                           keyframes.shape()[1],
+                                                           keyframes.shape()[2],
                                                            1,
                                                            1},
-                                                   1.f);
-            sd::ops::fill_slice(&latents.denoise_mask, 2, 0, init_image_latent.shape()[2], conditioned_mask);
+                                                     conditioned_mask);
+                latents.denoise_mask    = sd::ops::concat(latents.denoise_mask, keyframe_mask, 2);
+                latents.video_positions = build_ltxv_video_positions(latents.init_latent.shape()[0],
+                                                                     latents.init_latent.shape()[1],
+                                                                     latents.video_target_frame_count,
+                                                                     keyframe_frames,
+                                                                     frame_idx,
+                                                                     1,
+                                                                     request->fps,
+                                                                     request->vae_scale_factor,
+                                                                     8,
+                                                                     true);
+                return true;
+            };
+
+            if (!start_image.empty()) {
+                if (!apply_ltxav_condition_image_by_latent_index(sd_ctx,
+                                                                 start_image,
+                                                                 &latents.init_latent,
+                                                                 &latents.denoise_mask,
+                                                                 0,
+                                                                 "init",
+                                                                 conditioning_strength)) {
+                    return std::nullopt;
+                }
+            }
+
+            if (!end_image.empty()) {
+                auto end_image_latent = encode_ltxav_condition_image(sd_ctx, end_image, "end");
+                if (end_image_latent.empty()) {
+                    return std::nullopt;
+                }
+
+                int frame_idx = request->frames - 1;
+                bool ok       = frame_idx == 0 ? apply_ltxav_condition_by_latent_index(&latents.init_latent,
+                                                                                       &latents.denoise_mask,
+                                                                                       end_image_latent,
+                                                                                       0,
+                                                                                       "end",
+                                                                                       conditioned_mask)
+                                               : apply_video_condition_by_keyframe_index(end_image_latent, frame_idx, "end");
+                if (!ok) {
+                    return std::nullopt;
+                }
+            }
 
             int64_t t2 = ggml_time_ms();
             LOG_INFO("encode_first_stage completed, taking %" PRId64 " ms", t2 - t1);
@@ -5090,6 +5402,175 @@ static sd_image_t* decode_video_outputs(sd_ctx_t* sd_ctx,
     return result_images;
 }
 
+static sd::Tensor<float> upscale_ltx_spatial_video_latent(sd_ctx_t* sd_ctx,
+                                                          const char* model_path,
+                                                          const sd::Tensor<float>& packed_latent,
+                                                          int audio_length) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || packed_latent.empty()) {
+        return {};
+    }
+    if (strlen(SAFE_STR(model_path)) == 0) {
+        LOG_ERROR("LTX latent spatial upscale requires a model path");
+        return {};
+    }
+    if (!sd_ctx->sd->ensure_backend_pair(SDBackendModule::UPSCALER)) {
+        return {};
+    }
+
+    int latent_channels            = sd_ctx->sd->get_latent_channel();
+    sd::Tensor<float> video_latent = packed_latent;
+    sd::Tensor<float> audio_latent;
+    if (packed_latent.shape()[3] > latent_channels) {
+        video_latent = sd::ops::slice(packed_latent, 3, 0, latent_channels);
+        audio_latent = unpack_ltxav_audio_latent(packed_latent, audio_length, latent_channels);
+    }
+
+    LOG_INFO("LTX latent spatial upscale: latent %dx%dx%dx%d -> x2",
+             (int)video_latent.shape()[0],
+             (int)video_latent.shape()[1],
+             (int)video_latent.shape()[2],
+             (int)video_latent.shape()[3]);
+
+    sd::Tensor<float> unnormalized = sd_ctx->sd->un_normalize_ltx_video_latents(video_latent);
+    if (unnormalized.empty()) {
+        LOG_ERROR("LTX latent un-normalization failed before spatial upscale");
+        return {};
+    }
+
+    std::unique_ptr<LTXVUpsampler::LatentUpsamplerRunner> upsampler =
+        std::make_unique<LTXVUpsampler::LatentUpsamplerRunner>(sd_ctx->sd->backend_for(SDBackendModule::UPSCALER),
+                                                               sd_ctx->sd->params_backend_for(SDBackendModule::UPSCALER));
+    const size_t max_graph_vram_bytes = sd::ggml_graph_cut::max_vram_gib_to_bytes(sd_ctx->sd->max_vram);
+    upsampler->set_max_graph_vram_bytes(max_graph_vram_bytes);
+    if (!upsampler->load_from_file(model_path, sd_ctx->sd->n_threads)) {
+        LOG_ERROR("load LTX latent upsampler failed");
+        return {};
+    }
+
+    sd::Tensor<float> upscaled = upsampler->compute(sd_ctx->sd->n_threads, unnormalized);
+    upsampler.reset();
+    if (upscaled.empty()) {
+        LOG_ERROR("LTX latent spatial upscale failed");
+        return {};
+    }
+
+    upscaled = sd_ctx->sd->normalize_ltx_video_latents(upscaled);
+    if (upscaled.empty()) {
+        LOG_ERROR("LTX latent normalization failed after spatial upscale");
+        return {};
+    }
+
+    if (!audio_latent.empty()) {
+        upscaled = pack_ltxav_audio_and_video_latents(upscaled, audio_latent);
+    }
+    return upscaled;
+}
+
+static bool apply_ltxv_refine_image_conditioning(sd_ctx_t* sd_ctx,
+                                                 const sd_vid_gen_params_t* sd_vid_gen_params,
+                                                 const GenerationRequest& request,
+                                                 const ImageGenerationLatents& latents,
+                                                 sd::Tensor<float>* latent,
+                                                 sd::Tensor<float>* denoise_mask,
+                                                 sd::Tensor<float>* video_positions) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || sd_vid_gen_params == nullptr ||
+        latent == nullptr || latent->empty() || denoise_mask == nullptr || video_positions == nullptr) {
+        return true;
+    }
+    if (sd_vid_gen_params->init_image.data == nullptr &&
+        sd_vid_gen_params->end_image.data == nullptr) {
+        return true;
+    }
+    if (sd_ctx->sd->vae_decode_only) {
+        LOG_ERROR("LTXV refine image conditioning requires VAE encoder weights; create the context with vae_decode_only=false");
+        return false;
+    }
+
+    constexpr float conditioning_strength = 1.f;
+    int latent_channels                   = sd_ctx->sd->get_latent_channel();
+    sd::Tensor<float> video_latent        = *latent;
+    sd::Tensor<float> audio_latent;
+    if (latent->shape()[3] > latent_channels) {
+        video_latent = sd::ops::slice(*latent, 3, 0, latent_channels);
+        audio_latent = unpack_ltxav_audio_latent(*latent, latents.audio_length, latent_channels);
+        if (audio_latent.empty()) {
+            LOG_ERROR("failed to unpack LTXAV audio latent before image-to-video inplace conditioning");
+            return false;
+        }
+    }
+
+    int image_width              = static_cast<int>(video_latent.shape()[0]) * request.vae_scale_factor;
+    int image_height             = static_cast<int>(video_latent.shape()[1]) * request.vae_scale_factor;
+    sd::Tensor<float> video_mask = make_ltxav_video_denoise_mask(video_latent, 1.f);
+
+    if (sd_vid_gen_params->init_image.data != nullptr) {
+        sd::Tensor<float> start_image = sd_image_to_tensor(sd_vid_gen_params->init_image, image_width, image_height);
+        if (!apply_ltxav_condition_image_by_latent_index(sd_ctx,
+                                                         start_image,
+                                                         &video_latent,
+                                                         &video_mask,
+                                                         0,
+                                                         "init",
+                                                         conditioning_strength)) {
+            return false;
+        }
+    }
+
+    if (sd_vid_gen_params->end_image.data != nullptr) {
+        sd::Tensor<float> end_image        = sd_image_to_tensor(sd_vid_gen_params->end_image, image_width, image_height);
+        sd::Tensor<float> end_image_latent = encode_ltxav_condition_image(sd_ctx, end_image, "end");
+        if (end_image_latent.empty()) {
+            return false;
+        }
+
+        int frame_idx = request.frames - 1;
+        if (frame_idx == 0) {
+            if (!apply_ltxav_condition_by_latent_index(&video_latent,
+                                                       &video_mask,
+                                                       end_image_latent,
+                                                       0,
+                                                       "end",
+                                                       1.f - conditioning_strength)) {
+                return false;
+            }
+        } else {
+            if (latents.video_conditioning_frame_count <= 0 || latents.video_target_frame_count <= 0) {
+                LOG_ERROR("LTXV FLF2V refine conditioning requires low-resolution keyframe conditioning metadata");
+                return false;
+            }
+            int64_t target_latent_frames = latents.video_target_frame_count;
+            if (!apply_ltxav_condition_by_latent_index(&video_latent,
+                                                       &video_mask,
+                                                       end_image_latent,
+                                                       target_latent_frames,
+                                                       "end",
+                                                       1.f - conditioning_strength)) {
+                return false;
+            }
+            *video_positions = build_ltxv_video_positions(video_latent.shape()[0],
+                                                          video_latent.shape()[1],
+                                                          target_latent_frames,
+                                                          end_image_latent.shape()[2],
+                                                          frame_idx,
+                                                          1,
+                                                          request.fps,
+                                                          request.vae_scale_factor,
+                                                          8,
+                                                          true);
+        }
+    }
+
+    if (!audio_latent.empty()) {
+        *latent       = pack_ltxav_audio_and_video_latents(video_latent, audio_latent);
+        *denoise_mask = pack_ltxav_audio_and_video_denoise_mask(video_mask, video_latent, audio_latent);
+    } else {
+        *latent       = std::move(video_latent);
+        *denoise_mask = std::move(video_mask);
+    }
+    LOG_INFO("LTXV refine image conditioning applied at %dx%d", image_width, image_height);
+    return true;
+}
+
 SD_API bool generate_video(sd_ctx_t* sd_ctx,
                            const sd_vid_gen_params_t* sd_vid_gen_params,
                            sd_image_t** frames_out,
@@ -5110,6 +5591,23 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
     int64_t t0                    = ggml_time_ms();
     sd_ctx->sd->vae_tiling_params = sd_vid_gen_params->vae_tiling_params;
     GenerationRequest request(sd_ctx, sd_vid_gen_params);
+    bool latent_upscale_enabled     = request.hires.enabled;
+    GenerationRequest hires_request = request;
+    if (latent_upscale_enabled) {
+        if (!sd_version_is_ltxav(sd_ctx->sd->version)) {
+            LOG_ERROR("LTX latent spatial upscale is only supported for LTX video models");
+            return false;
+        }
+        if (request.hires.upscaler != SD_HIRES_UPSCALER_MODEL) {
+            LOG_ERROR("LTX latent spatial upscale currently requires hires upscaler MODEL");
+            return false;
+        }
+        if (strlen(SAFE_STR(request.hires.model_path)) == 0) {
+            LOG_ERROR("LTX latent spatial upscale is enabled but hires model path was not provided");
+            return false;
+        }
+    }
+
     sd_ctx->sd->rng->manual_seed(request.seed);
     sd_ctx->sd->sampler_rng->manual_seed(request.seed);
     sd_ctx->sd->set_flow_shift(sd_vid_gen_params->sample_params.flow_shift);
@@ -5121,14 +5619,22 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
         return false;
     }
     ImageGenerationLatents latents = std::move(*latent_inputs_opt);
-    ImageGenerationEmbeds embeds   = prepare_video_generation_embeds(sd_ctx,
-                                                                     sd_vid_gen_params,
-                                                                     request,
-                                                                     latents);
-    LOG_INFO("generate_video %dx%dx%d",
-             request.width,
-             request.height,
-             request.frames);
+
+    ImageGenerationEmbeds embeds = prepare_video_generation_embeds(sd_ctx,
+                                                                   sd_vid_gen_params,
+                                                                   request,
+                                                                   latents);
+    if (latent_upscale_enabled) {
+        LOG_INFO("generate_video %dx%dx%d -> LTX latent spatial upscale",
+                 request.width,
+                 request.height,
+                 request.frames);
+    } else {
+        LOG_INFO("generate_video %dx%dx%d",
+                 request.width,
+                 request.height,
+                 request.frames);
+    }
 
     int64_t latent_start = ggml_time_ms();
     int W                = request.width / request.vae_scale_factor;
@@ -5170,7 +5676,8 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                                            request.vace_strength,
                                                            latents.audio_length,
                                                            static_cast<float>(request.fps),
-                                                           request.cache_params);
+                                                           request.cache_params,
+                                                           latents.video_positions);
         int64_t sampling_end          = ggml_time_ms();
         if (x_t_sampled.empty()) {
             LOG_ERROR("sampling(high noise) failed after %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
@@ -5220,13 +5727,14 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                                         request.vace_strength,
                                                         latents.audio_length,
                                                         static_cast<float>(request.fps),
-                                                        request.cache_params);
+                                                        request.cache_params,
+                                                        latents.video_positions);
 
     int64_t sampling_end = ggml_time_ms();
-    if (sd_ctx->sd->free_params_immediately) {
-        sd_ctx->sd->diffusion_model->free_params_buffer();
-    }
     if (final_latent.empty()) {
+        if (sd_ctx->sd->free_params_immediately) {
+            sd_ctx->sd->diffusion_model->free_params_buffer();
+        }
         LOG_ERROR("sampling failed after %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
         if (sd_ctx->sd->offload_config.mode == SD_OFFLOAD_LAYER_STREAMING &&
             sd_ctx->sd->diffusion_model &&
@@ -5237,20 +5745,145 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
     }
     LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
 
-    // Smart offload: move diffusion to CPU if VRAM is tight for VAE decode
-    if (!sd_ctx->sd->free_params_immediately &&
-        sd_ctx->sd->should_offload_diffusion_for_vae(request.width, request.height)) {
-        sd_ctx->sd->offload_diffusion_model();
+    if (latent_upscale_enabled) {
+        int64_t upscale_start             = ggml_time_ms();
+        sd::Tensor<float> upscaled_latent = upscale_ltx_spatial_video_latent(sd_ctx,
+                                                                             request.hires.model_path,
+                                                                             final_latent,
+                                                                             latents.audio_length);
+        int64_t upscale_end               = ggml_time_ms();
+        if (upscaled_latent.empty()) {
+            if (sd_ctx->sd->free_params_immediately) {
+                sd_ctx->sd->diffusion_model->free_params_buffer();
+            }
+            return false;
+        }
+        LOG_INFO("LTX latent spatial upscale completed, taking %.2fs",
+                 (upscale_end - upscale_start) * 1.0f / 1000);
+
+        x_t                  = std::move(upscaled_latent);
+        hires_request.width  = static_cast<int>(x_t.shape()[0]) * hires_request.vae_scale_factor;
+        hires_request.height = static_cast<int>(x_t.shape()[1]) * hires_request.vae_scale_factor;
+        if ((request.hires.target_width > 0 || request.hires.target_height > 0) &&
+            (request.hires.target_width != hires_request.width || request.hires.target_height != hires_request.height)) {
+            LOG_WARN("LTX latent spatial upsampler output is %dx%d; ignoring hires target %dx%d",
+                     hires_request.width,
+                     hires_request.height,
+                     request.hires.target_width,
+                     request.hires.target_height);
+        }
+        sd::Tensor<float> hires_denoise_mask;
+        sd::Tensor<float> hires_video_positions;
+        if (!apply_ltxv_refine_image_conditioning(sd_ctx,
+                                                  sd_vid_gen_params,
+                                                  hires_request,
+                                                  latents,
+                                                  &x_t,
+                                                  &hires_denoise_mask,
+                                                  &hires_video_positions)) {
+            if (sd_ctx->sd->free_params_immediately) {
+                sd_ctx->sd->diffusion_model->free_params_buffer();
+            }
+            return false;
+        }
+        noise = sd::Tensor<float>::randn_like(x_t, sd_ctx->sd->rng);
+
+        W                                   = hires_request.width / hires_request.vae_scale_factor;
+        H                                   = hires_request.height / hires_request.vae_scale_factor;
+        T                                   = static_cast<int>(x_t.shape()[2]);
+        sample_method_t hires_sample_method = plan.sample_method;
+        int hires_scheduler_steps           = 0;
+        std::vector<float> hires_sigma_sched =
+            make_hires_sigma_schedule(sd_ctx,
+                                      request.hires,
+                                      sd_vid_gen_params->sample_params,
+                                      hires_sample_method,
+                                      plan.sample_steps,
+                                      sd_ctx->sd->get_image_seq_len(hires_request.height, hires_request.width) * T,
+                                      &hires_scheduler_steps);
+        float hires_eta = resolve_eta(sd_ctx,
+                                      sd_vid_gen_params->sample_params.eta,
+                                      hires_sample_method);
+
+        LOG_DEBUG("sample(latent upscale) %dx%dx%d", W, H, T);
+        LOG_INFO("LTX latent spatial upscale refine: scheduler_steps=%d, denoising_strength=%.2f, sampler=%s, sigma_sched_size=%zu%s",
+                 hires_scheduler_steps,
+                 request.hires.denoising_strength,
+                 sampling_methods_str[hires_sample_method],
+                 hires_sigma_sched.size(),
+                 request.hires.custom_sigmas_count > 0 ? ", custom_sigmas=true" : "");
+
+        sampling_start = ggml_time_ms();
+        final_latent   = sd_ctx->sd->sample(sd_ctx->sd->diffusion_model,
+                                            true,
+                                            x_t,
+                                            std::move(noise),
+                                            embeds.cond,
+                                          hires_request.use_uncond ? embeds.uncond : SDCondition(),
+                                            embeds.img_cond,
+                                            embeds.id_cond,
+                                            sd::Tensor<float>(),
+                                            0.f,
+                                            sd_vid_gen_params->sample_params.guidance,
+                                            hires_eta,
+                                            sd_vid_gen_params->sample_params.shifted_timestep,
+                                            hires_sample_method,
+                                            sd_ctx->sd->is_flow_denoiser(),
+                                            plan.extra_sample_args,
+                                            hires_sigma_sched,
+                                            -1,
+                                            std::vector<sd::Tensor<float>>{},
+                                            false,
+                                            hires_denoise_mask,
+                                            sd::Tensor<float>(),
+                                            hires_request.vace_strength,
+                                            latents.audio_length,
+                                            static_cast<float>(hires_request.fps),
+                                            hires_request.cache_params,
+                                            hires_video_positions);
+        sampling_end   = ggml_time_ms();
+        if (sd_ctx->sd->free_params_immediately) {
+            sd_ctx->sd->diffusion_model->free_params_buffer();
+        }
+        if (final_latent.empty()) {
+            LOG_ERROR("sampling(latent upscale) failed after %.2fs",
+                      (sampling_end - sampling_start) * 1.0f / 1000);
+            return false;
+        }
+        LOG_INFO("sampling(latent upscale) completed, taking %.2fs",
+                 (sampling_end - sampling_start) * 1.0f / 1000);
+    } else {
+        // Smart offload: move diffusion to CPU if VRAM is tight for VAE decode.
+        // Only runs in the non-upscale path; the LTX latent-upscale block above
+        // already manages params lifecycle through its own sampler invocation.
+        if (!sd_ctx->sd->free_params_immediately &&
+            sd_ctx->sd->should_offload_diffusion_for_vae(request.width, request.height)) {
+            sd_ctx->sd->offload_diffusion_model();
+        }
+        if (sd_ctx->sd->free_params_immediately) {
+            sd_ctx->sd->diffusion_model->free_params_buffer();
+        }
     }
+
+    int64_t latent_end = ggml_time_ms();
+    LOG_INFO("generating latent video completed, taking %.2fs", (latent_end - latent_start) * 1.0f / 1000);
+
 
     sd_audio_t* generated_audio = nullptr;
     if (sd_version_is_ltxav(sd_ctx->sd->version) &&
         latents.audio_length > 0 &&
         sd_ctx->sd->audio_vae_model != nullptr) {
+        int64_t audio_latent_decode_start = ggml_time_ms();
+
         auto audio_latent = unpack_ltxav_audio_latent(final_latent,
                                                       latents.audio_length,
                                                       sd_ctx->sd->get_latent_channel());
         if (!audio_latent.empty()) {
+            LOG_DEBUG("decode audio latent %dx%dx%dx%d",
+                      (int)audio_latent.shape()[0],
+                      (int)audio_latent.shape()[1],
+                      (int)audio_latent.shape()[2],
+                      (int)audio_latent.shape()[3]);
             auto waveform = sd_ctx->sd->decode_ltx_audio_latent(audio_latent);
             if (!waveform.empty()) {
                 generated_audio = waveform_to_sd_audio(sd_ctx->sd, waveform);
@@ -5258,16 +5891,21 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                 LOG_WARN("LTX audio latent decode failed; continuing with silent video output");
             }
         }
+        int64_t audio_latent_decode_end = ggml_time_ms();
+        LOG_INFO("decoding audio latent completed, taking %.2fs", (audio_latent_decode_end - audio_latent_decode_start) * 1.0f / 1000);
+    }
+
+    if (latents.video_conditioning_frame_count > 0) {
+        int64_t target_frames = latents.video_target_frame_count > 0 ? latents.video_target_frame_count
+                                                                     : final_latent.shape()[2] - latents.video_conditioning_frame_count;
+        final_latent          = sd::ops::slice(final_latent, 2, 0, target_frames);
     }
 
     if (latents.ref_image_num > 0) {
         final_latent = sd::ops::slice(final_latent, 2, latents.ref_image_num, final_latent.shape()[2]);
     }
 
-    int64_t latent_end = ggml_time_ms();
-    LOG_INFO("generating latent video completed, taking %.2fs", (latent_end - latent_start) * 1.0f / 1000);
-
-    auto result = decode_video_outputs(sd_ctx, request, final_latent, num_frames_out);
+    auto result = decode_video_outputs(sd_ctx, latent_upscale_enabled ? hires_request : request, final_latent, num_frames_out);
     if (result == nullptr) {
         free_sd_audio(generated_audio);
         return false;

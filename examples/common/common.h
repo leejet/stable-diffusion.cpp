@@ -195,7 +195,8 @@ struct SDGenerationParams {
     int video_frames                     = 1;
     int fps                              = 16;
     float vace_strength                  = 1.f;
-    sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f};
+    sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
+    std::string extra_tiling_args;
 
     std::string pm_id_images_dir;
     std::string pm_id_embed_path;
@@ -213,6 +214,7 @@ struct SDGenerationParams {
     int hires_steps                = 0;
     float hires_denoising_strength = 0.7f;
     int hires_upscale_tile_size    = 128;
+    std::vector<float> hires_custom_sigmas;
 
     std::map<std::string, float> lora_map;
     std::map<std::string, float> high_noise_lora_map;
