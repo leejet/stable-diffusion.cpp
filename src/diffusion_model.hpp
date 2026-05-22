@@ -42,6 +42,11 @@ struct DiffusionParams {
     float frame_rate                                                   = 24.f;
     const sd::Tensor<float>* video_positions                           = nullptr;
     const std::vector<int>* skip_layers                                = nullptr;
+    // PuLID-Flux: precomputed (N=1, num_tokens=32, kv_dim=2048) identity
+    // embedding produced by runtime-scripts/pulid_extract_id.py. nullptr when
+    // PuLID is disabled. id_weight is per-job (typical 0.7-1.2; default 1.0).
+    const sd::Tensor<float>* pulid_id                                  = nullptr;
+    float pulid_id_weight                                              = 1.0f;
 };
 
 template <typename T>
@@ -274,7 +279,9 @@ struct FluxModel : public DiffusionModel {
                             tensor_or_empty(diffusion_params.guidance),
                             diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
                             diffusion_params.increase_ref_index,
-                            diffusion_params.skip_layers ? *diffusion_params.skip_layers : empty_skip_layers);
+                            diffusion_params.skip_layers ? *diffusion_params.skip_layers : empty_skip_layers,
+                            tensor_or_empty(diffusion_params.pulid_id),
+                            diffusion_params.pulid_id_weight);
     }
 };
 

@@ -186,6 +186,16 @@ typedef struct {
     const sd_embedding_t* embeddings;
     uint32_t embedding_count;
     const char* photo_maker_path;
+    /**
+     * Path to pulid_flux_v0.9.1.safetensors (the PuLID identity-injection
+     * cross-attention weights). When set together with sd_img_gen_params_t.
+     * pulid_params.id_embedding_path, the Flux diffusion model performs PuLID
+     * cross-attention injection during the denoise loop. Loaded once with
+     * the model; the embedding is per-generation. Currently only meaningful
+     * for Flux (depth=19 double, 38 single blocks); silently ignored for
+     * other model versions.
+     */
+    const char* pulid_weights_path;
     const char* tensor_type_rules;
     bool vae_decode_only;
     bool free_params_immediately;
@@ -265,6 +275,29 @@ typedef struct {
     const char* id_embed_path;
     float style_strength;
 } sd_pm_params_t;  // photo maker
+
+/**
+ * PuLID-Flux identity preservation params.
+ *
+ * Unlike PhotoMaker (which extracts the ID embedding inside the inference
+ * process from a directory of images), PuLID's ID extraction is a heavy
+ * Python-only stack (insightface ArcFace + EVA-CLIP-L + IDFormer). To stay
+ * cross-vendor in C++/Vulkan, sd.cpp consumes a precomputed binary file
+ * produced by an external tool (runtime-scripts/pulid_extract_id.py in the
+ * Cloudhands client tree).
+ *
+ * Binary format (.pulidembd):
+ *   offset 0   : magic "PULIDV01"      (8 bytes ASCII)
+ *   offset 8   : num_tokens (uint32 LE)
+ *   offset 12  : token_dim (uint32 LE)
+ *   offset 16  : dtype (uint8): 0=fp16, 1=bf16, 2=fp32
+ *   offset 17  : reserved zeros        (15 bytes; header = 32 bytes total)
+ *   offset 32  : tokens, row-major LE  (num_tokens * token_dim values)
+ */
+typedef struct {
+    const char* id_embedding_path;  // path to .pulidembd file produced by pulid_extract_id.py
+    float id_weight;                // strength of the ID injection; typical 0.7-1.2, default 1.0
+} sd_pulid_params_t;
 
 enum sd_cache_mode_t {
     SD_CACHE_DISABLED = 0,
@@ -358,6 +391,7 @@ typedef struct {
     sd_image_t control_image;
     float control_strength;
     sd_pm_params_t pm_params;
+    sd_pulid_params_t pulid_params;
     sd_tiling_params_t vae_tiling_params;
     sd_cache_params_t cache;
     sd_hires_params_t hires;
