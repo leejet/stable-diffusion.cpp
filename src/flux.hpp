@@ -945,6 +945,21 @@ namespace Flux {
                                                                     ggml_tensor* txt_img_mask,
                                                                     std::vector<ModulationOut>& ds_img_mods,
                                                                     std::vector<ModulationOut>& ds_txt_mods) {
+            // share_modulation models (Flux 2 / Flux 2 Klein) do NOT instantiate
+            // local img_mod/txt_mod blocks inside DoubleStreamBlock — those fall
+            // back to nullptr inside block->forward when the mod vectors are empty,
+            // segfaulting. The layer-streaming path constructs empty mod vectors
+            // per iteration; the coarse path threads precomputed mods from
+            // forward_input_stage. Compute the shared mods on demand here so both
+            // paths produce a valid block input. Modulation is a single Linear over
+            // `vec` — cheap enough to recompute per block (sub-millisecond total
+            // for typical block counts).
+            if (params.share_modulation && (ds_img_mods.empty() || ds_txt_mods.empty())) {
+                auto double_stream_modulation_img = std::dynamic_pointer_cast<Modulation>(blocks["double_stream_modulation_img"]);
+                auto double_stream_modulation_txt = std::dynamic_pointer_cast<Modulation>(blocks["double_stream_modulation_txt"]);
+                ds_img_mods                       = double_stream_modulation_img->forward(ctx, vec);
+                ds_txt_mods                       = double_stream_modulation_txt->forward(ctx, vec);
+            }
             auto block = std::dynamic_pointer_cast<DoubleStreamBlock>(blocks["double_blocks." + std::to_string(block_idx)]);
             auto img_txt = block->forward(ctx, img, txt, vec, pe, txt_img_mask, ds_img_mods, ds_txt_mods);
             return img_txt;
@@ -957,6 +972,11 @@ namespace Flux {
                                            ggml_tensor* pe,
                                            ggml_tensor* txt_img_mask,
                                            std::vector<ModulationOut>& ss_mods) {
+            // See forward_double_block above — same share_modulation guard.
+            if (params.share_modulation && ss_mods.empty()) {
+                auto single_stream_modulation = std::dynamic_pointer_cast<Modulation>(blocks["single_stream_modulation"]);
+                ss_mods                       = single_stream_modulation->forward(ctx, vec);
+            }
             auto block = std::dynamic_pointer_cast<SingleStreamBlock>(blocks["single_blocks." + std::to_string(block_idx)]);
             return block->forward(ctx, txt_img, vec, pe, txt_img_mask, ss_mods);
         }
