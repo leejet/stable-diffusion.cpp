@@ -35,6 +35,7 @@ static bool build_openai_generation_request(const httplib::Request& req,
     std::string size          = j.value("size", "");
     std::string output_format = j.value("output_format", "png");
     int output_compression    = j.value("output_compression", 100);
+    int steps                 = j.value("steps", -1);
     int width                 = runtime.default_gen_params->width > 0 ? runtime.default_gen_params->width : 512;
     int height                = runtime.default_gen_params->width > 0 ? runtime.default_gen_params->height : 512;
     if (!size.empty()) {
@@ -62,6 +63,9 @@ static bool build_openai_generation_request(const httplib::Request& req,
     request.gen_params.width       = width;
     request.gen_params.height      = height;
     request.gen_params.batch_count = n;
+    if (steps > 0) {
+        request.gen_params.sample_params.sample_steps = steps;
+    }
 
     std::string sd_cpp_extra_args_str = extract_and_remove_sd_cpp_extra_args(request.gen_params.prompt);
     if (!sd_cpp_extra_args_str.empty() && !request.gen_params.from_json_str(sd_cpp_extra_args_str)) {
