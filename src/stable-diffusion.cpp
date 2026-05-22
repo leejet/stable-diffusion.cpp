@@ -759,7 +759,7 @@ public:
                     LOG_INFO("using TAE for preview");
                     preview_vae = create_tae();
                     preview_vae->set_max_graph_vram_bytes(max_graph_vram_bytes);
-                    get_param_tensors_p(first_stage_model, vae_mmap, "vae");
+                    get_param_tensors_p(preview_vae, vae_mmap, "tae");
                 }
             }
 
