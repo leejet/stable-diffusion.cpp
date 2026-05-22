@@ -1,0 +1,1582 @@
+#include "routes.h"
+
+static const char OPENAPI_YAML[] = R"OPENAPI(openapi: 3.1.0
+info:
+  title: stable-diffusion.cpp Server API
+  version: 1.0.0
+  description: |
+    HTTP APIs for the stable-diffusion.cpp server (`examples/server`).
+
+    Three API families are available:
+
+    - **OpenAI API** (`/v1/...`) — Compatible with OpenAI image endpoints
+    - **Stable Diffusion WebUI API** (`/sdapi/v1/...`) — Compatible with AUTOMATIC1111/WebUI endpoints
+    - **sdcpp Native API** (`/sdcpp/v1/...`) — Native async API with full parameter control
+
+    The sdcpp API is the native surface. Use it for async job submission, polling, and cancellation.
+
+    **`sd_cpp_extra_args` extension**: The OpenAI and sdapi compatibility endpoints support native
+    parameters embedded inside the `prompt` field:
+
+    ```
+    normal prompt text <sd_cpp_extra_args>{"sample_params":{"sample_steps":28}}</sd_cpp_extra_args>
+    ```
+
+    The embedded JSON follows the sdcpp API request schema.
+    Prompt-embedded `<lora:...>` tags are intentionally unsupported in all API families.
+  license:
+    name: MIT
+
+servers:
+  - url: http://127.0.0.1:1234
+    description: Default local server
+
+tags:
+  - name: OpenAI API
+    description: Compatibility API shaped like OpenAI image endpoints. Synchronous.
+  - name: Stable Diffusion WebUI API
+    description: Compatibility API shaped like AUTOMATIC1111/WebUI endpoints. Synchronous.
+  - name: sdcpp Native API
+    description: |
+      Native API for stable-diffusion.cpp. Asynchronous job model with full parameter control.
+      Submit a job with `POST /sdcpp/v1/img_gen` or `POST /sdcpp/v1/vid_gen`, then poll
+      `GET /sdcpp/v1/jobs/{id}` until the job completes.
+
+paths:
+
+  # -- OpenAI API ---------------------------------------------------------------
+
+  /v1/models:
+    get:
+      tags: [OpenAI API]
+      operationId: listModels
+      summary: List available models
+      responses:
+        "200":
+          description: Model list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenAIModelsResponse"
+
+  /v1/images/generations:
+    post:
+      tags: [OpenAI API]
+      operationId: createImage
+      summary: Generate images from a text prompt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenAIImageGenerationRequest"
+            example:
+              prompt: "a cat sitting on a chair"
+              n: 1
+              size: "1024x1024"
+              output_format: png
+      responses:
+        "200":
+          description: Generated images
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenAIImagesResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/images/edits:
+    post:
+      tags: [OpenAI API]
+      operationId: editImage
+      summary: Edit or inpaint images
+      description: Accepts multipart/form-data with image and optional mask uploads.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/OpenAIImageEditRequest"
+      responses:
+        "200":
+          description: Edited images
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenAIImagesResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # -- Stable Diffusion WebUI API -----------------------------------------------
+
+  /sdapi/v1/txt2img:
+    post:
+      tags: [Stable Diffusion WebUI API]
+      operationId: txt2img
+      summary: Text-to-image generation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Txt2ImgRequest"
+            example:
+              prompt: "a cat sitting on a chair"
+              negative_prompt: ""
+              width: 512
+              height: 512
+              steps: 20
+              cfg_scale: 7.0
+              seed: -1
+      responses:
+        "200":
+          description: Generated images
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SDAPIImagesResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /sdapi/v1/img2img:
+    post:
+      tags: [Stable Diffusion WebUI API]
+      operationId: img2img
+      summary: Image-to-image generation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Img2ImgRequest"
+      responses:
+        "200":
+          description: Generated images
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SDAPIImagesResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /sdapi/v1/loras:
+    get:
+      tags: [Stable Diffusion WebUI API]
+      operationId: listLoras
+      summary: List available LoRA models
+      responses:
+        "200":
+          description: LoRA list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SDAPILoraEntry"
+
+  /sdapi/v1/upscalers:
+    get:
+      tags: [Stable Diffusion WebUI API]
+      operationId: listUpscalers
+      summary: List available upscalers
+      description: |
+        Returns built-in upscalers (`None`, `Lanczos`, `Nearest`) plus any model-backed
+        upscalers scanned from the top level of `--hires-upscalers-dir`.
+      responses:
+        "200":
+          description: Upscaler list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SDAPIUpscalerEntry"
+
+  /sdapi/v1/latent-upscale-modes:
+    get:
+      tags: [Stable Diffusion WebUI API]
+      operationId: listLatentUpscaleModes
+      summary: List latent upscale modes
+      description: |
+        Returns built-in latent upscale modes: `Latent`, `Latent (nearest)`,
+        `Latent (nearest-exact)`, `Latent (antialiased)`, `Latent (bicubic)`,
+        `Latent (bicubic antialiased)`.
+      responses:
+        "200":
+          description: Latent upscale mode list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                  example:
+                    name: "Latent (bicubic)"
+
+  /sdapi/v1/samplers:
+    get:
+      tags: [Stable Diffusion WebUI API]
+      operationId: listSamplers
+      summary: List available samplers
+      responses:
+        "200":
+          description: Sampler list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SDAPISamplerEntry"
+
+  /sdapi/v1/schedulers:
+    get:
+      tags: [Stable Diffusion WebUI API]
+      operationId: listSchedulers
+      summary: List available schedulers
+      responses:
+        "200":
+          description: Scheduler list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SDAPISchedulerEntry"
+
+  /sdapi/v1/sd-models:
+    get:
+      tags: [Stable Diffusion WebUI API]
+      operationId: listSDModels
+      summary: List loaded models
+      responses:
+        "200":
+          description: Model list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SDAPIModelEntry"
+
+  /sdapi/v1/options:
+    get:
+      tags: [Stable Diffusion WebUI API]
+      operationId: getOptions
+      summary: Get current global options
+      responses:
+        "200":
+          description: Options
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SDAPIOptions"
+
+  # -- sdcpp Native API ---------------------------------------------------------
+
+  /sdcpp/v1/capabilities:
+    get:
+      tags: [sdcpp Native API]
+      operationId: getCapabilities
+      summary: Get server capabilities and defaults
+      description: |
+        Returns frontend-friendly capability metadata including loaded model info,
+        supported generation modes, defaults, output formats, feature flags,
+        available samplers, schedulers, LoRAs, upscalers, and queue limits.
+
+        The mode-aware fields (`defaults_by_mode`, `output_formats_by_mode`,
+        `features_by_mode`) are the primary interface. Top-level `defaults`,
+        `output_formats`, and `features` are deprecated mirrors of `current_mode`.
+      responses:
+        "200":
+          description: Capabilities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapabilitiesResponse"
+
+  /sdcpp/v1/img_gen:
+    post:
+      tags: [sdcpp Native API]
+      operationId: submitImgGen
+      summary: Submit an async image generation job
+      description: |
+        Submits a new image generation job to the queue. Returns `202 Accepted`
+        immediately with a `poll_url`. Poll `GET /sdcpp/v1/jobs/{id}` to check
+        status and retrieve the result when complete.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImgGenRequest"
+            example:
+              prompt: "a cat sitting on a chair"
+              negative_prompt: ""
+              width: 1024
+              height: 1024
+              seed: -1
+              batch_count: 1
+              sample_params:
+                scheduler: discrete
+                sample_method: euler_a
+                sample_steps: 28
+                guidance:
+                  txt_cfg: 7.0
+                  distilled_guidance: 3.5
+              output_format: png
+              output_compression: 100
+      responses:
+        "202":
+          description: Job accepted and queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobSubmissionResponse"
+              example:
+                id: job_01HTXYZABC
+                kind: img_gen
+                status: queued
+                created: 1775401200
+                poll_url: /sdcpp/v1/jobs/job_01HTXYZABC
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/QueueFull"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /sdcpp/v1/vid_gen:
+    post:
+      tags: [sdcpp Native API]
+      operationId: submitVidGen
+      summary: Submit an async video generation job
+      description: |
+        Submits a new video generation job to the queue. Returns `202 Accepted`
+        immediately with a `poll_url`. Poll `GET /sdcpp/v1/jobs/{id}` to check
+        status and retrieve the result when complete.
+
+        The effective frame count is normalized to the largest `4n+1` value not
+        exceeding `video_frames` (e.g. 34 -> 33, 32 -> 29). The completed result
+        includes the actual `frame_count`.
+
+        `output_format: webm` requires the server to be built with WebM support.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VidGenRequest"
+            example:
+              prompt: "a cat walking through a rainy alley"
+              negative_prompt: ""
+              width: 832
+              height: 480
+              seed: -1
+              video_frames: 33
+              fps: 16
+              output_format: webm
+              output_compression: 100
+      responses:
+        "202":
+          description: Job accepted and queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobSubmissionResponse"
+              example:
+                id: job_01HTXYZVID
+                kind: vid_gen
+                status: queued
+                created: 1775401200
+                poll_url: /sdcpp/v1/jobs/job_01HTXYZVID
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/QueueFull"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /sdcpp/v1/jobs/{id}:
+    get:
+      tags: [sdcpp Native API]
+      operationId: getJob
+      summary: Get job status and result
+      description: |
+        Returns the current status of a job. Poll this endpoint after submitting a job.
+
+        Status lifecycle: `queued` -> `generating` -> `completed` | `failed` | `cancelled`
+
+        - When `completed`, the `result` field contains the generated images or video.
+        - When `failed` or `cancelled`, the `error` field contains details.
+        - Completed/failed jobs are retained for 600 seconds (TTL), then return `410 Gone`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Job ID returned from the submission endpoint
+          example: job_01HTXYZABC
+      responses:
+        "200":
+          description: Job status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobStatus"
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "410":
+          description: Job expired (TTL elapsed after completion/failure)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /sdcpp/v1/jobs/{id}/cancel:
+    post:
+      tags: [sdcpp Native API]
+      operationId: cancelJob
+      summary: Cancel a queued job
+      description: |
+        Attempts to cancel a job. Only `queued` jobs can be cancelled;
+        jobs that are actively `generating` cannot be interrupted.
+        Returns the final job state on success.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Job ID to cancel
+          example: job_01HTXYZABC
+      responses:
+        "200":
+          description: Job cancelled (or already in a terminal state)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobStatus"
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Job is currently generating and cannot be cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "410":
+          description: Job expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+
+    # -- Shared low-level schemas ------------------------------------------------
+
+    SLGParams:
+      type: object
+      description: Skip-layer guidance parameters
+      properties:
+        layers:
+          type: array
+          items:
+            type: integer
+          description: Transformer layers to apply skip-layer guidance
+          default: [7, 8, 9]
+        layer_start:
+          type: number
+          description: Start fraction of the denoising process for SLG
+          default: 0.01
+        layer_end:
+          type: number
+          description: End fraction of the denoising process for SLG
+          default: 0.2
+        scale:
+          type: number
+          description: SLG scale; 0.0 disables SLG
+          default: 0.0
+
+    GuidanceParams:
+      type: object
+      description: Guidance scale parameters
+      properties:
+        txt_cfg:
+          type: number
+          description: Text CFG scale
+          default: 7.0
+        img_cfg:
+          type:
+            - number
+            - "null"
+          description: Image CFG scale; null uses backend default
+          default: null
+        distilled_guidance:
+          type: number
+          description: Distilled CFG scale for flow-matching models (e.g. FLUX)
+          default: 3.5
+        slg:
+          $ref: "#/components/schemas/SLGParams"
+
+    SampleParams:
+      type: object
+      description: Sampling parameters
+      properties:
+        scheduler:
+          type: string
+          description: Noise scheduler name; omit for backend default
+          example: discrete
+        sample_method:
+          type: string
+          description: Sampling method name; omit for backend default
+          example: euler_a
+        sample_steps:
+          type: integer
+          description: Number of denoising steps
+          default: 28
+        eta:
+          type:
+            - number
+            - "null"
+          description: Eta for ancestral samplers; null uses backend default
+          default: null
+        shifted_timestep:
+          type: integer
+          description: Shifted timestep offset
+          default: 0
+        custom_sigmas:
+          type: array
+          items:
+            type: number
+          description: Custom sigma schedule override; empty uses auto-generated schedule
+          default: []
+        flow_shift:
+          type:
+            - number
+            - "null"
+          description: Flow-matching shift factor; null uses backend default
+          default: null
+        guidance:
+          $ref: "#/components/schemas/GuidanceParams"
+
+    VAETilingParams:
+      type: object
+      description: VAE tiling configuration for memory-efficient decoding of large images/videos
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        temporal_tiling:
+          type: boolean
+          description: Enable temporal tiling for video VAE decoders
+          default: false
+        tile_size_x:
+          type: integer
+          description: Tile width in pixels; 0 for auto
+          default: 0
+        tile_size_y:
+          type: integer
+          description: Tile height in pixels; 0 for auto
+          default: 0
+        target_overlap:
+          type: number
+          description: Fractional overlap between adjacent tiles
+          default: 0.5
+        rel_size_x:
+          type: number
+          description: Relative tile size in x dimension
+          default: 0.0
+        rel_size_y:
+          type: number
+          description: Relative tile size in y dimension
+          default: 0.0
+        extra_tiling_args:
+          type: string
+          description: |
+            Key=value list for additional tiling args.
+            For LTX video VAE: `temporal_tile_frames` (default 4), `temporal_tile_overlap` (default 1).
+          default: ""
+
+    LoraEntry:
+      type: object
+      description: LoRA model specification
+      required: [path]
+      properties:
+        path:
+          type: string
+          description: LoRA path relative to the configured LoRA directory
+          example: my_style.safetensors
+        multiplier:
+          type: number
+          description: LoRA weight multiplier
+          default: 1.0
+        is_high_noise:
+          type: boolean
+          description: |
+            For `vid_gen` only -- applies this LoRA exclusively to the high-noise stage
+            (dual-stage models such as Wan).
+          default: false
+
+    HiresParams:
+      type: object
+      description: High-resolution fix parameters for a second upscale-and-denoise pass
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        upscaler:
+          type: string
+          description: |
+            Upscaler to use. Built-in values: `None`, `Lanczos`, `Nearest`,
+            `Latent`, `Latent (nearest)`, `Latent (nearest-exact)`,
+            `Latent (antialiased)`, `Latent (bicubic)`, `Latent (bicubic antialiased)`.
+            Use an `upscalers[].name` value from `GET /sdcpp/v1/capabilities` for
+            model-backed upscalers (resolved from `--hires-upscalers-dir`).
+          default: Latent
+        scale:
+          type: number
+          description: Upscale factor when target_width and target_height are both 0
+          default: 2.0
+        target_width:
+          type: integer
+          description: Target width in pixels; 0 uses scale
+          default: 0
+        target_height:
+          type: integer
+          description: Target height in pixels; 0 uses scale
+          default: 0
+        steps:
+          type: integer
+          description: Second-pass sample steps; 0 reuses the first-pass step count
+          default: 0
+        denoising_strength:
+          type: number
+          description: Denoising strength for the second pass (0.0-1.0)
+          default: 0.7
+        custom_sigmas:
+          type: array
+          items:
+            type: number
+          description: |
+            Custom sigma schedule for the second pass. When present, overrides the
+            schedule that would otherwise be trimmed by `denoising_strength`.
+          default: []
+        upscale_tile_size:
+          type: integer
+          description: Tile size for model-backed upscalers; 0 disables tiling
+          default: 128
+
+    # -- sdcpp Native API schemas ------------------------------------------------
+
+    ImgGenRequest:
+      type: object
+      description: Request body for `POST /sdcpp/v1/img_gen`
+      required: [prompt]
+      properties:
+        prompt:
+          type: string
+          description: Text prompt
+        negative_prompt:
+          type: string
+          description: Negative text prompt
+          default: ""
+        clip_skip:
+          type: integer
+          description: CLIP layer skip count; -1 uses backend default
+          default: -1
+        width:
+          type: integer
+          description: Output image width in pixels
+          default: 512
+        height:
+          type: integer
+          description: Output image height in pixels
+          default: 512
+        strength:
+          type: number
+          description: Denoising strength for img2img (0.0-1.0); ignored when no init_image
+          default: 0.75
+        seed:
+          type: integer
+          description: Random seed; -1 for a random seed each run
+          default: -1
+        batch_count:
+          type: integer
+          description: Number of images to generate
+          default: 1
+        auto_resize_ref_image:
+          type: boolean
+          description: Automatically resize reference images to match the generation size
+          default: true
+        increase_ref_index:
+          type: boolean
+          description: Increment reference image index each denoising step
+          default: false
+        control_strength:
+          type: number
+          description: ControlNet conditioning strength
+          default: 0.9
+        embed_image_metadata:
+          type: boolean
+          description: Embed generation parameters as PNG metadata chunks in the output
+          default: true
+        init_image:
+          type:
+            - string
+            - "null"
+          description: |
+            Init image as a raw base64 string or data URL (e.g. `data:image/png;base64,...`).
+            Must be 3-channel (RGB). When provided, `strength` controls denoising.
+          default: null
+        ref_images:
+          type: array
+          items:
+            type: string
+          description: |
+            Reference images for IP-Adapter-style conditioning. Each entry is a
+            raw base64 string or data URL (3-channel RGB).
+          default: []
+        mask_image:
+          type:
+            - string
+            - "null"
+          description: |
+            Inpainting mask as a raw base64 string or data URL (1-channel grayscale).
+            White areas are inpainted; black areas are preserved.
+          default: null
+        control_image:
+          type:
+            - string
+            - "null"
+          description: |
+            ControlNet conditioning image as a raw base64 string or data URL (3-channel RGB).
+          default: null
+        sample_params:
+          $ref: "#/components/schemas/SampleParams"
+        lora:
+          type: array
+          items:
+            $ref: "#/components/schemas/LoraEntry"
+          description: LoRA models to apply. Prompt-embedded `<lora:...>` tags are not supported.
+          default: []
+        hires:
+          $ref: "#/components/schemas/HiresParams"
+        vae_tiling_params:
+          $ref: "#/components/schemas/VAETilingParams"
+        cache_mode:
+          type: string
+          description: Attention cache mode for accelerated generation
+          enum: [disabled, easycache, ucache, dbcache, taylorseer, cache-dit, spectrum]
+          default: disabled
+        cache_option:
+          type: string
+          description: Mode-specific cache option string
+          default: ""
+        scm_mask:
+          type: string
+          description: SCM mask specification
+          default: ""
+        scm_policy_dynamic:
+          type: boolean
+          description: Use dynamic SCM policy
+          default: true
+        output_format:
+          type: string
+          description: Output image format
+          enum: [png, jpeg, webp]
+          default: png
+        output_compression:
+          type: integer
+          description: Output compression quality clamped to 0-100; 100 is maximum quality
+          default: 100
+
+    VidGenRequest:
+      type: object
+      description: Request body for `POST /sdcpp/v1/vid_gen`
+      required: [prompt]
+      properties:
+        prompt:
+          type: string
+          description: Text prompt
+        negative_prompt:
+          type: string
+          default: ""
+        clip_skip:
+          type: integer
+          description: CLIP layer skip count; -1 uses backend default
+          default: -1
+        width:
+          type: integer
+          description: Output video width in pixels
+          default: 512
+        height:
+          type: integer
+          description: Output video height in pixels
+          default: 512
+        strength:
+          type: number
+          description: Denoising strength for video-to-video (0.0-1.0)
+          default: 0.75
+        seed:
+          type: integer
+          description: Random seed; -1 for a random seed each run
+          default: -1
+        video_frames:
+          type: integer
+          description: |
+            Requested number of frames. Internally normalized to the largest `4n+1` value
+            not exceeding this count (e.g. 34 -> 33, 32 -> 29). The completed result
+            reports the actual `frame_count`.
+          default: 33
+        fps:
+          type: integer
+          description: Playback frame rate for the output container
+          default: 16
+        moe_boundary:
+          type: number
+          description: MoE boundary fraction for dual-stage models (e.g. Wan)
+          default: 0.875
+        vace_strength:
+          type: number
+          description: VACE conditioning strength
+          default: 1.0
+        init_image:
+          type:
+            - string
+            - "null"
+          description: Starting frame as a raw base64 string or data URL (3-channel RGB)
+          default: null
+        end_image:
+          type:
+            - string
+            - "null"
+          description: Ending frame as a raw base64 string or data URL (3-channel RGB)
+          default: null
+        control_frames:
+          type: array
+          items:
+            type: string
+          description: |
+            Conditioning frames as raw base64 strings or data URLs (3-channel RGB each).
+            Frame order matches conditioning order.
+          default: []
+        sample_params:
+          $ref: "#/components/schemas/SampleParams"
+        high_noise_sample_params:
+          allOf:
+            - $ref: "#/components/schemas/SampleParams"
+          description: |
+            Sampling parameters for the high-noise stage of dual-stage models (e.g. Wan).
+            May be omitted entirely; when omitted, backend defaults apply.
+        lora:
+          type: array
+          items:
+            $ref: "#/components/schemas/LoraEntry"
+          description: LoRA models to apply. Use `is_high_noise` to restrict to the high-noise stage.
+          default: []
+        vae_tiling_params:
+          $ref: "#/components/schemas/VAETilingParams"
+        cache_mode:
+          type: string
+          enum: [disabled, easycache, ucache, dbcache, taylorseer, cache-dit, spectrum]
+          default: disabled
+        cache_option:
+          type: string
+          default: ""
+        scm_mask:
+          type: string
+          default: ""
+        scm_policy_dynamic:
+          type: boolean
+          default: true
+        output_format:
+          type: string
+          description: |
+            Video container format.
+            - `webm` -- VP8/VP9 WebM (requires server built with WebM support; returns 400 otherwise)
+            - `webp` -- Animated WebP
+            - `avi` -- MJPG AVI
+          enum: [webm, webp, avi]
+          default: webm
+        output_compression:
+          type: integer
+          description: Container compression quality clamped to 0-100
+          default: 100
+
+    JobSubmissionResponse:
+      type: object
+      description: Response body for a successful job submission (202 Accepted)
+      properties:
+        id:
+          type: string
+          description: Unique job ID
+          example: job_01HTXYZABC
+        kind:
+          type: string
+          description: Job type
+          enum: [img_gen, vid_gen]
+        status:
+          type: string
+          description: Initial status (always `queued` on submission)
+          enum: [queued]
+        created:
+          type: integer
+          description: Unix timestamp of job creation
+          example: 1775401200
+        poll_url:
+          type: string
+          description: URL to poll for job status
+          example: /sdcpp/v1/jobs/job_01HTXYZABC
+
+    ImgGenResult:
+      type: object
+      description: Result payload for completed img_gen jobs
+      properties:
+        output_format:
+          type: string
+          description: Actual output format used
+          enum: [png, jpeg, webp]
+        images:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+                description: Image index within the batch
+              b64_json:
+                type: string
+                description: Base64-encoded image bytes
+
+    VidGenResult:
+      type: object
+      description: Result payload for completed vid_gen jobs
+      properties:
+        output_format:
+          type: string
+          description: Container format used
+          enum: [webm, webp, avi]
+        mime_type:
+          type: string
+          description: MIME type of the container file
+          example: video/webm
+        fps:
+          type: integer
+          description: Effective playback FPS echoed from the request
+        frame_count:
+          type: integer
+          description: Actual number of frames encoded in the container
+        b64_json:
+          type: string
+          description: Base64-encoded container file bytes
+
+    JobError:
+      type: object
+      description: Error details for failed or cancelled jobs
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code
+          example: generation_failed
+        message:
+          type: string
+          description: Human-readable error message
+          example: "generate_image returned empty results"
+
+    JobStatus:
+      type: object
+      description: Full job status object returned by GET /sdcpp/v1/jobs/{id}
+      properties:
+        id:
+          type: string
+          description: Unique job ID
+          example: job_01HTXYZABC
+        kind:
+          type: string
+          enum: [img_gen, vid_gen]
+        status:
+          type: string
+          enum: [queued, generating, completed, failed, cancelled]
+        created:
+          type: integer
+          description: Unix timestamp of job creation
+        started:
+          type:
+            - integer
+            - "null"
+          description: Unix timestamp when generation started; null if not yet started
+        completed:
+          type:
+            - integer
+            - "null"
+          description: Unix timestamp when the job finished; null if still in progress
+        queue_position:
+          type: integer
+          description: Position in the pending queue; 0 when generating or finished
+        result:
+          description: Result payload when status is `completed`; otherwise null
+          oneOf:
+            - $ref: "#/components/schemas/ImgGenResult"
+            - $ref: "#/components/schemas/VidGenResult"
+            - type: "null"
+        error:
+          description: Error details when status is `failed` or `cancelled`; otherwise null
+          oneOf:
+            - $ref: "#/components/schemas/JobError"
+            - type: "null"
+
+    CapabilitiesResponse:
+      type: object
+      description: Server capability metadata returned by GET /sdcpp/v1/capabilities
+      properties:
+        model:
+          type: object
+          properties:
+            name:
+              type: string
+              description: Model filename
+            stem:
+              type: string
+              description: Model filename without extension
+            path:
+              type: string
+              description: Full absolute model path
+        current_mode:
+          type: string
+          description: Currently active generation mode
+          enum: [img_gen, vid_gen, ""]
+        supported_modes:
+          type: array
+          items:
+            type: string
+          description: All supported generation modes for this server instance
+          example: [img_gen]
+        defaults:
+          type: object
+          description: "Deprecated: mirrors defaults_by_mode[current_mode]"
+        defaults_by_mode:
+          type: object
+          description: Default generation parameters keyed by mode (img_gen, vid_gen)
+        output_formats:
+          type: array
+          items:
+            type: string
+          description: "Deprecated: mirrors output_formats_by_mode[current_mode]"
+        output_formats_by_mode:
+          type: object
+          description: Available output formats keyed by mode
+          example:
+            img_gen: [png, jpeg, webp]
+            vid_gen: [avi, webp]
+        features:
+          type: object
+          description: "Deprecated: mirrors features_by_mode[current_mode]"
+        features_by_mode:
+          type: object
+          description: |
+            Feature availability flags keyed by mode.
+
+            img_gen flags: init_image, mask_image, control_image, ref_images, lora,
+            vae_tiling, hires, cache, cancel_queued, cancel_generating.
+
+            vid_gen flags: init_image, end_image, control_frames, high_noise_sample_params,
+            lora, vae_tiling, cache, cancel_queued, cancel_generating.
+        samplers:
+          type: array
+          items:
+            type: string
+          description: Available sampling method names
+        schedulers:
+          type: array
+          items:
+            type: string
+          description: Available scheduler names
+        loras:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                description: Display name derived from file stem
+              path:
+                type: string
+                description: Relative path under the configured LoRA directory
+          description: Available LoRA models
+        upscalers:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                description: |
+                  Upscaler name. Use this value in `hires.upscaler`.
+                  Built-in: None, Lanczos, Nearest, Latent, Latent (nearest),
+                  Latent (nearest-exact), Latent (antialiased), Latent (bicubic),
+                  Latent (bicubic antialiased). Model-backed entries follow.
+          description: Available upscalers (built-in and model-backed)
+        limits:
+          type: object
+          properties:
+            min_width:
+              type: integer
+              example: 64
+            max_width:
+              type: integer
+              example: 4096
+            min_height:
+              type: integer
+              example: 64
+            max_height:
+              type: integer
+              example: 4096
+            max_batch_count:
+              type: integer
+              example: 8
+            max_queue_size:
+              type: integer
+              example: 64
+
+    # -- OpenAI API schemas -------------------------------------------------------
+
+    OpenAIImageGenerationRequest:
+      type: object
+      required: [prompt]
+      description: Request body for POST /v1/images/generations
+      properties:
+        prompt:
+          type: string
+          description: |
+            Text prompt. May embed native sdcpp parameters using the
+            `<sd_cpp_extra_args>{...}</sd_cpp_extra_args>` syntax.
+        n:
+          type: integer
+          description: Number of images to generate
+          default: 1
+        size:
+          type: string
+          description: Image dimensions in WIDTHxHEIGHT format
+          example: "1024x1024"
+        output_format:
+          type: string
+          description: Output image format
+          enum: [png, jpeg, webp]
+          default: png
+        output_compression:
+          type: integer
+          description: Output compression quality clamped to 0-100
+          default: 100
+
+    OpenAIImageEditRequest:
+      type: object
+      required: [prompt]
+      description: Multipart form fields for POST /v1/images/edits
+      properties:
+        prompt:
+          type: string
+          description: Text prompt (may embed sd_cpp_extra_args)
+        image:
+          type: string
+          format: binary
+          description: Single image upload (legacy field; image[] is preferred for multi-image)
+        mask:
+          type: string
+          format: binary
+          description: Optional inpainting mask image (1-channel grayscale)
+        n:
+          type: integer
+          description: Number of output images
+          default: 1
+        size:
+          type: string
+          description: Image dimensions in WIDTHxHEIGHT format
+          example: "1024x1024"
+        output_format:
+          type: string
+          enum: [png, jpeg]
+          default: png
+        output_compression:
+          type: integer
+          description: Output compression quality clamped to 0-100
+          default: 100
+
+    OpenAIImagesResponse:
+      type: object
+      description: Response from /v1/images/generations and /v1/images/edits
+      properties:
+        created:
+          type: integer
+          description: Unix timestamp of the response
+        output_format:
+          type: string
+          description: Actual output format used
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              b64_json:
+                type: string
+                description: Base64-encoded image bytes
+
+    OpenAIModelsResponse:
+      type: object
+      description: Response from GET /v1/models
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                description: Model identifier
+                example: sd-cpp-local
+              object:
+                type: string
+                example: model
+              owned_by:
+                type: string
+                example: local
+
+    # -- Stable Diffusion WebUI API schemas ----------------------------------------
+
+    SDAPILoraRef:
+      type: object
+      description: LoRA reference used in sdapi generation requests
+      properties:
+        name:
+          type: string
+          description: LoRA name from GET /sdapi/v1/loras
+        multiplier:
+          type: number
+          description: LoRA weight multiplier
+          default: 1.0
+
+    Txt2ImgRequest:
+      type: object
+      required: [prompt]
+      description: Request body for POST /sdapi/v1/txt2img
+      properties:
+        prompt:
+          type: string
+          description: Text prompt (may embed sd_cpp_extra_args)
+        negative_prompt:
+          type: string
+          default: ""
+        width:
+          type: integer
+          default: 512
+        height:
+          type: integer
+          default: 512
+        steps:
+          type: integer
+          description: Number of sampling steps
+          default: 20
+        cfg_scale:
+          type: number
+          description: Text CFG scale
+          default: 7.0
+        seed:
+          type: integer
+          description: Random seed; -1 for random
+          default: -1
+        batch_size:
+          type: integer
+          description: Number of images to generate
+          default: 1
+        clip_skip:
+          type: integer
+          description: CLIP layer skip count
+        sampler_name:
+          type: string
+          description: Sampler name (WebUI-compatible name from GET /sdapi/v1/samplers)
+        scheduler:
+          type: string
+          description: Scheduler name (from GET /sdapi/v1/schedulers)
+        lora:
+          type: array
+          items:
+            $ref: "#/components/schemas/SDAPILoraRef"
+          description: Structured LoRA list. Prompt-embedded <lora:...> tags are not supported.
+        extra_images:
+          type: array
+          items:
+            type: string
+          description: Additional reference images as base64 strings or data URLs
+        enable_hr:
+          type: boolean
+          description: Enable highres fix
+          default: false
+        hr_upscaler:
+          type: string
+          description: |
+            Highres upscaler. `Lanczos`, `Nearest`, a latent mode such as
+            `Latent (nearest-exact)`, or an upscaler model name from GET /sdapi/v1/upscalers.
+        hr_scale:
+          type: number
+          description: Highres scale factor; used when hr_resize_x and hr_resize_y are both 0
+          default: 2.0
+        hr_resize_x:
+          type: integer
+          description: Highres target width; 0 uses hr_scale
+          default: 0
+        hr_resize_y:
+          type: integer
+          description: Highres target height; 0 uses hr_scale
+          default: 0
+        hr_steps:
+          type: integer
+          description: Highres second-pass sample steps; 0 reuses steps
+          default: 0
+        denoising_strength:
+          type: number
+          description: Highres denoising strength for txt2img
+          default: 0.7
+
+    Img2ImgRequest:
+      allOf:
+        - $ref: "#/components/schemas/Txt2ImgRequest"
+        - type: object
+          description: Request body for POST /sdapi/v1/img2img (extends Txt2ImgRequest)
+          properties:
+            init_images:
+              type: array
+              items:
+                type: string
+              description: Source images as base64 strings or data URLs
+            mask:
+              type:
+                - string
+                - "null"
+              description: Inpainting mask as base64 string or data URL
+            inpainting_mask_invert:
+              description: Invert the mask (0/false = normal, 1/true = inverted)
+              oneOf:
+                - type: integer
+                - type: boolean
+              default: 0
+            denoising_strength:
+              type: number
+              description: Image-to-image denoising strength (0.0-1.0)
+              default: 0.75
+
+    SDAPIImagesResponse:
+      type: object
+      description: Response from /sdapi/v1/txt2img and /sdapi/v1/img2img
+      properties:
+        images:
+          type: array
+          items:
+            type: string
+          description: Base64-encoded PNG images
+        parameters:
+          type: object
+          description: Echo of the parsed outer request body
+        info:
+          type: string
+          description: Currently always an empty string
+
+    SDAPILoraEntry:
+      type: object
+      description: LoRA model entry from GET /sdapi/v1/loras
+      properties:
+        name:
+          type: string
+          description: Display name derived from the file stem
+        path:
+          type: string
+          description: Relative path under the configured LoRA directory
+
+    SDAPIUpscalerEntry:
+      type: object
+      description: Upscaler entry from GET /sdapi/v1/upscalers
+      properties:
+        name:
+          type: string
+          description: Built-in name or model stem
+        model_name:
+          type:
+            - string
+            - "null"
+          description: Model family label for model-backed upscalers; null for built-ins
+        model_path:
+          type:
+            - string
+            - "null"
+          description: Absolute model path for model-backed upscalers; null for built-ins
+        model_url:
+          type:
+            - string
+            - "null"
+          description: Currently always null
+        scale:
+          type: integer
+          description: Currently always 4
+
+    SDAPISamplerEntry:
+      type: object
+      description: Sampler entry from GET /sdapi/v1/samplers
+      properties:
+        name:
+          type: string
+        aliases:
+          type: array
+          items:
+            type: string
+          description: Currently contains only the sampler name itself
+        options:
+          type: object
+          description: Currently always an empty object
+
+    SDAPISchedulerEntry:
+      type: object
+      description: Scheduler entry from GET /sdapi/v1/schedulers
+      properties:
+        name:
+          type: string
+        label:
+          type: string
+          description: Same value as name
+
+    SDAPIModelEntry:
+      type: object
+      description: Model entry from GET /sdapi/v1/sd-models
+      properties:
+        title:
+          type: string
+          description: Model stem
+        model_name:
+          type: string
+          description: Same value as title
+        filename:
+          type: string
+          description: Model filename
+        hash:
+          type: string
+          description: Placeholder compatibility value
+        sha256:
+          type: string
+          description: Placeholder compatibility value
+        config:
+          type: "null"
+          description: Currently always null
+
+    SDAPIOptions:
+      type: object
+      description: Global options from GET /sdapi/v1/options
+      properties:
+        samples_format:
+          type: string
+          description: Currently fixed to png
+          example: png
+        sd_model_checkpoint:
+          type: string
+          description: Model stem of the currently loaded model
+
+    # -- Shared error schema ------------------------------------------------------
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error code or human-readable error message
+
+  responses:
+    BadRequest:
+      description: |
+        Bad request -- invalid parameters, unsupported generation mode, or malformed JSON.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+    QueueFull:
+      description: Job queue is full; retry later.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "job queue is full"
+
+    InternalServerError:
+      description: Unexpected server error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+)OPENAPI";
+
+static const std::string SWAGGER_HTML = R"HTML(<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>stable-diffusion.cpp API</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+  <style>
+    body { margin: 0; }
+    .topbar { display: none; }
+  </style>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" crossorigin></script>
+  <script>
+    window.onload = () => {
+      SwaggerUIBundle({
+        url: '/openapi.yaml',
+        dom_id: '#swagger-ui',
+        presets: [
+          SwaggerUIBundle.presets.apis,
+          SwaggerUIBundle.SwaggerUIStandalonePreset,
+        ],
+        layout: 'BaseLayout',
+        deepLinking: true,
+        defaultModelsExpandDepth: 1,
+        defaultModelExpandDepth: 1,
+        docExpansion: 'list',
+        filter: true,
+        persistAuthorization: true,
+      });
+    };
+  </script>
+</body>
+</html>
+)HTML";
+
+void register_docs_endpoints(httplib::Server& svr) {
+    svr.Get("/openapi.yaml", [](const httplib::Request&, httplib::Response& res) {
+        res.set_content(OPENAPI_YAML, "application/yaml");
+    });
+
+    svr.Get("/docs", [](const httplib::Request&, httplib::Response& res) {
+        res.set_content(SWAGGER_HTML, "text/html");
+    });
+}

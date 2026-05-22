@@ -9,3 +9,4 @@ void register_index_endpoints(httplib::Server& svr, const SDSvrParams& svr_param
 void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt);
 void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt);
 void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt);
+void register_docs_endpoints(httplib::Server& svr);

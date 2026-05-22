@@ -73,6 +73,7 @@ add_executable(${TARGET}
     routes_openai.cpp
     routes_sdapi.cpp
     routes_sdcpp.cpp
+    routes_docs.cpp
 )
 
 if(HAVE_FRONTEND_BUILD)
