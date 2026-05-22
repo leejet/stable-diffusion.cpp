@@ -4792,7 +4792,7 @@ static sd::Tensor<float> upscale_ltx_spatial_video_latent(sd_ctx_t* sd_ctx,
         audio_latent = unpack_ltxav_audio_latent(packed_latent, audio_length, latent_channels);
     }
 
-    LOG_INFO("LTX latent spatial upscale: latent %dx%dx%dx%d -> x2",
+    LOG_INFO("LTX latent spatial upscale: latent %dx%dx%dx%d -> model output",
              (int)video_latent.shape()[0],
              (int)video_latent.shape()[1],
              (int)video_latent.shape()[2],
