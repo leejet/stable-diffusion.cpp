@@ -846,17 +846,6 @@ namespace Flux {
             }
         }
 
-        ggml_tensor* pad_to_patch_size(GGMLRunnerContext* ctx,
-                                       ggml_tensor* x) {
-            int64_t W = x->ne[0];
-            int64_t H = x->ne[1];
-
-            int pad_h = (params.patch_size - H % params.patch_size) % params.patch_size;
-            int pad_w = (params.patch_size - W % params.patch_size) % params.patch_size;
-            x         = ggml_ext_pad(ctx->ggml_ctx, x, pad_w, pad_h, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
-            return x;
-        }
-
         ggml_tensor* forward_orig(GGMLRunnerContext* ctx,
                                   ggml_tensor* img,
                                   ggml_tensor* txt,
