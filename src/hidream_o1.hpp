@@ -434,7 +434,7 @@ namespace HiDreamO1 {
 
             float sigma = 1.0f - timestep_tensor.values()[0];
             sigma       = std::max(1e-6f, sigma);
-            auto out    = ggml_ext_scale(compute_ctx, ggml_sub(compute_ctx, x, x_pred), 1.0f / sigma);
+            auto out    = ggml_scale(compute_ctx, ggml_sub(compute_ctx, x, x_pred), 1.0f / sigma);
 
             ggml_build_forward_expand(gf, out);
             return gf;

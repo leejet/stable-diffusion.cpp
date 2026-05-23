@@ -114,8 +114,9 @@ namespace Rope {
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_longcat_txt_ids(int bs, int context_len, int axes_dim_num) {
         auto txt_ids = std::vector<std::vector<float>>(bs * context_len, std::vector<float>(axes_dim_num, 0.0f));
         for (int i = 0; i < bs * context_len; i++) {
-            txt_ids[i][1] = (i % context_len);
-            txt_ids[i][2] = (i % context_len);
+            float token_index = static_cast<float>(i % context_len);
+            txt_ids[i][1]     = token_index;
+            txt_ids[i][2]     = token_index;
         }
         return txt_ids;
     }

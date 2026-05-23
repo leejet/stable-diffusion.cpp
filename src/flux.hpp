@@ -88,19 +88,14 @@ namespace Flux {
 
     public:
         SelfAttention(int64_t dim,
-                      int64_t num_heads    = 8,
-                      bool qkv_bias        = false,
-                      bool proj_bias       = true,
-                      bool diffusers_style = false)
+                      int64_t num_heads = 8,
+                      bool qkv_bias     = false,
+                      bool proj_bias    = true)
             : num_heads(num_heads) {
             int64_t head_dim = dim / num_heads;
-            if (diffusers_style) {
-                blocks["qkv"] = std::shared_ptr<GGMLBlock>(new SplitLinear(dim, {dim, dim, dim}, qkv_bias));
-            } else {
-                blocks["qkv"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim * 3, qkv_bias));
-            }
-            blocks["norm"] = std::shared_ptr<GGMLBlock>(new QKNorm(head_dim));
-            blocks["proj"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim, proj_bias));
+            blocks["qkv"]    = std::shared_ptr<GGMLBlock>(new Linear(dim, dim * 3, qkv_bias));
+            blocks["norm"]   = std::shared_ptr<GGMLBlock>(new QKNorm(head_dim));
+            blocks["proj"]   = std::shared_ptr<GGMLBlock>(new Linear(dim, dim, proj_bias));
         }
 
         std::vector<ggml_tensor*> pre_attention(GGMLRunnerContext* ctx, ggml_tensor* x) {
@@ -268,8 +263,7 @@ namespace Flux {
                           bool share_modulation = false,
                           bool mlp_proj_bias    = true,
                           bool use_yak_mlp      = false,
-                          bool use_mlp_silu_act = false,
-                          bool diffusers_style  = false)
+                          bool use_mlp_silu_act = false)
             : idx(idx), prune_mod(prune_mod) {
             int64_t mlp_hidden_dim = static_cast<int64_t>(hidden_size * mlp_ratio);
 
@@ -277,7 +271,7 @@ namespace Flux {
                 blocks["img_mod"] = std::shared_ptr<GGMLBlock>(new Modulation(hidden_size, true));
             }
             blocks["img_norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
-            blocks["img_attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias, mlp_proj_bias, diffusers_style));
+            blocks["img_attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias, mlp_proj_bias));
 
             blocks["img_norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
             if (use_yak_mlp) {
@@ -290,7 +284,7 @@ namespace Flux {
                 blocks["txt_mod"] = std::shared_ptr<GGMLBlock>(new Modulation(hidden_size, true));
             }
             blocks["txt_norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
-            blocks["txt_attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias, mlp_proj_bias, diffusers_style));
+            blocks["txt_attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias, mlp_proj_bias));
 
             blocks["txt_norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
             if (use_yak_mlp) {
@@ -429,7 +423,6 @@ namespace Flux {
         bool use_yak_mlp;
         bool use_mlp_silu_act;
         int64_t mlp_mult_factor;
-        bool diffusers_style = false;
 
     public:
         SingleStreamBlock(int64_t hidden_size,
@@ -441,8 +434,7 @@ namespace Flux {
                           bool share_modulation = false,
                           bool mlp_proj_bias    = true,
                           bool use_yak_mlp      = false,
-                          bool use_mlp_silu_act = false,
-                          bool diffusers_style  = false)
+                          bool use_mlp_silu_act = false)
             : hidden_size(hidden_size), num_heads(num_heads), idx(idx), prune_mod(prune_mod), use_yak_mlp(use_yak_mlp), use_mlp_silu_act(use_mlp_silu_act) {
             int64_t head_dim = hidden_size / num_heads;
             float scale      = qk_scale;
@@ -454,11 +446,7 @@ namespace Flux {
             if (use_yak_mlp || use_mlp_silu_act) {
                 mlp_mult_factor = 2;
             }
-            if (diffusers_style) {
-                blocks["linear1"] = std::shared_ptr<GGMLBlock>(new SplitLinear(hidden_size, {hidden_size, hidden_size, hidden_size, mlp_hidden_dim * mlp_mult_factor}, mlp_proj_bias));
-            } else {
-                blocks["linear1"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size * 3 + mlp_hidden_dim * mlp_mult_factor, mlp_proj_bias));
-            }
+            blocks["linear1"]  = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size * 3 + mlp_hidden_dim * mlp_mult_factor, mlp_proj_bias));
             blocks["linear2"]  = std::shared_ptr<GGMLBlock>(new Linear(hidden_size + mlp_hidden_dim, hidden_size, mlp_proj_bias));
             blocks["norm"]     = std::shared_ptr<GGMLBlock>(new QKNorm(head_dim));
             blocks["pre_norm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
@@ -768,7 +756,6 @@ namespace Flux {
         bool use_yak_mlp          = false;
         bool use_mlp_silu_act     = false;
         float ref_index_scale     = 1.f;
-        bool diffusers_style      = false;
         ChromaRadianceParams chroma_radiance_params;
     };
 
@@ -818,8 +805,7 @@ namespace Flux {
                                                                                                    params.share_modulation,
                                                                                                    !params.disable_bias,
                                                                                                    params.use_yak_mlp,
-                                                                                                   params.use_mlp_silu_act,
-                                                                                                   params.diffusers_style);
+                                                                                                   params.use_mlp_silu_act);
             }
 
             for (int i = 0; i < params.depth_single_blocks; i++) {
@@ -832,8 +818,7 @@ namespace Flux {
                                                                                                    params.share_modulation,
                                                                                                    !params.disable_bias,
                                                                                                    params.use_yak_mlp,
-                                                                                                   params.use_mlp_silu_act,
-                                                                                                   params.diffusers_style);
+                                                                                                   params.use_mlp_silu_act);
             }
 
             if (params.version == VERSION_CHROMA_RADIANCE) {
@@ -869,70 +854,6 @@ namespace Flux {
             int pad_h = (params.patch_size - H % params.patch_size) % params.patch_size;
             int pad_w = (params.patch_size - W % params.patch_size) % params.patch_size;
             x         = ggml_ext_pad(ctx->ggml_ctx, x, pad_w, pad_h, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
-            return x;
-        }
-
-        ggml_tensor* patchify(ggml_context* ctx,
-                              ggml_tensor* x) {
-            // x: [N, C, H, W]
-            // return: [N, h*w, C * patch_size * patch_size]
-            int64_t N = x->ne[3];
-            int64_t C = x->ne[2];
-            int64_t H = x->ne[1];
-            int64_t W = x->ne[0];
-            if (params.patch_size == 1) {
-                x = ggml_reshape_3d(ctx, x, H * W, C, N);              // [N, C, H*W]
-                x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));  // [N, H*W, C]
-                return x;
-            }
-            int64_t p = params.patch_size;
-            int64_t h = H / params.patch_size;
-            int64_t w = W / params.patch_size;
-
-            GGML_ASSERT(h * p == H && w * p == W);
-
-            x = ggml_reshape_4d(ctx, x, p, w, p, h * C * N);       // [N*C*h, p, w, p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N*C*h, w, p, p]
-            x = ggml_reshape_4d(ctx, x, p * p, w * h, C, N);       // [N, C, h*w, p*p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N, h*w, C, p*p]
-            x = ggml_reshape_3d(ctx, x, p * p * C, w * h, N);      // [N, h*w, C*p*p]
-            return x;
-        }
-
-        ggml_tensor* process_img(GGMLRunnerContext* ctx,
-                                 ggml_tensor* x) {
-            // img = rearrange(x, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=patch_size, pw=patch_size)
-            x = pad_to_patch_size(ctx, x);
-            x = patchify(ctx->ggml_ctx, x);
-            return x;
-        }
-
-        ggml_tensor* unpatchify(ggml_context* ctx,
-                                ggml_tensor* x,
-                                int64_t h,
-                                int64_t w) {
-            // x: [N, h*w, C*patch_size*patch_size]
-            // return: [N, C, H, W]
-            int64_t N = x->ne[2];
-            int64_t C = x->ne[0] / params.patch_size / params.patch_size;
-            int64_t H = h * params.patch_size;
-            int64_t W = w * params.patch_size;
-            int64_t p = params.patch_size;
-
-            if (params.patch_size == 1) {
-                x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));  // [N, C, H*W]
-                x = ggml_reshape_4d(ctx, x, W, H, C, N);               // [N, C, H, W]
-                return x;
-            }
-
-            GGML_ASSERT(C * p * p == x->ne[0]);
-
-            x = ggml_reshape_4d(ctx, x, p * p, C, w * h, N);       // [N, h*w, C, p*p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N, C, h*w, p*p]
-            x = ggml_reshape_4d(ctx, x, p, p, w, h * C * N);       // [N*C*h, w, p, p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N*C*h, p, w, p]
-            x = ggml_reshape_4d(ctx, x, W, H, C, N);               // [N, C, h*p, w*p]
-
             return x;
         }
 
@@ -1327,9 +1248,6 @@ namespace Flux {
                 if (tensor_name.find("guidance_in.in_layer.weight") != std::string::npos) {
                     flux_params.guidance_embed = true;
                 }
-                if (tensor_name.find("model.diffusion_model.single_blocks.0.linear1.weight.1") != std::string::npos) {
-                    flux_params.diffusers_style = true;
-                }
                 if (tensor_name.find("__x0__") != std::string::npos) {
                     LOG_DEBUG("using x0 prediction");
                     flux_params.chroma_radiance_params.use_x0 = true;
@@ -1391,10 +1309,6 @@ namespace Flux {
                      flux_params.num_heads);
             if (flux_params.is_chroma) {
                 LOG_INFO("Using pruned modulation (Chroma)");
-            }
-
-            if (flux_params.diffusers_style) {
-                LOG_INFO("Using diffusers-style attention blocks");
             }
 
             flux = Flux(flux_params);
@@ -1526,7 +1440,8 @@ namespace Flux {
                                             flux_params.axes_dim,
                                             sd_version_is_longcat(version));
             int pos_len = static_cast<int>(pe_vec.size() / flux_params.axes_dim_sum / 2);
-            auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
+            // LOG_DEBUG("pos_len %d", pos_len);
+            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe);
             // pe->data = nullptr;
