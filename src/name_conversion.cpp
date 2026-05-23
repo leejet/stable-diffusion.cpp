@@ -567,6 +567,11 @@ std::string convert_diffusers_dit_to_original_flux(std::string name) {
             flux_name_map[block_prefix + "attn.norm_k.weight"]       = dst_prefix + "img_attn.norm.key_norm.scale";
             flux_name_map[block_prefix + "attn.norm_added_q.weight"] = dst_prefix + "txt_attn.norm.query_norm.scale";
             flux_name_map[block_prefix + "attn.norm_added_k.weight"] = dst_prefix + "txt_attn.norm.key_norm.scale";
+            // Comfy-Org/LongCat-Image stores already-converted RMSNorm tensors as *.weight.
+            flux_name_map[dst_prefix + "img_attn.norm.query_norm.weight"] = dst_prefix + "img_attn.norm.query_norm.scale";
+            flux_name_map[dst_prefix + "img_attn.norm.key_norm.weight"]   = dst_prefix + "img_attn.norm.key_norm.scale";
+            flux_name_map[dst_prefix + "txt_attn.norm.query_norm.weight"] = dst_prefix + "txt_attn.norm.query_norm.scale";
+            flux_name_map[dst_prefix + "txt_attn.norm.key_norm.weight"]   = dst_prefix + "txt_attn.norm.key_norm.scale";
 
             // ff
             flux_name_map[block_prefix + "ff.net.0.proj.weight"] = dst_prefix + "img_mlp.0.weight";
@@ -605,8 +610,11 @@ std::string convert_diffusers_dit_to_original_flux(std::string name) {
 
             flux_name_map[block_prefix + "attn.norm_q.weight"] = dst_prefix + "norm.query_norm.scale";
             flux_name_map[block_prefix + "attn.norm_k.weight"] = dst_prefix + "norm.key_norm.scale";
-            flux_name_map[block_prefix + "proj_out.weight"]    = dst_prefix + "linear2.weight";
-            flux_name_map[block_prefix + "proj_out.bias"]      = dst_prefix + "linear2.bias";
+            // Comfy-Org/LongCat-Image stores already-converted RMSNorm tensors as *.weight.
+            flux_name_map[dst_prefix + "norm.query_norm.weight"] = dst_prefix + "norm.query_norm.scale";
+            flux_name_map[dst_prefix + "norm.key_norm.weight"]   = dst_prefix + "norm.key_norm.scale";
+            flux_name_map[block_prefix + "proj_out.weight"]      = dst_prefix + "linear2.weight";
+            flux_name_map[block_prefix + "proj_out.bias"]        = dst_prefix + "linear2.bias";
         }
 
         // --- final layers ---
