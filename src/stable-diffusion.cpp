@@ -592,9 +592,9 @@ public:
                 diffusion_model  = std::make_shared<QwenImageModel>(backend_for(SDBackendModule::DIFFUSION),
                                                                    params_backend_for(SDBackendModule::DIFFUSION),
                                                                    tensor_storage_map,
-                                                                    "model.diffusion_model",
-                                                                    version,
-                                                                    sd_ctx_params->qwen_image_zero_cond_t);
+                                                                   "model.diffusion_model",
+                                                                   version,
+                                                                   sd_ctx_params->qwen_image_zero_cond_t);
             } else if (sd_version_is_longcat(version)) {
                 bool enable_vision = false;
                 if (!vae_decode_only) {
@@ -607,10 +607,10 @@ public:
                                                                  "",
                                                                  enable_vision);
                 diffusion_model  = std::make_shared<FluxModel>(backend_for(SDBackendModule::DIFFUSION),
-                                                               params_backend_for(SDBackendModule::DIFFUSION),
-                                                               tensor_storage_map,
-                                                               version,
-                                                               sd_ctx_params->chroma_use_dit_mask);
+                                                              params_backend_for(SDBackendModule::DIFFUSION),
+                                                              tensor_storage_map,
+                                                              version,
+                                                              sd_ctx_params->chroma_use_dit_mask);
             } else if (version == VERSION_HIDREAM_O1) {
                 cond_stage_model = std::make_shared<HiDreamO1::HiDreamO1Conditioner>(backend_for(SDBackendModule::TE),
                                                                                      params_backend_for(SDBackendModule::TE),

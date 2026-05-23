@@ -1763,9 +1763,9 @@ struct LLMEmbedder : public Conditioner {
 
     std::tuple<std::vector<int>, std::vector<float>, std::vector<float>> tokenize(std::string text,
                                                                                   const std::pair<int, int>& attn_range,
-                                                                                  size_t min_length  = 0,
-                                                                                  size_t max_length  = 100000000,
-                                                                                  bool spell_quotes  = false) {
+                                                                                  size_t min_length = 0,
+                                                                                  size_t max_length = 100000000,
+                                                                                  bool spell_quotes = false) {
         std::vector<std::pair<std::string, float>> parsed_attention;
         if (attn_range.first >= 0 && attn_range.second > 0) {
             if (attn_range.first > 0) {
@@ -1799,7 +1799,7 @@ struct LLMEmbedder : public Conditioner {
         for (const auto& item : parsed_attention) {
             const std::string& curr_text = item.first;
             float curr_weight            = item.second;
-            auto append_tokens = [&](const std::string& text_part) {
+            auto append_tokens           = [&](const std::string& text_part) {
                 if (text_part.empty()) {
                     return;
                 }
@@ -1853,15 +1853,15 @@ struct LLMEmbedder : public Conditioner {
     sd::Tensor<float> encode_prompt(int n_threads,
                                     const std::string prompt,
                                     const std::pair<int, int>& prompt_attn_range,
-                                     int min_length,
-                                     int hidden_states_min_length,
-                                     const std::vector<std::pair<int, sd::Tensor<float>>>& image_embeds,
-                                     const std::set<int>& out_layers,
-                                     int prompt_template_encode_start_idx,
-                                     int prompt_template_encode_end_idx      = 0,
-                                     const std::string& prompt_template_suffix = "",
-                                     bool spell_quotes                       = false,
-                                     int max_length                          = 100000000) {
+                                    int min_length,
+                                    int hidden_states_min_length,
+                                    const std::vector<std::pair<int, sd::Tensor<float>>>& image_embeds,
+                                    const std::set<int>& out_layers,
+                                    int prompt_template_encode_start_idx,
+                                    int prompt_template_encode_end_idx        = 0,
+                                    const std::string& prompt_template_suffix = "",
+                                    bool spell_quotes                         = false,
+                                    int max_length                            = 100000000) {
         auto tokens_weights_mask = tokenize(prompt, prompt_attn_range, min_length, max_length, spell_quotes);
         auto& tokens             = std::get<0>(tokens_weights_mask);
         auto& weights            = std::get<1>(tokens_weights_mask);
@@ -1896,7 +1896,7 @@ struct LLMEmbedder : public Conditioner {
                                           image_embeds,
                                           out_layers);
         GGML_ASSERT(!hidden_states.empty());
-        hidden_states = apply_token_weights(std::move(hidden_states), weights);
+        hidden_states             = apply_token_weights(std::move(hidden_states), weights);
         int64_t hidden_states_end = hidden_states.shape()[1] - prompt_template_encode_end_idx;
         GGML_ASSERT(hidden_states_end > prompt_template_encode_start_idx);
 

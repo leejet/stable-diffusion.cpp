@@ -768,7 +768,7 @@ namespace Flux {
         bool use_yak_mlp          = false;
         bool use_mlp_silu_act     = false;
         float ref_index_scale     = 1.f;
-        bool diffusers_style        = false;
+        bool diffusers_style      = false;
         ChromaRadianceParams chroma_radiance_params;
     };
 
