@@ -254,7 +254,7 @@ void refresh_lora_cache(ServerRuntime& rt) {
 
     fs::path lora_dir = rt.ctx_params->lora_model_dir;
     if (fs::exists(lora_dir) && fs::is_directory(lora_dir)) {
-        for (auto& entry : fs::recursive_directory_iterator(lora_dir)) {
+        for (auto& entry : fs::recursive_directory_iterator(lora_dir, fs::directory_options::skip_permission_denied)) {
             if (!entry.is_regular_file()) {
                 continue;
             }
