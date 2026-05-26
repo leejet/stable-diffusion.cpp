@@ -2909,53 +2909,62 @@ public:
     }
 
     bool alloc_params_buffer() {
-        size_t num_tensors = ggml_tensor_num(params_ctx);
+        size_t num_tensors    = ggml_tensor_num(params_ctx);
         bool used_pinned_host = false;
-        bool copy_from_mmap = false;
-        std::vector<void*> saved_mmap_data;  // populated only when copy_from_mmap
 
         if (num_tensors == 0) {
             LOG_DEBUG("%s skipping params allocation (no tensors)", get_desc().c_str());
             return true;
         }
 
-        // Detect mmap: when ModelLoader memory-maps the weight file, every
-        // tensor's data pointer is set to an offset inside the mmap region.
-        bool all_have_data = true;
-        for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr; t = ggml_get_next_tensor(params_ctx, t)) {
-            if (t->data == nullptr) {
-                all_have_data = false;
-                break;
+        const bool need_offload = (params_backend != runtime_backend);
+
+        // Snapshot any pre-existing data pointers. ModelLoader::mmap_tensors()
+        // may have set t->data for some tensors (those whose on-disk shape +
+        // dtype matched a tensor in this ctx, so they could be backed
+        // directly by the mmap region). Quantized or shape-converted tensors
+        // are not mmap'd — they stay null and get filled by load_tensors().
+        // Recording which were mmap'd lets us copy their bytes into our
+        // owned pinned-host buffer below, even when only some tensors are
+        // mmap-backed (the realistic mixed-quant case).
+        std::vector<void*> saved_mmap_data(num_tensors, nullptr);
+        size_t mmapped_count = 0;
+        {
+            size_t i = 0;
+            for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr; t = ggml_get_next_tensor(params_ctx, t), ++i) {
+                if (t->data != nullptr) {
+                    saved_mmap_data[i] = t->data;
+                    mmapped_count++;
+                }
             }
         }
 
-        const bool need_offload = (params_backend != runtime_backend);
+        const bool any_mmap = mmapped_count > 0;
+        const bool all_mmap = mmapped_count == num_tensors;
 
-        if (all_have_data) {
-            if (!need_offload) {
-                // mmap data is already in place and no offloading is needed.
-                // Compute runs on the same backend as params, so cudaMemcpy
-                // never has to source from these mmap pages at runtime.
-                LOG_DEBUG("%s all params already mmap-allocated (no separate buffer needed)", get_desc().c_str());
-                params_buffer = nullptr;
-                rebuild_params_tensor_set();
-                return true;
-            }
+        // Pure-mmap + no-offload path: keep mmap data in place. No separate
+        // buffer needed; runtime backend reads directly from the mmap region
+        // because it's the same backend as params.
+        if (all_mmap && !need_offload) {
+            LOG_DEBUG("%s all params already mmap-allocated (no separate buffer needed)", get_desc().c_str());
+            params_buffer = nullptr;
+            rebuild_params_tensor_set();
+            return true;
+        }
 
-            // Mmap is in use AND we will offload params (params backend
-            // differs from runtime backend — typical when --offload-mode
-            // layer_streaming or any keep_*_on_cpu is active). Anonymous
-            // mmap pages cannot be the source of cudaMemcpyAsync — CUDA
-            // syncs through an internal bounce buffer, and on the per-layer
-            // streaming hot path that adds ~100ms per prefetch call plus a
-            // ~30s tax on the bulk cond_stage upload. Copy the mmap data
-            // into our owned (preferably pinned) host buffer now so every
-            // subsequent CPU→GPU transfer DMAs at PCIe speed.
-            saved_mmap_data.reserve(num_tensors);
+        // If we're going to allocate a fresh buffer AND some tensors are
+        // mmap-backed AND we need to offload, the mmap-backed tensors must
+        // be relocated into the new buffer too. Otherwise CUDA cannot DMA
+        // from their anonymous mmap source — it bounces through a sync
+        // staging buffer, killing the streaming async prefetch.
+        // Reset buffer/data so alloc_ctx_tensors_from_buft places every
+        // tensor (mmap or not) into the new buffer.
+        const bool relocate_mmap = any_mmap && need_offload;
+        if (relocate_mmap) {
             for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr; t = ggml_get_next_tensor(params_ctx, t)) {
-                saved_mmap_data.push_back(t->data);
+                t->buffer = nullptr;
+                t->data   = nullptr;
             }
-            copy_from_mmap = true;
         }
 
         // When weights live on CPU but get streamed/transferred to GPU during
@@ -2991,24 +3000,27 @@ public:
             return false;
         }
 
-        // Eager-copy mmap pages into the freshly-allocated buffer. After
-        // alloc_ctx_tensors_*, each tensor->data points to its new offset in
-        // params_buffer; ggml_backend_tensor_set writes from the saved mmap
-        // address to that new location. Done once at model load; saves
-        // ~25-50s per generation job on streaming workloads.
-        if (copy_from_mmap) {
+        // Copy the saved mmap bytes into the fresh tensor locations. Skip
+        // tensors that weren't mmap-backed — load_tensors() fills those in
+        // later. Done once at model load; pays back ~25-50s per generation
+        // job on streaming workloads (no more sync bounce on prefetch, no
+        // more 28s cond_stage CPU→GPU upload through mmap source).
+        if (relocate_mmap) {
             int64_t t0         = ggml_time_ms();
             size_t total_bytes = 0;
             size_t i           = 0;
             for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr; t = ggml_get_next_tensor(params_ctx, t), ++i) {
-                size_t bytes = ggml_nbytes(t);
-                ggml_backend_tensor_set(t, saved_mmap_data[i], 0, bytes);
-                total_bytes += bytes;
+                if (saved_mmap_data[i] != nullptr) {
+                    size_t bytes = ggml_nbytes(t);
+                    ggml_backend_tensor_set(t, saved_mmap_data[i], 0, bytes);
+                    total_bytes += bytes;
+                }
             }
             int64_t t1 = ggml_time_ms();
-            LOG_INFO("%s copied %i mmap tensors (%6.2f MB) into %s buffer in %.2fs",
+            LOG_INFO("%s copied %zu/%zu mmap tensors (%6.2f MB) into %s buffer in %.2fs",
                      get_desc().c_str(),
-                     num_tensors,
+                     mmapped_count,
+                     static_cast<size_t>(num_tensors),
                      total_bytes / (1024.f * 1024.f),
                      used_pinned_host ? "pinned host" : "pageable",
                      (t1 - t0) * 1.0f / 1000);
