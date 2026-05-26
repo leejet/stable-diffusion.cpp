@@ -1711,7 +1711,8 @@ namespace Flux {
                                        flux_params.theta,
                                        circular_y_enabled,
                                        circular_x_enabled,
-                                       flux_params.axes_dim);
+                                       flux_params.axes_dim,
+                                       sd_version_is_longcat(version));
             int pos_len = static_cast<int>(pe_vec.size() / flux_params.axes_dim_sum / 2);
             auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
             set_backend_tensor_data(pe, pe_vec.data());
@@ -1964,7 +1965,8 @@ namespace Flux {
                                        flux_params.theta,
                                        circular_y_enabled,
                                        circular_x_enabled,
-                                       flux_params.axes_dim);
+                                       flux_params.axes_dim,
+                                       sd_version_is_longcat(version));
 
             // Pre-generate mod_index_arange for Chroma.
             if (flux_params.is_chroma) {
