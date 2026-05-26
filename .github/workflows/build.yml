@@ -545,6 +545,30 @@ jobs:
       - name: Pack artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         run: |
+          $ErrorActionPreference = "Stop"
+          $dst = "build\bin"
+          $rocmBin = Join-Path "${env:HIP_PATH}" "bin"
+          $requiredRocmPaths = @(
+            (Join-Path $rocmBin "rocblas.dll"),
+            (Join-Path $rocmBin "rocblas\library")
+          )
+          foreach ($path in $requiredRocmPaths) {
+            if (!(Test-Path $path)) {
+              throw "Missing ROCm runtime dependency: $path"
+            }
+          }
+
+          foreach ($pattern in @("rocblas*.dll", "hipblas*.dll", "libhipblas*.dll")) {
+            Copy-Item -Path (Join-Path $rocmBin $pattern) -Destination $dst -Force -ErrorAction SilentlyContinue
+          }
+
+          foreach ($dir in @("rocblas", "hipblaslt")) {
+            $src = Join-Path $rocmBin $dir
+            if (Test-Path $src) {
+              Copy-Item -Path $src -Destination $dst -Recurse -Force
+            }
+          }
+
           7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip .\build\bin\*
 
       - name: Upload artifacts

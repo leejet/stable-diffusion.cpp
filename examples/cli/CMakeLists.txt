@@ -7,6 +7,9 @@ add_executable(${TARGET}
     image_metadata.cpp
     main.cpp
 )
+if(APPLE)
+    sd_set_macos_rpaths(${TARGET})
+endif()
 target_include_directories(${TARGET} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/.."
     "${PROJECT_SOURCE_DIR}/src"

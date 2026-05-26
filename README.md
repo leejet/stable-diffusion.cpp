@@ -40,6 +40,7 @@ API and command-line option may change frequently.***
     - [Chroma](./docs/chroma.md)
     - [Chroma1-Radiance](./docs/chroma_radiance.md)
     - [Qwen Image](./docs/qwen_image.md)
+    - [LongCat Image](./docs/longcat_image.md)
     - [Z-Image](./docs/z_image.md)
     - [Ovis-Image](./docs/ovis_image.md)
     - [Anima](./docs/anima.md)
@@ -48,6 +49,7 @@ API and command-line option may change frequently.***
   - Image Edit Models
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
     - [Qwen Image Edit series](./docs/qwen_image_edit.md)
+    - [LongCat Image Edit](./docs/longcat_image.md)
   - Video Models
     - [Wan2.1/Wan2.2](./docs/wan.md)
     - [LTX-2.3](./docs/ltx2.md)
@@ -133,6 +135,7 @@ For runtime and parameter backend placement, see the [backend selection guide](.
 - [Chroma](./docs/chroma.md)
 - [🔥Qwen Image](./docs/qwen_image.md)
 - [🔥Qwen Image Edit series](./docs/qwen_image_edit.md)
+- [🔥LongCat Image / LongCat Image Edit](./docs/longcat_image.md)
 - [🔥Wan2.1/Wan2.2](./docs/wan.md)
 - [🔥LTX-2.3](./docs/ltx2.md)
 - [🔥Z-Image](./docs/z_image.md)
