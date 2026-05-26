@@ -902,8 +902,26 @@ namespace ZImage {
                 // sampling steps. Now that _global + refiners are GPU-
                 // resident the free-VRAM measurement is accurate.
                 if (resident_layer_count_ < 0 && streaming_engine_) {
-                    resident_layer_count_ = streaming_engine_->compute_resident_block_count(
-                        "layers.0", num_layers);
+                    // Reserve enough for two things on top of the prefetch
+                    // window + safety margin that the engine already books:
+                    //  - the per-layer streamed mini-graph's compute buffer
+                    //    (~500-700 MB at typical Z-Image resolutions, was
+                    //     the original 768 MB default), AND
+                    //  - cond_stage reload headroom between back-to-back
+                    //    jobs in a queue.
+                    //
+                    // Z-Image's cond_stage (the LLM text encoder) is ~1.5 GB
+                    // for the Q8 build, plus a 500 MB safety margin checked
+                    // by the reload path in stable-diffusion.cpp:2661. If we
+                    // don't book that space here, chunk_K eats all the slack
+                    // and cond_stage falls to on-demand load on every queue
+                    // item — costing ~10-15s per job in cold-cache inference
+                    // overhead. Trades roughly 3 resident layers (~1 GB of
+                    // VRAM ≈ 1.4s extra per-step streaming work) for that
+                    // recurring reload tax; net win on queued workloads.
+                    const size_t kReserveBytes = 2ULL * 1024 * 1024 * 1024;
+                    resident_layer_count_     = streaming_engine_->compute_resident_block_count(
+                        "layers.0", num_layers, kReserveBytes);
                     LOG_INFO("%s layer cache: %d resident, %d streamed per step",
                              get_desc().c_str(),
                              resident_layer_count_,
