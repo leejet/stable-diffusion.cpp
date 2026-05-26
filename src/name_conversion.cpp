@@ -151,12 +151,6 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix) 
         {"output_norm.", "model.norm."},
     };
 
-    static const std::vector<std::pair<std::string, std::string>> llm_safetensors_prefix_map{
-        {"text_encoders.llm.embed_tokens.", "text_encoders.llm.model.embed_tokens."},
-        {"text_encoders.llm.layers.", "text_encoders.llm.model.layers."},
-        {"text_encoders.llm.norm.", "text_encoders.llm.model.norm."},
-    };
-
     static const std::vector<std::pair<std::string, std::string>> llm_vision_name_map{
         {"mm.", "merger.mlp."},
         {"v.post_ln.", "merger.ln_q."},
@@ -181,7 +175,6 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix) 
             replace_with_name_map(name, llm_vision_name_map);
         } else {
             replace_with_name_map(name, llm_name_map);
-            replace_with_prefix_map(name, llm_safetensors_prefix_map);
         }
     } else {
         name = convert_open_clip_to_hf_clip_name(name);
