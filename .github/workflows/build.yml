@@ -711,16 +711,6 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.15.1
-
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
@@ -777,6 +767,18 @@ jobs:
           echo ROCM_PATH=$ROCM_PATH >> $GITHUB_ENV
           echo PATH=$PATH:$ROCM_PATH/bin >> $GITHUB_ENV
           echo LD_LIBRARY_PATH=$ROCM_PATH/lib:$ROCM_PATH/llvm/lib:$ROCM_PATH/lib/rocprofiler-systems >> $GITHUB_ENV
+
+      # setup-node installs into /opt/hostedtoolcache, which is removed above.
+      # Keep Node/pnpm setup after disk cleanup so the server frontend can be embedded.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
 
       - name: Build
         id: cmake_build
