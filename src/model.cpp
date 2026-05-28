@@ -202,6 +202,91 @@ void convert_tensor(void* src,
     }
 }
 
+bool ModelLoader::load_tensor_f32(const TensorStorage& ts, std::vector<float>& out) {
+    if (ts.file_index >= file_paths_.size()) {
+        LOG_ERROR("load_tensor_f32: invalid file_index %zu for '%s'", ts.file_index, ts.name.c_str());
+        return false;
+    }
+
+    int64_t n = ts.nelements();
+    if (n == 0) {
+        out.clear();
+        return true;
+    }
+    out.resize(n);
+
+    size_t nbytes_to_read              = ts.nbytes_to_read();
+    std::vector<uint8_t> raw(nbytes_to_read);
+    const std::string& file_path = file_paths_[ts.file_index];
+
+    if (ts.index_in_zip >= 0) {
+        zip_t* z = zip_open(file_path.c_str(), 0, 'r');
+        if (!z) {
+            LOG_ERROR("load_tensor_f32: failed to open zip '%s'", file_path.c_str());
+            return false;
+        }
+        zip_entry_openbyindex(z, ts.index_in_zip);
+        size_t entry_size = zip_entry_size(z);
+        if (entry_size != nbytes_to_read) {
+            std::vector<uint8_t> entry_buf(entry_size);
+            zip_entry_noallocread(z, entry_buf.data(), entry_size);
+            memcpy(raw.data(), entry_buf.data() + ts.offset, nbytes_to_read);
+        } else {
+            zip_entry_noallocread(z, raw.data(), nbytes_to_read);
+        }
+        zip_entry_close(z);
+        zip_close(z);
+    } else {
+        std::ifstream file(file_path, std::ios::binary);
+        if (!file) {
+            LOG_ERROR("load_tensor_f32: failed to open '%s'", file_path.c_str());
+            return false;
+        }
+        file.seekg(ts.offset);
+        file.read(reinterpret_cast<char*>(raw.data()), (std::streamsize)nbytes_to_read);
+        if (!file) {
+            LOG_ERROR("load_tensor_f32: read failed for '%s' in '%s'", ts.name.c_str(), file_path.c_str());
+            return false;
+        }
+    }
+
+    void* src          = raw.data();
+    ggml_type src_type = ts.type;
+    std::vector<uint8_t> intermediate;
+
+    if (ts.is_f8_e4m3) {
+        intermediate.resize((size_t)n * sizeof(ggml_fp16_t));
+        f8_e4m3_to_f16_vec(raw.data(), (uint16_t*)intermediate.data(), n);
+        src      = intermediate.data();
+        src_type = GGML_TYPE_F16;
+    } else if (ts.is_f8_e5m2) {
+        intermediate.resize((size_t)n * sizeof(ggml_fp16_t));
+        f8_e5m2_to_f16_vec(raw.data(), (uint16_t*)intermediate.data(), n);
+        src      = intermediate.data();
+        src_type = GGML_TYPE_F16;
+    } else if (ts.is_f64) {
+        f64_to_f32_vec(reinterpret_cast<double*>(raw.data()), out.data(), n);
+        return true;
+    } else if (ts.is_i64) {
+        std::vector<int32_t> i32buf(n);
+        i64_to_i32_vec(reinterpret_cast<int64_t*>(raw.data()), i32buf.data(), n);
+        for (int64_t i = 0; i < n; i++) out[i] = static_cast<float>(i32buf[i]);
+        return true;
+    }
+
+    if (src_type == GGML_TYPE_F32) {
+        memcpy(out.data(), src, (size_t)n * sizeof(float));
+    } else if (src_type == GGML_TYPE_F16) {
+        ggml_fp16_to_fp32_row(reinterpret_cast<const ggml_fp16_t*>(src), out.data(), n);
+    } else {
+        int64_t n_per_row = ts.ne[0];
+        int64_t nrows     = n / n_per_row;
+        convert_tensor(src, src_type, out.data(), GGML_TYPE_F32, (int)nrows, (int)n_per_row);
+    }
+
+    return true;
+}
+
 /*================================================= ModelLoader ==================================================*/
 
 void ModelLoader::add_tensor_storage(const TensorStorage& tensor_storage) {

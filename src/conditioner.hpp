@@ -115,6 +115,7 @@ public:
                                               const ConditionerParams& conditioner_params) = 0;
     virtual void alloc_params_buffer()                                                     = 0;
     virtual void free_params_buffer()                                                      = 0;
+    virtual void free_compute_buffer() {}
     virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors)           = 0;
     virtual size_t get_params_buffer_size()                                                = 0;
     virtual void set_max_graph_vram_bytes(size_t max_vram_bytes) {}
@@ -802,6 +803,18 @@ struct SD3CLIPEmbedder : public Conditioner {
         }
         if (t5) {
             t5->free_params_buffer();
+        }
+    }
+
+    void free_compute_buffer() override {
+        if (clip_l) {
+            clip_l->free_compute_buffer();
+        }
+        if (clip_g) {
+            clip_g->free_compute_buffer();
+        }
+        if (t5) {
+            t5->free_compute_buffer();
         }
     }
 

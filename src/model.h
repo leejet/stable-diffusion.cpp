@@ -286,6 +286,9 @@ public:
 
     bool tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type);
     int64_t get_params_mem_size(ggml_backend_t backend, ggml_type type = GGML_TYPE_COUNT);
+    // Load a single tensor as f32 without holding any other tensors in memory.
+    // Suitable for streaming conversion passes.
+    bool load_tensor_f32(const TensorStorage& ts, std::vector<float>& out);
     ~ModelLoader() = default;
 };
 

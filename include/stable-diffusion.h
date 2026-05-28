@@ -213,6 +213,7 @@ typedef struct {
     int chroma_t5_mask_pad;
     bool qwen_image_zero_cond_t;
     float max_vram;  // GiB budget for graph-cut segmented param offload (0 = disabled, -1 = auto free VRAM minus 1 GiB)
+    bool lazy_loading;  // staged load: encode text, evict text encoder, load diffusion, evict, load VAE, decode
     const char* backend;
     const char* params_backend;
 } sd_ctx_params_t;
@@ -463,12 +464,10 @@ SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx,
 
 SD_API int get_upscale_factor(upscaler_ctx_t* upscaler_ctx);
 
-SD_API bool convert(const char* input_path,
-                    const char* vae_path,
+SD_API bool convert(const sd_ctx_params_t* params,
                     const char* output_path,
-                    enum sd_type_t output_type,
-                    const char* tensor_type_rules,
-                    bool convert_name);
+                    bool convert_name,
+                    float rmse_threshold);
 
 SD_API bool preprocess_canny(sd_image_t image,
                              float high_threshold,
