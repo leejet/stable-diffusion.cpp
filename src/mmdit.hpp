@@ -938,7 +938,11 @@ struct MMDiTRunner : public GGMLRunner {
         {
             LOG_INFO("loading from '%s'", file_path.c_str());
 
-            mmdit->alloc_params_buffer();
+            if (!mmdit->alloc_params_buffer()) {
+                LOG_ERROR("mmdit embeds buffer allocation failed");
+                return;
+            }
+
             std::map<std::string, ggml_tensor*> tensors;
             mmdit->get_param_tensors(tensors, "model.diffusion_model");
 

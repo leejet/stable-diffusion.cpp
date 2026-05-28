@@ -1494,8 +1494,11 @@ namespace LLM {
             model.get_param_tensors(tensors, prefix);
         }
 
-        void alloc_params_buffer() {
-            model.alloc_params_buffer();
+        bool alloc_params_buffer() {
+            if (!model.alloc_params_buffer()) {
+                return false;
+            }
+            return true;
         }
 
         std::tuple<std::vector<int>, std::vector<float>> tokenize(std::string text,
@@ -1737,7 +1740,11 @@ namespace LLM {
                                                                              "text_encoders.llm",
                                                                              true);
 
-            llm->alloc_params_buffer();
+            if (!llm->alloc_params_buffer()) {
+                LOG_ERROR("llm model allocation failed");
+                return;
+            }
+
             std::map<std::string, ggml_tensor*> tensors;
             llm->get_param_tensors(tensors, "text_encoders.llm");
 
