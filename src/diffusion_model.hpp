@@ -54,7 +54,7 @@ struct DiffusionModel {
     virtual std::string get_desc()                                               = 0;
     virtual sd::Tensor<float> compute(int n_threads,
                                       const DiffusionParams& diffusion_params)   = 0;
-    virtual void alloc_params_buffer()                                           = 0;
+    virtual bool alloc_params_buffer()                                           = 0;
     virtual void free_params_buffer()                                            = 0;
     virtual void free_compute_buffer()                                           = 0;
     virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) = 0;
@@ -80,8 +80,11 @@ struct UNetModel : public DiffusionModel {
         return unet.get_desc();
     }
 
-    void alloc_params_buffer() override {
-        unet.alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!unet.alloc_params_buffer()) {
+            return false;
+        }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -150,8 +153,11 @@ struct MMDiTModel : public DiffusionModel {
         return mmdit.get_desc();
     }
 
-    void alloc_params_buffer() override {
-        mmdit.alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!mmdit.alloc_params_buffer()) {
+            return false;
+        }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -219,8 +225,11 @@ struct FluxModel : public DiffusionModel {
         return flux.get_desc();
     }
 
-    void alloc_params_buffer() override {
-        flux.alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!flux.alloc_params_buffer()) {
+            return false;
+        }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -293,8 +302,11 @@ struct AnimaModel : public DiffusionModel {
         return anima.get_desc();
     }
 
-    void alloc_params_buffer() override {
-        anima.alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!anima.alloc_params_buffer()) {
+            return false;
+        }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -362,8 +374,11 @@ struct WanModel : public DiffusionModel {
         return wan.get_desc();
     }
 
-    void alloc_params_buffer() override {
-        wan.alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!wan.alloc_params_buffer()) {
+            return false;
+        }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -435,8 +450,11 @@ struct QwenImageModel : public DiffusionModel {
         return qwen_image.get_desc();
     }
 
-    void alloc_params_buffer() override {
-        qwen_image.alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!qwen_image.alloc_params_buffer()) {
+            return false;
+        }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -504,8 +522,11 @@ struct HiDreamO1Model : public DiffusionModel {
         return hidream_o1.get_desc();
     }
 
-    void alloc_params_buffer() override {
-        hidream_o1.alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!hidream_o1.alloc_params_buffer()) {
+            return false;
+        }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -581,8 +602,11 @@ struct ZImageModel : public DiffusionModel {
         return z_image.get_desc();
     }
 
-    void alloc_params_buffer() override {
-        z_image.alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!z_image.alloc_params_buffer()) {
+            return false;
+        }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -650,8 +674,11 @@ struct ErnieImageModel : public DiffusionModel {
         return ernie_image.get_desc();
     }
 
-    void alloc_params_buffer() override {
-        ernie_image.alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!ernie_image.alloc_params_buffer()) {
+            return false;
+        }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -716,8 +743,11 @@ struct LTXAVModel : public DiffusionModel {
         return ltxav.get_desc();
     }
 
-    void alloc_params_buffer() override {
-        ltxav.alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!ltxav.alloc_params_buffer()) {
+            return false;
+        }
+        return true;
     }
 
     void free_params_buffer() override {
