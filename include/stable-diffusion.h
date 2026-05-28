@@ -212,7 +212,8 @@ typedef struct {
     bool chroma_use_t5_mask;
     int chroma_t5_mask_pad;
     bool qwen_image_zero_cond_t;
-    float max_vram;  // GiB budget for graph-cut segmented param offload (0 = disabled, -1 = auto free VRAM minus 1 GiB)
+    float max_vram;     // GiB budget for graph-cut segmented param offload (0 = disabled, -1 = auto free VRAM minus 1 GiB)
+    bool lazy_loading;  // staged load: encode text, evict text encoder, load diffusion, evict, load VAE, decode
     const char* backend;
     const char* params_backend;
 } sd_ctx_params_t;

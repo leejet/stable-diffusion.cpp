@@ -4,6 +4,7 @@
 #include <cmath>
 #include <codecvt>
 #include <cstdarg>
+#include <cstdint>
 #include <exception>
 #include <fstream>
 #include <locale>
@@ -291,6 +292,32 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename, bo
 }
 
 #endif
+
+void evict_memory(const void* data, size_t size) {
+#if defined(__linux__)
+    if (data == nullptr || size == 0) {
+        return;
+    }
+    auto cfg_flags = get_mmap_flags();
+    if (!cfg_flags.dontneed) {
+        return;
+    }
+    long page_size = sysconf(_SC_PAGESIZE);
+    if (page_size <= 0) {
+        return;
+    }
+    const uintptr_t page_mask = static_cast<uintptr_t>(page_size - 1);
+    const uintptr_t start     = reinterpret_cast<uintptr_t>(data) & ~page_mask;
+    const uintptr_t end       = (reinterpret_cast<uintptr_t>(data) + size + page_mask) & ~page_mask;
+    if (end <= start) {
+        return;
+    }
+    madvise(reinterpret_cast<void*>(start), end - start, MADV_DONTNEED);
+#else
+    (void)data;
+    (void)size;
+#endif
+}
 
 bool MmapWrapper::copy_data(void* buf, size_t n, size_t offset) const {
     if (offset >= size_ || n > (size_ - offset)) {
