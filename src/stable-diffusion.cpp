@@ -167,6 +167,7 @@ public:
     sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0, 0, nullptr};
     bool offload_params_to_cpu           = false;
     float max_vram                       = 0.f;
+    bool stream_layers                   = false;
     bool use_pmid                        = false;
     std::string backend_spec;
     std::string params_backend_spec;
@@ -210,9 +211,14 @@ public:
 
     bool init_backend(const sd_ctx_params_t* sd_ctx_params) {
         std::string error;
+        // Use the member offload_params_to_cpu (not sd_ctx_params->...) so the
+        // auto-enable in init() (when --stream-layers is set without explicit
+        // params placement) actually reaches backend_manager. Otherwise the
+        // log says "enabling --offload-to-cpu implicitly" but params still
+        // get allocated on the runtime backend.
         if (!backend_manager.init(sd_ctx_params->backend,
                                   sd_ctx_params->params_backend,
-                                  sd_ctx_params->offload_params_to_cpu,
+                                  offload_params_to_cpu,
                                   sd_ctx_params->keep_clip_on_cpu,
                                   sd_ctx_params->keep_vae_on_cpu,
                                   sd_ctx_params->keep_control_net_on_cpu,
@@ -239,8 +245,25 @@ public:
         free_params_immediately = sd_ctx_params->free_params_immediately;
         offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
         max_vram                = sd_ctx_params->max_vram;
+        stream_layers           = sd_ctx_params->stream_layers;
         backend_spec            = SAFE_STR(sd_ctx_params->backend);
         params_backend_spec     = SAFE_STR(sd_ctx_params->params_backend);
+        if (stream_layers && max_vram == 0.f) {
+            // max_vram == 0 means "disabled"; negative values mean
+            // "auto-detect (free VRAM minus |max_vram| GiB)" and are
+            // resolved later in ggml_graph_cut::resolve_auto_max_vram_bytes.
+            LOG_WARN("--stream-layers has no effect without --max-vram set; ignoring");
+            stream_layers = false;
+        }
+        if (stream_layers && !offload_params_to_cpu && params_backend_spec.empty()) {
+            // Streaming needs weights somewhere they can stream FROM — i.e.
+            // params on CPU. Without --offload-to-cpu or an explicit
+            // --params-backend, weights would live on GPU, which makes
+            // streaming a silent no-op (params_backend == runtime_backend
+            // short-circuits should_use_graph_cut_segmented_compute).
+            LOG_INFO("--stream-layers requires CPU-resident weights; enabling --offload-to-cpu implicitly");
+            offload_params_to_cpu = true;
+        }
 
         bool use_tae       = false;
         bool use_audio_vae = false;
@@ -419,7 +442,18 @@ public:
                     }
                 }
             }
-            if (have_quantized_weight) {
+            // Immediate mode bakes LoRA into weights at load time by running
+            // a forward pass over EVERY weight tensor. That allocates a full-
+            // model-sized compute buffer (~11 GB for Z-Image bf16) on the
+            // runtime backend. On VRAM-constrained setups (--offload-to-cpu
+            // and/or --stream-layers, i.e. the whole reason streaming exists),
+            // that allocation OOMs — so AUTO must pick runtime there instead.
+            // Runtime mode is correct but slower because chunk-K residency
+            // is skipped while a weight_adapter is attached (see
+            // compute_streaming_segments).
+            const bool streaming_constrained = sd_ctx_params->stream_layers ||
+                                               sd_ctx_params->offload_params_to_cpu;
+            if (have_quantized_weight || streaming_constrained) {
                 apply_lora_immediately = false;
             } else {
                 apply_lora_immediately = true;
@@ -705,6 +739,7 @@ public:
             get_param_tensors(cond_stage_model, module_can_mmap(SDBackendModule::TE));
 
             diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
+            diffusion_model->set_stream_layers_enabled(stream_layers);
             get_param_tensors(diffusion_model, module_can_mmap(SDBackendModule::DIFFUSION));
 
             if (sd_version_is_unet_edit(version)) {
@@ -713,6 +748,7 @@ public:
 
             if (high_noise_diffusion_model) {
                 high_noise_diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
+                high_noise_diffusion_model->set_stream_layers_enabled(stream_layers);
                 get_param_tensors(high_noise_diffusion_model, module_can_mmap(SDBackendModule::DIFFUSION));
             }
 
@@ -2277,6 +2313,21 @@ public:
     }
 
     sd::Tensor<float> decode_first_stage(const sd::Tensor<float>& x, bool decode_video = false) {
+        // Release diffusion's chunk-K resident set before VAE decode. With
+        // --stream-layers, the diffusion runner keeps several GB resident
+        // across sampling steps to amortize H2D. VAE decode happens once at
+        // the end, so holding diffusion's resident set during decode just
+        // starves VAE of VRAM for its compute buffer (which can be several
+        // GB at full image resolution). Eviction frees that VRAM for VAE
+        // and is paid back at the next generation's first sampling step.
+        if (stream_layers) {
+            if (diffusion_model) {
+                diffusion_model->release_streaming_residency();
+            }
+            if (high_noise_diffusion_model) {
+                high_noise_diffusion_model->release_streaming_residency();
+            }
+        }
         auto latents = first_stage_model->diffusion_to_vae_latents(x);
         first_stage_model->set_temporal_tiling_enabled(vae_tiling_params.temporal_tiling);
         return first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
@@ -2592,6 +2643,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->lora_apply_mode         = LORA_APPLY_AUTO;
     sd_ctx_params->offload_params_to_cpu   = false;
     sd_ctx_params->max_vram                = 0.f;
+    sd_ctx_params->stream_layers           = false;
     sd_ctx_params->enable_mmap             = false;
     sd_ctx_params->keep_clip_on_cpu        = false;
     sd_ctx_params->keep_control_net_on_cpu = false;
@@ -2638,6 +2690,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "prediction: %s\n"
              "offload_params_to_cpu: %s\n"
              "max_vram: %.3f\n"
+             "stream_layers: %s\n"
              "backend: %s\n"
              "params_backend: %s\n"
              "keep_clip_on_cpu: %s\n"
@@ -2675,6 +2728,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              sd_prediction_name(sd_ctx_params->prediction),
              BOOL_STR(sd_ctx_params->offload_params_to_cpu),
              sd_ctx_params->max_vram,
+             BOOL_STR(sd_ctx_params->stream_layers),
              SAFE_STR(sd_ctx_params->backend),
              SAFE_STR(sd_ctx_params->params_backend),
              BOOL_STR(sd_ctx_params->keep_clip_on_cpu),

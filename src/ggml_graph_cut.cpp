@@ -753,4 +753,58 @@ namespace sd::ggml_graph_cut {
         return resolved_plan;
     }
 
+    void annotate_residency(Plan& plan, size_t max_graph_vram_bytes) {
+        // Reset any RESIDENT marks from a prior call before considering the
+        // new budget. The plan is cached across compute() invocations and
+        // the budget changes per-call (free-VRAM clamp, runner state, etc.);
+        // without this reset, segments marked RESIDENT under a larger budget
+        // would persist when the budget shrinks.
+        for (auto& seg : plan.segments) {
+            seg.residency = SegmentResidency::STREAMED;
+        }
+        if (max_graph_vram_bytes == 0 || plan.segments.size() < 2) {
+            return;
+        }
+
+        // Sanity: skip if no segment carries any params.
+        bool any_param_bearing = false;
+        for (const auto& seg : plan.segments) {
+            if (seg.input_param_bytes > 0) {
+                any_param_bearing = true;
+                break;
+            }
+        }
+        if (!any_param_bearing) {
+            return;
+        }
+
+        // Headroom budget:
+        //   - safety: minimum free VRAM (512 MB)
+        //   - compute_buffer_reserve: peak compute buffer for one streamed segment
+        // Async prefetch is not yet implemented in the streaming executor, so we
+        // do not reserve an additional segment-sized prefetch window. Once Task 11
+        // (async prefetch) lands, add `prefetch_segments * largest_streamed_segment`
+        // back here.
+        constexpr size_t safety                 = 512ull * 1024 * 1024;
+        constexpr size_t compute_buffer_reserve = 768ull * 1024 * 1024;
+        const size_t reserved                   = safety + compute_buffer_reserve;
+
+        if (max_graph_vram_bytes <= reserved) {
+            return;
+        }
+        const size_t available = max_graph_vram_bytes - reserved;
+
+        // Greedily mark segments RESIDENT from the start until we exceed the
+        // available budget. Honors heterogeneous segment sizes (small prelude +
+        // larger transformer layers) better than dividing by a single estimate.
+        size_t cumulative = 0;
+        for (auto& seg : plan.segments) {
+            if (cumulative + seg.input_param_bytes > available) {
+                break;
+            }
+            seg.residency = SegmentResidency::RESIDENT;
+            cumulative += seg.input_param_bytes;
+        }
+    }
+
 }  // namespace sd::ggml_graph_cut

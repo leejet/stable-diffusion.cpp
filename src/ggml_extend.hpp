@@ -28,6 +28,7 @@
 #include "ggml.h"
 #include "ggml_extend_backend.h"
 #include "ggml_graph_cut.h"
+#include "layer_registry.h"
 
 #include "model.h"
 #include "tensor.hpp"
@@ -1725,7 +1726,31 @@ protected:
     ggml_context* partial_offload_ctx                   = nullptr;
     ggml_backend_buffer_t partial_runtime_params_buffer = nullptr;
     std::vector<std::pair<ggml_tensor*, ggml_tensor*>> partial_offload_pairs;
+
+    // Async-prefetch staging: a parallel partial-offload track used by the
+    // streaming executor to issue the NEXT segment's H2D copies while the
+    // CURRENT segment is computing. After the current segment's compute is
+    // done and its partial state is torn down, the pending_* members are
+    // promoted into partial_* via promote_pending_to_partial().
+    ggml_context* pending_offload_ctx                   = nullptr;
+    ggml_backend_buffer_t pending_runtime_params_buffer = nullptr;
+    std::vector<std::pair<ggml_tensor*, ggml_tensor*>> pending_offload_pairs;
+
+    // chunk-K residency track: holds params that stay GPU-resident across
+    // multiple compute_streaming_segments() invocations within a generation.
+    // Coexists with the partial_* per-segment track; offload_partial_params()
+    // filters out anything already in resident_param_set so its
+    // dup-copy-swap dance doesn't tear down the resident buffer-swap.
+    ggml_context* resident_offload_ctx = nullptr;
+    std::vector<std::pair<ggml_tensor*, ggml_tensor*>> resident_offload_pairs;
+    ggml_backend_buffer_t resident_runtime_params_buffer = nullptr;
+    std::unordered_set<ggml_tensor*> resident_param_set;
+    uint64_t resident_state_token = 0;
+
     size_t max_graph_vram_bytes = 0;
+    bool stream_layers_enabled = false;
+
+    sd::layer_registry::Registry layer_registry_;
 
     std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
 
@@ -1802,6 +1827,10 @@ protected:
         if (partial_offload_ctx != nullptr) {
             ggml_free(partial_offload_ctx);
             partial_offload_ctx = nullptr;
+        }
+        if (pending_offload_ctx != nullptr) {
+            ggml_free(pending_offload_ctx);
+            pending_offload_ctx = nullptr;
         }
     }
 
@@ -2193,6 +2222,9 @@ protected:
             if (tensor == nullptr) {
                 continue;
             }
+            if (resident_param_set.find(tensor) != resident_param_set.end()) {
+                continue;  // already resident on GPU via the chunk-K track
+            }
             if (seen_tensors.insert(tensor).second) {
                 unique_tensors.push_back(tensor);
             }
@@ -2315,6 +2347,262 @@ protected:
         }
     }
 
+    // Issue an H2D copy for the next segment's params WITHOUT performing
+    // a buffer-swap on the source tensors yet. The dup-tensors hold the GPU
+    // data ready to swap in. Unlike offload_partial_params, this does NOT
+    // call restore_partial_params() — the current partial state must remain
+    // intact so the in-flight compute is unaffected.
+    //
+    // The H2D goes through ggml_backend_tensor_copy() which for CUDA hits
+    // cudaStreamPerThread; compute runs on cuda_ctx->stream() (a separate
+    // non-blocking stream), so the two should overlap on-device.
+    bool offload_pending_params(const std::vector<ggml_tensor*>& tensors) {
+        if (params_backend == runtime_backend) {
+            return true;
+        }
+        if (tensors.empty()) {
+            return true;
+        }
+        GGML_ASSERT(pending_offload_ctx == nullptr);
+        GGML_ASSERT(pending_runtime_params_buffer == nullptr);
+        GGML_ASSERT(pending_offload_pairs.empty());
+
+        std::vector<ggml_tensor*> unique_tensors;
+        std::unordered_set<ggml_tensor*> seen_tensors;
+        unique_tensors.reserve(tensors.size());
+        seen_tensors.reserve(tensors.size());
+        for (ggml_tensor* tensor : tensors) {
+            if (tensor == nullptr) {
+                continue;
+            }
+            if (resident_param_set.find(tensor) != resident_param_set.end()) {
+                continue;
+            }
+            if (seen_tensors.insert(tensor).second) {
+                unique_tensors.push_back(tensor);
+            }
+        }
+        if (unique_tensors.empty()) {
+            return true;
+        }
+
+        ggml_init_params params;
+        params.mem_size   = std::max<size_t>(1, unique_tensors.size()) * ggml_tensor_overhead();
+        params.mem_buffer = nullptr;
+        params.no_alloc   = true;
+
+        pending_offload_ctx = ggml_init(params);
+        GGML_ASSERT(pending_offload_ctx != nullptr);
+
+        pending_offload_pairs.clear();
+        pending_offload_pairs.reserve(unique_tensors.size());
+
+        for (ggml_tensor* tensor : unique_tensors) {
+            GGML_ASSERT(tensor->view_src == nullptr);
+            ggml_tensor* dup = ggml_dup_tensor(pending_offload_ctx, tensor);
+            ggml_set_name(dup, tensor->name);
+            pending_offload_pairs.push_back({tensor, dup});
+        }
+
+        pending_runtime_params_buffer = ggml_backend_alloc_ctx_tensors(pending_offload_ctx, runtime_backend);
+        if (pending_runtime_params_buffer == nullptr) {
+            LOG_ERROR("%s alloc pending runtime params backend buffer failed, num_tensors = %zu",
+                      get_desc().c_str(),
+                      pending_offload_pairs.size());
+            ggml_free(pending_offload_ctx);
+            pending_offload_ctx = nullptr;
+            pending_offload_pairs.clear();
+            return false;
+        }
+        ggml_backend_buffer_set_usage(pending_runtime_params_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+        // Issue the H2D copies. The src tensors are still pointing at host
+        // (or params backend) data; the dup tensors are on runtime_backend.
+        // ggml_backend_tensor_copy(host_src, gpu_dst) calls
+        // ggml_backend_tensor_set(dst, ...) which for CUDA enqueues on
+        // cudaStreamPerThread — independent of the compute stream.
+        for (auto& pair : pending_offload_pairs) {
+            ggml_tensor* tensor         = pair.first;
+            ggml_tensor* offload_tensor = pair.second;
+            ggml_backend_tensor_copy(tensor, offload_tensor);
+        }
+
+        return true;
+    }
+
+    // Promote a pending (prefetched) offload track into the active partial
+    // track. Caller MUST have already torn down the previous partial track
+    // via restore_partial_params(). After this call, partial_* owns the
+    // pending dup-tensors and the swap into the active source tensors is
+    // performed here.
+    void promote_pending_to_partial() {
+        if (pending_offload_pairs.empty()) {
+            if (pending_runtime_params_buffer != nullptr) {
+                ggml_backend_buffer_free(pending_runtime_params_buffer);
+                pending_runtime_params_buffer = nullptr;
+            }
+            if (pending_offload_ctx != nullptr) {
+                ggml_free(pending_offload_ctx);
+                pending_offload_ctx = nullptr;
+            }
+            return;
+        }
+        GGML_ASSERT(partial_offload_pairs.empty());
+        GGML_ASSERT(partial_offload_ctx == nullptr);
+        GGML_ASSERT(partial_runtime_params_buffer == nullptr);
+
+        // Swap source tensors to point at the prefetched GPU storage.
+        for (auto& pair : pending_offload_pairs) {
+            ggml_tensor* tensor         = pair.first;
+            ggml_tensor* offload_tensor = pair.second;
+            std::swap(tensor->buffer, offload_tensor->buffer);
+            std::swap(tensor->data, offload_tensor->data);
+            std::swap(tensor->extra, offload_tensor->extra);
+        }
+        partial_offload_ctx           = pending_offload_ctx;
+        partial_runtime_params_buffer = pending_runtime_params_buffer;
+        partial_offload_pairs         = std::move(pending_offload_pairs);
+        pending_offload_ctx           = nullptr;
+        pending_runtime_params_buffer = nullptr;
+        pending_offload_pairs.clear();
+    }
+
+    // Discard any in-flight pending offload track without promoting it.
+    // Used on error paths after offload_pending_params() succeeded but the
+    // subsequent compute failed.
+    void discard_pending_params() {
+        if (pending_offload_pairs.empty()) {
+            if (pending_runtime_params_buffer != nullptr) {
+                ggml_backend_buffer_free(pending_runtime_params_buffer);
+                pending_runtime_params_buffer = nullptr;
+            }
+            if (pending_offload_ctx != nullptr) {
+                ggml_free(pending_offload_ctx);
+                pending_offload_ctx = nullptr;
+            }
+            return;
+        }
+        if (pending_runtime_params_buffer != nullptr) {
+            ggml_backend_buffer_free(pending_runtime_params_buffer);
+            pending_runtime_params_buffer = nullptr;
+        }
+        pending_offload_pairs.clear();
+        if (pending_offload_ctx != nullptr) {
+            ggml_free(pending_offload_ctx);
+            pending_offload_ctx = nullptr;
+        }
+    }
+
+    // chunk-K: load a set of params onto the runtime backend and keep them
+    // resident across compute() calls. Caller MUST have torn down any prior
+    // resident state via restore_resident_params() before calling. By design
+    // this does NOT call restore_resident_params() itself — the resident
+    // track persists across compute() invocations.
+    bool offload_resident_params(const std::vector<ggml_tensor*>& tensors) {
+        if (params_backend == runtime_backend) {
+            return true;
+        }
+        if (tensors.empty()) {
+            return true;
+        }
+        GGML_ASSERT(resident_runtime_params_buffer == nullptr);
+        GGML_ASSERT(resident_offload_ctx == nullptr);
+        GGML_ASSERT(resident_offload_pairs.empty());
+        GGML_ASSERT(resident_param_set.empty());
+
+        std::vector<ggml_tensor*> unique_tensors;
+        std::unordered_set<ggml_tensor*> seen;
+        unique_tensors.reserve(tensors.size());
+        seen.reserve(tensors.size());
+        for (ggml_tensor* t : tensors) {
+            if (t == nullptr) continue;
+            if (seen.insert(t).second) unique_tensors.push_back(t);
+        }
+        if (unique_tensors.empty()) return true;
+
+        ggml_init_params init = {};
+        init.mem_size   = std::max<size_t>(1, unique_tensors.size()) * ggml_tensor_overhead();
+        init.mem_buffer = nullptr;
+        init.no_alloc   = true;
+        resident_offload_ctx = ggml_init(init);
+        GGML_ASSERT(resident_offload_ctx != nullptr);
+
+        resident_offload_pairs.reserve(unique_tensors.size());
+        for (ggml_tensor* t : unique_tensors) {
+            GGML_ASSERT(t->view_src == nullptr);
+            ggml_tensor* twin = ggml_dup_tensor(resident_offload_ctx, t);
+            ggml_set_name(twin, t->name);
+            resident_offload_pairs.push_back({t, twin});
+        }
+
+        resident_runtime_params_buffer = ggml_backend_alloc_ctx_tensors(resident_offload_ctx, runtime_backend);
+        if (resident_runtime_params_buffer == nullptr) {
+            LOG_ERROR("%s alloc resident runtime params backend buffer failed, num_tensors = %zu",
+                      get_desc().c_str(), resident_offload_pairs.size());
+            ggml_free(resident_offload_ctx);
+            resident_offload_ctx = nullptr;
+            resident_offload_pairs.clear();
+            return false;
+        }
+        ggml_backend_buffer_set_usage(resident_runtime_params_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+        for (auto& pair : resident_offload_pairs) {
+            ggml_tensor* t = pair.first;
+            ggml_tensor* twin = pair.second;
+            ggml_backend_tensor_copy(t, twin);
+            std::swap(t->buffer, twin->buffer);
+            std::swap(t->data,   twin->data);
+            std::swap(t->extra,  twin->extra);
+            resident_param_set.insert(t);
+        }
+        ggml_backend_synchronize(runtime_backend);
+
+        size_t sz = ggml_backend_buffer_get_size(resident_runtime_params_buffer);
+        LOG_INFO("%s offload resident params (%6.2f MB, %zu tensors) to runtime backend (%s)",
+                 get_desc().c_str(),
+                 sz / (1024.f * 1024.f),
+                 resident_offload_pairs.size(),
+                 ggml_backend_name(runtime_backend));
+        return true;
+    }
+
+    void restore_resident_params() {
+        if (resident_offload_pairs.empty()) {
+            if (resident_runtime_params_buffer != nullptr) {
+                ggml_backend_buffer_free(resident_runtime_params_buffer);
+                resident_runtime_params_buffer = nullptr;
+            }
+            if (resident_offload_ctx != nullptr) {
+                ggml_free(resident_offload_ctx);
+                resident_offload_ctx = nullptr;
+            }
+            resident_param_set.clear();
+            resident_state_token = 0;
+            return;
+        }
+        for (auto& pair : resident_offload_pairs) {
+            ggml_tensor* t = pair.first;
+            ggml_tensor* twin = pair.second;
+            t->buffer = twin->buffer;
+            t->data   = twin->data;
+            t->extra  = twin->extra;
+            twin->buffer = nullptr;
+            twin->data   = nullptr;
+            twin->extra  = nullptr;
+        }
+        if (resident_runtime_params_buffer != nullptr) {
+            ggml_backend_buffer_free(resident_runtime_params_buffer);
+            resident_runtime_params_buffer = nullptr;
+        }
+        resident_offload_pairs.clear();
+        if (resident_offload_ctx != nullptr) {
+            ggml_free(resident_offload_ctx);
+            resident_offload_ctx = nullptr;
+        }
+        resident_param_set.clear();
+        resident_state_token = 0;
+    }
+
     bool should_use_graph_cut_segmented_compute(const GraphCutPlan& plan) {
         return plan.has_cuts &&
                plan.valid &&
@@ -2334,12 +2622,85 @@ protected:
                                 GraphCutPlan* plan_out) {
         GGML_ASSERT(plan_out != nullptr);
         GGML_ASSERT(gf != nullptr);
+
+        // Start from the user-set budget. When streaming is on, clamp to actual
+        // free VRAM at this moment so we don't overcommit when another runner
+        // (e.g. the LLM in cond_stage) already grabbed a chunk-K resident set
+        // earlier in the generation.
+        size_t effective_budget = max_graph_vram_bytes;
+        if (stream_layers_enabled && max_graph_vram_bytes > 0 && runtime_backend != nullptr) {
+            ggml_backend_dev_t dev = ggml_backend_get_device(runtime_backend);
+            if (dev != nullptr && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                size_t free_vram = 0, total_vram = 0;
+                ggml_backend_dev_memory(dev, &free_vram, &total_vram);
+                constexpr size_t safety_margin = 512ull * 1024 * 1024;
+                size_t free_clamp = (free_vram > safety_margin) ? (free_vram - safety_margin) : 0;
+                if (free_clamp < effective_budget) {
+                    LOG_INFO("%s clamping streaming budget: actual free VRAM %.2f MB < user cap %.2f MB",
+                             get_desc().c_str(),
+                             free_clamp / (1024.0 * 1024.0),
+                             effective_budget / (1024.0 * 1024.0));
+                    effective_budget = free_clamp;
+                }
+            }
+        }
+
+        // Split the effective budget so chunk-K residency and the prefetch
+        // window (2 segments + compute buffer + safety) coexist:
+        //   effective = chunk_K + 2*segment + reserve, with chunk_K == 2*segment
+        //   => segment = (effective - reserve) / 4
+        //   => chunk_K = 2 * segment
+        constexpr size_t reserve = 512ull * 1024 * 1024 + 768ull * 1024 * 1024;
+        size_t plan_budget       = effective_budget;
+        size_t residency_budget  = effective_budget;
+        if (stream_layers_enabled && effective_budget > 0) {
+            // Always pass the full effective_budget to the planner. Earlier
+            // versions of this branch shrank the budget to (effective-reserve)/4
+            // so the prefetch path could hold two segments + compute buffer
+            // simultaneously and overlap H2D with compute. That worked for
+            // simple workloads but produced wrong output (white frames /
+            // colored noise) whenever the smaller-merged-segments combined
+            // with non-default --guidance or --flow-shift and batch_count > 1
+            // (FP error accumulates across the extra boundary-cache
+            // roundtrips). Runtime LoRA needed the same fall-back for the
+            // same reason. With the full budget the planner produces the
+            // walker's large merged segments; async prefetch can't engage
+            // (no room for two), but chunk-K residency still runs on the
+            // unmerged base plan and keeps most of the per-step H2D win.
+            plan_budget      = effective_budget;
+            residency_budget = effective_budget;
+        }
+
         *plan_out = sd::ggml_graph_cut::resolve_plan(runtime_backend,
                                                      gf,
                                                      &graph_cut_plan_cache_,
-                                                     max_graph_vram_bytes,
+                                                     plan_budget,
                                                      params_tensor_set_,
                                                      get_desc().c_str());
+        if (stream_layers_enabled) {
+            // chunk-K residency lives alongside ONE active merged segment
+            // at compute time (we no longer prefetch two at once). Reserve
+            // room for the largest merged segment's params, then let chunk-K
+            // fill the rest. annotate_residency internally subtracts its own
+            // safety + compute_buffer pad, so we pass it `effective - largest`
+            // and it computes available = (effective - largest) - reserve.
+            size_t largest_segment_params = 0;
+            for (const auto& seg : plan_out->segments) {
+                if (seg.input_param_bytes > largest_segment_params) {
+                    largest_segment_params = seg.input_param_bytes;
+                }
+            }
+            const size_t residency_for_annotate =
+                (residency_budget > largest_segment_params)
+                    ? (residency_budget - largest_segment_params)
+                    : 0;
+            sd::ggml_graph_cut::annotate_residency(*plan_out, residency_for_annotate);
+            LOG_INFO("%s streaming budget = %.2f MB (largest merged segment = %.2f MB, chunk-K available = %.2f MB)",
+                     get_desc().c_str(),
+                     effective_budget / (1024.0 * 1024.0),
+                     largest_segment_params / (1024.0 * 1024.0),
+                     (residency_for_annotate > reserve ? (residency_for_annotate - reserve) : 0) / (1024.0 * 1024.0));
+        }
         return true;
     }
 
@@ -2630,6 +2991,365 @@ protected:
     }
 
 public:
+    // Release chunk-K resident params held across compute() calls. Safe to
+    // call at any point — if no resident state exists this is a no-op.
+    // stable-diffusion.cpp uses this to evict the diffusion model's resident
+    // set before VAE decode so VAE has VRAM for its compute buffer.
+    void release_streaming_residency() {
+        restore_resident_params();
+    }
+
+    template <typename T>
+    std::optional<sd::Tensor<T>> compute_streaming_segments(ggml_cgraph*        gf,
+                                                            const GraphCutPlan& plan,
+                                                            int                 n_threads,
+                                                            bool                free_compute_buffer_immediately,
+                                                            bool                no_return = false) {
+        GGML_ASSERT(gf != nullptr);
+
+        // chunk-K residency: annotate the BASE plan (per-layer granularity) and
+        // offload its first-K segments' params once. Compute itself proceeds on
+        // the MERGED plan (`plan`) for fused-graph efficiency; offload_partial_params
+        // filters out resident tensors so the merged-segment offload skips them.
+        //
+        // Disabled when a runtime weight_adapter (LoRA in at-runtime mode) is
+        // attached: chunk-K snapshots the CPU weight data once and freezes the
+        // GPU resident copy. A runtime adapter modifies the weights between
+        // calls (and even between sampling steps), which leaves the resident
+        // GPU copy stale — observable as garbage output on later batch images.
+        // Our state_token hashes tensor *pointers*, not data, so it can't
+        // detect the modification; the safe behaviour is to release any prior
+        // resident set and skip the rebuild. Async prefetch on the streaming
+        // path still engages, so the perf hit is bounded.
+        if (weight_adapter != nullptr) {
+            restore_resident_params();
+        } else {
+            sd::ggml_graph_cut::Plan& base_plan = graph_cut_plan_cache_.graph_cut_plan;
+            if (base_plan.available) {
+                // Reserve headroom for the active merged-segment's params
+                // (the running compute holds them on GPU alongside chunk-K).
+                // Without this, chunk-K can grow until the largest merged
+                // segment's offload OOMs. Find the worst-case merged segment
+                // and subtract its param weight from the chunk-K budget.
+                size_t largest_merged_params = 0;
+                for (const auto& seg : plan.segments) {
+                    if (seg.input_param_bytes > largest_merged_params) {
+                        largest_merged_params = seg.input_param_bytes;
+                    }
+                }
+                const size_t chunk_k_budget =
+                    (max_graph_vram_bytes > largest_merged_params)
+                        ? (max_graph_vram_bytes - largest_merged_params)
+                        : 0;
+                sd::ggml_graph_cut::annotate_residency(base_plan, chunk_k_budget);
+
+                std::vector<ggml_tensor*> resident_params;
+                uint64_t token = 0;
+                for (const auto& segment : base_plan.segments) {
+                    if (segment.residency != sd::ggml_graph_cut::SegmentResidency::RESIDENT) {
+                        continue;
+                    }
+                    auto seg_params = sd::ggml_graph_cut::param_tensors(gf, segment);
+                    for (ggml_tensor* t : seg_params) {
+                        if (t == nullptr) continue;
+                        resident_params.push_back(t);
+                        token ^= reinterpret_cast<uintptr_t>(t) * 0x9E3779B97F4A7C15ull;
+                    }
+                }
+                if (token != resident_state_token) {
+                    if (resident_state_token != 0) {
+                        LOG_DEBUG("%s chunk-K: base-plan residency changed, rebuilding resident set",
+                                  get_desc().c_str());
+                    }
+                    restore_resident_params();
+                    if (!resident_params.empty()) {
+                        if (offload_resident_params(resident_params)) {
+                            resident_state_token = token;
+                        } else {
+                            LOG_ERROR("%s chunk-K: resident offload failed; continuing with per-segment streaming",
+                                      get_desc().c_str());
+                            restore_resident_params();
+                        }
+                    }
+                }
+            }
+        }
+
+        free_compute_buffer();
+        free_cache_ctx_and_buffer();
+
+        // Load any tensors not associated with a segment (a "_global" group
+        // holds the head/tail params). Move to GPU once for the full run.
+        layer_registry_.move_layer_to_gpu("_global");
+
+        // Async prefetch is currently disabled. The path is still implemented
+        // (compute_streaming_segments_prefetch below) and was the source of
+        // the original 26% wallclock win on the no-LoRA path, but two
+        // correctness problems force it off for now:
+        //
+        //   * Multi-LoRA workloads: graph_compute_async + per-segment
+        //     pending offload races MultiLoraAdapter's per-layer patch_weight
+        //     reads, producing colored static noise on both batch images.
+        //   * batch_count > 1 combined with non-default --guidance AND
+        //     --flow-shift: the smaller merged segments required to fit two
+        //     prefetched buffers + compute buffer in --max-vram accumulate
+        //     enough FP error across the extra boundary-cache roundtrips to
+        //     collapse the diffusion output to pure white frames.
+        //
+        // Until both are properly fixed (most likely by porting PR #1477's
+        // chunk_graph.hpp — see unified_streaming_future_optimizations memory
+        // note), the synchronous segment loop below is the only validated
+        // streaming path. chunk-K residency still engages, which preserves
+        // most of the per-step H2D savings.
+        const bool prefetch_enabled = false;
+
+        if (prefetch_enabled) {
+            return compute_streaming_segments_prefetch<T>(gf, plan, n_threads, no_return);
+        }
+
+        std::optional<sd::Tensor<T>> output = sd::Tensor<T>();
+        for (size_t seg_idx = 0; seg_idx < plan.segments.size(); ++seg_idx) {
+            int64_t t_segment_begin = ggml_time_ms();
+            const auto& segment     = plan.segments[seg_idx];
+            const bool  is_last     = seg_idx + 1 == plan.segments.size();
+            auto future_cut_names   = sd::ggml_graph_cut::collect_future_input_names(gf, plan, seg_idx);
+
+            LOG_DEBUG("%s streaming-cut executing segment %zu/%zu: %s (residency=%s)",
+                      get_desc().c_str(),
+                      seg_idx + 1,
+                      plan.segments.size(),
+                      segment.group_name.c_str(),
+                      segment.residency == sd::ggml_graph_cut::SegmentResidency::RESIDENT ? "RESIDENT" : "STREAMED");
+
+            // Move this segment's layer group onto GPU (skipped for resident
+            // groups already loaded). Registry is currently unpopulated at
+            // runtime, so this is a harmless no-op until chunk-K residency
+            // lands in a later task.
+            if (!layer_registry_.move_layer_to_gpu(segment.group_name)) {
+                LOG_DEBUG("%s streaming: no registry entry for group '%s' (using upstream offload path)",
+                          get_desc().c_str(),
+                          segment.group_name.c_str());
+            }
+
+            reset_segment_runtime_tensors(segment, gf);
+            if (!bind_segment_cached_inputs(gf, segment)) {
+                free_cache_ctx_and_buffer();
+                free_compute_buffer();
+                free_compute_ctx();
+                return std::nullopt;
+            }
+
+            if (!is_last) {
+                for (size_t output_idx = 0; output_idx < segment.output_node_indices.size(); ++output_idx) {
+                    ggml_tensor* out_tensor = sd::ggml_graph_cut::output_tensor(gf, segment, output_idx);
+                    if (out_tensor != nullptr &&
+                        sd::ggml_graph_cut::is_graph_cut_tensor(out_tensor) &&
+                        future_cut_names.find(out_tensor->name) != future_cut_names.end()) {
+                        cache(out_tensor->name, out_tensor);
+                    }
+                }
+            }
+
+            ggml_context* segment_graph_ctx = nullptr;
+            ggml_cgraph*  segment_graph     = sd::ggml_graph_cut::build_segment_graph(gf, segment, &segment_graph_ctx);
+            auto segment_output             = execute_graph<T>(segment_graph,
+                                                   n_threads,
+                                                   /*free_compute_buffer_immediately=*/true,
+                                                   sd::ggml_graph_cut::runtime_param_tensors(gf, segment, get_desc().c_str()),
+                                                   /*preserve_backend_tensor_data_map=*/true,
+                                                   /*no_return=*/!is_last || no_return,
+                                                   &future_cut_names);
+            ggml_free(segment_graph_ctx);
+            if (!segment_output.has_value()) {
+                free_cache_ctx_and_buffer();
+                free_compute_buffer();
+                free_compute_ctx();
+                return std::nullopt;
+            }
+            output = std::move(segment_output);
+
+            // Evict this segment's layer group when streaming. Resident groups
+            // stay loaded for the next sampling step.
+            if (segment.residency == sd::ggml_graph_cut::SegmentResidency::STREAMED) {
+                layer_registry_.move_layer_to_cpu(segment.group_name);
+            }
+            (void)t_segment_begin;
+        }
+
+        backend_tensor_data_map.clear();
+        free_cache_ctx_and_buffer();
+        free_compute_ctx();
+        return output;
+    }
+
+private:
+    // Async-prefetch streaming executor. Identical semantics to the
+    // synchronous compute_streaming_segments() but interleaves the next
+    // segment's H2D copies with the current segment's GPU compute. Requires
+    // the planner budget to have been shrunk (see resolve_graph_cut_plan)
+    // so that two segments' partial-offload buffers + the compute buffer
+    // fit inside max_graph_vram_bytes.
+    template <typename T>
+    std::optional<sd::Tensor<T>> compute_streaming_segments_prefetch(ggml_cgraph*        gf,
+                                                                     const GraphCutPlan& plan,
+                                                                     int                 n_threads,
+                                                                     bool                no_return) {
+        std::optional<sd::Tensor<T>> output = sd::Tensor<T>();
+        std::vector<ggml_tensor*> current_params;
+        std::vector<ggml_tensor*> next_params;
+
+        // Pre-offload first segment synchronously so we can begin compute.
+        current_params = sd::ggml_graph_cut::runtime_param_tensors(gf, plan.segments[0], get_desc().c_str());
+        if (!offload_partial_params(current_params)) {
+            LOG_ERROR("%s prefetch: initial partial offload failed", get_desc().c_str());
+            free_cache_ctx_and_buffer();
+            free_compute_buffer();
+            free_compute_ctx();
+            return std::nullopt;
+        }
+
+        auto bail = [this]() -> std::optional<sd::Tensor<T>> {
+            discard_pending_params();
+            free_cache_ctx_and_buffer();
+            free_compute_buffer();
+            free_compute_ctx();
+            return std::nullopt;
+        };
+
+        for (size_t seg_idx = 0; seg_idx < plan.segments.size(); ++seg_idx) {
+            const auto& segment   = plan.segments[seg_idx];
+            const bool  is_last   = seg_idx + 1 == plan.segments.size();
+            auto future_cut_names = sd::ggml_graph_cut::collect_future_input_names(gf, plan, seg_idx);
+
+            LOG_DEBUG("%s prefetch executing segment %zu/%zu: %s (residency=%s)",
+                      get_desc().c_str(),
+                      seg_idx + 1,
+                      plan.segments.size(),
+                      segment.group_name.c_str(),
+                      segment.residency == sd::ggml_graph_cut::SegmentResidency::RESIDENT ? "RESIDENT" : "STREAMED");
+
+            if (!layer_registry_.move_layer_to_gpu(segment.group_name)) {
+                LOG_DEBUG("%s prefetch: no registry entry for group '%s'",
+                          get_desc().c_str(), segment.group_name.c_str());
+            }
+
+            reset_segment_runtime_tensors(segment, gf);
+            if (!bind_segment_cached_inputs(gf, segment)) {
+                return bail();
+            }
+
+            if (!is_last) {
+                for (size_t output_idx = 0; output_idx < segment.output_node_indices.size(); ++output_idx) {
+                    ggml_tensor* out_tensor = sd::ggml_graph_cut::output_tensor(gf, segment, output_idx);
+                    if (out_tensor != nullptr &&
+                        sd::ggml_graph_cut::is_graph_cut_tensor(out_tensor) &&
+                        future_cut_names.find(out_tensor->name) != future_cut_names.end()) {
+                        cache(out_tensor->name, out_tensor);
+                    }
+                }
+            }
+
+            ggml_context* segment_graph_ctx = nullptr;
+            ggml_cgraph*  segment_graph     = sd::ggml_graph_cut::build_segment_graph(gf, segment, &segment_graph_ctx);
+
+            // Build / alloc compute buffer for this segment.
+            if (!alloc_compute_buffer(segment_graph)) {
+                LOG_ERROR("%s prefetch: alloc_compute_buffer failed", get_desc().c_str());
+                ggml_free(segment_graph_ctx);
+                return bail();
+            }
+            if (!ggml_gallocr_alloc_graph(compute_allocr, segment_graph)) {
+                LOG_ERROR("%s prefetch: alloc_graph failed", get_desc().c_str());
+                ggml_free(segment_graph_ctx);
+                return bail();
+            }
+            copy_data_to_backend_tensor(segment_graph, /*clear_after_copy=*/false);
+            if (ggml_backend_is_cpu(runtime_backend)) {
+                ggml_backend_cpu_set_n_threads(runtime_backend, n_threads);
+            }
+
+            // ASYNC compute. Returns once the work is enqueued on the
+            // compute stream; H2D issued in offload_pending_params() below
+            // will land on cudaStreamPerThread (independent of compute).
+            ggml_status status = ggml_backend_graph_compute_async(runtime_backend, segment_graph);
+            if (status != GGML_STATUS_SUCCESS) {
+                LOG_ERROR("%s prefetch: graph_compute_async failed: %s",
+                          get_desc().c_str(),
+                          ggml_status_to_string(status));
+                ggml_backend_synchronize(runtime_backend);
+                ggml_free(segment_graph_ctx);
+                return bail();
+            }
+
+            // Issue prefetch for the NEXT segment while compute runs.
+            bool prefetched_next = false;
+            if (!is_last) {
+                next_params = sd::ggml_graph_cut::runtime_param_tensors(gf,
+                                                                        plan.segments[seg_idx + 1],
+                                                                        get_desc().c_str());
+                if (!offload_pending_params(next_params)) {
+                    LOG_ERROR("%s prefetch: pending offload failed at segment %zu",
+                              get_desc().c_str(), seg_idx + 1);
+                    ggml_backend_synchronize(runtime_backend);
+                    ggml_free(segment_graph_ctx);
+                    return bail();
+                }
+                prefetched_next = !pending_offload_pairs.empty();
+            }
+
+            // Wait for compute (and the just-issued H2D) to finish.
+            ggml_backend_synchronize(runtime_backend);
+
+            // Read output for the LAST segment.
+            if (is_last && !no_return) {
+                auto result = ggml_get_tensor(compute_ctx, final_result_name.c_str());
+                if (result != nullptr) {
+                    output = read_graph_tensor<T>(result, "output");
+                    if (!output.has_value()) {
+                        ggml_free(segment_graph_ctx);
+                        return bail();
+                    }
+                } else {
+                    output = sd::Tensor<T>();
+                }
+            }
+
+            // Cache outputs that future segments will consume.
+            if (!copy_cache_tensors_to_cache_buffer(&future_cut_names)) {
+                ggml_free(segment_graph_ctx);
+                return bail();
+            }
+
+            ggml_free(segment_graph_ctx);
+
+            // Free the just-used compute buffer so the next segment's
+            // allocator can allocate fresh. This also tears down compute_allocr.
+            if (compute_allocr != nullptr) {
+                ggml_gallocr_free(compute_allocr);
+                compute_allocr = nullptr;
+            }
+
+            // Restore current segment's partial params (frees its GPU buffer).
+            restore_partial_params();
+
+            // Promote prefetched next-segment params to active partial state.
+            if (prefetched_next) {
+                promote_pending_to_partial();
+            }
+
+            if (segment.residency == sd::ggml_graph_cut::SegmentResidency::STREAMED) {
+                layer_registry_.move_layer_to_cpu(segment.group_name);
+            }
+        }
+
+        backend_tensor_data_map.clear();
+        free_cache_ctx_and_buffer();
+        free_compute_ctx();
+        return output;
+    }
+
+public:
+
     virtual std::string get_desc() = 0;
 
     GGMLRunner(ggml_backend_t backend, ggml_backend_t params_backend)
@@ -2638,9 +3358,11 @@ public:
         GGML_ASSERT(runtime_backend != nullptr);
         GGML_ASSERT(params_backend != nullptr);
         alloc_params_ctx();
+        layer_registry_.set_backends(runtime_backend, params_backend);
     }
 
     virtual ~GGMLRunner() {
+        restore_resident_params();
         free_params_buffer();
         free_compute_buffer();
         free_params_ctx();
@@ -2713,6 +3435,11 @@ public:
     }
 
     void free_params_buffer() {
+        // If chunk-K residency is active, our swap pointers reference the
+        // params backend buffer. Tear it down BEFORE freeing the params
+        // buffer so the swapped-back tensors don't end up with dangling
+        // pointers to a freed buffer.
+        restore_resident_params();
         if (params_buffer != nullptr) {
             ggml_backend_buffer_free(params_buffer);
             params_buffer = nullptr;
@@ -2736,6 +3463,7 @@ public:
             ggml_gallocr_free(compute_allocr);
             compute_allocr = nullptr;
         }
+        discard_pending_params();
         restore_partial_params();
         restore_all_params();
     }
@@ -2817,6 +3545,13 @@ public:
                 return std::nullopt;
             }
             if (should_use_graph_cut_segmented_compute(plan)) {
+                if (stream_layers_enabled) {
+                    return compute_streaming_segments<T>(gf,
+                                                         plan,
+                                                         n_threads,
+                                                         free_compute_buffer_immediately,
+                                                         no_return);
+                }
                 return compute_with_graph_cuts<T>(gf,
                                                   plan,
                                                   n_threads,
@@ -2856,6 +3591,12 @@ public:
     void set_max_graph_vram_bytes(size_t max_vram_bytes) {
         max_graph_vram_bytes = max_vram_bytes;
     }
+
+    void set_stream_layers_enabled(bool enabled) {
+        stream_layers_enabled = enabled;
+    }
+
+    sd::layer_registry::Registry& get_layer_registry() { return layer_registry_; }
 
     ggml_backend_t get_runtime_backend() {
         return runtime_backend;
