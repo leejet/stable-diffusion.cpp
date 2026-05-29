@@ -275,6 +275,7 @@ public:
                       std::set<std::string> ignore_tensors = {},
                       int n_threads                        = 0,
                       bool use_mmap                        = false);
+    bool load_tensor(const TensorStorage& tensor_storage, ggml_tensor* dst_tensor);
 
     std::vector<std::string> get_tensor_names() const {
         std::vector<std::string> names;
