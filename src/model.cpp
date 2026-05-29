@@ -1000,7 +1000,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                     }
 
                     if (dst_tensor->data == nullptr) {
-                        LOG_ERROR("memory allocation failed '%s'", tensor_storage.name.c_str());
+                        LOG_ERROR("process tensor data failed: '%s'", tensor_storage.name.c_str());
                         failed = true;
                         break;
                     }
