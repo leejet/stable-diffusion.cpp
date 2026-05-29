@@ -419,6 +419,10 @@ ArgOptions SDContextParams::get_options() {
 
     options.bool_options = {
         {"",
+         "--stream-layers",
+         "enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram; defaults to false)",
+         true, &stream_layers},
+        {"",
          "--force-sdxl-vae-conv-scale",
          "force use of conv scale on sdxl vae",
          true, &force_sdxl_vae_conv_scale},
@@ -694,6 +698,7 @@ std::string SDContextParams::to_string() const {
         << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
         << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
         << "  max_vram: " << max_vram << ",\n"
+        << "  stream_layers: " << (stream_layers ? "true" : "false") << ",\n"
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
         << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
@@ -773,6 +778,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         chroma_t5_mask_pad,
         qwen_image_zero_cond_t,
         max_vram,
+        stream_layers,
         backend.c_str(),
         params_backend.c_str(),
     };

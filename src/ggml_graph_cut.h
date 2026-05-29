@@ -2,6 +2,7 @@
 #define __SD_GGML_GRAPH_CUT_H__
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -10,6 +11,16 @@
 #include "ggml.h"
 
 namespace sd::ggml_graph_cut {
+
+    // Whether a segment's params live on the GPU across the entire generation
+    // (RESIDENT) or get streamed in per sampling step then evicted (STREAMED).
+    // Only populated when the planner is invoked with stream_layers_enabled=true;
+    // otherwise every segment is implicitly STREAMED and the existing walker in
+    // GGMLRunner::compute() handles it (upstream behavior unchanged).
+    enum class SegmentResidency : uint8_t {
+        STREAMED = 0,
+        RESIDENT = 1,
+    };
 
     struct Segment {
         enum InputType {
@@ -34,6 +45,7 @@ namespace sd::ggml_graph_cut {
         std::vector<int> internal_node_indices;
         std::vector<int> output_node_indices;
         std::vector<InputRef> input_refs;
+        SegmentResidency residency = SegmentResidency::STREAMED;
     };
 
     struct Plan {
@@ -101,6 +113,17 @@ namespace sd::ggml_graph_cut {
                       size_t max_graph_vram_bytes,
                       const std::unordered_set<const ggml_tensor*>& params_tensor_set,
                       const char* log_desc);
+
+    // Annotate the first K segments of plan as RESIDENT, where K is the
+    // number of leading segments that fit in the residency budget. K is
+    // determined by:
+    //   K = (max_graph_vram_bytes - prefetch_reserve - safety
+    //        - compute_buffer_reserve) / per_segment_param_bytes,
+    //   clamped to plan.segments.size().
+    //
+    // If max_graph_vram_bytes is 0 or the plan has fewer than 2 segments,
+    // this is a no-op (no annotation; behavior matches upstream).
+    void annotate_residency(Plan& plan, size_t max_graph_vram_bytes);
 }  // namespace sd::ggml_graph_cut
 
 #endif
