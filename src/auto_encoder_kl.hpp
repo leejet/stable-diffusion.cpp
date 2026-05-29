@@ -700,7 +700,15 @@ struct AutoEncoderKL : public VAE {
             }
         }
         ae = AutoEncoderKLModel(version, decode_only, use_linear_projection, use_video_decoder, tensor_storage_map, prefix);
-        ae.init(params_ctx, tensor_storage_map, prefix);
+        {
+            auto f32_map = tensor_storage_map;
+            for (auto& [name, storage] : f32_map) {
+                if (starts_with(name, prefix)) {
+                    storage.expected_type = GGML_TYPE_F32;
+                }
+            }
+            ae.init(params_ctx, f32_map, prefix);
+        }
     }
 
     void set_conv2d_scale(float scale) override {
