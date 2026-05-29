@@ -86,34 +86,55 @@ namespace Flux {
     struct SelfAttention : public GGMLBlock {
     public:
         int64_t num_heads;
+        int64_t hidden_size;
+        bool fused_qkv;
 
     public:
         SelfAttention(int64_t dim,
-                      int64_t num_heads = 8,
-                      bool qkv_bias     = false,
-                      bool proj_bias    = true)
-            : num_heads(num_heads) {
+                      int64_t num_heads     = 8,
+                      bool qkv_bias         = false,
+                      bool proj_bias        = true,
+                      bool fused_qkv        = true)
+            : num_heads(num_heads), hidden_size(dim), fused_qkv(fused_qkv) {
             int64_t head_dim = dim / num_heads;
-            blocks["qkv"]    = std::shared_ptr<GGMLBlock>(new Linear(dim, dim * 3, qkv_bias));
+            if (fused_qkv) {
+                blocks["qkv"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim * 3, qkv_bias));
+            } else {
+                blocks["to_q"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim, qkv_bias));
+                blocks["to_k"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim, qkv_bias));
+                blocks["to_v"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim, qkv_bias));
+            }
             blocks["norm"]   = std::shared_ptr<GGMLBlock>(new QKNorm(head_dim));
             blocks["proj"]   = std::shared_ptr<GGMLBlock>(new Linear(dim, dim, proj_bias));
         }
 
         std::vector<ggml_tensor*> pre_attention(GGMLRunnerContext* ctx, ggml_tensor* x) {
-            auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
-            auto norm     = std::dynamic_pointer_cast<QKNorm>(blocks["norm"]);
+            auto norm = std::dynamic_pointer_cast<QKNorm>(blocks["norm"]);
+            int64_t head_dim = hidden_size / num_heads;
 
-            auto qkv         = qkv_proj->forward(ctx, x);
-            int64_t head_dim = qkv->ne[0] / 3 / num_heads;
-            auto q           = ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, num_heads, qkv->ne[1], qkv->ne[2],
-                                            qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], 0);
-            auto k           = ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, num_heads, qkv->ne[1], qkv->ne[2],
-                                            qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], (qkv->nb[0]) * qkv->ne[0] / 3);
-            auto v           = ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, num_heads, qkv->ne[1], qkv->ne[2],
-                                            qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], (qkv->nb[0]) * 2 * qkv->ne[0] / 3);
-            q                = norm->query_norm(ctx, q);
-            k                = norm->key_norm(ctx, k);
-            return {q, k, v};
+            if (fused_qkv) {
+                auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
+                auto qkv      = qkv_proj->forward(ctx, x);
+                auto q        = ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, num_heads, qkv->ne[1], qkv->ne[2],
+                                             qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], 0);
+                auto k        = ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, num_heads, qkv->ne[1], qkv->ne[2],
+                                             qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], (qkv->nb[0]) * qkv->ne[0] / 3);
+                auto v        = ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, num_heads, qkv->ne[1], qkv->ne[2],
+                                             qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], (qkv->nb[0]) * 2 * qkv->ne[0] / 3);
+                q             = norm->query_norm(ctx, q);
+                k             = norm->key_norm(ctx, k);
+                return {q, k, v};
+            } else {
+                auto q_proj = std::dynamic_pointer_cast<Linear>(blocks["to_q"]);
+                auto k_proj = std::dynamic_pointer_cast<Linear>(blocks["to_k"]);
+                auto v_proj = std::dynamic_pointer_cast<Linear>(blocks["to_v"]);
+                auto q      = ggml_reshape_4d(ctx->ggml_ctx, q_proj->forward(ctx, x), head_dim, num_heads, x->ne[1], x->ne[2]);
+                auto k      = ggml_reshape_4d(ctx->ggml_ctx, k_proj->forward(ctx, x), head_dim, num_heads, x->ne[1], x->ne[2]);
+                auto v      = ggml_reshape_4d(ctx->ggml_ctx, v_proj->forward(ctx, x), head_dim, num_heads, x->ne[1], x->ne[2]);
+                q           = norm->query_norm(ctx, q);
+                k           = norm->key_norm(ctx, k);
+                return {q, k, v};
+            }
         }
 
         ggml_tensor* post_attention(GGMLRunnerContext* ctx, ggml_tensor* x) {
@@ -272,7 +293,7 @@ namespace Flux {
                 blocks["img_mod"] = std::shared_ptr<GGMLBlock>(new Modulation(hidden_size, true));
             }
             blocks["img_norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
-            blocks["img_attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias, mlp_proj_bias));
+            blocks["img_attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias, mlp_proj_bias, !share_modulation));
 
             blocks["img_norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
             if (use_yak_mlp) {
@@ -285,7 +306,7 @@ namespace Flux {
                 blocks["txt_mod"] = std::shared_ptr<GGMLBlock>(new Modulation(hidden_size, true));
             }
             blocks["txt_norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
-            blocks["txt_attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias, mlp_proj_bias));
+            blocks["txt_attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias, mlp_proj_bias, !share_modulation));
 
             blocks["txt_norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
             if (use_yak_mlp) {

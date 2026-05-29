@@ -11,6 +11,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "model.h"
@@ -28,6 +29,7 @@
 #include "zip.h"
 
 #include "name_conversion.h"
+#include "json.hpp"
 
 /*================================================= Preprocess ==================================================*/
 
@@ -208,8 +210,77 @@ void ModelLoader::add_tensor_storage(const TensorStorage& tensor_storage) {
     tensor_storage_map[tensor_storage.name] = tensor_storage;
 }
 
+bool is_sharded_safetensors_directory(const std::string& file_path) {
+    if (!is_directory(file_path)) {
+        return false;
+    }
+    std::string index_path = path_join(file_path, "model.safetensors.index.json");
+    return file_exists(index_path);
+}
+
+bool ModelLoader::init_from_sharded_safetensors_file(const std::string& file_path, const std::string& prefix) {
+    std::string index_path = path_join(file_path, "model.safetensors.index.json");
+
+    nlohmann::json index;
+    {
+        std::ifstream f(index_path);
+        if (!f.is_open()) {
+            LOG_ERROR("failed to open %s", index_path.c_str());
+            return false;
+        }
+        f >> index;
+    }
+
+    auto weight_map = index.find("weight_map");
+    if (weight_map == index.end()) {
+        LOG_ERROR("no weight_map in %s", index_path.c_str());
+        return false;
+    }
+
+    // Collect unique shard files
+    std::unordered_set<std::string> shard_files;
+    for (auto& [tensor_name, shard_file] : weight_map->items()) {
+        (void)tensor_name;
+        shard_files.insert(shard_file.get<std::string>());
+    }
+
+    size_t file_index_offset = file_paths_.size();
+
+    for (const auto& shard_file_name : shard_files) {
+        std::string shard_path = path_join(file_path, shard_file_name);
+        LOG_DEBUG("init from shard '%s'", shard_path.c_str());
+
+        std::vector<TensorStorage> tensor_storages;
+        std::string error;
+        if (!read_safetensors_file(shard_path, tensor_storages, &error)) {
+            LOG_ERROR("failed to read shard %s: %s", shard_path.c_str(), error.c_str());
+            return false;
+        }
+
+        file_paths_.push_back(shard_path);
+        size_t file_index = file_index_offset;
+
+        for (auto& tensor_storage : tensor_storages) {
+            if (!starts_with(tensor_storage.name, prefix)) {
+                tensor_storage.name = prefix + tensor_storage.name;
+            }
+            tensor_storage.file_index = file_index;
+            add_tensor_storage(tensor_storage);
+        }
+        file_index_offset++;
+    }
+
+    LOG_INFO("loaded %zu tensors from %zu shards in %s",
+             tensor_storage_map.size(), shard_files.size(), file_path.c_str());
+    return true;
+}
+
 bool ModelLoader::init_from_file(const std::string& file_path, const std::string& prefix) {
     if (is_directory(file_path)) {
+        if (is_sharded_safetensors_directory(file_path)) {
+            LOG_INFO("load %s using sharded safetensors format", file_path.c_str());
+            return init_from_sharded_safetensors_file(file_path, prefix);
+        }
         LOG_INFO("load %s using diffusers format", file_path.c_str());
         return init_from_diffusers_file(file_path, prefix);
     } else if (is_gguf_file(file_path)) {
@@ -452,7 +523,8 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("llm_adapter.blocks.0.cross_attn.q_proj.weight") != std::string::npos) {
             return VERSION_ANIMA;
         }
-        if (tensor_storage.name.find("model.diffusion_model.double_stream_modulation_img.lin.weight") != std::string::npos) {
+        if (tensor_storage.name.find("model.diffusion_model.double_stream_modulation_img.lin.weight") != std::string::npos ||
+            tensor_storage.name.find("model.diffusion_model.double_stream_modulation_img.linear.weight") != std::string::npos) {
             is_flux2 = true;
         }
         if (tensor_storage.name.find("single_blocks.47.linear1.weight") != std::string::npos) {

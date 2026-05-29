@@ -538,11 +538,25 @@ std::string convert_diffusers_dit_to_original_flux(std::string name) {
         flux_name_map["time_text_embed.guidance_embedder.linear_2.weight"] = "guidance_in.out_layer.weight";
         flux_name_map["time_text_embed.guidance_embedder.linear_2.bias"]   = "guidance_in.out_layer.bias";
 
+        // --- time_guidance_embed (flux.2 klein) ---
+        flux_name_map["time_guidance_embed.timestep_embedder.linear_1.weight"] = "time_in.in_layer.weight";
+        flux_name_map["time_guidance_embed.timestep_embedder.linear_1.bias"]   = "time_in.in_layer.bias";
+        flux_name_map["time_guidance_embed.timestep_embedder.linear_2.weight"] = "time_in.out_layer.weight";
+        flux_name_map["time_guidance_embed.timestep_embedder.linear_2.bias"]   = "time_in.out_layer.bias";
+
         // --- context_embedder / x_embedder ---
         flux_name_map["context_embedder.weight"] = "txt_in.weight";
         flux_name_map["context_embedder.bias"]   = "txt_in.bias";
         flux_name_map["x_embedder.weight"]       = "img_in.weight";
         flux_name_map["x_embedder.bias"]         = "img_in.bias";
+
+        // --- shared modulation (flux.2 klein) ---
+        flux_name_map["double_stream_modulation_img.linear.weight"] = "double_stream_modulation_img.lin.weight";
+        flux_name_map["double_stream_modulation_img.linear.bias"]   = "double_stream_modulation_img.lin.bias";
+        flux_name_map["double_stream_modulation_txt.linear.weight"] = "double_stream_modulation_txt.lin.weight";
+        flux_name_map["double_stream_modulation_txt.linear.bias"]   = "double_stream_modulation_txt.lin.bias";
+        flux_name_map["single_stream_modulation.linear.weight"]     = "single_stream_modulation.lin.weight";
+        flux_name_map["single_stream_modulation.linear.bias"]       = "single_stream_modulation.lin.bias";
 
         // --- double transformer blocks ---
         for (int i = 0; i < num_layers; ++i) {
@@ -554,20 +568,20 @@ std::string convert_diffusers_dit_to_original_flux(std::string name) {
             flux_name_map[block_prefix + "norm1_context.linear.weight"] = dst_prefix + "txt_mod.lin.weight";
             flux_name_map[block_prefix + "norm1_context.linear.bias"]   = dst_prefix + "txt_mod.lin.bias";
 
-            // attn
-            flux_name_map[block_prefix + "attn.to_q.weight"] = dst_prefix + "img_attn.qkv.weight";
-            flux_name_map[block_prefix + "attn.to_q.bias"]   = dst_prefix + "img_attn.qkv.bias";
-            flux_name_map[block_prefix + "attn.to_k.weight"] = dst_prefix + "img_attn.qkv.weight.1";
-            flux_name_map[block_prefix + "attn.to_k.bias"]   = dst_prefix + "img_attn.qkv.bias.1";
-            flux_name_map[block_prefix + "attn.to_v.weight"] = dst_prefix + "img_attn.qkv.weight.2";
-            flux_name_map[block_prefix + "attn.to_v.bias"]   = dst_prefix + "img_attn.qkv.bias.2";
+            // attn (separate q/k/v)
+            flux_name_map[block_prefix + "attn.to_q.weight"] = dst_prefix + "img_attn.to_q.weight";
+            flux_name_map[block_prefix + "attn.to_q.bias"]   = dst_prefix + "img_attn.to_q.bias";
+            flux_name_map[block_prefix + "attn.to_k.weight"] = dst_prefix + "img_attn.to_k.weight";
+            flux_name_map[block_prefix + "attn.to_k.bias"]   = dst_prefix + "img_attn.to_k.bias";
+            flux_name_map[block_prefix + "attn.to_v.weight"] = dst_prefix + "img_attn.to_v.weight";
+            flux_name_map[block_prefix + "attn.to_v.bias"]   = dst_prefix + "img_attn.to_v.bias";
 
-            flux_name_map[block_prefix + "attn.add_q_proj.weight"] = dst_prefix + "txt_attn.qkv.weight";
-            flux_name_map[block_prefix + "attn.add_q_proj.bias"]   = dst_prefix + "txt_attn.qkv.bias";
-            flux_name_map[block_prefix + "attn.add_k_proj.weight"] = dst_prefix + "txt_attn.qkv.weight.1";
-            flux_name_map[block_prefix + "attn.add_k_proj.bias"]   = dst_prefix + "txt_attn.qkv.bias.1";
-            flux_name_map[block_prefix + "attn.add_v_proj.weight"] = dst_prefix + "txt_attn.qkv.weight.2";
-            flux_name_map[block_prefix + "attn.add_v_proj.bias"]   = dst_prefix + "txt_attn.qkv.bias.2";
+            flux_name_map[block_prefix + "attn.add_q_proj.weight"] = dst_prefix + "txt_attn.to_q.weight";
+            flux_name_map[block_prefix + "attn.add_q_proj.bias"]   = dst_prefix + "txt_attn.to_q.bias";
+            flux_name_map[block_prefix + "attn.add_k_proj.weight"] = dst_prefix + "txt_attn.to_k.weight";
+            flux_name_map[block_prefix + "attn.add_k_proj.bias"]   = dst_prefix + "txt_attn.to_k.bias";
+            flux_name_map[block_prefix + "attn.add_v_proj.weight"] = dst_prefix + "txt_attn.to_v.weight";
+            flux_name_map[block_prefix + "attn.add_v_proj.bias"]   = dst_prefix + "txt_attn.to_v.bias";
 
             // norm
             flux_name_map[block_prefix + "attn.norm_q.weight"]       = dst_prefix + "img_attn.norm.query_norm.scale";
@@ -590,6 +604,16 @@ std::string convert_diffusers_dit_to_original_flux(std::string name) {
             flux_name_map[block_prefix + "ff_context.net.0.proj.bias"]   = dst_prefix + "txt_mlp.0.bias";
             flux_name_map[block_prefix + "ff_context.net.2.weight"]      = dst_prefix + "txt_mlp.2.weight";
             flux_name_map[block_prefix + "ff_context.net.2.bias"]        = dst_prefix + "txt_mlp.2.bias";
+
+            // ff.linear_in / linear_out (flux.2 klein)
+            flux_name_map[block_prefix + "ff.linear_in.weight"]  = dst_prefix + "img_mlp.0.weight";
+            flux_name_map[block_prefix + "ff.linear_in.bias"]    = dst_prefix + "img_mlp.0.bias";
+            flux_name_map[block_prefix + "ff.linear_out.weight"] = dst_prefix + "img_mlp.2.weight";
+            flux_name_map[block_prefix + "ff.linear_out.bias"]   = dst_prefix + "img_mlp.2.bias";
+            flux_name_map[block_prefix + "ff_context.linear_in.weight"]  = dst_prefix + "txt_mlp.0.weight";
+            flux_name_map[block_prefix + "ff_context.linear_in.bias"]    = dst_prefix + "txt_mlp.0.bias";
+            flux_name_map[block_prefix + "ff_context.linear_out.weight"] = dst_prefix + "txt_mlp.2.weight";
+            flux_name_map[block_prefix + "ff_context.linear_out.bias"]   = dst_prefix + "txt_mlp.2.bias";
 
             // output projections
             flux_name_map[block_prefix + "attn.to_out.0.weight"]   = dst_prefix + "img_attn.proj.weight";
@@ -622,6 +646,12 @@ std::string convert_diffusers_dit_to_original_flux(std::string name) {
             flux_name_map[dst_prefix + "norm.key_norm.weight"]   = dst_prefix + "norm.key_norm.scale";
             flux_name_map[block_prefix + "proj_out.weight"]      = dst_prefix + "linear2.weight";
             flux_name_map[block_prefix + "proj_out.bias"]        = dst_prefix + "linear2.bias";
+
+            // fused to_qkv_mlp_proj (flux.2 klein)
+            flux_name_map[block_prefix + "attn.to_qkv_mlp_proj.weight"] = dst_prefix + "linear1.weight";
+            flux_name_map[block_prefix + "attn.to_qkv_mlp_proj.bias"]   = dst_prefix + "linear1.bias";
+            flux_name_map[block_prefix + "attn.to_out.weight"]          = dst_prefix + "linear2.weight";
+            flux_name_map[block_prefix + "attn.to_out.bias"]            = dst_prefix + "linear2.bias";
         }
 
         // --- final layers ---
