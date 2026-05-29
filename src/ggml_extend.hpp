@@ -2704,8 +2704,38 @@ protected:
         return true;
     }
 
+    struct PersistentExternalBinding {
+        ggml_backend_buffer_t buffer = nullptr;
+        void* data                   = nullptr;
+        void* extra                  = nullptr;
+    };
+
+    void snapshot_persistent_externals(const sd::ggml_graph_cut::Plan& plan,
+                                       ggml_cgraph* gf,
+                                       std::unordered_map<ggml_tensor*, PersistentExternalBinding>& out) {
+        GGML_ASSERT(gf != nullptr);
+        out.clear();
+        for (const auto& segment : plan.segments) {
+            for (const auto& input : segment.input_refs) {
+                if (input.type != GraphCutSegment::INPUT_EXTERNAL) {
+                    continue;
+                }
+                ggml_tensor* tensor = sd::ggml_graph_cut::input_tensor(gf, input);
+                if (tensor == nullptr || tensor->buffer == nullptr) {
+                    continue;
+                }
+                PersistentExternalBinding binding;
+                binding.buffer = tensor->buffer;
+                binding.data   = tensor->data;
+                binding.extra  = tensor->extra;
+                out[tensor]    = binding;
+            }
+        }
+    }
+
     void reset_segment_runtime_tensors(const GraphCutSegment& segment,
-                                       ggml_cgraph* gf) {
+                                       ggml_cgraph* gf,
+                                       const std::unordered_map<ggml_tensor*, PersistentExternalBinding>* persistent_externals = nullptr) {
         GGML_ASSERT(gf != nullptr);
 
         for (const auto& input : segment.input_refs) {
@@ -2715,11 +2745,25 @@ protected:
             }
             switch (input.type) {
                 case GraphCutSegment::INPUT_PREVIOUS_CUT:
-                case GraphCutSegment::INPUT_EXTERNAL:
                     input_tensor->buffer = nullptr;
                     input_tensor->data   = nullptr;
                     input_tensor->extra  = nullptr;
                     break;
+                case GraphCutSegment::INPUT_EXTERNAL: {
+                    if (persistent_externals != nullptr) {
+                        auto it = persistent_externals->find(input_tensor);
+                        if (it != persistent_externals->end()) {
+                            input_tensor->buffer = it->second.buffer;
+                            input_tensor->data   = it->second.data;
+                            input_tensor->extra  = it->second.extra;
+                            break;
+                        }
+                    }
+                    input_tensor->buffer = nullptr;
+                    input_tensor->data   = nullptr;
+                    input_tensor->extra  = nullptr;
+                    break;
+                }
                 case GraphCutSegment::INPUT_PARAM:
                     break;
             }
@@ -2934,6 +2978,9 @@ protected:
         free_compute_buffer();
         free_cache_ctx_and_buffer();
 
+        std::unordered_map<ggml_tensor*, PersistentExternalBinding> persistent_externals;
+        snapshot_persistent_externals(plan, gf, persistent_externals);
+
         std::optional<sd::Tensor<T>> output = sd::Tensor<T>();
         for (size_t seg_idx = 0; seg_idx < plan.segments.size(); ++seg_idx) {
             int64_t t_segment_begin = ggml_time_ms();
@@ -2945,7 +2992,7 @@ protected:
                       plan.segments.size(),
                       segment.group_name.c_str());
 
-            reset_segment_runtime_tensors(segment, gf);
+            reset_segment_runtime_tensors(segment, gf, &persistent_externals);
             if (!bind_segment_cached_inputs(gf, segment)) {
                 free_cache_ctx_and_buffer();
                 free_compute_buffer();
@@ -3107,6 +3154,9 @@ public:
             return compute_streaming_segments_prefetch<T>(gf, plan, n_threads, no_return);
         }
 
+        std::unordered_map<ggml_tensor*, PersistentExternalBinding> persistent_externals;
+        snapshot_persistent_externals(plan, gf, persistent_externals);
+
         std::optional<sd::Tensor<T>> output = sd::Tensor<T>();
         for (size_t seg_idx = 0; seg_idx < plan.segments.size(); ++seg_idx) {
             int64_t t_segment_begin = ggml_time_ms();
@@ -3131,7 +3181,7 @@ public:
                           segment.group_name.c_str());
             }
 
-            reset_segment_runtime_tensors(segment, gf);
+            reset_segment_runtime_tensors(segment, gf, &persistent_externals);
             if (!bind_segment_cached_inputs(gf, segment)) {
                 free_cache_ctx_and_buffer();
                 free_compute_buffer();
@@ -3216,6 +3266,9 @@ private:
             return std::nullopt;
         };
 
+        std::unordered_map<ggml_tensor*, PersistentExternalBinding> persistent_externals;
+        snapshot_persistent_externals(plan, gf, persistent_externals);
+
         for (size_t seg_idx = 0; seg_idx < plan.segments.size(); ++seg_idx) {
             const auto& segment   = plan.segments[seg_idx];
             const bool  is_last   = seg_idx + 1 == plan.segments.size();
@@ -3233,7 +3286,7 @@ private:
                           get_desc().c_str(), segment.group_name.c_str());
             }
 
-            reset_segment_runtime_tensors(segment, gf);
+            reset_segment_runtime_tensors(segment, gf, &persistent_externals);
             if (!bind_segment_cached_inputs(gf, segment)) {
                 return bail();
             }
