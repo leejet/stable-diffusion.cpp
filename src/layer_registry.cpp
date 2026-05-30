@@ -6,13 +6,13 @@
 
 namespace sd::layer_registry {
 
-void Registry::register_layer(const std::string& name, ggml_tensor* tensor) {
+void LayerRegistry::register_layer(const std::string& name, ggml_tensor* tensor) {
     auto& info = layers_[name];
     info.tensors.push_back(tensor);
     info.bytes += ggml_nbytes(tensor);
 }
 
-bool Registry::move_layer_to_gpu(const std::string& name) {
+bool LayerRegistry::move_layer_to_gpu(const std::string& name) {
     auto it = layers_.find(name);
     if (it == layers_.end()) return false;
 
@@ -80,7 +80,7 @@ bool Registry::move_layer_to_gpu(const std::string& name) {
     return true;
 }
 
-bool Registry::move_layer_to_cpu(const std::string& name) {
+bool LayerRegistry::move_layer_to_cpu(const std::string& name) {
     auto it = layers_.find(name);
     if (it == layers_.end()) return false;
 
@@ -114,12 +114,12 @@ bool Registry::move_layer_to_cpu(const std::string& name) {
     return true;
 }
 
-bool Registry::is_layer_on_gpu(const std::string& name) const {
+bool LayerRegistry::is_layer_on_gpu(const std::string& name) const {
     auto it = layers_.find(name);
     return it != layers_.end() && it->second.on_gpu;
 }
 
-size_t Registry::get_layer_size(const std::string& name) const {
+size_t LayerRegistry::get_layer_size(const std::string& name) const {
     auto it = layers_.find(name);
     return it != layers_.end() ? it->second.bytes : 0;
 }

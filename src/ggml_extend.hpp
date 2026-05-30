@@ -1750,7 +1750,7 @@ protected:
     size_t max_graph_vram_bytes = 0;
     bool stream_layers_enabled = false;
 
-    sd::layer_registry::Registry layer_registry_;
+    sd::layer_registry::LayerRegistry layer_registry_;
 
     std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
 
@@ -3649,7 +3649,7 @@ public:
         stream_layers_enabled = enabled;
     }
 
-    sd::layer_registry::Registry& get_layer_registry() { return layer_registry_; }
+    sd::layer_registry::LayerRegistry& get_layer_registry() { return layer_registry_; }
 
     ggml_backend_t get_runtime_backend() {
         return runtime_backend;

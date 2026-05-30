@@ -20,10 +20,10 @@ struct LayerInfo {
     size_t                    bytes      = 0;
 };
 
-class Registry {
+class LayerRegistry {
 public:
-    Registry() = default;
-    Registry(ggml_backend_t gpu_backend, ggml_backend_t cpu_backend)
+    LayerRegistry() = default;
+    LayerRegistry(ggml_backend_t gpu_backend, ggml_backend_t cpu_backend)
         : gpu_backend_(gpu_backend), cpu_backend_(cpu_backend) {}
 
     void   set_backends(ggml_backend_t gpu_backend, ggml_backend_t cpu_backend) {
