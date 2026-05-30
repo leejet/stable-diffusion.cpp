@@ -256,13 +256,11 @@ public:
             stream_layers = false;
         }
         if (stream_layers && !offload_params_to_cpu && params_backend_spec.empty()) {
-            // Streaming needs weights somewhere they can stream FROM — i.e.
-            // params on CPU. Without --offload-to-cpu or an explicit
-            // --params-backend, weights would live on GPU, which makes
-            // streaming a silent no-op (params_backend == runtime_backend
-            // short-circuits should_use_graph_cut_segmented_compute).
-            LOG_INFO("--stream-layers requires CPU-resident weights; enabling --offload-to-cpu implicitly");
-            offload_params_to_cpu = true;
+            // Streaming needs weights on CPU to stream from. Mirror the
+            // --max-vram-missing branch above: warn and disable instead of
+            // silently flipping the caller's offload-to-cpu setting.
+            LOG_WARN("--stream-layers has no effect without --offload-to-cpu (or --params-backend); ignoring");
+            stream_layers = false;
         }
 
         bool use_tae       = false;
