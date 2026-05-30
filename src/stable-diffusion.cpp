@@ -138,6 +138,7 @@ public:
     bool vae_decode_only         = false;
     bool external_vae_is_invalid = false;
     bool free_params_immediately = false;
+    bool lazy_loading            = false;
 
     bool circular_x = false;
     bool circular_y = false;
@@ -208,6 +209,52 @@ public:
         return params_backend_for(module) != nullptr;
     }
 
+    bool tensor_is_mmap_backed(const ggml_tensor* tensor) const {
+        if (tensor == nullptr || tensor->data == nullptr || tensor->view_src != nullptr) {
+            return false;
+        }
+        const uint8_t* data = static_cast<const uint8_t*>(tensor->data);
+        const size_t size   = ggml_nbytes(tensor);
+        for (const auto& store : mmap_tensor_store) {
+            if (!store.mmapped) {
+                continue;
+            }
+            const uint8_t* base   = store.mmapped->data();
+            const size_t map_size = store.mmapped->size();
+            if (data >= base && size <= map_size && data - base <= map_size - size) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void evict_component_from_ram(const std::string& prefix) {
+        for (auto& [name, tensor] : tensors) {
+            if (!starts_with(name, prefix) || !tensor_is_mmap_backed(tensor)) {
+                continue;
+            }
+            evict_memory(tensor->data, ggml_nbytes(tensor));
+        }
+    }
+
+    void evict_text_encoder_from_ram() {
+        evict_component_from_ram("conditioner.");
+        evict_component_from_ram("cond_stage_model.");
+        evict_component_from_ram("text_encoders.");
+    }
+
+    void evict_diffusion_from_ram() {
+        evict_component_from_ram("model.diffusion_model.");
+        evict_component_from_ram("model.high_noise_diffusion_model.");
+    }
+
+    void evict_vae_from_ram() {
+        evict_component_from_ram("first_stage_model.");
+        evict_component_from_ram("vae.");
+        evict_component_from_ram("tae.");
+        evict_component_from_ram("audio_vae.");
+    }
+
     bool init_backend(const sd_ctx_params_t* sd_ctx_params) {
         std::string error;
         if (!backend_manager.init(sd_ctx_params->backend,
@@ -237,8 +284,13 @@ public:
         n_threads               = sd_ctx_params->n_threads;
         vae_decode_only         = sd_ctx_params->vae_decode_only;
         free_params_immediately = sd_ctx_params->free_params_immediately;
+        lazy_loading            = sd_ctx_params->lazy_loading;
         offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
         max_vram                = sd_ctx_params->max_vram;
+        if (lazy_loading) {
+            free_params_immediately = true;
+            LOG_INFO("lazy load/eager evict enabled: mmap and free_params_immediately forced on");
+        }
         backend_spec            = SAFE_STR(sd_ctx_params->backend);
         params_backend_spec     = SAFE_STR(sd_ctx_params->params_backend);
 
@@ -433,7 +485,7 @@ public:
         std::map<std::string, ggml_tensor*> mmap_able_tensors;
         bool enable_mmap_tensors = false;
         bool needs_writable_mmap = false;
-        if (sd_ctx_params->enable_mmap) {
+        if (sd_ctx_params->enable_mmap || lazy_loading) {
             if (apply_lora_immediately) {
                 needs_writable_mmap = true;
                 LOG_WARN("in mode 'immediately', LoRAs will cause extra memory usage with mmap");
@@ -1020,7 +1072,7 @@ public:
             return false;
         }
 
-        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap);
+        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap || lazy_loading);
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
             ggml_free(ctx);
@@ -2599,6 +2651,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->offload_params_to_cpu   = false;
     sd_ctx_params->max_vram                = 0.f;
     sd_ctx_params->enable_mmap             = false;
+    sd_ctx_params->lazy_loading            = false;
     sd_ctx_params->keep_clip_on_cpu        = false;
     sd_ctx_params->keep_control_net_on_cpu = false;
     sd_ctx_params->keep_vae_on_cpu         = false;
@@ -4025,6 +4078,10 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
 
     if (sd_ctx->sd->free_params_immediately) {
         sd_ctx->sd->cond_stage_model->free_params_buffer();
+        if (sd_ctx->sd->lazy_loading) {
+            sd_ctx->sd->cond_stage_model->free_compute_buffer();
+        }
+        sd_ctx->sd->evict_text_encoder_from_ram();
     }
 
     ImageGenerationEmbeds embeds;
@@ -4056,6 +4113,7 @@ static sd_image_t* decode_image_outputs(sd_ctx_t* sd_ctx,
             LOG_ERROR("decode_first_stage failed for latent %" PRId64, i + 1);
             if (sd_ctx->sd->free_params_immediately) {
                 sd_ctx->sd->first_stage_model->free_params_buffer();
+                sd_ctx->sd->evict_vae_from_ram();
             }
             return nullptr;
         }
@@ -4068,6 +4126,7 @@ static sd_image_t* decode_image_outputs(sd_ctx_t* sd_ctx,
     LOG_INFO("decode_first_stage completed, taking %.2fs", (t4 - t0) * 1.0f / 1000);
     if (sd_ctx->sd->free_params_immediately) {
         sd_ctx->sd->first_stage_model->free_params_buffer();
+        sd_ctx->sd->evict_vae_from_ram();
     }
 
     sd_image_t* result_images = (sd_image_t*)calloc(request.batch_count, sizeof(sd_image_t));
@@ -4266,6 +4325,10 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
 
     int64_t t0                    = ggml_time_ms();
     sd_ctx->sd->vae_tiling_params = sd_img_gen_params->vae_tiling_params;
+    if (sd_ctx->sd->lazy_loading && !sd_ctx->sd->vae_tiling_params.enabled) {
+        sd_ctx->sd->vae_tiling_params.enabled = true;
+        LOG_INFO("lazy_loading: auto-enabling VAE tiling to reduce peak VRAM");
+    }
     GenerationRequest request(sd_ctx, sd_img_gen_params);
     LOG_INFO("generate_image %dx%d", request.width, request.height);
 
@@ -4346,11 +4409,19 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                   (sampling_end - sampling_start) * 1.0f / 1000);
         if (sd_ctx->sd->free_params_immediately) {
             sd_ctx->sd->diffusion_model->free_params_buffer();
+            if (sd_ctx->sd->lazy_loading) {
+                sd_ctx->sd->diffusion_model->free_compute_buffer();
+            }
+            sd_ctx->sd->evict_diffusion_from_ram();
         }
         return nullptr;
     }
     if (sd_ctx->sd->free_params_immediately && !request.hires.enabled) {
         sd_ctx->sd->diffusion_model->free_params_buffer();
+        if (sd_ctx->sd->lazy_loading) {
+            sd_ctx->sd->diffusion_model->free_compute_buffer();
+        }
+        sd_ctx->sd->evict_diffusion_from_ram();
     }
     int64_t denoise_end = ggml_time_ms();
     LOG_INFO("generating %zu latent images completed, taking %.2fs",
@@ -4376,6 +4447,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                 LOG_ERROR("load hires model upscaler failed");
                 if (sd_ctx->sd->free_params_immediately) {
                     sd_ctx->sd->diffusion_model->free_params_buffer();
+                    sd_ctx->sd->evict_diffusion_from_ram();
                 }
                 return nullptr;
             }
@@ -4410,6 +4482,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
             if (upscaled.empty()) {
                 if (sd_ctx->sd->free_params_immediately) {
                     sd_ctx->sd->diffusion_model->free_params_buffer();
+                    sd_ctx->sd->evict_diffusion_from_ram();
                 }
                 return nullptr;
             }
@@ -4469,11 +4542,13 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                       (hires_sample_end - hires_sample_start) * 1.0f / 1000);
             if (sd_ctx->sd->free_params_immediately) {
                 sd_ctx->sd->diffusion_model->free_params_buffer();
+                sd_ctx->sd->evict_diffusion_from_ram();
             }
             return nullptr;
         }
         if (sd_ctx->sd->free_params_immediately) {
             sd_ctx->sd->diffusion_model->free_params_buffer();
+            sd_ctx->sd->evict_diffusion_from_ram();
         }
         int64_t hires_denoise_end = ggml_time_ms();
         LOG_INFO("hires fix completed, taking %.2fs", (hires_denoise_end - hires_denoise_start) * 1.0f / 1000);
@@ -4823,6 +4898,10 @@ static ImageGenerationEmbeds prepare_video_generation_embeds(sd_ctx_t* sd_ctx,
 
     if (sd_ctx->sd->free_params_immediately) {
         sd_ctx->sd->cond_stage_model->free_params_buffer();
+        if (sd_ctx->sd->lazy_loading) {
+            sd_ctx->sd->cond_stage_model->free_compute_buffer();
+        }
+        sd_ctx->sd->evict_text_encoder_from_ram();
     }
     return embeds;
 }
@@ -4852,6 +4931,7 @@ static sd_image_t* decode_video_outputs(sd_ctx_t* sd_ctx,
     LOG_INFO("decode_first_stage completed, taking %.2fs", (t5 - t4) * 1.0f / 1000);
     if (sd_ctx->sd->free_params_immediately) {
         sd_ctx->sd->first_stage_model->free_params_buffer();
+        sd_ctx->sd->evict_vae_from_ram();
     }
     if (vid.empty()) {
         LOG_ERROR("decode_first_stage failed for video");
@@ -5070,6 +5150,10 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
     }
     int64_t t0                    = ggml_time_ms();
     sd_ctx->sd->vae_tiling_params = sd_vid_gen_params->vae_tiling_params;
+    if (sd_ctx->sd->lazy_loading && !sd_ctx->sd->vae_tiling_params.enabled) {
+        sd_ctx->sd->vae_tiling_params.enabled = true;
+        LOG_INFO("lazy_loading: auto-enabling VAE tiling to reduce peak VRAM");
+    }
     GenerationRequest request(sd_ctx, sd_vid_gen_params);
     bool latent_upscale_enabled     = request.hires.enabled;
     GenerationRequest hires_request = request;
@@ -5163,6 +5247,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
             LOG_ERROR("sampling(high noise) failed after %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
             if (sd_ctx->sd->free_params_immediately) {
                 sd_ctx->sd->high_noise_diffusion_model->free_params_buffer();
+                sd_ctx->sd->evict_diffusion_from_ram();
             }
             return false;
         }
@@ -5172,6 +5257,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
         LOG_INFO("sampling(high noise) completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
         if (sd_ctx->sd->free_params_immediately) {
             sd_ctx->sd->high_noise_diffusion_model->free_params_buffer();
+            sd_ctx->sd->evict_diffusion_from_ram();
         }
     }
 
@@ -5209,6 +5295,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
     if (final_latent.empty()) {
         if (sd_ctx->sd->free_params_immediately) {
             sd_ctx->sd->diffusion_model->free_params_buffer();
+            sd_ctx->sd->evict_diffusion_from_ram();
         }
         LOG_ERROR("sampling failed after %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
         return false;
@@ -5225,6 +5312,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
         if (upscaled_latent.empty()) {
             if (sd_ctx->sd->free_params_immediately) {
                 sd_ctx->sd->diffusion_model->free_params_buffer();
+                sd_ctx->sd->evict_diffusion_from_ram();
             }
             return false;
         }
@@ -5260,6 +5348,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                               target_audio_length);
                     if (sd_ctx->sd->free_params_immediately) {
                         sd_ctx->sd->diffusion_model->free_params_buffer();
+                        sd_ctx->sd->evict_diffusion_from_ram();
                     }
                     return false;
                 }
@@ -5290,6 +5379,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                                   &hires_video_positions)) {
             if (sd_ctx->sd->free_params_immediately) {
                 sd_ctx->sd->diffusion_model->free_params_buffer();
+                sd_ctx->sd->evict_diffusion_from_ram();
             }
             return false;
         }
@@ -5351,6 +5441,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
         sampling_end   = ggml_time_ms();
         if (sd_ctx->sd->free_params_immediately) {
             sd_ctx->sd->diffusion_model->free_params_buffer();
+            sd_ctx->sd->evict_diffusion_from_ram();
         }
         if (final_latent.empty()) {
             LOG_ERROR("sampling(latent upscale) failed after %.2fs",
@@ -5361,6 +5452,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                  (sampling_end - sampling_start) * 1.0f / 1000);
     } else if (sd_ctx->sd->free_params_immediately) {
         sd_ctx->sd->diffusion_model->free_params_buffer();
+        sd_ctx->sd->evict_diffusion_from_ram();
     }
 
     int64_t latent_end = ggml_time_ms();

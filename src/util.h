@@ -64,6 +64,8 @@ protected:
     size_t size_ = 0;
 };
 
+void evict_memory(const void* data, size_t size);
+
 std::string path_join(const std::string& p1, const std::string& p2);
 std::vector<std::string> split_string(const std::string& str, char delimiter);
 
