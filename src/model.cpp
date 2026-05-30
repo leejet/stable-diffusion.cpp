@@ -865,8 +865,13 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
             if (dst_tensor == nullptr)
                 continue;
 
-            if (tensor_storage.type != dst_tensor->type)
+            if (tensor_storage.is_f8_e4m3 ||
+                tensor_storage.is_f8_e5m2 ||
+                tensor_storage.is_f64 ||
+                tensor_storage.is_i64 ||
+                tensor_storage.type != dst_tensor->type) {
                 continue;
+            }
 
             size_t tensor_size   = tensor_storage.nbytes();
             size_t tensor_offset = tensor_storage.offset;
@@ -997,6 +1002,12 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                         t1 = ggml_time_ms();
                         read_time_ms.fetch_add(t1 - t0);
                         continue;
+                    }
+
+                    if (dst_tensor->data == nullptr) {
+                        LOG_ERROR("process tensor data failed: '%s'", tensor_storage.name.c_str());
+                        failed = true;
+                        break;
                     }
 
                     // skip mmapped tensors

@@ -113,7 +113,7 @@ struct Conditioner {
 public:
     virtual SDCondition get_learned_condition(int n_threads,
                                               const ConditionerParams& conditioner_params) = 0;
-    virtual void alloc_params_buffer()                                                     = 0;
+    virtual bool alloc_params_buffer()                                                     = 0;
     virtual void free_params_buffer()                                                      = 0;
     virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors)           = 0;
     virtual size_t get_params_buffer_size()                                                = 0;
@@ -177,11 +177,16 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         }
     }
 
-    void alloc_params_buffer() override {
-        text_model->alloc_params_buffer();
-        if (sd_version_is_sdxl(version)) {
-            text_model2->alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!text_model->alloc_params_buffer()) {
+            return false;
         }
+        if (sd_version_is_sdxl(version)) {
+            if (!text_model2->alloc_params_buffer()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -789,16 +794,23 @@ struct SD3CLIPEmbedder : public Conditioner {
         }
     }
 
-    void alloc_params_buffer() override {
+    bool alloc_params_buffer() override {
         if (clip_l) {
-            clip_l->alloc_params_buffer();
+            if (!clip_l->alloc_params_buffer()) {
+                return false;
+            }
         }
         if (clip_g) {
-            clip_g->alloc_params_buffer();
+            if (!clip_g->alloc_params_buffer()) {
+                return false;
+            }
         }
         if (t5) {
-            t5->alloc_params_buffer();
+            if (!t5->alloc_params_buffer()) {
+                return false;
+            }
         }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -1165,14 +1177,20 @@ struct FluxCLIPEmbedder : public Conditioner {
         }
     }
 
-    void alloc_params_buffer() override {
+    bool alloc_params_buffer() override {
         if (clip_l) {
-            clip_l->alloc_params_buffer();
+            if (!clip_l->alloc_params_buffer()) {
+                return false;
+            }
         }
         if (t5) {
-            t5->alloc_params_buffer();
+            if (!t5->alloc_params_buffer()) {
+                return false;
+            }
         }
+        return true;
     }
+
 
     void free_params_buffer() override {
         if (clip_l) {
@@ -1417,10 +1435,13 @@ struct T5CLIPEmbedder : public Conditioner {
         }
     }
 
-    void alloc_params_buffer() override {
+    bool alloc_params_buffer() override {
         if (t5) {
-            t5->alloc_params_buffer();
+            if (!t5->alloc_params_buffer()) {
+                return false;
+            }
         }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -1613,8 +1634,11 @@ struct AnimaConditioner : public Conditioner {
         llm->get_param_tensors(tensors, "text_encoders.llm");
     }
 
-    void alloc_params_buffer() override {
-        llm->alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!llm->alloc_params_buffer()) {
+                return false;
+            }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -1756,8 +1780,11 @@ struct LLMEmbedder : public Conditioner {
         llm->get_param_tensors(tensors, "text_encoders.llm");
     }
 
-    void alloc_params_buffer() override {
-        llm->alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!llm->alloc_params_buffer()) {
+                return false;
+        }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -2282,9 +2309,14 @@ struct LTXAVEmbedder : public Conditioner {
         projector->get_param_tensors(tensors, "text_embedding_projection");
     }
 
-    void alloc_params_buffer() override {
-        llm->alloc_params_buffer();
-        projector->alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!llm->alloc_params_buffer()) {
+                return false;
+        }
+        if (!projector->alloc_params_buffer()) {
+                return false;
+        }
+        return true;
     }
 
     void free_params_buffer() override {
