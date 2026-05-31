@@ -15,7 +15,7 @@ You can run Chroma using stable-diffusion.cpp with a GPU that has 6GB or even 4G
 You can download the preconverted gguf weights from [silveroxides/Chroma-GGUF](https://huggingface.co/silveroxides/Chroma-GGUF), this way you don't have to do the conversion yourself.
 
 ```
-.\bin\Release\sd.exe -M convert -m ..\..\ComfyUI\models\unet\chroma-unlocked-v40.safetensors -o ..\models\chroma-unlocked-v40-q8_0.gguf -v --type q8_0
+.\bin\Release\sd-cli.exe -M convert -m ..\..\ComfyUI\models\unet\chroma-unlocked-v40.safetensors -o ..\models\chroma-unlocked-v40-q8_0.gguf -v --type q8_0
 ```
 
 ## Run
@@ -24,7 +24,7 @@ You can download the preconverted gguf weights from [silveroxides/Chroma-GGUF](h
 For example:
 
 ```
- .\bin\Release\sd.exe --diffusion-model  ..\models\chroma-unlocked-v40-q8_0.gguf --vae ..\models\ae.sft --t5xxl ..\models\t5xxl_fp16.safetensors  -p "a lovely cat holding a sign says 'chroma.cpp'" --cfg-scale 4.0 --sampling-method euler -v --chroma-disable-dit-mask --clip-on-cpu
+ .\bin\Release\sd-cli.exe --diffusion-model  ..\models\chroma-unlocked-v40-q8_0.gguf --vae ..\models\ae.sft --t5xxl ..\models\t5xxl_fp16.safetensors  -p "a lovely cat holding a sign says 'chroma.cpp'" --cfg-scale 4.0 --sampling-method euler -v --chroma-disable-dit-mask --clip-on-cpu
 ```
 
 ![](../assets/flux/chroma_v40.png)

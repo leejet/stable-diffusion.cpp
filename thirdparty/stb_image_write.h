@@ -257,6 +257,10 @@ int stbi_write_tga_with_rle = 1;
 int stbi_write_force_png_filter = -1;
 #endif
 
+#ifndef STBMIN
+#define STBMIN(a, b) ((a) < (b) ? (a) : (b))
+#endif // STBMIN
+
 static int stbi__flip_vertically_on_write = 0;
 
 STBIWDEF void stbi_flip_vertically_on_write(int flag)
@@ -1179,8 +1183,8 @@ STBIWDEF unsigned char *stbi_write_png_to_mem(const unsigned char *pixels, int s
    if (!zlib) return 0;
 
    if(parameters != NULL) {
-      param_length = strlen(parameters);
-      param_length += strlen("parameters") + 1; // For the name and the null-byte
+      param_length = (int)strlen(parameters);
+      param_length += (int)strlen("parameters") + 1; // For the name and the null-byte
    }
 
    // each tag requires 12 bytes of overhead
@@ -1526,11 +1530,11 @@ static int stbi_write_jpg_core(stbi__write_context *s, int width, int height, in
       if(parameters != NULL) {
          stbiw__putc(s, 0xFF /* comnent */ );
          stbiw__putc(s, 0xFE /* marker  */ );
-         size_t param_length = std::min(2 + strlen("parameters") + 1 + strlen(parameters) + 1, (size_t) 0xFFFF);
+         int param_length = STBMIN(2 + (int)strlen("parameters") + 1 + (int)strlen(parameters) + 1, 0xFFFF);
          stbiw__putc(s, param_length >> 8); // no need to mask, length < 65536
          stbiw__putc(s, param_length & 0xFF);
-         s->func(s->context, (void*)"parameters", strlen("parameters") + 1); // std::string is zero-terminated
-         s->func(s->context, (void*)parameters, std::min(param_length, (size_t) 65534) - 2 - strlen("parameters") - 1);
+         s->func(s->context, (void*)"parameters", (int)strlen("parameters") + 1); // std::string is zero-terminated
+         s->func(s->context, (void*)parameters, STBMIN(param_length, 65534) - 2 - (int)strlen("parameters") - 1);
          if(param_length > 65534) stbiw__putc(s, 0); // always zero-terminate for safety
          if(param_length & 1) stbiw__putc(s, 0xFF); // pad to even length
       }

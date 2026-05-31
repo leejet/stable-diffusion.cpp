@@ -23,5 +23,5 @@ You can also convert weights in the formats `ckpt/safetensors/diffusers` to gguf
 For example:
 
 ```sh
-./bin/sd -M convert -m ../models/v1-5-pruned-emaonly.safetensors -o  ../models/v1-5-pruned-emaonly.q8_0.gguf -v --type q8_0
+./bin/sd-cli -M convert -m ../models/v1-5-pruned-emaonly.safetensors -o  ../models/v1-5-pruned-emaonly.q8_0.gguf -v --type q8_0
 ```
