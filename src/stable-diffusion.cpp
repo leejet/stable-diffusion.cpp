@@ -1,3 +1,7 @@
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+
 #include "ggml_extend.hpp"
 #include "ggml_graph_cut.h"
 
@@ -26,6 +30,7 @@
 #include "ltx_vae.hpp"
 #include "ltxv.hpp"
 #include "mmdit.hpp"
+#include "pid.hpp"
 #include "pmid.hpp"
 #include "qwen_image.hpp"
 #include "sample-cache.h"
@@ -38,6 +43,9 @@
 
 #include "latent-preview.h"
 #include "name_conversion.h"
+
+const char* sd_vae_format_name(enum sd_vae_format_t format);
+static SDVersion sd_vae_format_to_version(enum sd_vae_format_t format, SDVersion fallback);
 
 const char* model_version_to_str[] = {
     "SD 1.x",
@@ -75,6 +83,7 @@ const char* model_version_to_str[] = {
     "Ernie Image",
     "Lens",
     "Longcat-Image",
+    "PiD",
 };
 
 const char* sampling_methods_str[] = {
@@ -533,6 +542,16 @@ public:
                                                                 params_backend_for(SDBackendModule::DIFFUSION),
                                                                 tensor_storage_map,
                                                                 "model.diffusion_model");
+            } else if (sd_version_is_pid(version)) {
+                vae_decode_only  = false;
+                cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
+                                                                 params_backend_for(SDBackendModule::TE),
+                                                                 tensor_storage_map,
+                                                                 version);
+                diffusion_model  = std::make_shared<Pid::PiDRunner>(backend_for(SDBackendModule::DIFFUSION),
+                                                                   params_backend_for(SDBackendModule::DIFFUSION),
+                                                                   tensor_storage_map,
+                                                                   "model.diffusion_model.net");
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
                 for (auto pair : tensor_storage_map) {
@@ -777,6 +796,16 @@ public:
                 }
             };
 
+            sd_vae_format_t vae_format = sd_ctx_params->vae_format;
+            if (vae_format < SD_VAE_FORMAT_AUTO || vae_format >= SD_VAE_FORMAT_COUNT) {
+                LOG_WARN("invalid VAE format override, using auto");
+                vae_format = SD_VAE_FORMAT_AUTO;
+            }
+            SDVersion vae_version = version;
+            if (sd_version_is_pid(version) && vae_format != SD_VAE_FORMAT_AUTO) {
+                vae_version = sd_vae_format_to_version(vae_format, vae_version);
+            }
+
             auto create_vae = [&]() -> std::shared_ptr<VAE> {
                 if (sd_version_is_ltxav(version)) {
                     return std::make_shared<LTXVideoVAE>(backend_for(SDBackendModule::VAE),
@@ -801,7 +830,7 @@ public:
                                                                  "first_stage_model",
                                                                  vae_decode_only,
                                                                  false,
-                                                                 version);
+                                                                 vae_version);
                     if (sd_version_is_sdxl(version) &&
                         (strlen(SAFE_STR(sd_ctx_params->vae_path)) == 0 || sd_ctx_params->force_sdxl_vae_conv_scale || external_vae_is_invalid)) {
                         float vae_conv_2d_scale = 1.f / 32.f;
@@ -1174,12 +1203,15 @@ public:
                            version == VERSION_HIDREAM_O1 ||
                            sd_version_is_anima(version) ||
                            sd_version_is_ernie_image(version) ||
-                           sd_version_is_z_image(version)) {
+                           sd_version_is_z_image(version) ||
+                           sd_version_is_pid(version)) {
                     pred_type = FLOW_PRED;
                     if (sd_version_is_wan(version)) {
                         default_flow_shift = 5.f;
                     } else if (sd_version_is_ernie_image(version)) {
                         default_flow_shift = 4.f;
+                    } else if (sd_version_is_pid(version)) {
+                        default_flow_shift = 1.5f;
                     } else {
                         default_flow_shift = 3.f;
                     }
@@ -1943,6 +1975,7 @@ public:
         float cfg_scale     = guidance.txt_cfg;
         float img_cfg_scale = guidance.img_cfg;
         float slg_scale     = guidance.slg.scale;
+        bool slg_uncond     = sd::guidance::parse_skip_layer_guidance_uncond_arg(extra_sample_args);
 
         sd_sample::SampleCacheRuntime cache_runtime = sd_sample::init_sample_cache_runtime(version,
                                                                                            cache_params,
@@ -1959,12 +1992,21 @@ public:
         }
 
         size_t steps       = sigmas.size() - 1;
-        bool has_skiplayer = slg_scale != 0.0f && !skip_layers.empty();
+        bool has_skiplayer = (slg_scale != 0.0f || slg_uncond) && !skip_layers.empty();
         if (has_skiplayer && !sd_version_is_dit(version)) {
             has_skiplayer = false;
             LOG_WARN("SLG is incompatible with this model type");
         }
+        sd::guidance::AdaptiveProjectedGuidanceParams apg_params = sd::guidance::parse_adaptive_projected_guidance_args(extra_sample_args);
+        bool use_apg_guidance                                    = sd::guidance::is_adaptive_projected_guidance_enabled(apg_params);
+        if (use_apg_guidance) {
+            LOG_INFO("using Adaptive Projected Guidance (APG)");
+        }
         sd::guidance::ClassifierFreeGuidance classifier_free_guidance(cfg_scale, img_cfg_scale);
+        sd::guidance::AdaptiveProjectedGuidance adaptive_projected_guidance(cfg_scale, img_cfg_scale, apg_params);
+        const sd::guidance::BaseGuidance& primary_guidance = use_apg_guidance
+                                                                 ? static_cast<const sd::guidance::BaseGuidance&>(adaptive_projected_guidance)
+                                                                 : static_cast<const sd::guidance::BaseGuidance&>(classifier_free_guidance);
         sd::guidance::SkipLayerGuidance skip_layer_guidance(has_skiplayer ? skip_layers : std::vector<int>(),
                                                             has_skiplayer ? slg_scale : 0.0f,
                                                             guidance.slg.layer_start,
@@ -2040,6 +2082,10 @@ public:
             diffusion_params.x                  = &noised_input;
             diffusion_params.timesteps          = &timesteps_tensor;
             diffusion_params.increase_ref_index = increase_ref_index;
+            sd::guidance::GuidanceInput step_guidance_input;
+            step_guidance_input.step          = step;
+            step_guidance_input.schedule_size = sigmas.size();
+            bool is_skiplayer_step            = skip_layer_guidance.is_enabled_for_step(step_guidance_input);
 
             compute_sample_controls(control_image,
                                     noised_input,
@@ -2123,7 +2169,12 @@ public:
                                             uncond,
                                             &controls);
                 }
-                uncond_out = run_condition(uncond);
+                const std::vector<int>* uncond_skip_layers = nullptr;
+                if (is_skiplayer_step && slg_uncond) {
+                    LOG_DEBUG("Skipping layers at uncond step %d\n", step);
+                    uncond_skip_layers = &skip_layer_guidance.layers();
+                }
+                uncond_out = run_condition(uncond, nullptr, uncond_skip_layers);
                 if (uncond_out.empty()) {
                     return {};
                 }
@@ -2142,12 +2193,12 @@ public:
             guidance_input.pred_uncond   = uncond_out.empty() ? nullptr : &uncond_out;
             guidance_input.pred_img_cond = img_cond_out.empty() ? nullptr : &img_cond_out;
 
-            sd::guidance::GuiderOutput guided = classifier_free_guidance.forward(guidance_input, {});
+            sd::guidance::GuiderOutput guided = primary_guidance.forward(guidance_input, {});
             if (guided.pred.empty()) {
                 return {};
             }
 
-            if (skip_layer_guidance.is_enabled_for_step(guidance_input)) {
+            if (is_skiplayer_step && slg_scale != 0.0f) {
                 LOG_DEBUG("Skipping layers at step %d\n", step);
                 if (!step_cache.is_step_skipped()) {
                     guidance_input.predict_skip_layer = [&]() -> sd::Tensor<float> {
@@ -2214,6 +2265,9 @@ public:
     }
 
     int get_vae_scale_factor() {
+        if (sd_version_is_pid(version)) {
+            return 1;
+        }
         return first_stage_model->get_scale_factor();
     }
 
@@ -2239,6 +2293,8 @@ public:
             } else if (version == VERSION_HIDREAM_O1) {
                 latent_channel = 3;
             } else if (version == VERSION_CHROMA_RADIANCE) {
+                latent_channel = 3;
+            } else if (sd_version_is_pid(version)) {
                 latent_channel = 3;
             } else if (sd_version_uses_flux2_vae(version)) {
                 latent_channel = 128;
@@ -2317,13 +2373,11 @@ public:
     }
 
     sd::Tensor<float> decode_first_stage(const sd::Tensor<float>& x, bool decode_video = false) {
-        // Release diffusion's chunk-K resident set before VAE decode. With
-        // --stream-layers, the diffusion runner keeps several GB resident
-        // across sampling steps to amortize H2D. VAE decode happens once at
-        // the end, so holding diffusion's resident set during decode just
-        // starves VAE of VRAM for its compute buffer (which can be several
-        // GB at full image resolution). Eviction frees that VRAM for VAE
-        // and is paid back at the next generation's first sampling step.
+        if (sd_version_is_pid(version)) {
+            return sd::ops::clamp((x + 1.f) * 0.5f, 0.0f, 1.0f);
+        }
+        // chunk-K residency held across sampling steps starves VAE decode
+        // of VRAM for its compute buffer; release it before decode.
         if (stream_layers) {
             if (diffusion_model) {
                 diffusion_model->release_streaming_residency();
@@ -2592,6 +2646,35 @@ enum sd_hires_upscaler_t str_to_sd_hires_upscaler(const char* str) {
     return SD_HIRES_UPSCALER_COUNT;
 }
 
+const char* sd_vae_format_name(enum sd_vae_format_t format) {
+    switch (format) {
+        case SD_VAE_FORMAT_AUTO:
+            return "auto";
+        case SD_VAE_FORMAT_FLUX:
+            return "flux";
+        case SD_VAE_FORMAT_SD3:
+            return "sd3";
+        case SD_VAE_FORMAT_FLUX2:
+            return "flux2";
+        default:
+            return NONE_STR;
+    }
+}
+
+static SDVersion sd_vae_format_to_version(enum sd_vae_format_t format, SDVersion fallback) {
+    switch (format) {
+        case SD_VAE_FORMAT_FLUX:
+            return VERSION_FLUX;
+        case SD_VAE_FORMAT_SD3:
+            return VERSION_SD3;
+        case SD_VAE_FORMAT_FLUX2:
+            return VERSION_FLUX2;
+        case SD_VAE_FORMAT_AUTO:
+        default:
+            return fallback;
+    }
+}
+
 void sd_cache_params_init(sd_cache_params_t* cache_params) {
     *cache_params                             = {};
     cache_params->mode                        = SD_CACHE_DISABLED;
@@ -2658,6 +2741,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->chroma_use_dit_mask     = true;
     sd_ctx_params->chroma_use_t5_mask      = false;
     sd_ctx_params->chroma_t5_mask_pad      = 1;
+    sd_ctx_params->vae_format              = SD_VAE_FORMAT_AUTO;
     sd_ctx_params->backend                 = nullptr;
     sd_ctx_params->params_backend          = nullptr;
 }
@@ -2706,7 +2790,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "circular_y: %s\n"
              "chroma_use_dit_mask: %s\n"
              "chroma_use_t5_mask: %s\n"
-             "chroma_t5_mask_pad: %d\n",
+             "chroma_t5_mask_pad: %d\n"
+             "vae_format: %s\n",
              SAFE_STR(sd_ctx_params->model_path),
              SAFE_STR(sd_ctx_params->clip_l_path),
              SAFE_STR(sd_ctx_params->clip_g_path),
@@ -2744,7 +2829,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              BOOL_STR(sd_ctx_params->circular_y),
              BOOL_STR(sd_ctx_params->chroma_use_dit_mask),
              BOOL_STR(sd_ctx_params->chroma_use_t5_mask),
-             sd_ctx_params->chroma_t5_mask_pad);
+             sd_ctx_params->chroma_t5_mask_pad,
+             sd_vae_format_name(sd_ctx_params->vae_format));
 
     return buf;
 }
@@ -3021,6 +3107,9 @@ SD_API bool sd_ctx_supports_video_generation(const sd_ctx_t* sd_ctx) {
 
 enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx) {
     if (sd_ctx != nullptr && sd_ctx->sd != nullptr) {
+        if (sd_version_is_pid(sd_ctx->sd->version)) {
+            return LCM_SAMPLE_METHOD;
+        }
         if (sd_version_is_dit(sd_ctx->sd->version)) {
             return EULER_SAMPLE_METHOD;
         }
@@ -3919,7 +4008,7 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
             continue;
         }
         sd::Tensor<float> ref_latent;
-        if (request->auto_resize_ref_image) {
+        if (request->auto_resize_ref_image && !sd_version_is_pid(sd_ctx->sd->version)) {
             LOG_DEBUG("auto resize ref images");
             int vae_image_size = std::min(1024 * 1024, request->width * request->height);
             double vae_width   = sqrt(vae_image_size * ref_images[i].shape()[0] / ref_images[i].shape()[1]);
@@ -3949,6 +4038,13 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
         }
 
         ref_latents.push_back(std::move(ref_latent));
+    }
+
+    if (sd_version_is_pid(sd_ctx->sd->version)) {
+        if (ref_latents.empty()) {
+            LOG_ERROR("PiD requires a reference image");
+            return std::nullopt;
+        }
     }
 
     sd::Tensor<float> concat_latent;

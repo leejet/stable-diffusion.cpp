@@ -91,7 +91,6 @@ struct LoraModel : public GGMLRunner {
             return false;
         }
 
-
         dry_run = false;
         model_loader.load_tensors(on_new_tensor_cb, n_threads);
 

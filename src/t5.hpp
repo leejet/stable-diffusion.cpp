@@ -478,7 +478,7 @@ struct T5Embedder {
     bool alloc_params_buffer() {
         if (!model.alloc_params_buffer()) {
             return false;
-         }
+        }
         return true;
     }
 
