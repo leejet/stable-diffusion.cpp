@@ -3,6 +3,7 @@
 
 #include <memory>
 
+#include "diffusion_model.hpp"
 #include "ggml_extend.hpp"
 #include "model.h"
 
@@ -767,6 +768,8 @@ public:
             auto context_x = block->forward(ctx, context, x, c_mod);
             context        = context_x.first;
             x              = context_x.second;
+            sd::ggml_graph_cut::mark_graph_cut(context, "mmdit.joint_blocks." + std::to_string(i), "context");
+            sd::ggml_graph_cut::mark_graph_cut(x, "mmdit.joint_blocks." + std::to_string(i), "x");
         }
 
         x = final_layer->forward(ctx, x, c_mod);  // (N, T, patch_size ** 2 * out_channels)
@@ -809,6 +812,11 @@ public:
 
             context = context_embedder->forward(ctx, context);  // [N, L, D] aka [N, L, 1536]
         }
+        sd::ggml_graph_cut::mark_graph_cut(x, "mmdit.prelude", "x");
+        sd::ggml_graph_cut::mark_graph_cut(c, "mmdit.prelude", "c");
+        if (context != nullptr) {
+            sd::ggml_graph_cut::mark_graph_cut(context, "mmdit.prelude", "context");
+        }
 
         x = forward_core_with_concat(ctx, x, c, context, skip_layers);  // (N, H*W, patch_size ** 2 * out_channels)
 
@@ -817,14 +825,14 @@ public:
         return x;
     }
 };
-struct MMDiTRunner : public GGMLRunner {
+struct MMDiTRunner : public DiffusionModelRunner {
     MMDiT mmdit;
 
     MMDiTRunner(ggml_backend_t backend,
-                bool offload_params_to_cpu,
+                ggml_backend_t params_backend,
                 const String2TensorStorage& tensor_storage_map = {},
                 const std::string prefix                       = "")
-        : GGMLRunner(backend, offload_params_to_cpu), mmdit(tensor_storage_map) {
+        : DiffusionModelRunner(backend, params_backend, prefix), mmdit(tensor_storage_map) {
         mmdit.init(params_ctx, tensor_storage_map, prefix);
     }
 
@@ -832,7 +840,7 @@ struct MMDiTRunner : public GGMLRunner {
         return "mmdit";
     }
 
-    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
         mmdit.get_param_tensors(tensors, prefix);
     }
 
@@ -876,6 +884,20 @@ struct MMDiTRunner : public GGMLRunner {
         };
 
         return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+    }
+
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
+        const auto* extra = diffusion_extra_as<SkipLayerDiffusionExtra>(diffusion_params);
+        static const std::vector<int> empty_skip_layers;
+        return compute(n_threads,
+                       *diffusion_params.x,
+                       *diffusion_params.timesteps,
+                       tensor_or_empty(diffusion_params.context),
+                       tensor_or_empty(diffusion_params.y),
+                       extra->skip_layers ? *extra->skip_layers : empty_skip_layers);
     }
 
     void test() {
@@ -927,11 +949,15 @@ struct MMDiTRunner : public GGMLRunner {
         // ggml_backend_t backend    = ggml_backend_cuda_init(0);
         ggml_backend_t backend             = ggml_backend_cpu_init();
         ggml_type model_data_type          = GGML_TYPE_F16;
-        std::shared_ptr<MMDiTRunner> mmdit = std::make_shared<MMDiTRunner>(backend, false);
+        std::shared_ptr<MMDiTRunner> mmdit = std::make_shared<MMDiTRunner>(backend, backend);
         {
             LOG_INFO("loading from '%s'", file_path.c_str());
 
-            mmdit->alloc_params_buffer();
+            if (!mmdit->alloc_params_buffer()) {
+                LOG_ERROR("mmdit embeds buffer allocation failed");
+                return;
+            }
+
             std::map<std::string, ggml_tensor*> tensors;
             mmdit->get_param_tensors(tensors, "model.diffusion_model");
 

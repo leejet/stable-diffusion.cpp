@@ -67,6 +67,10 @@ static enum sample_method_t get_sdapi_sample_method(std::string name) {
         {"k_res_multistep", RES_MULTISTEP_SAMPLE_METHOD},
         {"res 2s", RES_2S_SAMPLE_METHOD},
         {"k_res_2s", RES_2S_SAMPLE_METHOD},
+        {"euler_cfg_pp", EULER_CFG_PP_SAMPLE_METHOD},
+        {"k_euler_cfg_pp", EULER_CFG_PP_SAMPLE_METHOD},
+        {"euler_a_cfg_pp", EULER_CFG_PP_SAMPLE_METHOD},
+        {"k_euler_a_cfg_pp", EULER_CFG_PP_SAMPLE_METHOD},
     };
     auto it = hardcoded.find(name);
     return it != hardcoded.end() ? it->second : SAMPLE_METHOD_COUNT;
@@ -381,6 +385,8 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
         json result = json::array();
         result.push_back(make_builtin("None"));
+        result.push_back(make_builtin("Lanczos"));
+        result.push_back(make_builtin("Nearest"));
 
         {
             std::lock_guard<std::mutex> lock(*runtime->upscaler_mutex);
@@ -400,7 +406,12 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
     svr.Get("/sdapi/v1/latent-upscale-modes", [](const httplib::Request&, httplib::Response& res) {
         json result = json::array({
+            {{"name", "Latent"}},
             {{"name", "Latent (nearest)"}},
+            {{"name", "Latent (nearest-exact)"}},
+            {{"name", "Latent (antialiased)"}},
+            {{"name", "Latent (bicubic)"}},
+            {{"name", "Latent (bicubic antialiased)"}},
         });
         res.set_content(result.dump(), "application/json");
     });

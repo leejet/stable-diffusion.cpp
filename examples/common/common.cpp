@@ -35,6 +35,22 @@ const char* const modes_str[] = {
     "metadata",
 };
 
+static sd_vae_format_t str_to_vae_format(const std::string& value) {
+    if (value == "auto") {
+        return SD_VAE_FORMAT_AUTO;
+    }
+    if (value == "flux") {
+        return SD_VAE_FORMAT_FLUX;
+    }
+    if (value == "sd3") {
+        return SD_VAE_FORMAT_SD3;
+    }
+    if (value == "flux2") {
+        return SD_VAE_FORMAT_FLUX2;
+    }
+    return SD_VAE_FORMAT_COUNT;
+}
+
 #if defined(_WIN32)
 static std::string utf16_to_utf8(const std::wstring& wstr) {
     if (wstr.empty())
@@ -107,47 +123,60 @@ static bool is_absolute_path(const std::string& p) {
 
 std::string ArgOptions::wrap_text(const std::string& text, size_t width, size_t indent) {
     std::ostringstream oss;
-    size_t line_len = 0;
     size_t pos      = 0;
+    size_t line_len = 0;
 
     while (pos < text.size()) {
-        // Preserve manual newlines
         if (text[pos] == '\n') {
             oss << '\n'
                 << std::string(indent, ' ');
-            line_len = indent;
+            line_len = 0;
             ++pos;
             continue;
         }
 
-        // Add the character
-        oss << text[pos];
-        ++line_len;
-        ++pos;
+        if (std::isspace(static_cast<unsigned char>(text[pos]))) {
+            ++pos;
+            continue;
+        }
 
-        // If the current line exceeds width, try to break at the last space
-        if (line_len >= width) {
-            std::string current = oss.str();
-            size_t back         = current.size();
+        size_t word_start = pos;
+        while (pos < text.size() &&
+               text[pos] != '\n' &&
+               !std::isspace(static_cast<unsigned char>(text[pos]))) {
+            ++pos;
+        }
 
-            // Find the last space (for a clean break)
-            while (back > 0 && current[back - 1] != ' ' && current[back - 1] != '\n')
-                --back;
-
-            // If found a space to break on
-            if (back > 0 && current[back - 1] != '\n') {
-                std::string before = current.substr(0, back - 1);
-                std::string after  = current.substr(back);
-                oss.str("");
-                oss.clear();
-                oss << before << "\n"
-                    << std::string(indent, ' ') << after;
-            } else {
-                // If no space found, just break at width
-                oss << "\n"
-                    << std::string(indent, ' ');
+        std::string word = text.substr(word_start, pos - word_start);
+        while (!word.empty()) {
+            size_t separator_len = line_len == 0 ? 0 : 1;
+            if (line_len + separator_len + word.size() <= width) {
+                if (separator_len > 0) {
+                    oss << ' ';
+                    ++line_len;
+                }
+                oss << word;
+                line_len += word.size();
+                word.clear();
+                continue;
             }
-            line_len = indent;
+
+            if (line_len > 0) {
+                oss << '\n'
+                    << std::string(indent, ' ');
+                line_len = 0;
+                continue;
+            }
+
+            size_t chunk_len = std::min(width, word.size());
+            oss << word.substr(0, chunk_len);
+            line_len = chunk_len;
+            word.erase(0, chunk_len);
+            if (!word.empty()) {
+                oss << '\n'
+                    << std::string(indent, ' ');
+                line_len = 0;
+            }
         }
     }
 
@@ -328,9 +357,21 @@ ArgOptions SDContextParams::get_options() {
          "path to the standalone high noise diffusion model",
          &high_noise_diffusion_model_path},
         {"",
+         "--embeddings-connectors",
+         "path to LTXAV embeddings connectors",
+         &embeddings_connectors_path},
+        {"",
          "--vae",
          "path to standalone vae model",
          &vae_path},
+        {"",
+         "--vae-format",
+         "VAE latent format override: auto, flux, sd3, or flux2 (default: auto)",
+         &vae_format},
+        {"",
+         "--audio-vae",
+         "path to standalone LTX audio vae model",
+         &audio_vae_path},
         {"",
          "--taesd",
          "path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)",
@@ -367,6 +408,14 @@ ArgOptions SDContextParams::get_options() {
          "--upscale-model",
          "path to esrgan model.",
          &esrgan_path},
+        {"",
+         "--backend",
+         "runtime backend assignment, e.g. cpu or clip=cpu,vae=cuda0,diffusion=vulkan0",
+         &backend},
+        {"",
+         "--params-backend",
+         "parameter backend assignment, e.g. cpu or diffusion=cpu,clip=cpu",
+         &params_backend},
     };
 
     options.int_options = {
@@ -381,7 +430,12 @@ ArgOptions SDContextParams::get_options() {
          &chroma_t5_mask_pad},
     };
 
-    options.float_options = {};
+    options.float_options = {
+        {"",
+         "--max-vram",
+         "maximum VRAM budget in GiB for graph-cut segmented execution. 0 disables graph splitting; a negative value auto-detects free VRAM, sparing the specified value (e.g. -0.5 will keep at least 0.5 GiB free)",
+         &max_vram},
+    };
 
     options.bool_options = {
         {"",
@@ -605,6 +659,11 @@ bool SDContextParams::validate(SDMode mode) {
         }
     }
 
+    if (str_to_vae_format(vae_format) == SD_VAE_FORMAT_COUNT) {
+        LOG_ERROR("error: vae_format must be 'auto', 'flux', 'sd3', or 'flux2'");
+        return false;
+    }
+
     return true;
 }
 
@@ -643,7 +702,10 @@ std::string SDContextParams::to_string() const {
         << "  llm_vision_path: \"" << llm_vision_path << "\",\n"
         << "  diffusion_model_path: \"" << diffusion_model_path << "\",\n"
         << "  high_noise_diffusion_model_path: \"" << high_noise_diffusion_model_path << "\",\n"
+        << "  embeddings_connectors_path: \"" << embeddings_connectors_path << "\",\n"
         << "  vae_path: \"" << vae_path << "\",\n"
+        << "  vae_format: \"" << vae_format << "\",\n"
+        << "  audio_vae_path: \"" << audio_vae_path << "\",\n"
         << "  taesd_path: \"" << taesd_path << "\",\n"
         << "  esrgan_path: \"" << esrgan_path << "\",\n"
         << "  control_net_path: \"" << control_net_path << "\",\n"
@@ -657,6 +719,9 @@ std::string SDContextParams::to_string() const {
         << "  rng_type: " << sd_rng_type_name(rng_type) << ",\n"
         << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
         << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
+        << "  max_vram: " << max_vram << ",\n"
+        << "  backend: \"" << backend << "\",\n"
+        << "  params_backend: \"" << params_backend << "\",\n"
         << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
         << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
         << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
@@ -699,7 +764,9 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         llm_vision_path.c_str(),
         diffusion_model_path.c_str(),
         high_noise_diffusion_model_path.c_str(),
+        embeddings_connectors_path.c_str(),
         vae_path.c_str(),
+        audio_vae_path.c_str(),
         taesd_path.c_str(),
         control_net_path.c_str(),
         embedding_vec.data(),
@@ -731,6 +798,10 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         chroma_use_t5_mask,
         chroma_t5_mask_pad,
         qwen_image_zero_cond_t,
+        str_to_vae_format(vae_format),
+        max_vram,
+        backend.c_str(),
+        params_backend.c_str(),
     };
     return sd_ctx_params;
 }
@@ -783,8 +854,18 @@ ArgOptions SDGenerationParams::get_options() {
          &pm_id_embed_path},
         {"",
          "--hires-upscaler",
-         "highres fix upscaler, Latent (nearest) or a model name/path under --hires-upscalers-dir (default: Latent (nearest))",
+         "highres fix upscaler, Lanczos, Nearest, Latent, Latent (nearest), Latent (nearest-exact), "
+         "Latent (antialiased), Latent (bicubic), Latent (bicubic antialiased), or a model name "
+         "under --hires-upscalers-dir (default: Latent)",
          &hires_upscaler},
+        {"",
+         "--extra-sample-args",
+         "extra sampler/scheduler args, key=value list. lcm supports noise_clip_std, noise_scale_start, noise_scale_end; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma",
+         &extra_sample_args},
+        {"",
+         "--extra-tiling-args",
+         "extra VAE tiling args, key=value list. LTX video VAE supports temporal_tile_frames (default: 4), temporal_tile_overlap (default: 1)",
+         &extra_tiling_args},
     };
 
     options.int_options = {
@@ -969,6 +1050,11 @@ ArgOptions SDGenerationParams::get_options() {
          true,
          &vae_tiling_params.enabled},
         {"",
+         "--temporal-tiling",
+         "enable temporal tiling for LTX video VAE decode",
+         true,
+         &vae_tiling_params.temporal_tiling},
+        {"",
          "--hires",
          "enable highres fix",
          true,
@@ -1079,11 +1165,11 @@ ArgOptions SDGenerationParams::get_options() {
         return 1;
     };
 
-    auto on_sigmas_arg = [&](int argc, const char** argv, int index) {
-        if (++index >= argc) {
+    auto parse_sigmas_arg = [&](const char* value, std::vector<float>* target, const char* option_name) {
+        if (target == nullptr || value == nullptr) {
             return -1;
         }
-        std::string sigmas_str = argv[index];
+        std::string sigmas_str = value;
         if (!sigmas_str.empty() && sigmas_str.front() == '[') {
             sigmas_str.erase(0, 1);
         }
@@ -1091,6 +1177,7 @@ ArgOptions SDGenerationParams::get_options() {
             sigmas_str.pop_back();
         }
 
+        size_t before = target->size();
         std::stringstream ss(sigmas_str);
         std::string item;
         while (std::getline(ss, item, ',')) {
@@ -1098,22 +1185,36 @@ ArgOptions SDGenerationParams::get_options() {
             item.erase(item.find_last_not_of(" \t\n\r\f\v") + 1);
             if (!item.empty()) {
                 try {
-                    custom_sigmas.push_back(std::stof(item));
+                    target->push_back(std::stof(item));
                 } catch (const std::invalid_argument&) {
-                    LOG_ERROR("error: invalid float value '%s' in --sigmas", item.c_str());
+                    LOG_ERROR("error: invalid float value '%s' in %s", item.c_str(), option_name);
                     return -1;
                 } catch (const std::out_of_range&) {
-                    LOG_ERROR("error: float value '%s' out of range in --sigmas", item.c_str());
+                    LOG_ERROR("error: float value '%s' out of range in %s", item.c_str(), option_name);
                     return -1;
                 }
             }
         }
 
-        if (custom_sigmas.empty() && !sigmas_str.empty()) {
-            LOG_ERROR("error: could not parse any sigma values from '%s'", argv[index]);
+        if (target->size() == before && !sigmas_str.empty()) {
+            LOG_ERROR("error: could not parse any sigma values from '%s'", value);
             return -1;
         }
         return 1;
+    };
+
+    auto on_sigmas_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        return parse_sigmas_arg(argv[index], &custom_sigmas, "--sigmas");
+    };
+
+    auto on_hires_sigmas_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        return parse_sigmas_arg(argv[index], &hires_custom_sigmas, "--hires-sigmas");
     };
 
     auto on_ref_image_arg = [&](int argc, const char** argv, int index) {
@@ -1222,22 +1323,26 @@ ArgOptions SDGenerationParams::get_options() {
          on_seed_arg},
         {"",
          "--sampling-method",
-         "sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde] "
+         "sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde, euler_cfg_pp, euler_a_cfg_pp]"
          "(default: euler for Flux/SD3/Wan, euler_a otherwise)",
          on_sample_method_arg},
         {"",
          "--high-noise-sampling-method",
-         "(high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde]"
+         "(high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde, euler_cfg_pp, euler_a_cfg_pp]"
          " default: euler for Flux/SD3/Wan, euler_a otherwise",
          on_high_noise_sample_method_arg},
         {"",
          "--scheduler",
-         "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm, bong_tangent], default: discrete",
+         "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm, bong_tangent, ltx2], default: model-specific",
          on_scheduler_arg},
         {"",
          "--sigmas",
          "custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\").",
          on_sigmas_arg},
+        {"",
+         "--hires-sigmas",
+         "custom sigma values for the highres fix second pass, comma-separated (e.g., \"0.85,0.725,0.421875,0.0\").",
+         on_hires_sigmas_arg},
         {"",
          "--skip-layers",
          "layers to skip for SLG steps (default: [7,8,9])",
@@ -1470,11 +1575,31 @@ static bool resolve_model_file_from_dir(const std::string& model_name,
         LOG_ERROR("%s directory is empty", label);
         return false;
     }
+    auto ends_with_valid_ext = [&]() {
+        for (const auto& ext : valid_ext) {
+            if (model_name.size() < ext.size()) {
+                continue;
+            }
+            auto suffix = model_name.substr(model_name.size() - ext.size());
+            std::transform(suffix.begin(), suffix.end(), suffix.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            std::string lower_ext = ext;
+            std::transform(lower_ext.begin(), lower_ext.end(), lower_ext.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            if (suffix == lower_ext) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     if (model_name.empty() ||
         model_name.find('/') != std::string::npos ||
         model_name.find('\\') != std::string::npos ||
         fs::path(model_name).has_root_path() ||
-        fs::path(model_name).has_extension()) {
+        ends_with_valid_ext()) {
         LOG_ERROR("%s must be a model name without path or extension: %s", label, model_name.c_str());
         return false;
     }
@@ -1578,6 +1703,9 @@ bool SDGenerationParams::from_json_str(
         if (hires_json.contains("denoising_strength") && hires_json["denoising_strength"].is_number()) {
             hires_denoising_strength = hires_json["denoising_strength"];
         }
+        if (hires_json.contains("custom_sigmas") && hires_json["custom_sigmas"].is_array()) {
+            hires_custom_sigmas = hires_json["custom_sigmas"].get<std::vector<float>>();
+        }
         if (hires_json.contains("upscale_tile_size") && hires_json["upscale_tile_size"].is_number_integer()) {
             hires_upscale_tile_size = hires_json["upscale_tile_size"];
         }
@@ -1585,6 +1713,7 @@ bool SDGenerationParams::from_json_str(
 
     auto parse_sample_params_json = [&](const json& sample_json,
                                         sd_sample_params_t& target_params,
+                                        std::string& target_extra_sample_args,
                                         std::vector<int>& target_skip_layers,
                                         std::vector<float>* target_custom_sigmas) {
         if (sample_json.contains("sample_steps") && sample_json["sample_steps"].is_number_integer()) {
@@ -1598,6 +1727,9 @@ bool SDGenerationParams::from_json_str(
         }
         if (sample_json.contains("flow_shift") && sample_json["flow_shift"].is_number()) {
             target_params.flow_shift = sample_json["flow_shift"];
+        }
+        if (sample_json.contains("extra_sample_args") && sample_json["extra_sample_args"].is_string()) {
+            target_extra_sample_args = sample_json["extra_sample_args"].get<std::string>();
         }
         if (target_custom_sigmas != nullptr &&
             sample_json.contains("custom_sigmas") &&
@@ -1646,11 +1778,12 @@ bool SDGenerationParams::from_json_str(
     };
 
     if (j.contains("sample_params") && j["sample_params"].is_object()) {
-        parse_sample_params_json(j["sample_params"], sample_params, skip_layers, &custom_sigmas);
+        parse_sample_params_json(j["sample_params"], sample_params, extra_sample_args, skip_layers, &custom_sigmas);
     }
     if (j.contains("high_noise_sample_params") && j["high_noise_sample_params"].is_object()) {
         parse_sample_params_json(j["high_noise_sample_params"],
                                  high_noise_sample_params,
+                                 high_noise_extra_sample_args,
                                  high_noise_skip_layers,
                                  nullptr);
     }
@@ -1659,6 +1792,9 @@ bool SDGenerationParams::from_json_str(
         const json& tiling_json = j["vae_tiling_params"];
         if (tiling_json.contains("enabled") && tiling_json["enabled"].is_boolean()) {
             vae_tiling_params.enabled = tiling_json["enabled"];
+        }
+        if (tiling_json.contains("temporal_tiling") && tiling_json["temporal_tiling"].is_boolean()) {
+            vae_tiling_params.temporal_tiling = tiling_json["temporal_tiling"];
         }
         if (tiling_json.contains("tile_size_x") && tiling_json["tile_size_x"].is_number_integer()) {
             vae_tiling_params.tile_size_x = tiling_json["tile_size_x"];
@@ -1674,6 +1810,9 @@ bool SDGenerationParams::from_json_str(
         }
         if (tiling_json.contains("rel_size_y") && tiling_json["rel_size_y"].is_number()) {
             vae_tiling_params.rel_size_y = tiling_json["rel_size_y"];
+        }
+        if (tiling_json.contains("extra_tiling_args") && tiling_json["extra_tiling_args"].is_string()) {
+            extra_tiling_args = tiling_json["extra_tiling_args"].get<std::string>();
         }
     }
 
@@ -1897,6 +2036,8 @@ bool SDGenerationParams::initialize_cache_params() {
 }
 
 bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::string& hires_upscalers_dir, bool strict) {
+    vae_tiling_params.extra_tiling_args = extra_tiling_args.empty() ? nullptr : extra_tiling_args.c_str();
+
     if (high_noise_sample_params.sample_steps <= 0) {
         high_noise_sample_params.sample_steps = -1;
     }
@@ -1918,7 +2059,7 @@ bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::s
     hires_upscaler_model_path.clear();
     if (hires_enabled) {
         if (hires_upscaler.empty()) {
-            hires_upscaler = "Latent (nearest)";
+            hires_upscaler = "Latent";
         }
         resolved_hires_upscaler = str_to_sd_hires_upscaler(hires_upscaler.c_str());
         if (resolved_hires_upscaler == SD_HIRES_UPSCALER_NONE) {
@@ -2017,6 +2158,10 @@ bool SDGenerationParams::validate(SDMode mode) {
             LOG_ERROR("error: hires denoising strength must be in (0.0, 1.0]");
             return false;
         }
+        if (!hires_custom_sigmas.empty() && hires_custom_sigmas.size() < 2) {
+            LOG_ERROR("error: hires custom sigmas must contain at least two values");
+            return false;
+        }
         if (hires_upscale_tile_size < 1) {
             LOG_ERROR("error: hires upscale tile size must be positive");
             return false;
@@ -2077,6 +2222,9 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     high_noise_sample_params.guidance.slg.layer_count = high_noise_skip_layers.size();
     sample_params.custom_sigmas                       = custom_sigmas.empty() ? nullptr : custom_sigmas.data();
     sample_params.custom_sigmas_count                 = static_cast<int>(custom_sigmas.size());
+    sample_params.extra_sample_args                   = extra_sample_args.empty() ? nullptr : extra_sample_args.c_str();
+    high_noise_sample_params.extra_sample_args        = high_noise_extra_sample_args.empty() ? nullptr : high_noise_extra_sample_args.c_str();
+    vae_tiling_params.extra_tiling_args               = extra_tiling_args.empty() ? nullptr : extra_tiling_args.c_str();
     cache_params.scm_mask                             = scm_mask.empty() ? nullptr : scm_mask.c_str();
 
     sd_pm_params_t pm_params = {
@@ -2109,15 +2257,17 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     params.vae_tiling_params     = vae_tiling_params;
     params.cache                 = cache_params;
 
-    params.hires.enabled            = hires_enabled;
-    params.hires.upscaler           = resolved_hires_upscaler;
-    params.hires.model_path         = hires_upscaler_model_path.empty() ? nullptr : hires_upscaler_model_path.c_str();
-    params.hires.scale              = hires_scale;
-    params.hires.target_width       = hires_width;
-    params.hires.target_height      = hires_height;
-    params.hires.steps              = hires_steps;
-    params.hires.denoising_strength = hires_denoising_strength;
-    params.hires.upscale_tile_size  = hires_upscale_tile_size;
+    params.hires.enabled             = hires_enabled;
+    params.hires.upscaler            = resolved_hires_upscaler;
+    params.hires.model_path          = hires_upscaler_model_path.empty() ? nullptr : hires_upscaler_model_path.c_str();
+    params.hires.scale               = hires_scale;
+    params.hires.target_width        = hires_width;
+    params.hires.target_height       = hires_height;
+    params.hires.steps               = hires_steps;
+    params.hires.denoising_strength  = hires_denoising_strength;
+    params.hires.upscale_tile_size   = hires_upscale_tile_size;
+    params.hires.custom_sigmas       = hires_custom_sigmas.empty() ? nullptr : hires_custom_sigmas.data();
+    params.hires.custom_sigmas_count = static_cast<int>(hires_custom_sigmas.size());
     return params;
 }
 
@@ -2146,28 +2296,43 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
     high_noise_sample_params.guidance.slg.layer_count = high_noise_skip_layers.size();
     sample_params.custom_sigmas                       = custom_sigmas.empty() ? nullptr : custom_sigmas.data();
     sample_params.custom_sigmas_count                 = static_cast<int>(custom_sigmas.size());
+    sample_params.extra_sample_args                   = extra_sample_args.empty() ? nullptr : extra_sample_args.c_str();
+    high_noise_sample_params.extra_sample_args        = high_noise_extra_sample_args.empty() ? nullptr : high_noise_extra_sample_args.c_str();
+    vae_tiling_params.extra_tiling_args               = extra_tiling_args.empty() ? nullptr : extra_tiling_args.c_str();
     cache_params.scm_mask                             = scm_mask.empty() ? nullptr : scm_mask.c_str();
 
-    params.loras                    = lora_vec.empty() ? nullptr : lora_vec.data();
-    params.lora_count               = static_cast<uint32_t>(lora_vec.size());
-    params.prompt                   = prompt.c_str();
-    params.negative_prompt          = negative_prompt.c_str();
-    params.clip_skip                = clip_skip;
-    params.init_image               = init_image.get();
-    params.end_image                = end_image.get();
-    params.control_frames           = control_frame_views.empty() ? nullptr : control_frame_views.data();
-    params.control_frames_size      = static_cast<int>(control_frame_views.size());
-    params.width                    = get_resolved_width();
-    params.height                   = get_resolved_height();
-    params.sample_params            = sample_params;
-    params.high_noise_sample_params = high_noise_sample_params;
-    params.moe_boundary             = moe_boundary;
-    params.strength                 = strength;
-    params.seed                     = seed;
-    params.video_frames             = video_frames;
-    params.vace_strength            = vace_strength;
-    params.vae_tiling_params        = vae_tiling_params;
-    params.cache                    = cache_params;
+    params.loras                     = lora_vec.empty() ? nullptr : lora_vec.data();
+    params.lora_count                = static_cast<uint32_t>(lora_vec.size());
+    params.prompt                    = prompt.c_str();
+    params.negative_prompt           = negative_prompt.c_str();
+    params.clip_skip                 = clip_skip;
+    params.init_image                = init_image.get();
+    params.end_image                 = end_image.get();
+    params.control_frames            = control_frame_views.empty() ? nullptr : control_frame_views.data();
+    params.control_frames_size       = static_cast<int>(control_frame_views.size());
+    params.width                     = get_resolved_width();
+    params.height                    = get_resolved_height();
+    params.sample_params             = sample_params;
+    params.high_noise_sample_params  = high_noise_sample_params;
+    params.moe_boundary              = moe_boundary;
+    params.strength                  = strength;
+    params.seed                      = seed;
+    params.video_frames              = video_frames;
+    params.fps                       = fps;
+    params.vace_strength             = vace_strength;
+    params.vae_tiling_params         = vae_tiling_params;
+    params.cache                     = cache_params;
+    params.hires.enabled             = hires_enabled;
+    params.hires.upscaler            = resolved_hires_upscaler;
+    params.hires.model_path          = hires_upscaler_model_path.empty() ? nullptr : hires_upscaler_model_path.c_str();
+    params.hires.scale               = hires_scale;
+    params.hires.target_width        = hires_width;
+    params.hires.target_height       = hires_height;
+    params.hires.steps               = hires_steps;
+    params.hires.denoising_strength  = hires_denoising_strength;
+    params.hires.upscale_tile_size   = hires_upscale_tile_size;
+    params.hires.custom_sigmas       = hires_custom_sigmas.empty() ? nullptr : hires_custom_sigmas.data();
+    params.hires.custom_sigmas_count = static_cast<int>(hires_custom_sigmas.size());
     return params;
 }
 
@@ -2250,14 +2415,17 @@ std::string SDGenerationParams::to_string() const {
         << ", target_height: " << hires_height
         << ", steps: " << hires_steps
         << ", denoising_strength: " << hires_denoising_strength
+        << ", custom_sigmas: " << vec_to_string(hires_custom_sigmas)
         << ", upscale_tile_size: " << hires_upscale_tile_size << " },\n"
         << "  vae_tiling_params: { "
         << vae_tiling_params.enabled << ", "
+        << vae_tiling_params.temporal_tiling << ", "
         << vae_tiling_params.tile_size_x << ", "
         << vae_tiling_params.tile_size_y << ", "
         << vae_tiling_params.target_overlap << ", "
         << vae_tiling_params.rel_size_x << ", "
-        << vae_tiling_params.rel_size_y << " },\n"
+        << vae_tiling_params.rel_size_y << ", "
+        << "\"" << extra_tiling_args << "\" },\n"
         << "}";
     return oss.str();
 }
@@ -2266,7 +2434,198 @@ std::string version_string() {
     return std::string("stable-diffusion.cpp version ") + sd_version() + ", commit " + sd_commit();
 }
 
-std::string get_image_params(const SDContextParams& ctx_params, const SDGenerationParams& gen_params, int64_t seed) {
+static std::string safe_json_string(const char* value) {
+    return value ? value : "";
+}
+
+static void set_json_basename_if_not_empty(json& target, const char* key, const std::string& path) {
+    if (!path.empty()) {
+        target[key] = sd_basename(path);
+    }
+}
+
+static json build_sampling_metadata_json(const sd_sample_params_t& sample_params,
+                                         const std::vector<int>& skip_layers,
+                                         const std::vector<float>* custom_sigmas = nullptr) {
+    json sampling = {
+        {"steps", sample_params.sample_steps},
+        {"eta", sample_params.eta},
+        {"shifted_timestep", sample_params.shifted_timestep},
+        {"flow_shift", sample_params.flow_shift},
+        {"extra_sample_args", safe_json_string(sample_params.extra_sample_args)},
+        {"guidance",
+         {
+             {"txt_cfg", sample_params.guidance.txt_cfg},
+             {"img_cfg", sample_params.guidance.img_cfg},
+             {"distilled_guidance", sample_params.guidance.distilled_guidance},
+             {"slg",
+              {
+                  {"scale", sample_params.guidance.slg.scale},
+                  {"layers", skip_layers},
+                  {"start", sample_params.guidance.slg.layer_start},
+                  {"end", sample_params.guidance.slg.layer_end},
+              }},
+         }},
+    };
+    if (sample_params.sample_method != SAMPLE_METHOD_COUNT) {
+        sampling["method"] = safe_json_string(sd_sample_method_name(sample_params.sample_method));
+    }
+    if (sample_params.scheduler != SCHEDULER_COUNT) {
+        sampling["scheduler"] = safe_json_string(sd_scheduler_name(sample_params.scheduler));
+    }
+    if (custom_sigmas != nullptr) {
+        sampling["custom_sigmas"] = *custom_sigmas;
+    }
+    return sampling;
+}
+
+std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
+                                            const SDGenerationParams& gen_params,
+                                            int64_t seed,
+                                            SDMode mode) {
+    json root;
+    root["schema"]    = "sdcpp.image.params/v1";
+    root["mode"]      = mode == VID_GEN ? "vid_gen" : "img_gen";
+    root["generator"] = {
+        {"name", "stable-diffusion.cpp"},
+        {"version", safe_json_string(sd_version())},
+        {"commit", safe_json_string(sd_commit())},
+    };
+    root["seed"]   = seed;
+    root["width"]  = gen_params.get_resolved_width();
+    root["height"] = gen_params.get_resolved_height();
+
+    root["prompt"] = {
+        {"positive", gen_params.prompt},
+        {"negative", gen_params.negative_prompt},
+    };
+    root["sampling"] = build_sampling_metadata_json(gen_params.sample_params,
+                                                    gen_params.skip_layers,
+                                                    &gen_params.custom_sigmas);
+
+    json models;
+    set_json_basename_if_not_empty(models, "model", ctx_params.model_path);
+    set_json_basename_if_not_empty(models, "clip_l", ctx_params.clip_l_path);
+    set_json_basename_if_not_empty(models, "clip_g", ctx_params.clip_g_path);
+    set_json_basename_if_not_empty(models, "clip_vision", ctx_params.clip_vision_path);
+    set_json_basename_if_not_empty(models, "t5xxl", ctx_params.t5xxl_path);
+    set_json_basename_if_not_empty(models, "llm", ctx_params.llm_path);
+    set_json_basename_if_not_empty(models, "llm_vision", ctx_params.llm_vision_path);
+    set_json_basename_if_not_empty(models, "diffusion_model", ctx_params.diffusion_model_path);
+    set_json_basename_if_not_empty(models, "high_noise_diffusion_model", ctx_params.high_noise_diffusion_model_path);
+    set_json_basename_if_not_empty(models, "vae", ctx_params.vae_path);
+    set_json_basename_if_not_empty(models, "taesd", ctx_params.taesd_path);
+    set_json_basename_if_not_empty(models, "control_net", ctx_params.control_net_path);
+    root["models"] = std::move(models);
+
+    root["clip_skip"]             = gen_params.clip_skip;
+    root["strength"]              = gen_params.strength;
+    root["control_strength"]      = gen_params.control_strength;
+    root["auto_resize_ref_image"] = gen_params.auto_resize_ref_image;
+    root["increase_ref_index"]    = gen_params.increase_ref_index;
+    if (mode == VID_GEN) {
+        root["video"] = {
+            {"frame_count", gen_params.video_frames},
+            {"fps", gen_params.fps},
+        };
+        root["moe_boundary"]        = gen_params.moe_boundary;
+        root["vace_strength"]       = gen_params.vace_strength;
+        root["high_noise_sampling"] = build_sampling_metadata_json(gen_params.high_noise_sample_params,
+                                                                   gen_params.high_noise_skip_layers);
+    }
+
+    root["rng"] = safe_json_string(sd_rng_type_name(ctx_params.rng_type));
+    if (ctx_params.sampler_rng_type != RNG_TYPE_COUNT) {
+        root["sampler_rng"] = safe_json_string(sd_rng_type_name(ctx_params.sampler_rng_type));
+    }
+
+    json loras = json::array();
+    for (const auto& entry : gen_params.lora_map) {
+        loras.push_back({
+            {"name", sd_basename(entry.first)},
+            {"multiplier", entry.second},
+            {"is_high_noise", false},
+        });
+    }
+    for (const auto& entry : gen_params.high_noise_lora_map) {
+        loras.push_back({
+            {"name", sd_basename(entry.first)},
+            {"multiplier", entry.second},
+            {"is_high_noise", true},
+        });
+    }
+    if (!loras.empty()) {
+        root["loras"] = std::move(loras);
+    }
+
+    if (gen_params.hires_enabled) {
+        root["hires"] = {
+            {"enabled", gen_params.hires_enabled},
+            {"upscaler", gen_params.hires_upscaler},
+            {"model", gen_params.hires_upscaler_model_path.empty() ? "" : sd_basename(gen_params.hires_upscaler_model_path)},
+            {"scale", gen_params.hires_scale},
+            {"target_width", gen_params.hires_width},
+            {"target_height", gen_params.hires_height},
+            {"steps", gen_params.hires_steps},
+            {"denoising_strength", gen_params.hires_denoising_strength},
+            {"custom_sigmas", gen_params.hires_custom_sigmas},
+            {"upscale_tile_size", gen_params.hires_upscale_tile_size},
+        };
+    }
+
+    if (gen_params.cache_params.mode != SD_CACHE_DISABLED) {
+        root["cache"] = {
+            {"requested_mode", gen_params.cache_mode},
+            {"requested_option", gen_params.cache_option},
+            {"mode", gen_params.cache_params.mode},
+            {"scm_mask", gen_params.scm_mask},
+            {"scm_policy_dynamic", gen_params.scm_policy_dynamic},
+            {"reuse_threshold", gen_params.cache_params.reuse_threshold},
+            {"start_percent", gen_params.cache_params.start_percent},
+            {"end_percent", gen_params.cache_params.end_percent},
+            {"error_decay_rate", gen_params.cache_params.error_decay_rate},
+            {"use_relative_threshold", gen_params.cache_params.use_relative_threshold},
+            {"reset_error_on_compute", gen_params.cache_params.reset_error_on_compute},
+            {"Fn_compute_blocks", gen_params.cache_params.Fn_compute_blocks},
+            {"Bn_compute_blocks", gen_params.cache_params.Bn_compute_blocks},
+            {"residual_diff_threshold", gen_params.cache_params.residual_diff_threshold},
+            {"max_warmup_steps", gen_params.cache_params.max_warmup_steps},
+            {"max_cached_steps", gen_params.cache_params.max_cached_steps},
+            {"max_continuous_cached_steps", gen_params.cache_params.max_continuous_cached_steps},
+            {"taylorseer_n_derivatives", gen_params.cache_params.taylorseer_n_derivatives},
+            {"taylorseer_skip_interval", gen_params.cache_params.taylorseer_skip_interval},
+            {"spectrum_w", gen_params.cache_params.spectrum_w},
+            {"spectrum_m", gen_params.cache_params.spectrum_m},
+            {"spectrum_lam", gen_params.cache_params.spectrum_lam},
+            {"spectrum_window_size", gen_params.cache_params.spectrum_window_size},
+            {"spectrum_flex_window", gen_params.cache_params.spectrum_flex_window},
+            {"spectrum_warmup_steps", gen_params.cache_params.spectrum_warmup_steps},
+            {"spectrum_stop_percent", gen_params.cache_params.spectrum_stop_percent},
+        };
+    }
+
+    if (gen_params.vae_tiling_params.enabled ||
+        gen_params.vae_tiling_params.temporal_tiling ||
+        !gen_params.extra_tiling_args.empty()) {
+        root["vae_tiling"] = {
+            {"enabled", gen_params.vae_tiling_params.enabled},
+            {"temporal_tiling", gen_params.vae_tiling_params.temporal_tiling},
+            {"tile_size_x", gen_params.vae_tiling_params.tile_size_x},
+            {"tile_size_y", gen_params.vae_tiling_params.tile_size_y},
+            {"target_overlap", gen_params.vae_tiling_params.target_overlap},
+            {"rel_size_x", gen_params.vae_tiling_params.rel_size_x},
+            {"rel_size_y", gen_params.vae_tiling_params.rel_size_y},
+            {"extra_tiling_args", gen_params.extra_tiling_args},
+        };
+    }
+
+    return root.dump();
+}
+
+std::string get_image_params(const SDContextParams& ctx_params,
+                             const SDGenerationParams& gen_params,
+                             int64_t seed,
+                             SDMode mode) {
     std::string parameter_string;
     if (gen_params.prompt_with_lora.size() != 0) {
         parameter_string += gen_params.prompt_with_lora + "\n";
@@ -2279,7 +2638,7 @@ std::string get_image_params(const SDContextParams& ctx_params, const SDGenerati
     parameter_string += "Steps: " + std::to_string(gen_params.sample_params.sample_steps) + ", ";
     parameter_string += "CFG scale: " + std::to_string(gen_params.sample_params.guidance.txt_cfg) + ", ";
     if (gen_params.sample_params.guidance.slg.scale != 0 && gen_params.skip_layers.size() != 0) {
-        parameter_string += "SLG scale: " + std::to_string(gen_params.sample_params.guidance.txt_cfg) + ", ";
+        parameter_string += "SLG scale: " + std::to_string(gen_params.sample_params.guidance.slg.scale) + ", ";
         parameter_string += "Skip layers: [";
         for (const auto& layer : gen_params.skip_layers) {
             parameter_string += std::to_string(layer) + ", ";
@@ -2290,6 +2649,9 @@ std::string get_image_params(const SDContextParams& ctx_params, const SDGenerati
     }
     parameter_string += "Guidance: " + std::to_string(gen_params.sample_params.guidance.distilled_guidance) + ", ";
     parameter_string += "Eta: " + std::to_string(gen_params.sample_params.eta) + ", ";
+    if (!gen_params.extra_sample_args.empty()) {
+        parameter_string += "Extra sample args: " + gen_params.extra_sample_args + ", ";
+    }
     parameter_string += "Seed: " + std::to_string(seed) + ", ";
     parameter_string += "Size: " + std::to_string(gen_params.get_resolved_width()) + "x" + std::to_string(gen_params.get_resolved_height()) + ", ";
     parameter_string += "Model: " + sd_basename(ctx_params.model_path) + ", ";
@@ -2330,7 +2692,11 @@ std::string get_image_params(const SDContextParams& ctx_params, const SDGenerati
         parameter_string += "Hires resize: " + std::to_string(gen_params.hires_width) + "x" + std::to_string(gen_params.hires_height) + ", ";
         parameter_string += "Hires steps: " + std::to_string(gen_params.hires_steps) + ", ";
         parameter_string += "Denoising strength: " + std::to_string(gen_params.hires_denoising_strength) + ", ";
+        if (!gen_params.hires_custom_sigmas.empty()) {
+            parameter_string += "Hires custom sigmas: " + vec_to_string(gen_params.hires_custom_sigmas) + ", ";
+        }
     }
     parameter_string += "Version: stable-diffusion.cpp";
+    parameter_string += ", SDCPP: " + build_sdcpp_image_metadata_json(ctx_params, gen_params, seed, mode);
     return parameter_string;
 }

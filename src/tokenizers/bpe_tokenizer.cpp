@@ -131,11 +131,10 @@ std::vector<std::u32string> BPETokenizer::bpe(const std::u32string& token) const
 }
 
 std::vector<int> BPETokenizer::encode(const std::string& text, on_new_token_cb_t on_new_token_cb) {
-    std::string normalized_text = normalize(text);
     std::vector<int32_t> bpe_tokens;
     std::vector<std::string> token_strs;
 
-    auto splited_texts = split_with_special_tokens(normalized_text, special_tokens);
+    auto splited_texts = split_with_special_tokens(text, special_tokens);
 
     for (auto& splited_text : splited_texts) {
         if (is_special_token(splited_text)) {
@@ -160,15 +159,40 @@ std::vector<int> BPETokenizer::encode(const std::string& text, on_new_token_cb_t
                 }
             }
 
-            std::string token_str = token;
+            std::string token_str = normalize(token);
             std::u32string utf32_token;
-            for (int i = 0; i < static_cast<int>(token_str.length()); i++) {
-                unsigned char b = token_str[i];
-                utf32_token += byte_encoder[b];
+            if (byte_level_bpe) {
+                for (int i = 0; i < token_str.length(); i++) {
+                    unsigned char b = token_str[i];
+                    utf32_token += byte_encoder[b];
+                }
+            } else {
+                utf32_token = utf8_to_utf32(token_str);
             }
             auto bpe_strs = bpe(utf32_token);
             for (auto bpe_str : bpe_strs) {
-                bpe_tokens.push_back(encoder[bpe_str]);
+                int token_id;
+                auto iter = encoder.find(bpe_str);
+                if (iter != encoder.end()) {
+                    token_id = iter->second;
+                } else {
+                    if (byte_fallback) {
+                        auto utf8_token_str = utf32_to_utf8(bpe_str);
+                        for (int i = 0; i < utf8_token_str.length(); i++) {
+                            unsigned char b = utf8_token_str[i];
+                            char hex_buf[16];
+                            snprintf(hex_buf, sizeof(hex_buf), "<0x%02X>", b);
+                            iter     = encoder.find(utf8_to_utf32(hex_buf));
+                            token_id = iter != encoder.end() ? iter->second : UNK_TOKEN_ID;
+                            bpe_tokens.push_back(token_id);
+                            token_strs.push_back(hex_buf);
+                        }
+                        continue;
+                    } else {
+                        token_id = UNK_TOKEN_ID;
+                    }
+                }
+                bpe_tokens.push_back(token_id);
                 token_strs.push_back(utf32_to_utf8(bpe_str));
             }
         }

@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "common_dit.hpp"
+#include "diffusion_model.hpp"
 #include "flux.hpp"
 #include "qwen_image.hpp"
 #include "rope.hpp"
@@ -295,7 +296,9 @@ namespace ErnieImage {
             auto c      = time_embedding->forward(ctx, sample);  // [N, hidden_size]
 
             auto mod_params = adaLN_mod->forward(ctx, ggml_silu(ctx->ggml_ctx, c));  // [N, 6 * hidden_size]
-            auto chunks     = ggml_ext_chunk(ctx->ggml_ctx, mod_params, 6, 0);
+            sd::ggml_graph_cut::mark_graph_cut(hidden_states, "ernie_image.prelude", "hidden_states");
+            // sd::ggml_graph_cut::mark_graph_cut(mod_params, "ernie_image.prelude", "mod_params");
+            auto chunks = ggml_ext_chunk(ctx->ggml_ctx, mod_params, 6, 0);
             std::vector<ggml_tensor*> temb;
             temb.reserve(6);
             for (auto chunk : chunks) {
@@ -305,6 +308,7 @@ namespace ErnieImage {
             for (int i = 0; i < params.num_layers; i++) {
                 auto layer    = std::dynamic_pointer_cast<ErnieImageSharedAdaLNBlock>(blocks["layers." + std::to_string(i)]);
                 hidden_states = layer->forward(ctx, hidden_states, pe, temb);
+                sd::ggml_graph_cut::mark_graph_cut(hidden_states, "ernie_image.layers." + std::to_string(i), "hidden_states");
             }
 
             hidden_states = final_norm->forward(ctx, hidden_states, c);
@@ -322,16 +326,16 @@ namespace ErnieImage {
         }
     };
 
-    struct ErnieImageRunner : public GGMLRunner {
+    struct ErnieImageRunner : public DiffusionModelRunner {
         ErnieImageParams ernie_params;
         ErnieImageModel ernie_image;
         std::vector<float> pe_vec;
 
         ErnieImageRunner(ggml_backend_t backend,
-                         bool offload_params_to_cpu,
+                         ggml_backend_t params_backend,
                          const String2TensorStorage& tensor_storage_map = {},
                          const std::string prefix                       = "")
-            : GGMLRunner(backend, offload_params_to_cpu) {
+            : DiffusionModelRunner(backend, params_backend, prefix) {
             ernie_params.num_layers = 0;
             for (const auto& [name, tensor_storage] : tensor_storage_map) {
                 if (!starts_with(name, prefix)) {
@@ -390,7 +394,7 @@ namespace ErnieImage {
             return "ernie_image";
         }
 
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
             ernie_image.get_param_tensors(tensors, prefix);
         }
 
@@ -431,6 +435,16 @@ namespace ErnieImage {
                 return build_graph(x, timesteps, context);
             };
             return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+        }
+
+        sd::Tensor<float> compute(int n_threads,
+                                  const DiffusionParams& diffusion_params) override {
+            GGML_ASSERT(diffusion_params.x != nullptr);
+            GGML_ASSERT(diffusion_params.timesteps != nullptr);
+            return compute(n_threads,
+                           *diffusion_params.x,
+                           *diffusion_params.timesteps,
+                           tensor_or_empty(diffusion_params.context));
         }
     };
 }  // namespace ErnieImage

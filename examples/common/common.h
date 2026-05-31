@@ -92,7 +92,10 @@ struct SDContextParams {
     std::string llm_vision_path;
     std::string diffusion_model_path;
     std::string high_noise_diffusion_model_path;
+    std::string embeddings_connectors_path;
     std::string vae_path;
+    std::string vae_format = "auto";
+    std::string audio_vae_path;
     std::string taesd_path;
     std::string esrgan_path;
     std::string control_net_path;
@@ -109,14 +112,17 @@ struct SDContextParams {
     rng_type_t rng_type         = CUDA_RNG;
     rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
     bool offload_params_to_cpu  = false;
-    bool enable_mmap            = false;
-    bool control_net_cpu        = false;
-    bool clip_on_cpu            = false;
-    bool vae_on_cpu             = false;
-    bool flash_attn             = false;
-    bool diffusion_flash_attn   = false;
-    bool diffusion_conv_direct  = false;
-    bool vae_conv_direct        = false;
+    float max_vram              = 0.f;
+    std::string backend;
+    std::string params_backend;
+    bool enable_mmap           = false;
+    bool control_net_cpu       = false;
+    bool clip_on_cpu           = false;
+    bool vae_on_cpu            = false;
+    bool flash_attn            = false;
+    bool diffusion_flash_attn  = false;
+    bool diffusion_conv_direct = false;
+    bool vae_conv_direct       = false;
 
     bool circular   = false;
     bool circular_x = false;
@@ -167,6 +173,8 @@ struct SDGenerationParams {
 
     sd_sample_params_t sample_params;
     sd_sample_params_t high_noise_sample_params;
+    std::string extra_sample_args;
+    std::string high_noise_extra_sample_args;
     std::vector<int> skip_layers            = {7, 8, 9};
     std::vector<int> high_noise_skip_layers = {7, 8, 9};
 
@@ -182,7 +190,8 @@ struct SDGenerationParams {
     int video_frames                     = 1;
     int fps                              = 16;
     float vace_strength                  = 1.f;
-    sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
+    sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
+    std::string extra_tiling_args;
 
     std::string pm_id_images_dir;
     std::string pm_id_embed_path;
@@ -192,7 +201,7 @@ struct SDGenerationParams {
     int upscale_tile_size = 128;
 
     bool hires_enabled         = false;
-    std::string hires_upscaler = "Latent (nearest)";
+    std::string hires_upscaler = "Latent";
     std::string hires_upscaler_model_path;
     float hires_scale              = 2.f;
     int hires_width                = 0;
@@ -200,6 +209,7 @@ struct SDGenerationParams {
     int hires_steps                = 0;
     float hires_denoising_strength = 0.7f;
     int hires_upscale_tile_size    = 128;
+    std::vector<float> hires_custom_sigmas;
 
     std::map<std::string, float> lora_map;
     std::map<std::string, float> high_noise_lora_map;
@@ -249,6 +259,13 @@ struct SDGenerationParams {
 };
 
 std::string version_string();
-std::string get_image_params(const SDContextParams& ctx_params, const SDGenerationParams& gen_params, int64_t seed);
+std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
+                                            const SDGenerationParams& gen_params,
+                                            int64_t seed,
+                                            SDMode mode = IMG_GEN);
+std::string get_image_params(const SDContextParams& ctx_params,
+                             const SDGenerationParams& gen_params,
+                             int64_t seed,
+                             SDMode mode = IMG_GEN);
 
 #endif  // __EXAMPLES_COMMON_COMMON_H__

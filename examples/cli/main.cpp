@@ -385,11 +385,32 @@ std::string format_frame_idx(std::string pattern, int frame_idx) {
     return result;
 }
 
+static fs::path get_video_audio_sidecar_path(const SDCliParams& cli_params) {
+    fs::path out_path     = cli_params.output_path;
+    fs::path base_path    = out_path;
+    fs::path ext          = out_path.has_extension() ? out_path.extension() : fs::path{};
+    std::string ext_lower = ext.string();
+    std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
+    const EncodedImageFormat output_format = encoded_image_format_from_path(out_path.string());
+    if (!ext.empty()) {
+        if (output_format == EncodedImageFormat::JPEG ||
+            output_format == EncodedImageFormat::PNG ||
+            output_format == EncodedImageFormat::WEBP ||
+            ext_lower == ".avi" ||
+            ext_lower == ".webm") {
+            base_path.replace_extension();
+        }
+    }
+    base_path += ".wav";
+    return base_path;
+}
+
 bool save_results(const SDCliParams& cli_params,
                   const SDContextParams& ctx_params,
                   const SDGenerationParams& gen_params,
                   sd_image_t* results,
-                  int num_results) {
+                  int num_results,
+                  const sd_audio_t* generated_audio = nullptr) {
     if (results == nullptr || num_results <= 0) {
         return false;
     }
@@ -433,12 +454,28 @@ bool save_results(const SDCliParams& cli_params,
         if (!img.data)
             return false;
 
-        std::string params = gen_params.embed_image_metadata
-                                 ? get_image_params(ctx_params, gen_params, gen_params.seed + idx)
-                                 : "";
-        const bool ok      = write_image_to_file(path.string(), img.data, img.width, img.height, img.channel, params, 90);
+        const int64_t metadata_seed = cli_params.mode == VID_GEN ? gen_params.seed : gen_params.seed + idx;
+        std::string params          = gen_params.embed_image_metadata
+                                          ? get_image_params(ctx_params, gen_params, metadata_seed, cli_params.mode)
+                                          : "";
+        const bool ok               = write_image_to_file(path.string(), img.data, img.width, img.height, img.channel, params, 90);
         LOG_INFO("save result image %d to '%s' (%s)", idx, path.string().c_str(), ok ? "success" : "failure");
         return ok;
+    };
+
+    auto write_audio_sidecar = [&](const fs::path& wav_path) {
+        if (generated_audio == nullptr) {
+            return;
+        }
+        if (write_wav_to_file(wav_path.string(),
+                              generated_audio->data,
+                              generated_audio->sample_count,
+                              generated_audio->channels,
+                              generated_audio->sample_rate)) {
+            LOG_INFO("save result audio to '%s'", wav_path.string().c_str());
+        } else {
+            LOG_WARN("failed to save result audio to '%s'", wav_path.string().c_str());
+        }
     };
 
     int sucessful_reults = 0;
@@ -464,8 +501,16 @@ bool save_results(const SDCliParams& cli_params,
             ext = ".avi";
         fs::path video_path = base_path;
         video_path += ext;
-        if (create_video_from_sd_images(video_path.string().c_str(), results, num_results, gen_params.fps) == 0) {
+        std::string final_ext_lower = ext.string();
+        std::transform(final_ext_lower.begin(), final_ext_lower.end(), final_ext_lower.begin(), ::tolower);
+        const bool mux_audio = generated_audio != nullptr && (final_ext_lower == ".avi" || final_ext_lower == ".webm");
+        if (create_video_from_sd_images(video_path.string().c_str(), results, num_results, gen_params.fps, 90, mux_audio ? generated_audio : nullptr) == 0) {
             LOG_INFO("save result video to '%s'", video_path.string().c_str());
+            if (generated_audio != nullptr && !mux_audio) {
+                fs::path wav_path = video_path;
+                wav_path.replace_extension(".wav");
+                write_audio_sidecar(wav_path);
+            }
             return true;
         } else {
             LOG_ERROR("Failed to save result video to '%s'", video_path.string().c_str());
@@ -487,6 +532,9 @@ bool save_results(const SDCliParams& cli_params,
         }
     }
     LOG_INFO("%d/%d images saved", sucessful_reults, num_results);
+    if (generated_audio != nullptr) {
+        write_audio_sidecar(get_video_audio_sidecar_path(cli_params));
+    }
     return sucessful_reults != 0;
 }
 
@@ -690,14 +738,18 @@ int main(int argc, const char* argv[]) {
         vae_decode_only = false;
     }
 
-    if (gen_params.hires_enabled && !gen_params.hires_upscaler_model_path.empty()) {
+    if (gen_params.hires_enabled &&
+        (gen_params.resolved_hires_upscaler == SD_HIRES_UPSCALER_MODEL ||
+         gen_params.resolved_hires_upscaler == SD_HIRES_UPSCALER_LANCZOS ||
+         gen_params.resolved_hires_upscaler == SD_HIRES_UPSCALER_NEAREST)) {
         vae_decode_only = false;
     }
 
     sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(vae_decode_only, true, cli_params.taesd_preview);
 
     SDImageVec results;
-    int num_results = 0;
+    int num_results             = 0;
+    sd_audio_t* generated_audio = nullptr;
 
     if (cli_params.mode == UPSCALE) {
         num_results = 1;
@@ -729,7 +781,10 @@ int main(int argc, const char* argv[]) {
             results.adopt(generate_image(sd_ctx.get(), &img_gen_params), num_results);
         } else if (cli_params.mode == VID_GEN) {
             sd_vid_gen_params_t vid_gen_params = gen_params.to_sd_vid_gen_params_t();
-            sd_image_t* generated_video        = generate_video(sd_ctx.get(), &vid_gen_params, &num_results);
+            sd_image_t* generated_video        = nullptr;
+            if (!generate_video(sd_ctx.get(), &vid_gen_params, &generated_video, &num_results, &generated_audio)) {
+                generated_video = nullptr;
+            }
             results.adopt(generated_video, num_results);
         }
 
@@ -745,7 +800,9 @@ int main(int argc, const char* argv[]) {
                                                      ctx_params.offload_params_to_cpu,
                                                      ctx_params.diffusion_conv_direct,
                                                      ctx_params.n_threads,
-                                                     gen_params.upscale_tile_size));
+                                                     gen_params.upscale_tile_size,
+                                                     ctx_params.backend.c_str(),
+                                                     ctx_params.params_backend.c_str()));
 
         if (upscaler_ctx == nullptr) {
             LOG_ERROR("new_upscaler_ctx failed");
@@ -769,9 +826,12 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    if (!save_results(cli_params, ctx_params, gen_params, results.data(), num_results)) {
+    if (!save_results(cli_params, ctx_params, gen_params, results.data(), num_results, generated_audio)) {
+        free_sd_audio(generated_audio);
         return 1;
     }
+
+    free_sd_audio(generated_audio);
 
     return 0;
 }

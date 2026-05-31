@@ -62,16 +62,18 @@ protected:
     }
 
 public:
-    VAE(SDVersion version, ggml_backend_t backend, bool offload_params_to_cpu)
-        : version(version), GGMLRunner(backend, offload_params_to_cpu) {}
+    VAE(SDVersion version, ggml_backend_t backend, ggml_backend_t params_backend)
+        : version(version), GGMLRunner(backend, params_backend) {}
 
     int get_scale_factor() {
         int scale_factor = 8;
-        if (version == VERSION_WAN2_2_TI2V) {
+        if (version == VERSION_LTXAV) {
+            scale_factor = 32;
+        } else if (version == VERSION_WAN2_2_TI2V) {
             scale_factor = 16;
         } else if (sd_version_uses_flux2_vae(version)) {
             scale_factor = 16;
-        } else if (version == VERSION_CHROMA_RADIANCE) {
+        } else if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1) {
             scale_factor = 1;
         }
         return scale_factor;
@@ -142,8 +144,9 @@ public:
                                    "vae encode compute failed while processing a tile");
         } else {
             output = _compute(n_threads, input, false);
-            free_compute_buffer();
         }
+
+        free_compute_buffer();
 
         if (output.empty()) {
             LOG_ERROR("vae encode compute failed");
@@ -164,6 +167,7 @@ public:
         int64_t t0              = ggml_time_ms();
         sd::Tensor<float> input = x;
         sd::Tensor<float> output;
+        set_tiling_params(tiling_params);
 
         if (tiling_params.enabled) {
             const int scale_factor = get_scale_factor();
@@ -212,11 +216,15 @@ public:
     virtual sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents)                           = 0;
     virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix)         = 0;
     virtual void set_conv2d_scale(float scale) { SD_UNUSED(scale); };
+    virtual void set_temporal_tiling_enabled(bool enabled) { SD_UNUSED(enabled); };
+    virtual void set_tiling_params(const sd_tiling_params_t& params) {
+        set_temporal_tiling_enabled(params.temporal_tiling);
+    };
 };
 
 struct FakeVAE : public VAE {
-    FakeVAE(SDVersion version, ggml_backend_t backend, bool offload_params_to_cpu)
-        : VAE(version, backend, offload_params_to_cpu) {}
+    FakeVAE(SDVersion version, ggml_backend_t backend, ggml_backend_t params_backend)
+        : VAE(version, backend, params_backend) {}
 
     int get_encoder_output_channels(int input_channels) {
         return input_channels;

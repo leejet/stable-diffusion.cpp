@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "common_dit.hpp"
+#include "diffusion_model.hpp"
 #include "model.h"
 #include "rope.hpp"
 
@@ -446,7 +447,6 @@ namespace Flux {
             if (use_yak_mlp || use_mlp_silu_act) {
                 mlp_mult_factor = 2;
             }
-
             blocks["linear1"]  = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size * 3 + mlp_hidden_dim * mlp_mult_factor, mlp_proj_bias));
             blocks["linear2"]  = std::shared_ptr<GGMLBlock>(new Linear(hidden_size + mlp_hidden_dim, hidden_size, mlp_proj_bias));
             blocks["norm"]     = std::shared_ptr<GGMLBlock>(new QKNorm(head_dim));
@@ -928,6 +928,9 @@ namespace Flux {
             }
 
             txt = txt_in->forward(ctx, txt);
+            sd::ggml_graph_cut::mark_graph_cut(img, "flux.prelude", "img");
+            sd::ggml_graph_cut::mark_graph_cut(txt, "flux.prelude", "txt");
+            sd::ggml_graph_cut::mark_graph_cut(vec, "flux.prelude", "vec");
 
             for (int i = 0; i < params.depth; i++) {
                 if (skip_layers.size() > 0 && std::find(skip_layers.begin(), skip_layers.end(), i) != skip_layers.end()) {
@@ -939,6 +942,8 @@ namespace Flux {
                 auto img_txt = block->forward(ctx, img, txt, vec, pe, txt_img_mask, ds_img_mods, ds_txt_mods);
                 img          = img_txt.first;   // [N, n_img_token, hidden_size]
                 txt          = img_txt.second;  // [N, n_txt_token, hidden_size]
+                sd::ggml_graph_cut::mark_graph_cut(img, "flux.double_blocks." + std::to_string(i), "img");
+                sd::ggml_graph_cut::mark_graph_cut(txt, "flux.double_blocks." + std::to_string(i), "txt");
             }
 
             auto txt_img = ggml_concat(ctx->ggml_ctx, txt, img, 1);  // [N, n_txt_token + n_img_token, hidden_size]
@@ -949,6 +954,7 @@ namespace Flux {
                 auto block = std::dynamic_pointer_cast<SingleStreamBlock>(blocks["single_blocks." + std::to_string(i)]);
 
                 txt_img = block->forward(ctx, txt_img, vec, pe, txt_img_mask, ss_mods);
+                sd::ggml_graph_cut::mark_graph_cut(txt_img, "flux.single_blocks." + std::to_string(i), "txt_img");
             }
 
             img = ggml_view_3d(ctx->ggml_ctx,
@@ -1171,7 +1177,7 @@ namespace Flux {
         }
     };
 
-    struct FluxRunner : public GGMLRunner {
+    struct FluxRunner : public DiffusionModelRunner {
     public:
         FluxParams flux_params;
         Flux flux;
@@ -1183,12 +1189,12 @@ namespace Flux {
         bool use_mask = false;
 
         FluxRunner(ggml_backend_t backend,
-                   bool offload_params_to_cpu,
+                   ggml_backend_t params_backend,
                    const String2TensorStorage& tensor_storage_map = {},
                    const std::string prefix                       = "",
                    SDVersion version                              = VERSION_FLUX,
                    bool use_mask                                  = false)
-            : GGMLRunner(backend, offload_params_to_cpu), version(version), use_mask(use_mask) {
+            : DiffusionModelRunner(backend, params_backend, prefix), version(version), use_mask(use_mask) {
             flux_params.version             = version;
             flux_params.guidance_embed      = false;
             flux_params.depth               = 0;
@@ -1219,6 +1225,9 @@ namespace Flux {
                 flux_params.share_modulation = true;
                 flux_params.ref_index_scale  = 10.f;
                 flux_params.use_mlp_silu_act = true;
+            } else if (sd_version_is_longcat(version)) {
+                flux_params.context_in_dim = 3584;
+                flux_params.vec_in_dim     = 0;
             }
             int64_t head_dim                   = 0;
             int64_t actual_radiance_patch_size = -1;
@@ -1300,7 +1309,7 @@ namespace Flux {
             return "flux";
         }
 
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
             flux.get_param_tensors(tensors, prefix);
         }
 
@@ -1406,7 +1415,6 @@ namespace Flux {
             } else if (version == VERSION_OVIS_IMAGE) {
                 txt_arange_dims = {1, 2};
             }
-
             pe_vec      = Rope::gen_flux_pe(static_cast<int>(x->ne[1]),
                                             static_cast<int>(x->ne[0]),
                                             flux_params.patch_size,
@@ -1419,7 +1427,8 @@ namespace Flux {
                                             flux_params.theta,
                                             circular_y_enabled,
                                             circular_x_enabled,
-                                            flux_params.axes_dim);
+                                            flux_params.axes_dim,
+                                            sd_version_is_longcat(version));
             int pos_len = static_cast<int>(pe_vec.size() / flux_params.axes_dim_sum / 2);
             // LOG_DEBUG("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
@@ -1480,6 +1489,25 @@ namespace Flux {
 
             auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
             return result;
+        }
+
+        sd::Tensor<float> compute(int n_threads,
+                                  const DiffusionParams& diffusion_params) override {
+            GGML_ASSERT(diffusion_params.x != nullptr);
+            GGML_ASSERT(diffusion_params.timesteps != nullptr);
+            const auto* extra = diffusion_extra_as<FluxDiffusionExtra>(diffusion_params);
+            static const std::vector<sd::Tensor<float>> empty_ref_latents;
+            static const std::vector<int> empty_skip_layers;
+            return compute(n_threads,
+                           *diffusion_params.x,
+                           *diffusion_params.timesteps,
+                           tensor_or_empty(diffusion_params.context),
+                           tensor_or_empty(diffusion_params.c_concat),
+                           tensor_or_empty(diffusion_params.y),
+                           tensor_or_empty(extra->guidance),
+                           diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
+                           diffusion_params.increase_ref_index,
+                           extra->skip_layers ? *extra->skip_layers : empty_skip_layers);
         }
 
         void test() {
@@ -1558,13 +1586,17 @@ namespace Flux {
             }
 
             std::shared_ptr<FluxRunner> flux = std::make_shared<FluxRunner>(backend,
-                                                                            false,
+                                                                            backend,
                                                                             tensor_storage_map,
                                                                             "model.diffusion_model",
                                                                             VERSION_FLUX2,
                                                                             false);
 
-            flux->alloc_params_buffer();
+            if (!flux->alloc_params_buffer()) {
+                LOG_ERROR("flux model allocation failed");
+                return;
+            }
+
             std::map<std::string, ggml_tensor*> tensors;
             flux->get_param_tensors(tensors, "model.diffusion_model");
 

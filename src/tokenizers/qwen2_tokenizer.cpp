@@ -11,7 +11,7 @@ void Qwen2Tokenizer::load_from_merges(const std::string& merges_utf8_str) {
     }
 
     std::vector<std::u32string> merges = split_utf32(merges_utf8_str);
-    LOG_DEBUG("merges size %llu", merges.size());
+    LOG_DEBUG("merges size %zu", merges.size());
     std::vector<std::pair<std::u32string, std::u32string>> merge_pairs;
     for (const auto& merge : merges) {
         size_t space_pos = merge.find(' ');
@@ -81,6 +81,11 @@ Qwen2Tokenizer::Qwen2Tokenizer(const std::string& merges_utf8_str) {
         "</tool_response>",
         "<think>",
         "</think>",
+        "<|boi_token|>",
+        "<|bor_token|>",
+        "<|eor_token|>",
+        "<|bot_token|>",
+        "<|tms_token|>",
     };
 
     if (merges_utf8_str.size() > 0) {

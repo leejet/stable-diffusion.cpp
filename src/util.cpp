@@ -1,8 +1,10 @@
 #include "util.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <codecvt>
 #include <cstdarg>
+#include <exception>
 #include <fstream>
 #include <locale>
 #include <regex>
@@ -23,8 +25,9 @@
 #include <unistd.h>
 #endif
 
-#include "ggml-cpu.h"
+#include "ggml-backend.h"
 #include "ggml.h"
+#include "ggml_extend_backend.h"
 #include "stable-diffusion.h"
 
 bool ends_with(const std::string& str, const std::string& ending) {
@@ -111,7 +114,7 @@ private:
     HANDLE hmapping_;
 };
 
-std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename, bool writable) {
     void* mapped_data = nullptr;
     size_t file_size  = 0;
 
@@ -119,10 +122,10 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
         filename.c_str(),
         GENERIC_READ,
         FILE_SHARE_READ,
-        NULL,
+        nullptr,
         OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL,
-        NULL);
+        nullptr);
 
     if (file_handle == INVALID_HANDLE_VALUE) {
         return nullptr;
@@ -136,16 +139,20 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
 
     file_size = static_cast<size_t>(size.QuadPart);
 
-    HANDLE mapping_handle = CreateFileMapping(file_handle, NULL, PAGE_READONLY, 0, 0, NULL);
+    DWORD page_prot = writable ? PAGE_WRITECOPY : PAGE_READONLY;
 
-    if (mapping_handle == NULL) {
+    HANDLE mapping_handle = CreateFileMapping(file_handle, nullptr, page_prot, 0, 0, nullptr);
+
+    if (mapping_handle == nullptr) {
         CloseHandle(file_handle);
         return nullptr;
     }
 
-    mapped_data = MapViewOfFile(mapping_handle, FILE_MAP_READ, 0, 0, file_size);
+    DWORD view_access = writable ? FILE_MAP_COPY : FILE_MAP_READ;
 
-    if (mapped_data == NULL) {
+    mapped_data = MapViewOfFile(mapping_handle, view_access, 0, 0, file_size);
+
+    if (mapped_data == nullptr) {
         CloseHandle(mapping_handle);
         CloseHandle(file_handle);
         return nullptr;
@@ -171,28 +178,85 @@ bool is_directory(const std::string& path) {
     return (stat(path.c_str(), &buffer) == 0 && S_ISDIR(buffer.st_mode));
 }
 
-class MmapWrapperImpl : public MmapWrapper {
-public:
-    MmapWrapperImpl(void* data, size_t size)
-        : MmapWrapper(data, size) {}
-
-    ~MmapWrapperImpl() override {
-        munmap(data_, size_);
-    }
+struct MmapFlags {
+    bool sequential;
+    bool populate;
+    bool willneed;
+    bool dontneed;
 };
 
-std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
+static MmapFlags get_mmap_flags() {
+    MmapFlags result          = {};
+    const char* SD_MMAP_FLAGS = std::getenv("SD_MMAP_FLAGS");
+    if (SD_MMAP_FLAGS && *SD_MMAP_FLAGS) {
+        std::stringstream ss(SD_MMAP_FLAGS);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            std::string ntoken = trim(token);
+            std::transform(ntoken.begin(), ntoken.end(), ntoken.begin(), ::tolower);
+            if (ntoken == "sequential") {
+                result.sequential = true;
+            } else if (ntoken == "populate") {
+                result.populate = true;
+            } else if (ntoken == "willneed") {
+                result.willneed = true;
+            } else if (ntoken == "dontneed") {
+                result.dontneed = true;
+            }
+        }
+    }
+    return result;
+}
+
+class MmapWrapperImpl : public MmapWrapper {
+public:
+    MmapWrapperImpl(void* data, size_t size, int fd)
+        : MmapWrapper(data, size), fd_(fd) {}
+
+    ~MmapWrapperImpl() override {
+#ifdef __linux__
+        auto cfg_flags = get_mmap_flags();
+
+        // Drop the kernel pagecache pages for this file. madvise(DONTNEED)
+        // alone only unmaps from the process address space; pagecache
+        // entries persist (`free` reports them as buff/cache and the OOM
+        // killer doesn't touch them, but they ARE counted against
+        // overcommit and can starve other allocations on tight-RAM
+        // systems). posix_fadvise(POSIX_FADV_DONTNEED) is the documented
+        // way to evict pagecache for a specific fd's pages.
+        if (cfg_flags.dontneed) {
+            madvise(data_, size_, MADV_DONTNEED);
+            posix_fadvise(fd_, 0, 0, POSIX_FADV_DONTNEED);
+        }
+#endif
+        munmap(data_, size_);
+        close(fd_);
+    }
+
+private:
+    int fd_;
+};
+
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename, bool writable) {
     int file_descriptor = open(filename.c_str(), O_RDONLY);
     if (file_descriptor == -1) {
         return nullptr;
     }
 
+    auto cfg_flags = get_mmap_flags();
+
     int mmap_flags = MAP_PRIVATE;
 
 #ifdef __linux__
-    // performance flags used by llama.cpp
-    // posix_fadvise(file_descriptor, 0, 0, POSIX_FADV_SEQUENTIAL);
-    // mmap_flags |= MAP_POPULATE;
+    // Sequential access hint helps the kernel read-ahead efficiently and
+    // also encourages eviction of already-read pages (the kernel keeps
+    // a smaller working set when this is set).
+    if (cfg_flags.sequential) {
+        posix_fadvise(file_descriptor, 0, 0, POSIX_FADV_SEQUENTIAL);
+    }
+    if (cfg_flags.populate) {
+        mmap_flags |= MAP_POPULATE;
+    }
 #endif
 
     struct stat sb;
@@ -203,20 +267,27 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
 
     size_t file_size = sb.st_size;
 
-    void* mapped_data = mmap(NULL, file_size, PROT_READ, mmap_flags, file_descriptor, 0);
+    if (file_size == 0) {
+        close(file_descriptor);
+        return nullptr;
+    }
 
-    close(file_descriptor);
+    int mmap_prot = PROT_READ | (writable ? PROT_WRITE : 0);
+
+    void* mapped_data = mmap(nullptr, file_size, mmap_prot, mmap_flags, file_descriptor, 0);
 
     if (mapped_data == MAP_FAILED) {
+        close(file_descriptor);
         return nullptr;
     }
 
 #ifdef __linux__
-    // performance flags used by llama.cpp
-    // posix_madvise(mapped_data, file_size, POSIX_MADV_WILLNEED);
+    if (cfg_flags.willneed) {
+        posix_madvise(mapped_data, file_size, POSIX_MADV_WILLNEED);
+    }
 #endif
 
-    return std::make_unique<MmapWrapperImpl>(mapped_data, file_size);
+    return std::make_unique<MmapWrapperImpl>(mapped_data, file_size, file_descriptor);
 }
 
 #endif
@@ -335,6 +406,88 @@ std::vector<std::string> split_string(const std::string& str, char delimiter) {
     result.push_back(str.substr(start));
 
     return result;
+}
+
+KeyValueArgs parse_key_value_args(const char* args, const char* context) {
+    KeyValueArgs pairs;
+
+    if (args == nullptr || args[0] == '\0') {
+        return pairs;
+    }
+
+    std::string raw(args);
+    size_t start = 0;
+    for (size_t pos = 0; pos <= raw.size(); ++pos) {
+        if (pos != raw.size() && raw[pos] != ',' && raw[pos] != ';') {
+            continue;
+        }
+
+        std::string token = trim(raw.substr(start, pos - start));
+        if (!token.empty()) {
+            size_t eq = token.find('=');
+            if (eq == std::string::npos) {
+                const char* log_context = context ? context : "key=value arg";
+                LOG_WARN("ignoring malformed %s '%s'", log_context, token.c_str());
+            } else {
+                std::string key   = trim(token.substr(0, eq));
+                std::string value = trim(token.substr(eq + 1));
+                pairs.emplace_back(std::move(key), std::move(value));
+            }
+        }
+
+        start = pos + 1;
+    }
+
+    return pairs;
+}
+
+KeyValueArgs parse_key_value_args(const std::string& args, const char* context) {
+    return parse_key_value_args(args.c_str(), context);
+}
+
+bool parse_strict_float(const std::string& text, float& value) {
+    try {
+        size_t consumed = 0;
+        float parsed    = std::stof(text, &consumed);
+        if (!trim(text.substr(consumed)).empty()) {
+            return false;
+        }
+        value = parsed;
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool parse_strict_int(const std::string& text, int& value) {
+    try {
+        size_t consumed = 0;
+        int parsed      = std::stoi(text, &consumed);
+        if (!trim(text.substr(consumed)).empty()) {
+            return false;
+        }
+        value = parsed;
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool parse_strict_bool(const std::string& text, bool& value) {
+    std::string lowered = trim(text);
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+
+    if (lowered == "1" || lowered == "true" || lowered == "yes" || lowered == "on") {
+        value = true;
+        return true;
+    }
+    if (lowered == "0" || lowered == "false" || lowered == "no" || lowered == "off") {
+        value = false;
+        return true;
+    }
+    return false;
 }
 
 static std::string build_progress_bar(int step, int steps) {
@@ -495,26 +648,6 @@ sd_progress_cb_t sd_get_progress_callback() {
 void* sd_get_progress_callback_data() {
     return sd_progress_cb_data;
 }
-const char* sd_get_system_info() {
-    static char buffer[1024];
-    std::stringstream ss;
-    ss << "System Info: \n";
-    ss << "    SSE3 = " << ggml_cpu_has_sse3() << " | ";
-    ss << "    AVX = " << ggml_cpu_has_avx() << " | ";
-    ss << "    AVX2 = " << ggml_cpu_has_avx2() << " | ";
-    ss << "    AVX512 = " << ggml_cpu_has_avx512() << " | ";
-    ss << "    AVX512_VBMI = " << ggml_cpu_has_avx512_vbmi() << " | ";
-    ss << "    AVX512_VNNI = " << ggml_cpu_has_avx512_vnni() << " | ";
-    ss << "    FMA = " << ggml_cpu_has_fma() << " | ";
-    ss << "    NEON = " << ggml_cpu_has_neon() << " | ";
-    ss << "    ARM_FMA = " << ggml_cpu_has_arm_fma() << " | ";
-    ss << "    F16C = " << ggml_cpu_has_f16c() << " | ";
-    ss << "    FP16_VA = " << ggml_cpu_has_fp16_va() << " | ";
-    ss << "    WASM_SIMD = " << ggml_cpu_has_wasm_simd() << " | ";
-    ss << "    VSX = " << ggml_cpu_has_vsx() << " | ";
-    snprintf(buffer, sizeof(buffer), "%s", ss.str().c_str());
-    return buffer;
-}
 
 sd_image_t tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index) {
     const auto& shape = tensor.shape();
@@ -524,17 +657,7 @@ sd_image_t tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index) 
     int channel   = static_cast<int>(shape[shape.size() == 5 ? 3 : 2]);
     uint8_t* data = (uint8_t*)malloc(static_cast<size_t>(width * height * channel));
     GGML_ASSERT(data != nullptr);
-
-    for (int iw = 0; iw < width; ++iw) {
-        for (int ih = 0; ih < height; ++ih) {
-            for (int ic = 0; ic < channel; ++ic) {
-                float value                            = shape.size() == 5 ? tensor.index(iw, ih, frame_index, ic, 0)
-                                                                           : tensor.index(iw, ih, ic, frame_index);
-                value                                  = std::clamp(value, 0.0f, 1.0f);
-                data[(ih * width + iw) * channel + ic] = static_cast<uint8_t>(std::round(value * 255.0f));
-            }
-        }
-    }
+    preprocessing_tensor_frame_to_sd_image(tensor, frame_index, data);
     return {
         static_cast<uint32_t>(width),
         static_cast<uint32_t>(height),
@@ -717,4 +840,164 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
     }
 
     return res;
+}
+
+static size_t get_utf8_char_len(char c) {
+    unsigned char uc = static_cast<unsigned char>(c);
+    if ((uc & 0x80) == 0) {
+        return 1;
+    }
+    if ((uc & 0xE0) == 0xC0) {
+        return 2;
+    }
+    if ((uc & 0xF0) == 0xE0) {
+        return 3;
+    }
+    if ((uc & 0xF8) == 0xF0) {
+        return 4;
+    }
+    return 1;
+}
+
+static bool is_ascii_alpha(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+static bool starts_with_at(const std::string& text, size_t pos, const std::string& needle) {
+    return pos + needle.size() <= text.size() && text.compare(pos, needle.size(), needle) == 0;
+}
+
+static bool is_word_internal_apostrophe(const std::string& text, size_t pos) {
+    return pos > 0 && pos + 1 < text.size() &&
+           is_ascii_alpha(text[pos - 1]) && is_ascii_alpha(text[pos + 1]);
+}
+
+static std::vector<std::pair<std::string, bool>> split_quotation(const std::string& text) {
+    static const std::vector<std::pair<std::string, std::string>> quote_pairs = {
+        {"'", "'"},
+        {"\"", "\""},
+        {"\xE2\x80\x98", "\xE2\x80\x99"},
+        {"\xE2\x80\x9C", "\xE2\x80\x9D"},
+    };
+
+    std::vector<std::pair<std::string, bool>> result;
+    size_t segment_start = 0;
+    size_t i             = 0;
+
+    auto push_segment = [&](size_t begin, size_t end, bool matched) {
+        if (end > begin) {
+            result.emplace_back(text.substr(begin, end - begin), matched);
+        }
+    };
+
+    while (i < text.size()) {
+        bool matched_quote = false;
+        for (const auto& quote_pair : quote_pairs) {
+            const std::string& open_quote  = quote_pair.first;
+            const std::string& close_quote = quote_pair.second;
+            if (!starts_with_at(text, i, open_quote)) {
+                continue;
+            }
+            if (open_quote == "'" && is_word_internal_apostrophe(text, i)) {
+                continue;
+            }
+
+            size_t search_pos = i + open_quote.size();
+            size_t close_pos  = std::string::npos;
+            bool invalid      = false;
+            while (search_pos < text.size()) {
+                if (open_quote != close_quote && starts_with_at(text, search_pos, open_quote)) {
+                    invalid = true;
+                    break;
+                }
+                if (starts_with_at(text, search_pos, close_quote)) {
+                    if (close_quote == "'" && is_word_internal_apostrophe(text, search_pos)) {
+                        search_pos += close_quote.size();
+                        continue;
+                    }
+                    close_pos = search_pos;
+                    break;
+                }
+
+                size_t char_len = get_utf8_char_len(text[search_pos]);
+                if (search_pos + char_len > text.size()) {
+                    char_len = 1;
+                }
+                search_pos += char_len;
+            }
+            if (invalid || close_pos == std::string::npos) {
+                continue;
+            }
+
+            size_t quote_start = i;
+            push_segment(segment_start, quote_start, false);
+            i = close_pos + close_quote.size();
+            push_segment(quote_start, i, true);
+            segment_start = i;
+            matched_quote = true;
+            break;
+        }
+        if (!matched_quote) {
+            size_t char_len = get_utf8_char_len(text[i]);
+            if (i + char_len > text.size()) {
+                char_len = 1;
+            }
+            i += char_len;
+        }
+    }
+
+    push_segment(segment_start, text.size(), false);
+    return result;
+}
+
+std::vector<std::pair<std::string, float>> split_quotation_attention(
+    const std::vector<std::pair<std::string, float>>& parsed_attention) {
+    std::vector<std::pair<std::string, float>> result;
+    for (const auto& item : parsed_attention) {
+        const std::string& text = item.first;
+        float weight            = item.second;
+        for (const auto& part : split_quotation(text)) {
+            if (part.second) {
+                size_t i = 0;
+                while (i < part.first.size()) {
+                    size_t char_len = get_utf8_char_len(part.first[i]);
+                    if (i + char_len > part.first.size()) {
+                        char_len = 1;
+                    }
+                    result.emplace_back(part.first.substr(i, char_len), weight);
+                    i += char_len;
+                }
+            } else {
+                result.emplace_back(part.first, weight);
+            }
+        }
+    }
+    return result;
+}
+
+// namespace is needed to avoid conflicts with ggml_backend_extend.hpp
+namespace ggml_cpu {
+#include "ggml-cpu.h"
+}
+
+const char* sd_get_system_info() {
+    using namespace ggml_cpu;
+    static char buffer[1024];
+    std::stringstream ss;
+    ss << "System Info: \n";
+    ss << "    SSE3 = " << ggml_cpu_has_sse3() << " | ";
+    ss << "    AVX = " << ggml_cpu_has_avx() << " | ";
+    ss << "    AVX2 = " << ggml_cpu_has_avx2() << " | ";
+    ss << "    AVX512 = " << ggml_cpu_has_avx512() << " | ";
+    ss << "    AVX512_VBMI = " << ggml_cpu_has_avx512_vbmi() << " | ";
+    ss << "    AVX512_VNNI = " << ggml_cpu_has_avx512_vnni() << " | ";
+    ss << "    FMA = " << ggml_cpu_has_fma() << " | ";
+    ss << "    NEON = " << ggml_cpu_has_neon() << " | ";
+    ss << "    ARM_FMA = " << ggml_cpu_has_arm_fma() << " | ";
+    ss << "    F16C = " << ggml_cpu_has_f16c() << " | ";
+    ss << "    FP16_VA = " << ggml_cpu_has_fp16_va() << " | ";
+    ss << "    WASM_SIMD = " << ggml_cpu_has_wasm_simd() << " | ";
+    ss << "    VSX = " << ggml_cpu_has_vsx() << " | ";
+    snprintf(buffer, sizeof(buffer), "%s", ss.str().c_str());
+    return buffer;
 }

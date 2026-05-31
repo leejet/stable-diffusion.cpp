@@ -103,6 +103,64 @@ namespace DiT {
         x         = ggml_ext_slice(ctx, x, 0, 0, W);               // [N, C, H, W]
         return x;
     }
+
+    inline ggml_tensor* patchify(ggml_context* ctx,
+                                 ggml_tensor* x,
+                                 int pt,
+                                 int ph,
+                                 int pw,
+                                 int64_t N = 1) {
+        // x: [N*C, T, H, W]
+        // return: [N, h*w, C*pt*ph*pw]
+        int64_t C     = x->ne[3] / N;
+        int64_t T     = x->ne[2];
+        int64_t H     = x->ne[1];
+        int64_t W     = x->ne[0];
+        int64_t t_len = T / pt;
+        int64_t h_len = H / ph;
+        int64_t w_len = W / pw;
+
+        GGML_ASSERT(C * N == x->ne[3]);
+        GGML_ASSERT(t_len * pt == T && h_len * ph == H && w_len * pw == W);
+
+        x = ggml_reshape_4d(ctx, x, pw * w_len, ph * h_len, pt, t_len * C * N);      // [N*C*t_len, pt, h_len*ph, w_len*pw]
+        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));          // [N*C*t_len, h_len*ph, pt, w_len*pw]
+        x = ggml_reshape_4d(ctx, x, pw * w_len, pt, ph, h_len * t_len * C * N);      // [N*C*t_len*h_len, ph, pt, w_len*pw]
+        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));          // [N*C*t_len*h_len, pt, ph, w_len*pw]
+        x = ggml_reshape_4d(ctx, x, pw, w_len, ph * pt, h_len * t_len * C * N);      // [N*C*t_len*h_len, pt*ph, w_len, pw]
+        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));          // [N*C*t_len*h_len, w_len, pt*ph, pw]
+        x = ggml_reshape_4d(ctx, x, pw * ph * pt, w_len * h_len * t_len, C, N);      // [N, C, t_len*h_len*w_len, pt*ph*pw]
+        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));          // [N, t_len*h_len*w_len, C, pt*ph*pw]
+        x = ggml_reshape_4d(ctx, x, pw * ph * pt * C, w_len * h_len * t_len, N, 1);  // [N, t_len*h_len*w_len, C*pt*ph*pw]
+        return x;
+    }
+
+    inline ggml_tensor* unpatchify(ggml_context* ctx,
+                                   ggml_tensor* x,
+                                   int64_t t_len,
+                                   int64_t h_len,
+                                   int64_t w_len,
+                                   int pt,
+                                   int ph,
+                                   int pw) {
+        // x: [N, t_len*h_len*w_len, pt*ph*pw*C]
+        // return: [N*C, t_len*pt, h_len*ph, w_len*pw]
+        int64_t N = x->ne[3];
+        int64_t C = x->ne[0] / pt / ph / pw;
+
+        GGML_ASSERT(C * pt * ph * pw == x->ne[0]);
+
+        x = ggml_reshape_4d(ctx, x, C, pw * ph * pt, w_len * h_len * t_len, N);  // [N, t_len*h_len*w_len, pt*ph*pw, C]
+        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 1, 2, 0, 3));      // [N, C, t_len*h_len*w_len, pt*ph*pw]
+        x = ggml_reshape_4d(ctx, x, pw, ph * pt, w_len, h_len * t_len * C * N);  // [N*C*t_len*h_len, w_len, pt*ph, pw]
+        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));      // [N*C*t_len*h_len, pt*ph, w_len, pw]
+        x = ggml_reshape_4d(ctx, x, pw * w_len, ph, pt, h_len * t_len * C * N);  // [N*C*t_len*h_len, pt, ph, w_len*pw]
+        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));      // [N*C*t_len*h_len, ph, pt, w_len*pw]
+        x = ggml_reshape_4d(ctx, x, pw * w_len, pt, ph * h_len, t_len * C * N);  // [N*C*t_len, h_len*ph, pt, w_len*pw]
+        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));      // [N*C*t_len, pt, h_len*ph, w_len*pw]
+        x = ggml_reshape_4d(ctx, x, pw * w_len, ph * h_len, pt * t_len, C * N);  // [N*C, t_len*pt, h_len*ph, w_len*pw]
+        return x;
+    }
 }  // namespace DiT
 
 #endif  // __COMMON_DIT_HPP__

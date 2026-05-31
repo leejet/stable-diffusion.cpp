@@ -2,6 +2,7 @@
 #define __UNET_HPP__
 
 #include "common_block.hpp"
+#include "diffusion_model.hpp"
 #include "model.h"
 
 /*==================================================== UnetModel =====================================================*/
@@ -482,12 +483,14 @@ public:
 
             emb = ggml_add(ctx->ggml_ctx, emb, label_emb);  // [N, time_embed_dim]
         }
+        // sd::ggml_graph_cut::mark_graph_cut(emb, "unet.prelude", "emb");
 
         // input_blocks
         std::vector<ggml_tensor*> hs;
 
         // input block 0
         auto h = input_blocks_0_0->forward(ctx, x);
+        sd::ggml_graph_cut::mark_graph_cut(h, "unet.input_blocks.0", "h");
 
         ggml_set_name(h, "bench-start");
         hs.push_back(h);
@@ -505,6 +508,7 @@ public:
                     std::string name = "input_blocks." + std::to_string(input_block_idx) + ".1";
                     h                = attention_layer_forward(name, ctx, h, context, num_video_frames);  // [N, mult*model_channels, h, w]
                 }
+                sd::ggml_graph_cut::mark_graph_cut(h, "unet.input_blocks." + std::to_string(input_block_idx), "h");
                 hs.push_back(h);
             }
             if (tiny_unet) {
@@ -518,6 +522,7 @@ public:
                 auto block       = std::dynamic_pointer_cast<DownSampleBlock>(blocks[name]);
 
                 h = block->forward(ctx, h);  // [N, mult*model_channels, h/(2^(i+1)), w/(2^(i+1))]
+                // sd::ggml_graph_cut::mark_graph_cut(h, "unet.input_blocks." + std::to_string(input_block_idx), "h");
                 hs.push_back(h);
             }
         }
@@ -531,6 +536,7 @@ public:
                 h = resblock_forward("middle_block.2", ctx, h, emb, num_video_frames);             // [N, 4*model_channels, h/8, w/8]
             }
         }
+        sd::ggml_graph_cut::mark_graph_cut(h, "unet.middle_block", "h");
         if (controls.size() > 0) {
             auto cs = ggml_ext_scale(ctx->ggml_ctx, controls[controls.size() - 1], control_strength, true);
             h       = ggml_add(ctx->ggml_ctx, h, cs);  // middle control
@@ -581,6 +587,7 @@ public:
                 }
 
                 output_block_idx += 1;
+                sd::ggml_graph_cut::mark_graph_cut(h, "unet.output_blocks." + std::to_string(output_block_idx - 1), "h");
             }
         }
 
@@ -593,15 +600,15 @@ public:
     }
 };
 
-struct UNetModelRunner : public GGMLRunner {
+struct UNetModelRunner : public DiffusionModelRunner {
     UnetModelBlock unet;
 
     UNetModelRunner(ggml_backend_t backend,
-                    bool offload_params_to_cpu,
+                    ggml_backend_t params_backend,
                     const String2TensorStorage& tensor_storage_map,
                     const std::string prefix,
                     SDVersion version = VERSION_SD1)
-        : GGMLRunner(backend, offload_params_to_cpu), unet(version, tensor_storage_map) {
+        : DiffusionModelRunner(backend, params_backend, prefix), unet(version, tensor_storage_map) {
         unet.init(params_ctx, tensor_storage_map, prefix);
     }
 
@@ -609,7 +616,7 @@ struct UNetModelRunner : public GGMLRunner {
         return "unet";
     }
 
-    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
         unet.get_param_tensors(tensors, prefix);
     }
 
@@ -674,6 +681,23 @@ struct UNetModelRunner : public GGMLRunner {
         };
 
         return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+    }
+
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
+        const auto* extra = diffusion_extra_as<UNetDiffusionExtra>(diffusion_params);
+        static const std::vector<sd::Tensor<float>> empty_controls;
+        return compute(n_threads,
+                       *diffusion_params.x,
+                       *diffusion_params.timesteps,
+                       tensor_or_empty(diffusion_params.context),
+                       tensor_or_empty(diffusion_params.c_concat),
+                       tensor_or_empty(diffusion_params.y),
+                       extra->num_video_frames,
+                       extra->controls ? *extra->controls : empty_controls,
+                       extra->control_strength);
     }
 
     void test() {

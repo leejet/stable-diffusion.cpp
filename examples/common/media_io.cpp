@@ -613,6 +613,13 @@ typedef struct {
     uint32_t size;
 } avi_index_entry;
 
+typedef struct {
+    char fourcc[4];
+    uint32_t flags;
+    uint32_t offset;
+    uint32_t size;
+} avi_chunk_index_entry;
+
 void write_u32_le(FILE* f, uint32_t val) {
     fwrite(&val, 4, 1, f);
 }
@@ -645,6 +652,33 @@ void patch_u32_le(std::vector<uint8_t>& data, size_t offset, uint32_t val) {
 
 void write_fourcc(std::vector<uint8_t>& data, const char* fourcc) {
     data.insert(data.end(), fourcc, fourcc + 4);
+}
+
+static std::vector<uint8_t> audio_to_pcm16_bytes(const sd_audio_t* audio) {
+    if (audio == nullptr || audio->data == nullptr || audio->sample_count == 0 || audio->channels == 0 || audio->sample_rate == 0) {
+        return {};
+    }
+
+    const size_t pcm_samples = static_cast<size_t>(audio->sample_count) * static_cast<size_t>(audio->channels);
+    std::vector<uint8_t> bytes(pcm_samples * sizeof(int16_t));
+    auto* pcm = reinterpret_cast<int16_t*>(bytes.data());
+    for (size_t i = 0; i < pcm_samples; ++i) {
+        const float sample = std::clamp(audio->data[i], -1.0f, 1.0f);
+        pcm[i]             = static_cast<int16_t>(std::lrint(sample * 32767.0f));
+    }
+    return bytes;
+}
+
+static std::pair<uint64_t, uint64_t> audio_sample_range_for_video_frame(const sd_audio_t* audio, int frame_idx, int num_frames, int fps) {
+    if (audio == nullptr || fps <= 0 || num_frames <= 0) {
+        return {0, 0};
+    }
+    const uint64_t total = audio->sample_count;
+    const uint64_t start = static_cast<uint64_t>((static_cast<long double>(frame_idx) * total) / num_frames);
+    const uint64_t end   = frame_idx + 1 == num_frames
+                               ? total
+                               : static_cast<uint64_t>((static_cast<long double>(frame_idx + 1) * total) / num_frames);
+    return {start, std::max(start, end)};
 }
 
 EncodedImageFormat encoded_image_format_from_path(const std::string& path) {
@@ -776,7 +810,7 @@ uint8_t* load_image_from_memory(const char* image_bytes,
     return load_image_common(true, image_bytes, len, width, height, expected_width, expected_height, expected_channel);
 }
 
-std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(sd_image_t* images, int num_images, int fps, int quality) {
+std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(sd_image_t* images, int num_images, int fps, int quality, const sd_audio_t* audio) {
     if (num_images == 0) {
         fprintf(stderr, "Error: Image array is empty.\n");
         return {};
@@ -793,7 +827,13 @@ std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(sd_image_t* images
     // stb_image_write changes JPEG sampling behavior above quality 90.
     // MJPG AVI playback is more compatible when we keep the encoder on the
     // <= 90 path.
-    const int mjpg_quality = std::clamp(quality, 1, 90);
+    const int mjpg_quality               = std::clamp(quality, 1, 90);
+    const bool has_audio                 = audio != nullptr && audio->data != nullptr && audio->sample_count > 0 && audio->channels > 0 && audio->sample_rate > 0;
+    const std::vector<uint8_t> audio_pcm = audio_to_pcm16_bytes(audio);
+    const uint16_t audio_bits_per_sample = 16;
+    const uint16_t audio_block_align     = has_audio ? static_cast<uint16_t>(audio->channels * (audio_bits_per_sample / 8)) : 0;
+    const uint32_t audio_byte_rate       = has_audio ? static_cast<uint32_t>(audio->sample_rate * audio_block_align) : 0;
+    const uint32_t audio_data_size       = has_audio ? static_cast<uint32_t>(audio_pcm.size()) : 0;
 
     std::vector<uint8_t> avi_data;
     avi_data.reserve(static_cast<size_t>(num_images) * 1024);
@@ -804,7 +844,11 @@ std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(sd_image_t* images
     write_fourcc(avi_data, "AVI ");
 
     write_fourcc(avi_data, "LIST");
-    write_u32_le(avi_data, 4 + 8 + 56 + 8 + 4 + 8 + 56 + 8 + 40);
+    uint32_t hdrl_size = 4 + 8 + 56 + 8 + 4 + 8 + 56 + 8 + 40;
+    if (has_audio) {
+        hdrl_size += 8 + (4 + 8 + 56 + 8 + 16);
+    }
+    write_u32_le(avi_data, hdrl_size);
     write_fourcc(avi_data, "hdrl");
 
     write_fourcc(avi_data, "avih");
@@ -815,7 +859,7 @@ std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(sd_image_t* images
     write_u32_le(avi_data, 0x110);
     write_u32_le(avi_data, num_images);
     write_u32_le(avi_data, 0);
-    write_u32_le(avi_data, 1);
+    write_u32_le(avi_data, has_audio ? 2 : 1);
     write_u32_le(avi_data, width * height * 3);
     write_u32_le(avi_data, width);
     write_u32_le(avi_data, height);
@@ -862,12 +906,48 @@ std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(sd_image_t* images
     write_u32_le(avi_data, 0);
     write_u32_le(avi_data, 0);
 
+    if (has_audio) {
+        write_fourcc(avi_data, "LIST");
+        write_u32_le(avi_data, 4 + 8 + 56 + 8 + 16);
+        write_fourcc(avi_data, "strl");
+
+        write_fourcc(avi_data, "strh");
+        write_u32_le(avi_data, 56);
+        write_fourcc(avi_data, "auds");
+        write_u32_le(avi_data, 0);
+        write_u32_le(avi_data, 0);
+        write_u16_le(avi_data, 0);
+        write_u16_le(avi_data, 0);
+        write_u32_le(avi_data, 0);
+        write_u32_le(avi_data, audio_block_align);
+        write_u32_le(avi_data, audio_byte_rate);
+        write_u32_le(avi_data, 0);
+        write_u32_le(avi_data, static_cast<uint32_t>(audio->sample_count));
+        write_u32_le(avi_data, audio_data_size);
+        write_u32_le(avi_data, static_cast<uint32_t>(-1));
+        write_u32_le(avi_data, audio_block_align);
+        write_u16_le(avi_data, 0);
+        write_u16_le(avi_data, 0);
+        write_u16_le(avi_data, 0);
+        write_u16_le(avi_data, 0);
+
+        write_fourcc(avi_data, "strf");
+        write_u32_le(avi_data, 16);
+        write_u16_le(avi_data, 1);
+        write_u16_le(avi_data, static_cast<uint16_t>(audio->channels));
+        write_u32_le(avi_data, audio->sample_rate);
+        write_u32_le(avi_data, audio_byte_rate);
+        write_u16_le(avi_data, audio_block_align);
+        write_u16_le(avi_data, audio_bits_per_sample);
+    }
+
     write_fourcc(avi_data, "LIST");
     const size_t movi_size_pos = avi_data.size();
     write_u32_le(avi_data, 0);
     write_fourcc(avi_data, "movi");
 
-    std::vector<avi_index_entry> index(static_cast<size_t>(num_images));
+    std::vector<avi_chunk_index_entry> index;
+    index.reserve(static_cast<size_t>(num_images) + (has_audio ? 1 : 0));
     std::vector<uint8_t> jpeg_data;
 
     for (int i = 0; i < num_images; i++) {
@@ -884,13 +964,32 @@ std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(sd_image_t* images
             return {};
         }
 
-        index[i].offset = static_cast<uint32_t>(avi_data.size());
+        avi_chunk_index_entry video_entry = {};
+        memcpy(video_entry.fourcc, "00dc", 4);
+        video_entry.flags  = 0x10;
+        video_entry.offset = static_cast<uint32_t>(avi_data.size());
         write_fourcc(avi_data, "00dc");
         write_u32_le(avi_data, static_cast<uint32_t>(jpeg_data.size()));
-        index[i].size = (uint32_t)jpeg_data.size();
+        video_entry.size = static_cast<uint32_t>(jpeg_data.size());
         avi_data.insert(avi_data.end(), jpeg_data.begin(), jpeg_data.end());
+        index.push_back(video_entry);
 
         if (jpeg_data.size() % 2) {
+            avi_data.push_back(0);
+        }
+    }
+
+    if (has_audio && !audio_pcm.empty()) {
+        avi_chunk_index_entry audio_entry = {};
+        memcpy(audio_entry.fourcc, "01wb", 4);
+        audio_entry.flags  = 0;
+        audio_entry.offset = static_cast<uint32_t>(avi_data.size());
+        audio_entry.size   = static_cast<uint32_t>(audio_pcm.size());
+        write_fourcc(avi_data, "01wb");
+        write_u32_le(avi_data, static_cast<uint32_t>(audio_pcm.size()));
+        avi_data.insert(avi_data.end(), audio_pcm.begin(), audio_pcm.end());
+        index.push_back(audio_entry);
+        if (audio_pcm.size() % 2 != 0) {
             avi_data.push_back(0);
         }
     }
@@ -899,12 +998,12 @@ std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(sd_image_t* images
     patch_u32_le(avi_data, movi_size_pos, static_cast<uint32_t>(movi_size));
 
     write_fourcc(avi_data, "idx1");
-    write_u32_le(avi_data, num_images * 16);
-    for (int i = 0; i < num_images; i++) {
-        write_fourcc(avi_data, "00dc");
-        write_u32_le(avi_data, 0x10);
-        write_u32_le(avi_data, index[i].offset);
-        write_u32_le(avi_data, index[i].size);
+    write_u32_le(avi_data, static_cast<uint32_t>(index.size() * 16));
+    for (const auto& entry : index) {
+        write_fourcc(avi_data, entry.fourcc);
+        write_u32_le(avi_data, entry.flags);
+        write_u32_le(avi_data, entry.offset);
+        write_u32_le(avi_data, entry.size);
     }
 
     const size_t file_size = avi_data.size() - riff_size_pos - 4;
@@ -913,8 +1012,8 @@ std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(sd_image_t* images
     return avi_data;
 }
 
-int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality) {
-    std::vector<uint8_t> avi_data = create_mjpg_avi_from_sd_images_to_vector(images, num_images, fps, quality);
+int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality, const sd_audio_t* audio) {
+    std::vector<uint8_t> avi_data = create_mjpg_avi_from_sd_images_to_vector(images, num_images, fps, quality, audio);
     if (avi_data.empty()) {
         return -1;
     }
@@ -1044,7 +1143,7 @@ int create_animated_webp_from_sd_images(const char* filename, sd_image_t* images
 #endif
 
 #ifdef SD_USE_WEBM
-std::vector<uint8_t> create_webm_from_sd_images_to_vector(sd_image_t* images, int num_images, int fps, int quality) {
+std::vector<uint8_t> create_webm_from_sd_images_to_vector(sd_image_t* images, int num_images, int fps, int quality, const sd_audio_t* audio) {
     if (num_images == 0) {
         fprintf(stderr, "Error: Image array is empty.\n");
         return {};
@@ -1089,6 +1188,25 @@ std::vector<uint8_t> create_webm_from_sd_images_to_vector(sd_image_t* images, in
             video_track->set_display_height(static_cast<uint64_t>(height));
             video_track->set_frame_rate(static_cast<double>(fps));
         }
+
+        uint64_t audio_track_number    = 0;
+        std::vector<uint8_t> audio_pcm = audio_to_pcm16_bytes(audio);
+        if (audio != nullptr && !audio_pcm.empty()) {
+            audio_track_number = segment.AddAudioTrack(static_cast<int32_t>(audio->sample_rate), static_cast<int32_t>(audio->channels), 0);
+            if (audio_track_number == 0) {
+                fprintf(stderr, "Error: Failed to add audio track.\n");
+                return -1;
+            }
+            auto* audio_track = static_cast<mkvmuxer::AudioTrack*>(segment.GetTrackByNumber(audio_track_number));
+            if (audio_track == nullptr) {
+                fprintf(stderr, "Error: Failed to get audio track.\n");
+                return -1;
+            }
+            audio_track->set_codec_id("A_PCM/INT/LIT");
+            audio_track->set_bit_depth(16);
+            audio_track->set_sample_rate(static_cast<double>(audio->sample_rate));
+            audio_track->set_channels(audio->channels);
+        }
         segment.GetSegmentInfo()->set_writing_app("stable-diffusion.cpp");
         segment.GetSegmentInfo()->set_muxing_app("stable-diffusion.cpp");
 
@@ -1118,6 +1236,23 @@ std::vector<uint8_t> create_webm_from_sd_images_to_vector(sd_image_t* images, in
                 return -1;
             }
 
+            if (audio_track_number != 0) {
+                auto [audio_begin, audio_end] = audio_sample_range_for_video_frame(audio, i, num_images, fps);
+                const uint64_t frame_samples  = audio_end - audio_begin;
+                if (frame_samples > 0) {
+                    const uint64_t frame_bytes = frame_samples * audio->channels * sizeof(int16_t);
+                    const uint8_t* frame_ptr   = audio_pcm.data() + audio_begin * audio->channels * sizeof(int16_t);
+                    if (!segment.AddFrame(frame_ptr,
+                                          frame_bytes,
+                                          audio_track_number,
+                                          timestamp_ns,
+                                          true)) {
+                        fprintf(stderr, "Error: Failed to mux audio chunk %d into WebM.\n", i);
+                        return -1;
+                    }
+                }
+            }
+
             timestamp_ns += frame_duration_ns;
         }
 
@@ -1133,8 +1268,8 @@ std::vector<uint8_t> create_webm_from_sd_images_to_vector(sd_image_t* images, in
     return writer.data();
 }
 
-int create_webm_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality) {
-    std::vector<uint8_t> webm_data = create_webm_from_sd_images_to_vector(images, num_images, fps, quality);
+int create_webm_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality, const sd_audio_t* audio) {
+    std::vector<uint8_t> webm_data = create_webm_from_sd_images_to_vector(images, num_images, fps, quality, audio);
     if (webm_data.empty()) {
         return -1;
     }
@@ -1150,7 +1285,8 @@ std::vector<uint8_t> create_video_from_sd_images_to_vector(const std::string& ou
                                                            sd_image_t* images,
                                                            int num_images,
                                                            int fps,
-                                                           int quality) {
+                                                           int quality,
+                                                           const sd_audio_t* audio) {
     std::string format = output_format;
     std::transform(format.begin(), format.end(), format.begin(),
                    [](unsigned char c) { return static_cast<char>(tolower(c)); });
@@ -1160,7 +1296,7 @@ std::vector<uint8_t> create_video_from_sd_images_to_vector(const std::string& ou
 
 #ifdef SD_USE_WEBM
     if (format == "webm") {
-        return create_webm_from_sd_images_to_vector(images, num_images, fps, quality);
+        return create_webm_from_sd_images_to_vector(images, num_images, fps, quality, audio);
     }
 #endif
 
@@ -1170,14 +1306,14 @@ std::vector<uint8_t> create_video_from_sd_images_to_vector(const std::string& ou
     }
 #endif
 
-    return create_mjpg_avi_from_sd_images_to_vector(images, num_images, fps, quality);
+    return create_mjpg_avi_from_sd_images_to_vector(images, num_images, fps, quality, audio);
 }
 
-int create_video_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality) {
+int create_video_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality, const sd_audio_t* audio) {
     std::string path                = filename ? filename : "";
     auto pos                        = path.find_last_of('.');
     std::string ext                 = pos == std::string::npos ? "" : path.substr(pos);
-    std::vector<uint8_t> video_data = create_video_from_sd_images_to_vector(ext, images, num_images, fps, quality);
+    std::vector<uint8_t> video_data = create_video_from_sd_images_to_vector(ext, images, num_images, fps, quality, audio);
     if (video_data.empty()) {
         return -1;
     }
@@ -1186,4 +1322,55 @@ int create_video_from_sd_images(const char* filename, sd_image_t* images, int nu
         return -1;
     }
     return 0;
+}
+
+bool write_wav_to_file(const std::string& path,
+                       const float* interleaved_samples,
+                       uint64_t sample_count,
+                       uint32_t channels,
+                       uint32_t sample_rate) {
+    if (interleaved_samples == nullptr || sample_count == 0 || channels == 0 || sample_rate == 0) {
+        return false;
+    }
+
+    std::ofstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        return false;
+    }
+
+    uint32_t bits_per_sample  = 16;
+    uint32_t bytes_per_sample = bits_per_sample / 8;
+    uint32_t block_align      = channels * bytes_per_sample;
+    uint32_t byte_rate        = sample_rate * block_align;
+    uint32_t data_size        = static_cast<uint32_t>(sample_count * channels * bytes_per_sample);
+    uint32_t riff_size        = 36 + data_size;
+
+    file.write("RIFF", 4);
+    file.write(reinterpret_cast<const char*>(&riff_size), sizeof(riff_size));
+    file.write("WAVE", 4);
+    file.write("fmt ", 4);
+
+    uint32_t fmt_size            = 16;
+    uint16_t audio_format        = 1;
+    uint16_t wav_channels        = static_cast<uint16_t>(channels);
+    uint16_t wav_block_align     = static_cast<uint16_t>(block_align);
+    uint16_t wav_bits_per_sample = static_cast<uint16_t>(bits_per_sample);
+    file.write(reinterpret_cast<const char*>(&fmt_size), sizeof(fmt_size));
+    file.write(reinterpret_cast<const char*>(&audio_format), sizeof(audio_format));
+    file.write(reinterpret_cast<const char*>(&wav_channels), sizeof(wav_channels));
+    file.write(reinterpret_cast<const char*>(&sample_rate), sizeof(sample_rate));
+    file.write(reinterpret_cast<const char*>(&byte_rate), sizeof(byte_rate));
+    file.write(reinterpret_cast<const char*>(&wav_block_align), sizeof(wav_block_align));
+    file.write(reinterpret_cast<const char*>(&wav_bits_per_sample), sizeof(wav_bits_per_sample));
+
+    file.write("data", 4);
+    file.write(reinterpret_cast<const char*>(&data_size), sizeof(data_size));
+
+    std::vector<int16_t> pcm(sample_count * channels);
+    for (size_t i = 0; i < pcm.size(); ++i) {
+        float sample = std::max(-1.0f, std::min(1.0f, interleaved_samples[i]));
+        pcm[i]       = static_cast<int16_t>(std::lrint(sample * 32767.0f));
+    }
+    file.write(reinterpret_cast<const char*>(pcm.data()), static_cast<std::streamsize>(pcm.size() * sizeof(int16_t)));
+    return file.good();
 }

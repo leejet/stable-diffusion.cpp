@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "common_block.hpp"
+#include "diffusion_model.hpp"
 #include "flux.hpp"
 #include "rope.hpp"
 
@@ -499,9 +500,15 @@ namespace Anima {
                 encoder_hidden_states = adapted_context;
             }
 
+            sd::ggml_graph_cut::mark_graph_cut(x, "anima.prelude", "x");
+            sd::ggml_graph_cut::mark_graph_cut(embedded_timestep, "anima.prelude", "embedded_timestep");
+            sd::ggml_graph_cut::mark_graph_cut(temb, "anima.prelude", "temb");
+            sd::ggml_graph_cut::mark_graph_cut(encoder_hidden_states, "anima.prelude", "context");
+
             for (int i = 0; i < num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<TransformerBlock>(blocks["blocks." + std::to_string(i)]);
                 x          = block->forward(ctx, x, encoder_hidden_states, embedded_timestep, temb, image_pe);
+                sd::ggml_graph_cut::mark_graph_cut(x, "anima.blocks." + std::to_string(i), "x");
             }
 
             x = final_layer->forward(ctx, x, embedded_timestep, temb);  // [N, h*w, ph*pw*C]
@@ -512,7 +519,7 @@ namespace Anima {
         }
     };
 
-    struct AnimaRunner : public GGMLRunner {
+    struct AnimaRunner : public DiffusionModelRunner {
     public:
         std::vector<float> image_pe_vec;
         std::vector<float> adapter_q_pe_vec;
@@ -520,10 +527,10 @@ namespace Anima {
         AnimaNet net;
 
         AnimaRunner(ggml_backend_t backend,
-                    bool offload_params_to_cpu,
+                    ggml_backend_t params_backend,
                     const String2TensorStorage& tensor_storage_map = {},
                     const std::string prefix                       = "model.diffusion_model")
-            : GGMLRunner(backend, offload_params_to_cpu) {
+            : DiffusionModelRunner(backend, params_backend, prefix) {
             int64_t num_layers    = 0;
             std::string layer_tag = prefix + ".net.blocks.";
             for (const auto& kv : tensor_storage_map) {
@@ -553,7 +560,7 @@ namespace Anima {
             return "anima";
         }
 
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
             net.get_param_tensors(tensors, prefix + ".net");
         }
 
@@ -592,7 +599,8 @@ namespace Anima {
                                           {},
                                           empty_ref_latents,
                                           false,
-                                          1.0f);
+                                          1.0f,
+                                          false);
 
             std::vector<float> axis_thetas = {
                 static_cast<float>(theta) * calc_ntk_factor(t_extrapolation_ratio, axes_dim[0]),
@@ -676,6 +684,19 @@ namespace Anima {
                 return build_graph(x, timesteps, context, t5_ids, t5_weights);
             };
             return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+        }
+
+        sd::Tensor<float> compute(int n_threads,
+                                  const DiffusionParams& diffusion_params) override {
+            GGML_ASSERT(diffusion_params.x != nullptr);
+            GGML_ASSERT(diffusion_params.timesteps != nullptr);
+            const auto* extra = diffusion_extra_as<AnimaDiffusionExtra>(diffusion_params);
+            return compute(n_threads,
+                           *diffusion_params.x,
+                           *diffusion_params.timesteps,
+                           tensor_or_empty(diffusion_params.context),
+                           tensor_or_empty(extra->t5_ids),
+                           tensor_or_empty(extra->t5_weights));
         }
     };
 }  // namespace Anima

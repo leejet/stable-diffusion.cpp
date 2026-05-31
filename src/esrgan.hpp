@@ -124,27 +124,33 @@ public:
         auto conv_hr    = std::dynamic_pointer_cast<Conv2d>(blocks["conv_hr"]);
         auto conv_last  = std::dynamic_pointer_cast<Conv2d>(blocks["conv_last"]);
 
-        auto feat      = conv_first->forward(ctx, x);
+        auto feat = conv_first->forward(ctx, x);
+        sd::ggml_graph_cut::mark_graph_cut(feat, "esrgan.prelude", "feat");
         auto body_feat = feat;
         for (int i = 0; i < num_block; i++) {
             std::string name = "body." + std::to_string(i);
             auto block       = std::dynamic_pointer_cast<RRDB>(blocks[name]);
 
             body_feat = block->forward(ctx, body_feat);
+            sd::ggml_graph_cut::mark_graph_cut(body_feat, "esrgan.body." + std::to_string(i), "feat");
         }
         body_feat = conv_body->forward(ctx, body_feat);
         feat      = ggml_add(ctx->ggml_ctx, feat, body_feat);
+        sd::ggml_graph_cut::mark_graph_cut(feat, "esrgan.body.out", "feat");
         // upsample
         if (scale >= 2) {
             auto conv_up1 = std::dynamic_pointer_cast<Conv2d>(blocks["conv_up1"]);
             feat          = lrelu(ctx, conv_up1->forward(ctx, ggml_upscale(ctx->ggml_ctx, feat, 2, GGML_SCALE_MODE_NEAREST)));
+            sd::ggml_graph_cut::mark_graph_cut(feat, "esrgan.up1", "feat");
             if (scale == 4) {
                 auto conv_up2 = std::dynamic_pointer_cast<Conv2d>(blocks["conv_up2"]);
                 feat          = lrelu(ctx, conv_up2->forward(ctx, ggml_upscale(ctx->ggml_ctx, feat, 2, GGML_SCALE_MODE_NEAREST)));
+                sd::ggml_graph_cut::mark_graph_cut(feat, "esrgan.up2", "feat");
             }
         }
         // for all scales
         auto out = conv_last->forward(ctx, lrelu(ctx, conv_hr->forward(ctx, feat)));
+        sd::ggml_graph_cut::mark_graph_cut(out, "esrgan.final", "out");
         return out;
     }
 };
@@ -155,10 +161,10 @@ struct ESRGAN : public GGMLRunner {
     int tile_size = 128;  // avoid cuda OOM for 4gb VRAM
 
     ESRGAN(ggml_backend_t backend,
-           bool offload_params_to_cpu,
+           ggml_backend_t params_backend,
            int tile_size                                  = 128,
            const String2TensorStorage& tensor_storage_map = {})
-        : GGMLRunner(backend, offload_params_to_cpu) {
+        : GGMLRunner(backend, params_backend) {
         this->tile_size = tile_size;
     }
 
@@ -264,7 +270,11 @@ struct ESRGAN : public GGMLRunner {
         rrdb_net = std::make_unique<RRDBNet>(detected_scale, detected_num_block, detected_num_in_ch, detected_num_out_ch, detected_num_feat, detected_num_grow_ch);
         rrdb_net->init(params_ctx, {}, "");
 
-        alloc_params_buffer();
+        if (!alloc_params_buffer()) {
+            LOG_ERROR("esrgan model buffer allocation failed");
+            return false;
+        }
+
         std::map<std::string, ggml_tensor*> esrgan_tensors;
         rrdb_net->get_param_tensors(esrgan_tensors);
 

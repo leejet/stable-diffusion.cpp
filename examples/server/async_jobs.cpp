@@ -231,16 +231,21 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
     sd_vid_gen_params_t params = job.vid_gen.to_sd_vid_gen_params_t();
 
     SDImageVec results;
-    int num_results = 0;
+    int num_results             = 0;
+    sd_audio_t* generated_audio = nullptr;
 
     {
         std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
-        sd_image_t* raw_results = generate_video(runtime.sd_ctx, &params, &num_results);
+        sd_image_t* raw_results = nullptr;
+        if (!generate_video(runtime.sd_ctx, &params, &raw_results, &num_results, &generated_audio)) {
+            raw_results = nullptr;
+        }
         results.adopt(raw_results, num_results);
     }
 
     num_results = results.count();
     if (num_results <= 0) {
+        free_sd_audio(generated_audio);
         error_message = "generate_video returned no results";
         return false;
     }
@@ -249,7 +254,9 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
                                                                              results.data(),
                                                                              num_results,
                                                                              job.vid_gen.gen_params.fps,
-                                                                             job.vid_gen.output_compression);
+                                                                             job.vid_gen.output_compression,
+                                                                             generated_audio);
+    free_sd_audio(generated_audio);
     if (video_bytes.empty()) {
         error_message = "failed to encode generated video container";
         return false;

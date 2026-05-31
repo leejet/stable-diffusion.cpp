@@ -219,7 +219,7 @@ Currently supported request fields:
 | `lora` | `array<object>` | Structured LoRA list |
 | `extra_images` | `array<string>` | Base64 or data URL images |
 | `enable_hr` | `boolean` | Enable highres fix for `txt2img` |
-| `hr_upscaler` | `string` | `Latent (nearest)` or an upscaler model name from `/sdapi/v1/upscalers` |
+| `hr_upscaler` | `string` | `Lanczos`, `Nearest`, a latent mode such as `Latent (nearest-exact)`, or an upscaler model name from `/sdapi/v1/upscalers` |
 | `hr_scale` | `number` | Highres scale when resize target is not set |
 | `hr_resize_x` | `integer` | Highres target width, `0` to use scale |
 | `hr_resize_y` | `integer` | Highres target height, `0` to use scale |
@@ -302,6 +302,8 @@ Built-in entries include `None`, `Lanczos`, and `Nearest`. Model-backed entries 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `[].name` | `string` | WebUI-compatible latent upscale mode name |
+
+Built-in latent modes include `Latent`, `Latent (nearest)`, `Latent (nearest-exact)`, `Latent (antialiased)`, `Latent (bicubic)`, and `Latent (bicubic antialiased)`.
 
 `GET /sdapi/v1/samplers`
 
@@ -462,7 +464,7 @@ Shared nested fields:
 | --- | --- | --- |
 | `upscalers[].name` | `string` | Built-in name or model stem; use this value in `hires.upscaler` |
 
-Built-in entries include `None` and `Latent (nearest)`. Model-backed entries are scanned from the top level of `--hires-upscalers-dir`; subdirectories are not scanned.
+Built-in entries include `None`, `Lanczos`, `Nearest`, `Latent`, `Latent (nearest)`, `Latent (nearest-exact)`, `Latent (antialiased)`, `Latent (bicubic)`, and `Latent (bicubic antialiased)`. Model-backed entries are scanned from the top level of `--hires-upscalers-dir`; subdirectories are not scanned.
 
 `limits`
 
@@ -502,17 +504,21 @@ Shared default fields used by both `img_gen` and `vid_gen`:
 | `sample_params.guidance.slg.scale` | `number` |
 | `vae_tiling_params` | `object` |
 | `vae_tiling_params.enabled` | `boolean` |
+| `vae_tiling_params.temporal_tiling` | `boolean` |
 | `vae_tiling_params.tile_size_x` | `integer` |
 | `vae_tiling_params.tile_size_y` | `integer` |
 | `vae_tiling_params.target_overlap` | `number` |
 | `vae_tiling_params.rel_size_x` | `number` |
 | `vae_tiling_params.rel_size_y` | `number` |
+| `vae_tiling_params.extra_tiling_args` | `string` |
 | `cache_mode` | `string` |
 | `cache_option` | `string` |
 | `scm_mask` | `string` |
 | `scm_policy_dynamic` | `boolean` |
 | `output_format` | `string` |
 | `output_compression` | `integer` |
+
+`vae_tiling_params.extra_tiling_args` accepts a key=value list. For LTX video VAE temporal tiling, `temporal_tile_frames` defaults to `4` and `temporal_tile_overlap` defaults to `1`.
 
 `img_gen`-specific default fields:
 
@@ -530,6 +536,7 @@ Shared default fields used by both `img_gen` and `vid_gen`:
 | `hires.target_height` | `integer` |
 | `hires.steps` | `integer` |
 | `hires.denoising_strength` | `number` |
+| `hires.custom_sigmas` | `array<number>` |
 | `hires.upscale_tile_size` | `integer` |
 
 `vid_gen`-specific default fields:
@@ -677,22 +684,25 @@ Example:
   "lora": [],
   "hires": {
     "enabled": false,
-    "upscaler": "Latent (nearest)",
+    "upscaler": "Latent",
     "scale": 2.0,
     "target_width": 0,
     "target_height": 0,
     "steps": 0,
     "denoising_strength": 0.7,
+    "custom_sigmas": [],
     "upscale_tile_size": 128
   },
 
   "vae_tiling_params": {
     "enabled": false,
+    "temporal_tiling": false,
     "tile_size_x": 0,
     "tile_size_y": 0,
     "target_overlap": 0.5,
     "rel_size_x": 0.0,
-    "rel_size_y": 0.0
+    "rel_size_y": 0.0,
+    "extra_tiling_args": ""
   },
 
   "cache_mode": "disabled",
@@ -797,14 +807,23 @@ Other native fields:
 | `hires.target_height` | `integer` |
 | `hires.steps` | `integer` |
 | `hires.denoising_strength` | `number` |
+| `hires.custom_sigmas` | `array<number>` |
 | `hires.upscale_tile_size` | `integer` |
 | `vae_tiling_params` | `object` |
+| `vae_tiling_params.enabled` | `boolean` |
+| `vae_tiling_params.temporal_tiling` | `boolean` |
+| `vae_tiling_params.tile_size_x` | `integer` |
+| `vae_tiling_params.tile_size_y` | `integer` |
+| `vae_tiling_params.target_overlap` | `number` |
+| `vae_tiling_params.rel_size_x` | `number` |
+| `vae_tiling_params.rel_size_y` | `number` |
+| `vae_tiling_params.extra_tiling_args` | `string` |
 | `cache_mode` | `string` |
 | `cache_option` | `string` |
 | `scm_mask` | `string` |
 | `scm_policy_dynamic` | `boolean` |
 
-For `hires.upscaler`, use `Latent (nearest)` for latent upscale or an `upscalers[].name` value from `GET /sdcpp/v1/capabilities`. Model-backed upscalers are resolved as `--hires-upscalers-dir / (name + ext)` and must live directly in that directory.
+For `hires.upscaler`, use `Lanczos`, `Nearest`, `Latent`, `Latent (nearest)`, `Latent (nearest-exact)`, `Latent (antialiased)`, `Latent (bicubic)`, `Latent (bicubic antialiased)`, or an `upscalers[].name` value from `GET /sdcpp/v1/capabilities`. Model-backed upscalers are resolved as `--hires-upscalers-dir / (name + ext)` and must live directly in that directory. `hires.custom_sigmas`, when present, overrides the generated second-pass hires sigma schedule; otherwise the hires schedule is trimmed by `hires.denoising_strength`.
 
 HTTP-only output fields:
 
@@ -1007,11 +1026,13 @@ Example:
 
   "vae_tiling_params": {
     "enabled": false,
+    "temporal_tiling": false,
     "tile_size_x": 0,
     "tile_size_y": 0,
     "target_overlap": 0.5,
     "rel_size_x": 0.0,
-    "rel_size_y": 0.0
+    "rel_size_y": 0.0,
+    "extra_tiling_args": ""
   },
 
   "cache_mode": "disabled",
@@ -1129,6 +1150,14 @@ Other native fields:
 | Field | Type |
 | --- | --- |
 | `vae_tiling_params` | `object` |
+| `vae_tiling_params.enabled` | `boolean` |
+| `vae_tiling_params.temporal_tiling` | `boolean` |
+| `vae_tiling_params.tile_size_x` | `integer` |
+| `vae_tiling_params.tile_size_y` | `integer` |
+| `vae_tiling_params.target_overlap` | `number` |
+| `vae_tiling_params.rel_size_x` | `number` |
+| `vae_tiling_params.rel_size_y` | `number` |
+| `vae_tiling_params.extra_tiling_args` | `string` |
 | `cache_mode` | `string` |
 | `cache_option` | `string` |
 | `scm_mask` | `string` |

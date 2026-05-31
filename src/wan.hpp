@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "common_block.hpp"
+#include "diffusion_model.hpp"
 #include "flux.hpp"
 #include "rope.hpp"
 #include "vae.hpp"
@@ -692,6 +693,7 @@ namespace WAN {
             } else {
                 x = conv1->forward(ctx, x);
             }
+            // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.encoder.prelude", "x");
 
             // downsamples
             std::vector<int64_t> dims = {dim};
@@ -717,12 +719,14 @@ namespace WAN {
                         x = layer->forward(ctx, x, b, feat_cache, feat_idx, chunk_idx);
                     }
                 }
+                // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.encoder.down." + std::to_string(i), "x");
             }
 
             // middle
             x = middle_0->forward(ctx, x, b, feat_cache, feat_idx);
             x = middle_1->forward(ctx, x, b);
             x = middle_2->forward(ctx, x, b, feat_cache, feat_idx);
+            // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.encoder.mid", "x");
 
             // head
             x = head_0->forward(ctx, x);
@@ -863,11 +867,13 @@ namespace WAN {
             } else {
                 x = conv1->forward(ctx, x);
             }
+            // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.decoder.prelude", "x");
 
             // middle
             x = middle_0->forward(ctx, x, b, feat_cache, feat_idx);
             x = middle_1->forward(ctx, x, b);
             x = middle_2->forward(ctx, x, b, feat_cache, feat_idx);
+            // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.decoder.mid", "x");
 
             // upsamples
             std::vector<int64_t> dims = {dim_mult[dim_mult.size() - 1] * dim};
@@ -893,6 +899,7 @@ namespace WAN {
                         x = layer->forward(ctx, x, b, feat_cache, feat_idx, chunk_idx);
                     }
                 }
+                // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.decoder.up." + std::to_string(i), "x");
             }
 
             // head
@@ -966,10 +973,10 @@ namespace WAN {
             blocks["conv2"]   = std::shared_ptr<GGMLBlock>(new CausalConv3d(z_dim, z_dim, {1, 1, 1}));
         }
 
-        ggml_tensor* patchify(ggml_context* ctx,
-                              ggml_tensor* x,
-                              int64_t patch_size,
-                              int64_t b = 1) {
+        static ggml_tensor* patchify(ggml_context* ctx,
+                                     ggml_tensor* x,
+                                     int64_t patch_size,
+                                     int64_t b = 1) {
             // x: [b*c, f, h*q, w*r]
             // return: [b*c*r*q, f, h, w]
             if (patch_size == 1) {
@@ -993,10 +1000,10 @@ namespace WAN {
             return x;
         }
 
-        ggml_tensor* unpatchify(ggml_context* ctx,
-                                ggml_tensor* x,
-                                int64_t patch_size,
-                                int64_t b = 1) {
+        static ggml_tensor* unpatchify(ggml_context* ctx,
+                                       ggml_tensor* x,
+                                       int64_t patch_size,
+                                       int64_t b = 1) {
             // x: [b*c*r*q, f, h, w]
             // return: [b*c, f, h*q, w*r]
             if (patch_size == 1) {
@@ -1031,6 +1038,7 @@ namespace WAN {
             if (wan2_2) {
                 x = patchify(ctx->ggml_ctx, x, 2, b);
             }
+            // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.encode.prelude", "x");
 
             auto encoder = std::dynamic_pointer_cast<Encoder3d>(blocks["encoder"]);
             auto conv1   = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv1"]);
@@ -1051,6 +1059,7 @@ namespace WAN {
             }
             out     = conv1->forward(ctx, out);
             auto mu = ggml_ext_chunk(ctx->ggml_ctx, out, 2, 3)[0];
+            // sd::ggml_graph_cut::mark_graph_cut(mu, "wan_vae.encode.final", "mu");
             clear_cache();
             return mu;
         }
@@ -1068,6 +1077,7 @@ namespace WAN {
 
             int64_t iter_ = z->ne[2];
             auto x        = conv2->forward(ctx, z);
+            // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.decode.prelude", "x");
             ggml_tensor* out;
             for (int i = 0; i < iter_; i++) {
                 _conv_idx = 0;
@@ -1083,6 +1093,7 @@ namespace WAN {
             if (wan2_2) {
                 out = unpatchify(ctx->ggml_ctx, out, 2, b);
             }
+            // sd::ggml_graph_cut::mark_graph_cut(out, "wan_vae.decode.final", "out");
             clear_cache();
             return out;
         }
@@ -1097,13 +1108,15 @@ namespace WAN {
             auto decoder = std::dynamic_pointer_cast<Decoder3d>(blocks["decoder"]);
             auto conv2   = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv2"]);
 
-            auto x    = conv2->forward(ctx, z);
+            auto x = conv2->forward(ctx, z);
+            // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.decode_partial.prelude", "x");
             auto in   = ggml_ext_slice(ctx->ggml_ctx, x, 2, i, i + 1);  // [b*c, 1, h, w]
             _conv_idx = 0;
             auto out  = decoder->forward(ctx, in, b, _feat_map, _conv_idx, i);
             if (wan2_2) {
                 out = unpatchify(ctx->ggml_ctx, out, 2, b);
             }
+            // sd::ggml_graph_cut::mark_graph_cut(out, "wan_vae.decode_partial.final", "out");
             return out;
         }
     };
@@ -1114,12 +1127,12 @@ namespace WAN {
         WanVAE ae;
 
         WanVAERunner(ggml_backend_t backend,
-                     bool offload_params_to_cpu,
+                     ggml_backend_t params_backend,
                      const String2TensorStorage& tensor_storage_map = {},
                      const std::string prefix                       = "",
                      bool decode_only                               = false,
                      SDVersion version                              = VERSION_WAN2)
-            : decode_only(decode_only), ae(decode_only, version == VERSION_WAN2_2_TI2V), VAE(version, backend, offload_params_to_cpu) {
+            : decode_only(decode_only), ae(decode_only, version == VERSION_WAN2_2_TI2V), VAE(version, backend, params_backend) {
             ae.init(params_ctx, tensor_storage_map, prefix);
         }
 
@@ -1317,11 +1330,14 @@ namespace WAN {
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
             ggml_backend_t backend            = ggml_backend_cpu_init();
             ggml_type model_data_type         = GGML_TYPE_F16;
-            std::shared_ptr<WanVAERunner> vae = std::make_shared<WanVAERunner>(backend, false, String2TensorStorage{}, "", false, VERSION_WAN2_2_TI2V);
+            std::shared_ptr<WanVAERunner> vae = std::make_shared<WanVAERunner>(backend, backend, String2TensorStorage{}, "", false, VERSION_WAN2_2_TI2V);
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
 
-                vae->alloc_params_buffer();
+                if (!vae->alloc_params_buffer()) {
+                    LOG_ERROR("vae buffer allocation failed");
+                    return;
+                }
                 std::map<std::string, ggml_tensor*> tensors;
                 vae->get_param_tensors(tensors, "first_stage_model");
 
@@ -1984,6 +2000,13 @@ namespace WAN {
                 c = ggml_reshape_3d(ctx->ggml_ctx, c, c->ne[0] * c->ne[1] * c->ne[2], c->ne[3] / N, N);  // [N, dim, t_len*h_len*w_len]
                 c = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, c, 1, 0, 2, 3));  // [N, t_len*h_len*w_len, dim]
             }
+            sd::ggml_graph_cut::mark_graph_cut(x, "wan.prelude", "x");
+            // sd::ggml_graph_cut::mark_graph_cut(e, "wan.prelude", "e");
+            // sd::ggml_graph_cut::mark_graph_cut(e0, "wan.prelude", "e0");
+            // sd::ggml_graph_cut::mark_graph_cut(context, "wan.prelude", "context");
+            if (c != nullptr) {
+                sd::ggml_graph_cut::mark_graph_cut(c, "wan.prelude", "c");
+            }
 
             auto x_orig = x;
 
@@ -2003,6 +2026,10 @@ namespace WAN {
                     c           = result.second;
                     c_skip      = ggml_ext_scale(ctx->ggml_ctx, c_skip, vace_strength);
                     x           = ggml_add(ctx->ggml_ctx, x, c_skip);
+                }
+                sd::ggml_graph_cut::mark_graph_cut(x, "wan.blocks." + std::to_string(i), "x");
+                if (c != nullptr) {
+                    sd::ggml_graph_cut::mark_graph_cut(c, "wan.blocks." + std::to_string(i), "c");
                 }
             }
 
@@ -2062,7 +2089,7 @@ namespace WAN {
         }
     };
 
-    struct WanRunner : public GGMLRunner {
+    struct WanRunner : public DiffusionModelRunner {
     public:
         std::string desc = "wan";
         WanParams wan_params;
@@ -2071,11 +2098,11 @@ namespace WAN {
         SDVersion version;
 
         WanRunner(ggml_backend_t backend,
-                  bool offload_params_to_cpu,
+                  ggml_backend_t params_backend,
                   const String2TensorStorage& tensor_storage_map = {},
                   const std::string prefix                       = "",
                   SDVersion version                              = VERSION_WAN2)
-            : GGMLRunner(backend, offload_params_to_cpu) {
+            : DiffusionModelRunner(backend, params_backend, prefix) {
             wan_params.num_layers = 0;
             for (auto pair : tensor_storage_map) {
                 std::string tensor_name = pair.first;
@@ -2185,7 +2212,7 @@ namespace WAN {
             return desc;
         }
 
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
             wan.get_param_tensors(tensors, prefix);
         }
 
@@ -2261,6 +2288,22 @@ namespace WAN {
             return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
         }
 
+        sd::Tensor<float> compute(int n_threads,
+                                  const DiffusionParams& diffusion_params) override {
+            GGML_ASSERT(diffusion_params.x != nullptr);
+            GGML_ASSERT(diffusion_params.timesteps != nullptr);
+            const auto* extra = diffusion_extra_as<WanDiffusionExtra>(diffusion_params);
+            return compute(n_threads,
+                           *diffusion_params.x,
+                           *diffusion_params.timesteps,
+                           tensor_or_empty(diffusion_params.context),
+                           tensor_or_empty(diffusion_params.y),
+                           tensor_or_empty(diffusion_params.c_concat),
+                           sd::Tensor<float>(),
+                           tensor_or_empty(extra->vace_context),
+                           extra->vace_strength);
+        }
+
         void test() {
             ggml_init_params params;
             params.mem_size   = static_cast<size_t>(200 * 1024 * 1024);  // 200 MB
@@ -2323,12 +2366,16 @@ namespace WAN {
             }
 
             std::shared_ptr<WanRunner> wan = std::make_shared<WanRunner>(backend,
-                                                                         false,
+                                                                         backend,
                                                                          tensor_storage_map,
                                                                          "model.diffusion_model",
                                                                          VERSION_WAN2_2_TI2V);
 
-            wan->alloc_params_buffer();
+            if (!wan->alloc_params_buffer()) {
+                LOG_ERROR("wan buffer allocation failed");
+                return;
+            }
+
             std::map<std::string, ggml_tensor*> tensors;
             wan->get_param_tensors(tensors, "model.diffusion_model");
 

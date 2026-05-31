@@ -13,12 +13,39 @@ if (MSVC)
     add_compile_definitions(_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING)
     add_compile_options(
         $<$<COMPILE_LANGUAGE:C>:/MP>
+        $<$<COMPILE_LANGUAGE:C>:/utf-8>
         $<$<COMPILE_LANGUAGE:CXX>:/MP>
+        $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
     )
 endif()
 
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
+if(APPLE)
+    function(sd_set_macos_rpaths target)
+        get_target_property(target_type ${target} TYPE)
+        if(target_type STREQUAL "EXECUTABLE")
+            set(runtime_paths "@executable_path" "@executable_path/../lib")
+        elseif(target_type STREQUAL "SHARED_LIBRARY" OR target_type STREQUAL "MODULE_LIBRARY")
+            set(runtime_paths "@loader_path" "@loader_path/../lib")
+            set_target_properties(${target} PROPERTIES
+                MACOSX_RPATH ON
+                INSTALL_NAME_DIR "@rpath"
+                BUILD_WITH_INSTALL_NAME_DIR ON
+            )
+        else()
+            return()
+        endif()
+
+        # Release artifacts zip the build output directly, so keep macOS rpaths relocatable.
+        set_target_properties(${target} PROPERTIES
+            BUILD_RPATH "${runtime_paths}"
+            INSTALL_RPATH "${runtime_paths}"
+            BUILD_WITH_INSTALL_RPATH ON
+        )
+    endfunction()
+endif()
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(SD_STANDALONE ON)
@@ -69,40 +96,40 @@ option(SD_BUILD_SHARED_GGML_LIB      "sd: build ggml as a separate shared lib" O
 option(SD_USE_SYSTEM_GGML            "sd: use system-installed GGML library" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED true)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED true)
+
 if(SD_CUDA)
     message("-- Use CUDA as backend stable-diffusion")
     set(GGML_CUDA ON)
-    add_definitions(-DSD_USE_CUDA)
 endif()
 
 if(SD_METAL)
     message("-- Use Metal as backend stable-diffusion")
     set(GGML_METAL ON)
-    add_definitions(-DSD_USE_METAL)
 endif()
 
 if (SD_VULKAN)
     message("-- Use Vulkan as backend stable-diffusion")
     set(GGML_VULKAN ON)
-    add_definitions(-DSD_USE_VULKAN)
 endif ()
 
 if (SD_OPENCL)
     message("-- Use OpenCL as backend stable-diffusion")
     set(GGML_OPENCL ON)
-    add_definitions(-DSD_USE_OPENCL)
 endif ()
 
 if (SD_HIPBLAS)
     message("-- Use HIPBLAS as backend stable-diffusion")
     set(GGML_HIP ON)
-    add_definitions(-DSD_USE_CUDA)
 endif ()
 
 if(SD_MUSA)
     message("-- Use MUSA as backend stable-diffusion")
     set(GGML_MUSA ON)
-    add_definitions(-DSD_USE_CUDA)
 endif()
 
 if(SD_WEBP)
@@ -112,19 +139,28 @@ if(SD_WEBP)
           "Or link against system library:\n  cmake (...) -DSD_USE_SYSTEM_WEBP=ON")
     endif()
     if(SD_USE_SYSTEM_WEBP)
-        find_package(WebP REQUIRED)
-        add_library(webp ALIAS WebP::webp)
-        # libwebp CMake target naming is not consistent across versions/distros.
-        # Some export WebP::libwebpmux, others export WebP::webpmux.
-        if(TARGET WebP::libwebpmux)
-            add_library(libwebpmux ALIAS WebP::libwebpmux)
-        elseif(TARGET WebP::webpmux)
-            add_library(libwebpmux ALIAS WebP::webpmux)
+        find_package(WebP)
+        if(WebP_FOUND)
+            add_library(webp ALIAS WebP::webp)
+            # libwebp CMake target naming is not consistent across versions/distros.
+            # Some export WebP::libwebpmux, others export WebP::webpmux.
+            if(TARGET WebP::libwebpmux)
+                add_library(libwebpmux ALIAS WebP::libwebpmux)
+            elseif(TARGET WebP::webpmux)
+                add_library(libwebpmux ALIAS WebP::webpmux)
+            else()
+                message(FATAL_ERROR
+                    "Could not find a compatible webpmux target in system WebP package. "
+                    "Expected WebP::libwebpmux or WebP::webpmux."
+                )
+            endif()
         else()
-            message(FATAL_ERROR
-                "Could not find a compatible webpmux target in system WebP package. "
-                "Expected WebP::libwebpmux or WebP::webpmux."
-            )
+            find_package(PkgConfig REQUIRED)
+            pkg_check_modules(WebP REQUIRED IMPORTED_TARGET GLOBAL libwebp)
+            pkg_check_modules(WebPMux REQUIRED IMPORTED_TARGET GLOBAL libwebpmux)
+            link_libraries(PkgConfig::WebP)
+            link_libraries(PkgConfig::WebPMux)
+            add_library(libwebpmux ALIAS PkgConfig::WebPMux)
         endif()
     endif()
 endif()
@@ -139,18 +175,26 @@ if(SD_WEBM)
           "Or link against system library:\n  cmake (...) -DSD_USE_SYSTEM_WEBM=ON")
     endif()
     if(SD_USE_SYSTEM_WEBM)
-        find_path(WEBM_INCLUDE_DIR
-            NAMES mkvmuxer/mkvmuxer.h mkvparser/mkvparser.h common/webmids.h
-            PATH_SUFFIXES webm
-            REQUIRED)
-        find_library(WEBM_LIBRARY
-            NAMES webm libwebm
-            REQUIRED)
+        find_package(PkgConfig)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(WebM REQUIRED IMPORTED_TARGET GLOBAL libwebm)
+        endif()
+        if(PkgConfig_FOUND AND WebM_FOUND)
+            link_libraries(PkgConfig::WebM)
+        else()
+            find_path(WEBM_INCLUDE_DIR
+                NAMES mkvmuxer/mkvmuxer.h mkvparser/mkvparser.h common/webmids.h
+                PATH_SUFFIXES webm
+                REQUIRED)
+            find_library(WEBM_LIBRARY
+                NAMES webm libwebm
+                REQUIRED)
 
-        add_library(webm UNKNOWN IMPORTED)
-        set_target_properties(webm PROPERTIES
-            IMPORTED_LOCATION "${WEBM_LIBRARY}"
-            INTERFACE_INCLUDE_DIRECTORIES "${WEBM_INCLUDE_DIR}")
+            add_library(webm UNKNOWN IMPORTED)
+            set_target_properties(webm PROPERTIES
+                IMPORTED_LOCATION "${WEBM_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES "${WEBM_INCLUDE_DIR}")
+        endif()
     endif()
 endif()
 
@@ -218,11 +262,14 @@ else()
     add_library(${SD_LIB} STATIC ${SD_LIB_SOURCES})
 endif()
 
+if(APPLE)
+    sd_set_macos_rpaths(${SD_LIB})
+endif()
+
 if(SD_SYCL)
     message("-- Use SYCL as backend stable-diffusion")
     set(GGML_SYCL ON)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-narrowing -fsycl")
-    add_definitions(-DSD_USE_SYCL)
     # disable fast-math on host, see:
     # https://www.intel.com/content/www/us/en/docs/cpp-compiler/developer-guide-reference/2021-10/fp-model-fp.html
     if (WIN32)

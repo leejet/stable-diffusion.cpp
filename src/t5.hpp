@@ -251,7 +251,8 @@ public:
                          ggml_tensor* x,
                          ggml_tensor* past_bias                = nullptr,
                          ggml_tensor* attention_mask           = nullptr,
-                         ggml_tensor* relative_position_bucket = nullptr) {
+                         ggml_tensor* relative_position_bucket = nullptr,
+                         const std::string& graph_cut_prefix   = "") {
         // x: [N, n_token, model_dim]
         for (int i = 0; i < num_layers; i++) {
             auto block = std::dynamic_pointer_cast<T5Block>(blocks["block." + std::to_string(i)]);
@@ -259,6 +260,9 @@ public:
             auto ret  = block->forward(ctx, x, past_bias, attention_mask, relative_position_bucket);
             x         = ret.first;
             past_bias = ret.second;
+            if (!graph_cut_prefix.empty()) {
+                sd::ggml_graph_cut::mark_graph_cut(x, graph_cut_prefix + ".block." + std::to_string(i), "x");
+            }
         }
 
         auto final_layer_norm = std::dynamic_pointer_cast<T5LayerNorm>(blocks["final_layer_norm"]);
@@ -305,7 +309,8 @@ public:
         auto encoder = std::dynamic_pointer_cast<T5Stack>(blocks["encoder"]);
 
         auto x = shared->forward(ctx, input_ids);
-        x      = encoder->forward(ctx, x, past_bias, attention_mask, relative_position_bucket);
+        sd::ggml_graph_cut::mark_graph_cut(x, "t5.prelude", "x");
+        x = encoder->forward(ctx, x, past_bias, attention_mask, relative_position_bucket, "t5");
         return x;
     }
 };
@@ -316,11 +321,11 @@ struct T5Runner : public GGMLRunner {
     std::vector<int> relative_position_bucket_vec;
 
     T5Runner(ggml_backend_t backend,
-             bool offload_params_to_cpu,
+             ggml_backend_t params_backend,
              const String2TensorStorage& tensor_storage_map,
              const std::string prefix,
              bool is_umt5 = false)
-        : GGMLRunner(backend, offload_params_to_cpu) {
+        : GGMLRunner(backend, params_backend) {
         if (is_umt5) {
             params.vocab_size         = 256384;
             params.relative_attention = false;
@@ -459,19 +464,22 @@ struct T5Embedder {
     T5Runner model;
 
     T5Embedder(ggml_backend_t backend,
-               bool offload_params_to_cpu,
+               ggml_backend_t params_backend,
                const String2TensorStorage& tensor_storage_map = {},
                const std::string prefix                       = "",
                bool is_umt5                                   = false)
-        : model(backend, offload_params_to_cpu, tensor_storage_map, prefix, is_umt5), tokenizer(is_umt5) {
+        : model(backend, params_backend, tensor_storage_map, prefix, is_umt5), tokenizer(is_umt5) {
     }
 
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
         model.get_param_tensors(tensors, prefix);
     }
 
-    void alloc_params_buffer() {
-        model.alloc_params_buffer();
+    bool alloc_params_buffer() {
+        if (!model.alloc_params_buffer()) {
+            return false;
+        }
+        return true;
     }
 
     std::tuple<std::vector<int>, std::vector<float>, std::vector<float>> tokenize(std::string text,
@@ -571,9 +579,12 @@ struct T5Embedder {
             }
         }
 
-        std::shared_ptr<T5Embedder> t5 = std::make_shared<T5Embedder>(backend, false, tensor_storage_map, "", true);
+        std::shared_ptr<T5Embedder> t5 = std::make_shared<T5Embedder>(backend, backend, tensor_storage_map, "", true);
 
-        t5->alloc_params_buffer();
+        if (!t5->alloc_params_buffer()) {
+            LOG_ERROR("t5 params buffer allocation failed");
+            return;
+        }
         std::map<std::string, ggml_tensor*> tensors;
         t5->get_param_tensors(tensors, "");
 

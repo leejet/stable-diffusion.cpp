@@ -4,8 +4,10 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "ggml-backend.h"
 #include "stable-diffusion.h"
 #include "tensor.hpp"
 
@@ -41,7 +43,7 @@ sd::Tensor<float> clip_preprocess(const sd::Tensor<float>& image, int target_wid
 
 class MmapWrapper {
 public:
-    static std::unique_ptr<MmapWrapper> create(const std::string& filename);
+    static std::unique_ptr<MmapWrapper> create(const std::string& filename, bool writable = false);
 
     virtual ~MmapWrapper() = default;
 
@@ -51,6 +53,7 @@ public:
     MmapWrapper& operator=(MmapWrapper&&)      = delete;
 
     const uint8_t* data() const { return static_cast<uint8_t*>(data_); }
+    uint8_t* writable_data() { return static_cast<uint8_t*>(data_); }
     size_t size() const { return size_; }
     bool copy_data(void* buf, size_t n, size_t offset) const;
 
@@ -63,6 +66,15 @@ protected:
 
 std::string path_join(const std::string& p1, const std::string& p2);
 std::vector<std::string> split_string(const std::string& str, char delimiter);
+
+using KeyValueArgs = std::vector<std::pair<std::string, std::string>>;
+
+KeyValueArgs parse_key_value_args(const char* args, const char* context = "key=value arg");
+KeyValueArgs parse_key_value_args(const std::string& args, const char* context = "key=value arg");
+bool parse_strict_float(const std::string& text, float& value);
+bool parse_strict_int(const std::string& text, int& value);
+bool parse_strict_bool(const std::string& text, bool& value);
+
 void pretty_progress(int step, int steps, float time);
 void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds);
 
@@ -71,6 +83,8 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
 std::string trim(const std::string& s);
 
 std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::string& text);
+std::vector<std::pair<std::string, float>> split_quotation_attention(
+    const std::vector<std::pair<std::string, float>>& parsed_attention);
 
 sd_progress_cb_t sd_get_progress_callback();
 void* sd_get_progress_callback_data();
@@ -81,6 +95,9 @@ preview_t sd_get_preview_mode();
 int sd_get_preview_interval();
 bool sd_should_preview_denoised();
 bool sd_should_preview_noisy();
+
+// test if the backend is a specific one, e.g. "CUDA", "ROCm", "Vulkan" etc.
+bool sd_backend_is(ggml_backend_t backend, const std::string& name);
 
 #define LOG_DEBUG(format, ...) log_printf(SD_LOG_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define LOG_INFO(format, ...) log_printf(SD_LOG_INFO, __FILE__, __LINE__, format, ##__VA_ARGS__)

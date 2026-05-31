@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "common_block.hpp"
+#include "diffusion_model.hpp"
 #include "flux.hpp"
 
 namespace Qwen {
@@ -95,9 +96,7 @@ namespace Qwen {
 
             float scale         = 1.f / 32.f;
             bool force_prec_f32 = false;
-#ifdef SD_USE_VULKAN
-            force_prec_f32 = true;
-#endif
+
             // The purpose of the scale here is to prevent NaN issues in certain situations.
             // For example when using CUDA but the weights are k-quants (not all prompts).
             blocks["to_out.0"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, out_dim, out_bias, false, force_prec_f32, scale));
@@ -123,6 +122,10 @@ namespace Qwen {
             auto to_k     = std::dynamic_pointer_cast<Linear>(blocks["to_k"]);
             auto to_v     = std::dynamic_pointer_cast<Linear>(blocks["to_v"]);
             auto to_out_0 = std::dynamic_pointer_cast<Linear>(blocks["to_out.0"]);
+
+            if (sd_backend_is(ctx->backend, "Vulkan")) {
+                to_out_0->set_force_prec_f32(true);
+            }
 
             auto norm_added_q = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm_added_q"]);
             auto norm_added_k = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm_added_k"]);
@@ -410,6 +413,9 @@ namespace Qwen {
             auto img = img_in->forward(ctx, x);
             auto txt = txt_norm->forward(ctx, context);
             txt      = txt_in->forward(ctx, txt);
+            sd::ggml_graph_cut::mark_graph_cut(img, "qwen_image.prelude", "img");
+            sd::ggml_graph_cut::mark_graph_cut(txt, "qwen_image.prelude", "txt");
+            // sd::ggml_graph_cut::mark_graph_cut(t_emb, "qwen_image.prelude", "t_emb");
 
             for (int i = 0; i < params.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<QwenImageTransformerBlock>(blocks["transformer_blocks." + std::to_string(i)]);
@@ -417,6 +423,8 @@ namespace Qwen {
                 auto result = block->forward(ctx, img, txt, t_emb, pe, modulate_index);
                 img         = result.first;
                 txt         = result.second;
+                sd::ggml_graph_cut::mark_graph_cut(img, "qwen_image.transformer_blocks." + std::to_string(i), "img");
+                sd::ggml_graph_cut::mark_graph_cut(txt, "qwen_image.transformer_blocks." + std::to_string(i), "txt");
             }
 
             if (params.zero_cond_t) {
@@ -472,7 +480,7 @@ namespace Qwen {
         }
     };
 
-    struct QwenImageRunner : public GGMLRunner {
+    struct QwenImageRunner : public DiffusionModelRunner {
     public:
         QwenImageParams qwen_image_params;
         QwenImageModel qwen_image;
@@ -481,12 +489,12 @@ namespace Qwen {
         SDVersion version;
 
         QwenImageRunner(ggml_backend_t backend,
-                        bool offload_params_to_cpu,
+                        ggml_backend_t params_backend,
                         const String2TensorStorage& tensor_storage_map = {},
                         const std::string prefix                       = "",
                         SDVersion version                              = VERSION_QWEN_IMAGE,
                         bool zero_cond_t                               = false)
-            : GGMLRunner(backend, offload_params_to_cpu) {
+            : DiffusionModelRunner(backend, params_backend, prefix) {
             qwen_image_params.num_layers  = 0;
             qwen_image_params.zero_cond_t = zero_cond_t;
             for (auto pair : tensor_storage_map) {
@@ -521,7 +529,7 @@ namespace Qwen {
             return "qwen_image";
         }
 
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
             qwen_image.get_param_tensors(tensors, prefix);
         }
 
@@ -617,6 +625,19 @@ namespace Qwen {
             return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
         }
 
+        sd::Tensor<float> compute(int n_threads,
+                                  const DiffusionParams& diffusion_params) override {
+            GGML_ASSERT(diffusion_params.x != nullptr);
+            GGML_ASSERT(diffusion_params.timesteps != nullptr);
+            static const std::vector<sd::Tensor<float>> empty_ref_latents;
+            return compute(n_threads,
+                           *diffusion_params.x,
+                           *diffusion_params.timesteps,
+                           tensor_or_empty(diffusion_params.context),
+                           diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
+                           diffusion_params.increase_ref_index);
+        }
+
         void test() {
             ggml_init_params params;
             params.mem_size   = static_cast<size_t>(1024 * 1024) * 1024;  // 1GB
@@ -679,12 +700,16 @@ namespace Qwen {
             }
 
             std::shared_ptr<QwenImageRunner> qwen_image = std::make_shared<QwenImageRunner>(backend,
-                                                                                            false,
+                                                                                            backend,
                                                                                             tensor_storage_map,
                                                                                             "model.diffusion_model",
                                                                                             VERSION_QWEN_IMAGE);
 
-            qwen_image->alloc_params_buffer();
+            if (!qwen_image->alloc_params_buffer()) {
+                LOG_ERROR("qwen_image buffer allocation failed");
+                return;
+            }
+
             std::map<std::string, ggml_tensor*> tensors;
             qwen_image->get_param_tensors(tensors, "model.diffusion_model");
 
