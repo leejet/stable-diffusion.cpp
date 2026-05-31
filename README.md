@@ -15,6 +15,7 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
+* **2026/05/31** 🚀 stable-diffusion.cpp now supports **PiD**
 * **2026/05/27** 🚀 stable-diffusion.cpp now supports **Lens**
 * **2026/05/17** 🚀 stable-diffusion.cpp now supports **LTX-2.3**
 * **2026/04/11** 🚀 stable-diffusion.cpp now uses a brand-new embedded web UI.  
@@ -42,6 +43,7 @@ API and command-line option may change frequently.***
     - [Chroma](./docs/chroma.md)
     - [Chroma1-Radiance](./docs/chroma_radiance.md)
     - [Qwen Image](./docs/qwen_image.md)
+    - [PiD](./docs/pid.md)
     - [LongCat Image](./docs/longcat_image.md)
     - [Z-Image](./docs/z_image.md)
     - [Ovis-Image](./docs/ovis_image.md)
