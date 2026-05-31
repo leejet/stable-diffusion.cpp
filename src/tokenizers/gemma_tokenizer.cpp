@@ -190,7 +190,6 @@ GemmaTokenizer::GemmaTokenizer(const std::string& merges_utf8_str, const std::st
     }
 }
 
-
 std::string Gemma2Tokenizer::normalize(const std::string& text) const {
     std::string normalized = text;
     size_t pos             = 0;
@@ -236,7 +235,6 @@ Gemma2Tokenizer::Gemma2Tokenizer(const std::string& merges_utf8_str, const std::
     byte_level_bpe = false;
     byte_fallback  = true;
     add_bos_token  = true;
-    pad_left       = true;
     PAD_TOKEN      = "<pad>";
     EOS_TOKEN      = "<eos>";
     BOS_TOKEN      = "<bos>";

@@ -35,6 +35,22 @@ const char* const modes_str[] = {
     "metadata",
 };
 
+static sd_vae_format_t str_to_vae_format(const std::string& value) {
+    if (value == "auto") {
+        return SD_VAE_FORMAT_AUTO;
+    }
+    if (value == "flux") {
+        return SD_VAE_FORMAT_FLUX;
+    }
+    if (value == "sd3") {
+        return SD_VAE_FORMAT_SD3;
+    }
+    if (value == "flux2") {
+        return SD_VAE_FORMAT_FLUX2;
+    }
+    return SD_VAE_FORMAT_COUNT;
+}
+
 #if defined(_WIN32)
 static std::string utf16_to_utf8(const std::wstring& wstr) {
     if (wstr.empty())
@@ -349,6 +365,10 @@ ArgOptions SDContextParams::get_options() {
          "path to standalone vae model",
          &vae_path},
         {"",
+         "--vae-format",
+         "VAE latent format override: auto, flux, sd3, or flux2 (default: auto)",
+         &vae_format},
+        {"",
          "--audio-vae",
          "path to standalone LTX audio vae model",
          &audio_vae_path},
@@ -639,6 +659,11 @@ bool SDContextParams::validate(SDMode mode) {
         }
     }
 
+    if (str_to_vae_format(vae_format) == SD_VAE_FORMAT_COUNT) {
+        LOG_ERROR("error: vae_format must be 'auto', 'flux', 'sd3', or 'flux2'");
+        return false;
+    }
+
     return true;
 }
 
@@ -679,6 +704,7 @@ std::string SDContextParams::to_string() const {
         << "  high_noise_diffusion_model_path: \"" << high_noise_diffusion_model_path << "\",\n"
         << "  embeddings_connectors_path: \"" << embeddings_connectors_path << "\",\n"
         << "  vae_path: \"" << vae_path << "\",\n"
+        << "  vae_format: \"" << vae_format << "\",\n"
         << "  audio_vae_path: \"" << audio_vae_path << "\",\n"
         << "  taesd_path: \"" << taesd_path << "\",\n"
         << "  esrgan_path: \"" << esrgan_path << "\",\n"
@@ -772,6 +798,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         chroma_use_t5_mask,
         chroma_t5_mask_pad,
         qwen_image_zero_cond_t,
+        str_to_vae_format(vae_format),
         max_vram,
         backend.c_str(),
         params_backend.c_str(),
