@@ -469,6 +469,13 @@ SD_API bool convert(const char* input_path,
                     enum sd_type_t output_type,
                     const char* tensor_type_rules,
                     bool convert_name);
+SD_API bool convert_with_threads(const char* input_path,
+                                 const char* vae_path,
+                                 const char* output_path,
+                                 enum sd_type_t output_type,
+                                 const char* tensor_type_rules,
+                                 bool convert_name,
+                                 int n_threads);
 
 SD_API bool preprocess_canny(sd_image_t image,
                              float high_threshold,
