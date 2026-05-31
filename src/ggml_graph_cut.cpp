@@ -778,16 +778,23 @@ namespace sd::ggml_graph_cut {
             return;
         }
 
-        // Headroom budget:
-        //   - safety: minimum free VRAM (512 MB)
-        //   - compute_buffer_reserve: peak compute buffer for one streamed segment
-        // Async prefetch is not yet implemented in the streaming executor, so we
-        // do not reserve an additional segment-sized prefetch window. Once Task 11
-        // (async prefetch) lands, add `prefetch_segments * largest_streamed_segment`
-        // back here.
-        constexpr size_t safety                 = 512ull * 1024 * 1024;
-        constexpr size_t compute_buffer_reserve = 768ull * 1024 * 1024;
-        const size_t reserved                   = safety + compute_buffer_reserve;
+        // Model the active streamed segment's real footprint instead of a
+        // fixed reserve: params + compute buffer + output + boundary-cut
+        // inputs. The largest such footprint over the plan is the headroom
+        // the resident set must leave free.
+        size_t worst_streamed_footprint = 0;
+        for (const auto& seg : plan.segments) {
+            const size_t seg_footprint = seg.input_param_bytes +
+                                         seg.compute_buffer_size +
+                                         seg.output_bytes +
+                                         seg.input_previous_cut_bytes +
+                                         seg.input_external_bytes;
+            if (seg_footprint > worst_streamed_footprint) {
+                worst_streamed_footprint = seg_footprint;
+            }
+        }
+        constexpr size_t safety = 512ull * 1024 * 1024;
+        const size_t reserved   = safety + worst_streamed_footprint;
 
         if (max_graph_vram_bytes <= reserved) {
             return;
