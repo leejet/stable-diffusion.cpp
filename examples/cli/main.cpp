@@ -41,6 +41,7 @@ struct SDCliParams {
     bool verbose          = false;
     bool canny_preprocess = false;
     bool convert_name     = false;
+    float rmse_threshold  = 0.0f;
 
     preview_t preview_method = PREVIEW_NONE;
     int preview_interval     = 1;
@@ -86,6 +87,16 @@ struct SDCliParams {
              "--output-begin-idx",
              "starting index for output image sequence, must be non-negative (default 0 if specified %d in output path, 1 otherwise)",
              &output_begin_idx},
+        };
+
+        options.float_options = {
+            {"",
+             "--rmse",
+             "maximum relative RMSE per tensor for auto mixed-precision quantization in convert mode "
+             "(e.g. 0.03 = 3%). Sweeps from coarsest to finest quant type and picks the coarsest "
+             "that stays under this budget. --type sets the quality ceiling (default: f16). "
+             "Explicit --tensor-type-rules take priority over the RMSE sweep.",
+             &rmse_threshold},
         };
 
         options.bool_options = {
@@ -601,23 +612,16 @@ int main(int argc, const char* argv[]) {
     LOG_DEBUG("%s", gen_params.to_string().c_str());
 
     if (cli_params.mode == CONVERT) {
-        bool success = convert(ctx_params.model_path.c_str(),
-                               ctx_params.vae_path.c_str(),
+        sd_ctx_params_t sd_params = ctx_params.to_sd_ctx_params_t(false, false, false);
+        bool success              = convert(&sd_params,
                                cli_params.output_path.c_str(),
-                               ctx_params.wtype,
-                               ctx_params.tensor_type_rules.c_str(),
-                               cli_params.convert_name);
+                               cli_params.convert_name,
+                               cli_params.rmse_threshold);
         if (!success) {
-            LOG_ERROR("convert '%s'/'%s' to '%s' failed",
-                      ctx_params.model_path.c_str(),
-                      ctx_params.vae_path.c_str(),
-                      cli_params.output_path.c_str());
+            LOG_ERROR("convert to '%s' failed", cli_params.output_path.c_str());
             return 1;
         } else {
-            LOG_INFO("convert '%s'/'%s' to '%s' success",
-                     ctx_params.model_path.c_str(),
-                     ctx_params.vae_path.c_str(),
-                     cli_params.output_path.c_str());
+            LOG_INFO("convert to '%s' success", cli_params.output_path.c_str());
             return 0;
         }
     }

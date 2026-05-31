@@ -450,6 +450,10 @@ ArgOptions SDContextParams::get_options() {
          "--mmap",
          "whether to memory-map model",
          true, &enable_mmap},
+        {"-ll",
+         "--lazy-load",
+         "staged loading: evict text encoders from RAM after encoding, diffusion model after sampling, VAE after decoding (forces --mmap on)",
+         true, &lazy_loading},
         {"",
          "--control-net-cpu",
          "keep controlnet in cpu (for low vram)",
@@ -723,6 +727,7 @@ std::string SDContextParams::to_string() const {
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
         << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
+        << "  lazy_loading: " << (lazy_loading ? "true" : "false") << ",\n"
         << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
         << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
         << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
@@ -800,6 +805,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         qwen_image_zero_cond_t,
         str_to_vae_format(vae_format),
         max_vram,
+        lazy_loading,
         backend.c_str(),
         params_backend.c_str(),
     };

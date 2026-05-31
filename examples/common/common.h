@@ -116,6 +116,7 @@ struct SDContextParams {
     std::string backend;
     std::string params_backend;
     bool enable_mmap           = false;
+    bool lazy_loading          = false;
     bool control_net_cpu       = false;
     bool clip_on_cpu           = false;
     bool vae_on_cpu            = false;

@@ -5,6 +5,10 @@
 #include "ggml_extend.hpp"
 #include "ggml_graph_cut.h"
 
+#if defined(__linux__)
+#include <sys/mman.h>
+#endif
+
 #include "model.h"
 #include "rng.hpp"
 #include "rng_mt19937.hpp"
@@ -147,6 +151,7 @@ public:
     bool vae_decode_only         = false;
     bool external_vae_is_invalid = false;
     bool free_params_immediately = false;
+    bool lazy_loading            = false;
 
     bool circular_x = false;
     bool circular_y = false;
@@ -217,6 +222,20 @@ public:
         return params_backend_for(module) != nullptr;
     }
 
+    // For each mmap-backed tensor whose name starts with `prefix`, advise the OS
+    // that those physical pages can be reclaimed.  The virtual mapping stays
+    // valid so no pointer patching is needed; pages are reloaded on next access.
+    void evict_component_from_ram(const std::string& prefix) {
+#if defined(__linux__)
+        for (auto& [name, tensor] : tensors) {
+            if (!tensor || !tensor->data || tensor->view_src) continue;
+            if (tensor->buffer != nullptr) continue;  // not mmap-backed
+            if (name.size() < prefix.size() || name.substr(0, prefix.size()) != prefix) continue;
+            madvise(tensor->data, ggml_nbytes(tensor), MADV_DONTNEED);
+        }
+#endif
+    }
+
     bool init_backend(const sd_ctx_params_t* sd_ctx_params) {
         std::string error;
         if (!backend_manager.init(sd_ctx_params->backend,
@@ -246,8 +265,13 @@ public:
         n_threads               = sd_ctx_params->n_threads;
         vae_decode_only         = sd_ctx_params->vae_decode_only;
         free_params_immediately = sd_ctx_params->free_params_immediately;
+        lazy_loading            = sd_ctx_params->lazy_loading;
         offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
         max_vram                = sd_ctx_params->max_vram;
+        if (lazy_loading) {
+            free_params_immediately = true;
+            LOG_INFO("lazy_loading enabled: mmap and free_params_immediately forced on");
+        }
         backend_spec            = SAFE_STR(sd_ctx_params->backend);
         params_backend_spec     = SAFE_STR(sd_ctx_params->params_backend);
 
@@ -442,7 +466,7 @@ public:
         std::map<std::string, ggml_tensor*> mmap_able_tensors;
         bool enable_mmap_tensors = false;
         bool needs_writable_mmap = false;
-        if (sd_ctx_params->enable_mmap) {
+        if (sd_ctx_params->enable_mmap || lazy_loading) {
             if (apply_lora_immediately) {
                 needs_writable_mmap = true;
                 LOG_WARN("in mode 'immediately', LoRAs will cause extra memory usage with mmap");
@@ -1049,7 +1073,7 @@ public:
             return false;
         }
 
-        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap);
+        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap || lazy_loading);
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
             ggml_free(ctx);
@@ -4126,6 +4150,13 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
 
     if (sd_ctx->sd->free_params_immediately) {
         sd_ctx->sd->cond_stage_model->free_params_buffer();
+        if (sd_ctx->sd->lazy_loading) {
+            sd_ctx->sd->cond_stage_model->free_compute_buffer();
+        }
+    }
+    if (sd_ctx->sd->lazy_loading) {
+        sd_ctx->sd->evict_component_from_ram("text_encoders.");
+        LOG_DEBUG("lazy_loading: text encoder pages evicted");
     }
 
     ImageGenerationEmbeds embeds;
@@ -4169,6 +4200,11 @@ static sd_image_t* decode_image_outputs(sd_ctx_t* sd_ctx,
     LOG_INFO("decode_first_stage completed, taking %.2fs", (t4 - t0) * 1.0f / 1000);
     if (sd_ctx->sd->free_params_immediately) {
         sd_ctx->sd->first_stage_model->free_params_buffer();
+        if (sd_ctx->sd->lazy_loading) {
+            sd_ctx->sd->evict_component_from_ram("first_stage_model."); // AIO GGUF / main model file
+            sd_ctx->sd->evict_component_from_ram("vae.");               // separate --vae file
+            LOG_DEBUG("lazy_loading: VAE pages evicted");
+        }
     }
 
     sd_image_t* result_images = (sd_image_t*)calloc(request.batch_count, sizeof(sd_image_t));
@@ -4367,6 +4403,10 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
 
     int64_t t0                    = ggml_time_ms();
     sd_ctx->sd->vae_tiling_params = sd_img_gen_params->vae_tiling_params;
+    if (sd_ctx->sd->lazy_loading && !sd_ctx->sd->vae_tiling_params.enabled) {
+        sd_ctx->sd->vae_tiling_params.enabled = true;
+        LOG_INFO("lazy_loading: auto-enabling VAE tiling to reduce peak VRAM");
+    }
     GenerationRequest request(sd_ctx, sd_img_gen_params);
     LOG_INFO("generate_image %dx%d", request.width, request.height);
 
@@ -4452,6 +4492,11 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
     }
     if (sd_ctx->sd->free_params_immediately && !request.hires.enabled) {
         sd_ctx->sd->diffusion_model->free_params_buffer();
+        if (sd_ctx->sd->lazy_loading) {
+            sd_ctx->sd->diffusion_model->free_compute_buffer();
+            sd_ctx->sd->evict_component_from_ram("model.diffusion_model.");
+            LOG_DEBUG("lazy_loading: diffusion model pages evicted");
+        }
     }
     int64_t denoise_end = ggml_time_ms();
     LOG_INFO("generating %zu latent images completed, taking %.2fs",
@@ -4575,6 +4620,10 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
         }
         if (sd_ctx->sd->free_params_immediately) {
             sd_ctx->sd->diffusion_model->free_params_buffer();
+            if (sd_ctx->sd->lazy_loading) {
+                sd_ctx->sd->evict_component_from_ram("model.diffusion_model.");
+                LOG_DEBUG("lazy_loading: diffusion model pages evicted (post hires)");
+            }
         }
         int64_t hires_denoise_end = ggml_time_ms();
         LOG_INFO("hires fix completed, taking %.2fs", (hires_denoise_end - hires_denoise_start) * 1.0f / 1000);
