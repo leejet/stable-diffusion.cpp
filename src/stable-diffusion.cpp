@@ -1941,6 +1941,7 @@ public:
         float cfg_scale     = guidance.txt_cfg;
         float img_cfg_scale = guidance.img_cfg;
         float slg_scale     = guidance.slg.scale;
+        bool slg_uncond     = sd::guidance::parse_skip_layer_guidance_uncond_arg(extra_sample_args);
 
         sd_sample::SampleCacheRuntime cache_runtime = sd_sample::init_sample_cache_runtime(version,
                                                                                            cache_params,
@@ -1957,12 +1958,21 @@ public:
         }
 
         size_t steps       = sigmas.size() - 1;
-        bool has_skiplayer = slg_scale != 0.0f && !skip_layers.empty();
+        bool has_skiplayer = (slg_scale != 0.0f || slg_uncond) && !skip_layers.empty();
         if (has_skiplayer && !sd_version_is_dit(version)) {
             has_skiplayer = false;
             LOG_WARN("SLG is incompatible with this model type");
         }
+        sd::guidance::AdaptiveProjectedGuidanceParams apg_params = sd::guidance::parse_adaptive_projected_guidance_args(extra_sample_args);
+        bool use_apg_guidance                                    = sd::guidance::is_adaptive_projected_guidance_enabled(apg_params);
+        if (use_apg_guidance) {
+            LOG_INFO("using Adaptive Projected Guidance (APG)");
+        }
         sd::guidance::ClassifierFreeGuidance classifier_free_guidance(cfg_scale, img_cfg_scale);
+        sd::guidance::AdaptiveProjectedGuidance adaptive_projected_guidance(cfg_scale, img_cfg_scale, apg_params);
+        const sd::guidance::BaseGuidance& primary_guidance = use_apg_guidance
+                                                                 ? static_cast<const sd::guidance::BaseGuidance&>(adaptive_projected_guidance)
+                                                                 : static_cast<const sd::guidance::BaseGuidance&>(classifier_free_guidance);
         sd::guidance::SkipLayerGuidance skip_layer_guidance(has_skiplayer ? skip_layers : std::vector<int>(),
                                                             has_skiplayer ? slg_scale : 0.0f,
                                                             guidance.slg.layer_start,
@@ -2038,6 +2048,10 @@ public:
             diffusion_params.x                  = &noised_input;
             diffusion_params.timesteps          = &timesteps_tensor;
             diffusion_params.increase_ref_index = increase_ref_index;
+            sd::guidance::GuidanceInput step_guidance_input;
+            step_guidance_input.step          = step;
+            step_guidance_input.schedule_size = sigmas.size();
+            bool is_skiplayer_step            = skip_layer_guidance.is_enabled_for_step(step_guidance_input);
 
             compute_sample_controls(control_image,
                                     noised_input,
@@ -2121,7 +2135,12 @@ public:
                                             uncond,
                                             &controls);
                 }
-                uncond_out = run_condition(uncond);
+                const std::vector<int>* uncond_skip_layers = nullptr;
+                if (is_skiplayer_step && slg_uncond) {
+                    LOG_DEBUG("Skipping layers at uncond step %d\n", step);
+                    uncond_skip_layers = &skip_layer_guidance.layers();
+                }
+                uncond_out = run_condition(uncond, nullptr, uncond_skip_layers);
                 if (uncond_out.empty()) {
                     return {};
                 }
@@ -2140,12 +2159,12 @@ public:
             guidance_input.pred_uncond   = uncond_out.empty() ? nullptr : &uncond_out;
             guidance_input.pred_img_cond = img_cond_out.empty() ? nullptr : &img_cond_out;
 
-            sd::guidance::GuiderOutput guided = classifier_free_guidance.forward(guidance_input, {});
+            sd::guidance::GuiderOutput guided = primary_guidance.forward(guidance_input, {});
             if (guided.pred.empty()) {
                 return {};
             }
 
-            if (skip_layer_guidance.is_enabled_for_step(guidance_input)) {
+            if (is_skiplayer_step && slg_scale != 0.0f) {
                 LOG_DEBUG("Skipping layers at step %d\n", step);
                 if (!step_cache.is_step_skipped()) {
                     guidance_input.predict_skip_layer = [&]() -> sd::Tensor<float> {

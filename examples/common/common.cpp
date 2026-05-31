@@ -860,7 +860,7 @@ ArgOptions SDGenerationParams::get_options() {
          &hires_upscaler},
         {"",
          "--extra-sample-args",
-         "extra sampler/scheduler args, key=value list. lcm supports noise_clip_std, noise_scale_start, noise_scale_end; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma",
+         "extra sampler/scheduler/guidance args, key=value list. APG supports apg_eta, apg_momentum, apg_norm_threshold, apg_norm_threshold_smoothing; SLG supports slg_uncond; lcm supports noise_clip_std, noise_scale_start, noise_scale_end; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma",
          &extra_sample_args},
         {"",
          "--extra-tiling-args",
