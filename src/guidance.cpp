@@ -63,22 +63,6 @@ namespace sd::guidance {
         return uncond;
     }
 
-    static bool should_log_cfg_delta_norm() {
-        const char* value = std::getenv("SD_LOG_CFG_DELTA_NORM");
-        if (value == nullptr) {
-            return false;
-        }
-
-        std::string setting = value;
-        if (setting == "ON" || setting == "TRUE") {
-            return true;
-        }
-        if (setting != "OFF" && setting != "FALSE") {
-            LOG_WARN("SD_LOG_CFG_DELTA_NORM environment variable has unexpected value. Assuming default (\"OFF\"). (Expected \"ON\"/\"TRUE\" or \"OFF\"/\"FALSE\", got \"%s\")", value);
-        }
-        return false;
-    }
-
     ClassifierFreeGuidance::ClassifierFreeGuidance(float guidance_scale,
                                                    float image_guidance_scale)
         : guidance_scale_(guidance_scale),
@@ -119,8 +103,7 @@ namespace sd::guidance {
                                                          AdaptiveProjectedGuidanceParams params)
         : guidance_scale_(guidance_scale),
           image_guidance_scale_(image_guidance_scale),
-          params_(params),
-          log_cfg_delta_norm_(should_log_cfg_delta_norm()) {
+          params_(params) {
     }
 
     static sd::Tensor<float> calculate_guidance_delta(const sd::Tensor<float>& pred_cond,
@@ -189,12 +172,8 @@ namespace sd::guidance {
         }
 
         float diff_norm = 0.0f;
-        if (params_.norm_threshold > 0.0f || log_cfg_delta_norm_) {
+        if (params_.norm_threshold > 0.0f) {
             diff_norm = std::sqrt((deltas * deltas).sum());
-        }
-
-        if (log_cfg_delta_norm_) {
-            LOG_INFO("CFG Delta norm: %.2f", diff_norm);
         }
 
         float apg_scale_factor = 1.0f;

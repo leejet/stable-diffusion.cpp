@@ -61,7 +61,6 @@ namespace sd::guidance {
         float guidance_scale_       = 1.0f;
         float image_guidance_scale_ = 1.0f;
         AdaptiveProjectedGuidanceParams params_;
-        bool log_cfg_delta_norm_ = false;
         mutable sd::Tensor<float> momentum_buffer_;
 
     public:
