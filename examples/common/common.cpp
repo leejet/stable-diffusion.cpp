@@ -245,6 +245,7 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
         return false;
     };
 
+    bool valid = false;
     for (int i = 1; i < argc; i++) {
         arg            = argv[i];
         bool found_arg = false;
@@ -287,7 +288,7 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                 break;
 
             if (match_and_apply(options.manual_options, [&](auto& option) {
-                    int ret = option.cb(argc, argv, i);
+                    int ret = option.cb(argc, argv, i, valid);
                     if (ret < 0) {
                         invalid_arg = true;
                         return;
@@ -299,7 +300,9 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
         }
 
         if (invalid_arg) {
-            LOG_ERROR("error: invalid parameter for argument: %s", arg.c_str());
+            if (!valid) {
+                LOG_ERROR("error: invalid parameter for argument: %s", arg.c_str());
+            }
             return false;
         }
         if (!found_arg) {
