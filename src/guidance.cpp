@@ -82,17 +82,18 @@ namespace sd::guidance {
         output.pred                        = pred_cond;
         if (has_tensor(input.pred_uncond)) {
             const sd::Tensor<float>& pred_uncond = *input.pred_uncond;
-            if (has_tensor(input.pred_img_cond)) {
-                const sd::Tensor<float>& pred_img_cond = *input.pred_img_cond;
-                output.pred                            = pred_uncond +
-                              image_guidance_scale_ * (pred_img_cond - pred_uncond) +
-                              guidance_scale_ * (pred_cond - pred_img_cond);
+            if (has_tensor(input.pred_img_uncond)) {
+                const sd::Tensor<float>& pred_img_uncond = *input.pred_img_uncond;
+                output.pred                              = pred_img_uncond +
+                              image_guidance_scale_ * (pred_uncond - pred_img_uncond) +
+                              guidance_scale_ * (pred_cond - pred_uncond);
+
             } else {
                 output.pred = pred_uncond + guidance_scale_ * (pred_cond - pred_uncond);
             }
-        } else if (has_tensor(input.pred_img_cond)) {
-            const sd::Tensor<float>& pred_img_cond = *input.pred_img_cond;
-            output.pred                            = pred_img_cond + guidance_scale_ * (pred_cond - pred_img_cond);
+        } else if (has_tensor(input.pred_img_uncond)) {
+            const sd::Tensor<float>& pred_img_uncond = *input.pred_img_uncond;
+            output.pred                              = pred_img_uncond + guidance_scale_ * (pred_cond - pred_img_uncond);
         }
 
         return output;
@@ -139,24 +140,24 @@ namespace sd::guidance {
         output.pred                        = pred_cond;
         if (has_tensor(input.pred_uncond)) {
             const sd::Tensor<float>& pred_uncond = *input.pred_uncond;
-            if (has_tensor(input.pred_img_cond)) {
-                const sd::Tensor<float>& pred_img_cond = *input.pred_img_cond;
-                output.pred                            = pred_uncond +
-                              image_guidance_scale_ * (pred_img_cond - pred_uncond) +
-                              guidance_scale_ * (pred_cond - pred_img_cond);
+            if (has_tensor(input.pred_img_uncond)) {
+                const sd::Tensor<float>& pred_img_uncond = *input.pred_img_uncond;
+                output.pred                              = pred_img_uncond +
+                              image_guidance_scale_ * (pred_uncond - pred_img_uncond) +
+                              guidance_scale_ * (pred_cond - pred_uncond);
             } else {
                 output.pred = pred_uncond + guidance_scale_ * (pred_cond - pred_uncond);
             }
-        } else if (has_tensor(input.pred_img_cond)) {
-            const sd::Tensor<float>& pred_img_cond = *input.pred_img_cond;
-            output.pred                            = pred_img_cond + guidance_scale_ * (pred_cond - pred_img_cond);
+        } else if (has_tensor(input.pred_img_uncond)) {
+            const sd::Tensor<float>& pred_img_uncond = *input.pred_img_uncond;
+            output.pred                              = pred_img_uncond + guidance_scale_ * (pred_cond - pred_img_uncond);
         }
-        if (!has_tensor(input.pred_uncond) && !has_tensor(input.pred_img_cond)) {
+        if (!has_tensor(input.pred_uncond) && !has_tensor(input.pred_img_uncond)) {
             return output;
         }
 
         const sd::Tensor<float>* pred_uncond   = input.pred_uncond;
-        const sd::Tensor<float>* pred_img_cond = input.pred_img_cond;
+        const sd::Tensor<float>* pred_img_cond = input.pred_img_uncond;
 
         sd::Tensor<float> deltas = calculate_guidance_delta(pred_cond,
                                                             pred_uncond,
