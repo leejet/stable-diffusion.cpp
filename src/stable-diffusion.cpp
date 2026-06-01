@@ -1108,7 +1108,7 @@ public:
                 if (module_backend == nullptr) {
                     return false;
                 }
-                if (ggml_backend_is_cpu(module_backend)) {
+                if (sd_backend_is_cpu(module_backend)) {
                     total_params_ram_size += size;
                 } else {
                     total_params_vram_size += size;
@@ -1123,7 +1123,7 @@ public:
                 if (module_backend == nullptr) {
                     return "N/A";
                 }
-                return ggml_backend_is_cpu(module_backend) ? "RAM" : "VRAM";
+                return sd_backend_is_cpu(module_backend) ? "RAM" : "VRAM";
             };
 
             if (!add_params_memory(clip_params_mem_size, SDBackendModule::TE) ||
