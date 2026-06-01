@@ -2853,7 +2853,7 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
              sample_params->guidance.txt_cfg,
              std::isfinite(sample_params->guidance.img_cfg)
                  ? sample_params->guidance.img_cfg
-                 : 1.0f,
+                 : sample_params->guidance.txt_cfg,
              sample_params->guidance.distilled_guidance,
              sample_params->guidance.slg.layer_count,
              sample_params->guidance.slg.layer_start,
@@ -3338,7 +3338,7 @@ struct GenerationRequest {
         // img_cfg == txt_cfg means that img_cfg is not used
         bool img_cfg_was_unset = !std::isfinite(guidance->img_cfg);
         if (!std::isfinite(guidance->img_cfg)) {
-            guidance->img_cfg = 1.0f;
+            guidance->img_cfg = guidance->txt_cfg;
         }
 
         if (!sd_version_supports_img_cfg(sd_ctx->sd->version, has_ref_images)) {

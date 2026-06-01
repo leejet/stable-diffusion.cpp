@@ -129,7 +129,8 @@ Generation Options:
   --hires-upscale-tile-size <int>          highres fix upscaler tile size, reserved for model-backed upscalers (default:
                                            128)
   --cfg-scale <float>                      unconditional guidance scale: (default: 7.0)
-  --img-cfg-scale <float>                  image guidance scale for inpaint or image edit models: (default: 1.0)
+  --img-cfg-scale <float>                  image guidance scale for inpaint or image edit models: (default: same as
+                                           --cfg-scale)
   --guidance <float>                       distilled guidance scale for models with guidance input (default: 3.5)
   --slg-scale <float>                      skip layer guidance (SLG) scale, only for DiT models: (default: 0). 0 means
                                            disabled, a value of 2.5 is nice for sd3.5 medium
@@ -140,7 +141,7 @@ Generation Options:
   --flow-shift <float>                     shift value for Flow models like SD3.x or WAN (default: auto)
   --high-noise-cfg-scale <float>           (high noise) unconditional guidance scale: (default: 7.0)
   --high-noise-img-cfg-scale <float>       (high noise) image guidance scale for inpaint or image edit models (default:
-                                           1.0)
+                                           same as --cfg-scale)
   --high-noise-guidance <float>            (high noise) distilled guidance scale for models with guidance input
                                            (default: 3.5)
   --high-noise-slg-scale <float>           (high noise) skip layer guidance (SLG) scale, only for DiT models: (default:
