@@ -302,17 +302,24 @@ static ggml_backend_t init_named_backend(const std::string& name) {
 }
 
 bool sd_backend_is_cpu(ggml_backend_t backend) {
+    if (backend == nullptr) {
+        return false;
+    }
     auto dev = ggml_backend_get_device(backend);
-    return ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
+    return dev != nullptr && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
 }
 
 ggml_backend_t sd_backend_cpu_init() {
+    ggml_backend_load_all_once();
     return ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
 }
 
 bool sd_backend_cpu_set_n_threads(ggml_backend_t backend, int n_threads) {
+    if (backend == nullptr) {
+        return false;
+    }
     auto dev = ggml_backend_get_device(backend);
-    if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+    if (dev != nullptr && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
         auto reg                           = ggml_backend_dev_backend_reg(dev);
         auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t)ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
         if (ggml_backend_set_n_threads_fn != nullptr) {

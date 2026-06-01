@@ -972,4 +972,3 @@ std::vector<std::pair<std::string, float>> split_quotation_attention(
     }
     return result;
 }
-
