@@ -47,6 +47,9 @@ enum SDVersion {
     VERSION_Z_IMAGE,
     VERSION_OVIS_IMAGE,
     VERSION_ERNIE_IMAGE,
+    VERSION_LENS,
+    VERSION_LONGCAT,
+    VERSION_PID,
     VERSION_COUNT,
 };
 
@@ -141,6 +144,13 @@ static inline bool sd_version_is_z_image(SDVersion version) {
     return false;
 }
 
+static inline bool sd_version_is_longcat(SDVersion version) {
+    if (version == VERSION_LONGCAT) {
+        return true;
+    }
+    return false;
+}
+
 static inline bool sd_version_is_ernie_image(SDVersion version) {
     if (version == VERSION_ERNIE_IMAGE) {
         return true;
@@ -148,8 +158,22 @@ static inline bool sd_version_is_ernie_image(SDVersion version) {
     return false;
 }
 
+static inline bool sd_version_is_lens(SDVersion version) {
+    if (version == VERSION_LENS) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_is_pid(SDVersion version) {
+    if (version == VERSION_PID) {
+        return true;
+    }
+    return false;
+}
+
 static inline bool sd_version_uses_flux2_vae(SDVersion version) {
-    if (sd_version_is_flux2(version) || sd_version_is_ernie_image(version)) {
+    if (sd_version_is_flux2(version) || sd_version_is_ernie_image(version) || sd_version_is_lens(version)) {
         return true;
     }
     return false;
@@ -176,7 +200,10 @@ static inline bool sd_version_is_dit(SDVersion version) {
         version == VERSION_HIDREAM_O1 ||
         sd_version_is_anima(version) ||
         sd_version_is_z_image(version) ||
-        sd_version_is_ernie_image(version)) {
+        sd_version_is_ernie_image(version) ||
+        sd_version_is_lens(version) ||
+        sd_version_is_longcat(version) ||
+        sd_version_is_pid(version)) {
         return true;
     }
     return false;

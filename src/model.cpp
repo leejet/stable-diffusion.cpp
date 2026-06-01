@@ -410,7 +410,7 @@ bool ModelLoader::init_from_diffusers_file(const std::string& file_path, const s
 }
 
 SDVersion ModelLoader::get_sd_version() {
-    TensorStorage token_embedding_weight, input_block_weight;
+    TensorStorage token_embedding_weight, input_block_weight, context_ebedding_weight;
 
     bool has_multiple_encoders = false;
     bool is_unet               = false;
@@ -428,8 +428,12 @@ SDVersion ModelLoader::get_sd_version() {
     bool has_attn_1024               = false;
 
     for (auto& [name, tensor_storage] : tensor_storage_map) {
-        if (tensor_storage.name.find("model.diffusion_model.double_blocks.") != std::string::npos) {
+        if (tensor_storage.name.find("model.diffusion_model.double_blocks.") != std::string::npos ||
+            tensor_storage.name.find("model.diffusion_model.single_transformer_blocks.") != std::string::npos) {
             is_flux = true;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.net.lq_proj.latent_proj.0.weight") != std::string::npos) {
+            return VERSION_PID;
         }
         if (tensor_storage.name.find("model.diffusion_model.nerf_final_layer_conv.") != std::string::npos) {
             return VERSION_CHROMA_RADIANCE;
@@ -440,6 +444,10 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("model.x_embedder.proj1.weight") != std::string::npos &&
             tensor_storage_map.find("model.language_model.layers.0.self_attn.q_proj.weight") != tensor_storage_map.end()) {
             return VERSION_HIDREAM_O1;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.attn.norm_added_q.weight") != std::string::npos &&
+            tensor_storage_map.find("model.diffusion_model.transformer_blocks.0.img_mlp.w1.weight") != tensor_storage_map.end()) {
+            return VERSION_LENS;
         }
         if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.img_mod.1.weight") != std::string::npos) {
             return VERSION_QWEN_IMAGE;
@@ -522,6 +530,9 @@ SDVersion ModelLoader::get_sd_version() {
             tensor_storage.name == "unet.conv_in.weight") {
             input_block_weight = tensor_storage;
         }
+        if (tensor_storage.name == "model.diffusion_model.txt_in.weight" || tensor_storage.name == "model.diffusion_model.context_embedder.weight") {
+            context_ebedding_weight = tensor_storage;
+        }
     }
     if (is_wan) {
         LOG_DEBUG("patch_embedding_channels %d", patch_embedding_channels);
@@ -552,16 +563,20 @@ SDVersion ModelLoader::get_sd_version() {
     }
 
     if (is_flux && !is_flux2) {
-        if (input_block_weight.ne[0] == 384) {
-            return VERSION_FLUX_FILL;
+        if (context_ebedding_weight.ne[0] == 3584) {
+            return VERSION_LONGCAT;
+        } else {
+            if (input_block_weight.ne[0] == 384) {
+                return VERSION_FLUX_FILL;
+            }
+            if (input_block_weight.ne[0] == 128) {
+                return VERSION_FLUX_CONTROLS;
+            }
+            if (input_block_weight.ne[0] == 196) {
+                return VERSION_FLEX_2;
+            }
+            return VERSION_FLUX;
         }
-        if (input_block_weight.ne[0] == 128) {
-            return VERSION_FLUX_CONTROLS;
-        }
-        if (input_block_weight.ne[0] == 196) {
-            return VERSION_FLEX_2;
-        }
-        return VERSION_FLUX;
     }
 
     if (is_flux2) {
@@ -853,8 +868,13 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
             if (dst_tensor == nullptr)
                 continue;
 
-            if (tensor_storage.type != dst_tensor->type)
+            if (tensor_storage.is_f8_e4m3 ||
+                tensor_storage.is_f8_e5m2 ||
+                tensor_storage.is_f64 ||
+                tensor_storage.is_i64 ||
+                tensor_storage.type != dst_tensor->type) {
                 continue;
+            }
 
             size_t tensor_size   = tensor_storage.nbytes();
             size_t tensor_offset = tensor_storage.offset;
@@ -985,6 +1005,12 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                         t1 = ggml_time_ms();
                         read_time_ms.fetch_add(t1 - t0);
                         continue;
+                    }
+
+                    if (dst_tensor->data == nullptr) {
+                        LOG_ERROR("process tensor data failed: '%s'", tensor_storage.name.c_str());
+                        failed = true;
+                        break;
                     }
 
                     // skip mmapped tensors

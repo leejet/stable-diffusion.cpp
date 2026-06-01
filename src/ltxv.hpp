@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "common_block.hpp"
+#include "diffusion_model.hpp"
 #include "flux.hpp"
 #include "rope.hpp"
 
@@ -1534,8 +1535,7 @@ namespace LTXV {
         }
     };
 
-    struct LTXAVRunner : public GGMLRunner {
-        std::string prefix;
+    struct LTXAVRunner : public DiffusionModelRunner {
         LTXAVParams params;
         LTXAVModelBlock model;
         std::vector<float> video_pe_vec;
@@ -1561,8 +1561,7 @@ namespace LTXV {
                     ggml_backend_t params_backend,
                     const String2TensorStorage& tensor_storage_map = {},
                     const std::string& prefix                      = "model.diffusion_model")
-            : GGMLRunner(backend, params_backend),
-              prefix(prefix),
+            : DiffusionModelRunner(backend, params_backend, prefix),
               params(),
               model(params) {
             auto patchify_proj_iter = tensor_storage_map.find(prefix + ".patchify_proj.weight");
@@ -1673,7 +1672,7 @@ namespace LTXV {
             return "ltxav";
         }
 
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
             model.get_param_tensors(tensors, prefix);
         }
 
@@ -1917,6 +1916,22 @@ namespace LTXV {
             return out;
         }
 
+        sd::Tensor<float> compute(int n_threads,
+                                  const DiffusionParams& diffusion_params) override {
+            GGML_ASSERT(diffusion_params.x != nullptr);
+            GGML_ASSERT(diffusion_params.timesteps != nullptr);
+            const auto* extra = diffusion_extra_as<LTXAVDiffusionExtra>(diffusion_params);
+            return compute(n_threads,
+                           *diffusion_params.x,
+                           *diffusion_params.timesteps,
+                           tensor_or_empty(diffusion_params.context),
+                           tensor_or_empty(extra->audio_x),
+                           tensor_or_empty(extra->audio_timesteps),
+                           extra->audio_length,
+                           extra->frame_rate,
+                           tensor_or_empty(extra->video_positions));
+        }
+
         void test(const std::string& x_path,
                   const std::string& timesteps_path       = "",
                   const std::string& context_path         = "",
@@ -2002,7 +2017,10 @@ namespace LTXV {
                                                                                tensor_storage_map,
                                                                                "model.diffusion_model");
 
-            ltxav->alloc_params_buffer();
+            if (!ltxav->alloc_params_buffer()) {
+                LOG_ERROR("ltxav buffer allocation failed");
+                return;
+            }
             std::map<std::string, ggml_tensor*> tensors;
             ltxav->get_param_tensors(tensors, "model.diffusion_model");
 

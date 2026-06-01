@@ -545,6 +545,30 @@ jobs:
       - name: Pack artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         run: |
+          $ErrorActionPreference = "Stop"
+          $dst = "build\bin"
+          $rocmBin = Join-Path "${env:HIP_PATH}" "bin"
+          $requiredRocmPaths = @(
+            (Join-Path $rocmBin "rocblas.dll"),
+            (Join-Path $rocmBin "rocblas\library")
+          )
+          foreach ($path in $requiredRocmPaths) {
+            if (!(Test-Path $path)) {
+              throw "Missing ROCm runtime dependency: $path"
+            }
+          }
+
+          foreach ($pattern in @("rocblas*.dll", "hipblas*.dll", "libhipblas*.dll")) {
+            Copy-Item -Path (Join-Path $rocmBin $pattern) -Destination $dst -Force -ErrorAction SilentlyContinue
+          }
+
+          foreach ($dir in @("rocblas", "hipblaslt")) {
+            $src = Join-Path $rocmBin $dir
+            if (Test-Path $src) {
+              Copy-Item -Path $src -Destination $dst -Recurse -Force
+            }
+          }
+
           7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip .\build\bin\*
 
       - name: Upload artifacts
@@ -687,16 +711,6 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.15.1
-
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
@@ -753,6 +767,18 @@ jobs:
           echo ROCM_PATH=$ROCM_PATH >> $GITHUB_ENV
           echo PATH=$PATH:$ROCM_PATH/bin >> $GITHUB_ENV
           echo LD_LIBRARY_PATH=$ROCM_PATH/lib:$ROCM_PATH/llvm/lib:$ROCM_PATH/lib/rocprofiler-systems >> $GITHUB_ENV
+
+      # setup-node installs into /opt/hostedtoolcache, which is removed above.
+      # Keep Node/pnpm setup after disk cleanup so the server frontend can be embedded.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
 
       - name: Build
         id: cmake_build

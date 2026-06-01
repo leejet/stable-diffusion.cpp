@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "common_block.hpp"
+#include "diffusion_model.hpp"
 #include "flux.hpp"
 #include "rope.hpp"
 #include "vae.hpp"
@@ -1333,7 +1334,10 @@ namespace WAN {
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
 
-                vae->alloc_params_buffer();
+                if (!vae->alloc_params_buffer()) {
+                    LOG_ERROR("vae buffer allocation failed");
+                    return;
+                }
                 std::map<std::string, ggml_tensor*> tensors;
                 vae->get_param_tensors(tensors, "first_stage_model");
 
@@ -2085,7 +2089,7 @@ namespace WAN {
         }
     };
 
-    struct WanRunner : public GGMLRunner {
+    struct WanRunner : public DiffusionModelRunner {
     public:
         std::string desc = "wan";
         WanParams wan_params;
@@ -2098,7 +2102,7 @@ namespace WAN {
                   const String2TensorStorage& tensor_storage_map = {},
                   const std::string prefix                       = "",
                   SDVersion version                              = VERSION_WAN2)
-            : GGMLRunner(backend, params_backend) {
+            : DiffusionModelRunner(backend, params_backend, prefix) {
             wan_params.num_layers = 0;
             for (auto pair : tensor_storage_map) {
                 std::string tensor_name = pair.first;
@@ -2208,7 +2212,7 @@ namespace WAN {
             return desc;
         }
 
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
             wan.get_param_tensors(tensors, prefix);
         }
 
@@ -2284,6 +2288,22 @@ namespace WAN {
             return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
         }
 
+        sd::Tensor<float> compute(int n_threads,
+                                  const DiffusionParams& diffusion_params) override {
+            GGML_ASSERT(diffusion_params.x != nullptr);
+            GGML_ASSERT(diffusion_params.timesteps != nullptr);
+            const auto* extra = diffusion_extra_as<WanDiffusionExtra>(diffusion_params);
+            return compute(n_threads,
+                           *diffusion_params.x,
+                           *diffusion_params.timesteps,
+                           tensor_or_empty(diffusion_params.context),
+                           tensor_or_empty(diffusion_params.y),
+                           tensor_or_empty(diffusion_params.c_concat),
+                           sd::Tensor<float>(),
+                           tensor_or_empty(extra->vace_context),
+                           extra->vace_strength);
+        }
+
         void test() {
             ggml_init_params params;
             params.mem_size   = static_cast<size_t>(200 * 1024 * 1024);  // 200 MB
@@ -2351,7 +2371,11 @@ namespace WAN {
                                                                          "model.diffusion_model",
                                                                          VERSION_WAN2_2_TI2V);
 
-            wan->alloc_params_buffer();
+            if (!wan->alloc_params_buffer()) {
+                LOG_ERROR("wan buffer allocation failed");
+                return;
+            }
+
             std::map<std::string, ggml_tensor*> tensors;
             wan->get_param_tensors(tensors, "model.diffusion_model");
 

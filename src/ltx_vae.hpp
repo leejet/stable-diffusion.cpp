@@ -153,7 +153,7 @@ namespace LTXVAE {
 
             GGML_ASSERT(x->ne[2] >= temporal_pad);
 
-            int end_idx   = x->ne[2] - temporal_pad;
+            int end_idx   = (int)x->ne[2] - temporal_pad;
             int start_idx = std::max(end_idx - pad, 0);
 
             // Save a contiguous copy of the last `pad` frames so the large `x`
@@ -1534,7 +1534,11 @@ struct LTXVideoVAE : public VAE {
                                                                          true,
                                                                          VERSION_LTXAV);
 
-        vae->alloc_params_buffer();
+        if (!vae->alloc_params_buffer()) {
+            LOG_ERROR("vae buffer allocation failed");
+            return;
+        }
+
         std::map<std::string, ggml_tensor*> tensors;
         vae->get_param_tensors(tensors, "first_stage_model");
 

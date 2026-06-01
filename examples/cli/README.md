@@ -104,9 +104,10 @@ Generation Options:
   --hires-upscaler <string>                highres fix upscaler, Lanczos, Nearest, Latent, Latent (nearest), Latent
                                            (nearest-exact), Latent (antialiased), Latent (bicubic), Latent (bicubic
                                            antialiased), or a model name under --hires-upscalers-dir (default: Latent)
-  --extra-sample-args <string>             extra sampler/scheduler args, key=value list. lcm supports noise_clip_std,
-                                           noise_scale_start, noise_scale_end; ltx2 supports max_shift, base_shift,
-                                           stretch, terminal; euler_ge supports gamma
+  --extra-sample-args <string>             extra sampler/scheduler/guidance args, key=value list. APG supports apg_eta,
+                                           apg_momentum, apg_norm_threshold, apg_norm_threshold_smoothing; SLG supports
+                                           slg_uncond; lcm supports noise_clip_std, noise_scale_start, noise_scale_end;
+                                           ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma
   --extra-tiling-args <string>             extra VAE tiling args, key=value list. LTX video VAE supports
                                            temporal_tile_frames (default: 4), temporal_tile_overlap (default: 1)
   -H, --height <int>                       image height, in pixel space (default: 512)
@@ -128,8 +129,8 @@ Generation Options:
   --hires-upscale-tile-size <int>          highres fix upscaler tile size, reserved for model-backed upscalers (default:
                                            128)
   --cfg-scale <float>                      unconditional guidance scale: (default: 7.0)
-  --img-cfg-scale <float>                  image guidance scale for inpaint or instruct-pix2pix models: (default: same
-                                           as --cfg-scale)
+  --img-cfg-scale <float>                  image guidance scale for inpaint or image edit models: (default: same as
+                                           --cfg-scale)
   --guidance <float>                       distilled guidance scale for models with guidance input (default: 3.5)
   --slg-scale <float>                      skip layer guidance (SLG) scale, only for DiT models: (default: 0). 0 means
                                            disabled, a value of 2.5 is nice for sd3.5 medium
@@ -139,8 +140,8 @@ Generation Options:
                                            res_2s; 1 for euler_a, er_sde and dpm++2s_a)
   --flow-shift <float>                     shift value for Flow models like SD3.x or WAN (default: auto)
   --high-noise-cfg-scale <float>           (high noise) unconditional guidance scale: (default: 7.0)
-  --high-noise-img-cfg-scale <float>       (high noise) image guidance scale for inpaint or instruct-pix2pix models
-                                           (default: same as --cfg-scale)
+  --high-noise-img-cfg-scale <float>       (high noise) image guidance scale for inpaint or image edit models (default:
+                                           same as --cfg-scale)
   --high-noise-guidance <float>            (high noise) distilled guidance scale for models with guidance input
                                            (default: 3.5)
   --high-noise-slg-scale <float>           (high noise) skip layer guidance (SLG) scale, only for DiT models: (default:
@@ -150,7 +151,7 @@ Generation Options:
   --high-noise-eta <float>                 (high noise) noise multiplier (default: 0 for ddim_trailing, tcd,
                                            res_multistep and res_2s; 1 for euler_a, er_sde and dpm++2s_a)
   --strength <float>                       strength for noising/unnoising (default: 0.75)
-  --pm-style-strength <float>              
+  --pm-style-strength <float>
   --control-strength <float>               strength to apply Control Net (default: 0.9). 1.0 corresponds to full
                                            destruction of information in init image
   --moe-boundary <float>                   timestep boundary for Wan2.2 MoE model. (default: 0.875). Only enabled if

@@ -102,7 +102,6 @@ struct ConditionerParams {
     int clip_skip                                    = -1;
     int width                                        = -1;
     int height                                       = -1;
-    int adm_in_channels                              = -1;
     bool zero_out_masked                             = false;
     int num_input_imgs                               = 0;        // for photomaker
     const std::vector<sd::Tensor<float>>* ref_images = nullptr;  // for qwen image edit
@@ -114,7 +113,7 @@ struct Conditioner {
 public:
     virtual SDCondition get_learned_condition(int n_threads,
                                               const ConditionerParams& conditioner_params) = 0;
-    virtual void alloc_params_buffer()                                                     = 0;
+    virtual bool alloc_params_buffer()                                                     = 0;
     virtual void free_params_buffer()                                                      = 0;
     virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors)           = 0;
     virtual size_t get_params_buffer_size()                                                = 0;
@@ -177,11 +176,16 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         }
     }
 
-    void alloc_params_buffer() override {
-        text_model->alloc_params_buffer();
-        if (sd_version_is_sdxl(version)) {
-            text_model2->alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!text_model->alloc_params_buffer()) {
+            return false;
         }
+        if (sd_version_is_sdxl(version)) {
+            if (!text_model2->alloc_params_buffer()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -502,7 +506,6 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                              int clip_skip,
                                              int width,
                                              int height,
-                                             int adm_in_channels  = -1,
                                              bool zero_out_masked = false) {
         int64_t t0 = ggml_time_ms();
         sd::Tensor<float> hidden_states;  // [n_token, hidden_size] or [n_token, hidden_size + hidden_size2]
@@ -588,7 +591,8 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
 
         sd::Tensor<float> vec;
         if (sd_version_is_sdxl(version)) {
-            int out_dim = 256;
+            int out_dim         = 256;
+            int adm_in_channels = 2816;
             GGML_ASSERT(!pooled.empty());
             vec = sd::Tensor<float>({adm_in_channels});
             vec.fill_(0.0f);
@@ -647,7 +651,6 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                                  conditioner_params.clip_skip,
                                                  conditioner_params.width,
                                                  conditioner_params.height,
-                                                 conditioner_params.adm_in_channels,
                                                  conditioner_params.zero_out_masked);
         return std::make_tuple(cond, clsm);
     }
@@ -674,7 +677,6 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                             conditioner_params.clip_skip,
                                             conditioner_params.width,
                                             conditioner_params.height,
-                                            conditioner_params.adm_in_channels,
                                             conditioner_params.zero_out_masked);
     }
 };
@@ -784,16 +786,23 @@ struct SD3CLIPEmbedder : public Conditioner {
         }
     }
 
-    void alloc_params_buffer() override {
+    bool alloc_params_buffer() override {
         if (clip_l) {
-            clip_l->alloc_params_buffer();
+            if (!clip_l->alloc_params_buffer()) {
+                return false;
+            }
         }
         if (clip_g) {
-            clip_g->alloc_params_buffer();
+            if (!clip_g->alloc_params_buffer()) {
+                return false;
+            }
         }
         if (t5) {
-            t5->alloc_params_buffer();
+            if (!t5->alloc_params_buffer()) {
+                return false;
+            }
         }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -1148,13 +1157,18 @@ struct FluxCLIPEmbedder : public Conditioner {
         }
     }
 
-    void alloc_params_buffer() override {
+    bool alloc_params_buffer() override {
         if (clip_l) {
-            clip_l->alloc_params_buffer();
+            if (!clip_l->alloc_params_buffer()) {
+                return false;
+            }
         }
         if (t5) {
-            t5->alloc_params_buffer();
+            if (!t5->alloc_params_buffer()) {
+                return false;
+            }
         }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -1391,10 +1405,13 @@ struct T5CLIPEmbedder : public Conditioner {
         }
     }
 
-    void alloc_params_buffer() override {
+    bool alloc_params_buffer() override {
         if (t5) {
-            t5->alloc_params_buffer();
+            if (!t5->alloc_params_buffer()) {
+                return false;
+            }
         }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -1581,8 +1598,11 @@ struct AnimaConditioner : public Conditioner {
         llm->get_param_tensors(tensors, "text_encoders.llm");
     }
 
-    void alloc_params_buffer() override {
-        llm->alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!llm->alloc_params_buffer()) {
+            return false;
+        }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -1696,11 +1716,19 @@ struct LLMEmbedder : public Conditioner {
             arch = LLM::LLMArch::MISTRAL_SMALL_3_2;
         } else if (sd_version_is_ernie_image(version)) {
             arch = LLM::LLMArch::MINISTRAL_3_3B;
+        } else if (sd_version_is_lens(version)) {
+            arch = LLM::LLMArch::GPT_OSS_20B;
+        } else if (sd_version_is_pid(version)) {
+            arch = LLM::LLMArch::GEMMA2_2B;
         } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
             arch = LLM::LLMArch::QWEN3;
         }
         if (arch == LLM::LLMArch::MISTRAL_SMALL_3_2 || arch == LLM::LLMArch::MINISTRAL_3_3B) {
             tokenizer = std::make_shared<MistralTokenizer>();
+        } else if (arch == LLM::LLMArch::GPT_OSS_20B) {
+            tokenizer = std::make_shared<GPTOSSTokenizer>();
+        } else if (arch == LLM::LLMArch::GEMMA2_2B) {
+            tokenizer = std::make_shared<Gemma2Tokenizer>();
         } else {
             tokenizer = std::make_shared<Qwen2Tokenizer>();
         }
@@ -1716,8 +1744,11 @@ struct LLMEmbedder : public Conditioner {
         llm->get_param_tensors(tensors, "text_encoders.llm");
     }
 
-    void alloc_params_buffer() override {
-        llm->alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!llm->alloc_params_buffer()) {
+            return false;
+        }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -1747,7 +1778,8 @@ struct LLMEmbedder : public Conditioner {
     std::tuple<std::vector<int>, std::vector<float>, std::vector<float>> tokenize(std::string text,
                                                                                   const std::pair<int, int>& attn_range,
                                                                                   size_t min_length = 0,
-                                                                                  size_t max_length = 100000000) {
+                                                                                  size_t max_length = 100000000,
+                                                                                  bool spell_quotes = false) {
         std::vector<std::pair<std::string, float>> parsed_attention;
         if (attn_range.first >= 0 && attn_range.second > 0) {
             if (attn_range.first > 0) {
@@ -1755,6 +1787,9 @@ struct LLMEmbedder : public Conditioner {
             }
             if (attn_range.second - attn_range.first > 0) {
                 auto new_parsed_attention = parse_prompt_attention(text.substr(attn_range.first, attn_range.second - attn_range.first));
+                if (spell_quotes) {
+                    new_parsed_attention = split_quotation_attention(new_parsed_attention);
+                }
                 parsed_attention.insert(parsed_attention.end(),
                                         new_parsed_attention.begin(),
                                         new_parsed_attention.end());
@@ -1804,8 +1839,10 @@ struct LLMEmbedder : public Conditioner {
                                     int hidden_states_min_length,
                                     const std::vector<std::pair<int, sd::Tensor<float>>>& image_embeds,
                                     const std::set<int>& out_layers,
-                                    int prompt_template_encode_start_idx) {
-        auto tokens_weights_mask = tokenize(prompt, prompt_attn_range, min_length);
+                                    int prompt_template_encode_start_idx,
+                                    bool spell_quotes = false,
+                                    int max_length    = 100000000) {
+        auto tokens_weights_mask = tokenize(prompt, prompt_attn_range, min_length, max_length, spell_quotes);
         auto& tokens             = std::get<0>(tokens_weights_mask);
         auto& weights            = std::get<1>(tokens_weights_mask);
         auto& mask               = std::get<2>(tokens_weights_mask);
@@ -1813,12 +1850,16 @@ struct LLMEmbedder : public Conditioner {
         sd::Tensor<int32_t> input_ids({static_cast<int64_t>(tokens.size())}, tokens);
         sd::Tensor<float> attention_mask;
         if (!mask.empty()) {
-            attention_mask = sd::Tensor<float>({static_cast<int64_t>(mask.size()), static_cast<int64_t>(mask.size())});
+            attention_mask                     = sd::Tensor<float>({static_cast<int64_t>(mask.size()), static_cast<int64_t>(mask.size())});
+            const float masked_attention_value = -std::numeric_limits<float>::max() / 4.0f;
             for (size_t i1 = 0; i1 < mask.size(); ++i1) {
                 for (size_t i0 = 0; i0 < mask.size(); ++i0) {
                     float value = 0.0f;
-                    if (mask[i0] == 0.0f || i0 > i1) {
-                        value = -INFINITY;
+                    if (mask[i0] == 0.0f) {
+                        value += masked_attention_value;
+                    }
+                    if (i0 > i1) {
+                        value += masked_attention_value;
                     }
                     attention_mask[static_cast<int64_t>(i0 + mask.size() * i1)] = value;
                 }
@@ -1865,7 +1906,9 @@ struct LLMEmbedder : public Conditioner {
         std::vector<std::pair<int, sd::Tensor<float>>> image_embeds;
         int prompt_template_encode_start_idx = 34;
         int min_length                       = 0;  // pad tokens
+        int max_length                       = 100000000;
         int hidden_states_min_length         = 0;  // zero pad hidden_states
+        bool spell_quotes                    = false;
         std::set<int> out_layers;
 
         int64_t t0 = ggml_time_ms();
@@ -1938,6 +1981,71 @@ struct LLMEmbedder : public Conditioner {
 
                 prompt += "<|im_end|>\n<|im_start|>assistant\n";
             }
+        } else if (sd_version_is_longcat(version)) {
+            spell_quotes = true;
+
+            if (llm->enable_vision && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
+                LOG_INFO("LongCatEditPipeline");
+                prompt_template_encode_start_idx = 67;
+                min_length                       = 512 + prompt_template_encode_start_idx;
+                int image_embed_idx              = 36 + 6;
+
+                int min_pixels          = 384 * 384;
+                int max_pixels          = 560 * 560;
+                std::string placeholder = "<|image_pad|>";
+                std::string img_prompt;
+
+                for (int i = 0; i < conditioner_params.ref_images->size(); i++) {
+                    const auto& image = (*conditioner_params.ref_images)[i];
+                    double factor     = llm->params.vision.patch_size * llm->params.vision.spatial_merge_size;
+                    int height        = static_cast<int>(image.shape()[1]);
+                    int width         = static_cast<int>(image.shape()[0]);
+                    int h_bar         = static_cast<int>(std::round(height / factor) * factor);
+                    int w_bar         = static_cast<int>(std::round(width / factor) * factor);
+
+                    if (static_cast<double>(h_bar) * w_bar > max_pixels) {
+                        double beta = std::sqrt((height * width) / static_cast<double>(max_pixels));
+                        h_bar       = std::max(static_cast<int>(factor),
+                                               static_cast<int>(std::floor(height / beta / factor)) * static_cast<int>(factor));
+                        w_bar       = std::max(static_cast<int>(factor),
+                                               static_cast<int>(std::floor(width / beta / factor)) * static_cast<int>(factor));
+                    } else if (static_cast<double>(h_bar) * w_bar < min_pixels) {
+                        double beta = std::sqrt(static_cast<double>(min_pixels) / (height * width));
+                        h_bar       = static_cast<int>(std::ceil(height * beta / factor)) * static_cast<int>(factor);
+                        w_bar       = static_cast<int>(std::ceil(width * beta / factor)) * static_cast<int>(factor);
+                    }
+
+                    LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
+
+                    auto resized_image = clip_preprocess(image, w_bar, h_bar);
+                    auto image_embed   = llm->encode_image(n_threads, resized_image);
+                    GGML_ASSERT(!image_embed.empty());
+                    image_embeds.emplace_back(image_embed_idx, image_embed);
+                    image_embed_idx += 1 + static_cast<int>(image_embed.shape()[1]) + 6;
+
+                    img_prompt += "<|vision_start|>";
+                    int64_t num_image_tokens = image_embed.shape()[1];
+                    img_prompt.reserve(num_image_tokens * placeholder.size());
+                    for (int j = 0; j < num_image_tokens; j++) {
+                        img_prompt += placeholder;
+                    }
+                    img_prompt += "<|vision_end|>";
+                }
+
+                prompt = "<|im_start|>system\nAs an image editing expert, first analyze the content and attributes of the input image(s). Then, based on the user's editing instructions, clearly and precisely determine how to modify the given image(s), ensuring that only the specified parts are altered and all other aspects remain consistent with the original(s).<|im_end|>\n<|im_start|>user\n";
+                prompt += img_prompt;
+            } else {
+                prompt_template_encode_start_idx = 36;
+                min_length                       = 512 + prompt_template_encode_start_idx;
+
+                prompt = "<|im_start|>system\nAs an image captioning expert, generate a descriptive text prompt based on an image content, suitable for input to a text-to-image model.<|im_end|>\n<|im_start|>user\n";
+            }
+
+            prompt_attn_range.first = static_cast<int>(prompt.size());
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+
+            prompt += "<|im_end|>\n<|im_start|>assistant\n";
         } else if (version == VERSION_FLUX2) {
             prompt_template_encode_start_idx = 0;
             hidden_states_min_length         = 512;
@@ -1957,6 +2065,30 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.first = 0;
             prompt += conditioner_params.text;
             prompt_attn_range.second = static_cast<int>(prompt.size());
+        } else if (sd_version_is_lens(version)) {
+            prompt_template_encode_start_idx = 97;
+            min_length                       = 0;
+            max_length                       = 512;
+            out_layers                       = {6, 12, 18, 24};
+
+            prompt =
+                "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\n"
+                "Knowledge cutoff: 2024-06\n"
+                "Current date: 2026-05-26\n"  // fix for current date
+                "\n"
+                "Reasoning: medium\n"
+                "\n"
+                "# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions\n"
+                "\n"
+                "Describe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background.\n"
+                "\n"
+                "<|end|><|start|>user<|message|>";
+
+            prompt_attn_range.first = static_cast<int>(prompt.size());
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+
+            prompt += "<|end|><|start|>assistant<|channel|>analysis<|message|>Need to generate one image according to the description.<|end|><|start|>assistant<|channel|>final<|message|>";
         } else if (sd_version_is_z_image(version)) {
             prompt_template_encode_start_idx = 0;
             out_layers                       = {35};  // -2
@@ -2001,6 +2133,53 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.second = static_cast<int>(prompt.size());
 
             prompt += "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
+        } else if (sd_version_is_pid(version)) {
+            constexpr int pixeldit_max_length = 300;
+            const std::string chi_prompt =
+                "Given a user prompt, generate an \"Enhanced prompt\" that provides detailed visual descriptions suitable for image generation. Evaluate the level of detail in the user prompt:\n"
+                "- If the prompt is simple, focus on adding specifics about colors, shapes, sizes, textures, and spatial relationships to create vivid and concrete scenes.\n"
+                "- If the prompt is already detailed, refine and enhance the existing details slightly without overcomplicating.\n"
+                "Here are examples of how to transform or refine prompts:\n"
+                "- User Prompt: A cat sleeping -> Enhanced: A small, fluffy white cat curled up in a round shape, sleeping peacefully on a warm sunny windowsill, surrounded by pots of blooming red flowers.\n"
+                "- User Prompt: A busy city street -> Enhanced: A bustling city street scene at dusk, featuring glowing street lamps, a diverse crowd of people in colorful clothing, and a double-decker bus passing by towering glass skyscrapers.\n"
+                "Please generate only the enhanced description for the prompt below and avoid including any additional commentary or evaluations:\n"
+                "User Prompt: ";
+            auto chi_tokens       = std::get<0>(tokenize(chi_prompt, {0, 0}));
+            size_t num_chi_tokens = chi_tokens.size();
+            max_length            = (int)num_chi_tokens + pixeldit_max_length - 2;
+            min_length            = max_length;
+
+            prompt_attn_range.first = static_cast<int>(prompt.size());
+            prompt += " " + conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+
+            auto hidden_states = encode_prompt(n_threads,
+                                               prompt,
+                                               prompt_attn_range,
+                                               min_length,
+                                               0,
+                                               image_embeds,
+                                               out_layers,
+                                               0,
+                                               false,
+                                               max_length);
+            GGML_ASSERT(!hidden_states.empty());
+
+            if (hidden_states.shape()[1] > pixeldit_max_length) {
+                auto bos      = sd::ops::slice(hidden_states, 1, 0, 1);
+                auto tail     = sd::ops::slice(hidden_states,
+                                               1,
+                                               hidden_states.shape()[1] - (pixeldit_max_length - 1),
+                                               hidden_states.shape()[1]);
+                hidden_states = sd::ops::concat(bos, tail, 1);
+            }
+
+            int64_t t1 = ggml_time_ms();
+            LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
+
+            SDCondition result;
+            result.c_crossattn = std::move(hidden_states);
+            return result;
         } else {
             GGML_ABORT("unknown version %d", version);
         }
@@ -2012,7 +2191,9 @@ struct LLMEmbedder : public Conditioner {
                                            hidden_states_min_length,
                                            image_embeds,
                                            out_layers,
-                                           prompt_template_encode_start_idx);
+                                           prompt_template_encode_start_idx,
+                                           spell_quotes,
+                                           max_length);
         std::vector<sd::Tensor<float>> extra_hidden_states_vec;
         for (int i = 0; i < extra_prompts.size(); i++) {
             auto extra_hidden_states = encode_prompt(n_threads,
@@ -2022,7 +2203,9 @@ struct LLMEmbedder : public Conditioner {
                                                      hidden_states_min_length,
                                                      image_embeds,
                                                      out_layers,
-                                                     prompt_template_encode_start_idx);
+                                                     prompt_template_encode_start_idx,
+                                                     spell_quotes,
+                                                     max_length);
             extra_hidden_states_vec.push_back(std::move(extra_hidden_states));
         }
 
@@ -2137,9 +2320,14 @@ struct LTXAVEmbedder : public Conditioner {
         projector->get_param_tensors(tensors, "text_embedding_projection");
     }
 
-    void alloc_params_buffer() override {
-        llm->alloc_params_buffer();
-        projector->alloc_params_buffer();
+    bool alloc_params_buffer() override {
+        if (!llm->alloc_params_buffer()) {
+            return false;
+        }
+        if (!projector->alloc_params_buffer()) {
+            return false;
+        }
+        return true;
     }
 
     void free_params_buffer() override {
@@ -2154,6 +2342,11 @@ struct LTXAVEmbedder : public Conditioner {
     void set_flash_attention_enabled(bool enabled) override {
         llm->set_flash_attention_enabled(enabled);
         projector->set_flash_attention_enabled(enabled);
+    }
+
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        llm->set_max_graph_vram_bytes(max_vram_bytes);
+        projector->set_max_graph_vram_bytes(max_vram_bytes);
     }
 
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {

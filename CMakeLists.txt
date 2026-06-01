@@ -22,6 +22,31 @@ endif()
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+if(APPLE)
+    function(sd_set_macos_rpaths target)
+        get_target_property(target_type ${target} TYPE)
+        if(target_type STREQUAL "EXECUTABLE")
+            set(runtime_paths "@executable_path" "@executable_path/../lib")
+        elseif(target_type STREQUAL "SHARED_LIBRARY" OR target_type STREQUAL "MODULE_LIBRARY")
+            set(runtime_paths "@loader_path" "@loader_path/../lib")
+            set_target_properties(${target} PROPERTIES
+                MACOSX_RPATH ON
+                INSTALL_NAME_DIR "@rpath"
+                BUILD_WITH_INSTALL_NAME_DIR ON
+            )
+        else()
+            return()
+        endif()
+
+        # Release artifacts zip the build output directly, so keep macOS rpaths relocatable.
+        set_target_properties(${target} PROPERTIES
+            BUILD_RPATH "${runtime_paths}"
+            INSTALL_RPATH "${runtime_paths}"
+            BUILD_WITH_INSTALL_RPATH ON
+        )
+    endfunction()
+endif()
+
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(SD_STANDALONE ON)
 else()
@@ -235,6 +260,10 @@ else()
         set(BUILD_SHARED_LIBS OFF)
     endif()
     add_library(${SD_LIB} STATIC ${SD_LIB_SOURCES})
+endif()
+
+if(APPLE)
+    sd_set_macos_rpaths(${SD_LIB})
 endif()
 
 if(SD_SYCL)
