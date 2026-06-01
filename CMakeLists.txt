@@ -125,6 +125,12 @@ endif ()
 if (SD_HIPBLAS)
     message("-- Use HIPBLAS as backend stable-diffusion")
     set(GGML_HIP ON)
+    # ggml-hip's device-stub objects must be position-independent, or the
+    # default-PIE sd-cli link fails with `relocation R_X86_64_32 ... cannot be
+    # used when making a PIE object` on distros that default to PIE
+    # (Ubuntu 24.04, Fedora 40+, Debian 12+). The shared-library branch below
+    # already sets this; the static build (the HIP default) did not.
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 endif ()
 
 if(SD_MUSA)
