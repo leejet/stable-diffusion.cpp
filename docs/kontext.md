@@ -16,7 +16,7 @@ You can run Kontext using stable-diffusion.cpp with a GPU that has 6GB or even 4
 You can download the preconverted gguf weights from [FLUX.1-Kontext-dev-GGUF](https://huggingface.co/QuantStack/FLUX.1-Kontext-dev-GGUF), this way you don't have to do the conversion yourself.
 
 ```
-.\bin\Release\sd.exe -M convert -m ..\..\ComfyUI\models\unet\flux1-kontext-dev.safetensors -o ..\models\flux1-kontext-dev-q8_0.gguf -v --type q8_0
+.\bin\Release\sd-cli.exe -M convert -m ..\..\ComfyUI\models\unet\flux1-kontext-dev.safetensors -o ..\models\flux1-kontext-dev-q8_0.gguf -v --type q8_0
 ```
 
 ## Run
@@ -27,7 +27,7 @@ You can download the preconverted gguf weights from [FLUX.1-Kontext-dev-GGUF](ht
 For example:
 
 ```
- .\bin\Release\sd.exe -r .\flux1-dev-q8_0.png --diffusion-model  ..\models\flux1-kontext-dev-q8_0.gguf --vae ..\models\ae.sft --clip_l ..\models\clip_l.safetensors --t5xxl ..\models\t5xxl_fp16.safetensors -p "change 'flux.cpp' to 'kontext.cpp'" --cfg-scale 1.0 --sampling-method euler -v --clip-on-cpu
+ .\bin\Release\sd-cli.exe -r .\flux1-dev-q8_0.png --diffusion-model  ..\models\flux1-kontext-dev-q8_0.gguf --vae ..\models\ae.sft --clip_l ..\models\clip_l.safetensors --t5xxl ..\models\t5xxl_fp16.safetensors -p "change 'flux.cpp' to 'kontext.cpp'" --cfg-scale 1.0 --sampling-method euler -v --clip-on-cpu
 ```
 
 

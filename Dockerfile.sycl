@@ -1,4 +1,5 @@
-ARG SYCL_VERSION=2025.1.0-0
+# ggml SYCL hardware detection uses BMG G31/WCL architecture enums added in oneAPI 2025.3.
+ARG SYCL_VERSION=2025.3.2-0
 
 FROM intel/oneapi-basekit:${SYCL_VERSION}-devel-ubuntu24.04 AS build
 
@@ -14,6 +15,7 @@ RUN mkdir build && cd build && \
 
 FROM intel/oneapi-basekit:${SYCL_VERSION}-devel-ubuntu24.04 AS runtime
 
-COPY --from=build /sd.cpp/build/bin/sd /sd
+COPY --from=build /sd.cpp/build/bin/sd-cli /sd-cli
+COPY --from=build /sd.cpp/build/bin/sd-server /sd-server
 
-ENTRYPOINT [ "/sd" ]
+ENTRYPOINT [ "/sd-cli" ]
