@@ -1699,10 +1699,7 @@ protected:
     ggml_backend_buffer_t partial_runtime_params_buffer = nullptr;
     std::vector<std::pair<ggml_tensor*, ggml_tensor*>> partial_offload_pairs;
 
-    // chunk-K residency: GPU-resident params shared across streaming
-    // segments. offload_partial_params() skips tensors in
-    // resident_param_set so the per-segment offload track does not tear
-    // down the resident buffer-swap.
+    // Params kept on the runtime backend across streaming segments.
     ggml_context* resident_offload_ctx = nullptr;
     std::vector<std::pair<ggml_tensor*, ggml_tensor*>> resident_offload_pairs;
     ggml_backend_buffer_t resident_runtime_params_buffer = nullptr;
@@ -2181,7 +2178,7 @@ protected:
                 continue;
             }
             if (resident_param_set.find(tensor) != resident_param_set.end()) {
-                continue;  // already resident on GPU via the chunk-K track
+                continue;
             }
             if (seen_tensors.insert(tensor).second) {
                 unique_tensors.push_back(tensor);
@@ -2305,9 +2302,6 @@ protected:
         }
     }
 
-    // chunk-K: load params onto the runtime backend and keep them resident
-    // across compute() calls. Caller must release any prior resident set
-    // via restore_resident_params() first.
     bool offload_resident_params(const std::vector<ggml_tensor*>& tensors) {
         if (params_backend == runtime_backend) {
             return true;
@@ -2434,10 +2428,7 @@ protected:
         GGML_ASSERT(plan_out != nullptr);
         GGML_ASSERT(gf != nullptr);
 
-        // Start from the user-set budget. When streaming is on, clamp to actual
-        // free VRAM at this moment so we don't overcommit when another runner
-        // (e.g. the LLM in cond_stage) already grabbed a chunk-K resident set
-        // earlier in the generation.
+        // Keep the plan and resident params under the same live-VRAM cap.
         size_t effective_budget = max_graph_vram_bytes;
         if (stream_layers_enabled && max_graph_vram_bytes > 0 && runtime_backend != nullptr) {
             ggml_backend_dev_t dev = ggml_backend_get_device(runtime_backend);
@@ -2808,10 +2799,6 @@ protected:
     }
 
 public:
-    // Release chunk-K resident params held across compute() calls. Safe to
-    // call at any point — if no resident state exists this is a no-op.
-    // stable-diffusion.cpp uses this to evict the diffusion model's resident
-    // set before VAE decode so VAE has VRAM for its compute buffer.
     void release_streaming_residency() {
         restore_resident_params();
     }
@@ -2825,14 +2812,8 @@ public:
                                                             bool                no_return = false) {
         GGML_ASSERT(gf != nullptr);
 
-        // chunk-K residency: annotate the BASE plan (per-layer granularity) and
-        // offload its first-K segments' params once. Compute itself proceeds on
-        // the MERGED plan (`plan`) for fused-graph efficiency; offload_partial_params
-        // Runtime weight_adapter (e.g. LoRA in at-runtime mode) mutates the
-        // CPU weight data between compute calls. The chunk-K resident GPU
-        // copy is snapshotted once at offload, so it would go stale; the
-        // state_token only hashes tensor pointers and cannot detect this.
-        // Release any resident set and skip rebuild in that case.
+        // Runtime LoRA mutates CPU weights between calls, so resident GPU
+        // copies would go stale.
         if (weight_adapter != nullptr) {
             restore_resident_params();
         } else {
@@ -2871,8 +2852,6 @@ public:
         free_compute_buffer();
         free_cache_ctx_and_buffer();
 
-        // Tensors not associated with any segment (the "_global" group holds
-        // head/tail params) move to GPU once for the full run.
         layer_registry_.move_layer_to_gpu("_global");
 
         std::unordered_map<ggml_tensor*, PersistentExternalBinding> persistent_externals;
@@ -2892,10 +2871,6 @@ public:
                       segment.group_name.c_str(),
                       segment.residency == sd::ggml_graph_cut::SegmentResidency::RESIDENT ? "RESIDENT" : "STREAMED");
 
-            // Move this segment's layer group onto GPU (skipped for resident
-            // groups already loaded). Registry is currently unpopulated at
-            // runtime, so this is a harmless no-op until chunk-K residency
-            // lands in a later task.
             if (!layer_registry_.move_layer_to_gpu(segment.group_name)) {
                 LOG_DEBUG("%s streaming: no registry entry for group '%s' (using upstream offload path)",
                           get_desc().c_str(),
@@ -2939,8 +2914,6 @@ public:
             }
             output = std::move(segment_output);
 
-            // Evict this segment's layer group when streaming. Resident groups
-            // stay loaded for the next sampling step.
             if (segment.residency == sd::ggml_graph_cut::SegmentResidency::STREAMED) {
                 layer_registry_.move_layer_to_cpu(segment.group_name);
             }
@@ -3040,10 +3013,7 @@ public:
     }
 
     void free_params_buffer() {
-        // If chunk-K residency is active, our swap pointers reference the
-        // params backend buffer. Tear it down BEFORE freeing the params
-        // buffer so the swapped-back tensors don't end up with dangling
-        // pointers to a freed buffer.
+        // Restore swapped resident params before freeing their backing buffer.
         restore_resident_params();
         if (params_buffer != nullptr) {
             ggml_backend_buffer_free(params_buffer);

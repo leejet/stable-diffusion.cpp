@@ -754,11 +754,7 @@ namespace sd::ggml_graph_cut {
     }
 
     void annotate_residency(Plan& plan, size_t max_graph_vram_bytes) {
-        // Reset any RESIDENT marks from a prior call before considering the
-        // new budget. The plan is cached across compute() invocations and
-        // the budget changes per-call (free-VRAM clamp, runner state, etc.);
-        // without this reset, segments marked RESIDENT under a larger budget
-        // would persist when the budget shrinks.
+        // Cached plans may be reused with a smaller live budget.
         for (auto& seg : plan.segments) {
             seg.residency = SegmentResidency::STREAMED;
         }
@@ -766,7 +762,6 @@ namespace sd::ggml_graph_cut {
             return;
         }
 
-        // Sanity: skip if no segment carries any params.
         bool any_param_bearing = false;
         for (const auto& seg : plan.segments) {
             if (seg.input_param_bytes > 0) {
@@ -778,10 +773,7 @@ namespace sd::ggml_graph_cut {
             return;
         }
 
-        // Model the active streamed segment's real footprint instead of a
-        // fixed reserve: params + compute buffer + output + boundary-cut
-        // inputs. The largest such footprint over the plan is the headroom
-        // the resident set must leave free.
+        // Leave room for the largest active streamed segment.
         size_t worst_streamed_footprint = 0;
         for (const auto& seg : plan.segments) {
             const size_t seg_footprint = seg.input_param_bytes +
@@ -801,9 +793,6 @@ namespace sd::ggml_graph_cut {
         }
         const size_t available = max_graph_vram_bytes - reserved;
 
-        // Greedily mark segments RESIDENT from the start until we exceed the
-        // available budget. Honors heterogeneous segment sizes (small prelude +
-        // larger transformer layers) better than dividing by a single estimate.
         size_t cumulative = 0;
         for (auto& seg : plan.segments) {
             if (cumulative + seg.input_param_bytes > available) {

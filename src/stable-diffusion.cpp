@@ -233,11 +233,6 @@ public:
 
     bool init_backend(const sd_ctx_params_t* sd_ctx_params) {
         std::string error;
-        // Use the member offload_params_to_cpu (not sd_ctx_params->...) so the
-        // auto-enable in init() (when --stream-layers is set without explicit
-        // params placement) actually reaches backend_manager. Otherwise the
-        // log says "enabling --offload-to-cpu implicitly" but params still
-        // get allocated on the runtime backend.
         if (!backend_manager.init(sd_ctx_params->backend,
                                   sd_ctx_params->params_backend,
                                   offload_params_to_cpu,
@@ -271,16 +266,11 @@ public:
         backend_spec            = SAFE_STR(sd_ctx_params->backend);
         params_backend_spec     = SAFE_STR(sd_ctx_params->params_backend);
         if (stream_layers && max_vram == 0.f) {
-            // max_vram == 0 means "disabled"; negative values mean
-            // "auto-detect (free VRAM minus |max_vram| GiB)" and are
-            // resolved later in ggml_graph_cut::resolve_auto_max_vram_bytes.
             LOG_WARN("--stream-layers has no effect without --max-vram set; ignoring");
             stream_layers = false;
         }
         if (stream_layers && !offload_params_to_cpu && params_backend_spec.empty()) {
-            // Streaming needs weights on CPU to stream from. Mirror the
-            // --max-vram-missing branch above: warn and disable instead of
-            // silently flipping the caller's offload-to-cpu setting.
+            // Streaming needs CPU-resident params.
             LOG_WARN("--stream-layers has no effect without --offload-to-cpu (or --params-backend); ignoring");
             stream_layers = false;
         }
@@ -462,15 +452,7 @@ public:
                     }
                 }
             }
-            // Immediate mode bakes LoRA into weights at load time by running
-            // a forward pass over EVERY weight tensor. That allocates a full-
-            // model-sized compute buffer (~11 GB for Z-Image bf16) on the
-            // runtime backend. On VRAM-constrained setups (--offload-to-cpu
-            // and/or --stream-layers, i.e. the whole reason streaming exists),
-            // that allocation OOMs — so AUTO must pick runtime there instead.
-            // Runtime mode is correct but slower because chunk-K residency
-            // is skipped while a weight_adapter is attached (see
-            // compute_streaming_segments).
+            // Avoid full-model LoRA merge buffers on constrained setups.
             const bool streaming_constrained = stream_layers ||
                                                sd_ctx_params->offload_params_to_cpu;
             if (have_quantized_weight || streaming_constrained) {
@@ -2398,8 +2380,7 @@ public:
         if (sd_version_is_pid(version)) {
             return sd::ops::clamp((x + 1.f) * 0.5f, 0.0f, 1.0f);
         }
-        // chunk-K residency held across sampling steps starves VAE decode
-        // of VRAM for its compute buffer; release it before decode.
+        // Free resident diffusion params before VAE allocates its compute buffer.
         if (stream_layers) {
             if (diffusion_model) {
                 diffusion_model->release_streaming_residency();
