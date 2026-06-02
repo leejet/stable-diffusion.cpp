@@ -471,7 +471,7 @@ public:
             // Runtime mode is correct but slower because chunk-K residency
             // is skipped while a weight_adapter is attached (see
             // compute_streaming_segments).
-            const bool streaming_constrained = sd_ctx_params->stream_layers ||
+            const bool streaming_constrained = stream_layers ||
                                                sd_ctx_params->offload_params_to_cpu;
             if (have_quantized_weight || streaming_constrained) {
                 apply_lora_immediately = false;
