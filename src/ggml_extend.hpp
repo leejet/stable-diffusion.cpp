@@ -2432,12 +2432,17 @@ protected:
         GGML_ASSERT(gf != nullptr);
 
         // Keep the plan and resident params under the same live-VRAM cap.
+        // Add back our own resident buffer so we don't see chunk-K's
+        // allocation as "taken" VRAM and shrink the budget on every step.
         size_t effective_budget = max_graph_vram_bytes;
         if (stream_layers_enabled && max_graph_vram_bytes > 0 && runtime_backend != nullptr) {
             ggml_backend_dev_t dev = ggml_backend_get_device(runtime_backend);
             if (dev != nullptr && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
                 size_t free_vram = 0, total_vram = 0;
                 ggml_backend_dev_memory(dev, &free_vram, &total_vram);
+                if (resident_runtime_params_buffer != nullptr) {
+                    free_vram += ggml_backend_buffer_get_size(resident_runtime_params_buffer);
+                }
                 constexpr size_t safety_margin = 512ull * 1024 * 1024;
                 size_t free_clamp              = (free_vram > safety_margin) ? (free_vram - safety_margin) : 0;
                 if (free_clamp < effective_budget) {
@@ -2815,39 +2820,36 @@ public:
                                                             bool no_return = false) {
         GGML_ASSERT(gf != nullptr);
 
-        // Runtime LoRA mutates CPU weights between calls, so resident GPU
-        // copies would go stale.
-        if (weight_adapter != nullptr) {
-            restore_resident_params();
-        } else {
-            sd::ggml_graph_cut::Plan& base_plan = graph_cut_plan_cache_.graph_cut_plan;
-            if (base_plan.available) {
-                sd::ggml_graph_cut::annotate_residency(base_plan, residency_budget_bytes);
+        // Runtime LoRA composes `weight + diff` in the compute graph via
+        // ggml_add; the resident weight tensor's data is never mutated, so
+        // chunk-K residency stays valid across sampling steps.
+        sd::ggml_graph_cut::Plan& base_plan = graph_cut_plan_cache_.graph_cut_plan;
+        if (base_plan.available) {
+            sd::ggml_graph_cut::annotate_residency(base_plan, residency_budget_bytes);
 
-                std::vector<ggml_tensor*> resident_params;
-                uint64_t token = 0;
-                for (const auto& segment : base_plan.segments) {
-                    if (segment.residency != sd::ggml_graph_cut::SegmentResidency::RESIDENT) {
-                        continue;
-                    }
-                    auto seg_params = sd::ggml_graph_cut::param_tensors(gf, segment);
-                    for (ggml_tensor* t : seg_params) {
-                        if (t == nullptr)
-                            continue;
-                        resident_params.push_back(t);
-                        token ^= reinterpret_cast<uintptr_t>(t) * 0x9E3779B97F4A7C15ull;
-                    }
+            std::vector<ggml_tensor*> resident_params;
+            uint64_t token = 0;
+            for (const auto& segment : base_plan.segments) {
+                if (segment.residency != sd::ggml_graph_cut::SegmentResidency::RESIDENT) {
+                    continue;
                 }
-                if (token != resident_state_token) {
-                    restore_resident_params();
-                    if (!resident_params.empty()) {
-                        if (offload_resident_params(resident_params)) {
-                            resident_state_token = token;
-                        } else {
-                            LOG_ERROR("%s chunk-K: resident offload failed; continuing with per-segment streaming",
-                                      get_desc().c_str());
-                            restore_resident_params();
-                        }
+                auto seg_params = sd::ggml_graph_cut::param_tensors(gf, segment);
+                for (ggml_tensor* t : seg_params) {
+                    if (t == nullptr)
+                        continue;
+                    resident_params.push_back(t);
+                    token ^= reinterpret_cast<uintptr_t>(t) * 0x9E3779B97F4A7C15ull;
+                }
+            }
+            if (token != resident_state_token) {
+                restore_resident_params();
+                if (!resident_params.empty()) {
+                    if (offload_resident_params(resident_params)) {
+                        resident_state_token = token;
+                    } else {
+                        LOG_ERROR("%s chunk-K: resident offload failed; continuing with per-segment streaming",
+                                  get_desc().c_str());
+                        restore_resident_params();
                     }
                 }
             }
