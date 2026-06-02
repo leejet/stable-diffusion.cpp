@@ -1443,7 +1443,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_group_norm(ggml_context* ctx,
 
 __STATIC_INLINE__ void ggml_ext_backend_tensor_get_and_sync(ggml_backend_t backend, const ggml_tensor* tensor, void* data, size_t offset, size_t size) {
     if ((sd_backend_is(backend, "ROCm") || sd_backend_is(backend, "CUDA") || sd_backend_is(backend, "SYCL")) &&
-        !ggml_backend_is_cpu(backend)) {
+        !sd_backend_is_cpu(backend)) {
         ggml_backend_tensor_get_async(backend, tensor, data, offset, size);
         ggml_backend_synchronize(backend);
         return;
@@ -1914,7 +1914,7 @@ protected:
         LOG_DEBUG("%s compute buffer size: %.2f MB(%s)",
                   get_desc().c_str(),
                   compute_buffer_size / 1024.0 / 1024.0,
-                  ggml_backend_is_cpu(runtime_backend) ? "RAM" : "VRAM");
+                  sd_backend_is_cpu(runtime_backend) ? "RAM" : "VRAM");
         return true;
     }
 
@@ -2001,7 +2001,7 @@ protected:
         LOG_DEBUG("%s cache backend buffer size = % 6.2f MB(%s) (%i tensors)",
                   get_desc().c_str(),
                   cache_buffer_size / (1024.f * 1024.f),
-                  ggml_backend_is_cpu(runtime_backend) ? "RAM" : "VRAM",
+                  sd_backend_is_cpu(runtime_backend) ? "RAM" : "VRAM",
                   num_tensors);
         if (old_cache_buffer != nullptr) {
             ggml_backend_buffer_free(old_cache_buffer);
@@ -2419,13 +2419,13 @@ protected:
                max_graph_vram_bytes > 0 &&
                plan.segments.size() > 1 &&
                params_backend != runtime_backend &&
-               !ggml_backend_is_cpu(runtime_backend);
+               !sd_backend_is_cpu(runtime_backend);
     }
 
     bool can_attempt_graph_cut_segmented_compute() const {
         return max_graph_vram_bytes > 0 &&
                params_backend != runtime_backend &&
-               !ggml_backend_is_cpu(runtime_backend);
+               !sd_backend_is_cpu(runtime_backend);
     }
 
     bool resolve_graph_cut_plan(ggml_cgraph* gf,
@@ -2634,8 +2634,8 @@ protected:
         int64_t t_copy_begin = ggml_time_ms();
         copy_data_to_backend_tensor(gf, !preserve_backend_tensor_data_map);
         int64_t t_copy_end = ggml_time_ms();
-        if (ggml_backend_is_cpu(runtime_backend)) {
-            ggml_backend_cpu_set_n_threads(runtime_backend, n_threads);
+        if (sd_backend_is_cpu(runtime_backend)) {
+            sd_backend_cpu_set_n_threads(runtime_backend, n_threads);
         }
 
         int64_t t_compute_begin = ggml_time_ms();
@@ -3028,7 +3028,7 @@ public:
         LOG_DEBUG("%s params backend buffer size = % 6.2f MB(%s) (%i tensors)",
                   get_desc().c_str(),
                   params_buffer_size / (1024.f * 1024.f),
-                  ggml_backend_is_cpu(params_backend) ? "RAM" : "VRAM",
+                  sd_backend_is_cpu(params_backend) ? "RAM" : "VRAM",
                   num_tensors);
         return true;
     }
@@ -3100,7 +3100,7 @@ public:
             return nullptr;
         }
         // it's performing a compute, check if backend isn't cpu
-        if (!ggml_backend_is_cpu(runtime_backend) && (tensor->buffer == nullptr || ggml_backend_buffer_is_host(tensor->buffer))) {
+        if (!sd_backend_is_cpu(runtime_backend) && (tensor->buffer == nullptr || ggml_backend_buffer_is_host(tensor->buffer))) {
             // pass input tensors to gpu memory
             auto backend_tensor = ggml_dup_tensor(compute_ctx, tensor);
 
