@@ -189,6 +189,7 @@ public:
     sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0, 0, nullptr};
     bool offload_params_to_cpu           = false;
     float max_vram                       = 0.f;
+    bool stream_layers                   = false;
     bool use_pmid                        = false;
     std::string backend_spec;
     std::string params_backend_spec;
@@ -234,7 +235,7 @@ public:
         std::string error;
         if (!backend_manager.init(sd_ctx_params->backend,
                                   sd_ctx_params->params_backend,
-                                  sd_ctx_params->offload_params_to_cpu,
+                                  offload_params_to_cpu,
                                   sd_ctx_params->keep_clip_on_cpu,
                                   sd_ctx_params->keep_vae_on_cpu,
                                   sd_ctx_params->keep_control_net_on_cpu,
@@ -261,8 +262,18 @@ public:
         free_params_immediately = sd_ctx_params->free_params_immediately;
         offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
         max_vram                = sd_ctx_params->max_vram;
+        stream_layers           = sd_ctx_params->stream_layers;
         backend_spec            = SAFE_STR(sd_ctx_params->backend);
         params_backend_spec     = SAFE_STR(sd_ctx_params->params_backend);
+        if (stream_layers && max_vram == 0.f) {
+            LOG_WARN("--stream-layers has no effect without --max-vram set; ignoring");
+            stream_layers = false;
+        }
+        if (stream_layers && !offload_params_to_cpu && params_backend_spec.empty()) {
+            // Streaming needs CPU-resident params.
+            LOG_WARN("--stream-layers has no effect without --offload-to-cpu (or --params-backend); ignoring");
+            stream_layers = false;
+        }
 
         bool use_tae       = false;
         bool use_audio_vae = false;
@@ -441,7 +452,10 @@ public:
                     }
                 }
             }
-            if (have_quantized_weight) {
+            // Avoid full-model LoRA merge buffers on constrained setups.
+            const bool streaming_constrained = stream_layers ||
+                                               sd_ctx_params->offload_params_to_cpu;
+            if (have_quantized_weight || streaming_constrained) {
                 apply_lora_immediately = false;
             } else {
                 apply_lora_immediately = true;
@@ -737,6 +751,7 @@ public:
             get_param_tensors(cond_stage_model, module_can_mmap(SDBackendModule::TE));
 
             diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
+            diffusion_model->set_stream_layers_enabled(stream_layers);
             get_param_tensors(diffusion_model, module_can_mmap(SDBackendModule::DIFFUSION));
 
             if (sd_version_is_unet_edit(version)) {
@@ -745,6 +760,7 @@ public:
 
             if (high_noise_diffusion_model) {
                 high_noise_diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
+                high_noise_diffusion_model->set_stream_layers_enabled(stream_layers);
                 get_param_tensors(high_noise_diffusion_model, module_can_mmap(SDBackendModule::DIFFUSION));
             }
 
@@ -2364,6 +2380,15 @@ public:
         if (sd_version_is_pid(version)) {
             return sd::ops::clamp((x + 1.f) * 0.5f, 0.0f, 1.0f);
         }
+        // Free resident diffusion params before VAE allocates its compute buffer.
+        if (stream_layers) {
+            if (diffusion_model) {
+                diffusion_model->release_streaming_residency();
+            }
+            if (high_noise_diffusion_model) {
+                high_noise_diffusion_model->release_streaming_residency();
+            }
+        }
         auto latents = first_stage_model->diffusion_to_vae_latents(x);
         first_stage_model->set_temporal_tiling_enabled(vae_tiling_params.temporal_tiling);
         return first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
@@ -2708,6 +2733,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->lora_apply_mode         = LORA_APPLY_AUTO;
     sd_ctx_params->offload_params_to_cpu   = false;
     sd_ctx_params->max_vram                = 0.f;
+    sd_ctx_params->stream_layers           = false;
     sd_ctx_params->enable_mmap             = false;
     sd_ctx_params->keep_clip_on_cpu        = false;
     sd_ctx_params->keep_control_net_on_cpu = false;
@@ -2755,6 +2781,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "prediction: %s\n"
              "offload_params_to_cpu: %s\n"
              "max_vram: %.3f\n"
+             "stream_layers: %s\n"
              "backend: %s\n"
              "params_backend: %s\n"
              "keep_clip_on_cpu: %s\n"
@@ -2793,6 +2820,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              sd_prediction_name(sd_ctx_params->prediction),
              BOOL_STR(sd_ctx_params->offload_params_to_cpu),
              sd_ctx_params->max_vram,
+             BOOL_STR(sd_ctx_params->stream_layers),
              SAFE_STR(sd_ctx_params->backend),
              SAFE_STR(sd_ctx_params->params_backend),
              BOOL_STR(sd_ctx_params->keep_clip_on_cpu),
@@ -4164,7 +4192,7 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
             std::vector<sd::Tensor<float>> empty_ref_images;
             condition_params.ref_images = &empty_ref_images;
             uncond                      = sd_ctx->sd->cond_stage_model->get_learned_condition(sd_ctx->sd->n_threads,
-                                                                         condition_params);
+                                                                                              condition_params);
             if (uncond.c_concat.empty()) {
                 uncond.c_concat = latents->uncond_concat_latent;  // TODO: optimize
             }
@@ -4182,9 +4210,9 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
 
     ImageGenerationEmbeds embeds;
     embeds.img_cond = std::move(img_cond);
-    embeds.cond    = std::move(cond);
-    embeds.uncond  = std::move(uncond);
-    embeds.id_cond = std::move(id_cond);
+    embeds.cond     = std::move(cond);
+    embeds.uncond   = std::move(uncond);
+    embeds.id_cond  = std::move(id_cond);
 
     return embeds;
 }
