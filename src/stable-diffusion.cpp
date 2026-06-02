@@ -2223,7 +2223,9 @@ public:
             sd::guidance::GuiderOutput output;
             output.pred = denoised;
             if (needs_uncond_denoised) {
-                const sd::Tensor<float>& base_uncond = !uncond_out.empty() ? uncond_out : cond_out;
+                const sd::Tensor<float>& base_uncond = !img_uncond_out.empty()
+                                                           ? img_uncond_out
+                                                           : (!uncond_out.empty() ? uncond_out : cond_out);
                 output.pred_uncond                   = base_uncond * c_out + x * c_skip;
             }
             if (cache_runtime.spectrum_enabled) {

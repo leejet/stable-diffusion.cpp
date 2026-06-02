@@ -109,20 +109,20 @@ namespace sd::guidance {
 
     static sd::Tensor<float> calculate_guidance_delta(const sd::Tensor<float>& pred_cond,
                                                       const sd::Tensor<float>* pred_uncond,
-                                                      const sd::Tensor<float>* pred_img_cond,
+                                                      const sd::Tensor<float>* pred_img_uncond,
                                                       float guidance_scale,
                                                       float image_guidance_scale) {
-        if (pred_img_cond != nullptr) {
+        if (pred_img_uncond != nullptr) {
             if (pred_uncond != nullptr && guidance_scale == 1.0f) {
-                return *pred_img_cond - *pred_uncond;
+                return *pred_uncond - *pred_img_uncond;
             }
             if (pred_uncond != nullptr) {
                 return pred_cond +
-                       (*pred_uncond * (1.0f - image_guidance_scale) +
-                        *pred_img_cond * (image_guidance_scale - guidance_scale)) /
+                       (*pred_uncond * (image_guidance_scale - guidance_scale) +
+                        *pred_img_uncond * (1.0f - image_guidance_scale)) /
                            (guidance_scale - 1.0f);
             }
-            return pred_cond - *pred_img_cond;
+            return pred_cond - *pred_img_uncond;
         }
         return pred_cond - *pred_uncond;
     }
@@ -156,12 +156,12 @@ namespace sd::guidance {
             return output;
         }
 
-        const sd::Tensor<float>* pred_uncond   = input.pred_uncond;
-        const sd::Tensor<float>* pred_img_cond = input.pred_img_uncond;
+        const sd::Tensor<float>* pred_uncond     = input.pred_uncond;
+        const sd::Tensor<float>* pred_img_uncond = input.pred_img_uncond;
 
         sd::Tensor<float> deltas = calculate_guidance_delta(pred_cond,
                                                             pred_uncond,
-                                                            pred_img_cond,
+                                                            pred_img_uncond,
                                                             guidance_scale_,
                                                             image_guidance_scale_);
         if (params_.momentum != 0.0f) {
@@ -203,11 +203,11 @@ namespace sd::guidance {
         if (pred_uncond != nullptr) {
             if (guidance_scale_ != 1.0f) {
                 output.pred = pred_cond + (guidance_scale_ - 1.0f) * deltas;
-            } else if (pred_img_cond != nullptr) {
+            } else if (pred_img_uncond != nullptr) {
                 output.pred = pred_cond + (image_guidance_scale_ - 1.0f) * deltas;
             }
-        } else if (pred_img_cond != nullptr) {
-            output.pred = *pred_img_cond + guidance_scale_ * deltas;
+        } else if (pred_img_uncond != nullptr) {
+            output.pred = *pred_img_uncond + guidance_scale_ * deltas;
         }
 
         return output;
