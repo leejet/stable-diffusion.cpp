@@ -4192,7 +4192,7 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
             std::vector<sd::Tensor<float>> empty_ref_images;
             condition_params.ref_images = &empty_ref_images;
             uncond                      = sd_ctx->sd->cond_stage_model->get_learned_condition(sd_ctx->sd->n_threads,
-                                                                         condition_params);
+                                                                                              condition_params);
             if (uncond.c_concat.empty()) {
                 uncond.c_concat = latents->uncond_concat_latent;  // TODO: optimize
             }
@@ -4210,9 +4210,9 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
 
     ImageGenerationEmbeds embeds;
     embeds.img_cond = std::move(img_cond);
-    embeds.cond    = std::move(cond);
-    embeds.uncond  = std::move(uncond);
-    embeds.id_cond = std::move(id_cond);
+    embeds.cond     = std::move(cond);
+    embeds.uncond   = std::move(uncond);
+    embeds.id_cond  = std::move(id_cond);
 
     return embeds;
 }

@@ -1707,7 +1707,7 @@ protected:
     uint64_t resident_state_token = 0;
 
     size_t max_graph_vram_bytes = 0;
-    bool stream_layers_enabled = false;
+    bool stream_layers_enabled  = false;
 
     sd::layer_registry::LayerRegistry layer_registry_;
 
@@ -2319,16 +2319,19 @@ protected:
         unique_tensors.reserve(tensors.size());
         seen.reserve(tensors.size());
         for (ggml_tensor* t : tensors) {
-            if (t == nullptr) continue;
-            if (seen.insert(t).second) unique_tensors.push_back(t);
+            if (t == nullptr)
+                continue;
+            if (seen.insert(t).second)
+                unique_tensors.push_back(t);
         }
-        if (unique_tensors.empty()) return true;
+        if (unique_tensors.empty())
+            return true;
 
         ggml_init_params init = {};
-        init.mem_size   = std::max<size_t>(1, unique_tensors.size()) * ggml_tensor_overhead();
-        init.mem_buffer = nullptr;
-        init.no_alloc   = true;
-        resident_offload_ctx = ggml_init(init);
+        init.mem_size         = std::max<size_t>(1, unique_tensors.size()) * ggml_tensor_overhead();
+        init.mem_buffer       = nullptr;
+        init.no_alloc         = true;
+        resident_offload_ctx  = ggml_init(init);
         GGML_ASSERT(resident_offload_ctx != nullptr);
 
         resident_offload_pairs.reserve(unique_tensors.size());
@@ -2351,12 +2354,12 @@ protected:
         ggml_backend_buffer_set_usage(resident_runtime_params_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
         for (auto& pair : resident_offload_pairs) {
-            ggml_tensor* t = pair.first;
+            ggml_tensor* t    = pair.first;
             ggml_tensor* twin = pair.second;
             ggml_backend_tensor_copy(t, twin);
             std::swap(t->buffer, twin->buffer);
-            std::swap(t->data,   twin->data);
-            std::swap(t->extra,  twin->extra);
+            std::swap(t->data, twin->data);
+            std::swap(t->extra, twin->extra);
             resident_param_set.insert(t);
         }
         ggml_backend_synchronize(runtime_backend);
@@ -2385,14 +2388,14 @@ protected:
             return;
         }
         for (auto& pair : resident_offload_pairs) {
-            ggml_tensor* t = pair.first;
+            ggml_tensor* t    = pair.first;
             ggml_tensor* twin = pair.second;
-            t->buffer = twin->buffer;
-            t->data   = twin->data;
-            t->extra  = twin->extra;
-            twin->buffer = nullptr;
-            twin->data   = nullptr;
-            twin->extra  = nullptr;
+            t->buffer         = twin->buffer;
+            t->data           = twin->data;
+            t->extra          = twin->extra;
+            twin->buffer      = nullptr;
+            twin->data        = nullptr;
+            twin->extra       = nullptr;
         }
         if (resident_runtime_params_buffer != nullptr) {
             ggml_backend_buffer_free(resident_runtime_params_buffer);
@@ -2436,7 +2439,7 @@ protected:
                 size_t free_vram = 0, total_vram = 0;
                 ggml_backend_dev_memory(dev, &free_vram, &total_vram);
                 constexpr size_t safety_margin = 512ull * 1024 * 1024;
-                size_t free_clamp = (free_vram > safety_margin) ? (free_vram - safety_margin) : 0;
+                size_t free_clamp              = (free_vram > safety_margin) ? (free_vram - safety_margin) : 0;
                 if (free_clamp < effective_budget) {
                     LOG_INFO("%s clamping streaming budget: actual free VRAM %.2f MB < user cap %.2f MB",
                              get_desc().c_str(),
@@ -2804,12 +2807,12 @@ public:
     }
 
     template <typename T>
-    std::optional<sd::Tensor<T>> compute_streaming_segments(ggml_cgraph*        gf,
+    std::optional<sd::Tensor<T>> compute_streaming_segments(ggml_cgraph* gf,
                                                             const GraphCutPlan& plan,
-                                                            size_t              residency_budget_bytes,
-                                                            int                 n_threads,
-                                                            bool                free_compute_buffer_immediately,
-                                                            bool                no_return = false) {
+                                                            size_t residency_budget_bytes,
+                                                            int n_threads,
+                                                            bool free_compute_buffer_immediately,
+                                                            bool no_return = false) {
         GGML_ASSERT(gf != nullptr);
 
         // Runtime LoRA mutates CPU weights between calls, so resident GPU
@@ -2829,7 +2832,8 @@ public:
                     }
                     auto seg_params = sd::ggml_graph_cut::param_tensors(gf, segment);
                     for (ggml_tensor* t : seg_params) {
-                        if (t == nullptr) continue;
+                        if (t == nullptr)
+                            continue;
                         resident_params.push_back(t);
                         token ^= reinterpret_cast<uintptr_t>(t) * 0x9E3779B97F4A7C15ull;
                     }
@@ -2861,7 +2865,7 @@ public:
         for (size_t seg_idx = 0; seg_idx < plan.segments.size(); ++seg_idx) {
             int64_t t_segment_begin = ggml_time_ms();
             const auto& segment     = plan.segments[seg_idx];
-            const bool  is_last     = seg_idx + 1 == plan.segments.size();
+            const bool is_last      = seg_idx + 1 == plan.segments.size();
             auto future_cut_names   = sd::ggml_graph_cut::collect_future_input_names(gf, plan, seg_idx);
 
             LOG_DEBUG("%s streaming-cut executing segment %zu/%zu: %s (residency=%s)",
@@ -2897,7 +2901,7 @@ public:
             }
 
             ggml_context* segment_graph_ctx = nullptr;
-            ggml_cgraph*  segment_graph     = sd::ggml_graph_cut::build_segment_graph(gf, segment, &segment_graph_ctx);
+            ggml_cgraph* segment_graph      = sd::ggml_graph_cut::build_segment_graph(gf, segment, &segment_graph_ctx);
             auto segment_output             = execute_graph<T>(segment_graph,
                                                    n_threads,
                                                    /*free_compute_buffer_immediately=*/true,
@@ -2927,7 +2931,6 @@ public:
     }
 
 public:
-
     virtual std::string get_desc() = 0;
 
     GGMLRunner(ggml_backend_t backend, ggml_backend_t params_backend)
