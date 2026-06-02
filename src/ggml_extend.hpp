@@ -2429,7 +2429,8 @@ protected:
     }
 
     bool resolve_graph_cut_plan(ggml_cgraph* gf,
-                                GraphCutPlan* plan_out) {
+                                GraphCutPlan* plan_out,
+                                size_t* effective_budget_out = nullptr) {
         GGML_ASSERT(plan_out != nullptr);
         GGML_ASSERT(gf != nullptr);
 
@@ -2453,6 +2454,10 @@ protected:
                     effective_budget = free_clamp;
                 }
             }
+        }
+
+        if (effective_budget_out != nullptr) {
+            *effective_budget_out = effective_budget;
         }
 
         *plan_out = sd::ggml_graph_cut::resolve_plan(runtime_backend,
@@ -2814,6 +2819,7 @@ public:
     template <typename T>
     std::optional<sd::Tensor<T>> compute_streaming_segments(ggml_cgraph*        gf,
                                                             const GraphCutPlan& plan,
+                                                            size_t              residency_budget_bytes,
                                                             int                 n_threads,
                                                             bool                free_compute_buffer_immediately,
                                                             bool                no_return = false) {
@@ -2832,7 +2838,7 @@ public:
         } else {
             sd::ggml_graph_cut::Plan& base_plan = graph_cut_plan_cache_.graph_cut_plan;
             if (base_plan.available) {
-                sd::ggml_graph_cut::annotate_residency(base_plan, max_graph_vram_bytes);
+                sd::ggml_graph_cut::annotate_residency(base_plan, residency_budget_bytes);
 
                 std::vector<ggml_tensor*> resident_params;
                 uint64_t token = 0;
@@ -3138,7 +3144,8 @@ public:
 
         if (can_attempt_graph_cut_segmented_compute()) {
             GraphCutPlan plan;
-            if (!resolve_graph_cut_plan(gf, &plan)) {
+            size_t effective_graph_vram_bytes = 0;
+            if (!resolve_graph_cut_plan(gf, &plan, &effective_graph_vram_bytes)) {
                 free_compute_ctx();
                 return std::nullopt;
             }
@@ -3146,6 +3153,7 @@ public:
                 if (stream_layers_enabled) {
                     return compute_streaming_segments<T>(gf,
                                                          plan,
+                                                         effective_graph_vram_bytes,
                                                          n_threads,
                                                          free_compute_buffer_immediately,
                                                          no_return);
