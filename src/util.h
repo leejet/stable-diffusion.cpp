@@ -77,6 +77,7 @@ bool parse_strict_bool(const std::string& text, bool& value);
 
 void pretty_progress(int step, int steps, float time);
 void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds);
+bool sd_abort_requested();
 
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...);
 

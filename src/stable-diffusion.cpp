@@ -109,6 +109,21 @@ const char* sampling_methods_str[] = {
 
 /*================================================== Helper Functions ================================================*/
 
+// qvac: bridge ggml's log stream into sd's logger so backend init failures
+// (e.g. Android Vulkan) surface through the host-provided log callback.
+static void ggml_sd_log_bridge(enum ggml_log_level level, const char* text, void* user_data) {
+    (void)user_data;
+    if (text == nullptr) {
+        return;
+    }
+    switch (level) {
+        case GGML_LOG_LEVEL_DEBUG: LOG_DEBUG("ggml: %s", text); break;
+        case GGML_LOG_LEVEL_WARN: LOG_WARN("ggml: %s", text); break;
+        case GGML_LOG_LEVEL_ERROR: LOG_ERROR("ggml: %s", text); break;
+        default: LOG_INFO("ggml: %s", text); break;
+    }
+}
+
 static bool sd_version_supports_ref_latent_img_cfg(SDVersion version) {
     return version == VERSION_FLUX ||
            sd_version_is_flux2(version) ||
@@ -233,7 +248,33 @@ public:
 
     bool init_backend(const sd_ctx_params_t* sd_ctx_params) {
         std::string error;
-        if (!backend_manager.init(sd_ctx_params->backend,
+
+        // qvac downstream reconcile: when no explicit --backend spec is given,
+        // derive one from preferred_gpu_backend / SD_CPU_ONLY so the legacy
+        // vcpkg consumer API keeps working on top of upstream's richer
+        // backend/params_backend string mechanism (which still wins when set).
+        const char* effective_backend = sd_ctx_params->backend;
+        std::string derived_backend;
+        if (SAFE_STR(effective_backend)[0] == '\0') {
+            if (getenv("SD_CPU_ONLY")) {
+                LOG_INFO("SD_CPU_ONLY set - forcing CPU backend");
+                derived_backend = "cpu";
+            } else {
+                switch (sd_ctx_params->preferred_gpu_backend) {
+                    case SD_BACKEND_PREF_CPU: derived_backend = "cpu"; break;
+                    case SD_BACKEND_PREF_GPU: derived_backend = "gpu"; break;
+                    case SD_BACKEND_PREF_OPENCL: derived_backend = "opencl"; break;
+                    case SD_BACKEND_PREF_AUTO:
+                    default: break;  // leave empty -> upstream auto-selection
+                }
+            }
+            if (!derived_backend.empty()) {
+                LOG_INFO("Applying backend preference: %s", derived_backend.c_str());
+                effective_backend = derived_backend.c_str();
+            }
+        }
+
+        if (!backend_manager.init(effective_backend,
                                   sd_ctx_params->params_backend,
                                   offload_params_to_cpu,
                                   sd_ctx_params->keep_clip_on_cpu,
@@ -285,7 +326,7 @@ public:
             sampler_rng = rng;
         }
 
-        ggml_log_set(ggml_log_callback_default, nullptr);
+        ggml_log_set(ggml_sd_log_bridge, nullptr);
 
         if (!init_backend(sd_ctx_params)) {
             return false;
@@ -2019,6 +2060,12 @@ public:
         SamplePreviewContext preview = prepare_sample_preview_context();
 
         auto denoise = [&](const sd::Tensor<float>& x, float sigma, int step) -> sd::guidance::GuiderOutput {
+            // qvac: host-driven cancellation. Returning an empty GuiderOutput
+            // makes sample_k_diffusion bail out and run the normal cleanup path.
+            if (sd_abort_requested()) {
+                LOG_WARN("Abort requested by host; stopping sampling");
+                return {};
+            }
             if (step == 1 || step == -1) {
                 pretty_progress(0, (int)steps, 0);
             }
@@ -2747,6 +2794,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->vae_format              = SD_VAE_FORMAT_AUTO;
     sd_ctx_params->backend                 = nullptr;
     sd_ctx_params->params_backend          = nullptr;
+    sd_ctx_params->preferred_gpu_backend   = SD_BACKEND_PREF_AUTO;
 }
 
 char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {

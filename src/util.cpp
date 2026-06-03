@@ -339,6 +339,9 @@ int32_t sd_get_num_physical_cores() {
 static sd_progress_cb_t sd_progress_cb = nullptr;
 void* sd_progress_cb_data              = nullptr;
 
+static sd_abort_cb_t sd_abort_cb = nullptr;
+static void* sd_abort_cb_data    = nullptr;
+
 static sd_preview_cb_t sd_preview_cb = nullptr;
 static void* sd_preview_cb_data      = nullptr;
 preview_t sd_preview_mode            = PREVIEW_NONE;
@@ -610,6 +613,13 @@ void sd_set_log_callback(sd_log_cb_t cb, void* data) {
 void sd_set_progress_callback(sd_progress_cb_t cb, void* data) {
     sd_progress_cb      = cb;
     sd_progress_cb_data = data;
+}
+void sd_set_abort_callback(sd_abort_cb_t cb, void* data) {
+    sd_abort_cb      = cb;
+    sd_abort_cb_data = data;
+}
+bool sd_abort_requested() {
+    return sd_abort_cb && sd_abort_cb(sd_abort_cb_data);
 }
 void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode, int interval, bool denoised, bool noisy, void* data) {
     sd_preview_cb       = cb;
