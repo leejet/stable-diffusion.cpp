@@ -3365,18 +3365,22 @@ struct GenerationRequest {
         GGML_ASSERT(guidance != nullptr);
         GGML_ASSERT(use_uncond != nullptr);
         GGML_ASSERT(use_img_uncond != nullptr);
-        // out_uncond + text_cfg_scale * (out_cond - out_img_uncond) + image_cfg_scale * (out_img_uncond - out_uncond)
-        // img_cfg == txt_cfg means that img_cfg is not used
-        bool img_cfg_was_unset = !std::isfinite(guidance->img_cfg);
-        if (!std::isfinite(guidance->img_cfg)) {
-            guidance->img_cfg = guidance->txt_cfg;
+        // out_img_uncond + text_cfg_scale * (out_cond - out_uncond) + image_cfg_scale * (out_uncond - out_img_uncond)
+        // -> text_cfg_scale * out_cond + (image_cfg_scale - text_cfg_scale) * out_uncond + (1 - image_cfg_scale) * out_img_uncond
+        // out_cond       : prompt, image latent
+        // out_uncond     : negative prompt, image latent
+        // out_img_uncond : negative prompt, zero image latent
+        // image_cfg_scale == 1 reduces 3-cond CFG to 2-cond CFG.
+        bool img_cfg_was_set = std::isfinite(guidance->img_cfg);
+        if (!img_cfg_was_set) {
+            guidance->img_cfg = 1.f;
         }
 
         if (!sd_version_supports_img_cfg(sd_ctx->sd->version, has_ref_images)) {
-            if (!img_cfg_was_unset && guidance->img_cfg != guidance->txt_cfg) {
-                LOG_WARN("2-conditioning CFG is not supported with this model, disabling it for better performance");
+            if (img_cfg_was_set && guidance->img_cfg != 1.f) {
+                LOG_WARN("3-conditioning CFG is not supported with this model, disabling it for better performance");
             }
-            guidance->img_cfg = guidance->txt_cfg;
+            guidance->img_cfg = 1.f;
         }
 
         if (guidance->img_cfg != guidance->txt_cfg) {
