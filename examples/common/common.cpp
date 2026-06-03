@@ -808,6 +808,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         stream_layers,
         backend.c_str(),
         params_backend.c_str(),
+        SD_BACKEND_PREF_GPU,  // qvac: default to GPU when no explicit --backend is given
     };
     return sd_ctx_params;
 }

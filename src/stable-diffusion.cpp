@@ -264,7 +264,11 @@ public:
                     case SD_BACKEND_PREF_CPU: derived_backend = "cpu"; break;
                     case SD_BACKEND_PREF_OPENCL: derived_backend = "opencl"; break;
                     case SD_BACKEND_PREF_GPU:
-                    default: derived_backend = "gpu"; break;
+                    default:
+                        // Leave empty: upstream auto-selection is GPU-first AND
+                        // (unlike an explicit "gpu" spec) keeps the keep_clip/
+                        // vae/control_net_on_cpu overrides effective.
+                        break;
                 }
             }
             if (!derived_backend.empty()) {
