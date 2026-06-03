@@ -3017,7 +3017,18 @@ public:
             LOG_DEBUG("%s skipping params allocation (no tensors)", get_desc().c_str());
             return true;
         }
-        params_buffer = ggml_backend_alloc_ctx_tensors(params_ctx, params_backend);
+        // Pinned host buffer when CPU-offloaded for DMA-direct H2D.
+        ggml_backend_buffer_type_t params_buft = nullptr;
+        if (params_backend != runtime_backend) {
+            ggml_backend_dev_t runtime_dev = ggml_backend_get_device(runtime_backend);
+            if (runtime_dev != nullptr) {
+                params_buft = ggml_backend_dev_host_buffer_type(runtime_dev);
+            }
+        }
+        if (params_buft == nullptr) {
+            params_buft = ggml_backend_get_default_buffer_type(params_backend);
+        }
+        params_buffer = ggml_backend_alloc_ctx_tensors_from_buft(params_ctx, params_buft);
         if (params_buffer == nullptr) {
             LOG_ERROR("%s alloc params backend buffer failed, num_tensors = %i",
                       get_desc().c_str(),
