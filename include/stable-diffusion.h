@@ -155,8 +155,7 @@ enum lora_apply_mode_t {
 // qvac downstream API: high-level GPU backend preference honored by
 // StableDiffusionGGML::init_backend() when no explicit --backend spec is given.
 enum sd_backend_preference_t {
-    SD_BACKEND_PREF_AUTO = 0,
-    SD_BACKEND_PREF_CPU,
+    SD_BACKEND_PREF_CPU = 0,
     SD_BACKEND_PREF_GPU,
     SD_BACKEND_PREF_OPENCL,
 };
@@ -470,6 +469,12 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 
+// qvac downstream API: high-level upscaler device selection (RuntimeStats).
+enum sd_upscaler_device_t {
+    SD_UPSCALER_DEVICE_CPU = 0,
+    SD_UPSCALER_DEVICE_GPU = 1,
+};
+
 SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
                                         bool offload_params_to_cpu,
                                         bool direct,
@@ -477,6 +482,18 @@ SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
                                         int tile_size,
                                         const char* backend,
                                         const char* params_backend);
+// qvac downstream API: construct an upscaler from a high-level device/backend
+// preference instead of an explicit backend spec string. Maps the preference
+// onto upstream's backend_manager string mechanism.
+SD_API upscaler_ctx_t* new_upscaler_ctx_with_device(const char* esrgan_path,
+                                                    bool offload_params_to_cpu,
+                                                    bool direct,
+                                                    int n_threads,
+                                                    int tile_size,
+                                                    enum sd_upscaler_device_t device,
+                                                    enum sd_backend_preference_t gpu_backend_pref);
+// Returns 0 = CPU, 1 = GPU (matches qvac RuntimeStats backendDevice), -1 on error.
+SD_API int get_upscaler_backend_device(const upscaler_ctx_t* upscaler_ctx);
 SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 
 SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx,

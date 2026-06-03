@@ -71,6 +71,8 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
     if (!ensure_backend_pair(SDBackendModule::UPSCALER)) {
         return false;
     }
+    actual_backend_device = sd_backend_is_cpu(backend_for(SDBackendModule::UPSCALER)) ? 0 : 1;
+    LOG_INFO("ESRGAN upscaler compute backend: %s", actual_backend_device == 0 ? "CPU" : "GPU (accelerated)");
 
     ModelLoader model_loader;
     if (!model_loader.init_from_file_and_convert_name(esrgan_path)) {
@@ -177,6 +179,40 @@ upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
         return nullptr;
     }
     return upscaler_ctx;
+}
+
+// qvac: map a high-level (device, gpu_backend_pref) preference onto upstream's
+// backend_manager spec string so the downstream device-selection API keeps
+// working on top of the refactored backend system.
+static const char* upscaler_pref_to_backend_spec(sd_upscaler_device_t device,
+                                                  sd_backend_preference_t gpu_backend_pref) {
+    if (device == SD_UPSCALER_DEVICE_CPU) {
+        return "cpu";
+    }
+    switch (gpu_backend_pref) {
+        case SD_BACKEND_PREF_CPU: return "cpu";
+        case SD_BACKEND_PREF_OPENCL: return "opencl";
+        case SD_BACKEND_PREF_GPU:
+        default: return "gpu";
+    }
+}
+
+upscaler_ctx_t* new_upscaler_ctx_with_device(const char* esrgan_path_c_str,
+                                             bool offload_params_to_cpu,
+                                             bool direct,
+                                             int n_threads,
+                                             int tile_size,
+                                             sd_upscaler_device_t device,
+                                             sd_backend_preference_t gpu_backend_pref) {
+    const char* backend_spec = upscaler_pref_to_backend_spec(device, gpu_backend_pref);
+    return new_upscaler_ctx(esrgan_path_c_str, offload_params_to_cpu, direct, n_threads, tile_size, backend_spec, nullptr);
+}
+
+int get_upscaler_backend_device(const upscaler_ctx_t* upscaler_ctx) {
+    if (upscaler_ctx == nullptr || upscaler_ctx->upscaler == nullptr) {
+        return -1;
+    }
+    return upscaler_ctx->upscaler->actual_backend_device;
 }
 
 sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, uint32_t upscale_factor) {
