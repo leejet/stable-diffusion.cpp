@@ -2823,9 +2823,27 @@ public:
         // Runtime LoRA composes `weight + diff` in the compute graph via
         // ggml_add; the resident weight tensor's data is never mutated, so
         // chunk-K residency stays valid across sampling steps.
+        // Reserve room for the worst merged segment so chunk-K can't grow
+        // large enough to starve later partial-param allocations.
+        size_t worst_merged_segment_footprint = 0;
+        for (const auto& seg : plan.segments) {
+            const size_t fp = seg.input_param_bytes +
+                              seg.compute_buffer_size +
+                              seg.output_bytes +
+                              seg.input_previous_cut_bytes +
+                              seg.input_external_bytes;
+            if (fp > worst_merged_segment_footprint) {
+                worst_merged_segment_footprint = fp;
+            }
+        }
+        const size_t residency_budget_for_annotate =
+            residency_budget_bytes > worst_merged_segment_footprint
+                ? residency_budget_bytes - worst_merged_segment_footprint
+                : 0;
+
         sd::ggml_graph_cut::Plan& base_plan = graph_cut_plan_cache_.graph_cut_plan;
         if (base_plan.available) {
-            sd::ggml_graph_cut::annotate_residency(base_plan, residency_budget_bytes);
+            sd::ggml_graph_cut::annotate_residency(base_plan, residency_budget_for_annotate);
 
             std::vector<ggml_tensor*> resident_params;
             uint64_t token = 0;
