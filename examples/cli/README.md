@@ -41,6 +41,8 @@ Context Options:
   --qwen2vl_vision <string>                alias of --llm_vision. Deprecated.
   --diffusion-model <string>               path to the standalone diffusion model
   --high-noise-diffusion-model <string>    path to the standalone high noise diffusion model
+  --uncond-diffusion-model <string>        path to the standalone unconditional diffusion model, currently used by
+                                           Ideogram4 CFG
   --vae <string>                           path to standalone vae model
   --taesd <string>                         path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
   --tae <string>                           alias of --taesd

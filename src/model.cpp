@@ -435,6 +435,9 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("model.diffusion_model.net.lq_proj.latent_proj.0.weight") != std::string::npos) {
             return VERSION_PID;
         }
+        if (tensor_storage.name.find("embed_image_indicator.weight") != std::string::npos) {
+            return VERSION_IDEOGRAM4;
+        }
         if (tensor_storage.name.find("model.diffusion_model.nerf_final_layer_conv.") != std::string::npos) {
             return VERSION_CHROMA_RADIANCE;
         }
@@ -1253,6 +1256,8 @@ bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage
         } else if (ends_with(name, ".bias")) {
             // Pass, do not convert
         } else if (ends_with(name, ".scale")) {
+            // Pass, do not convert
+        } else if (ends_with(name, ".weight_scale")) {
             // Pass, do not convert
         } else if (contains(name, "img_in.") ||
                    contains(name, "txt_in.") ||
