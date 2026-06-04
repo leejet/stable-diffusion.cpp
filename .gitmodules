@@ -1,6 +1,7 @@
 [submodule "ggml"]
     path = ggml
-	url = https://github.com/leejet/ggml.git
+	url = https://github.com/aegioscy/qvac-ext-ggml.git
+	branch = feature/ltx-metal-unified
 [submodule "examples/server/frontend"]
 	path = examples/server/frontend
 	url = https://github.com/leejet/sdcpp-webui.git
