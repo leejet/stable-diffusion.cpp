@@ -313,6 +313,13 @@ add_subdirectory(thirdparty)
 target_link_libraries(${SD_LIB} PUBLIC ggml zip)
 target_include_directories(${SD_LIB} PUBLIC . src include)
 target_include_directories(${SD_LIB} PUBLIC . thirdparty)
+
+# ggml_graph_cut.cpp includes the internal ggml-impl.h. In the submodule build
+# it lives under ggml/src; for system ggml (SD_USE_SYSTEM_GGML=ON) the ggml port
+# installs it into the include dir. Add the submodule path when present.
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ggml/src")
+    target_include_directories(${SD_LIB} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ggml/src)
+endif()
 target_compile_features(${SD_LIB} PUBLIC c_std_11 cxx_std_17)
 
 
