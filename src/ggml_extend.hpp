@@ -1706,8 +1706,9 @@ protected:
     std::unordered_set<ggml_tensor*> resident_param_set;
     uint64_t resident_state_token = 0;
 
-    size_t max_graph_vram_bytes = 0;
-    bool stream_layers_enabled  = false;
+    size_t max_graph_vram_bytes           = 0;
+    bool   stream_layers_enabled          = false;
+    size_t observed_max_effective_budget_ = 0;
 
     sd::layer_registry::LayerRegistry layer_registry_;
 
@@ -2446,12 +2447,22 @@ protected:
                 constexpr size_t safety_margin = 512ull * 1024 * 1024;
                 size_t free_clamp              = (free_vram > safety_margin) ? (free_vram - safety_margin) : 0;
                 if (free_clamp < effective_budget) {
-                    LOG_INFO("%s clamping streaming budget: actual free VRAM %.2f MB < user cap %.2f MB",
-                             get_desc().c_str(),
-                             free_clamp / (1024.0 * 1024.0),
-                             effective_budget / (1024.0 * 1024.0));
+                    LOG_DEBUG("%s clamping streaming budget: actual free VRAM %.2f MB < user cap %.2f MB",
+                              get_desc().c_str(),
+                              free_clamp / (1024.0 * 1024.0),
+                              effective_budget / (1024.0 * 1024.0));
                     effective_budget = free_clamp;
                 }
+            }
+        }
+
+        bool budget_increased = false;
+        if (stream_layers_enabled) {
+            if (effective_budget > observed_max_effective_budget_) {
+                observed_max_effective_budget_ = effective_budget;
+                budget_increased               = true;
+            } else {
+                effective_budget = observed_max_effective_budget_;
             }
         }
 
@@ -2466,9 +2477,15 @@ protected:
                                                      params_tensor_set_,
                                                      get_desc().c_str());
         if (stream_layers_enabled) {
-            LOG_INFO("%s streaming budget = %.2f MB",
-                     get_desc().c_str(),
-                     effective_budget / (1024.0 * 1024.0));
+            if (budget_increased) {
+                LOG_INFO("%s streaming budget = %.2f MB",
+                         get_desc().c_str(),
+                         effective_budget / (1024.0 * 1024.0));
+            } else {
+                LOG_DEBUG("%s streaming budget = %.2f MB",
+                          get_desc().c_str(),
+                          effective_budget / (1024.0 * 1024.0));
+            }
         }
         return true;
     }
@@ -3042,6 +3059,7 @@ public:
             ggml_backend_buffer_free(params_buffer);
             params_buffer = nullptr;
         }
+        observed_max_effective_budget_ = 0;
     }
 
     size_t get_params_buffer_size() {
