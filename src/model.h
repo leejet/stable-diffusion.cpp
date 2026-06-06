@@ -8,10 +8,10 @@
 #include <string>
 #include <vector>
 
+#include "core/ordered_map.hpp"
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "model_io/tensor_storage.h"
-#include "ordered_map.hpp"
 
 enum SDVersion {
     VERSION_SD1,

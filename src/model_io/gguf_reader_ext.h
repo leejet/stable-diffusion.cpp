@@ -6,8 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "core/util.h"
 #include "ggml.h"
-#include "util.h"
 
 struct GGUFTensorInfo {
     std::string name;

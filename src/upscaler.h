@@ -1,10 +1,10 @@
 #ifndef __SD_UPSCALER_H__
 #define __SD_UPSCALER_H__
 
-#include "esrgan.hpp"
-#include "ggml_extend_backend.h"
+#include "core/ggml_extend_backend.h"
+#include "core/tensor.hpp"
+#include "model/upscaler/esrgan.hpp"
 #include "stable-diffusion.h"
-#include "tensor.hpp"
 
 #include <memory>
 #include <string>
