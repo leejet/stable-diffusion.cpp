@@ -16,6 +16,77 @@ namespace WAN {
     constexpr int CACHE_T        = 2;
     constexpr int WAN_GRAPH_SIZE = 10240;
 
+    struct WanConfig {
+        std::string model_type                 = "t2v";
+        std::tuple<int, int, int> patch_size   = {1, 2, 2};
+        int64_t text_len                       = 512;
+        int64_t in_dim                         = 16;
+        int64_t dim                            = 2048;
+        int64_t ffn_dim                        = 8192;
+        int freq_dim                           = 256;
+        int64_t text_dim                       = 4096;
+        int64_t out_dim                        = 16;
+        int64_t num_heads                      = 16;
+        int num_layers                         = 32;
+        int vace_layers                        = 0;
+        int64_t vace_in_dim                    = 96;
+        std::map<int, int> vace_layers_mapping = {};
+        bool qk_norm                           = true;
+        bool cross_attn_norm                   = true;
+        float eps                              = 1e-6f;
+        int64_t flf_pos_embed_token_number     = 0;
+        int theta                              = 10000;
+        // wan2.1 1.3B: 1536/12, wan2.1/2.2 14B: 5120/40, wan2.2 5B: 3074/24
+        std::vector<int> axes_dim = {44, 42, 42};
+        int64_t axes_dim_sum      = 128;
+
+        static WanConfig detect_from_weights(const String2TensorStorage& tensor_storage_map, const std::string& prefix) {
+            WanConfig config;
+            config.num_layers = 0;
+            for (const auto& [name, _] : tensor_storage_map) {
+                if (!starts_with(name, prefix)) {
+                    continue;
+                }
+                size_t pos = name.find("vace_blocks.");
+                if (pos != std::string::npos) {
+                    auto items = split_string(name.substr(pos), '.');
+                    if (items.size() > 1) {
+                        int block_index = atoi(items[1].c_str());
+                        if (block_index + 1 > config.vace_layers) {
+                            config.vace_layers = block_index + 1;
+                        }
+                    }
+                    continue;
+                }
+                pos = name.find("blocks.");
+                if (pos != std::string::npos) {
+                    auto items = split_string(name.substr(pos), '.');
+                    if (items.size() > 1) {
+                        int block_index = atoi(items[1].c_str());
+                        if (block_index + 1 > config.num_layers) {
+                            config.num_layers = block_index + 1;
+                        }
+                    }
+                    continue;
+                }
+                if (name.find("img_emb") != std::string::npos) {
+                    config.model_type = "i2v";
+                }
+                if (name.find("img_emb.emb_pos") != std::string::npos) {
+                    config.flf_pos_embed_token_number = 514;
+                }
+            }
+            LOG_DEBUG("wan: model_type = %s, num_layers = %d, vace_layers = %d, dim = %" PRId64 ", ffn_dim = %" PRId64 ", num_heads = %" PRId64,
+                      config.model_type.c_str(),
+                      config.num_layers,
+                      config.vace_layers,
+                      config.dim,
+                      config.ffn_dim,
+                      config.num_heads);
+            return config;
+        }
+    };
+
     class CausalConv3d : public GGMLBlock {
     protected:
         int64_t in_channels;
@@ -1799,97 +1870,72 @@ namespace WAN {
         }
     };
 
-    struct WanParams {
-        std::string model_type                 = "t2v";
-        std::tuple<int, int, int> patch_size   = {1, 2, 2};
-        int64_t text_len                       = 512;
-        int64_t in_dim                         = 16;
-        int64_t dim                            = 2048;
-        int64_t ffn_dim                        = 8192;
-        int freq_dim                           = 256;
-        int64_t text_dim                       = 4096;
-        int64_t out_dim                        = 16;
-        int64_t num_heads                      = 16;
-        int num_layers                         = 32;
-        int vace_layers                        = 0;
-        int64_t vace_in_dim                    = 96;
-        std::map<int, int> vace_layers_mapping = {};
-        bool qk_norm                           = true;
-        bool cross_attn_norm                   = true;
-        float eps                              = 1e-6f;
-        int64_t flf_pos_embed_token_number     = 0;
-        int theta                              = 10000;
-        // wan2.1 1.3B: 1536/12, wan2.1/2.2 14B: 5120/40, wan2.2 5B: 3074/24
-        std::vector<int> axes_dim = {44, 42, 42};
-        int64_t axes_dim_sum      = 128;
-    };
-
     class Wan : public GGMLBlock {
     protected:
-        WanParams params;
+        WanConfig config;
 
     public:
         Wan() {}
-        Wan(WanParams params)
-            : params(params) {
+        Wan(WanConfig config)
+            : config(config) {
             // patch_embedding
-            blocks["patch_embedding"] = std::shared_ptr<GGMLBlock>(new Conv3d(params.in_dim, params.dim, params.patch_size, params.patch_size));
+            blocks["patch_embedding"] = std::shared_ptr<GGMLBlock>(new Conv3d(config.in_dim, config.dim, config.patch_size, config.patch_size));
 
             // text_embedding
-            blocks["text_embedding.0"] = std::shared_ptr<GGMLBlock>(new Linear(params.text_dim, params.dim));
+            blocks["text_embedding.0"] = std::shared_ptr<GGMLBlock>(new Linear(config.text_dim, config.dim));
             // text_embedding.1 is nn.GELU()
-            blocks["text_embedding.2"] = std::shared_ptr<GGMLBlock>(new Linear(params.dim, params.dim));
+            blocks["text_embedding.2"] = std::shared_ptr<GGMLBlock>(new Linear(config.dim, config.dim));
 
             // time_embedding
-            blocks["time_embedding.0"] = std::shared_ptr<GGMLBlock>(new Linear(params.freq_dim, params.dim));
+            blocks["time_embedding.0"] = std::shared_ptr<GGMLBlock>(new Linear(config.freq_dim, config.dim));
             // time_embedding.1 is nn.SiLU()
-            blocks["time_embedding.2"] = std::shared_ptr<GGMLBlock>(new Linear(params.dim, params.dim));
+            blocks["time_embedding.2"] = std::shared_ptr<GGMLBlock>(new Linear(config.dim, config.dim));
 
             // time_projection.0 is nn.SiLU()
-            blocks["time_projection.1"] = std::shared_ptr<GGMLBlock>(new Linear(params.dim, params.dim * 6));
+            blocks["time_projection.1"] = std::shared_ptr<GGMLBlock>(new Linear(config.dim, config.dim * 6));
 
             // blocks
-            for (int i = 0; i < params.num_layers; i++) {
-                auto block                            = std::shared_ptr<GGMLBlock>(new WanAttentionBlock(params.model_type == "t2v",
-                                                                                                         params.dim,
-                                                                                                         params.ffn_dim,
-                                                                                                         params.num_heads,
-                                                                                                         params.qk_norm,
-                                                                                                         params.cross_attn_norm,
-                                                                                                         params.eps));
+            for (int i = 0; i < config.num_layers; i++) {
+                auto block                            = std::shared_ptr<GGMLBlock>(new WanAttentionBlock(config.model_type == "t2v",
+                                                                                                         config.dim,
+                                                                                                         config.ffn_dim,
+                                                                                                         config.num_heads,
+                                                                                                         config.qk_norm,
+                                                                                                         config.cross_attn_norm,
+                                                                                                         config.eps));
                 blocks["blocks." + std::to_string(i)] = block;
             }
 
             // head
-            blocks["head"] = std::shared_ptr<GGMLBlock>(new Head(params.dim, params.out_dim, params.patch_size, params.eps));
+            blocks["head"] = std::shared_ptr<GGMLBlock>(new Head(config.dim, config.out_dim, config.patch_size, config.eps));
 
             // img_emb
-            if (params.model_type == "i2v") {
-                blocks["img_emb"] = std::shared_ptr<GGMLBlock>(new MLPProj(1280, params.dim, params.flf_pos_embed_token_number));
+            if (config.model_type == "i2v") {
+                blocks["img_emb"] = std::shared_ptr<GGMLBlock>(new MLPProj(1280, config.dim, config.flf_pos_embed_token_number));
             }
 
             // vace
-            if (params.vace_layers > 0) {
-                for (int i = 0; i < params.vace_layers; i++) {
-                    auto block                                 = std::shared_ptr<GGMLBlock>(new VaceWanAttentionBlock(params.model_type == "t2v",
-                                                                                                                      params.dim,
-                                                                                                                      params.ffn_dim,
-                                                                                                                      params.num_heads,
-                                                                                                                      params.qk_norm,
-                                                                                                                      params.cross_attn_norm,
-                                                                                                                      params.eps,
+            if (config.vace_layers > 0) {
+                for (int i = 0; i < config.vace_layers; i++) {
+                    auto block                                 = std::shared_ptr<GGMLBlock>(new VaceWanAttentionBlock(config.model_type == "t2v",
+                                                                                                                      config.dim,
+                                                                                                                      config.ffn_dim,
+                                                                                                                      config.num_heads,
+                                                                                                                      config.qk_norm,
+                                                                                                                      config.cross_attn_norm,
+                                                                                                                      config.eps,
                                                                                                                       i));
                     blocks["vace_blocks." + std::to_string(i)] = block;
                 }
 
-                int step = params.num_layers / params.vace_layers;
+                int step = config.num_layers / config.vace_layers;
                 int n    = 0;
-                for (int i = 0; i < params.num_layers; i += step) {
-                    this->params.vace_layers_mapping[i] = n;
+                for (int i = 0; i < config.num_layers; i += step) {
+                    this->config.vace_layers_mapping[i] = n;
                     n++;
                 }
 
-                blocks["vace_patch_embedding"] = std::shared_ptr<GGMLBlock>(new Conv3d(params.vace_in_dim, params.dim, params.patch_size, params.patch_size));
+                blocks["vace_patch_embedding"] = std::shared_ptr<GGMLBlock>(new Conv3d(config.vace_in_dim, config.dim, config.patch_size, config.patch_size));
             }
         }
 
@@ -1899,9 +1945,9 @@ namespace WAN {
             int64_t H = x->ne[1];
             int64_t T = x->ne[2];
 
-            int pad_t = (std::get<0>(params.patch_size) - T % std::get<0>(params.patch_size)) % std::get<0>(params.patch_size);
-            int pad_h = (std::get<1>(params.patch_size) - H % std::get<1>(params.patch_size)) % std::get<1>(params.patch_size);
-            int pad_w = (std::get<2>(params.patch_size) - W % std::get<2>(params.patch_size)) % std::get<2>(params.patch_size);
+            int pad_t = (std::get<0>(config.patch_size) - T % std::get<0>(config.patch_size)) % std::get<0>(config.patch_size);
+            int pad_h = (std::get<1>(config.patch_size) - H % std::get<1>(config.patch_size)) % std::get<1>(config.patch_size);
+            int pad_w = (std::get<2>(config.patch_size) - W % std::get<2>(config.patch_size)) % std::get<2>(config.patch_size);
             ggml_ext_pad(ctx->ggml_ctx, x, pad_w, pad_h, pad_t, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
             return x;
         }
@@ -1914,9 +1960,9 @@ namespace WAN {
             // x: [N, t_len*h_len*w_len, pt*ph*pw*C]
             // return: [N*C, t_len*pt, h_len*ph, w_len*pw]
             int64_t N  = x->ne[3];
-            int64_t pt = std::get<0>(params.patch_size);
-            int64_t ph = std::get<1>(params.patch_size);
-            int64_t pw = std::get<2>(params.patch_size);
+            int64_t pt = std::get<0>(config.patch_size);
+            int64_t ph = std::get<1>(config.patch_size);
+            int64_t pw = std::get<2>(config.patch_size);
             int64_t C  = x->ne[0] / pt / ph / pw;
 
             GGML_ASSERT(C * pt * ph * pw == x->ne[0]);
@@ -1967,7 +2013,7 @@ namespace WAN {
             x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [N, t_len*h_len*w_len, dim]
 
             // time_embedding
-            auto e = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep, params.freq_dim);
+            auto e = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep, config.freq_dim);
             e      = time_embedding_0->forward(ctx, e);
             e      = ggml_silu_inplace(ctx->ggml_ctx, e);
             e      = time_embedding_2->forward(ctx, e);  // [N, dim] or [N, T, dim]
@@ -1983,7 +2029,7 @@ namespace WAN {
 
             int64_t context_img_len = 0;
             if (clip_fea != nullptr) {
-                if (params.model_type == "i2v") {
+                if (config.model_type == "i2v") {
                     auto img_emb     = std::dynamic_pointer_cast<MLPProj>(blocks["img_emb"]);
                     auto context_img = img_emb->forward(ctx, clip_fea);                      // [N, context_img_len, dim]
                     context          = ggml_concat(ctx->ggml_ctx, context_img, context, 1);  // [N, context_img_len + context_txt_len, dim]
@@ -1993,7 +2039,7 @@ namespace WAN {
 
             // vace_patch_embedding
             ggml_tensor* c = nullptr;
-            if (params.vace_layers > 0) {
+            if (config.vace_layers > 0) {
                 auto vace_patch_embedding = std::dynamic_pointer_cast<Conv3d>(blocks["vace_patch_embedding"]);
 
                 c = vace_patch_embedding->forward(ctx, vace_context);                                    // [N*dim, t_len, h_len, w_len]
@@ -2010,13 +2056,13 @@ namespace WAN {
 
             auto x_orig = x;
 
-            for (int i = 0; i < params.num_layers; i++) {
+            for (int i = 0; i < config.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<WanAttentionBlock>(blocks["blocks." + std::to_string(i)]);
 
                 x = block->forward(ctx, x, e0, pe, context, context_img_len);
 
-                auto iter = params.vace_layers_mapping.find(i);
-                if (iter != params.vace_layers_mapping.end()) {
+                auto iter = config.vace_layers_mapping.find(i);
+                if (iter != config.vace_layers_mapping.end()) {
                     int n = iter->second;
 
                     auto vace_block = std::dynamic_pointer_cast<VaceWanAttentionBlock>(blocks["vace_blocks." + std::to_string(n)]);
@@ -2065,14 +2111,14 @@ namespace WAN {
 
             x = pad_to_patch_size(ctx, x);
 
-            int64_t t_len = ((T + (std::get<0>(params.patch_size) / 2)) / std::get<0>(params.patch_size));
-            int64_t h_len = ((H + (std::get<1>(params.patch_size) / 2)) / std::get<1>(params.patch_size));
-            int64_t w_len = ((W + (std::get<2>(params.patch_size) / 2)) / std::get<2>(params.patch_size));
+            int64_t t_len = ((T + (std::get<0>(config.patch_size) / 2)) / std::get<0>(config.patch_size));
+            int64_t h_len = ((H + (std::get<1>(config.patch_size) / 2)) / std::get<1>(config.patch_size));
+            int64_t w_len = ((W + (std::get<2>(config.patch_size) / 2)) / std::get<2>(config.patch_size));
 
             if (time_dim_concat != nullptr) {
                 time_dim_concat = pad_to_patch_size(ctx, time_dim_concat);
                 x               = ggml_concat(ctx->ggml_ctx, x, time_dim_concat, 2);  // [N*C, (T+pad_t) + (T2+pad_t2), H + pad_h, W + pad_w]
-                t_len           = ((x->ne[2] + (std::get<0>(params.patch_size) / 2)) / std::get<0>(params.patch_size));
+                t_len           = ((x->ne[2] + (std::get<0>(config.patch_size) / 2)) / std::get<0>(config.patch_size));
             }
 
             auto out = forward_orig(ctx, x, timestep, context, pe, clip_fea, vace_context, vace_strength, N);  // [N, t_len*h_len*w_len, pt*ph*pw*C]
@@ -2092,7 +2138,7 @@ namespace WAN {
     struct WanRunner : public DiffusionModelRunner {
     public:
         std::string desc = "wan";
-        WanParams wan_params;
+        WanConfig config;
         Wan wan;
         std::vector<float> pe_vec;
         SDVersion version;
@@ -2102,109 +2148,73 @@ namespace WAN {
                   const String2TensorStorage& tensor_storage_map = {},
                   const std::string prefix                       = "",
                   SDVersion version                              = VERSION_WAN2)
-            : DiffusionModelRunner(backend, params_backend, prefix) {
-            wan_params.num_layers = 0;
-            for (auto pair : tensor_storage_map) {
-                std::string tensor_name = pair.first;
-                if (tensor_name.find(prefix) == std::string::npos)
-                    continue;
-                size_t pos = tensor_name.find("vace_blocks.");
-                if (pos != std::string::npos) {
-                    tensor_name = tensor_name.substr(pos);  // remove prefix
-                    auto items  = split_string(tensor_name, '.');
-                    if (items.size() > 1) {
-                        int block_index = atoi(items[1].c_str());
-                        if (block_index + 1 > wan_params.vace_layers) {
-                            wan_params.vace_layers = block_index + 1;
-                        }
-                    }
-                    continue;
-                }
-                pos = tensor_name.find("blocks.");
-                if (pos != std::string::npos) {
-                    tensor_name = tensor_name.substr(pos);  // remove prefix
-                    auto items  = split_string(tensor_name, '.');
-                    if (items.size() > 1) {
-                        int block_index = atoi(items[1].c_str());
-                        if (block_index + 1 > wan_params.num_layers) {
-                            wan_params.num_layers = block_index + 1;
-                        }
-                    }
-                    continue;
-                }
-                if (tensor_name.find("img_emb") != std::string::npos) {
-                    wan_params.model_type = "i2v";
-                }
-                if (tensor_name.find("img_emb.emb_pos") != std::string::npos) {
-                    wan_params.flf_pos_embed_token_number = 514;
-                }
-            }
-
-            if (wan_params.num_layers == 30) {
+            : DiffusionModelRunner(backend, params_backend, prefix),
+              config(WanConfig::detect_from_weights(tensor_storage_map, prefix)) {
+            if (config.num_layers == 30) {
                 if (version == VERSION_WAN2_2_TI2V) {
-                    desc                 = "Wan2.2-TI2V-5B";
-                    wan_params.dim       = 3072;
-                    wan_params.eps       = 1e-06f;
-                    wan_params.ffn_dim   = 14336;
-                    wan_params.freq_dim  = 256;
-                    wan_params.in_dim    = 48;
-                    wan_params.num_heads = 24;
-                    wan_params.out_dim   = 48;
-                    wan_params.text_len  = 512;
+                    desc             = "Wan2.2-TI2V-5B";
+                    config.dim       = 3072;
+                    config.eps       = 1e-06f;
+                    config.ffn_dim   = 14336;
+                    config.freq_dim  = 256;
+                    config.in_dim    = 48;
+                    config.num_heads = 24;
+                    config.out_dim   = 48;
+                    config.text_len  = 512;
                 } else {
-                    if (wan_params.vace_layers > 0) {
-                        desc              = "Wan2.1-VACE-1.3B";
-                        wan_params.in_dim = 16;
-                    } else if (wan_params.model_type == "i2v") {
-                        desc              = "Wan2.1-I2V-1.3B";
-                        wan_params.in_dim = 36;
+                    if (config.vace_layers > 0) {
+                        desc          = "Wan2.1-VACE-1.3B";
+                        config.in_dim = 16;
+                    } else if (config.model_type == "i2v") {
+                        desc          = "Wan2.1-I2V-1.3B";
+                        config.in_dim = 36;
                     } else {
-                        desc              = "Wan2.1-T2V-1.3B";
-                        wan_params.in_dim = 16;
+                        desc          = "Wan2.1-T2V-1.3B";
+                        config.in_dim = 16;
                     }
-                    wan_params.dim       = 1536;
-                    wan_params.eps       = 1e-06f;
-                    wan_params.ffn_dim   = 8960;
-                    wan_params.freq_dim  = 256;
-                    wan_params.num_heads = 12;
-                    wan_params.out_dim   = 16;
-                    wan_params.text_len  = 512;
+                    config.dim       = 1536;
+                    config.eps       = 1e-06f;
+                    config.ffn_dim   = 8960;
+                    config.freq_dim  = 256;
+                    config.num_heads = 12;
+                    config.out_dim   = 16;
+                    config.text_len  = 512;
                 }
-            } else if (wan_params.num_layers == 40) {
-                if (wan_params.model_type == "t2v") {
+            } else if (config.num_layers == 40) {
+                if (config.model_type == "t2v") {
                     if (version == VERSION_WAN2_2_I2V) {
-                        desc              = "Wan2.2-I2V-14B";
-                        wan_params.in_dim = 36;
+                        desc          = "Wan2.2-I2V-14B";
+                        config.in_dim = 36;
                     } else {
-                        if (wan_params.vace_layers > 0) {
+                        if (config.vace_layers > 0) {
                             desc = "Wan2.x-VACE-14B";
                         } else {
                             desc = "Wan2.x-T2V-14B";
                         }
-                        wan_params.in_dim = 16;
+                        config.in_dim = 16;
                     }
                 } else {
-                    wan_params.in_dim = 36;
-                    if (wan_params.flf_pos_embed_token_number > 0) {
+                    config.in_dim = 36;
+                    if (config.flf_pos_embed_token_number > 0) {
                         desc = "Wan2.1-FLF2V-14B";
                     } else {
                         desc = "Wan2.1-I2V-14B";
                     }
                 }
-                wan_params.dim       = 5120;
-                wan_params.eps       = 1e-06f;
-                wan_params.ffn_dim   = 13824;
-                wan_params.freq_dim  = 256;
-                wan_params.num_heads = 40;
-                wan_params.out_dim   = 16;
-                wan_params.text_len  = 512;
+                config.dim       = 5120;
+                config.eps       = 1e-06f;
+                config.ffn_dim   = 13824;
+                config.freq_dim  = 256;
+                config.num_heads = 40;
+                config.out_dim   = 16;
+                config.text_len  = 512;
             } else {
-                GGML_ABORT("invalid num_layers(%d) of wan", wan_params.num_layers);
+                GGML_ABORT("invalid num_layers(%d) of wan", config.num_layers);
             }
 
             LOG_INFO("%s", desc.c_str());
 
-            wan = Wan(wan_params);
+            wan = Wan(config);
             wan.init(params_ctx, tensor_storage_map, prefix);
         }
 
@@ -2237,15 +2247,15 @@ namespace WAN {
             pe_vec      = Rope::gen_wan_pe(static_cast<int>(x->ne[2]),
                                            static_cast<int>(x->ne[1]),
                                            static_cast<int>(x->ne[0]),
-                                           std::get<0>(wan_params.patch_size),
-                                           std::get<1>(wan_params.patch_size),
-                                           std::get<2>(wan_params.patch_size),
+                                           std::get<0>(config.patch_size),
+                                           std::get<1>(config.patch_size),
+                                           std::get<2>(config.patch_size),
                                            1,
-                                           wan_params.theta,
-                                           wan_params.axes_dim);
-            int pos_len = static_cast<int>(pe_vec.size() / wan_params.axes_dim_sum / 2);
+                                           config.theta,
+                                           config.axes_dim);
+            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
             // LOG_DEBUG("pos_len %d", pos_len);
-            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, wan_params.axes_dim_sum / 2, pos_len);
+            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe);
             // pe->data = nullptr;
