@@ -450,6 +450,10 @@ ArgOptions SDContextParams::get_options() {
          "enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram; defaults to false)",
          true, &stream_layers},
         {"",
+         "--audio-vae-cpu",
+         "run audio VAE on CPU to free GPU VRAM for video VAE (audio is faster on CPU anyway)",
+         true, &audio_vae_on_cpu},
+        {"",
          "--force-sdxl-vae-conv-scale",
          "force use of conv scale on sdxl vae",
          true, &force_sdxl_vae_conv_scale},
@@ -657,8 +661,8 @@ bool SDContextParams::resolve(SDMode mode) {
     return true;
 }
 
-bool SDContextParams::validate(SDMode mode) {
-    if (mode != UPSCALE && mode != METADATA && model_path.length() == 0 && diffusion_model_path.length() == 0) {
+bool SDContextParams::validate(SDMode mode, bool skip_model_check) {
+    if (!skip_model_check && mode != UPSCALE && mode != METADATA && model_path.length() == 0 && diffusion_model_path.length() == 0) {
         LOG_ERROR("error: the following arguments are required: model_path/diffusion_model\n");
         return false;
     }
@@ -678,11 +682,11 @@ bool SDContextParams::validate(SDMode mode) {
     return true;
 }
 
-bool SDContextParams::resolve_and_validate(SDMode mode) {
+bool SDContextParams::resolve_and_validate(SDMode mode, bool skip_model_check) {
     if (!resolve(mode)) {
         return false;
     }
-    if (!validate(mode)) {
+    if (!validate(mode, skip_model_check)) {
         return false;
     }
     return true;
@@ -815,6 +819,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         str_to_vae_format(vae_format),
         max_vram,
         stream_layers,
+        audio_vae_on_cpu,
         backend.c_str(),
         params_backend.c_str(),
     };
@@ -881,6 +886,14 @@ ArgOptions SDGenerationParams::get_options() {
          "--extra-tiling-args",
          "extra VAE tiling args, key=value list. LTX video VAE supports temporal_tile_frames (default: 4), temporal_tile_overlap (default: 1)",
          &extra_tiling_args},
+        {"",
+         "--save-latent",
+         "path to save the denoised latent tensor before VAE decode (video generation only)",
+         &save_latent_path},
+        {"",
+         "--load-latent",
+         "path to load a pre-computed latent tensor from, skipping text encoding and denoising (video generation only)",
+         &load_latent_path},
     };
 
     options.int_options = {
@@ -2348,6 +2361,8 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
     params.hires.upscale_tile_size   = hires_upscale_tile_size;
     params.hires.custom_sigmas       = hires_custom_sigmas.empty() ? nullptr : hires_custom_sigmas.data();
     params.hires.custom_sigmas_count = static_cast<int>(hires_custom_sigmas.size());
+    params.save_latent_path          = save_latent_path.empty() ? nullptr : save_latent_path.c_str();
+    params.load_latent_path          = load_latent_path.empty() ? nullptr : load_latent_path.c_str();
     return params;
 }
 

@@ -122,6 +122,40 @@ namespace sd {
         return tensor;
     }
 
+    template <typename T>
+    inline void save_tensor_to_file_as_tensor(const std::string& file_path,
+                                               const Tensor<T>& tensor,
+                                               const std::string& name = "") {
+        std::ofstream file(file_path, std::ios::binary);
+        if (!file.is_open()) {
+            throw std::runtime_error("failed to open tensor file for writing: " + file_path);
+        }
+
+        int32_t n_dims = static_cast<int32_t>(tensor.dim());
+        int32_t length = static_cast<int32_t>(name.size());
+        int32_t ttype  = static_cast<int32_t>(GGMLTypeTraits<T>::type);
+        file.write(reinterpret_cast<const char*>(&n_dims), sizeof(n_dims));
+        file.write(reinterpret_cast<const char*>(&length), sizeof(length));
+        file.write(reinterpret_cast<const char*>(&ttype), sizeof(ttype));
+        if (!file.good()) {
+            throw std::runtime_error("failed to write tensor file header: " + file_path);
+        }
+
+        for (int i = 0; i < n_dims; ++i) {
+            int32_t dim = static_cast<int32_t>(tensor.shape()[static_cast<size_t>(i)]);
+            file.write(reinterpret_cast<const char*>(&dim), sizeof(dim));
+        }
+        if (length > 0) {
+            file.write(name.data(), length);
+        }
+        file.write(reinterpret_cast<const char*>(tensor.data()),
+                   static_cast<std::streamsize>(tensor.numel() * sizeof(T)));
+        if (!file.good()) {
+            throw std::runtime_error("failed to write tensor file data: " + file_path);
+        }
+        file.close();
+    }
+
 }  // namespace sd
 
 #endif  // __SD_CORE_TENSOR_GGML_HPP__

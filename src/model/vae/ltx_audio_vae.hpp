@@ -216,7 +216,13 @@ namespace LTXV {
             x = ggml_pad_ext(ctx, x, static_cast<int>(left_pad), 0, 0, 0, 0, 0, 0, 0);
         }
 
-        auto frames = ggml_conv_1d(ctx, forward_basis, x, hop_length, 0, 1);
+        ggml_tensor* w_basis = forward_basis;
+        ggml_tensor* x_conv = x;
+        if (sd_backend_is_cpu(runner_ctx->backend)) {
+            w_basis = ggml_cast(ctx, w_basis, GGML_TYPE_F16);
+            x_conv = ggml_cast(ctx, x_conv, GGML_TYPE_F16);
+        }
+        auto frames = ggml_conv_1d(ctx, w_basis, x_conv, hop_length, 0, 1);
         GGML_ASSERT(frames->ne[0] == frame_count);
         GGML_ASSERT(frames->ne[1] == stft_channels);
         GGML_ASSERT(frames->ne[2] == channels * batch);
@@ -317,7 +323,15 @@ namespace LTXV {
                                          int padding) {
         auto ctx = runner_ctx->ggml_ctx;
         GGML_ASSERT(x->ne[3] == 1);
-        auto tiled = tile_depthwise_filter_1d(runner_ctx, filter, x->ne[1]);
+        ggml_tensor* w_filter = filter;
+        if (!sd_backend_is_cpu(runner_ctx->backend)) {
+            w_filter = ggml_cast(ctx, filter, GGML_TYPE_F32);
+        }
+        auto tiled = tile_depthwise_filter_1d(runner_ctx, w_filter, x->ne[1]);
+        if (sd_backend_is_cpu(runner_ctx->backend)) {
+            tiled = ggml_cast(ctx, tiled, GGML_TYPE_F16);
+        }
+        x = cast_audio_activation_for_weight(runner_ctx->backend, ctx, x, tiled);
         auto out   = ggml_conv_1d_dw(ctx, tiled, x, stride, padding, 1);
         return ggml_reshape_4d(ctx, out, out->ne[0], out->ne[1], 1, 1);
     }
@@ -337,10 +351,11 @@ namespace LTXV {
         return reversed;
     }
 
-    static ggml_tensor* depthwise_conv_transpose1d(ggml_context* ctx,
+    static ggml_tensor* depthwise_conv_transpose1d(GGMLRunnerContext* runner_ctx,
                                                    ggml_tensor* x,
                                                    ggml_tensor* filter,
                                                    int stride) {
+        auto ctx = runner_ctx->ggml_ctx;
         GGML_ASSERT(x->ne[2] == 1 && x->ne[3] == 1);
         GGML_ASSERT(filter->ne[1] == 1);
         GGML_ASSERT(filter->ne[2] == 1 && filter->ne[3] == 1);
@@ -361,7 +376,15 @@ namespace LTXV {
         }
         x_flat = ggml_reshape_3d(ctx, x_flat, time * stride, 1, channels);
 
-        auto reversed_filter = reverse_1d_filter(ctx, filter);
+        ggml_tensor* w_filter = filter;
+        if (!sd_backend_is_cpu(runner_ctx->backend)) {
+            w_filter = ggml_cast(ctx, filter, GGML_TYPE_F32);
+        }
+        auto reversed_filter = reverse_1d_filter(ctx, w_filter);
+        if (sd_backend_is_cpu(runner_ctx->backend)) {
+            reversed_filter = ggml_cast(ctx, reversed_filter, GGML_TYPE_F16);
+        }
+        x_flat = cast_audio_activation_for_weight(runner_ctx->backend, ctx, x_flat, reversed_filter);
         auto out             = ggml_conv_1d(ctx, reversed_filter, x_flat, 1, static_cast<int>(kernel_size - 1), 1);
         if (out->ne[0] > out_time) {
             out = ggml_ext_slice(ctx, out, 0, 0, out_time);
@@ -402,7 +425,7 @@ namespace LTXV {
 
         auto x = ggml_reshape_3d(ctx, waveform, time, channels * batch, 1);
         x      = replicate_pad_1d(runner_ctx, x, pad, pad);
-        x      = depthwise_conv_transpose1d(ctx, x, filter, ratio);
+        x      = depthwise_conv_transpose1d(runner_ctx, x, filter, ratio);
         x      = ggml_ext_slice(ctx, x, 0, pad_left, x->ne[0] - pad_right);
         return ggml_reshape_3d(ctx, x, x->ne[0], channels, batch);
     }
@@ -550,6 +573,7 @@ namespace LTXV {
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
+            x = cast_audio_activation_for_weight(ctx->backend, ctx->ggml_ctx, x, params["weight"]);
             x = ggml_conv_1d(ctx->ggml_ctx, params["weight"], x, stride, padding, dilation);
             if (bias) {
                 auto b = ggml_reshape_4d(ctx->ggml_ctx, params["bias"], 1, params["bias"]->ne[0], 1, 1);
@@ -567,6 +591,7 @@ namespace LTXV {
         int padding;
         int dilation;
         bool bias;
+        std::string prefix;
 
         ConvTranspose1D(int64_t in_channels,
                         int64_t out_channels,
@@ -586,9 +611,9 @@ namespace LTXV {
         void init_params(ggml_context* ctx,
                          const String2TensorStorage& tensor_storage_map = {},
                          const std::string prefix                       = "") override {
-            SD_UNUSED(tensor_storage_map);
-            SD_UNUSED(prefix);
-            params["weight"] = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, kernel_size, out_channels, in_channels, 1);
+            this->prefix     = prefix;
+            ggml_type wtype  = audio_conv_weight_type(get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F16));
+            params["weight"] = ggml_new_tensor_4d(ctx, wtype, kernel_size, out_channels, in_channels, 1);
             if (bias) {
                 params["bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_channels);
             }
@@ -596,7 +621,11 @@ namespace LTXV {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
             GGML_ASSERT(dilation == 1);
-            x = ggml_conv_transpose_1d(ctx->ggml_ctx, params["weight"], x, stride, 0, dilation);
+            ggml_tensor* w = params["weight"];
+            if (!sd_backend_is_cpu(ctx->backend)) {
+                w = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_F32);
+            }
+            x = ggml_conv_transpose_1d(ctx->ggml_ctx, w, x, stride, 0, dilation);
             if (padding > 0) {
                 x = ggml_ext_slice(ctx->ggml_ctx, x, 0, padding, x->ne[0] - padding);
             }
@@ -654,7 +683,8 @@ namespace LTXV {
                          const std::string prefix                       = "") override {
             ggml_type down_type                 = audio_conv_weight_type(get_type(prefix + "downsample.lowpass.filter", tensor_storage_map, GGML_TYPE_F16));
             params["downsample.lowpass.filter"] = ggml_new_tensor_3d(ctx, down_type, down_kernel_size, 1, 1);
-            params["upsample.filter"]           = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, up_kernel_size, 1, 1);
+            ggml_type up_type                   = audio_conv_weight_type(get_type(prefix + "upsample.filter", tensor_storage_map, GGML_TYPE_F16));
+            params["upsample.filter"]           = ggml_new_tensor_3d(ctx, up_type, up_kernel_size, 1, 1);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
@@ -667,7 +697,7 @@ namespace LTXV {
             int up_pad_right = up_pad * up_ratio + (up_kernel_size - up_ratio + 1) / 2;
 
             x = replicate_pad_1d(ctx, x, up_pad, up_pad);
-            x = depthwise_conv_transpose1d(ctx->ggml_ctx, x, up_filter, up_ratio);
+            x = depthwise_conv_transpose1d(ctx, x, up_filter, up_ratio);
             x = ggml_ext_slice(ctx->ggml_ctx, x, 0, up_pad_left, x->ne[0] - up_pad_right);
 
             x = act->forward(ctx, x);

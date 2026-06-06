@@ -3483,6 +3483,18 @@ public:
     }
 };
 
+static inline ggml_tensor* cast_audio_activation_for_weight(ggml_backend_t backend,
+                                                            ggml_context* ctx,
+                                                            ggml_tensor* x,
+                                                            ggml_tensor* w) {
+    if (sd_backend_is_cpu(backend)) {
+        if (x->type != w->type) {
+            return ggml_cast(ctx, x, w->type);
+        }
+    }
+    return x;
+}
+
 class Conv2d : public UnaryBlock {
 protected:
     int64_t in_channels;
@@ -3531,6 +3543,7 @@ public:
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
         ggml_tensor* w = params["weight"];
+        x = cast_audio_activation_for_weight(ctx->backend, ctx->ggml_ctx, x, w);
         ggml_tensor* b = nullptr;
         if (bias) {
             b = params["bias"];

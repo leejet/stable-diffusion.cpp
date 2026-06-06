@@ -224,6 +224,7 @@ typedef struct {
     enum sd_vae_format_t vae_format;
     float max_vram;  // GiB budget for graph-cut segmented param offload (0 = disabled, -1 = auto free VRAM minus 1 GiB)
     bool stream_layers;  // Enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram)
+    bool audio_vae_on_cpu;  // Run audio VAE on CPU (frees GPU VRAM for video VAE)
     const char* backend;
     const char* params_backend;
 } sd_ctx_params_t;
@@ -397,6 +398,8 @@ typedef struct {
     sd_tiling_params_t vae_tiling_params;
     sd_cache_params_t cache;
     sd_hires_params_t hires;
+    const char* save_latent_path;
+    const char* load_latent_path;
 } sd_vid_gen_params_t;
 
 typedef struct sd_ctx_t sd_ctx_t;

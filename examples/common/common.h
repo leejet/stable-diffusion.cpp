@@ -152,6 +152,7 @@ struct SDContextParams {
     bool control_net_cpu       = false;
     bool clip_on_cpu           = false;
     bool vae_on_cpu            = false;
+    bool audio_vae_on_cpu      = false;
     bool flash_attn            = false;
     bool diffusion_flash_attn  = false;
     bool diffusion_conv_direct = false;
@@ -176,8 +177,8 @@ struct SDContextParams {
     ArgOptions get_options();
     void build_embedding_map();
     bool resolve(SDMode mode);
-    bool validate(SDMode mode);
-    bool resolve_and_validate(SDMode mode);
+    bool validate(SDMode mode, bool skip_model_check = false);
+    bool resolve_and_validate(SDMode mode, bool skip_model_check = false);
     std::string to_string() const;
     sd_ctx_params_t to_sd_ctx_params_t(bool vae_decode_only, bool free_params_immediately, bool taesd_preview);
 };
@@ -203,6 +204,8 @@ struct SDGenerationParams {
     std::string control_image_path;
     std::vector<std::string> ref_image_paths;
     std::string control_video_path;
+    std::string save_latent_path;
+    std::string load_latent_path;
 
     sd_sample_params_t sample_params;
     sd_sample_params_t high_noise_sample_params;

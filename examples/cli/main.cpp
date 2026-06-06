@@ -278,7 +278,8 @@ void parse_args(int argc, const char** argv, SDCliParams& cli_params, SDContextP
 
     bool valid = cli_params.resolve_and_validate();
     if (valid && cli_params.mode != METADATA) {
-        valid = ctx_params.resolve_and_validate(cli_params.mode) &&
+        bool skip_model = !gen_params.load_latent_path.empty();
+        valid = ctx_params.resolve_and_validate(cli_params.mode, skip_model) &&
                 gen_params.resolve_and_validate(cli_params.mode,
                                                 ctx_params.lora_model_dir,
                                                 ctx_params.hires_upscalers_dir);

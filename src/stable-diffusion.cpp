@@ -875,8 +875,10 @@ public:
             }
 
             if (use_audio_vae) {
-                audio_vae_model = std::make_shared<LTXV::LTXAudioVAERunner>(backend_for(SDBackendModule::VAE),
-                                                                            params_backend_for(SDBackendModule::VAE),
+                auto audio_runtime = sd_ctx_params->audio_vae_on_cpu ? sd_backend_cpu_init() : backend_for(SDBackendModule::VAE);
+                auto audio_params  = sd_ctx_params->audio_vae_on_cpu ? sd_backend_cpu_init() : params_backend_for(SDBackendModule::VAE);
+                audio_vae_model = std::make_shared<LTXV::LTXAudioVAERunner>(audio_runtime,
+                                                                            audio_params,
                                                                             tensor_storage_map);
                 get_param_tensors_p(audio_vae_model, vae_mmap, "");
             }
@@ -5226,6 +5228,13 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
     GenerationRequest request(sd_ctx, sd_vid_gen_params);
     bool latent_upscale_enabled     = request.hires.enabled;
     GenerationRequest hires_request = request;
+
+    const char* load_latent_path = sd_vid_gen_params->load_latent_path;
+    const char* save_latent_path = sd_vid_gen_params->save_latent_path;
+    bool load_latent             = (load_latent_path != nullptr && strlen(load_latent_path) > 0);
+    ImageGenerationLatents latents;
+    sd::Tensor<float> final_latent;
+    int64_t latent_start = 0;
     if (latent_upscale_enabled) {
         if (!sd_version_is_ltxav(sd_ctx->sd->version)) {
             LOG_ERROR("LTX latent spatial upscale is only supported for LTX video models");
@@ -5247,12 +5256,13 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
     sd_ctx->sd->apply_loras(sd_vid_gen_params->loras, sd_vid_gen_params->lora_count);
     sd_ctx->sd->reset_generation_extensions();
 
+    if (!load_latent) {
     SamplePlan plan(sd_ctx, sd_vid_gen_params, request);
     auto latent_inputs_opt = prepare_video_generation_latents(sd_ctx, sd_vid_gen_params, &request);
     if (!latent_inputs_opt.has_value()) {
         return false;
     }
-    ImageGenerationLatents latents = std::move(*latent_inputs_opt);
+    latents = std::move(*latent_inputs_opt);
 
     ImageGenerationEmbeds embeds = prepare_video_generation_embeds(sd_ctx,
                                                                    sd_vid_gen_params,
@@ -5270,7 +5280,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                  request.frames);
     }
 
-    int64_t latent_start = ggml_time_ms();
+    latent_start = ggml_time_ms();
     int W                = request.width / request.vae_scale_factor;
     int H                = request.height / request.vae_scale_factor;
     int T                = static_cast<int>(latents.init_latent.shape()[2]);
@@ -5329,7 +5339,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
 
     LOG_DEBUG("sample %dx%dx%d", W, H, T);
     int64_t sampling_start         = ggml_time_ms();
-    sd::Tensor<float> final_latent = sd_ctx->sd->sample(sd_ctx->sd->diffusion_model,
+    final_latent = sd_ctx->sd->sample(sd_ctx->sd->diffusion_model,
                                                         true,
                                                         x_t,
                                                         std::move(noise),
@@ -5510,6 +5520,33 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
     } else if (sd_ctx->sd->free_params_immediately) {
         sd_ctx->sd->diffusion_model->free_params_buffer();
     }
+    } else {
+        // === LOAD LATENT PATH ===
+        LOG_INFO("loading latent from '%s'", load_latent_path);
+        final_latent = sd::load_tensor_from_file_as_tensor<float>(load_latent_path);
+        if (final_latent.empty()) {
+            LOG_ERROR("failed to load latent from '%s'", load_latent_path);
+            return false;
+        }
+        LOG_INFO("loaded latent from '%s': [%lld,%lld,%lld,%lld]",
+                 load_latent_path,
+                 (long long)final_latent.shape()[0],
+                 (long long)final_latent.shape()[1],
+                 (long long)final_latent.shape()[2],
+                 (long long)final_latent.shape()[3]);
+        latent_upscale_enabled = false;
+        latent_start           = ggml_time_ms();
+        if (request.width <= 0) request.width = static_cast<int>(final_latent.shape()[1]) * request.vae_scale_factor;
+        if (request.height <= 0) request.height = static_cast<int>(final_latent.shape()[0]) * request.vae_scale_factor;
+        if (sd_ctx->sd->free_params_immediately) {
+            if (sd_ctx->sd->diffusion_model) {
+                sd_ctx->sd->diffusion_model->free_params_buffer();
+            }
+            if (sd_ctx->sd->cond_stage_model) {
+                sd_ctx->sd->cond_stage_model->free_params_buffer();
+            }
+        }
+    }
 
     int64_t latent_end = ggml_time_ms();
     LOG_INFO("generating latent video completed, taking %.2fs", (latent_end - latent_start) * 1.0f / 1000);
@@ -5548,6 +5585,12 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
 
     if (latents.ref_image_num > 0) {
         final_latent = sd::ops::slice(final_latent, 2, latents.ref_image_num, final_latent.shape()[2]);
+    }
+
+    // Save denoised latent before VAE decode if requested
+    if (save_latent_path != nullptr && strlen(save_latent_path) > 0) {
+        LOG_INFO("saving latent to '%s'", save_latent_path);
+        sd::save_tensor_to_file_as_tensor<float>(save_latent_path, final_latent, "latent");
     }
 
     auto result = decode_video_outputs(sd_ctx, latent_upscale_enabled ? hires_request : request, final_latent, num_frames_out);
