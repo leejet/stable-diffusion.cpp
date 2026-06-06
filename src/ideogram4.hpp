@@ -181,7 +181,7 @@ namespace Ideogram4 {
             q = norm_q->forward(ctx, q);
             k = norm_k->forward(ctx, k);
 
-            x = Rope::attention(ctx, q, k, v, pe, mask, 1.f / std::sqrt(static_cast<float>(head_dim)), false);
+            x = Rope::attention(ctx, q, k, v, pe, mask, 1.f / 128.f, false);
             x = out_proj->forward(ctx, x);
             return x;
         }

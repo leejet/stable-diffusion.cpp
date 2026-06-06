@@ -3380,10 +3380,10 @@ public:
             forward_params.linear.scale          = scale;
             out                                  = ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, ctx->backend, x, w, linear_bias, prefix, forward_params);
         } else {
-            out = ggml_ext_linear(ctx->ggml_ctx, x, w, linear_bias, force_prec_f32, 1 / 128.f);
+            out = ggml_ext_linear(ctx->ggml_ctx, x, w, linear_bias, force_prec_f32, scale);
         }
         if (has_weight_scale) {
-            out               = ggml_mul(ctx->ggml_ctx, out, params["weight_scale"]);
+            out = ggml_mul(ctx->ggml_ctx, out, params["weight_scale"]);
             if (b != nullptr) {
                 out = ggml_add_inplace(ctx->ggml_ctx, out, b);
             }
