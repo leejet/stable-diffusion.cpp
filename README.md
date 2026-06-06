@@ -15,6 +15,7 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
+* **2026/06/04** 🚀 stable-diffusion.cpp now supports **Ideogram4**
 * **2026/05/31** 🚀 stable-diffusion.cpp now supports **PiD**
 * **2026/05/27** 🚀 stable-diffusion.cpp now supports **Lens**
 * **2026/05/17** 🚀 stable-diffusion.cpp now supports **LTX-2.3**
@@ -50,6 +51,7 @@ API and command-line option may change frequently.***
     - [Anima](./docs/anima.md)
     - [ERNIE-Image](./docs/ernie_image.md)
     - [HiDream-O1-Image](./docs/hidream_o1_image.md)
+    - [Ideogram4](./docs/ideogram4.md)
   - Image Edit Models
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
     - [Qwen Image Edit series](./docs/qwen_image_edit.md)

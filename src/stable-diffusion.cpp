@@ -23,6 +23,7 @@
 #include "flux.hpp"
 #include "guidance.h"
 #include "hidream_o1.hpp"
+#include "ideogram4.hpp"
 #include "lens.hpp"
 #include "lora.hpp"
 #include "ltx_audio_vae.h"
@@ -84,6 +85,7 @@ const char* model_version_to_str[] = {
     "Lens",
     "Longcat-Image",
     "PiD",
+    "Ideogram 4",
 };
 
 const char* sampling_methods_str[] = {
@@ -312,6 +314,13 @@ public:
             LOG_INFO("loading high noise diffusion model from '%s'", sd_ctx_params->high_noise_diffusion_model_path);
             if (!model_loader.init_from_file(sd_ctx_params->high_noise_diffusion_model_path, "model.high_noise_diffusion_model.")) {
                 LOG_WARN("loading diffusion model from '%s' failed", sd_ctx_params->high_noise_diffusion_model_path);
+            }
+        }
+
+        if (strlen(SAFE_STR(sd_ctx_params->uncond_diffusion_model_path)) > 0) {
+            LOG_INFO("loading unconditional diffusion model from '%s'", sd_ctx_params->uncond_diffusion_model_path);
+            if (!model_loader.init_from_file(sd_ctx_params->uncond_diffusion_model_path, "model.diffusion_model.uncond.")) {
+                LOG_WARN("loading unconditional diffusion model from '%s' failed", sd_ctx_params->uncond_diffusion_model_path);
             }
         }
 
@@ -547,6 +556,17 @@ public:
                                                                    params_backend_for(SDBackendModule::DIFFUSION),
                                                                    tensor_storage_map,
                                                                    "model.diffusion_model.net");
+            } else if (sd_version_is_ideogram4(version)) {
+                cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
+                                                                 params_backend_for(SDBackendModule::TE),
+                                                                 tensor_storage_map,
+                                                                 version,
+                                                                 "",
+                                                                 false);
+                diffusion_model  = std::make_shared<Ideogram4::Ideogram4Runner>(backend_for(SDBackendModule::DIFFUSION),
+                                                                               params_backend_for(SDBackendModule::DIFFUSION),
+                                                                               tensor_storage_map,
+                                                                               "model.diffusion_model");
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
                 for (auto pair : tensor_storage_map) {
@@ -1024,6 +1044,12 @@ public:
             ignore_tensors.insert("text_encoders.llm.model.layers.0.mlp.experts.gate_up_proj.weight_scale_2");
             ignore_tensors.insert("text_encoders.llm.model.layers.0.mlp.experts.down_proj.weight_scale_2");
         }
+        if (sd_version_is_ideogram4(version)) {
+            ignore_tensors.insert("text_encoders.llm.lm_head.");
+            ignore_tensors.insert("text_encoders.llm.visual.");
+            ignore_tensors.insert("text_encoders.llm.vision_model.");
+            ignore_tensors.insert("text_encoders.llm.tokenizer_json");
+        }
         if (version == VERSION_HIDREAM_O1) {
             ignore_tensors.insert("lm_head.");
             ignore_tensors.insert("model.visual.deepstack_merger_list.");
@@ -1199,7 +1225,8 @@ public:
                            sd_version_is_anima(version) ||
                            sd_version_is_ernie_image(version) ||
                            sd_version_is_z_image(version) ||
-                           sd_version_is_pid(version)) {
+                           sd_version_is_pid(version) ||
+                           sd_version_is_ideogram4(version)) {
                     pred_type = FLOW_PRED;
                     if (sd_version_is_wan(version)) {
                         default_flow_shift = 5.f;
@@ -1207,6 +1234,8 @@ public:
                         default_flow_shift = 4.f;
                     } else if (sd_version_is_pid(version)) {
                         default_flow_shift = 1.5f;
+                    } else if (sd_version_is_ideogram4(version)) {
+                        default_flow_shift = 1.0f;
                     } else {
                         default_flow_shift = 3.f;
                     }
@@ -1869,7 +1898,7 @@ public:
         if (version == VERSION_HIDREAM_O1) {
             return std::vector<float>{1.0f - (t / static_cast<float>(TIMESTEPS))};
         }
-        if (sd_version_is_z_image(version)) {
+        if (sd_version_is_z_image(version) || sd_version_is_ideogram4(version)) {
             return std::vector<float>{1000.f - t};
         }
         return std::vector<float>{t};
@@ -2771,6 +2800,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "llm_vision_path: %s\n"
              "diffusion_model_path: %s\n"
              "high_noise_diffusion_model_path: %s\n"
+             "uncond_diffusion_model_path: %s\n"
              "embeddings_connectors_path: %s\n"
              "vae_path: %s\n"
              "audio_vae_path: %s\n"
@@ -2810,6 +2840,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->llm_vision_path),
              SAFE_STR(sd_ctx_params->diffusion_model_path),
              SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path),
+             SAFE_STR(sd_ctx_params->uncond_diffusion_model_path),
              SAFE_STR(sd_ctx_params->embeddings_connectors_path),
              SAFE_STR(sd_ctx_params->vae_path),
              SAFE_STR(sd_ctx_params->audio_vae_path),
@@ -4178,16 +4209,20 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
 
     SDCondition uncond;
     if (request->use_uncond || request->use_high_noise_uncond) {
-        bool zero_out_masked = false;
-        if (sd_version_is_sdxl(sd_ctx->sd->version) &&
-            request->negative_prompt.empty() &&
-            !sd_ctx->sd->is_using_edm_v_parameterization) {
-            zero_out_masked = true;
+        if (sd_version_is_ideogram4(sd_ctx->sd->version)) {
+            uncond.c_vector = sd::Tensor<float>::from_vector({1.0f});
+        } else {
+            bool zero_out_masked = false;
+            if (sd_version_is_sdxl(sd_ctx->sd->version) &&
+                request->negative_prompt.empty() &&
+                !sd_ctx->sd->is_using_edm_v_parameterization) {
+                zero_out_masked = true;
+            }
+            condition_params.text            = request->negative_prompt;
+            condition_params.zero_out_masked = zero_out_masked;
+            uncond                           = sd_ctx->sd->cond_stage_model->get_learned_condition(sd_ctx->sd->n_threads,
+                                                                                                   condition_params);
         }
-        condition_params.text            = request->negative_prompt;
-        condition_params.zero_out_masked = zero_out_masked;
-        uncond                           = sd_ctx->sd->cond_stage_model->get_learned_condition(sd_ctx->sd->n_threads,
-                                                                                               condition_params);
         if (uncond.c_concat.empty()) {
             uncond.c_concat = latents->concat_latent;  // TODO: optimize
         }
