@@ -4,12 +4,30 @@
 #include <random>
 #include <vector>
 
+/**
+ * @brief Abstract base class for random number generators (RNG).
+ *
+ * This class defines the interface for random number generation
+ * that is required by the stable diffusion framework. All RNG
+ * implementations must inherit from this class and implement
+ * the pure virtual methods.
+ */
 class RNG {
 public:
     virtual void manual_seed(uint64_t seed)      = 0;
     virtual std::vector<float> randn(uint32_t n) = 0;
 };
 
+/**
+ * @brief Default random number generator implementation using C++ standard library.
+ *
+ * This class provides a concrete implementation of the RNG interface
+ * using the standard library's default random engine. It generates
+ * random numbers with a normal distribution (mean=0, stddev=1) which
+ * is commonly used in diffusion models.
+ *
+ * @see RNG
+ */
 class STDDefaultRNG : public RNG {
 private:
     std::default_random_engine generator;
