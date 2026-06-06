@@ -40,6 +40,7 @@
 #include "upscaler.h"
 #include "vae.hpp"
 #include "wan.hpp"
+#include "wan_vae.hpp"
 #include "z_image.hpp"
 
 #include "latent-preview.h"
