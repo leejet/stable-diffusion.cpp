@@ -203,8 +203,9 @@ ArgOptions SDSvrParams::get_options() {
         {"", "--color", "colors the logging tags according to level", true, &color},
     };
 
-    auto on_help_arg = [&](int, const char**, int) {
+    auto on_help_arg = [&](int, const char**, int, bool& valid) {
         normal_exit = true;
+        valid       = true;
         return -1;
     };
 
