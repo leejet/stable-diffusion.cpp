@@ -1,6 +1,6 @@
 #include "qwen2_tokenizer.h"
 
-#include "util.h"
+#include "core/util.h"
 #include "vocab/vocab.h"
 
 void Qwen2Tokenizer::load_from_merges(const std::string& merges_utf8_str) {

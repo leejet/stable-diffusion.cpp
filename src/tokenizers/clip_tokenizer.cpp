@@ -6,9 +6,9 @@
 #include <regex>
 #include <set>
 
+#include "core/util.h"
 #include "ggml.h"
 #include "tokenize_util.h"
-#include "util.h"
 #include "vocab/vocab.h"
 
 CLIPTokenizer::CLIPTokenizer(int pad_token_id, const std::string& merges_utf8_str) {

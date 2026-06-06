@@ -13,18 +13,18 @@
 #include <unordered_map>
 #include <vector>
 
+#include "core/util.h"
 #include "model.h"
 #include "model_io/gguf_io.h"
 #include "model_io/safetensors_io.h"
 #include "model_io/torch_legacy_io.h"
 #include "model_io/torch_zip_io.h"
 #include "stable-diffusion.h"
-#include "util.h"
 
+#include "core/ggml_extend_backend.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml.h"
-#include "ggml_extend_backend.h"
 #include "zip.h"
 
 #include "name_conversion.h"

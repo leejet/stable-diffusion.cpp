@@ -1,7 +1,7 @@
 #include "gpt_oss_tokenizer.h"
 
+#include "core/util.h"
 #include "json.hpp"
-#include "util.h"
 #include "vocab/vocab.h"
 
 void GPTOSSTokenizer::load_from_merges(const std::string& merges_utf8_str, const std::string& vocab_utf8_str) {

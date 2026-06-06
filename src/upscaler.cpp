@@ -1,8 +1,8 @@
 #include "upscaler.h"
-#include "ggml_extend.hpp"
+#include "core/ggml_extend.hpp"
+#include "core/util.h"
 #include "model.h"
 #include "stable-diffusion.h"
-#include "util.h"
 
 #include <utility>
 

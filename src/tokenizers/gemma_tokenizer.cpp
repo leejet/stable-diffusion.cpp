@@ -1,8 +1,8 @@
 #include "gemma_tokenizer.h"
 
+#include "core/util.h"
 #include "ggml.h"
 #include "json.hpp"
-#include "util.h"
 #include "vocab/vocab.h"
 
 std::string GemmaTokenizer::normalize(const std::string& text) const {
