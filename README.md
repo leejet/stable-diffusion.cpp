@@ -15,7 +15,7 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
-* **2026/05/27** 🚀 stable-diffusion.cpp now supports **Ideogram4**
+* **2026/06/04** 🚀 stable-diffusion.cpp now supports **Ideogram4**
 * **2026/05/31** 🚀 stable-diffusion.cpp now supports **PiD**
 * **2026/05/27** 🚀 stable-diffusion.cpp now supports **Lens**
 * **2026/05/17** 🚀 stable-diffusion.cpp now supports **LTX-2.3**
