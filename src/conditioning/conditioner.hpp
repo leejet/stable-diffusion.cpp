@@ -9,6 +9,7 @@
 #include "model/te/clip.hpp"
 #include "model/te/llm.hpp"
 #include "model/te/t5.hpp"
+#include "model_loader.h"
 
 struct SDCondition {
     sd::Tensor<float> c_crossattn;

@@ -9,7 +9,7 @@
 
 #include "conditioning/conditioner.hpp"
 #include "core/ggml_extend_backend.h"
-#include "model.h"
+#include "model_loader.h"
 #include "stable-diffusion.h"
 
 struct GenerationExtensionInitContext {

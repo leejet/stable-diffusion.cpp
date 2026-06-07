@@ -10,7 +10,7 @@
 #include "core/rng_mt19937.hpp"
 #include "core/rng_philox.hpp"
 #include "core/util.h"
-#include "model.h"
+#include "model_loader.h"
 #include "stable-diffusion.h"
 
 #include "conditioning/conditioner.hpp"
