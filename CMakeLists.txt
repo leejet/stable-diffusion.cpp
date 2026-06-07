@@ -222,7 +222,6 @@ file(GLOB SD_LIB_SOURCES CONFIGURE_DEPENDS
     "src/runtime/*.h"
     "src/runtime/*.cpp"
     "src/runtime/*.hpp"
-    "src/runtime/*.inl"
     "src/model_io/*.h"
     "src/model_io/*.cpp"
     "src/tokenizers/*.h"
