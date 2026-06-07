@@ -1,6 +1,7 @@
 for f in src/*.cpp src/*.h src/*.hpp \
          src/conditioning/*.cpp src/conditioning/*.h src/conditioning/*.hpp \
          src/core/*.cpp src/core/*.h src/core/*.hpp \
+         src/extensions/*.cpp src/extensions/*.h src/extensions/*.hpp \
          src/runtime/*.cpp src/runtime/*.h src/runtime/*.hpp \
          src/model/*/*.cpp src/model/*/*.h src/model/*/*.hpp \
          src/tokenizers/*.h src/tokenizers/*.cpp src/tokenizers/vocab/*.h src/tokenizers/vocab/*.cpp \
