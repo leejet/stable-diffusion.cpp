@@ -1,8 +1,9 @@
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 
+#include "core/util.h"
 #include "name_conversion.h"
-#include "util.h"
 
 void replace_with_name_map(std::string& name, const std::vector<std::pair<std::string, std::string>>& name_map) {
     for (auto kv : name_map) {

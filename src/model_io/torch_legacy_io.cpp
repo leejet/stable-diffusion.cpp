@@ -7,8 +7,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "core/util.h"
 #include "pickle_io.h"
-#include "util.h"
 
 // torch.save format background:
 //

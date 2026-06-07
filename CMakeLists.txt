@@ -210,6 +210,21 @@ file(GLOB SD_LIB_SOURCES CONFIGURE_DEPENDS
     "src/*.h"
     "src/*.cpp"
     "src/*.hpp"
+    "src/conditioning/*.h"
+    "src/conditioning/*.cpp"
+    "src/conditioning/*.hpp"
+    "src/core/*.h"
+    "src/core/*.cpp"
+    "src/core/*.hpp"
+    "src/extensions/*.h"
+    "src/extensions/*.cpp"
+    "src/extensions/*.hpp"
+    "src/model/*/*.h"
+    "src/model/*/*.cpp"
+    "src/model/*/*.hpp"
+    "src/runtime/*.h"
+    "src/runtime/*.cpp"
+    "src/runtime/*.hpp"
     "src/model_io/*.h"
     "src/model_io/*.cpp"
     "src/tokenizers/*.h"
@@ -312,6 +327,7 @@ add_subdirectory(thirdparty)
 
 target_link_libraries(${SD_LIB} PUBLIC ggml zip)
 target_include_directories(${SD_LIB} PUBLIC . src include)
+target_include_directories(${SD_LIB} PRIVATE src/core)
 target_include_directories(${SD_LIB} PUBLIC . thirdparty)
 target_compile_features(${SD_LIB} PUBLIC c_std_11 cxx_std_17)
 

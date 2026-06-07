@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <sstream>
 
+#include "core/util.h"
 #include "tokenize_util.h"
-#include "util.h"
 
 std::vector<std::pair<int, std::u32string>> BPETokenizer::bytes_to_unicode() {
     std::vector<std::pair<int, std::u32string>> byte_unicode_pairs;
