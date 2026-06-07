@@ -423,6 +423,10 @@ ArgOptions SDContextParams::get_options() {
          "--params-backend",
          "parameter backend assignment, e.g. cpu or diffusion=cpu,clip=cpu",
          &params_backend},
+        {"",
+         "--dit-split",
+         "comma-separated GPU names to row-split DiT weights across (e.g. cuda2,cuda3). Uses GGML tensor parallelism",
+         &dit_split_devices},
     };
 
     options.int_options = {
@@ -815,6 +819,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         str_to_vae_format(vae_format),
         max_vram,
         stream_layers,
+        dit_split_devices.empty() ? nullptr : dit_split_devices.c_str(),
         backend.c_str(),
         params_backend.c_str(),
     };

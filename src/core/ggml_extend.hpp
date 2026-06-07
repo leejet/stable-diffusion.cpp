@@ -1675,6 +1675,8 @@ struct GGMLRunnerContext {
 };
 
 struct GGMLRunner {
+public:
+    void set_dit_split_buft(ggml_backend_buffer_type_t buft) { dit_split_buft = buft; }
 protected:
     typedef std::function<ggml_cgraph*()> get_graph_cb_t;
     using GraphCutSegment = sd::ggml_graph_cut::Segment;
@@ -1687,6 +1689,7 @@ protected:
     ggml_backend_buffer_t params_buffer         = nullptr;
     ggml_context* offload_ctx                   = nullptr;
     ggml_backend_buffer_t runtime_params_buffer = nullptr;
+    ggml_backend_buffer_type_t dit_split_buft   = nullptr;  // optional tensor-split buffer type for DiT weights
     bool params_on_runtime_backend              = false;
 
     ggml_context* cache_ctx            = nullptr;
@@ -2121,7 +2124,9 @@ protected:
         num_tensors = ggml_tensor_num(offload_ctx);
         GGML_ASSERT(num_tensors == ggml_tensor_num(params_ctx));
 
-        runtime_params_buffer = ggml_backend_alloc_ctx_tensors(offload_ctx, runtime_backend);
+        runtime_params_buffer = dit_split_buft
+            ? ggml_backend_alloc_ctx_tensors_from_buft(offload_ctx, dit_split_buft)
+            : ggml_backend_alloc_ctx_tensors(offload_ctx, runtime_backend);
 
         if (runtime_params_buffer == nullptr) {
             LOG_ERROR("%s alloc runtime params backend buffer failed, num_tensors = %i",

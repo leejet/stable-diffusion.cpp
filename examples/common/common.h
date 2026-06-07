@@ -146,6 +146,7 @@ struct SDContextParams {
     bool offload_params_to_cpu  = false;
     float max_vram              = 0.f;
     bool stream_layers          = false;
+    std::string dit_split_devices;
     std::string backend;
     std::string params_backend;
     bool enable_mmap           = false;
