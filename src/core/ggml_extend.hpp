@@ -3327,6 +3327,7 @@ public:
         for (auto& pair : params) {
             ggml_tensor* param           = pair.second;
             tensors[prefix + pair.first] = pair.second;
+            ggml_set_name(param, (prefix + pair.first).c_str());
         }
     }
 
