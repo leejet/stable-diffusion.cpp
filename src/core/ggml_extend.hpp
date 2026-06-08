@@ -3327,6 +3327,10 @@ public:
         for (auto& pair : params) {
             ggml_tensor* param           = pair.second;
             tensors[prefix + pair.first] = pair.second;
+            // Also set the tensor's own name to its full hierarchical name. Without this the param
+            // tensors are unnamed and show up as "leaf_N" in graph dumps / profiling output and to
+            // any tooling that inspects weights by name (e.g. importance-matrix collection).
+            ggml_set_name(param, (prefix + pair.first).c_str());
         }
     }
 
