@@ -474,6 +474,10 @@ ArgOptions SDContextParams::get_options() {
          "keep vae in cpu (for low vram)",
          true, &vae_on_cpu},
         {"",
+         "--sequential-load",
+         "load the conditioner, run it, free it, then load the diffusion model; lowers peak device memory so the text-encoder-on-GPU path fits smaller cards (single diffusion model only)",
+         true, &sequential_load},
+        {"",
          "--fa",
          "use flash attention",
          true, &flash_attn},
@@ -817,6 +821,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         stream_layers,
         backend.c_str(),
         params_backend.c_str(),
+        sequential_load,
     };
     return sd_ctx_params;
 }

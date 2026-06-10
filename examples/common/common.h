@@ -152,6 +152,7 @@ struct SDContextParams {
     bool control_net_cpu       = false;
     bool clip_on_cpu           = false;
     bool vae_on_cpu            = false;
+    bool sequential_load       = false;
     bool flash_attn            = false;
     bool diffusion_flash_attn  = false;
     bool diffusion_conv_direct = false;

@@ -200,6 +200,18 @@ public:
 
     std::map<std::string, ggml_tensor*> tensors;
 
+    // --- Sequential (lazy) component loading -------------------------------
+    // Load the conditioner, run it, free it, THEN allocate + load the diffusion
+    // model. Cuts peak device memory from sum(cond, DiT, VAE) to ~max(cond,
+    // DiT+VAE), so the fast text-encoder-on-GPU recipe fits cards that can't
+    // hold all three at once. Opt-in (--sequential-load), single diffusion model
+    // only, and backend-agnostic (Vulkan/CPU/CUDA).
+    bool                  seq_load_requested = false;  // requested via --sequential-load
+    bool                  seq_load           = false;  // effective (requested && single DiT)
+    bool                  dit_params_loaded = true;   // false while DiT load is deferred
+    std::set<std::string> deferred_dit_keys;          // diffusion-model tensor keys to load later
+    ModelLoader           model_loader;               // retained so the deferred DiT load can read the file
+
     // lora_name => multiplier
     std::unordered_map<std::string, float> curr_lora_state;
 
@@ -293,7 +305,9 @@ public:
         }
         max_vram = sd::ggml_graph_cut::resolve_max_vram_gib(max_vram, backend_for(SDBackendModule::DIFFUSION));
 
-        ModelLoader model_loader;
+        // model_loader is retained as a member so the deferred diffusion-model
+        // load can read the file after the conditioner has run + been freed.
+        seq_load_requested = sd_ctx_params->sequential_load;
 
         if (strlen(SAFE_STR(sd_ctx_params->model_path)) > 0) {
             LOG_INFO("loading model from '%s'", sd_ctx_params->model_path);
@@ -774,6 +788,21 @@ public:
                 get_param_tensors(high_noise_diffusion_model, module_can_mmap(SDBackendModule::DIFFUSION));
             }
 
+            // Sequential load only applies to the single-diffusion-model case (no
+            // high-noise model). Capture the DiT tensor keys so we can skip its
+            // up-front alloc/load and bring it in after the conditioner is freed.
+            seq_load = seq_load_requested && diffusion_model && !high_noise_diffusion_model;
+            if (seq_load) {
+                std::map<std::string, ggml_tensor*> dit_temp;
+                diffusion_model->get_param_tensors(dit_temp);
+                for (const auto& [k, t] : dit_temp) {
+                    deferred_dit_keys.insert(k);
+                }
+                dit_params_loaded = false;
+                LOG_INFO("sequential load: deferring %zu diffusion-model tensors until after conditioning",
+                         deferred_dit_keys.size());
+            }
+
             if (!ensure_backend_pair(SDBackendModule::VAE)) {
                 return false;
             }
@@ -1048,7 +1077,7 @@ public:
             ggml_free(ctx);
             return false;
         }
-        if (diffusion_model && !diffusion_model->alloc_params_buffer()) {
+        if (!seq_load && diffusion_model && !diffusion_model->alloc_params_buffer()) {
             LOG_ERROR("Diffusion model params buffer allocation failed");
             ggml_free(ctx);
             return false;
@@ -1081,7 +1110,19 @@ public:
             }
         }
 
-        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap);
+        bool success;
+        if (seq_load) {
+            // First pass: load everything except the deferred diffusion-model tensors.
+            std::map<std::string, ggml_tensor*> first_tensors = tensors;
+            for (const auto& k : deferred_dit_keys) {
+                first_tensors.erase(k);
+            }
+            std::set<std::string> first_ignore = ignore_tensors;
+            first_ignore.insert("model.diffusion_model.");  // deferred — loaded after conditioning
+            success = model_loader.load_tensors(first_tensors, first_ignore, n_threads, sd_ctx_params->enable_mmap);
+        } else {
+            success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap);
+        }
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
             ggml_free(ctx);
@@ -1890,6 +1931,40 @@ public:
         *controls = std::move(*control_result);
     }
 
+    // Allocate + load the diffusion-model params that sequential loading deferred.
+    // No-op unless seq_load deferred them. Reads the retained model_loader, so the
+    // model file(s) are re-opened for the DiT tensors only (conditioner/VAE ignored).
+    bool ensure_diffusion_model_loaded() {
+        if (dit_params_loaded) {
+            return true;
+        }
+        int64_t t0 = ggml_time_ms();
+        if (!diffusion_model->alloc_params_buffer()) {
+            LOG_ERROR("sequential load: diffusion model params buffer allocation failed");
+            return false;
+        }
+        std::map<std::string, ggml_tensor*> dit_tensors;
+        for (const auto& k : deferred_dit_keys) {
+            auto it = tensors.find(k);
+            if (it != tensors.end()) {
+                dit_tensors[k] = it->second;
+            }
+        }
+        // Ignore the (already-loaded) non-DiT components so they don't log as unknown.
+        std::set<std::string> ignore = {
+            "text_encoders.", "cond_stage_model.", "first_stage_model.",
+            "vae.", "audio_vae", "alphas_cumprod",
+        };
+        if (!model_loader.load_tensors(dit_tensors, ignore, n_threads, false)) {
+            LOG_ERROR("sequential load: deferred diffusion model tensor load failed");
+            return false;
+        }
+        dit_params_loaded = true;
+        LOG_INFO("sequential load: diffusion model allocated + loaded in %.2fs",
+                 (ggml_time_ms() - t0) * 1.0f / 1000);
+        return true;
+    }
+
     sd::Tensor<float> sample(const std::shared_ptr<DiffusionModelRunner>& work_diffusion_model,
                              bool inverse_noise_scaling,
                              const sd::Tensor<float>& init_latent,
@@ -1915,6 +1990,12 @@ public:
                              float frame_rate,
                              const sd_cache_params_t* cache_params,
                              const sd::Tensor<float>& video_positions = {}) {
+        // Sequential load: bring in the diffusion model now (after the conditioner
+        // has run and freed its buffer), just before the first denoise step.
+        if (work_diffusion_model == diffusion_model && !ensure_diffusion_model_loaded()) {
+            LOG_ERROR("sequential load: diffusion model not available for sampling");
+            return {};
+        }
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
         float cfg_scale     = guidance.txt_cfg;
         float img_cfg_scale = guidance.img_cfg;
@@ -2703,6 +2784,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->vae_format              = SD_VAE_FORMAT_AUTO;
     sd_ctx_params->backend                 = nullptr;
     sd_ctx_params->params_backend          = nullptr;
+    sd_ctx_params->sequential_load         = false;
 }
 
 char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {

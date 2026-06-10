@@ -226,6 +226,7 @@ typedef struct {
     bool stream_layers;  // Enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram)
     const char* backend;
     const char* params_backend;
+    bool sequential_load;  // load conditioner -> run -> free -> then load the diffusion model (lowers peak device memory)
 } sd_ctx_params_t;
 
 typedef struct {
