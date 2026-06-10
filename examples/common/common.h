@@ -148,6 +148,7 @@ struct SDContextParams {
     bool stream_layers          = false;
     std::string backend;
     std::string params_backend;
+    std::string rpc_servers;
     bool enable_mmap           = false;
     bool control_net_cpu       = false;
     bool clip_on_cpu           = false;

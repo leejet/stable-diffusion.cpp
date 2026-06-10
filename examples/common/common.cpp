@@ -423,6 +423,10 @@ ArgOptions SDContextParams::get_options() {
          "--params-backend",
          "parameter backend assignment, e.g. cpu or diffusion=cpu,clip=cpu",
          &params_backend},
+        {"",
+         "--rpc-servers",
+         "comma-separated list of RPC servers to connect to for offloading, in the format host:port, e.g. localhost:50052,192.168.1.3:50052",
+         &rpc_servers},
     };
 
     options.int_options = {
@@ -817,6 +821,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         stream_layers,
         backend.c_str(),
         params_backend.c_str(),
+        rpc_servers.c_str(),
     };
     return sd_ctx_params;
 }
