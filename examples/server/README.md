@@ -145,7 +145,10 @@ Context Options:
   --high-noise-diffusion-model <string>    path to the standalone high noise diffusion model
   --uncond-diffusion-model <string>        path to the standalone unconditional diffusion model, currently used by
                                            Ideogram4 CFG
+  --embeddings-connectors <string>         path to LTXAV embeddings connectors
   --vae <string>                           path to standalone vae model
+  --vae-format <string>                    VAE latent format override: auto, flux, sd3, or flux2 (default: auto)
+  --audio-vae <string>                     path to standalone LTX audio vae model
   --taesd <string>                         path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
   --tae <string>                           alias of --taesd
   --control-net <string>                   path to control net model
@@ -155,12 +158,18 @@ Context Options:
   --tensor-type-rules <string>             weight type per tensor pattern (example: "^vae\.=f16,model\.=q8_0")
   --photo-maker <string>                   path to PHOTOMAKER model
   --upscale-model <string>                 path to esrgan model.
+  --backend <string>                       runtime backend assignment, e.g. cpu or clip=cpu,vae=cuda0,diffusion=vulkan0
+  --params-backend <string>                parameter backend assignment, e.g. cpu or diffusion=cpu,clip=cpu
+  --rpc-servers <string>                   comma-separated list of RPC servers to connect to for offloading, in the
+                                           format host:port, e.g. localhost:50052,192.168.1.3:50052
   -t, --threads <int>                      number of threads to use during computation (default: -1). If threads <= 0,
                                            then threads will be set to the number of CPU physical cores
   --chroma-t5-mask-pad <int>               t5 mask pad size of chroma
   --max-vram <float>                       maximum VRAM budget in GiB for graph-cut segmented execution. 0 disables
                                            graph splitting; a negative value auto-detects free VRAM, sparing the
                                            specified value (e.g. -0.5 will keep at least 0.5 GiB free)
+  --stream-layers                          enable residency+prefetch streaming on top of --max-vram (no effect without
+                                           --max-vram; defaults to false)
   --force-sdxl-vae-conv-scale              force use of conv scale on sdxl vae
   --offload-to-cpu                         place the weights in RAM to save VRAM, and automatically load them into VRAM
                                            when needed
@@ -211,7 +220,8 @@ Default Generation Options:
   --extra-sample-args <string>             extra sampler/scheduler/guidance args, key=value list. APG supports apg_eta,
                                            apg_momentum, apg_norm_threshold, apg_norm_threshold_smoothing; SLG supports
                                            slg_uncond; lcm supports noise_clip_std, noise_scale_start, noise_scale_end;
-                                           ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma
+                                           ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports
+                                           gamma
   --extra-tiling-args <string>             extra VAE tiling args, key=value list. LTX video VAE supports
                                            temporal_tile_frames (default: 4), temporal_tile_overlap (default: 1)
   -H, --height <int>                       image height, in pixel space (default: 512)
@@ -255,7 +265,7 @@ Default Generation Options:
   --high-noise-eta <float>                 (high noise) noise multiplier (default: 0 for ddim_trailing, tcd,
                                            res_multistep and res_2s; 1 for euler_a, er_sde and dpm++2s_a)
   --strength <float>                       strength for noising/unnoising (default: 0.75)
-  --pm-style-strength <float>
+  --pm-style-strength <float>              
   --control-strength <float>               strength to apply Control Net (default: 0.9). 1.0 corresponds to full
                                            destruction of information in init image
   --moe-boundary <float>                   timestep boundary for Wan2.2 MoE model. (default: 0.875). Only enabled if
@@ -274,13 +284,15 @@ Default Generation Options:
   -s, --seed                               RNG seed (default: 42, use random seed for < 0)
   --sampling-method                        sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m,
                                            dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s,
-                                           er_sde, euler_cfg_pp, euler_a_cfg_pp] (default: euler for Flux/SD3/Wan, euler_a otherwise)
+                                           er_sde, euler_cfg_pp, euler_a_cfg_pp](default: euler for Flux/SD3/Wan,
+                                           euler_a otherwise)
   --high-noise-sampling-method             (high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a,
                                            dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep,
-                                           res_2s, er_sde, euler_cfg_pp, euler_a_cfg_pp] default: euler for Flux/SD3/Wan, euler_a otherwise
+                                           res_2s, er_sde, euler_cfg_pp, euler_a_cfg_pp] default: euler for
+                                           Flux/SD3/Wan, euler_a otherwise
   --scheduler                              denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits,
-                                           smoothstep, sgm_uniform, simple, kl_optimal, lcm, bong_tangent, ltx2], default:
-                                           model-specific
+                                           smoothstep, sgm_uniform, simple, kl_optimal, lcm, bong_tangent, ltx2],
+                                           default: model-specific
   --sigmas                                 custom sigma values for the sampler, comma-separated (e.g.,
                                            "14.61,7.8,3.5,0.0").
   --hires-sigmas                           custom sigma values for the highres fix second pass, comma-separated (e.g.,
