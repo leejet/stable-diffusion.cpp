@@ -131,14 +131,14 @@ If you want to allow connections from other machines on the network:
 
 > **Drivers & Hardware:** Ensure the Server machine has the necessary drivers installed and functional (e.g., Nvidia Drivers for CUDA, Vulkan SDK, or Metal). If no devices are found, the server will simply fallback to CPU usage.
 
-### Step B: Check if the client is able to connect to the server and see the available devices
+<!-- ### Step B: Check if the client is able to connect to the server and see the available devices
 
 We're assuming the server is running on your local machine, and listening on the default port `50052`. If it's running on a different machine, you can replace `localhost` with the IP address of the server.
 
 **On the Client:**
 
 ```bash
-./sd-cli --rpc localhost:50052 --list-devices
+./sd-cli --rpc-servers localhost:50052 --list-devices
 ```
 
 If the server is running and the client is able to connect, you should see `RPC0    localhost:50052` in the list of devices.
@@ -153,16 +153,16 @@ Name    Description
 CPU     AMD Ryzen 9 5900X 12-Core Processor
 RPC0    localhost:50052
 RPC1    localhost:50052
-```
+``` -->
 
-### Step C: Run with RPC device
+### Step B: Run with RPC device
 
 If everything is working correctly, you can now run the client while offloading some or all of the work to the RPC server.
 
 Example: Setting the main backend to the RPC0 device for doing all the work on the server.
 
 ```bash
-./sd-cli -m models/sd1.5.safetensors -p "A cat" --rpc localhost:50052 --main-backend-device RPC0
+./sd-cli -m models/sd1.5.safetensors -p "A cat" --rpc-servers localhost:50052  --backend RPC0
 ```
 
 ---
@@ -208,7 +208,7 @@ cd ./build/bin/Release
 Pass multiple server addresses separated by commas.
 
 ```bash
-./sd-cli --rpc 192.168.1.10:50052,192.168.1.10:50053,192.168.1.11:50052 --list-devices
+./sd-cli --rpc-servers 192.168.1.10:50052,192.168.1.10:50053,192.168.1.11:50052 [...]
 ```
 
 The client will map these servers to sequential device IDs (e.g., RPC0 from the first server, RPC2, RPC3 from the second, and RPC4 from the third). With this setup, you could for example use RPC0 for the main backend, RPC1 and RPC2 for the text encoders, and RPC3 for the VAE.
@@ -217,4 +217,4 @@ The client will map these servers to sequential device IDs (e.g., RPC0 from the 
 
 ## 6. Performance Considerations
 
-RPC performance is heavily dependent on network bandwidth, as large weights and activations must be transferred back and forth over the network, especially for large models, or when using high resolutions. For best results, ensure your network connection is stable and has sufficient bandwidth (>1Gbps recommended).
+RPC performance is heavily dependent on network bandwidth, as large weights and activations must be transferred back and forth over the network, especially for large models, or when using high resolutions. For best results, ensure your network connection is stable and has sufficient bandwidth (>1Gbps recommended). This shoumd not be a concern if you are running the server and client on the same machine, as the data transfer will happen over the loopback interface.
