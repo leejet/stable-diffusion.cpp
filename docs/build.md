@@ -46,6 +46,29 @@ cmake ..
 cmake --build . --config Release
 ```
 
+## Build with a prebuilt GGML SDK
+
+By default, CMake builds the bundled `ggml` submodule from source. To speed up packaging or downstream builds, you can use an unpacked prebuilt GGML SDK instead:
+
+```shell
+mkdir build && cd build
+cmake .. -DSD_USE_PREBUILT_GGML=ON -DGGML_ROOT_DIR=/path/to/ggml-sdk
+cmake --build . --config Release
+```
+
+CMake can also download an SDK archive from a release. The archive name is derived from the host platform as `ggml-<tag>-<platform>.tar.gz` on Linux/macOS and `ggml-<tag>-<platform>.zip` on Windows:
+
+```shell
+mkdir build && cd build
+cmake .. \
+  -DSD_USE_PREBUILT_GGML=ON \
+  -DGGML_RELEASE_BASE_URL=https://github.com/seasonjs/ggml.cpp-build/releases/download \
+  -DGGML_RELEASE_TAG=<ggml-sdk-tag>
+cmake --build . --config Release
+```
+
+Replace `<ggml-sdk-tag>` with a prebuilt SDK release tag that matches this repository's validated `ggml` revision. The SDK must contain `lib/cmake/ggml/ggml-config.cmake` and must be built from a compatible `ggml` revision with the same ABI-sensitive options expected by `stable-diffusion.cpp`, including `GGML_MAX_NAME=128`.
+
 ## Build with OpenBLAS
 
 ```shell
