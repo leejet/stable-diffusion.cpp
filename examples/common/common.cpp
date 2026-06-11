@@ -454,6 +454,10 @@ ArgOptions SDContextParams::get_options() {
          "enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram; defaults to false)",
          true, &stream_layers},
         {"",
+         "--dit-layer-split",
+         "use layer-split (true tensor parallelism assigning DiT blocks to different GPUs) with --dit-split",
+         true, &dit_layer_split},
+        {"",
          "--force-sdxl-vae-conv-scale",
          "force use of conv scale on sdxl vae",
          true, &force_sdxl_vae_conv_scale},
@@ -820,6 +824,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         max_vram,
         stream_layers,
         dit_split_devices.empty() ? nullptr : dit_split_devices.c_str(),
+        dit_layer_split,
         backend.c_str(),
         params_backend.c_str(),
     };
@@ -2175,7 +2180,7 @@ bool SDGenerationParams::validate(SDMode mode) {
             return false;
         }
         if (hires_denoising_strength <= 0.f || hires_denoising_strength > 1.f) {
-            LOG_ERROR("error: hires denoising strength must be in (0.0, 1.0]");
+            LOG_ERROR("error: hires denoising strength must be in [0.0, 1.0]");
             return false;
         }
         if (!hires_custom_sigmas.empty() && hires_custom_sigmas.size() < 2) {

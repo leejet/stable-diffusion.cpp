@@ -224,7 +224,8 @@ typedef struct {
     enum sd_vae_format_t vae_format;
     float max_vram;  // GiB budget for graph-cut segmented param offload (0 = disabled, -1 = auto free VRAM minus 1 GiB)
     bool stream_layers;  // Enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram)
-    const char* dit_split_devices;  // Comma-separated GPU names to row-split DiT weights across (e.g. "cuda2,cuda3")
+    const char* dit_split_devices;  // Comma-separated GPU names (e.g. "cuda2,cuda3")
+    bool dit_layer_split;           // true = layer-split (tensor parallel), false = row-split
     const char* backend;
     const char* params_backend;
 } sd_ctx_params_t;

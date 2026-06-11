@@ -147,6 +147,7 @@ struct SDContextParams {
     float max_vram              = 0.f;
     bool stream_layers          = false;
     std::string dit_split_devices;
+    bool dit_layer_split = false;
     std::string backend;
     std::string params_backend;
     bool enable_mmap           = false;

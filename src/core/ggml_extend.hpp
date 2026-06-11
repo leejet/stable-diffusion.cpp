@@ -1689,7 +1689,8 @@ protected:
     ggml_backend_buffer_t params_buffer         = nullptr;
     ggml_context* offload_ctx                   = nullptr;
     ggml_backend_buffer_t runtime_params_buffer = nullptr;
-    ggml_backend_buffer_type_t dit_split_buft   = nullptr;  // optional tensor-split buffer type for DiT weights
+    ggml_backend_buffer_type_t dit_split_buft   = nullptr;  // optional tensor-split buffer for DiT weights
+    ggml_backend_sched_t      dit_sched         = nullptr;  // optional multi-backend sched for layer-split
     bool params_on_runtime_backend              = false;
 
     ggml_context* cache_ctx            = nullptr;
@@ -1898,6 +1899,15 @@ protected:
     }
 
     bool alloc_compute_buffer(ggml_cgraph* gf) {
+        // Multi-backend sched path
+        if (dit_sched != nullptr) {
+            if (!ggml_backend_sched_reserve(dit_sched, gf)) {
+                LOG_ERROR("sched reserve failed");
+                return false;
+            }
+            return true;
+        }
+        // Single-backend path
         if (compute_allocr != nullptr) {
             return true;
         }
@@ -2681,7 +2691,12 @@ protected:
         }
 
         int64_t t_compute_begin = ggml_time_ms();
-        ggml_status status      = ggml_backend_graph_compute(runtime_backend, gf);
+        ggml_status status;
+        if (dit_sched != nullptr) {
+            status = ggml_backend_sched_graph_compute(dit_sched, gf);
+        } else {
+            status = ggml_backend_graph_compute(runtime_backend, gf);
+        }
         int64_t t_compute_end   = ggml_time_ms();
         if (status != GGML_STATUS_SUCCESS) {
             LOG_ERROR("%s compute failed: %s", get_desc().c_str(), ggml_status_to_string(status));

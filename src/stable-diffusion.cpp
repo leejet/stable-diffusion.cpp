@@ -625,6 +625,36 @@ public:
                                                                    params_backend_for(SDBackendModule::TE),
                                                                    tensor_storage_map);
 
+                // Layer-split setup (before LTXAVRunner ctor)
+                if (sd_ctx_params->dit_layer_split && sd_ctx_params->dit_split_devices) {
+                    std::vector<int> devs;
+                    std::string s(sd_ctx_params->dit_split_devices);
+                    for (size_t p = 0; p < s.size(); ) {
+                        auto c = s.find(',', p);
+                        auto t = s.substr(p, c == std::string::npos ? c : c - p);
+                        p = (c == std::string::npos) ? s.size() : c + 1;
+                        if (t.find("cuda") == 0) devs.push_back(std::stoi(t.substr(4)));
+                    }
+                    if (devs.size() >= 2) {
+                        auto* spec = new LTXV::MultiBackendSpec();
+                        for (int d : devs)
+                            if (d != 2) { auto* devp = ggml_backend_dev_get(d); if (devp) spec->additional_backends.push_back(ggml_backend_dev_init(devp, nullptr)); }
+                        spec->tensor_backend_fn = [devs](const std::string& n) -> ggml_backend_t {
+                            auto bp = n.find("transformer_blocks.");
+                            if (bp != std::string::npos) {
+                                bp += 21; auto dot = n.find('.', bp);
+                                if (dot != std::string::npos) {
+                                    int blk = std::stoi(n.substr(bp, dot - bp));
+                                    int mid = 24 / (int)devs.size();
+                                    if (blk / mid > 0) return nullptr; // assign to extra
+                                }
+                            }
+                            return nullptr;
+                        };
+                        LTXV::g_pending_multi_backend_spec() = spec;
+                        LOG_INFO("DiT layer-split across %zu GPUs", devs.size());
+                    }
+                }
                 diffusion_model  = std::make_shared<LTXV::LTXAVRunner>(backend_for(SDBackendModule::DIFFUSION),
                                                                       params_backend_for(SDBackendModule::DIFFUSION),
                                                                       tensor_storage_map,
