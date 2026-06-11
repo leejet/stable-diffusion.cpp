@@ -5,6 +5,6 @@ includedir=@CMAKE_INSTALL_FULL_INCLUDEDIR@
 
 Name: stable-diffusion
 Description: Diffusion model(SD,Flux,Wan,Qwen Image,Z-Image,...) inference in pure C/C++
-Version: @SD_INSTALL_VERSION@
+Version: @SDCPP_BUILD_VERSION@
 Libs: -L${libdir} -lggml -lggml-base -lstable-diffusion
 Cflags: -I${includedir}
