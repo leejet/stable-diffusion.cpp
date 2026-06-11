@@ -1673,6 +1673,18 @@ namespace LTXV {
         }
     };
 
+    // Multi-backend layer-split support (from PR #1470, simplified for LTXAVRunner)
+    enum class MultiBackendMode { LAYER_SPLIT, ROW_SPLIT };
+    struct MultiBackendSpec {
+        MultiBackendMode mode = MultiBackendMode::LAYER_SPLIT;
+        std::vector<ggml_backend_t> additional_backends;
+        std::function<ggml_backend_t(const std::string&)> tensor_backend_fn;
+    };
+    inline MultiBackendSpec*& g_pending_multi_backend_spec() {
+        static MultiBackendSpec* spec = nullptr;
+        return spec;
+    }
+
     struct LTXAVRunner : public DiffusionModelRunner {
         LTXAVConfig config;
         LTXAVModelBlock model;
@@ -1693,7 +1705,33 @@ namespace LTXV {
               config(LTXAVConfig::detect_from_weights(tensor_storage_map, prefix)),
               model(config) {
             model.init(params_ctx, tensor_storage_map, prefix);
+            // Pick up layer-split spec if set right before this ctor
+            auto* spec = g_pending_multi_backend_spec();
+            if (spec != nullptr) {
+                extra_backends = std::move(spec->additional_backends);
+                delete spec;
+                g_pending_multi_backend_spec() = nullptr;
+                // Create multi-backend sched
+                if (!extra_backends.empty()) {
+                    std::vector<ggml_backend_t> backends;
+                    backends.push_back(runtime_backend);
+                    for (auto* b : extra_backends) backends.push_back(b);
+                    auto* cpu_be = sd_backend_cpu_init();
+                    backends.push_back(cpu_be);
+                    std::vector<ggml_backend_buffer_type_t> bufts;
+                    for (auto* b : backends) bufts.push_back(ggml_backend_get_default_buffer_type(b));
+                    dit_sched = ggml_backend_sched_new(backends.data(), bufts.data(), (int)backends.size(), 8192, false, false);
+                    LOG_INFO("ltxav layer-split sched: %zu backends", backends.size());
+                }
+            }
         }
+
+        // Layer-split state (only for DiT)
+        bool                                            multi_mode    = false;
+        MultiBackendMode                                multi_kind    = MultiBackendMode::LAYER_SPLIT;
+        std::vector<ggml_backend_t>                     extra_backends;
+        std::function<ggml_backend_t(const std::string&)> tensor_fn   = nullptr;
+        ggml_backend_sched_t                            dit_sched     = nullptr;
 
         std::string get_desc() override {
             return "ltxav";

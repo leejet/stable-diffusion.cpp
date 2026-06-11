@@ -5,6 +5,7 @@
 
 #include "core/ggml_extend.hpp"
 #include "core/ggml_graph_cut.h"
+#include "ggml-cuda.h"
 
 #include "core/rng.hpp"
 #include "core/rng_mt19937.hpp"
@@ -623,10 +624,68 @@ public:
                 cond_stage_model = std::make_shared<LTXAVEmbedder>(backend_for(SDBackendModule::TE),
                                                                    params_backend_for(SDBackendModule::TE),
                                                                    tensor_storage_map);
+
+                // Layer-split setup (before LTXAVRunner ctor)
+                if (sd_ctx_params->dit_layer_split && sd_ctx_params->dit_split_devices) {
+                    std::vector<int> devs;
+                    std::string s(sd_ctx_params->dit_split_devices);
+                    for (size_t p = 0; p < s.size(); ) {
+                        auto c = s.find(',', p);
+                        auto t = s.substr(p, c == std::string::npos ? c : c - p);
+                        p = (c == std::string::npos) ? s.size() : c + 1;
+                        if (t.find("cuda") == 0) devs.push_back(std::stoi(t.substr(4)));
+                    }
+                    if (devs.size() >= 2) {
+                        auto* spec = new LTXV::MultiBackendSpec();
+                        for (int d : devs)
+                            if (d != 2) { auto* devp = ggml_backend_dev_get(d); if (devp) spec->additional_backends.push_back(ggml_backend_dev_init(devp, nullptr)); }
+                        spec->tensor_backend_fn = [devs](const std::string& n) -> ggml_backend_t {
+                            auto bp = n.find("transformer_blocks.");
+                            if (bp != std::string::npos) {
+                                bp += 21; auto dot = n.find('.', bp);
+                                if (dot != std::string::npos) {
+                                    int blk = std::stoi(n.substr(bp, dot - bp));
+                                    int mid = 24 / (int)devs.size();
+                                    if (blk / mid > 0) return nullptr; // assign to extra
+                                }
+                            }
+                            return nullptr;
+                        };
+                        LTXV::g_pending_multi_backend_spec() = spec;
+                        LOG_INFO("DiT layer-split across %zu GPUs", devs.size());
+                    }
+                }
                 diffusion_model  = std::make_shared<LTXV::LTXAVRunner>(backend_for(SDBackendModule::DIFFUSION),
                                                                       params_backend_for(SDBackendModule::DIFFUSION),
                                                                       tensor_storage_map,
                                                                       "model.diffusion_model");
+
+                // === DiT Tensor Split across GPUs ===
+                if (sd_ctx_params->dit_split_devices && strlen(sd_ctx_params->dit_split_devices) > 0) {
+                    std::string spec(sd_ctx_params->dit_split_devices);
+                    std::vector<int> split_devices;
+                    int main_device = -1;
+                    for (size_t pos = 0; pos < spec.size(); ) {
+                        auto comma = spec.find(',', pos);
+                        std::string token = spec.substr(pos, comma == std::string::npos ? comma : comma - pos);
+                        pos = (comma == std::string::npos) ? spec.size() : comma + 1;
+                        if (token.find("cuda") == 0) {
+                            int idx = std::stoi(token.substr(4));
+                            split_devices.push_back(idx);
+                            if (main_device < 0) main_device = idx;
+                        }
+                    }
+                    if (split_devices.size() >= 2) {
+                        float ts[GGML_CUDA_MAX_DEVICES] = {};
+                        float frac = 1.0f / (float)split_devices.size();
+                        for (int d : split_devices) ts[d] = frac;
+                        diffusion_model->set_dit_split_buft(ggml_backend_cuda_split_buffer_type(main_device, ts));
+                        LOG_INFO("DiT tensor split across GPUs: %s (%.0f%% each)",
+                                 sd_ctx_params->dit_split_devices, frac * 100.0f);
+                    } else {
+                        LOG_WARN("--dit-split needs >=2 GPUs, got '%s'", sd_ctx_params->dit_split_devices);
+                    }
+                }
             } else if (sd_version_is_wan(version)) {
                 cond_stage_model = std::make_shared<T5CLIPEmbedder>(backend_for(SDBackendModule::TE),
                                                                     params_backend_for(SDBackendModule::TE),
