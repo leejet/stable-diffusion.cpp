@@ -3291,7 +3291,7 @@ struct GenerationRequest {
             hires.custom_sigmas       = nullptr;
             hires.custom_sigmas_count = 0;
         }
-        hires.denoising_strength = std::clamp(hires.denoising_strength, 0.0001f, 1.f);
+        hires.denoising_strength = std::clamp(hires.denoising_strength, 0.f, 1.f);
         hires.steps              = std::max(0, hires.steps);
 
         if (hires.target_width > 0 && hires.target_height > 0) {

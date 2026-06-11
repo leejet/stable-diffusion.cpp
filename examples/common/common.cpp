@@ -2182,8 +2182,8 @@ bool SDGenerationParams::validate(SDMode mode) {
             LOG_ERROR("error: hires steps must be >= 0");
             return false;
         }
-        if (hires_denoising_strength <= 0.f || hires_denoising_strength > 1.f) {
-            LOG_ERROR("error: hires denoising strength must be in (0.0, 1.0]");
+        if (hires_denoising_strength < 0.f || hires_denoising_strength > 1.f) {
+            LOG_ERROR("error: hires denoising strength must be in [0.0, 1.0]");
             return false;
         }
         if (!hires_custom_sigmas.empty() && hires_custom_sigmas.size() < 2) {
