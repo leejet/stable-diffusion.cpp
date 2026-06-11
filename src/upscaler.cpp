@@ -179,8 +179,8 @@ upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
     return upscaler_ctx;
 }
 
-sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, uint32_t upscale_factor) {
-    return upscaler_ctx->upscaler->upscale(input_image, upscale_factor);
+sd_image_t* upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, uint32_t upscale_factor) {
+    return &upscaler_ctx->upscaler->upscale(input_image, upscale_factor);
 }
 
 int get_upscale_factor(upscaler_ctx_t* upscaler_ctx) {

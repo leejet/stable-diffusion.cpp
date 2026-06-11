@@ -815,7 +815,8 @@ int main(int argc, const char* argv[]) {
                 SDImageOwner current_image(results[i]);
                 results[i] = {0, 0, 0, nullptr};
                 for (int u = 0; u < gen_params.upscale_repeats; ++u) {
-                    SDImageOwner upscaled_image(upscale(upscaler_ctx.get(), current_image.get(), upscale_factor));
+                    auto image= upscale(upscaler_ctx.get(), current_image.get(), upscale_factor);
+                    SDImageOwner upscaled_image(*image);
                     if (upscaled_image.get().data == nullptr) {
                         LOG_ERROR("upscale failed");
                         break;
