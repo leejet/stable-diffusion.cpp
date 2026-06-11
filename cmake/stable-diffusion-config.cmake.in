@@ -1,0 +1,30 @@
+set(SD_VERSION      @SD_INSTALL_VERSION@)
+set(SD_BUILD_COMMIT @SD_BUILD_COMMIT@)
+set(SD_BUILD_NUMBER @SD_BUILD_NUMBER@)
+set(SD_SHARED_LIB   @BUILD_SHARED_LIBS@)
+
+@PACKAGE_INIT@
+
+set_and_check(SD_INCLUDE_DIR "@PACKAGE_SD_INCLUDE_INSTALL_DIR@")
+set_and_check(SD_LIB_DIR     "@PACKAGE_SD_LIB_INSTALL_DIR@")
+set_and_check(SD_BIN_DIR     "@PACKAGE_SD_BIN_INSTALL_DIR@")
+
+find_package(ggml REQUIRED HINTS ${SD_LIB_DIR}/cmake)
+
+find_library(stable-diffusion_LIBRARY stable-diffusion
+    REQUIRED
+    HINTS ${SD_LIB_DIR}
+    NO_CMAKE_FIND_ROOT_PATH
+)
+
+add_library(stable-diffusion UNKNOWN IMPORTED)
+set_target_properties(stable-diffusion
+    PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${SD_INCLUDE_DIR}"
+        INTERFACE_LINK_LIBRARIES "ggml::ggml;ggml::ggml-base;"
+        IMPORTED_LINK_INTERFACE_LANGUAGES "CXX"
+        IMPORTED_LOCATION "${stable-diffusion_LIBRARY}"
+        INTERFACE_COMPILE_FEATURES "c_std_11;cxx_std_17"
+        POSITION_INDEPENDENT_CODE ON)
+
+check_required_components(Stable-diffusion)
