@@ -2,6 +2,8 @@
 #include <cstring>
 #include <condition_variable>
 #include <exception>
+#include <fstream>
+#include <memory>
 #include <mutex>
 #include <regex>
 #include <string>
@@ -11,6 +13,7 @@
 #include "model.h"
 #include "model_io/gguf_io.h"
 #include "model_io/safetensors_io.h"
+#include "model_io/streaming_writer.h"
 #include "util.h"
 
 #include "ggml-cpu.h"
@@ -44,6 +47,42 @@ static TensorWritePlan tensor_write_plan_from_export_info(const TensorExportInfo
     return plan;
 }
 
+static std::vector<TensorWritePlan> tensor_write_plans_from_export_infos(const std::vector<TensorExportInfo>& tensors) {
+    std::vector<TensorWritePlan> plans;
+    plans.reserve(tensors.size());
+    for (const TensorExportInfo& info : tensors) {
+        plans.push_back(tensor_write_plan_from_export_info(info));
+    }
+    return plans;
+}
+
+static bool preallocate_output_file(const std::string& output_path, uint64_t file_size, std::string* error) {
+    if (file_size == 0) {
+        return true;
+    }
+
+    std::fstream file(output_path, std::ios::binary | std::ios::in | std::ios::out);
+    if (!file.is_open()) {
+        if (error != nullptr) {
+            *error = "failed to open output file '" + output_path + "' for preallocation";
+        }
+        return false;
+    }
+
+    // This portable fallback sets the final file size. A platform-specific
+    // posix_fallocate/ftruncate path can replace it later.
+    file.seekp(static_cast<std::streamoff>(file_size - 1), std::ios::beg);
+    file.put('\0');
+    file.flush();
+    if (!file) {
+        if (error != nullptr) {
+            *error = "failed to preallocate output file '" + output_path + "'";
+        }
+        return false;
+    }
+    return true;
+}
+
 static ggml_type get_export_tensor_type(ModelLoader& model_loader,
                                         const TensorStorage& tensor_storage,
                                         ggml_type type,
@@ -70,23 +109,18 @@ static ggml_type get_export_tensor_type(ModelLoader& model_loader,
 static bool collect_tensors_for_export(ModelLoader& model_loader,
                                        ggml_type type,
                                        const TensorTypeRules& tensor_type_rules,
-                                       int n_threads,
                                        std::vector<TensorExportInfo>& tensors) {
-    std::mutex tensor_mutex;
-    auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
+    tensors.clear();
+    tensors.reserve(model_loader.get_tensor_storage_map().size());
+    for (const auto& kv : model_loader.get_tensor_storage_map()) {
+        const TensorStorage& tensor_storage = kv.second;
         TensorExportInfo info;
         info.storage = tensor_storage;
         info.type    = get_export_tensor_type(model_loader, tensor_storage, type, tensor_type_rules);
-
-        std::lock_guard<std::mutex> lock(tensor_mutex);
         tensors.push_back(std::move(info));
-        *dst_tensor = nullptr;
-        return true;
-    };
-
-    bool success = model_loader.load_tensors(on_new_tensor_cb, n_threads);
+    }
     LOG_INFO("collected %zu tensors for export", tensors.size());
-    return success;
+    return true;
 }
 
 static bool load_tensor_for_export(ModelLoader& model_loader, TensorExportJob& job) {
@@ -125,10 +159,10 @@ static bool load_tensor_for_export(ModelLoader& model_loader, TensorExportJob& j
     return true;
 }
 
-template <typename Writer>
 static bool stream_tensor_data(ModelLoader& model_loader,
+                               const std::string& output_path,
                                const std::vector<TensorExportInfo>& tensors,
-                               Writer& writer,
+                               const StreamingModelWriter& writer,
                                int n_threads,
                                std::string* error) {
     n_threads = n_threads > 0 ? n_threads : sd_get_num_physical_cores();
@@ -182,8 +216,14 @@ static bool stream_tensor_data(ModelLoader& model_loader,
         memory_cv.notify_all();
     };
 
-    for (int worker_index = 0; worker_index < n_threads; worker_index++) {
-        workers.emplace_back([&, worker_index]() {
+    for (int worker = 0; worker < n_threads; worker++) {
+        workers.emplace_back([&]() {
+            std::fstream output_file(output_path, std::ios::binary | std::ios::in | std::ios::out);
+            if (!output_file.is_open()) {
+                fail("failed to open output file '" + output_path + "' for tensor writing");
+                return;
+            }
+
             while (true) {
                 size_t tensor_index = 0;
                 {
@@ -215,10 +255,10 @@ static bool stream_tensor_data(ModelLoader& model_loader,
                 }
 
                 std::string write_error;
-                if (!writer.write_tensor(tensor_index,
+                if (!writer.write_tensor(output_file,
+                                         tensor_index,
                                          job.data.empty() ? nullptr : job.data.data(),
                                          job.data.size(),
-                                         worker_index,
                                          &write_error)) {
                     release_memory(tensor_bytes);
                     fail(write_error.empty() ? "streaming conversion write failed" : write_error);
@@ -254,38 +294,20 @@ static bool stream_tensor_data(ModelLoader& model_loader,
     return true;
 }
 
-static bool write_gguf_file_streaming(ModelLoader& model_loader,
-                                      const char* output_path,
-                                      const std::vector<TensorExportInfo>& tensors,
-                                      int n_threads,
-                                      std::string* error) {
-    std::vector<TensorWritePlan> plans;
-    plans.reserve(tensors.size());
-    for (const TensorExportInfo& info : tensors) {
-        plans.push_back(tensor_write_plan_from_export_info(info));
-    }
-    GGUFStreamingWriter writer;
-    if (!writer.open(output_path, plans, n_threads, error)) {
+static bool write_model_file_streaming(ModelLoader& model_loader,
+                                       const std::string& output_path,
+                                       const std::vector<TensorExportInfo>& tensors,
+                                       StreamingModelWriter& writer,
+                                       int n_threads,
+                                       std::string* error) {
+    std::vector<TensorWritePlan> plans = tensor_write_plans_from_export_infos(tensors);
+    if (!writer.write_metadata(output_path, plans, error)) {
         return false;
     }
-    return stream_tensor_data(model_loader, tensors, writer, n_threads, error);
-}
-
-static bool write_safetensors_file_streaming(ModelLoader& model_loader,
-                                             const char* output_path,
-                                             const std::vector<TensorExportInfo>& tensors,
-                                             int n_threads,
-                                             std::string* error) {
-    std::vector<TensorWritePlan> plans;
-    plans.reserve(tensors.size());
-    for (const TensorExportInfo& info : tensors) {
-        plans.push_back(tensor_write_plan_from_export_info(info));
-    }
-    SafetensorsStreamingWriter writer;
-    if (!writer.open(output_path, plans, n_threads, error)) {
+    if (!preallocate_output_file(output_path, writer.file_size(), error)) {
         return false;
     }
-    return stream_tensor_data(model_loader, tensors, writer, n_threads, error);
+    return stream_tensor_data(model_loader, output_path, tensors, writer, n_threads, error);
 }
 
 bool convert_with_threads(const char* input_path,
@@ -317,14 +339,16 @@ bool convert_with_threads(const char* input_path,
     TensorTypeRules type_rules = parse_tensor_type_rules(tensor_type_rules);
 
     std::vector<TensorExportInfo> tensors;
-    bool success = collect_tensors_for_export(model_loader, type, type_rules, n_threads, tensors);
+    bool success = collect_tensors_for_export(model_loader, type, type_rules, tensors);
     std::string error;
     if (success) {
+        std::unique_ptr<StreamingModelWriter> writer;
         if (output_is_safetensors) {
-            success = write_safetensors_file_streaming(model_loader, output_path, tensors, n_threads, &error);
+            writer = std::make_unique<SafetensorsStreamingWriter>();
         } else {
-            success = write_gguf_file_streaming(model_loader, output_path, tensors, n_threads, &error);
+            writer = std::make_unique<GGUFStreamingWriter>();
         }
+        success = write_model_file_streaming(model_loader, output_path, tensors, *writer, n_threads, &error);
     }
 
     if (!success && !error.empty()) {
