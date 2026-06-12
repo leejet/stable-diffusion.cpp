@@ -423,6 +423,18 @@ ArgOptions SDContextParams::get_options() {
          "--params-backend",
          "parameter backend assignment, e.g. cpu or diffusion=cpu,clip=cpu",
          &params_backend},
+        {"",
+         "--multi-gpu-mode",
+         "how to split a too-large DiT across GPUs (auto-fit): "
+         "row (matmul rows, CUDA/SYCL), layer (whole blocks, generic), or off "
+         "(default: row)",
+         &multi_gpu_mode},
+        {"",
+         "--fit-compute-reserve",
+         "auto-fit: per-component compute-buffer reserve in MiB as a component "
+         "map, e.g. dit=2048,vae=1024,cond=512 (missing keys keep the built-in "
+         "defaults)",
+         &fit_compute_reserve},
     };
 
     options.int_options = {
@@ -439,19 +451,6 @@ ArgOptions SDContextParams::get_options() {
          "--fit-target",
          "auto-fit: MiB of free memory to leave on each GPU (default: 512)",
          &auto_fit_target_mb},
-        {"",
-         "--fit-compute-reserve-dit",
-         "auto-fit: MiB reserved on the DiT's GPU for its compute buffer "
-         "(0 keeps the built-in default)",
-         &auto_fit_compute_reserve_dit_mb},
-        {"",
-         "--fit-compute-reserve-vae",
-         "auto-fit: MiB reserved on the VAE's GPU for its compute buffer",
-         &auto_fit_compute_reserve_vae_mb},
-        {"",
-         "--fit-compute-reserve-cond",
-         "auto-fit: MiB reserved on the conditioner's GPU for its compute buffer",
-         &auto_fit_compute_reserve_cond_mb},
     };
 
     options.float_options = {
@@ -518,6 +517,18 @@ ArgOptions SDContextParams::get_options() {
          "--chroma-enable-t5-mask",
          "enable t5 mask for chroma",
          true, &chroma_use_t5_mask},
+        {"",
+         "--control-net-cpu",
+         "keep controlnet in cpu (deprecated alias for --backend control_net=cpu)",
+         true, &control_net_cpu},
+        {"",
+         "--clip-on-cpu",
+         "keep clip in cpu (deprecated alias for --backend clip=cpu)",
+         true, &clip_on_cpu},
+        {"",
+         "--vae-on-cpu",
+         "keep vae in cpu (deprecated alias for --backend vae=cpu)",
+         true, &vae_on_cpu},
         {"",
          "--auto-fit",
          "automatically pick DiT/VAE/Conditioner device placements based on "
@@ -771,7 +782,9 @@ std::string SDContextParams::to_string() const {
         << "  auto_fit: " << (auto_fit ? "true" : "false") << ",\n"
         << "  auto_fit_target_mb: " << auto_fit_target_mb << ",\n"
         << "  auto_fit_dry_run: " << (auto_fit_dry_run ? "true" : "false") << ",\n"
+        << "  fit_compute_reserve: \"" << fit_compute_reserve << "\",\n"
         << "  auto_multi_gpu: " << (auto_multi_gpu ? "true" : "false") << ",\n"
+        << "  multi_gpu_mode: \"" << multi_gpu_mode << "\",\n"
         << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
@@ -791,6 +804,30 @@ std::string SDContextParams::to_string() const {
 }
 
 sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool free_params_immediately, bool taesd_preview) {
+    // Fold the deprecated --*-on-cpu aliases into the generic backend spec.
+    // They are prepended so explicit --backend entries take precedence.
+    std::string alias_spec;
+    if (control_net_cpu) {
+        alias_spec += "control_net=cpu,";
+    }
+    if (clip_on_cpu) {
+        alias_spec += "clip=cpu,";
+    }
+    if (vae_on_cpu) {
+        alias_spec += "vae=cpu,";
+    }
+    if (!alias_spec.empty()) {
+        backend = alias_spec + backend;
+        if (backend.back() == ',') {
+            backend.pop_back();
+        }
+        control_net_cpu = false;
+        clip_on_cpu     = false;
+        vae_on_cpu      = false;
+        printf("warning: --clip-on-cpu / --vae-on-cpu / --control-net-cpu are deprecated, use --backend instead (folded into --backend \"%s\")\n",
+               backend.c_str());
+    }
+
     embedding_vec.clear();
     embedding_vec.reserve(embedding_map.size());
     for (const auto& kv : embedding_map) {
@@ -850,10 +887,9 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         auto_fit,
         auto_fit_target_mb,
         auto_fit_dry_run,
-        auto_fit_compute_reserve_dit_mb,
-        auto_fit_compute_reserve_vae_mb,
-        auto_fit_compute_reserve_cond_mb,
+        fit_compute_reserve.c_str(),
         auto_multi_gpu,
+        multi_gpu_mode.c_str(),
     };
     return sd_ctx_params;
 }

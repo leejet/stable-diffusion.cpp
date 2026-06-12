@@ -230,21 +230,28 @@ typedef struct {
     // into the same backend assignment that `backend` / `params_backend` use).
     // `auto_fit_target_mb` is the memory to leave free per GPU (default 512).
     // `auto_fit_dry_run` prints the plan and aborts init before loading.
-    // `auto_fit_compute_reserve_{dit,vae,cond}_mb` let the user tune the
-    // per-component compute-buffer reserve; 0 means use the built-in default.
+    // `auto_fit_compute_reserve` tunes the per-component compute-buffer
+    // reserve in MiB as a component map, e.g. "dit=2048,vae=1024,cond=512"
+    // (same component-key style as `backend`); missing keys / NULL keep the
+    // built-in defaults.
     bool auto_fit;
     int  auto_fit_target_mb;
     bool auto_fit_dry_run;
-    int  auto_fit_compute_reserve_dit_mb;
-    int  auto_fit_compute_reserve_vae_mb;
-    int  auto_fit_compute_reserve_cond_mb;
+    const char* auto_fit_compute_reserve;
 
     // When more than one GPU device is present, prefer placing different
     // components on different GPUs to balance load and fit larger total
     // working sets. Set false to keep all components on a single GPU when
     // they fit. Defaults to true. Each component still lives entirely on
-    // one device — no intra-tensor row split.
+    // one device unless multi_gpu_mode splits it (see below).
     bool auto_multi_gpu;
+
+    // How to split a single component (currently only the DiT) across GPUs
+    // when it doesn't fit on one but fits across several: "row" (matmul rows
+    // split via the backend's stock split buffer type, CUDA/SYCL),
+    // "layer" (whole blocks per GPU, routed by a scheduler, backend-generic),
+    // or "off" (never split a single component). NULL / empty => "row".
+    const char* multi_gpu_mode;
 } sd_ctx_params_t;
 
 typedef struct {

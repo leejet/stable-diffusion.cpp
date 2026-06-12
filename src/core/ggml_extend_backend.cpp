@@ -507,6 +507,10 @@ ggml_backend_t SDBackendManager::params_backend(SDBackendModule module) {
     return init_cached_backend(name);
 }
 
+ggml_backend_t SDBackendManager::ensure_backend(const std::string& device_name) {
+    return init_cached_backend(device_name);
+}
+
 bool SDBackendManager::runtime_backend_is_cpu(SDBackendModule module) {
     return sd_backend_is_cpu(runtime_backend(module));
 }
@@ -653,4 +657,23 @@ const char* sd_backend_module_name(SDBackendModule module) {
             return "upscaler";
     }
     return "unknown";
+}
+
+ggml_backend_buffer_type_t sd_backend_split_buffer_type(ggml_backend_t backend, int main_device, const float* tensor_split) {
+    if (backend == nullptr) {
+        return nullptr;
+    }
+    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+    if (dev == nullptr) {
+        return nullptr;
+    }
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    if (reg == nullptr) {
+        return nullptr;
+    }
+    auto fn = (ggml_backend_split_buffer_type_t)ggml_backend_reg_get_proc_address(reg, "ggml_backend_split_buffer_type");
+    if (fn == nullptr) {
+        return nullptr;  // backend has no row-split support (non-CUDA/SYCL)
+    }
+    return fn(main_device, tensor_split);
 }
