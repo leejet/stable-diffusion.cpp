@@ -256,6 +256,8 @@ bool ModelManager::stage_tensors_to_compute_backend(const std::vector<TensorStat
             continue;
         }
 
+        int64_t t0 = ggml_time_ms();
+
         ggml_init_params init_params;
         init_params.mem_size   = std::max<size_t>(1, states.size()) * ggml_tensor_overhead();
         init_params.mem_buffer = nullptr;
@@ -303,10 +305,12 @@ bool ModelManager::stage_tensors_to_compute_backend(const std::vector<TensorStat
         }
         compute_staging_blocks_.push_back(std::move(block));
 
-        LOG_DEBUG("model manager staged compute params (%6.2f MB, %zu tensors) to %s",
+        int64_t t1 = ggml_time_ms();
+        LOG_DEBUG("model manager staged compute params (%6.2f MB, %zu tensors) to %s, taking %.2fs",
                   ggml_backend_buffer_get_size(compute_buffer) / (1024.f * 1024.f),
                   states.size(),
-                  ggml_backend_name(compute_backend));
+                  ggml_backend_name(compute_backend),
+                  (t1 - t0) * 1.0f / 1000);
     }
 
     return true;
@@ -678,7 +682,17 @@ ggml_backend_buffer_type_t ModelManager::params_buffer_type_for(const TensorStat
         LOG_ERROR("model manager params backend is null for tensor '%s'", state.name.c_str());
         return nullptr;
     }
-    return ggml_backend_get_default_buffer_type(state.params_backend);
+    ggml_backend_buffer_type_t params_buft = nullptr;
+    if (state.compute_backend != nullptr && state.params_backend != state.compute_backend) {
+        ggml_backend_dev_t compute_dev = ggml_backend_get_device(state.compute_backend);
+        if (compute_dev != nullptr) {
+            params_buft = ggml_backend_dev_host_buffer_type(compute_dev);
+        }
+    }
+    if (params_buft == nullptr) {
+        params_buft = ggml_backend_get_default_buffer_type(state.params_backend);
+    }
+    return params_buft;
 }
 
 void ModelManager::free_compute_staging_block(ComputeStagingBlock& block) {

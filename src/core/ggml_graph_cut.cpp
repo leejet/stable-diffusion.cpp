@@ -721,7 +721,7 @@ namespace sd::ggml_graph_cut {
                 GGML_ASSERT(!candidate_plan.segments.empty());
 
                 const auto& candidate_segment = candidate_plan.segments.back();
-                const size_t candidate_bytes   = graph_cut_segment_vram_bytes(candidate_segment);
+                const size_t candidate_bytes  = graph_cut_segment_vram_bytes(candidate_segment);
                 if (candidate_bytes > max_graph_vram_bytes) {
                     break;
                 }
