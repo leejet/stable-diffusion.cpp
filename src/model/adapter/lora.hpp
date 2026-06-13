@@ -658,7 +658,7 @@ struct LoraModel : public GGMLRunner {
                 if (lokr_w2)
                     applied_lora_tensors.insert(lokr_w2_name);
                 if (lokr_w2_a)
-                    applied_lora_tensors.insert(lokr_w2_name);
+                    applied_lora_tensors.insert(lokr_w2_a_name);
                 if (lokr_w2_b)
                     applied_lora_tensors.insert(lokr_w2_b_name);
                 applied_lora_tensors.insert(alpha_name);
