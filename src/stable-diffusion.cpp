@@ -90,6 +90,7 @@ const char* model_version_to_str[] = {
     "Longcat-Image",
     "PiD",
     "Ideogram 4",
+    "ESRGAN",
 };
 
 const char* sampling_methods_str[] = {
@@ -4996,17 +4997,41 @@ static sd::Tensor<float> upscale_ltx_spatial_video_latent(sd_ctx_t* sd_ctx,
         return {};
     }
 
+    auto upsampler_manager = std::make_shared<ModelManager>();
+    upsampler_manager->set_n_threads(sd_ctx->sd->n_threads);
+    upsampler_manager->set_enable_mmap(sd_ctx->sd->enable_mmap);
+    ModelLoader& model_loader = upsampler_manager->loader();
+    if (!model_loader.init_from_file(model_path)) {
+        LOG_ERROR("init LTX latent upsampler model loader from file failed: '%s'", model_path);
+        return {};
+    }
+
     std::unique_ptr<LTXVUpsampler::LatentUpsamplerRunner> upsampler =
         std::make_unique<LTXVUpsampler::LatentUpsamplerRunner>(sd_ctx->sd->backend_for(SDBackendModule::UPSCALER),
-                                                               sd_ctx->sd->backend_for(SDBackendModule::UPSCALER));
+                                                               sd_ctx->sd->params_backend_for(SDBackendModule::UPSCALER),
+                                                               model_loader.get_tensor_storage_map());
     const size_t max_graph_vram_bytes = sd::ggml_graph_cut::max_vram_gib_to_bytes(sd_ctx->sd->max_vram);
     upsampler->set_max_graph_vram_bytes(max_graph_vram_bytes);
-    if (!upsampler->load_from_file(model_path, sd_ctx->sd->n_threads)) {
-        LOG_ERROR("load LTX latent upsampler failed");
+    if (upsampler->model == nullptr) {
+        LOG_ERROR("init LTX latent upsampler from metadata failed");
+        return {};
+    }
+
+    std::map<std::string, ggml_tensor*> tensors;
+    upsampler->get_param_tensors(tensors);
+    upsampler->set_weight_manager(upsampler_manager);
+    if (!upsampler_manager->register_param_tensors("LTX latent upsampler",
+                                                   std::move(tensors),
+                                                   ModelManager::ResidencyMode::Resident,
+                                                   sd_ctx->sd->backend_for(SDBackendModule::UPSCALER),
+                                                   sd_ctx->sd->params_backend_for(SDBackendModule::UPSCALER)) ||
+        !upsampler_manager->validate_registered_tensors()) {
+        LOG_ERROR("register LTX latent upsampler tensors with model manager failed");
         return {};
     }
 
     sd::Tensor<float> upscaled = upsampler->compute(sd_ctx->sd->n_threads, unnormalized);
+    upsampler_manager.reset();
     upsampler.reset();
     if (upscaled.empty()) {
         LOG_ERROR("LTX latent spatial upscale failed");
