@@ -240,20 +240,25 @@ namespace LTXVUpsampler {
     protected:
         int64_t channels;
         int stride;
-        ggml_tensor* kernel = nullptr;
         std::vector<float> kernel_data;
+        std::string kernel_name;
 
         void init_params(ggml_context* ctx,
                          const String2TensorStorage& tensor_storage_map = {},
                          const std::string prefix                       = "") override {
+            SD_UNUSED(ctx);
             SD_UNUSED(tensor_storage_map);
             if (stride == 1) {
                 return;
             }
-            kernel           = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 5, 5, 1, channels);
-            std::string name = prefix + "kernel";
-            ggml_set_name(kernel, name.c_str());
+            kernel_name = prefix + "kernel";
+        }
 
+    public:
+        BlurDownsample(int64_t channels, int stride)
+            : channels(channels),
+              stride(stride) {
+            GGML_ASSERT(stride >= 1);
             static const float binomial[5] = {1.f, 4.f, 6.f, 4.f, 1.f};
             kernel_data.resize(static_cast<size_t>(5 * 5 * channels));
             for (int64_t c = 0; c < channels; ++c) {
@@ -266,26 +271,16 @@ namespace LTXVUpsampler {
             }
         }
 
-    public:
-        BlurDownsample(int64_t channels, int stride)
-            : channels(channels),
-              stride(stride) {
-            GGML_ASSERT(stride >= 1);
-        }
-
-        void load_fixed_tensors() {
-            if (kernel == nullptr || kernel_data.empty()) {
-                return;
-            }
-            ggml_backend_tensor_set(kernel, kernel_data.data(), 0, kernel_data.size() * sizeof(float));
-        }
-
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             if (stride == 1) {
                 return x;
             }
-            GGML_ASSERT(kernel != nullptr);
+            GGML_ASSERT(ctx != nullptr);
+            GGML_ASSERT(!kernel_data.empty());
             GGML_ASSERT(x->ne[2] == channels);
+            ggml_tensor* kernel = ggml_new_tensor_4d(ctx->ggml_ctx, GGML_TYPE_F32, 5, 5, 1, channels);
+            ggml_set_name(kernel, kernel_name.empty() ? "blur_down.kernel" : kernel_name.c_str());
+            ctx->bind_backend_tensor_data(kernel, kernel_data.data());
             if (ctx->conv2d_direct_enabled) {
                 return ggml_conv_2d_dw_direct(ctx->ggml_ctx, kernel, x, stride, stride, 2, 2, 1, 1);
             }
@@ -309,11 +304,6 @@ namespace LTXVUpsampler {
             blocks["conv"]          = std::shared_ptr<GGMLBlock>(new Conv2d(mid_channels, num * num * mid_channels, {3, 3}, {1, 1}, {1, 1}));
             blocks["pixel_shuffle"] = std::shared_ptr<GGMLBlock>(new PixelShuffleND(num));
             blocks["blur_down"]     = std::shared_ptr<GGMLBlock>(new BlurDownsample(mid_channels, den));
-        }
-
-        void load_fixed_tensors() {
-            auto blur_down = std::dynamic_pointer_cast<BlurDownsample>(blocks["blur_down"]);
-            blur_down->load_fixed_tensors();
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
@@ -426,14 +416,6 @@ namespace LTXVUpsampler {
             sd::ggml_graph_cut::mark_graph_cut(x, "ltx_latent_upsampler.final", "x");
             return x;
         }
-
-        void load_fixed_tensors() {
-            if (!config.rational_resampler) {
-                return;
-            }
-            auto upsampler = std::dynamic_pointer_cast<SpatialRationalResampler>(blocks["upsampler"]);
-            upsampler->load_fixed_tensors();
-        }
     };
 
     struct LatentUpsamplerRunner : public GGMLRunner {
@@ -490,12 +472,11 @@ namespace LTXVUpsampler {
             if (config.rational_resampler) {
                 ignore_tensors.insert("upsampler.blur_down.kernel");
             }
-            if (!model_loader.load_tensors(tensors, ignore_tensors, n_threads)) {
+            model_loader.set_n_threads(n_threads);
+            if (!model_loader.load_tensors(tensors, ignore_tensors)) {
                 LOG_ERROR("load LTX latent upsampler tensors failed");
                 return false;
             }
-            model->load_fixed_tensors();
-
             LOG_INFO("LTX latent upsampler loaded: in_channels=%" PRId64 ", mid_channels=%" PRId64 ", blocks=%d, scale=%.3f, temporal_factor=%d, rational=%d",
                      config.in_channels,
                      config.mid_channels,
@@ -542,7 +523,7 @@ namespace LTXVUpsampler {
             }
             size_t expected_dim = static_cast<size_t>(x.dim());
             auto get_graph      = [&]() -> ggml_cgraph* { return build_graph(x); };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), expected_dim);
+            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), expected_dim);
         }
     };
 

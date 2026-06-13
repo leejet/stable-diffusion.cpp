@@ -336,9 +336,11 @@ struct ESRGAN : public GGMLRunner {
                 }
             }
 
-            success = model_loader.load_tensors(model_tensors, {}, n_threads);
+            model_loader.set_n_threads(n_threads);
+            success = model_loader.load_tensors(model_tensors);
         } else {
-            success = model_loader.load_tensors(esrgan_tensors, {}, n_threads);
+            model_loader.set_n_threads(n_threads);
+            success = model_loader.load_tensors(esrgan_tensors);
         }
 
         if (!success) {
@@ -367,7 +369,7 @@ struct ESRGAN : public GGMLRunner {
     sd::Tensor<float> compute(const int n_threads,
                               const sd::Tensor<float>& x) {
         auto get_graph = [&]() -> ggml_cgraph* { return build_graph(x); };
-        auto result    = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+        auto result    = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
         return result;
     }
 };
