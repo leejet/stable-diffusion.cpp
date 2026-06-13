@@ -122,6 +122,7 @@ public:
                                 ggml_backend_t params_backend,
                                 size_t* registered_tensor_size = nullptr);
     bool validate_registered_tensors();
+    bool load_all_params_eagerly();
 
     bool prepare_params(const std::vector<ggml_tensor*>& tensors) override;
     void release_compute_backend_params(const std::vector<ggml_tensor*>& tensors) override;

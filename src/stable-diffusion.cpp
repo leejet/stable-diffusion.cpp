@@ -192,6 +192,7 @@ public:
     bool enable_mmap                     = false;
     float max_vram                       = 0.f;
     bool stream_layers                   = false;
+    bool eager_load_params               = false;
     std::string backend_spec;
     std::string params_backend_spec;
 
@@ -326,6 +327,7 @@ public:
         enable_mmap             = sd_ctx_params->enable_mmap;
         max_vram                = sd_ctx_params->max_vram;
         stream_layers           = sd_ctx_params->stream_layers;
+        eager_load_params       = sd_ctx_params->eager_load_params;
         backend_spec            = SAFE_STR(sd_ctx_params->backend);
         params_backend_spec     = SAFE_STR(sd_ctx_params->params_backend);
         if (stream_layers && max_vram == 0.f) {
@@ -1107,8 +1109,15 @@ public:
             LOG_ERROR("model metadata validation failed");
             return false;
         }
-
-        LOG_DEBUG("model metadata validated; weights will be prepared lazily");
+        if (eager_load_params) {
+            if (!model_manager->load_all_params_eagerly()) {
+                LOG_ERROR("eager params load failed");
+                return false;
+            }
+            LOG_DEBUG("model metadata validated; weights pre-loaded to params backend");
+        } else {
+            LOG_DEBUG("model metadata validated; weights will be prepared lazily");
+        }
 
         {
             size_t total_params_ram_size  = 0;
@@ -2637,6 +2646,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->offload_params_to_cpu   = false;
     sd_ctx_params->max_vram                = 0.f;
     sd_ctx_params->stream_layers           = false;
+    sd_ctx_params->eager_load_params       = false;
     sd_ctx_params->enable_mmap             = false;
     sd_ctx_params->keep_clip_on_cpu        = false;
     sd_ctx_params->keep_control_net_on_cpu = false;
@@ -2686,6 +2696,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "offload_params_to_cpu: %s\n"
              "max_vram: %.3f\n"
              "stream_layers: %s\n"
+             "eager_load_params: %s\n"
              "backend: %s\n"
              "params_backend: %s\n"
              "keep_clip_on_cpu: %s\n"
@@ -2726,6 +2737,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              BOOL_STR(sd_ctx_params->offload_params_to_cpu),
              sd_ctx_params->max_vram,
              BOOL_STR(sd_ctx_params->stream_layers),
+             BOOL_STR(sd_ctx_params->eager_load_params),
              SAFE_STR(sd_ctx_params->backend),
              SAFE_STR(sd_ctx_params->params_backend),
              BOOL_STR(sd_ctx_params->keep_clip_on_cpu),
