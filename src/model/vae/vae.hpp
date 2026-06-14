@@ -1,12 +1,14 @@
-#ifndef __SD_MODEL_VAE_VAE_HPP__
+﻿#ifndef __SD_MODEL_VAE_VAE_HPP__
 #define __SD_MODEL_VAE_VAE_HPP__
 
 #include "core/tensor_ggml.hpp"
 #include "model/common/block.hpp"
+#include "model_manager.h"
 
 struct VAE : public GGMLRunner {
 protected:
     SDVersion version;
+    std::string weight_prefix;
     bool scale_input                                      = true;
     virtual sd::Tensor<float> _compute(const int n_threads,
                                        const sd::Tensor<float>& z,
@@ -62,8 +64,11 @@ protected:
     }
 
 public:
-    VAE(SDVersion version, ggml_backend_t backend, ggml_backend_t params_backend)
-        : version(version), GGMLRunner(backend, params_backend) {}
+    VAE(SDVersion version,
+        ggml_backend_t backend,
+        const std::string& weight_prefix                    = "",
+        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : version(version), weight_prefix(weight_prefix), GGMLRunner(backend, weight_manager) {}
 
     int get_scale_factor() {
         int scale_factor = 8;
@@ -214,7 +219,7 @@ public:
     virtual sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) = 0;
     virtual sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latents)                           = 0;
     virtual sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents)                           = 0;
-    virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix)         = 0;
+    virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors)                                   = 0;
     virtual void set_conv2d_scale(float scale) { SD_UNUSED(scale); };
     virtual void set_temporal_tiling_enabled(bool enabled) { SD_UNUSED(enabled); };
     virtual void set_tiling_params(const sd_tiling_params_t& params) {
@@ -223,8 +228,10 @@ public:
 };
 
 struct FakeVAE : public VAE {
-    FakeVAE(SDVersion version, ggml_backend_t backend, ggml_backend_t params_backend)
-        : VAE(version, backend, params_backend) {}
+    FakeVAE(SDVersion version,
+            ggml_backend_t backend,
+            std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : VAE(version, backend, "", weight_manager) {}
 
     int get_encoder_output_channels(int input_channels) {
         return input_channels;
@@ -251,7 +258,7 @@ struct FakeVAE : public VAE {
         return latents;
     }
 
-    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) override {}
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {}
 
     std::string get_desc() override {
         return "fake_vae";
