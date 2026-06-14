@@ -199,7 +199,52 @@ public:
                 "vae decode compute failed while processing a tile",
                 silent);
         } else {
+            // AUTO: probe first so a too-large decode tiles instead of erroring; output.empty() backstops a real OOM.
+            const bool auto_probe = !tiling_params.enabled && tiling_params.auto_tile;
+            if (auto_probe) {
+                size_t max_bytes = 0;
+                if (tiling_params.extra_tiling_args != nullptr) {
+                    for (const auto& [key, value] : parse_key_value_args(tiling_params.extra_tiling_args, "VAE extra tiling arg")) {
+                        if (key == "max_buffer_size") {
+                            max_bytes = strtoull(value.c_str(), nullptr, 10);
+                        }
+                    }
+                }
+                set_probe_compute_buffer_fits(true, max_bytes);
+            }
             output = _compute(n_threads, input, true);
+            if (auto_probe) {
+                set_probe_compute_buffer_fits(false);
+            }
+            if (output.empty() && !tiling_params.enabled && tiling_params.auto_tile) {
+                free_compute_buffer();
+                if (!silent) {
+                    LOG_WARN("vae: untiled decode buffer exceeded the backend limit; retrying with tiling");
+                }
+                sd_tiling_params_t auto_tiling = tiling_params;
+                auto_tiling.enabled            = true;
+                set_tiling_params(auto_tiling);
+                const int scale_factor = get_scale_factor();
+                int64_t W              = input.shape()[0] * scale_factor;
+                int64_t H              = input.shape()[1] * scale_factor;
+                float tile_overlap;
+                int tile_size_x, tile_size_y;
+                get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, auto_tiling, input.shape()[0], input.shape()[1]);
+                output = tiled_compute(
+                    input,
+                    n_threads,
+                    static_cast<int>(W),
+                    static_cast<int>(H),
+                    scale_factor,
+                    tile_size_x,
+                    tile_size_y,
+                    tile_overlap,
+                    circular_x,
+                    circular_y,
+                    true,
+                    "vae decode compute failed while processing a tile",
+                    silent);
+            }
         }
 
         free_compute_buffer();

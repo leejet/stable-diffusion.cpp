@@ -1705,10 +1705,17 @@ protected:
 
     ggml_context* compute_ctx    = nullptr;
     ggml_gallocr* compute_allocr = nullptr;
+    // Set when alloc_compute_buffer deferred to tiling on purpose (not a failure).
+    bool compute_buffer_deferred_to_tiling = false;
 
     size_t max_graph_vram_bytes           = 0;
     bool stream_layers_enabled            = false;
     size_t observed_max_effective_budget_ = 0;
+
+    // When set, alloc_compute_buffer declines a too-large untiled decode so VAE AUTO can tile.
+    bool probe_compute_buffer_fits_ = false;
+    // Optional user cap (bytes) to force tiling; 0 = no cap.
+    size_t probe_max_bytes_ = 0;
 
     std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
     std::weak_ptr<RunnerWeightManager> weight_manager;
@@ -1978,10 +1985,77 @@ protected:
     }
 
     bool alloc_compute_buffer(ggml_cgraph* gf) {
+        compute_buffer_deferred_to_tiling = false;
         if (compute_allocr != nullptr) {
             return true;
         }
-        compute_allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(runtime_backend));
+        ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(runtime_backend);
+
+        if (probe_compute_buffer_fits_) {
+            // Measure the planned untiled compute buffer once (no allocation), then defer to
+            // tiling before the real reserve hits a raw backend error.
+            ggml_gallocr* probe = ggml_gallocr_new(buft);
+            size_t sizes[1]     = {0};
+            ggml_gallocr_reserve_n_size(probe, gf, nullptr, nullptr, sizes);
+            ggml_gallocr_free(probe);
+            size_t planned = sizes[0];
+
+            // User cap (extra_tiling_args max_buffer_size), any backend.
+            if (probe_max_bytes_ > 0 && planned > probe_max_bytes_) {
+                LOG_DEBUG("%s: untiled compute buffer %.2f MB exceeds requested max_buffer_size %.2f MB; deferring to tiling",
+                          get_desc().c_str(),
+                          planned / 1024.0 / 1024.0,
+                          probe_max_bytes_ / 1024.0 / 1024.0);
+                compute_buffer_deferred_to_tiling = true;
+                return false;
+            }
+
+            // Free VRAM, any non-CPU backend: a decode can fit every op's per-buffer cap yet
+            // still exceed total free VRAM. Margin covers the scratch pool the reserve omits.
+            ggml_backend_dev_t dev = ggml_backend_get_device(runtime_backend);
+            if (dev != nullptr && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                size_t free_vram = 0, total_vram = 0;
+                ggml_backend_dev_memory(dev, &free_vram, &total_vram);
+                size_t margin = planned / 3;
+                if (margin < 512ull * 1024 * 1024) {
+                    margin = 512ull * 1024 * 1024;
+                }
+                if (free_vram > 0 && free_vram < planned + margin) {
+                    LOG_DEBUG("%s: untiled compute buffer %.2f MB won't fit free VRAM; deferring to tiling",
+                              get_desc().c_str(),
+                              planned / 1024.0 / 1024.0);
+                    compute_buffer_deferred_to_tiling = true;
+                    return false;
+                }
+            }
+
+            // Per-buffer cap: Vulkan via supports_op (the real limit; buft_get_max_size only
+            // reports the suballocation block there), other backends via buft_get_max_size.
+            if (sd_backend_is(runtime_backend, "Vulkan")) {
+                for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
+                    ggml_tensor* op = ggml_graph_node(gf, i);
+                    if (!ggml_backend_supports_op(runtime_backend, op)) {
+                        LOG_DEBUG("%s: untiled compute op %.2f MB exceeds backend support; deferring to tiling",
+                                  get_desc().c_str(),
+                                  ggml_nbytes(op) / 1024.0 / 1024.0);
+                        compute_buffer_deferred_to_tiling = true;
+                        return false;
+                    }
+                }
+            } else {
+                size_t max_size = ggml_backend_buft_get_max_size(buft);
+                if (max_size > 0 && planned > max_size) {
+                    LOG_DEBUG("%s: untiled compute buffer %.2f MB exceeds backend max single buffer %.2f MB; deferring to tiling",
+                              get_desc().c_str(),
+                              planned / 1024.0 / 1024.0,
+                              max_size / 1024.0 / 1024.0);
+                    compute_buffer_deferred_to_tiling = true;
+                    return false;
+                }
+            }
+        }
+
+        compute_allocr = ggml_gallocr_new(buft);
 
         if (!ggml_gallocr_reserve(compute_allocr, gf)) {
             // failed to allocate the compute buffer
@@ -2432,7 +2506,9 @@ protected:
         GraphWeightDoneGuard graph_weight_done_guard(this, &params_to_prepare);
 
         if (!alloc_compute_buffer(gf)) {
-            LOG_ERROR("%s alloc compute buffer failed", get_desc().c_str());
+            if (!compute_buffer_deferred_to_tiling) {
+                LOG_ERROR("%s alloc compute buffer failed", get_desc().c_str());
+            }
             return std::nullopt;
         }
         struct ComputeBufferGuard {
@@ -2821,6 +2897,11 @@ public:
 
     void set_stream_layers_enabled(bool enabled) {
         stream_layers_enabled = enabled;
+    }
+
+    void set_probe_compute_buffer_fits(bool enabled, size_t max_bytes = 0) {
+        probe_compute_buffer_fits_ = enabled;
+        probe_max_bytes_           = enabled ? max_bytes : 0;
     }
 };
 

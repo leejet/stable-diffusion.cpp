@@ -229,7 +229,7 @@ struct SDGenerationParams {
     int video_frames                     = 1;
     int fps                              = 16;
     float vace_strength                  = 1.f;
-    sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
+    sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr, true};
     std::string extra_tiling_args;
 
     std::string pm_id_images_dir;
