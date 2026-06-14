@@ -443,6 +443,10 @@ ArgOptions SDContextParams::get_options() {
          "map, e.g. dit=2048,vae=1024,cond=512 (missing keys keep the built-in "
          "defaults)",
          &fit_compute_reserve},
+        {"",
+         "--max-vram",
+         "maximum VRAM budget in GiB for graph-cut segmented execution. Accepts a single value or assignments by backend/device, e.g. 6 or cuda0=6,vulkan0=4. 0 disables graph splitting; a negative value auto-detects free VRAM, sparing the specified value",
+         &max_vram},
     };
 
     options.int_options = {
@@ -459,13 +463,6 @@ ArgOptions SDContextParams::get_options() {
          "--fit-target",
          "auto-fit: MiB of free memory to leave on each GPU (default: 512)",
          &auto_fit_target_mb},
-    };
-
-    options.float_options = {
-        {"",
-         "--max-vram",
-         "maximum VRAM budget in GiB for graph-cut segmented execution. 0 disables graph splitting; a negative value auto-detects free VRAM, sparing the specified value (e.g. -0.5 will keep at least 0.5 GiB free)",
-         &max_vram},
     };
 
     options.bool_options = {
@@ -801,7 +798,7 @@ std::string SDContextParams::to_string() const {
         << "  rng_type: " << sd_rng_type_name(rng_type) << ",\n"
         << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
         << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
-        << "  max_vram: " << max_vram << ",\n"
+        << "  max_vram: \"" << max_vram << "\",\n"
         << "  stream_layers: " << (stream_layers ? "true" : "false") << ",\n"
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
@@ -882,7 +879,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.chroma_t5_mask_pad              = chroma_t5_mask_pad;
     sd_ctx_params.qwen_image_zero_cond_t          = qwen_image_zero_cond_t;
     sd_ctx_params.vae_format                      = str_to_vae_format(vae_format);
-    sd_ctx_params.max_vram                        = max_vram;
+    sd_ctx_params.max_vram                        = max_vram.c_str();
     sd_ctx_params.stream_layers                   = stream_layers;
     sd_ctx_params.backend                         = effective_backend.c_str();
     sd_ctx_params.params_backend                  = effective_params_backend.c_str();

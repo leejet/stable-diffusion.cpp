@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <set>
 #include <unordered_set>
+#include <vector>
 
 #include "core/ggml_extend.hpp"
 #include "core/ggml_graph_cut.h"
@@ -190,8 +191,8 @@ public:
     std::string taesd_path;
     sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0, 0, nullptr};
     bool enable_mmap                     = false;
-    float max_vram                       = 0.f;
-    bool stream_layers                   = false;
+    sd::ggml_graph_cut::MaxVramAssignment max_vram_assignment;
+    bool stream_layers = false;
     std::string backend_spec;
     std::string params_backend_spec;
 
@@ -242,6 +243,10 @@ public:
             LOG_ERROR("failed to initialize %s params backend", sd_backend_module_name(module));
         }
         return module_backend;
+    }
+
+    size_t max_graph_vram_bytes_for_module(SDBackendModule module) {
+        return max_vram_assignment.bytes_for_backend(backend_for(module));
     }
 
     bool ensure_backend_pair(SDBackendModule module) {
@@ -675,18 +680,20 @@ public:
     bool init(const sd_ctx_params_t* sd_ctx_params) {
         n_threads           = sd_ctx_params->n_threads;
         enable_mmap         = sd_ctx_params->enable_mmap;
-        max_vram            = sd_ctx_params->max_vram;
         stream_layers       = sd_ctx_params->stream_layers;
         backend_spec        = SAFE_STR(sd_ctx_params->backend);
         params_backend_spec = SAFE_STR(sd_ctx_params->params_backend);
+        max_vram_assignment.reset(0.f);
+        {
+            std::string error;
+            if (!max_vram_assignment.parse(SAFE_STR(sd_ctx_params->max_vram), &error)) {
+                LOG_ERROR("%s", error.c_str());
+                return false;
+            }
+        }
 
         std::string rpc_servers_spec = SAFE_STR(sd_ctx_params->rpc_servers);
         add_rpc_devices(rpc_servers_spec);
-
-        if (stream_layers && max_vram == 0.f) {
-            LOG_WARN("--stream-layers has no effect without --max-vram set; ignoring");
-            stream_layers = false;
-        }
 
         bool use_tae         = false;
         bool use_audio_vae   = false;
@@ -1028,16 +1035,22 @@ public:
         }
 
         // Create the backends now that the placement (manual or auto-fit) is
-        // settled, then resolve the graph-cut VRAM budget against the DiT's
-        // runtime backend.
+        // settled, then canonicalize graph-cut VRAM budget assignments against
+        // the initialized backend registry.
         if (!init_backend()) {
             return false;
+        }
+        {
+            std::string error;
+            if (!max_vram_assignment.canonicalize_backend_keys(&error)) {
+                LOG_ERROR("%s", error.c_str());
+                return false;
+            }
         }
         if (stream_layers && !backend_manager.params_backend_is_cpu(SDBackendModule::DIFFUSION)) {
             LOG_WARN("--stream-layers has no effect unless diffusion params backend is cpu; ignoring");
             stream_layers = false;
         }
-        max_vram = sd::ggml_graph_cut::resolve_max_vram_gib(max_vram, backend_for(SDBackendModule::DIFFUSION));
 
         LOG_INFO("Weight type stat:                 %s", wtype_stat_to_str(wtype_stat).c_str());
         LOG_INFO("Conditioner weight type stat:     %s", wtype_stat_to_str(conditioner_wtype_stat).c_str());
@@ -1092,8 +1105,6 @@ public:
         if (sd_ctx_params->circular_x || sd_ctx_params->circular_y) {
             LOG_INFO("Using circular padding for convolutions");
         }
-
-        const size_t max_graph_vram_bytes = sd::ggml_graph_cut::max_vram_gib_to_bytes(max_vram);
 
         {
             if (!ensure_backend_pair(SDBackendModule::TE) ||
@@ -1216,7 +1227,7 @@ public:
                     clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(backend_for(SDBackendModule::CLIP_VISION),
                                                                              tensor_storage_map,
                                                                              model_manager);
-                    clip_vision->set_max_graph_vram_bytes(max_graph_vram_bytes);
+                    clip_vision->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::CLIP_VISION));
                     if (!register_runner_params("CLIP vision",
                                                 clip_vision,
                                                 SDBackendModule::CLIP_VISION)) {
@@ -1320,7 +1331,7 @@ public:
                 }
             }
 
-            cond_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
+            cond_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::TE));
             if (!register_runner_params("Conditioner model",
                                         cond_stage_model,
                                         SDBackendModule::TE,
@@ -1339,7 +1350,7 @@ public:
                          backend_fit::multi_gpu_mode_str(fit_dit_split_mode));
             }
 
-            diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
+            diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::DIFFUSION));
             diffusion_model->set_stream_layers_enabled(dit_split ? false : stream_layers);
             if (!register_runner_params("Diffusion model",
                                         diffusion_model,
@@ -1349,7 +1360,7 @@ public:
             }
 
             if (high_noise_diffusion_model) {
-                high_noise_diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
+                high_noise_diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::DIFFUSION));
                 high_noise_diffusion_model->set_stream_layers_enabled(dit_split ? false : stream_layers);
                 if (!register_runner_params("High noise diffusion model",
                                             high_noise_diffusion_model,
@@ -1448,7 +1459,7 @@ public:
             } else if (use_tae && !tae_preview_only) {
                 LOG_INFO("using TAE for encoding / decoding");
                 first_stage_model = create_tae(false);
-                first_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
+                first_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::VAE));
                 if (!register_runner_params("VAE",
                                             first_stage_model,
                                             SDBackendModule::VAE,
@@ -1458,7 +1469,7 @@ public:
             } else {
                 LOG_INFO("using VAE for encoding / decoding");
                 first_stage_model = create_vae();
-                first_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
+                first_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::VAE));
                 if (!register_runner_params("VAE",
                                             first_stage_model,
                                             SDBackendModule::VAE,
@@ -1468,7 +1479,7 @@ public:
                 if (use_tae && tae_preview_only) {
                     LOG_INFO("using TAE for preview");
                     preview_vae = create_tae(true);
-                    preview_vae->set_max_graph_vram_bytes(max_graph_vram_bytes);
+                    preview_vae->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::VAE));
                     if (!register_runner_params("preview VAE",
                                                 preview_vae,
                                                 SDBackendModule::VAE,
@@ -3239,7 +3250,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->sampler_rng_type     = RNG_TYPE_COUNT;
     sd_ctx_params->prediction           = PREDICTION_COUNT;
     sd_ctx_params->lora_apply_mode      = LORA_APPLY_AUTO;
-    sd_ctx_params->max_vram             = 0.f;
+    sd_ctx_params->max_vram             = nullptr;
     sd_ctx_params->stream_layers        = false;
     sd_ctx_params->enable_mmap          = false;
     sd_ctx_params->diffusion_flash_attn = false;
@@ -3289,7 +3300,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "rng_type: %s\n"
              "sampler_rng_type: %s\n"
              "prediction: %s\n"
-             "max_vram: %.3f\n"
+             "max_vram: %s\n"
              "stream_layers: %s\n"
              "backend: %s\n"
              "params_backend: %s\n"
@@ -3330,7 +3341,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              sd_rng_type_name(sd_ctx_params->rng_type),
              sd_rng_type_name(sd_ctx_params->sampler_rng_type),
              sd_prediction_name(sd_ctx_params->prediction),
-             sd_ctx_params->max_vram,
+             SAFE_STR(sd_ctx_params->max_vram),
              BOOL_STR(sd_ctx_params->stream_layers),
              SAFE_STR(sd_ctx_params->backend),
              SAFE_STR(sd_ctx_params->params_backend),
@@ -5059,7 +5070,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                                                             request.hires.upscale_tile_size,
                                                             sd_ctx->sd->backend_spec,
                                                             sd_ctx->sd->params_backend_spec);
-            const size_t max_graph_vram_bytes = sd::ggml_graph_cut::max_vram_gib_to_bytes(sd_ctx->sd->max_vram);
+            const size_t max_graph_vram_bytes = sd_ctx->sd->max_graph_vram_bytes_for_module(SDBackendModule::UPSCALER);
             hires_upscaler->set_max_graph_vram_bytes(max_graph_vram_bytes);
             if (!hires_upscaler->load_from_file(request.hires.model_path,
                                                 sd_ctx->sd->n_threads)) {
@@ -5608,7 +5619,7 @@ static sd::Tensor<float> upscale_ltx_spatial_video_latent(sd_ctx_t* sd_ctx,
         std::make_unique<LTXVUpsampler::LatentUpsamplerRunner>(sd_ctx->sd->backend_for(SDBackendModule::UPSCALER),
                                                                model_loader.get_tensor_storage_map(),
                                                                upsampler_manager);
-    const size_t max_graph_vram_bytes = sd::ggml_graph_cut::max_vram_gib_to_bytes(sd_ctx->sd->max_vram);
+    const size_t max_graph_vram_bytes = sd_ctx->sd->max_graph_vram_bytes_for_module(SDBackendModule::UPSCALER);
     upsampler->set_max_graph_vram_bytes(max_graph_vram_bytes);
     if (upsampler->model == nullptr) {
         LOG_ERROR("init LTX latent upsampler from metadata failed");
