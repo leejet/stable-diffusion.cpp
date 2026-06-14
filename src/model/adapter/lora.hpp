@@ -4,6 +4,7 @@
 #include <mutex>
 #include "core/ggml_extend.hpp"
 #include "model_loader.h"
+#include "model_manager.h"
 
 #define LORA_GRAPH_BASE_SIZE 10240
 
@@ -14,22 +15,24 @@ struct LoraModel : public GGMLRunner {
     std::map<ggml_tensor*, ggml_tensor*> original_tensor_to_final_tensor;
     std::set<std::string> applied_lora_tensors;
     std::string file_path;
-    ModelLoader model_loader;
-    bool load_failed         = false;
-    bool applied             = false;
-    bool tensor_preprocessed = false;
+    std::shared_ptr<ModelManager> model_manager;
+    ggml_backend_t params_backend = nullptr;
+    bool load_failed              = false;
+    bool applied                  = false;
+    bool tensor_preprocessed      = false;
 
     typedef std::function<bool(const std::string&)> filter_t;
 
     LoraModel(const std::string& lora_id,
               ggml_backend_t backend,
-              ggml_backend_t params_backend,
-              const std::string& file_path = "",
-              std::string prefix           = "",
-              SDVersion version            = VERSION_COUNT)
-        : lora_id(lora_id), file_path(file_path), GGMLRunner(backend, params_backend) {
+              ggml_backend_t params_backend_,
+              const std::string& file_path          = "",
+              std::string prefix                    = "",
+              SDVersion version                     = VERSION_COUNT,
+              std::shared_ptr<ModelManager> manager = std::make_shared<ModelManager>())
+        : GGMLRunner(backend, manager), lora_id(lora_id), file_path(file_path), model_manager(std::move(manager)), params_backend(params_backend_) {
         prefix = "lora." + prefix;
-        if (!model_loader.init_from_file_and_convert_name(file_path, prefix, version)) {
+        if (model_manager == nullptr || !model_manager->loader().init_from_file_and_convert_name(file_path, prefix, version)) {
             load_failed = true;
         }
     }
@@ -71,7 +74,11 @@ struct LoraModel : public GGMLRunner {
             return true;
         };
 
-        model_loader.load_tensors(on_new_tensor_cb, n_threads);
+        if (model_manager != nullptr) {
+            model_manager->set_n_threads(n_threads);
+        }
+        ModelLoader& model_loader = model_manager->loader();
+        model_loader.load_tensors(on_new_tensor_cb);
 
         if (tensors_to_create.empty()) {
             return true;
@@ -87,25 +94,64 @@ struct LoraModel : public GGMLRunner {
             lora_tensors[name] = real;
         }
 
-        if (!alloc_params_buffer()) {
-            LOG_ERROR("lora model buffer allocation failed");
+        std::map<std::string, ggml_tensor*> tensors;
+        for (const auto& pair : lora_tensors) {
+            tensors[pair.first] = pair.second;
+        }
+        if (model_manager == nullptr ||
+            !model_manager->register_param_tensors("LoRA",
+                                                   std::move(tensors),
+                                                   ModelManager::ResidencyMode::ParamBackend,
+                                                   runtime_backend,
+                                                   params_backend) ||
+            !model_manager->validate_registered_tensors()) {
+            LOG_ERROR("lora model manager registration failed");
             return false;
         }
-
-        dry_run = false;
-        model_loader.load_tensors(on_new_tensor_cb, n_threads);
+        std::vector<ggml_tensor*> lora_params;
+        lora_params.reserve(lora_tensors.size());
+        for (const auto& pair : lora_tensors) {
+            lora_params.push_back(pair.second);
+        }
+        if (!model_manager->prepare_params(lora_params)) {
+            LOG_ERROR("lora model manager prepare params failed");
+            return false;
+        }
 
         LOG_DEBUG("finished loaded lora");
         return true;
     }
 
-    void preprocess_lora_tensors(const std::map<std::string, ggml_tensor*>& model_tensors) {
+    void release_loaded_tensors() {
+        runner_done();
+        free_compute_buffer();
+        model_manager.reset();
+        free_params_ctx();
+        alloc_params_ctx();
+        model_manager  = std::make_shared<ModelManager>();
+        weight_manager = model_manager;
+        lora_tensors.clear();
+        original_tensor_to_final_tensor.clear();
+        applied_lora_tensors.clear();
+        applied             = false;
+        tensor_preprocessed = false;
+    }
+
+    static std::set<std::string> tensor_names(const std::map<std::string, ggml_tensor*>& model_tensors) {
+        std::set<std::string> names;
+        for (const auto& item : model_tensors) {
+            names.insert(item.first);
+        }
+        return names;
+    }
+
+    void preprocess_lora_tensors(const std::set<std::string>& model_tensor_names) {
         if (tensor_preprocessed) {
             return;
         }
         tensor_preprocessed = true;
         // I really hate these hardcoded processes.
-        if (model_tensors.find("cond_stage_model.1.transformer.text_model.encoder.layers.0.self_attn.in_proj.weight") != model_tensors.end()) {
+        if (model_tensor_names.find("cond_stage_model.1.transformer.text_model.encoder.layers.0.self_attn.in_proj.weight") != model_tensor_names.end()) {
             std::unordered_map<std::string, ggml_tensor*> new_lora_tensors;
             for (auto& [old_name, tensor] : lora_tensors) {
                 std::string new_name = old_name;
@@ -612,7 +658,7 @@ struct LoraModel : public GGMLRunner {
                 if (lokr_w2)
                     applied_lora_tensors.insert(lokr_w2_name);
                 if (lokr_w2_a)
-                    applied_lora_tensors.insert(lokr_w2_name);
+                    applied_lora_tensors.insert(lokr_w2_a_name);
                 if (lokr_w2_b)
                     applied_lora_tensors.insert(lokr_w2_b_name);
                 applied_lora_tensors.insert(alpha_name);
@@ -753,11 +799,13 @@ struct LoraModel : public GGMLRunner {
         return out_diff;
     }
 
-    ggml_cgraph* build_lora_graph(const std::map<std::string, ggml_tensor*>& model_tensors, SDVersion version) {
+    ggml_cgraph* build_lora_graph(const std::map<std::string, ggml_tensor*>& model_tensors,
+                                  const std::set<std::string>& model_tensor_names,
+                                  SDVersion version) {
         size_t lora_graph_size = LORA_GRAPH_BASE_SIZE + lora_tensors.size() * 10;
         ggml_cgraph* gf        = ggml_new_graph_custom(compute_ctx, lora_graph_size, false);
 
-        preprocess_lora_tensors(model_tensors);
+        preprocess_lora_tensors(model_tensor_names);
 
         original_tensor_to_final_tensor.clear();
         applied_lora_tensors.clear();
@@ -794,12 +842,16 @@ struct LoraModel : public GGMLRunner {
         return gf;
     }
 
-    void apply(std::map<std::string, ggml_tensor*> model_tensors, SDVersion version, int n_threads) {
+    void apply(std::map<std::string, ggml_tensor*> model_tensors,
+               const std::set<std::string>& model_tensor_names,
+               SDVersion version,
+               int n_threads,
+               bool warn_unused = true) {
         auto get_graph = [&]() -> ggml_cgraph* {
-            return build_lora_graph(model_tensors, version);
+            return build_lora_graph(model_tensors, model_tensor_names, version);
         };
-        GGMLRunner::compute<float>(get_graph, n_threads, false, true);
-        stat();
+        GGMLRunner::compute<float>(get_graph, n_threads, false, false, false, true);
+        stat(!warn_unused);
         for (auto item : original_tensor_to_final_tensor) {
             ggml_tensor* original_tensor = item.first;
             ggml_tensor* final_tensor    = item.second;
@@ -808,6 +860,10 @@ struct LoraModel : public GGMLRunner {
         }
         original_tensor_to_final_tensor.clear();
         GGMLRunner::free_compute_buffer();
+    }
+
+    void apply(std::map<std::string, ggml_tensor*> model_tensors, SDVersion version, int n_threads, bool warn_unused = true) {
+        apply(model_tensors, tensor_names(model_tensors), version, n_threads, warn_unused);
     }
 
     void stat(bool at_runntime = false) {

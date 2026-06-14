@@ -387,10 +387,10 @@ namespace ErnieImage {
         std::vector<float> pe_vec;
 
         ErnieImageRunner(ggml_backend_t backend,
-                         ggml_backend_t params_backend,
-                         const String2TensorStorage& tensor_storage_map = {},
-                         const std::string prefix                       = "")
-            : DiffusionModelRunner(backend, params_backend, prefix),
+                         const String2TensorStorage& tensor_storage_map      = {},
+                         const std::string prefix                            = "",
+                         std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+            : DiffusionModelRunner(backend, prefix, weight_manager),
               config(ErnieImageConfig::detect_from_weights(tensor_storage_map, prefix)) {
             ernie_image = ErnieImageModel(config);
             ernie_image.init(params_ctx, tensor_storage_map, prefix);
@@ -440,7 +440,7 @@ namespace ErnieImage {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(x, timesteps, context);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,

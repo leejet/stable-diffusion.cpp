@@ -51,10 +51,6 @@ public:
 
     bool init(const char* backend_spec,
               const char* params_backend_spec,
-              bool offload_params_to_cpu,
-              bool keep_clip_on_cpu,
-              bool keep_vae_on_cpu,
-              bool keep_control_net_on_cpu,
               std::string* error);
     void reset();
 
@@ -69,6 +65,7 @@ public:
 
     bool runtime_backend_is_cpu(SDBackendModule module);
     bool params_backend_is_cpu(SDBackendModule module);
+    bool params_backend_is_disk(SDBackendModule module) const;
     bool runtime_backend_supports_host_buffer(SDBackendModule module);
 
 private:
@@ -90,4 +87,5 @@ void ggml_ext_im_set_f32_1d(const struct ggml_tensor* tensor, int i, float value
 // array of length = the backend registry's device count; `main_device` is the
 // index of the device that owns the non-split portion.
 ggml_backend_buffer_type_t sd_backend_split_buffer_type(ggml_backend_t backend, int main_device, const float* tensor_split);
+bool add_rpc_devices(const std::string& servers);
 #endif  // __SD_CORE_GGML_EXTEND_BACKEND_H__

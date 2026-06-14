@@ -694,11 +694,11 @@ struct UNetModelRunner : public DiffusionModelRunner {
     UnetModelBlock unet;
 
     UNetModelRunner(ggml_backend_t backend,
-                    ggml_backend_t params_backend,
                     const String2TensorStorage& tensor_storage_map,
                     const std::string prefix,
-                    SDVersion version = VERSION_SD1)
-        : DiffusionModelRunner(backend, params_backend, prefix),
+                    SDVersion version                                   = VERSION_SD1,
+                    std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : DiffusionModelRunner(backend, prefix, weight_manager),
           config(UNetConfig::detect_from_weights(tensor_storage_map, prefix, version)),
           unet(config) {
         unet.init(params_ctx, tensor_storage_map, prefix);
@@ -772,7 +772,7 @@ struct UNetModelRunner : public DiffusionModelRunner {
             return build_graph(x, timesteps, context, c_concat, y, num_video_frames, controls, control_strength);
         };
 
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
     }
 
     sd::Tensor<float> compute(int n_threads,

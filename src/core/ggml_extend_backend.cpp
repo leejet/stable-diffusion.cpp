@@ -45,6 +45,10 @@ static bool is_default_backend_token(const std::string& name) {
     return lower.empty() || lower == "default" || lower == "auto";
 }
 
+static bool is_disk_backend_token(const std::string& name) {
+    return lower_copy(trim_copy(name)) == "disk";
+}
+
 static bool parse_backend_module(const std::string& raw_name, SDBackendModule* module) {
     std::string name = lower_copy(trim_copy(raw_name));
     name.erase(std::remove(name.begin(), name.end(), '-'), name.end());
@@ -198,6 +202,36 @@ void ggml_ext_im_set_f32_1d(const struct ggml_tensor* tensor, int i, float value
         default:
             GGML_ABORT("fatal error");
     }
+}
+
+bool add_rpc_devices(const std::string& servers) {
+    const std::string in = trim_copy(servers);
+    if (in.empty()) {
+        return true;
+    }
+    auto rpc_servers = split_copy(in, ',');
+    if (rpc_servers.empty()) {
+        LOG_ERROR("invalid RPC servers specification: '%s'", servers.c_str());
+        return false;
+    }
+    ggml_backend_reg_t rpc_reg = ggml_backend_reg_by_name("RPC");
+    if (!rpc_reg) {
+        LOG_ERROR("RPC backend not found, cannot add RPC servers");
+        return false;
+    }
+    typedef ggml_backend_reg_t (*ggml_backend_rpc_add_server_t)(const char* endpoint);
+    ggml_backend_rpc_add_server_t ggml_backend_rpc_add_server_fn = (ggml_backend_rpc_add_server_t)ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_server");
+    if (!ggml_backend_rpc_add_server_fn) {
+        LOG_ERROR("RPC backend does not have ggml_backend_rpc_add_server function, cannot add RPC servers");
+        return false;
+    }
+    for (const auto& server : rpc_servers) {
+        LOG_INFO("Adding RPC server: %s", server.c_str());
+        auto reg = ggml_backend_rpc_add_server_fn(server.c_str());
+        // no return value to check for success but should print errors from the RPC backend if it fails to add the server
+        ggml_backend_register(reg);
+    }
+    return true;
 }
 
 static void ggml_backend_load_all_once() {
@@ -504,6 +538,9 @@ ggml_backend_t SDBackendManager::params_backend(SDBackendModule module) {
     if (name.empty()) {
         return runtime_backend(module);
     }
+    if (is_disk_backend_token(name)) {
+        return runtime_backend(module);
+    }
     return init_cached_backend(name);
 }
 
@@ -517,6 +554,10 @@ bool SDBackendManager::runtime_backend_is_cpu(SDBackendModule module) {
 
 bool SDBackendManager::params_backend_is_cpu(SDBackendModule module) {
     return sd_backend_is_cpu(params_backend(module));
+}
+
+bool SDBackendManager::params_backend_is_disk(SDBackendModule module) const {
+    return is_disk_backend_token(params_assignment_.get(module));
 }
 
 bool SDBackendManager::runtime_backend_supports_host_buffer(SDBackendModule module) {
@@ -538,10 +579,6 @@ bool SDBackendManager::runtime_backend_supports_host_buffer(SDBackendModule modu
 
 bool SDBackendManager::init(const char* backend_spec,
                             const char* params_backend_spec,
-                            bool offload_params_to_cpu,
-                            bool keep_clip_on_cpu,
-                            bool keep_vae_on_cpu,
-                            bool keep_control_net_on_cpu,
                             std::string* error) {
     reset();
 
@@ -552,29 +589,19 @@ bool SDBackendManager::init(const char* backend_spec,
         return false;
     }
 
-    if (runtime_assignment_.empty()) {
-        if (keep_clip_on_cpu) {
-            runtime_assignment_.set_module(SDBackendModule::TE, "cpu");
-        }
-        if (keep_vae_on_cpu) {
-            runtime_assignment_.set_module(SDBackendModule::VAE, "cpu");
-        }
-        if (keep_control_net_on_cpu) {
-            runtime_assignment_.set_module(SDBackendModule::CONTROL_NET, "cpu");
-        }
-    }
-
-    if (params_assignment_.empty() && offload_params_to_cpu) {
-        params_assignment_.set_default("cpu");
-    }
-
     return validate(error);
 }
 
 bool SDBackendManager::validate(std::string* error) const {
-    auto validate_name = [&](const std::string& name) -> bool {
+    auto validate_runtime_name = [&](const std::string& name) -> bool {
         if (is_default_backend_token(name)) {
             return true;
+        }
+        if (is_disk_backend_token(name)) {
+            if (error != nullptr) {
+                *error = "backend 'disk' is only supported by params_backend";
+            }
+            return false;
         }
         if (!sd_resolve_backend_name(name).empty()) {
             return true;
@@ -584,18 +611,24 @@ bool SDBackendManager::validate(std::string* error) const {
         }
         return false;
     };
+    auto validate_params_name = [&](const std::string& name) -> bool {
+        if (is_disk_backend_token(name)) {
+            return true;
+        }
+        return validate_runtime_name(name);
+    };
 
-    if (!validate_name(runtime_assignment_.default_name) ||
-        !validate_name(params_assignment_.default_name)) {
+    if (!validate_runtime_name(runtime_assignment_.default_name) ||
+        !validate_params_name(params_assignment_.default_name)) {
         return false;
     }
     for (const auto& kv : runtime_assignment_.module_names) {
-        if (!validate_name(kv.second)) {
+        if (!validate_runtime_name(kv.second)) {
             return false;
         }
     }
     for (const auto& kv : params_assignment_.module_names) {
-        if (!validate_name(kv.second)) {
+        if (!validate_params_name(kv.second)) {
             return false;
         }
     }

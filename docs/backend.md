@@ -3,7 +3,7 @@
 `stable-diffusion.cpp` has two backend assignments:
 
 - `--backend` selects the runtime backend used to execute model graphs.
-- `--params-backend` selects the backend used to allocate model parameters.
+- `--params-backend` selects where model parameters are kept.
 
 If `--params-backend` is not set, parameters use the same backend as their module runtime backend.
 
@@ -27,6 +27,12 @@ The same syntax is used for parameter placement:
 
 ```shell
 sd-cli -m model.safetensors -p "a cat" --backend cuda0 --params-backend te=cpu,vae=cpu
+```
+
+`--params-backend` also accepts the special value `disk`:
+
+```shell
+sd-cli -m model.safetensors -p "a cat" --backend cuda0 --params-backend disk
 ```
 
 Module names are case-insensitive. Hyphens and underscores in module names are ignored, so `clip_vision`, `clip-vision`, and `clipvision` are equivalent.
@@ -64,9 +70,11 @@ The special values `auto`, `default`, and an empty backend name select the defau
 
 The special value `gpu` selects the first GPU backend, falling back to the first integrated GPU backend.
 
+The special value `disk` is accepted only by `--params-backend`. `--backend disk` is invalid because `disk` is a parameter residency mode, not a runtime compute backend.
+
 ## Runtime backend vs. parameter backend
 
-The runtime backend controls where graph execution runs. The parameter backend controls where model weights are allocated.
+The runtime backend controls where graph execution runs. The parameter backend controls where model weights are allocated or whether they are reloaded from disk on demand.
 
 For example:
 
@@ -75,6 +83,16 @@ sd-cli -m model.safetensors -p "a cat" --backend cuda0 --params-backend cpu
 ```
 
 This runs all modules on `cuda0`, but stores parameters in CPU RAM. During execution, parameters are moved to the runtime backend as needed.
+
+For example:
+
+```shell
+sd-cli -m model.safetensors -p "a cat" --backend cuda0 --params-backend disk
+```
+
+This runs all modules on `cuda0`, reloads parameters from the model file as needed, and releases those parameter buffers after use.
+
+`disk` is never selected implicitly. If `--params-backend` is not set, parameters use the runtime backend.
 
 Per-module assignments can be mixed:
 
@@ -100,23 +118,27 @@ uses one shared CPU backend for both `te` and `vae` runtime execution.
 
 Runtime and parameter assignments also share the same backend cache. If `--backend diffusion=cuda0` and `--params-backend diffusion=cuda0` resolve to the same device, both use the same backend instance.
 
+`--params-backend disk` does not create a separate backend instance. Parameters are loaded lazily using the module runtime backend.
+
 `SDBackendManager` owns the backend instances and frees them when the context or upscaler is destroyed. Model runners receive non-owning runtime and parameter backend pointers and do not free them.
 
 ## Compatibility flags
 
-The older CPU placement flags are still supported:
+The example CLI/server still accepts these older CPU placement flags as compatibility aliases:
 
 - `--clip-on-cpu`
 - `--vae-on-cpu`
 - `--control-net-cpu`
 - `--offload-to-cpu`
 
-`--clip-on-cpu`, `--vae-on-cpu`, and `--control-net-cpu` affect runtime backend assignment only when `--backend` is not set. They map to `te=cpu`, `vae=cpu`, and `controlnet=cpu`.
+`--clip-on-cpu`, `--vae-on-cpu`, and `--control-net-cpu` are deprecated. The example argument layer prepends `te=cpu`, `vae=cpu`, and `controlnet=cpu` to `--backend` before creating the context.
 
-`--offload-to-cpu` affects parameter backend assignment only when `--params-backend` is not set. It is equivalent to:
+`--offload-to-cpu` prepends a CPU default to the parameter assignment in the caller before creating the context:
 
 ```shell
---params-backend cpu
+--params-backend '*=cpu'
 ```
 
-Explicit `--backend` and `--params-backend` assignments are preferred for new commands.
+Because this default is inserted first, later explicit `--params-backend` entries can still override it, for example `--offload-to-cpu --params-backend te=disk` keeps non-TE parameters on CPU and reloads TE parameters from disk.
+
+Library callers should set `backend` and `params_backend` directly. The old CPU/offload fields are no longer part of the C API. Explicit `--backend` and `--params-backend` assignments are preferred for new commands.

@@ -35,6 +35,15 @@ namespace backend_fit {
 constexpr int64_t MiB           = 1024 * 1024;
 constexpr int     DEVICE_ID_CPU = -1;
 
+static inline int bit_count(unsigned int value) {
+    int count = 0;
+    while (value != 0) {
+        count += static_cast<int>(value & 1U);
+        value >>= 1;
+    }
+    return count;
+}
+
 enum class ComponentKind {
     DIT,
     VAE,
@@ -417,7 +426,7 @@ inline Plan compute_plan(const std::vector<Component>& components,
             if (want_layer) {
                 const int max_mask = 1 << nG;
                 for (int mask = 1; mask < max_mask; mask++) {
-                    if (__builtin_popcount(mask) < 2) continue;
+                    if (bit_count(static_cast<unsigned int>(mask)) < 2) continue;
                     opts.push_back({Placement::GPU_LAYER_SPLIT, mask});
                 }
             }

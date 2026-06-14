@@ -1,4 +1,4 @@
-#ifndef __SD_MODEL_VAE_LTX_AUDIO_VAE_HPP__
+﻿#ifndef __SD_MODEL_VAE_LTX_AUDIO_VAE_HPP__
 #define __SD_MODEL_VAE_LTX_AUDIO_VAE_HPP__
 
 #include <cmath>
@@ -9,6 +9,7 @@
 
 #include "core/ggml_extend.hpp"
 #include "model_loader.h"
+#include "model_manager.h"
 
 namespace LTXV {
 
@@ -997,13 +998,15 @@ namespace LTXV {
     struct LTXAudioVAERunner : public GGMLRunner {
         LTXAudioVAEConfig config;
         LTXAudioVAE model;
+        std::string weight_prefix;
         sd::Tensor<float> bwe_skip_filter_tensor;
 
         LTXAudioVAERunner(ggml_backend_t backend,
-                          ggml_backend_t params_backend,
                           const String2TensorStorage& tensor_storage_map,
-                          const std::string& prefix = "")
-            : GGMLRunner(backend, params_backend),
+                          const std::string& prefix                           = "",
+                          std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+            : GGMLRunner(backend, weight_manager),
+              weight_prefix(prefix),
               config(LTXAudioVAEConfig::detect_from_weights(tensor_storage_map)),
               model(config) {
             model.init(params_ctx, tensor_storage_map, prefix);
@@ -1013,11 +1016,11 @@ namespace LTXV {
             }
         }
 
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
-            model.get_param_tensors(tensors, prefix);
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {
+            model.get_param_tensors(tensors, weight_prefix);
         }
 
-        size_t get_params_buffer_size() {
+        size_t get_params_mem_size() {
             return model.get_params_mem_size();
         }
 
@@ -1037,7 +1040,7 @@ namespace LTXV {
                 ggml_build_forward_expand(gf, waveform);
                 return gf;
             };
-            auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), 4);
+            auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), 4);
             int64_t t1  = ggml_time_ms();
             LOG_INFO("ltx audio vae decode completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
             return result;
@@ -1064,7 +1067,8 @@ namespace LTXV {
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
             LOG_INFO("loading ltx audio vae from '%s'", model_path.c_str());
 
-            ModelLoader model_loader;
+            auto model_manager        = std::make_shared<ModelManager>();
+            ModelLoader& model_loader = model_manager->loader();
             if (!model_loader.init_from_file(model_path)) {
                 LOG_ERROR("init model loader from file failed: '%s'", model_path.c_str());
                 return;
@@ -1072,20 +1076,17 @@ namespace LTXV {
 
             auto& tensor_storage_map = model_loader.get_tensor_storage_map();
             auto ltx_audio_vae       = std::make_shared<LTXAudioVAERunner>(backend,
-                                                                     backend,
                                                                      tensor_storage_map,
-                                                                     prefix);
+                                                                     prefix,
+                                                                     model_manager);
 
-            if (!ltx_audio_vae->alloc_params_buffer()) {
-                LOG_ERROR("ltx audio vae buffer allocation failed");
-                return;
-            }
-
-            std::map<std::string, ggml_tensor*> tensors;
-            ltx_audio_vae->get_param_tensors(tensors, "");
-
-            if (!model_loader.load_tensors(tensors)) {
-                LOG_ERROR("load tensors from model loader failed");
+            if (!model_manager->register_runner_params("LTX audio VAE test",
+                                                       *ltx_audio_vae,
+                                                       ModelManager::ResidencyMode::ParamBackend,
+                                                       backend,
+                                                       backend) ||
+                !model_manager->validate_registered_tensors()) {
+                LOG_ERROR("register ltx audio vae tensors with model manager failed");
                 return;
             }
 
