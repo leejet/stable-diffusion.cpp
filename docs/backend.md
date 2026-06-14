@@ -35,6 +35,14 @@ sd-cli -m model.safetensors -p "a cat" --backend cuda0 --params-backend te=cpu,v
 sd-cli -m model.safetensors -p "a cat" --backend cuda0 --params-backend disk
 ```
 
+`--max-vram` can target resolved backend/device names:
+
+```shell
+sd-cli -m model.safetensors -p "a cat" --backend diffusion=cuda0,vae=vulkan0 --max-vram cuda0=6,vulkan0=2
+```
+
+The budget applies to every module running on that backend.
+
 Module names are case-insensitive. Hyphens and underscores in module names are ignored, so `clip_vision`, `clip-vision`, and `clipvision` are equivalent.
 
 `all=`, `default=`, and `*=` can be used to set the default backend inside a mixed assignment:
