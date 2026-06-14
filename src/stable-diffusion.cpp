@@ -163,7 +163,6 @@ public:
     SDBackendManager backend_manager;
 
     SDVersion version;
-    bool vae_decode_only         = false;
     bool external_vae_is_invalid = false;
 
     bool circular_x = false;
@@ -318,7 +317,6 @@ public:
 
     bool init(const sd_ctx_params_t* sd_ctx_params) {
         n_threads             = sd_ctx_params->n_threads;
-        vae_decode_only       = sd_ctx_params->vae_decode_only;
         offload_params_to_cpu = sd_ctx_params->offload_params_to_cpu;
         enable_mmap           = sd_ctx_params->enable_mmap;
         max_vram              = sd_ctx_params->max_vram;
@@ -560,10 +558,6 @@ public:
         size_t control_net_params_mem_size  = 0;
         size_t extension_params_mem_size    = 0;
 
-        if (sd_version_is_control(version)) {
-            // Might need vae encode for control cond
-            vae_decode_only = false;
-        }
         bool tae_preview_only = sd_ctx_params->tae_preview_only;
         if (version == VERSION_SDXS_512_DS || version == VERSION_SDXS_09) {
             tae_preview_only = false;
@@ -591,7 +585,6 @@ public:
                                                                 "model.diffusion_model",
                                                                 model_manager);
             } else if (sd_version_is_pid(version)) {
-                vae_decode_only  = false;
                 cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
                                                                  tensor_storage_map,
                                                                  version,
@@ -706,15 +699,11 @@ public:
                     }
                 }
             } else if (sd_version_is_qwen_image(version)) {
-                bool enable_vision = false;
-                if (!vae_decode_only) {
-                    enable_vision = true;
-                }
                 cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
                                                                  tensor_storage_map,
                                                                  version,
                                                                  "",
-                                                                 enable_vision,
+                                                                 true,
                                                                  model_manager);
                 diffusion_model  = std::make_shared<Qwen::QwenImageRunner>(backend_for(SDBackendModule::DIFFUSION),
                                                                           tensor_storage_map,
@@ -723,15 +712,11 @@ public:
                                                                           sd_ctx_params->qwen_image_zero_cond_t,
                                                                           model_manager);
             } else if (sd_version_is_longcat(version)) {
-                bool enable_vision = false;
-                if (!vae_decode_only) {
-                    enable_vision = true;
-                }
                 cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
                                                                  tensor_storage_map,
                                                                  version,
                                                                  "",
-                                                                 enable_vision,
+                                                                 true,
                                                                  model_manager);
                 diffusion_model  = std::make_shared<Flux::FluxRunner>(backend_for(SDBackendModule::DIFFUSION),
                                                                      tensor_storage_map,
@@ -827,10 +812,6 @@ public:
                 return false;
             }
 
-            if (sd_version_is_unet_edit(version)) {
-                vae_decode_only = false;
-            }
-
             if (high_noise_diffusion_model) {
                 high_noise_diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
                 high_noise_diffusion_model->set_stream_layers_enabled(stream_layers);
@@ -846,7 +827,7 @@ public:
                 return false;
             }
 
-            auto create_tae = [&]() -> std::shared_ptr<VAE> {
+            auto create_tae = [&](bool decode_only) -> std::shared_ptr<VAE> {
                 if (sd_version_is_wan(version) ||
                     sd_version_is_qwen_image(version) ||
                     sd_version_is_anima(version) ||
@@ -854,7 +835,7 @@ public:
                     return std::make_shared<TinyVideoAutoEncoder>(backend_for(SDBackendModule::VAE),
                                                                   tensor_storage_map,
                                                                   "decoder",
-                                                                  vae_decode_only,
+                                                                  decode_only,
                                                                   version,
                                                                   model_manager);
 
@@ -862,7 +843,7 @@ public:
                     auto model = std::make_shared<TinyImageAutoEncoder>(backend_for(SDBackendModule::VAE),
                                                                         tensor_storage_map,
                                                                         "decoder.layers",
-                                                                        vae_decode_only,
+                                                                        decode_only,
                                                                         version,
                                                                         model_manager);
                     return model;
@@ -884,7 +865,7 @@ public:
                     return std::make_shared<LTXVideoVAE>(backend_for(SDBackendModule::VAE),
                                                          tensor_storage_map,
                                                          "first_stage_model",
-                                                         vae_decode_only,
+                                                         false,
                                                          version,
                                                          model_manager);
                 } else if (sd_version_is_wan(version) ||
@@ -893,14 +874,14 @@ public:
                     return std::make_shared<WAN::WanVAERunner>(backend_for(SDBackendModule::VAE),
                                                                tensor_storage_map,
                                                                "first_stage_model",
-                                                               vae_decode_only,
+                                                               false,
                                                                version,
                                                                model_manager);
                 } else {
                     auto model = std::make_shared<AutoEncoderKL>(backend_for(SDBackendModule::VAE),
                                                                  tensor_storage_map,
                                                                  "first_stage_model",
-                                                                 vae_decode_only,
+                                                                 false,
                                                                  false,
                                                                  vae_version,
                                                                  model_manager);
@@ -930,7 +911,7 @@ public:
                 }
             } else if (use_tae && !tae_preview_only) {
                 LOG_INFO("using TAE for encoding / decoding");
-                first_stage_model = create_tae();
+                first_stage_model = create_tae(false);
                 first_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
                 if (!register_runner_params("VAE",
                                             first_stage_model,
@@ -950,7 +931,7 @@ public:
                 }
                 if (use_tae && tae_preview_only) {
                     LOG_INFO("using TAE for preview");
-                    preview_vae = create_tae();
+                    preview_vae = create_tae(true);
                     preview_vae->set_max_graph_vram_bytes(max_graph_vram_bytes);
                     if (!register_runner_params("preview VAE",
                                                 preview_vae,
@@ -1080,13 +1061,6 @@ public:
         ignore_tensors.insert("model.diffusion_model.__32x32__");
         ignore_tensors.insert("model.diffusion_model.__index_timestep_zero__");
 
-        if (vae_decode_only) {
-            ignore_tensors.insert("first_stage_model.encoder");
-            ignore_tensors.insert("first_stage_model.conv1");
-            ignore_tensors.insert("first_stage_model.quant");
-            ignore_tensors.insert("tae.encoder");
-            ignore_tensors.insert("text_encoders.llm.visual.");
-        }
         if (audio_vae_model) {
             ignore_tensors.insert("audio_vae.encoder");
         }
@@ -2642,7 +2616,6 @@ void sd_hires_params_init(sd_hires_params_t* hires_params) {
 
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     *sd_ctx_params                         = {};
-    sd_ctx_params->vae_decode_only         = true;
     sd_ctx_params->n_threads               = sd_get_num_physical_cores();
     sd_ctx_params->wtype                   = SD_TYPE_COUNT;
     sd_ctx_params->rng_type                = CUDA_RNG;
@@ -2691,7 +2664,6 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "control_net_path: %s\n"
              "photo_maker_path: %s\n"
              "tensor_type_rules: %s\n"
-             "vae_decode_only: %s\n"
              "n_threads: %d\n"
              "wtype: %s\n"
              "rng_type: %s\n"
@@ -2730,7 +2702,6 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->control_net_path),
              SAFE_STR(sd_ctx_params->photo_maker_path),
              SAFE_STR(sd_ctx_params->tensor_type_rules),
-             BOOL_STR(sd_ctx_params->vae_decode_only),
              sd_ctx_params->n_threads,
              sd_type_name(sd_ctx_params->wtype),
              sd_rng_type_name(sd_ctx_params->rng_type),
@@ -3913,7 +3884,7 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
         }
     }
 
-    if (!control_image_tensor.empty() && !sd_ctx->sd->vae_decode_only) {
+    if (!control_image_tensor.empty()) {
         control_latent = sd_ctx->sd->encode_first_stage(control_image_tensor);
         if (control_latent.empty()) {
             LOG_ERROR("failed to encode control image");
@@ -4255,11 +4226,6 @@ static sd::Tensor<float> upscale_hires_latent(sd_ctx_t* sd_ctx,
     } else if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL ||
                request.hires.upscaler == SD_HIRES_UPSCALER_LANCZOS ||
                request.hires.upscaler == SD_HIRES_UPSCALER_NEAREST) {
-        if (sd_ctx->sd->vae_decode_only) {
-            LOG_ERROR("hires %s upscaler requires VAE encoder weights; create the context with vae_decode_only=false",
-                      sd_hires_upscaler_name(request.hires.upscaler));
-            return {};
-        }
         if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL && upscaler == nullptr) {
             LOG_ERROR("hires model upscaler context is null");
             return {};
@@ -4607,11 +4573,6 @@ static std::optional<ImageGenerationLatents> prepare_video_generation_latents(sd
         }
 
         if (!start_image.empty() || !end_image.empty()) {
-            if (sd_ctx->sd->vae_decode_only) {
-                LOG_ERROR("LTXAV image conditioning requires VAE encoder weights; create the context with vae_decode_only=false");
-                return std::nullopt;
-            }
-
             if (!start_image.empty() && !end_image.empty()) {
                 LOG_INFO("FLF2V");
             } else if (!start_image.empty()) {
@@ -5076,11 +5037,6 @@ static bool apply_ltxv_refine_image_conditioning(sd_ctx_t* sd_ctx,
         sd_vid_gen_params->end_image.data == nullptr) {
         return true;
     }
-    if (sd_ctx->sd->vae_decode_only) {
-        LOG_ERROR("LTXV refine image conditioning requires VAE encoder weights; create the context with vae_decode_only=false");
-        return false;
-    }
-
     constexpr float conditioning_strength = 1.f;
     int latent_channels                   = sd_ctx->sd->get_latent_channel();
     sd::Tensor<float> video_latent        = *latent;
