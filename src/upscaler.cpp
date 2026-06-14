@@ -43,10 +43,13 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
                                   int n_threads) {
     ggml_log_set(ggml_log_callback_default, nullptr);
 
+    std::string effective_params_backend_spec = params_backend_spec;
+    if (offload_params_to_cpu) {
+        effective_params_backend_spec = effective_params_backend_spec.empty() ? "*=cpu" : "*=cpu," + effective_params_backend_spec;
+    }
     std::string error;
     if (!backend_manager.init(backend_spec.c_str(),
-                              params_backend_spec.c_str(),
-                              offload_params_to_cpu,
+                              effective_params_backend_spec.c_str(),
                               false,
                               false,
                               false,
@@ -106,7 +109,7 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
     esrgan_upscaler->get_param_tensors(tensors);
     if (!model_manager->register_param_tensors("ESRGAN",
                                                std::move(tensors),
-                                               ModelManager::ResidencyMode::Resident,
+                                               backend_manager.params_backend_is_disk(SDBackendModule::UPSCALER) ? ModelManager::ResidencyMode::Disk : ModelManager::ResidencyMode::ParamBackend,
                                                backend_for(SDBackendModule::UPSCALER),
                                                params_backend_for(SDBackendModule::UPSCALER)) ||
         !model_manager->validate_registered_tensors()) {

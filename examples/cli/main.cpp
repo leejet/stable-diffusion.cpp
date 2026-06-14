@@ -746,7 +746,7 @@ int main(int argc, const char* argv[]) {
         vae_decode_only = false;
     }
 
-    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(vae_decode_only, true, cli_params.taesd_preview);
+    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(vae_decode_only, cli_params.taesd_preview);
 
     SDImageVec results;
     int num_results             = 0;

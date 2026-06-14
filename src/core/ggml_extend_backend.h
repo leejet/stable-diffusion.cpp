@@ -51,7 +51,6 @@ public:
 
     bool init(const char* backend_spec,
               const char* params_backend_spec,
-              bool offload_params_to_cpu,
               bool keep_clip_on_cpu,
               bool keep_vae_on_cpu,
               bool keep_control_net_on_cpu,
@@ -63,6 +62,7 @@ public:
 
     bool runtime_backend_is_cpu(SDBackendModule module);
     bool params_backend_is_cpu(SDBackendModule module);
+    bool params_backend_is_disk(SDBackendModule module) const;
     bool runtime_backend_supports_host_buffer(SDBackendModule module);
 
 private:
