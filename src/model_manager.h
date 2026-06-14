@@ -16,7 +16,7 @@ class ModelManager : public RunnerWeightManager {
 public:
     enum class ResidencyMode {
         Disk,
-        Resident,
+        ParamBackend,
     };
 
     struct LoraSpec {
@@ -33,7 +33,7 @@ private:
         ggml_tensor* tensor = nullptr;
         std::string desc;
 
-        ResidencyMode residency_mode   = ResidencyMode::Resident;
+        ResidencyMode residency_mode   = ResidencyMode::ParamBackend;
         ggml_backend_t compute_backend = nullptr;
         ggml_backend_t params_backend  = nullptr;
         bool metadata_validated        = false;
@@ -121,6 +121,42 @@ public:
                                 ggml_backend_t compute_backend,
                                 ggml_backend_t params_backend,
                                 size_t* registered_tensor_size = nullptr);
+
+    template <typename Runner>
+    bool register_runner_params(const std::string& desc,
+                                Runner& runner,
+                                ResidencyMode residency_mode,
+                                ggml_backend_t compute_backend,
+                                ggml_backend_t params_backend,
+                                size_t* registered_tensor_size = nullptr) {
+        std::map<std::string, ggml_tensor*> tensors;
+        runner.get_param_tensors(tensors);
+        return register_param_tensors(desc,
+                                      std::move(tensors),
+                                      residency_mode,
+                                      compute_backend,
+                                      params_backend,
+                                      registered_tensor_size);
+    }
+
+    template <typename Runner>
+    bool register_runner_params(const std::string& desc,
+                                Runner& runner,
+                                const std::string& prefix,
+                                ResidencyMode residency_mode,
+                                ggml_backend_t compute_backend,
+                                ggml_backend_t params_backend,
+                                size_t* registered_tensor_size = nullptr) {
+        std::map<std::string, ggml_tensor*> tensors;
+        runner.get_param_tensors(tensors, prefix);
+        return register_param_tensors(desc,
+                                      std::move(tensors),
+                                      residency_mode,
+                                      compute_backend,
+                                      params_backend,
+                                      registered_tensor_size);
+    }
+
     bool validate_registered_tensors();
     bool load_all_params_eagerly();
 

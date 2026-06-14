@@ -51,10 +51,6 @@ public:
 
     bool init(const char* backend_spec,
               const char* params_backend_spec,
-              bool offload_params_to_cpu,
-              bool keep_clip_on_cpu,
-              bool keep_vae_on_cpu,
-              bool keep_control_net_on_cpu,
               std::string* error);
     void reset();
 
@@ -63,6 +59,7 @@ public:
 
     bool runtime_backend_is_cpu(SDBackendModule module);
     bool params_backend_is_cpu(SDBackendModule module);
+    bool params_backend_is_disk(SDBackendModule module) const;
     bool runtime_backend_supports_host_buffer(SDBackendModule module);
 
 private:
@@ -76,4 +73,5 @@ ggml_backend_t sd_backend_cpu_init();
 bool sd_backend_cpu_set_n_threads(ggml_backend_t backend_cpu, int n_threads);
 const char* sd_backend_module_name(SDBackendModule module);
 void ggml_ext_im_set_f32_1d(const struct ggml_tensor* tensor, int i, float value);
+bool add_rpc_devices(const std::string& servers);
 #endif  // __SD_CORE_GGML_EXTEND_BACKEND_H__
