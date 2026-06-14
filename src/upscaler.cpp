@@ -39,20 +39,12 @@ void UpscalerGGML::set_stream_layers_enabled(bool enabled) {
 }
 
 bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
-                                  bool offload_params_to_cpu,
                                   int n_threads) {
     ggml_log_set(ggml_log_callback_default, nullptr);
 
-    std::string effective_params_backend_spec = params_backend_spec;
-    if (offload_params_to_cpu) {
-        effective_params_backend_spec = effective_params_backend_spec.empty() ? "*=cpu" : "*=cpu," + effective_params_backend_spec;
-    }
     std::string error;
     if (!backend_manager.init(backend_spec.c_str(),
-                              effective_params_backend_spec.c_str(),
-                              false,
-                              false,
-                              false,
+                              params_backend_spec.c_str(),
                               &error)) {
         LOG_ERROR("upscaler backend config failed: %s", error.c_str());
         return false;
@@ -181,7 +173,6 @@ struct upscaler_ctx_t {
 };
 
 upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
-                                 bool offload_params_to_cpu,
                                  bool direct,
                                  int n_threads,
                                  int tile_size,
@@ -198,7 +189,7 @@ upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
         return nullptr;
     }
 
-    if (!upscaler_ctx->upscaler->load_from_file(esrgan_path, offload_params_to_cpu, n_threads)) {
+    if (!upscaler_ctx->upscaler->load_from_file(esrgan_path, n_threads)) {
         delete upscaler_ctx->upscaler;
         upscaler_ctx->upscaler = nullptr;
         free(upscaler_ctx);

@@ -124,16 +124,16 @@ Runtime and parameter assignments also share the same backend cache. If `--backe
 
 ## Compatibility flags
 
-The older CPU placement flags are still supported:
+The example CLI/server still accepts these older CPU placement flags as compatibility aliases:
 
 - `--clip-on-cpu`
 - `--vae-on-cpu`
 - `--control-net-cpu`
 - `--offload-to-cpu`
 
-`--clip-on-cpu`, `--vae-on-cpu`, and `--control-net-cpu` affect runtime backend assignment only when `--backend` is not set. They map to `te=cpu`, `vae=cpu`, and `controlnet=cpu`.
+`--clip-on-cpu`, `--vae-on-cpu`, and `--control-net-cpu` are deprecated. The example argument layer prepends `te=cpu`, `vae=cpu`, and `controlnet=cpu` to `--backend` before creating the context.
 
-`--offload-to-cpu` prepends a CPU default to the parameter assignment before parsing:
+`--offload-to-cpu` prepends a CPU default to the parameter assignment in the caller before creating the context:
 
 ```shell
 --params-backend '*=cpu'
@@ -141,4 +141,4 @@ The older CPU placement flags are still supported:
 
 Because this default is inserted first, later explicit `--params-backend` entries can still override it, for example `--offload-to-cpu --params-backend te=disk` keeps non-TE parameters on CPU and reloads TE parameters from disk.
 
-Explicit `--backend` and `--params-backend` assignments are preferred for new commands.
+Library callers should set `backend` and `params_backend` directly. The old CPU/offload fields are no longer part of the C API. Explicit `--backend` and `--params-backend` assignments are preferred for new commands.

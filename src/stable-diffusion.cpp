@@ -187,7 +187,6 @@ public:
 
     std::string taesd_path;
     sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0, 0, nullptr};
-    bool offload_params_to_cpu           = false;
     bool enable_mmap                     = false;
     float max_vram                       = 0.f;
     bool stream_layers                   = false;
@@ -250,13 +249,10 @@ public:
                                                      params_mem_size);
     }
 
-    bool init_backend(const sd_ctx_params_t* sd_ctx_params) {
+    bool init_backend() {
         std::string error;
-        if (!backend_manager.init(sd_ctx_params->backend,
+        if (!backend_manager.init(backend_spec.c_str(),
                                   params_backend_spec.c_str(),
-                                  sd_ctx_params->keep_clip_on_cpu,
-                                  sd_ctx_params->keep_vae_on_cpu,
-                                  sd_ctx_params->keep_control_net_on_cpu,
                                   &error)) {
             LOG_ERROR("backend config failed: %s", error.c_str());
             return false;
@@ -316,16 +312,12 @@ public:
     }
 
     bool init(const sd_ctx_params_t* sd_ctx_params) {
-        n_threads             = sd_ctx_params->n_threads;
-        offload_params_to_cpu = sd_ctx_params->offload_params_to_cpu;
-        enable_mmap           = sd_ctx_params->enable_mmap;
-        max_vram              = sd_ctx_params->max_vram;
-        stream_layers         = sd_ctx_params->stream_layers;
-        backend_spec          = SAFE_STR(sd_ctx_params->backend);
-        params_backend_spec   = SAFE_STR(sd_ctx_params->params_backend);
-        if (offload_params_to_cpu) {
-            params_backend_spec = params_backend_spec.empty() ? "*=cpu" : "*=cpu," + params_backend_spec;
-        }
+        n_threads           = sd_ctx_params->n_threads;
+        enable_mmap         = sd_ctx_params->enable_mmap;
+        max_vram            = sd_ctx_params->max_vram;
+        stream_layers       = sd_ctx_params->stream_layers;
+        backend_spec        = SAFE_STR(sd_ctx_params->backend);
+        params_backend_spec = SAFE_STR(sd_ctx_params->params_backend);
         if (stream_layers && max_vram == 0.f) {
             LOG_WARN("--stream-layers has no effect without --max-vram set; ignoring");
             stream_layers = false;
@@ -344,7 +336,7 @@ public:
 
         ggml_log_set(ggml_log_callback_default, nullptr);
 
-        if (!init_backend(sd_ctx_params)) {
+        if (!init_backend()) {
             return false;
         }
         if (stream_layers && !backend_manager.params_backend_is_cpu(SDBackendModule::DIFFUSION)) {
@@ -534,8 +526,8 @@ public:
                 }
             }
             // Avoid full-model LoRA merge buffers on constrained setups.
-            const bool streaming_constrained = stream_layers ||
-                                               sd_ctx_params->offload_params_to_cpu;
+            const bool params_offloaded      = params_backend_for(SDBackendModule::DIFFUSION) != backend_for(SDBackendModule::DIFFUSION);
+            const bool streaming_constrained = stream_layers || params_offloaded;
             if (have_quantized_weight || streaming_constrained) {
                 apply_lora_immediately = false;
             } else {
@@ -2615,29 +2607,25 @@ void sd_hires_params_init(sd_hires_params_t* hires_params) {
 }
 
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
-    *sd_ctx_params                         = {};
-    sd_ctx_params->n_threads               = sd_get_num_physical_cores();
-    sd_ctx_params->wtype                   = SD_TYPE_COUNT;
-    sd_ctx_params->rng_type                = CUDA_RNG;
-    sd_ctx_params->sampler_rng_type        = RNG_TYPE_COUNT;
-    sd_ctx_params->prediction              = PREDICTION_COUNT;
-    sd_ctx_params->lora_apply_mode         = LORA_APPLY_AUTO;
-    sd_ctx_params->offload_params_to_cpu   = false;
-    sd_ctx_params->max_vram                = 0.f;
-    sd_ctx_params->stream_layers           = false;
-    sd_ctx_params->enable_mmap             = false;
-    sd_ctx_params->keep_clip_on_cpu        = false;
-    sd_ctx_params->keep_control_net_on_cpu = false;
-    sd_ctx_params->keep_vae_on_cpu         = false;
-    sd_ctx_params->diffusion_flash_attn    = false;
-    sd_ctx_params->circular_x              = false;
-    sd_ctx_params->circular_y              = false;
-    sd_ctx_params->chroma_use_dit_mask     = true;
-    sd_ctx_params->chroma_use_t5_mask      = false;
-    sd_ctx_params->chroma_t5_mask_pad      = 1;
-    sd_ctx_params->vae_format              = SD_VAE_FORMAT_AUTO;
-    sd_ctx_params->backend                 = nullptr;
-    sd_ctx_params->params_backend          = nullptr;
+    *sd_ctx_params                      = {};
+    sd_ctx_params->n_threads            = sd_get_num_physical_cores();
+    sd_ctx_params->wtype                = SD_TYPE_COUNT;
+    sd_ctx_params->rng_type             = CUDA_RNG;
+    sd_ctx_params->sampler_rng_type     = RNG_TYPE_COUNT;
+    sd_ctx_params->prediction           = PREDICTION_COUNT;
+    sd_ctx_params->lora_apply_mode      = LORA_APPLY_AUTO;
+    sd_ctx_params->max_vram             = 0.f;
+    sd_ctx_params->stream_layers        = false;
+    sd_ctx_params->enable_mmap          = false;
+    sd_ctx_params->diffusion_flash_attn = false;
+    sd_ctx_params->circular_x           = false;
+    sd_ctx_params->circular_y           = false;
+    sd_ctx_params->chroma_use_dit_mask  = true;
+    sd_ctx_params->chroma_use_t5_mask   = false;
+    sd_ctx_params->chroma_t5_mask_pad   = 1;
+    sd_ctx_params->vae_format           = SD_VAE_FORMAT_AUTO;
+    sd_ctx_params->backend              = nullptr;
+    sd_ctx_params->params_backend       = nullptr;
 }
 
 char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
@@ -2669,14 +2657,10 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "rng_type: %s\n"
              "sampler_rng_type: %s\n"
              "prediction: %s\n"
-             "offload_params_to_cpu: %s\n"
              "max_vram: %.3f\n"
              "stream_layers: %s\n"
              "backend: %s\n"
              "params_backend: %s\n"
-             "keep_clip_on_cpu: %s\n"
-             "keep_control_net_on_cpu: %s\n"
-             "keep_vae_on_cpu: %s\n"
              "flash_attn: %s\n"
              "diffusion_flash_attn: %s\n"
              "circular_x: %s\n"
@@ -2707,14 +2691,10 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              sd_rng_type_name(sd_ctx_params->rng_type),
              sd_rng_type_name(sd_ctx_params->sampler_rng_type),
              sd_prediction_name(sd_ctx_params->prediction),
-             BOOL_STR(sd_ctx_params->offload_params_to_cpu),
              sd_ctx_params->max_vram,
              BOOL_STR(sd_ctx_params->stream_layers),
              SAFE_STR(sd_ctx_params->backend),
              SAFE_STR(sd_ctx_params->params_backend),
-             BOOL_STR(sd_ctx_params->keep_clip_on_cpu),
-             BOOL_STR(sd_ctx_params->keep_control_net_on_cpu),
-             BOOL_STR(sd_ctx_params->keep_vae_on_cpu),
              BOOL_STR(sd_ctx_params->flash_attn),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
              BOOL_STR(sd_ctx_params->circular_x),
@@ -4436,7 +4416,6 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
             const size_t max_graph_vram_bytes = sd::ggml_graph_cut::max_vram_gib_to_bytes(sd_ctx->sd->max_vram);
             hires_upscaler->set_max_graph_vram_bytes(max_graph_vram_bytes);
             if (!hires_upscaler->load_from_file(request.hires.model_path,
-                                                sd_ctx->sd->offload_params_to_cpu,
                                                 sd_ctx->sd->n_threads)) {
                 LOG_ERROR("load hires model upscaler failed");
                 return nullptr;

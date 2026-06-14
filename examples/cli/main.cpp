@@ -782,12 +782,11 @@ int main(int argc, const char* argv[]) {
     int upscale_factor = 4;  // unused for RealESRGAN_x4plus_anime_6B.pth
     if (ctx_params.esrgan_path.size() > 0 && gen_params.upscale_repeats > 0) {
         UpscalerCtxPtr upscaler_ctx(new_upscaler_ctx(ctx_params.esrgan_path.c_str(),
-                                                     ctx_params.offload_params_to_cpu,
                                                      ctx_params.diffusion_conv_direct,
                                                      ctx_params.n_threads,
                                                      gen_params.upscale_tile_size,
-                                                     ctx_params.backend.c_str(),
-                                                     ctx_params.params_backend.c_str()));
+                                                     sd_ctx_params.backend,
+                                                     sd_ctx_params.params_backend));
 
         if (upscaler_ctx == nullptr) {
             LOG_ERROR("new_upscaler_ctx failed");
