@@ -165,7 +165,6 @@ public:
     SDVersion version;
     bool vae_decode_only         = false;
     bool external_vae_is_invalid = false;
-    bool free_params_immediately = false;
 
     bool circular_x = false;
     bool circular_y = false;
@@ -246,7 +245,7 @@ public:
         }
         return model_manager->register_param_tensors(desc,
                                                      std::move(group_tensors),
-                                                     free_params_immediately ? ModelManager::ResidencyMode::Disk : ModelManager::ResidencyMode::Resident,
+                                                     backend_manager.params_backend_is_disk(module) ? ModelManager::ResidencyMode::Disk : ModelManager::ResidencyMode::ParamBackend,
                                                      backend_for(module),
                                                      params_backend_for(module),
                                                      params_mem_size);
@@ -255,8 +254,7 @@ public:
     bool init_backend(const sd_ctx_params_t* sd_ctx_params) {
         std::string error;
         if (!backend_manager.init(sd_ctx_params->backend,
-                                  sd_ctx_params->params_backend,
-                                  offload_params_to_cpu,
+                                  params_backend_spec.c_str(),
                                   sd_ctx_params->keep_clip_on_cpu,
                                   sd_ctx_params->keep_vae_on_cpu,
                                   sd_ctx_params->keep_control_net_on_cpu,
@@ -319,22 +317,19 @@ public:
     }
 
     bool init(const sd_ctx_params_t* sd_ctx_params) {
-        n_threads               = sd_ctx_params->n_threads;
-        vae_decode_only         = sd_ctx_params->vae_decode_only;
-        free_params_immediately = sd_ctx_params->free_params_immediately;
-        offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
-        enable_mmap             = sd_ctx_params->enable_mmap;
-        max_vram                = sd_ctx_params->max_vram;
-        stream_layers           = sd_ctx_params->stream_layers;
-        backend_spec            = SAFE_STR(sd_ctx_params->backend);
-        params_backend_spec     = SAFE_STR(sd_ctx_params->params_backend);
+        n_threads             = sd_ctx_params->n_threads;
+        vae_decode_only       = sd_ctx_params->vae_decode_only;
+        offload_params_to_cpu = sd_ctx_params->offload_params_to_cpu;
+        enable_mmap           = sd_ctx_params->enable_mmap;
+        max_vram              = sd_ctx_params->max_vram;
+        stream_layers         = sd_ctx_params->stream_layers;
+        backend_spec          = SAFE_STR(sd_ctx_params->backend);
+        params_backend_spec   = SAFE_STR(sd_ctx_params->params_backend);
+        if (offload_params_to_cpu) {
+            params_backend_spec = params_backend_spec.empty() ? "*=cpu" : "*=cpu," + params_backend_spec;
+        }
         if (stream_layers && max_vram == 0.f) {
             LOG_WARN("--stream-layers has no effect without --max-vram set; ignoring");
-            stream_layers = false;
-        }
-        if (stream_layers && !offload_params_to_cpu && params_backend_spec.empty()) {
-            // Streaming needs CPU-resident params.
-            LOG_WARN("--stream-layers has no effect without --offload-to-cpu (or --params-backend); ignoring");
             stream_layers = false;
         }
 
@@ -353,6 +348,10 @@ public:
 
         if (!init_backend(sd_ctx_params)) {
             return false;
+        }
+        if (stream_layers && !backend_manager.params_backend_is_cpu(SDBackendModule::DIFFUSION)) {
+            LOG_WARN("--stream-layers has no effect unless diffusion params backend is cpu; ignoring");
+            stream_layers = false;
         }
         max_vram = sd::ggml_graph_cut::resolve_max_vram_gib(max_vram, backend_for(SDBackendModule::DIFFUSION));
 
@@ -2644,7 +2643,6 @@ void sd_hires_params_init(sd_hires_params_t* hires_params) {
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     *sd_ctx_params                         = {};
     sd_ctx_params->vae_decode_only         = true;
-    sd_ctx_params->free_params_immediately = true;
     sd_ctx_params->n_threads               = sd_get_num_physical_cores();
     sd_ctx_params->wtype                   = SD_TYPE_COUNT;
     sd_ctx_params->rng_type                = CUDA_RNG;
@@ -2694,7 +2692,6 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "photo_maker_path: %s\n"
              "tensor_type_rules: %s\n"
              "vae_decode_only: %s\n"
-             "free_params_immediately: %s\n"
              "n_threads: %d\n"
              "wtype: %s\n"
              "rng_type: %s\n"
@@ -2734,7 +2731,6 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->photo_maker_path),
              SAFE_STR(sd_ctx_params->tensor_type_rules),
              BOOL_STR(sd_ctx_params->vae_decode_only),
-             BOOL_STR(sd_ctx_params->free_params_immediately),
              sd_ctx_params->n_threads,
              sd_type_name(sd_ctx_params->wtype),
              sd_rng_type_name(sd_ctx_params->rng_type),
@@ -5037,7 +5033,7 @@ static sd::Tensor<float> upscale_ltx_spatial_video_latent(sd_ctx_t* sd_ctx,
     upsampler->get_param_tensors(tensors);
     if (!upsampler_manager->register_param_tensors("LTX latent upsampler",
                                                    std::move(tensors),
-                                                   ModelManager::ResidencyMode::Resident,
+                                                   ModelManager::ResidencyMode::ParamBackend,
                                                    sd_ctx->sd->backend_for(SDBackendModule::UPSCALER),
                                                    sd_ctx->sd->params_backend_for(SDBackendModule::UPSCALER)) ||
         !upsampler_manager->validate_registered_tensors()) {

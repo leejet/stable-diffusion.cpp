@@ -179,7 +179,7 @@ struct SDContextParams {
     bool validate(SDMode mode);
     bool resolve_and_validate(SDMode mode);
     std::string to_string() const;
-    sd_ctx_params_t to_sd_ctx_params_t(bool vae_decode_only, bool free_params_immediately, bool taesd_preview);
+    sd_ctx_params_t to_sd_ctx_params_t(bool vae_decode_only, bool taesd_preview);
 };
 
 struct SDGenerationParams {

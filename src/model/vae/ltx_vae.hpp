@@ -1538,7 +1538,7 @@ struct LTXVideoVAE : public VAE {
 
         if (!model_manager->register_runner_params("LTX VAE test",
                                                    *vae,
-                                                   ModelManager::ResidencyMode::Resident,
+                                                   ModelManager::ResidencyMode::ParamBackend,
                                                    backend,
                                                    backend) ||
             !model_manager->validate_registered_tensors()) {
