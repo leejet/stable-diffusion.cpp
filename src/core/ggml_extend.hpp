@@ -1699,6 +1699,13 @@ protected:
     ggml_backend_t params_backend  = nullptr;
     ggml_backend_t runtime_backend = nullptr;
 
+    // Multi-GPU support: additional GPU backends for parallel parameter distribution
+    std::vector<ggml_backend_t> extra_gpu_backends;
+    ggml_backend_sched_t multi_gpu_sched = nullptr;
+    bool multi_gpu_enabled               = false;
+    std::vector<ggml_backend_buffer_t> multi_gpu_params_buffers;
+    std::vector<ggml_context*> multi_gpu_params_ctxs;
+
     ggml_context* params_ctx            = nullptr;
     ggml_backend_buffer_t params_buffer = nullptr;
 
@@ -2147,6 +2154,9 @@ protected:
             graph_tensor_set.insert(ggml_graph_node(gf, i));
         }
 
+        int copied_count = 0;
+        int skipped_no_buf = 0;
+        int skipped_not_in_graph = 0;
         for (auto& kv : backend_tensor_data_map) {
             auto tensor = kv.first;
             auto data   = kv.second;
@@ -2155,9 +2165,11 @@ protected:
             }
             const char* name = ggml_get_name(tensor);
             if (graph_tensor_set.find(tensor) == graph_tensor_set.end()) {
+                skipped_not_in_graph++;
                 continue;
             }
             if (tensor->buffer == nullptr) {
+                skipped_no_buf++;
                 LOG_WARN("%s skip backend tensor copy: tensor buffer not set, name='%s', ne=[%lld,%lld,%lld,%lld], type=%s",
                          get_desc().c_str(),
                          name != nullptr ? name : "",
@@ -2182,7 +2194,12 @@ protected:
             }
 
             ggml_backend_tensor_set(tensor, data, 0, ggml_nbytes(tensor));
+            copied_count++;
         }
+
+        LOG_INFO("%s copy_data_to_backend_tensor: copied=%d skipped_no_buf=%d skipped_not_in_graph=%d total_in_map=%zu graph_leafs=%d graph_nodes=%d",
+                 get_desc().c_str(), copied_count, skipped_no_buf, skipped_not_in_graph,
+                 backend_tensor_data_map.size(), n_leafs, n_nodes);
 
         if (clear_after_copy) {
             backend_tensor_data_map.clear();
@@ -2434,6 +2451,21 @@ protected:
         };
         GraphWeightDoneGuard graph_weight_done_guard(this, &params_to_prepare);
 
+        // Multi-GPU execution path using ggml_backend_sched
+        if (multi_gpu_enabled && !extra_gpu_backends.empty() && !sd_backend_is_cpu(runtime_backend)) {
+            auto result = execute_graph_multi_gpu<T>(gf,
+                                                     n_threads,
+                                                     free_compute_buffer,
+                                                     free_compute_params,
+                                                     preserve_backend_tensor_data_map,
+                                                     no_return,
+                                                     cache_keep_names,
+                                                     params_to_prepare);
+            // Dismiss the guard since multi-GPU path handles cleanup internally
+            graph_weight_done_guard.dismiss();
+            return result;
+        }
+
         if (!alloc_compute_buffer(gf)) {
             LOG_ERROR("%s alloc compute buffer failed", get_desc().c_str());
             return std::nullopt;
@@ -2535,6 +2567,181 @@ protected:
             }
             graph_weight_done_guard.dismiss();
         }
+        return output;
+    }
+
+    template <typename T>
+    std::optional<sd::Tensor<T>> execute_graph_multi_gpu(
+        ggml_cgraph* gf,
+        int n_threads,
+        bool free_compute_buffer,
+        bool free_compute_params,
+        bool preserve_backend_tensor_data_map,
+        bool no_return,
+        const std::unordered_set<std::string>* cache_keep_names,
+        const std::vector<ggml_tensor*>& params_to_prepare) {
+        // Collect all GPU backends
+        std::vector<ggml_backend_t> all_backends;
+        all_backends.push_back(runtime_backend);
+        for (auto& b : extra_gpu_backends) {
+            all_backends.push_back(b);
+        }
+        // Add CPU backend for fallback
+        ggml_backend_t cpu_backend = sd_backend_cpu_init();
+        all_backends.push_back(cpu_backend);
+
+        int n_backends = (int)all_backends.size();
+
+        // Get buffer types for each backend
+        std::vector<ggml_backend_buffer_type_t> bufts(n_backends);
+        for (int i = 0; i < n_backends; i++) {
+            bufts[i] = ggml_backend_get_default_buffer_type(all_backends[i]);
+        }
+
+        // Determine graph size from the actual graph
+        int n_nodes = ggml_graph_n_nodes(gf);
+        int n_leafs = sd::ggml_graph_cut::leaf_count(gf);
+        size_t graph_size = (size_t)n_nodes + (size_t)n_leafs + 256;  // extra margin
+
+        // Create scheduler only once, reuse across iterations
+        if (multi_gpu_sched == nullptr) {
+            multi_gpu_sched = ggml_backend_sched_new(all_backends.data(),
+                                                      bufts.data(),
+                                                      n_backends,
+                                                      graph_size,
+                                                      false,   // sequential - split graph into segments per GPU
+                                                      true);   // op_offload
+
+            if (multi_gpu_sched == nullptr) {
+                LOG_ERROR("%s multi-GPU: failed to create backend scheduler", get_desc().c_str());
+                return std::nullopt;
+            }
+        }
+
+        // Reset the scheduler for this iteration
+        ggml_backend_sched_reset(multi_gpu_sched);
+
+        // After reset, manually assign backends for leaf tensors without buffers
+        // (graph inputs like latent, timestep, positional encoding, etc.)
+        {
+            int n_leafs_dbg = sd::ggml_graph_cut::leaf_count(gf);
+            int no_buffer_count = 0;
+            for (int i = 0; i < n_leafs_dbg; i++) {
+                ggml_tensor* t = sd::ggml_graph_cut::leaf_tensor(gf, i);
+                if (t == nullptr) continue;
+                ggml_backend_buffer_t buf = t->view_src ? t->view_src->buffer : t->buffer;
+                if (buf == nullptr) {
+                    no_buffer_count++;
+                    ggml_backend_sched_set_tensor_backend(multi_gpu_sched, t, runtime_backend);
+                }
+            }
+            LOG_INFO("%s multi-GPU: assigned %d leaf tensors without buffer to primary GPU",
+                     get_desc().c_str(), no_buffer_count);
+        }
+
+        if (!ggml_backend_sched_alloc_graph(multi_gpu_sched, gf)) {
+            LOG_ERROR("%s multi-GPU: failed to allocate graph", get_desc().c_str());
+            return std::nullopt;
+        }
+
+        // Debug: verify parameter tensors have correct backend assignment
+        {
+            int param_on_gpu0 = 0, param_on_gpu1 = 0, param_on_gpu2 = 0, param_on_cpu = 0, param_no_buf = 0;
+            int leaf_count = sd::ggml_graph_cut::leaf_count(gf);
+            for (int i = 0; i < leaf_count; i++) {
+                ggml_tensor* t = sd::ggml_graph_cut::leaf_tensor(gf, i);
+                if (t == nullptr) continue;
+                ggml_backend_t t_backend = ggml_backend_sched_get_tensor_backend(multi_gpu_sched, t);
+                if (t_backend == nullptr) {
+                    param_no_buf++;
+                    continue;
+                }
+                if (t_backend == all_backends[0]) param_on_gpu0++;
+                else if (n_backends > 1 && t_backend == all_backends[1]) param_on_gpu1++;
+                else if (n_backends > 2 && t_backend == all_backends[2]) param_on_gpu2++;
+                else if (n_backends > 3 && t_backend == all_backends[3]) param_on_cpu++;
+                else param_no_buf++;
+            }
+            LOG_INFO("%s multi-GPU: leaf backend dist: gpu0=%d gpu1=%d gpu2=%d cpu=%d null=%d",
+                     get_desc().c_str(), param_on_gpu0, param_on_gpu1, param_on_gpu2, param_on_cpu, param_no_buf);
+        }
+
+        // Debug: check a few leaf parameter tensors for valid data
+        {
+            int checked = 0;
+            int leaf_count = sd::ggml_graph_cut::leaf_count(gf);
+            for (int i = 0; i < leaf_count && checked < 5; i++) {
+                ggml_tensor* t = sd::ggml_graph_cut::leaf_tensor(gf, i);
+                if (t == nullptr) continue;
+                ggml_backend_buffer_t buf = t->view_src ? t->view_src->buffer : t->buffer;
+                if (buf == nullptr || t->data == nullptr) continue;
+                // Only check weight tensors (skip input tensors like latent/timestep)
+                if (t->op != GGML_OP_NONE) continue;
+                // Read first few values
+                float vals[4] = {0};
+                size_t nb = ggml_nbytes(t);
+                size_t to_read = std::min(nb, sizeof(vals));
+                ggml_backend_tensor_get(t, vals, 0, to_read);
+                bool has_nan = false;
+                for (int k = 0; k < 4 && k < (int)(to_read/sizeof(float)); k++) {
+                    if (std::isnan(vals[k]) || std::isinf(vals[k])) has_nan = true;
+                }
+                LOG_INFO("%s multi-GPU: leaf[%d] '%s' type=%s ne=[%lld,%lld,%lld] vals=[%.4f,%.4f,%.4f,%.4f] nan=%d buf=%p",
+                         get_desc().c_str(), i, t->name, ggml_type_name(t->type),
+                         (long long)t->ne[0], (long long)t->ne[1], (long long)t->ne[2],
+                         vals[0], vals[1], vals[2], vals[3], has_nan, (void*)buf);
+                checked++;
+            }
+        }
+
+        // Copy data to backend tensors AFTER alloc_graph so tensors have buffers
+        // For multi-GPU path, always preserve the data map since the scheduler is reused
+        // across iterations and leaf tensors need their data copied each time
+        copy_data_to_backend_tensor(gf, false);
+
+        // Set n_threads for CPU backend
+        sd_backend_cpu_set_n_threads(cpu_backend, n_threads);
+
+        LOG_INFO("%s multi-GPU: executing graph with %d splits across %d backends",
+                  get_desc().c_str(),
+                  ggml_backend_sched_get_n_splits(multi_gpu_sched),
+                  n_backends);
+
+        // Execute the graph
+        ggml_status status = ggml_backend_sched_graph_compute(multi_gpu_sched, gf);
+        if (status != GGML_STATUS_SUCCESS) {
+            LOG_ERROR("%s multi-GPU: compute failed: %s", get_desc().c_str(), ggml_status_to_string(status));
+            return std::nullopt;
+        }
+
+        ggml_backend_sched_synchronize(multi_gpu_sched);
+
+        LOG_INFO("%s multi-GPU: graph compute completed with %d splits",
+                  get_desc().c_str(),
+                  ggml_backend_sched_get_n_splits(multi_gpu_sched));
+
+        // Read output
+        if (!copy_cache_tensors_to_cache_buffer(cache_keep_names)) {
+            return std::nullopt;
+        }
+        auto result = ggml_get_tensor(compute_ctx, final_result_name.c_str());
+        std::optional<sd::Tensor<T>> output;
+        if (!no_return) {
+            output = read_graph_tensor<T>(result, "output");
+            if (!output.has_value()) {
+                return std::nullopt;
+            }
+        } else {
+            output = sd::Tensor<T>();
+        }
+
+        if (!free_compute_params) {
+            for (ggml_tensor* param : params_to_prepare) {
+                if (param == nullptr) continue;
+                kept_compute_param_tensor_set.insert(param);
+            }
+        }
+
         return output;
     }
 
@@ -2645,6 +2852,16 @@ public:
         free_params_ctx();
         free_compute_ctx();
         free_cache_ctx_and_buffer();
+        if (multi_gpu_sched != nullptr) {
+            ggml_backend_sched_free(multi_gpu_sched);
+            multi_gpu_sched = nullptr;
+        }
+        for (auto& backend : extra_gpu_backends) {
+            if (backend != nullptr) {
+                ggml_backend_free(backend);
+            }
+        }
+        extra_gpu_backends.clear();
     }
 
     virtual GGMLRunnerContext get_context() {
@@ -2696,6 +2913,12 @@ public:
             LOG_DEBUG("%s skipping params allocation (no tensors)", get_desc().c_str());
             return true;
         }
+
+        // Multi-GPU: distribute params across multiple GPUs
+        if (multi_gpu_enabled && !extra_gpu_backends.empty() && !sd_backend_is_cpu(params_backend)) {
+            return alloc_params_buffer_multi_gpu(num_tensors);
+        }
+
         // Pinned host buffer when CPU-offloaded for DMA-direct H2D.
         ggml_backend_buffer_type_t params_buft = nullptr;
         if (params_backend != runtime_backend) {
@@ -2725,12 +2948,149 @@ public:
         return true;
     }
 
+    // Extract block index from tensor name for round-robin GPU assignment
+    int extract_block_index(const std::string& name) const {
+        // Look for patterns like "transformer_blocks.N" or "single_blocks.N"
+        static const std::vector<std::string> block_prefixes = {
+            "transformer_blocks.",
+            "single_blocks.",
+            "double_blocks.",
+        };
+        for (const auto& prefix : block_prefixes) {
+            size_t pos = name.find(prefix);
+            if (pos != std::string::npos) {
+                size_t start = pos + prefix.size();
+                size_t end   = start;
+                while (end < name.size() && std::isdigit(name[end])) {
+                    end++;
+                }
+                if (end > start) {
+                    return std::stoi(name.substr(start, end - start));
+                }
+            }
+        }
+        return -1;  // No block index found
+    }
+
+    bool alloc_params_buffer_multi_gpu(size_t num_tensors) {
+        // Collect all GPU backends (primary + extra)
+        std::vector<ggml_backend_t> all_gpus;
+        all_gpus.push_back(runtime_backend);
+        for (auto& b : extra_gpu_backends) {
+            all_gpus.push_back(b);
+        }
+        int n_gpus = (int)all_gpus.size();
+
+        LOG_INFO("%s multi-GPU: distributing params across %d GPUs", get_desc().c_str(), n_gpus);
+
+        // Group tensors by GPU assignment using round-robin based on block index
+        std::vector<std::vector<ggml_tensor*>> gpu_tensors(n_gpus);
+        std::vector<ggml_context*> gpu_ctxs(n_gpus, nullptr);
+
+        for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr; t = ggml_get_next_tensor(params_ctx, t)) {
+            int block_idx = extract_block_index(t->name);
+            int gpu_idx;
+            if (block_idx >= 0) {
+                gpu_idx = block_idx % n_gpus;
+            } else {
+                // Non-block tensors go to GPU 0
+                gpu_idx = 0;
+            }
+            gpu_tensors[gpu_idx].push_back(t);
+        }
+
+        // Allocate buffers on each GPU
+        for (int g = 0; g < n_gpus; g++) {
+            if (gpu_tensors[g].empty()) continue;
+
+            // Create a context for this GPU's tensors
+            ggml_init_params init_params;
+            init_params.mem_size   = gpu_tensors[g].size() * ggml_tensor_overhead();
+            init_params.mem_buffer = nullptr;
+            init_params.no_alloc   = true;
+            gpu_ctxs[g]            = ggml_init(init_params);
+            GGML_ASSERT(gpu_ctxs[g] != nullptr);
+
+            // Duplicate tensor metadata into this GPU's context
+            for (ggml_tensor* src : gpu_tensors[g]) {
+                ggml_tensor* dst = ggml_dup_tensor(gpu_ctxs[g], src);
+                ggml_set_name(dst, src->name);
+                // Swap buffer/data pointers so the original params_ctx tensor
+                // points to the new GPU buffer after allocation
+                std::swap(src->buffer, dst->buffer);
+                std::swap(src->data, dst->data);
+                std::swap(src->extra, dst->extra);
+            }
+
+            // Allocate on this GPU
+            ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(all_gpus[g]);
+            ggml_backend_buffer_t buf       = ggml_backend_alloc_ctx_tensors_from_buft(gpu_ctxs[g], buft);
+            if (buf == nullptr) {
+                LOG_ERROR("%s multi-GPU: alloc params buffer failed on GPU %d", get_desc().c_str(), g);
+                // Cleanup
+                for (int i = 0; i <= g; i++) {
+                    if (gpu_ctxs[i] != nullptr) ggml_free(gpu_ctxs[i]);
+                }
+                return false;
+            }
+            ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+            // Copy buffer/data back to original params_ctx tensors
+            for (size_t i = 0; i < gpu_tensors[g].size(); i++) {
+                ggml_tensor* src = gpu_tensors[g][i];
+                ggml_tensor* dst = ggml_get_tensor(gpu_ctxs[g], src->name);
+                src->buffer = dst->buffer;
+                src->data   = dst->data;
+                src->extra  = dst->extra;
+            }
+
+            size_t buf_size = ggml_backend_buffer_get_size(buf);
+            LOG_INFO("%s multi-GPU: GPU %d params buffer = %.2f MB (%zu tensors)",
+                     get_desc().c_str(), g, buf_size / (1024.f * 1024.f), gpu_tensors[g].size());
+
+            // Store the buffer and context for later cleanup
+            // (We'll use multi_gpu_params_buffers to track these)
+            multi_gpu_params_buffers.push_back(buf);
+            multi_gpu_params_ctxs.push_back(gpu_ctxs[g]);
+        }
+
+        // Load data from model files into the GPU buffers
+        auto manager = weight_manager.lock();
+        if (manager != nullptr) {
+            std::vector<ggml_tensor*> all_tensors;
+            for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr; t = ggml_get_next_tensor(params_ctx, t)) {
+                all_tensors.push_back(t);
+            }
+            if (!manager->prepare_params(all_tensors)) {
+                LOG_ERROR("%s multi-GPU: prepare params failed", get_desc().c_str());
+                return false;
+            }
+        }
+
+        rebuild_params_tensor_set();
+        LOG_INFO("%s multi-GPU: params distributed across %d GPUs successfully",
+                 get_desc().c_str(), n_gpus);
+        return true;
+    }
+
 protected:
     void free_params_buffer() {
         if (params_buffer != nullptr) {
             ggml_backend_buffer_free(params_buffer);
             params_buffer = nullptr;
         }
+        for (auto& buf : multi_gpu_params_buffers) {
+            if (buf != nullptr) {
+                ggml_backend_buffer_free(buf);
+            }
+        }
+        multi_gpu_params_buffers.clear();
+        for (auto& ctx : multi_gpu_params_ctxs) {
+            if (ctx != nullptr) {
+                ggml_free(ctx);
+            }
+        }
+        multi_gpu_params_ctxs.clear();
         observed_max_effective_budget_ = 0;
     }
 
@@ -2901,6 +3261,20 @@ public:
 
     void set_stream_layers_enabled(bool enabled) {
         stream_layers_enabled = enabled;
+    }
+
+    void set_multi_gpu_enabled(bool enabled) {
+        multi_gpu_enabled = enabled;
+    }
+
+    void add_extra_gpu_backend(ggml_backend_t backend) {
+        if (backend != nullptr) {
+            extra_gpu_backends.push_back(backend);
+        }
+    }
+
+    bool has_extra_gpu_backends() const {
+        return !extra_gpu_backends.empty();
     }
 
     ggml_backend_t get_runtime_backend() {

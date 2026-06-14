@@ -950,6 +950,33 @@ static sd::Tensor<float> sample_euler(denoise_cb_t model,
             return {};
         }
         sd::Tensor<float> denoised = std::move(denoised_opt.pred);
+
+        // Debug: check denoised and x for NaN at each step
+        {
+            int nan_d = 0, nan_x = 0;
+            int n = std::min((int)denoised.numel(), 100);
+            for (int j = 0; j < n; j++) {
+                if (std::isnan(denoised.data()[j]) || std::isinf(denoised.data()[j])) nan_d++;
+                if (std::isnan(x.data()[j]) || std::isinf(x.data()[j])) nan_x++;
+            }
+            if (nan_d > 0 || nan_x > 0 || i == 0) {
+                float d_min = std::numeric_limits<float>::max(), d_max = std::numeric_limits<float>::lowest();
+                float x_min = std::numeric_limits<float>::max(), x_max = std::numeric_limits<float>::lowest();
+                for (int j = 0; j < n; j++) {
+                    if (!std::isnan(denoised.data()[j]) && !std::isinf(denoised.data()[j])) {
+                        d_min = std::min(d_min, denoised.data()[j]);
+                        d_max = std::max(d_max, denoised.data()[j]);
+                    }
+                    if (!std::isnan(x.data()[j]) && !std::isinf(x.data()[j])) {
+                        x_min = std::min(x_min, x.data()[j]);
+                        x_max = std::max(x_max, x.data()[j]);
+                    }
+                }
+                LOG_INFO("euler step %d/%d: sigma=%.4f denoised[nan=%d min=%.4f max=%.4f] x[nan=%d min=%.4f max=%.4f]",
+                         i, steps, sigma, nan_d, d_min, d_max, nan_x, x_min, x_max);
+            }
+        }
+
         sd::Tensor<float> d        = (x - denoised) / sigma;
         x += d * (sigmas[i + 1] - sigma);
     }

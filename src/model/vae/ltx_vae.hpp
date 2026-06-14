@@ -1068,7 +1068,9 @@ namespace LTXVAE {
               timestep_conditioning(timestep_conditioning),
               patch_size(patch_size),
               decode_only(decode_only) {
+            LOG_INFO("VideoVAE: version=%d, decode_only=%d, prefix=%s", version, decode_only, prefix.c_str());
             if (!decode_only) {
+                LOG_INFO("VideoVAE: creating Encoder with version=%d", version);
                 blocks["encoder"] = std::make_shared<Encoder>(version,
                                                               tensor_storage_map,
                                                               prefix,

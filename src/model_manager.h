@@ -69,6 +69,8 @@ private:
     uint64_t current_lora_epoch_ = 0;
     int n_threads_               = 0;
     bool enable_mmap_            = false;
+    bool multi_gpu_enabled_      = false;
+    std::vector<ggml_backend_t> extra_gpu_backends_;
 
     void finish_compute_backend_usage(const std::vector<TensorState*>& states);
     void release_all();
@@ -110,6 +112,12 @@ public:
         model_loader_.set_n_threads(n_threads);
     }
     void set_enable_mmap(bool enable_mmap) { enable_mmap_ = enable_mmap; }
+    void set_multi_gpu_enabled(bool enabled) { multi_gpu_enabled_ = enabled; }
+    void add_extra_gpu_backend(ggml_backend_t backend) {
+        if (backend != nullptr) {
+            extra_gpu_backends_.push_back(backend);
+        }
+    }
     void set_common_ignore_tensors(std::set<std::string> ignore_tensors);
     void set_loras(std::vector<LoraSpec> loras, SDVersion version);
 

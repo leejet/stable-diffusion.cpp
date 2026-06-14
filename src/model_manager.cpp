@@ -100,6 +100,28 @@ size_t estimate_tensors_size(const std::map<std::string, ggml_tensor*>& tensors)
     return size;
 }
 
+static int extract_block_index(const std::string& name) {
+    static const std::vector<std::string> block_prefixes = {
+        "transformer_blocks.",
+        "single_blocks.",
+        "double_blocks.",
+    };
+    for (const auto& prefix : block_prefixes) {
+        size_t pos = name.find(prefix);
+        if (pos != std::string::npos) {
+            size_t start = pos + prefix.size();
+            size_t end   = start;
+            while (end < name.size() && std::isdigit(name[end])) {
+                end++;
+            }
+            if (end > start) {
+                return std::stoi(name.substr(start, end - start));
+            }
+        }
+    }
+    return -1;
+}
+
 bool ModelManager::register_param_tensors(const std::string& desc,
                                           std::map<std::string, ggml_tensor*> tensors,
                                           ResidencyMode residency_mode,
@@ -112,6 +134,15 @@ bool ModelManager::register_param_tensors(const std::string& desc,
     }
     if (registered_tensor_size != nullptr) {
         *registered_tensor_size += estimate_tensors_size(tensors);
+    }
+
+    // Build list of all GPU backends for multi-GPU distribution
+    std::vector<ggml_backend_t> all_gpus;
+    if (multi_gpu_enabled_ && !extra_gpu_backends_.empty()) {
+        all_gpus.push_back(compute_backend);
+        for (auto& b : extra_gpu_backends_) {
+            all_gpus.push_back(b);
+        }
     }
 
     std::vector<std::unique_ptr<TensorState>> new_states;
@@ -134,7 +165,21 @@ bool ModelManager::register_param_tensors(const std::string& desc,
         state->tensor          = tensor;
         state->desc            = desc;
         state->residency_mode  = residency_mode;
-        state->compute_backend = compute_backend;
+
+        // Multi-GPU: assign compute backend based on block index
+        if (!all_gpus.empty()) {
+            int block_idx = extract_block_index(name);
+            int gpu_idx;
+            if (block_idx >= 0) {
+                gpu_idx = block_idx % (int)all_gpus.size();
+            } else {
+                gpu_idx = 0;
+            }
+            state->compute_backend = all_gpus[gpu_idx];
+        } else {
+            state->compute_backend = compute_backend;
+        }
+
         state->params_backend  = params_backend;
         new_states.push_back(std::move(state));
     }

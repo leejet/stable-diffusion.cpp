@@ -193,6 +193,7 @@ public:
     bool enable_mmap                     = false;
     float max_vram                       = 0.f;
     bool stream_layers                   = false;
+    bool multi_gpu                       = false;
     std::string backend_spec;
     std::string params_backend_spec;
 
@@ -327,6 +328,7 @@ public:
         enable_mmap             = sd_ctx_params->enable_mmap;
         max_vram                = sd_ctx_params->max_vram;
         stream_layers           = sd_ctx_params->stream_layers;
+        multi_gpu               = sd_ctx_params->multi_gpu;
         backend_spec            = SAFE_STR(sd_ctx_params->backend);
         params_backend_spec     = SAFE_STR(sd_ctx_params->params_backend);
         if (stream_layers && max_vram == 0.f) {
@@ -809,6 +811,28 @@ public:
 
             diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
             diffusion_model->set_stream_layers_enabled(stream_layers);
+            if (multi_gpu) {
+                diffusion_model->set_multi_gpu_enabled(true);
+                // Initialize extra GPU backends (GPU 1, GPU 2, ...)
+                int n_devices = ggml_backend_dev_count();
+                for (int i = 1; i < n_devices; i++) {
+                    ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                    if (dev != nullptr && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                        ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
+                        if (backend != nullptr) {
+                            LOG_INFO("Multi-GPU: adding GPU %d (%s)", i, ggml_backend_name(backend));
+                            diffusion_model->add_extra_gpu_backend(backend);
+                            model_manager->add_extra_gpu_backend(backend);
+                        }
+                    }
+                }
+                if (!diffusion_model->has_extra_gpu_backends()) {
+                    LOG_WARN("--multi-gpu specified but no extra GPUs found; disabling");
+                    diffusion_model->set_multi_gpu_enabled(false);
+                } else {
+                    model_manager->set_multi_gpu_enabled(true);
+                }
+            }
             if (!register_runner_params("Diffusion model",
                                         diffusion_model,
                                         SDBackendModule::DIFFUSION,
@@ -870,6 +894,7 @@ public:
 
             auto create_vae = [&]() -> std::shared_ptr<VAE> {
                 if (sd_version_is_ltxav(version)) {
+                    LOG_INFO("Creating LTXVideoVAE with vae_decode_only=%d", vae_decode_only);
                     return std::make_shared<LTXVideoVAE>(backend_for(SDBackendModule::VAE),
                                                          params_backend_for(SDBackendModule::VAE),
                                                          tensor_storage_map,
@@ -2053,6 +2078,22 @@ public:
                     return sd::Tensor<float>();
                 }
 
+                // Debug: check for NaN in diffusion model output
+                {
+                    int nan_count = 0;
+                    int inf_count = 0;
+                    int out_n = (int)output_opt.numel();
+                    for (int i = 0; i < std::min(out_n, 1000); i++) {
+                        float v = output_opt.data()[i];
+                        if (std::isnan(v)) nan_count++;
+                        else if (std::isinf(v)) inf_count++;
+                    }
+                    if (nan_count > 0 || inf_count > 0) {
+                        LOG_WARN("diffusion model output step=%d: nan=%d inf=%d in first %d elements",
+                                 step, nan_count, inf_count, std::min(out_n, 1000));
+                    }
+                }
+
                 step_cache.after_condition(&condition, noised_input, output_opt);
                 return output_opt;
             };
@@ -2638,6 +2679,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->offload_params_to_cpu   = false;
     sd_ctx_params->max_vram                = 0.f;
     sd_ctx_params->stream_layers           = false;
+    sd_ctx_params->multi_gpu               = false;
     sd_ctx_params->enable_mmap             = false;
     sd_ctx_params->keep_clip_on_cpu        = false;
     sd_ctx_params->keep_control_net_on_cpu = false;
@@ -2687,6 +2729,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "offload_params_to_cpu: %s\n"
              "max_vram: %.3f\n"
              "stream_layers: %s\n"
+             "multi_gpu: %s\n"
              "backend: %s\n"
              "params_backend: %s\n"
              "keep_clip_on_cpu: %s\n"
@@ -2727,6 +2770,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              BOOL_STR(sd_ctx_params->offload_params_to_cpu),
              sd_ctx_params->max_vram,
              BOOL_STR(sd_ctx_params->stream_layers),
+             BOOL_STR(sd_ctx_params->multi_gpu),
              SAFE_STR(sd_ctx_params->backend),
              SAFE_STR(sd_ctx_params->params_backend),
              BOOL_STR(sd_ctx_params->keep_clip_on_cpu),
@@ -4929,6 +4973,26 @@ static sd_image_t* decode_video_outputs(sd_ctx_t* sd_ctx,
               (int)video_latent.shape()[2],
               (int)video_latent.shape()[3]);
     // auto z = sd::load_tensor_from_file_as_tensor<float>("ltx_vae_z.bin");
+    // Debug: check latent values before VAE decode
+    {
+        float min_val = std::numeric_limits<float>::max();
+        float max_val = std::numeric_limits<float>::lowest();
+        float sum = 0.f;
+        int n = (int)video_latent.numel();
+        for (int i = 0; i < n; i++) {
+            float v = video_latent.data()[i];
+            if (std::isnan(v) || std::isinf(v)) {
+                LOG_WARN("latent[%d] = %f (nan/inf!)", i, v);
+                if (i < 10) continue;
+                break;
+            }
+            min_val = std::min(min_val, v);
+            max_val = std::max(max_val, v);
+            sum += v;
+        }
+        LOG_INFO("video_latent stats: min=%.4f max=%.4f mean=%.4f n=%d",
+                 min_val, max_val, sum / n, n);
+    }
     int64_t t4            = ggml_time_ms();
     sd::Tensor<float> vid = sd_ctx->sd->decode_first_stage(video_latent, true);
     int64_t t5            = ggml_time_ms();
@@ -5306,6 +5370,27 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
         return false;
     }
     LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
+
+    // Debug: check final latent values
+    {
+        float min_val = std::numeric_limits<float>::max();
+        float max_val = std::numeric_limits<float>::lowest();
+        float sum = 0.f;
+        int n = (int)final_latent.numel();
+        int nan_count = 0;
+        for (int i = 0; i < n; i++) {
+            float v = final_latent.data()[i];
+            if (std::isnan(v) || std::isinf(v)) {
+                nan_count++;
+                continue;
+            }
+            min_val = std::min(min_val, v);
+            max_val = std::max(max_val, v);
+            sum += v;
+        }
+        LOG_INFO("final_latent stats: min=%.4f max=%.4f mean=%.4f nan/inf=%d n=%d",
+                 min_val, max_val, sum / n, nan_count, n);
+    }
 
     if (latent_upscale_enabled) {
         int64_t upscale_start             = ggml_time_ms();

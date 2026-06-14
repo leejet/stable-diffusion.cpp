@@ -72,9 +72,9 @@ static ggml_type safetensors_dtype_to_ggml_type(const std::string& dtype) {
     } else if (dtype == "F64") {
         ttype = GGML_TYPE_F32;
     } else if (dtype == "F8_E4M3") {
-        ttype = GGML_TYPE_F16;
+        ttype = GGML_TYPE_BF16;
     } else if (dtype == "F8_E5M2") {
-        ttype = GGML_TYPE_F16;
+        ttype = GGML_TYPE_BF16;
     } else if (dtype == "I32") {
         ttype = GGML_TYPE_I32;
     } else if (dtype == "I64") {

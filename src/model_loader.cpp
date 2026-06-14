@@ -4,6 +4,7 @@
 #include <cinttypes>
 #include <cstdarg>
 #include <cstdlib>
+#include <dirent.h>
 #include <fstream>
 #include <functional>
 #include <mutex>
@@ -15,6 +16,7 @@
 #include <vector>
 
 #include "core/util.h"
+#include "json.hpp"
 #include "model_io/gguf_io.h"
 #include "model_io/safetensors_io.h"
 #include "model_io/torch_legacy_io.h"
@@ -120,8 +122,97 @@ uint16_t f8_e4m3_to_f16(uint8_t f8) {
     return ggml_fp32_to_fp16(*reinterpret_cast<const float*>(&result));
 }
 
+uint16_t f8_e4m3_to_bf16(uint8_t f8) {
+    // Convert FP8 E4M3 to BF16 via FP32 intermediate
+    const uint32_t exponent_bias = 7;
+    if (f8 == 0xff) {
+        // Negative NaN in bf16: sign=1, exponent=0xFF, mantissa=0x40
+        return 0xFFC0;
+    } else if (f8 == 0x7f) {
+        // Positive NaN in bf16: sign=0, exponent=0xFF, mantissa=0x40
+        return 0x7FC0;
+    }
+
+    uint32_t sign     = f8 & 0x80;
+    uint32_t exponent = (f8 & 0x78) >> 3;
+    uint32_t mantissa = f8 & 0x07;
+    uint32_t result   = sign << 24;
+    if (exponent == 0) {
+        if (mantissa > 0) {
+            exponent = 0x7f - exponent_bias;
+
+            // yes, 2 times
+            if ((mantissa & 0x04) == 0) {
+                mantissa &= 0x03;
+                mantissa <<= 1;
+                exponent -= 1;
+            }
+            if ((mantissa & 0x04) == 0) {
+                mantissa &= 0x03;
+                mantissa <<= 1;
+                exponent -= 1;
+            }
+
+            result |= (mantissa & 0x03) << 21;
+            result |= exponent << 23;
+        }
+    } else {
+        result |= mantissa << 20;
+        exponent += 0x7f - exponent_bias;
+        result |= exponent << 23;
+    }
+
+    // FP32 to BF16: take upper 16 bits
+    return static_cast<uint16_t>(result >> 16);
+}
+
 uint16_t f8_e5m2_to_f16(uint8_t fp8) {
     return static_cast<uint16_t>(fp8) << 8;
+}
+
+uint16_t f8_e5m2_to_bf16(uint8_t fp8) {
+    // FP8 E5M2 to BF16 via FP32
+    // E5M2: 1 sign + 5 exponent (bias 15) + 2 mantissa
+    float f;
+    if (fp8 == 0x7C) {
+        // positive infinity
+        uint32_t inf_bits = 0x7f800000;
+        f = *reinterpret_cast<const float*>(&inf_bits);
+    } else if (fp8 == 0xFC) {
+        // negative infinity
+        uint32_t inf_bits = 0xff800000;
+        f = *reinterpret_cast<const float*>(&inf_bits);
+    } else if ((fp8 & 0x7C) == 0x7C) {
+        // NaN
+        uint32_t nan_bits = 0x7fc00000;
+        if (fp8 & 0x80) nan_bits = 0xffc00000;
+        f = *reinterpret_cast<const float*>(&nan_bits);
+    } else {
+        uint32_t sign     = fp8 & 0x80;
+        uint32_t exponent = (fp8 & 0x7C) >> 2;
+        uint32_t mantissa = fp8 & 0x03;
+        uint32_t result   = sign << 24;
+        if (exponent == 0) {
+            if (mantissa > 0) {
+                exponent = 0x7f - 15;
+                if ((mantissa & 0x02) == 0) {
+                    mantissa &= 0x01;
+                    mantissa <<= 1;
+                    exponent -= 1;
+                }
+                result |= mantissa << 21;
+                result |= exponent << 23;
+            }
+        } else {
+            result |= mantissa << 21;
+            exponent += 0x7f - 15;
+            result |= exponent << 23;
+        }
+        f = *reinterpret_cast<const float*>(&result);
+    }
+    uint32_t f32_bits;
+    memcpy(&f32_bits, &f, sizeof(f32_bits));
+    return static_cast<uint16_t>(f32_bits >> 16);
 }
 
 void f8_e4m3_to_f16_vec(uint8_t* src, uint16_t* dst, int64_t n) {
@@ -135,6 +226,20 @@ void f8_e5m2_to_f16_vec(uint8_t* src, uint16_t* dst, int64_t n) {
     // support inplace op
     for (int64_t i = n - 1; i >= 0; i--) {
         dst[i] = f8_e5m2_to_f16(src[i]);
+    }
+}
+
+void f8_e4m3_to_bf16_vec(uint8_t* src, uint16_t* dst, int64_t n) {
+    // support inplace op
+    for (int64_t i = n - 1; i >= 0; i--) {
+        dst[i] = f8_e4m3_to_bf16(src[i]);
+    }
+}
+
+void f8_e5m2_to_bf16_vec(uint8_t* src, uint16_t* dst, int64_t n) {
+    // support inplace op
+    for (int64_t i = n - 1; i >= 0; i--) {
+        dst[i] = f8_e5m2_to_bf16(src[i]);
     }
 }
 
@@ -406,22 +511,156 @@ bool ModelLoader::init_from_diffusers_file(const std::string& file_path, const s
     std::string clip_path   = path_join(file_path, "text_encoder/model.safetensors");
     std::string clip_g_path = path_join(file_path, "text_encoder_2/model.safetensors");
 
-    if (!init_from_safetensors_file(unet_path, "unet.")) {
+    // Check for standard diffusers directory structure first
+    if (file_exists(unet_path) || file_exists(vae_path) || file_exists(clip_path) || file_exists(clip_g_path)) {
+        if (!init_from_safetensors_file(unet_path, "unet.")) {
+            return false;
+        }
+
+        if (!init_from_safetensors_file(vae_path, "vae.")) {
+            LOG_WARN("Couldn't find working VAE in %s", file_path.c_str());
+            // return false;
+        }
+        if (!init_from_safetensors_file(clip_path, "te.")) {
+            LOG_WARN("Couldn't find working text encoder in %s", file_path.c_str());
+            // return false;
+        }
+        if (!init_from_safetensors_file(clip_g_path, "te.1.")) {
+            LOG_DEBUG("Couldn't find working second text encoder in %s", file_path.c_str());
+        }
+        return true;
+    }
+
+    // HuggingFace sharded safetensors format: load model-*.safetensors files
+    // Look for model.safetensors.index.json or model-*.safetensors files
+    std::string index_path = path_join(file_path, "model.safetensors.index.json");
+    std::set<std::string> shard_files;
+
+    if (file_exists(index_path)) {
+        // Parse the index JSON to find which shard files exist
+        std::ifstream ifs(index_path);
+        if (ifs.is_open()) {
+            try {
+                nlohmann::json index_json = nlohmann::json::parse(ifs);
+                if (index_json.contains("weight_map")) {
+                    for (auto& [key, val] : index_json["weight_map"].items()) {
+                        if (val.is_string()) {
+                            shard_files.insert(val.get<std::string>());
+                        }
+                    }
+                }
+            } catch (...) {
+                LOG_WARN("Failed to parse model.safetensors.index.json in %s", file_path.c_str());
+            }
+        }
+    }
+
+    // If no index found, glob for model-*.safetensors files
+    if (shard_files.empty()) {
+        // Try single model.safetensors file
+        std::string single_model_path = path_join(file_path, "model.safetensors");
+        if (file_exists(single_model_path)) {
+            return init_from_safetensors_file(single_model_path, prefix);
+        }
+
+        // Try to find model-*.safetensors shard files
+        DIR* dir = opendir(file_path.c_str());
+        if (dir) {
+            struct dirent* entry;
+            while ((entry = readdir(dir)) != nullptr) {
+                std::string name = entry->d_name;
+                if (name.find("model-") == 0 && name.find(".safetensors") != std::string::npos) {
+                    shard_files.insert(name);
+                }
+            }
+            closedir(dir);
+        }
+    }
+
+    if (shard_files.empty()) {
+        LOG_WARN("No safetensors model files found in %s", file_path.c_str());
         return false;
     }
 
-    if (!init_from_safetensors_file(vae_path, "vae.")) {
-        LOG_WARN("Couldn't find working VAE in %s", file_path.c_str());
-        // return false;
+    LOG_INFO("Loading %zu shard files from %s", shard_files.size(), file_path.c_str());
+    bool any_loaded = false;
+    for (const auto& shard_name : shard_files) {
+        std::string shard_path = path_join(file_path, shard_name);
+        if (init_from_safetensors_file(shard_path, prefix)) {
+            any_loaded = true;
+        } else {
+            LOG_WARN("Failed to load shard %s", shard_path.c_str());
+        }
     }
-    if (!init_from_safetensors_file(clip_path, "te.")) {
-        LOG_WARN("Couldn't find working text encoder in %s", file_path.c_str());
-        // return false;
+
+    // HuggingFace gemma models have a "language_model." prefix that needs to be stripped
+    // e.g. "language_model.model.embed_tokens.weight" -> "model.embed_tokens.weight"
+    // This is needed because the C++ code expects "text_encoders.llm.model.embed_tokens.weight"
+    // but the safetensors files contain "language_model.model.embed_tokens.weight"
+    bool has_language_model_prefix = false;
+    for (auto& [name, ts] : tensor_storage_map) {
+        if (starts_with(name, prefix + "language_model.")) {
+            has_language_model_prefix = true;
+            break;
+        }
     }
-    if (!init_from_safetensors_file(clip_g_path, "te.1.")) {
-        LOG_DEBUG("Couldn't find working second text encoder in %s", file_path.c_str());
+    if (has_language_model_prefix) {
+        LOG_INFO("Stripping 'language_model.' prefix from tensors in %s", file_path.c_str());
+        String2TensorStorage new_map;
+        for (auto& [name, tensor_storage] : tensor_storage_map) {
+            if (starts_with(name, prefix + "language_model.")) {
+                std::string new_name = prefix + name.substr(prefix.size() + strlen("language_model."));
+                tensor_storage.name = new_name;
+                new_map[new_name] = std::move(tensor_storage);
+            } else {
+                new_map[name] = std::move(tensor_storage);
+            }
+        }
+        tensor_storage_map.swap(new_map);
     }
-    return true;
+
+    // HuggingFace safetensors LLM naming differs from GGUF naming.
+    // The C++ code uses GGUF-style names internally (e.g., post_attention_norm, post_ffw_norm),
+    // but safetensors files use HuggingFace names (e.g., post_feedforward_layernorm, pre_feedforward_layernorm).
+    // Apply reverse mapping: safetensors HF name -> C++ internal name.
+    static const std::vector<std::pair<std::string, std::string>> hf_llm_name_map = {
+        {"post_feedforward_layernorm.", "post_ffw_norm."},
+        {"pre_feedforward_layernorm.", "post_attention_norm."},
+        // Standard mappings that are already correct in most safetensors files:
+        // {"input_layernorm.", "input_layernorm."}  -- no change needed
+        // {"post_attention_layernorm.", "post_attention_layernorm."}  -- already correct for pre_ffw_norm
+    };
+
+    bool needs_rename = false;
+    for (auto& [name, ts] : tensor_storage_map) {
+        if (!starts_with(name, prefix)) continue;
+        for (const auto& [hf_name, cpp_name] : hf_llm_name_map) {
+            if (name.find(hf_name) != std::string::npos) {
+                needs_rename = true;
+                break;
+            }
+        }
+        if (needs_rename) break;
+    }
+
+    if (needs_rename) {
+        LOG_INFO("Applying HuggingFace LLM name mapping for %s", file_path.c_str());
+        String2TensorStorage new_map;
+        for (auto& [name, tensor_storage] : tensor_storage_map) {
+            std::string new_name = name;
+            for (const auto& [hf_name, cpp_name] : hf_llm_name_map) {
+                size_t pos = new_name.find(hf_name);
+                if (pos != std::string::npos) {
+                    new_name.replace(pos, hf_name.size(), cpp_name);
+                }
+            }
+            tensor_storage.name = new_name;
+            new_map[new_name] = std::move(tensor_storage);
+        }
+        tensor_storage_map.swap(new_map);
+    }
+
+    return any_loaded;
 }
 
 SDVersion ModelLoader::get_sd_version() {
@@ -1130,9 +1369,17 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
 
                     t0 = ggml_time_ms();
                     if (tensor_storage.is_f8_e4m3) {
-                        f8_e4m3_to_f16_vec((uint8_t*)read_buf, (uint16_t*)target_buf, tensor_storage.nelements());
+                        if (tensor_storage.type == GGML_TYPE_BF16) {
+                            f8_e4m3_to_bf16_vec((uint8_t*)read_buf, (uint16_t*)target_buf, tensor_storage.nelements());
+                        } else {
+                            f8_e4m3_to_f16_vec((uint8_t*)read_buf, (uint16_t*)target_buf, tensor_storage.nelements());
+                        }
                     } else if (tensor_storage.is_f8_e5m2) {
-                        f8_e5m2_to_f16_vec((uint8_t*)read_buf, (uint16_t*)target_buf, tensor_storage.nelements());
+                        if (tensor_storage.type == GGML_TYPE_BF16) {
+                            f8_e5m2_to_bf16_vec((uint8_t*)read_buf, (uint16_t*)target_buf, tensor_storage.nelements());
+                        } else {
+                            f8_e5m2_to_f16_vec((uint8_t*)read_buf, (uint16_t*)target_buf, tensor_storage.nelements());
+                        }
                     } else if (tensor_storage.is_f64) {
                         f64_to_f32_vec((double*)read_buf, (float*)target_buf, tensor_storage.nelements());
                     } else if (tensor_storage.is_i64) {
