@@ -1162,7 +1162,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
 
                         // RPC backends require serialized access to prevent concurrency issues
                         const char* buffer_type_name = ggml_backend_buft_name(ggml_backend_buffer_get_type(dst_tensor->buffer));
-                        bool is_rpc_buffer = buffer_type_name != nullptr &&
+                        bool is_rpc_buffer           = buffer_type_name != nullptr &&
                                              std::string(buffer_type_name).find("RPC") != std::string::npos;
 
                         if (is_rpc_buffer) {
