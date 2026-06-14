@@ -196,7 +196,6 @@ typedef struct {
     uint32_t embedding_count;
     const char* photo_maker_path;
     const char* tensor_type_rules;
-    bool vae_decode_only;
     int n_threads;
     enum sd_type_t wtype;
     enum rng_type_t rng_type;

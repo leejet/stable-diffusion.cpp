@@ -757,7 +757,7 @@ std::string SDContextParams::to_string() const {
     return oss.str();
 }
 
-sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool taesd_preview) {
+sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     embedding_vec.clear();
     embedding_vec.reserve(embedding_map.size());
     for (const auto& kv : embedding_map) {
@@ -787,7 +787,6 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool t
         static_cast<uint32_t>(embedding_vec.size()),
         photo_maker_path.c_str(),
         tensor_type_rules.c_str(),
-        vae_decode_only,
         n_threads,
         wtype,
         rng_type,

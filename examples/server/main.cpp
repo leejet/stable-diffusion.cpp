@@ -85,7 +85,7 @@ int main(int argc, const char** argv) {
     LOG_DEBUG("%s", ctx_params.to_string().c_str());
     LOG_DEBUG("%s", default_gen_params.to_string().c_str());
 
-    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(false, false);
+    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(false);
     SDCtxPtr sd_ctx(new_sd_ctx(&sd_ctx_params));
 
     if (sd_ctx == nullptr) {
