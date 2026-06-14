@@ -63,9 +63,9 @@ Context Options:
   --offload-to-cpu                         place the weights in RAM to save VRAM, and automatically load them into VRAM
                                            when needed
   --mmap                                   whether to memory-map model
-  --control-net-cpu                        keep controlnet in cpu (for low vram)
-  --clip-on-cpu                            keep clip in cpu (for low vram)
-  --vae-on-cpu                             keep vae in cpu (for low vram)
+  --control-net-cpu                        deprecated; use --backend controlnet=cpu
+  --clip-on-cpu                            deprecated; use --backend te=cpu
+  --vae-on-cpu                             deprecated; use --backend vae=cpu
   --fa                                     use flash attention
   --diffusion-fa                           use flash attention in the diffusion model only
   --diffusion-conv-direct                  use ggml_conv2d_direct in the diffusion model

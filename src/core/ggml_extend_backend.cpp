@@ -545,9 +545,6 @@ bool SDBackendManager::runtime_backend_supports_host_buffer(SDBackendModule modu
 
 bool SDBackendManager::init(const char* backend_spec,
                             const char* params_backend_spec,
-                            bool keep_clip_on_cpu,
-                            bool keep_vae_on_cpu,
-                            bool keep_control_net_on_cpu,
                             std::string* error) {
     reset();
 
@@ -556,18 +553,6 @@ bool SDBackendManager::init(const char* backend_spec,
     }
     if (!sd_parse_backend_assignment(SAFE_STR(params_backend_spec), &params_assignment_, error)) {
         return false;
-    }
-
-    if (runtime_assignment_.empty()) {
-        if (keep_clip_on_cpu) {
-            runtime_assignment_.set_module(SDBackendModule::TE, "cpu");
-        }
-        if (keep_vae_on_cpu) {
-            runtime_assignment_.set_module(SDBackendModule::VAE, "cpu");
-        }
-        if (keep_control_net_on_cpu) {
-            runtime_assignment_.set_module(SDBackendModule::CONTROL_NET, "cpu");
-        }
     }
 
     return validate(error);

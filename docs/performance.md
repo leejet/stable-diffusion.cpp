@@ -31,7 +31,7 @@ Use CPU params to reduce VRAM usage:
 --backend cuda0 --params-backend cpu
 ```
 
-This keeps model weights in system RAM and moves them to the runtime backend when needed. `--offload-to-cpu` is a compatibility shortcut that prepends `*=cpu` to `--params-backend`, so explicit module assignments can still override it:
+This keeps model weights in system RAM and moves them to the runtime backend when needed. In the example CLI/server, `--offload-to-cpu` is a compatibility shortcut that prepends `*=cpu` to `--params-backend` before creating the context, so explicit module assignments can still override it:
 
 ```shell
 --offload-to-cpu --params-backend te=disk
