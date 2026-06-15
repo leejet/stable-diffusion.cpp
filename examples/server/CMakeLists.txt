@@ -9,33 +9,33 @@ set(HAVE_FRONTEND_BUILD OFF)
 
 if(SD_SERVER_BUILD_FRONTEND AND EXISTS "${FRONTEND_DIR}")
     if(WIN32)
-        find_program(PNPM_EXECUTABLE NAMES pnpm.cmd pnpm)
+        find_program(NPX_EXECUTABLE NAMES npx.cmd npx)
     else()
-        find_program(PNPM_EXECUTABLE NAMES pnpm)
+        find_program(NPX_EXECUTABLE NAMES npx)
     endif()
 
-    if(PNPM_EXECUTABLE)
+    if(NPX_EXECUTABLE)
         message(STATUS "Frontend dir found: ${FRONTEND_DIR}")
-        message(STATUS "pnpm found: ${PNPM_EXECUTABLE}")
+        message(STATUS "npx found: ${NPX_EXECUTABLE}")
 
         set(HAVE_FRONTEND_BUILD ON)
 
         add_custom_target(${TARGET}_frontend_install
-            COMMAND "${PNPM_EXECUTABLE}" -C "${FRONTEND_DIR}" install
+            COMMAND "${NPX_EXECUTABLE}" -C "${FRONTEND_DIR}" pnpm install
             WORKING_DIRECTORY "${FRONTEND_DIR}"
             COMMENT "Installing frontend dependencies"
             VERBATIM
         )
 
         add_custom_target(${TARGET}_frontend_build
-            COMMAND "${PNPM_EXECUTABLE}" -C "${FRONTEND_DIR}" run build
+            COMMAND "${NPX_EXECUTABLE}" -C "${FRONTEND_DIR}" pnpm run build
             WORKING_DIRECTORY "${FRONTEND_DIR}"
             COMMENT "Building frontend"
             VERBATIM
         )
 
         add_custom_target(${TARGET}_frontend_header
-            COMMAND "${PNPM_EXECUTABLE}" -C "${FRONTEND_DIR}" run build:header
+            COMMAND "${NPX_EXECUTABLE}" -C "${FRONTEND_DIR}" pnpm run build:header
             WORKING_DIRECTORY "${FRONTEND_DIR}"
             COMMENT "Generating gen_index_html.h"
             VERBATIM
@@ -51,11 +51,11 @@ if(SD_SERVER_BUILD_FRONTEND AND EXISTS "${FRONTEND_DIR}")
         set_source_files_properties("${GENERATED_HTML_HEADER}" PROPERTIES GENERATED TRUE)
     else()
         if(EXISTS "${GENERATED_HTML_HEADER}")
-            message(STATUS "pnpm not found; using pre-built frontend header detected at ${GENERATED_HTML_HEADER}")
+            message(STATUS "npx not found; using pre-built frontend header detected at ${GENERATED_HTML_HEADER}")
             set(HAVE_FRONTEND_BUILD ON)
             add_custom_target(${TARGET}_frontend)
         else()
-            message(WARNING "pnpm not found; frontend build disabled.")
+            message(WARNING "npx not found; frontend build disabled.")
         endif()
     endif()
 else()
