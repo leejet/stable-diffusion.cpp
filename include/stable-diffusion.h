@@ -453,8 +453,11 @@ SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_para
 SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params);
 
 enum sd_cancel_mode_t {
+    // Stop the current generation as soon as possible.
     SD_CANCEL_ALL,
+    // Finish the current image sample, then skip additional batch latents and return completed images.
     SD_CANCEL_NEW_LATENTS,
+    // Clear a pending cancellation request.
     SD_CANCEL_RESET
 };
 
