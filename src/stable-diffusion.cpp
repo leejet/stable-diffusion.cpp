@@ -449,14 +449,6 @@ public:
 
         if (strlen(SAFE_STR(sd_ctx_params->pulid_weights_path)) > 0) {
             LOG_INFO("loading PuLID weights from '%s'", sd_ctx_params->pulid_weights_path);
-            // PuLID's cross-attention (pulid_ca.*) weights are part of the Flux
-            // diffusion model -- its blocks are constructed inside FluxModel when
-            // the tensor map contains pulid_ca.* keys. So they must be merged into
-            // the model loader here, BEFORE the diffusion model is built; that is
-            // why this stays in the ctor rather than in the pulid generation
-            // extension (whose init runs after model construction). The runtime
-            // side -- per-generation id-embedding + per-step injection -- lives in
-            // src/extensions/pulid_extension.cpp.
             if (!model_loader.init_from_file(sd_ctx_params->pulid_weights_path,
                                              "model.diffusion_model.")) {
                 LOG_WARN("loading PuLID weights from '%s' failed", sd_ctx_params->pulid_weights_path);
