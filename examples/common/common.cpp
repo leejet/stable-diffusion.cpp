@@ -51,6 +51,10 @@ static sd_vae_format_t str_to_vae_format(const std::string& value) {
     return SD_VAE_FORMAT_COUNT;
 }
 
+static void prepend_backend_assignment(std::string& spec, const char* assignment) {
+    spec = spec.empty() ? assignment : std::string(assignment) + "," + spec;
+}
+
 #if defined(_WIN32)
 static std::string utf16_to_utf8(const std::wstring& wstr) {
     if (wstr.empty())
@@ -412,6 +416,10 @@ ArgOptions SDContextParams::get_options() {
          "path to PHOTOMAKER model",
          &photo_maker_path},
         {"",
+         "--pulid-weights",
+         "path to PuLID flux weights (e.g. pulid_flux_v0.9.1.safetensors). Identity is injected during the denoise loop when paired with --pulid-id-embedding.",
+         &pulid_weights_path},
+        {"",
          "--upscale-model",
          "path to esrgan model.",
          &esrgan_path},
@@ -421,8 +429,16 @@ ArgOptions SDContextParams::get_options() {
          &backend},
         {"",
          "--params-backend",
-         "parameter backend assignment, e.g. cpu or diffusion=cpu,clip=cpu",
+         "parameter backend assignment, e.g. disk, cpu, or diffusion=disk,clip=cpu",
          &params_backend},
+        {"",
+         "--rpc-servers",
+         "comma-separated list of RPC servers to connect to for offloading, in the format host:port, e.g. localhost:50052,192.168.1.3:50052",
+         &rpc_servers},
+        {"",
+         "--max-vram",
+         "maximum VRAM budget in GiB for graph-cut segmented execution. Accepts a single value or assignments by backend/device, e.g. 6 or cuda0=6,vulkan0=4. 0 disables graph splitting; a negative value auto-detects free VRAM, sparing the specified value",
+         &max_vram},
     };
 
     options.int_options = {
@@ -435,13 +451,6 @@ ArgOptions SDContextParams::get_options() {
          "--chroma-t5-mask-pad",
          "t5 mask pad size of chroma",
          &chroma_t5_mask_pad},
-    };
-
-    options.float_options = {
-        {"",
-         "--max-vram",
-         "maximum VRAM budget in GiB for graph-cut segmented execution. 0 disables graph splitting; a negative value auto-detects free VRAM, sparing the specified value (e.g. -0.5 will keep at least 0.5 GiB free)",
-         &max_vram},
     };
 
     options.bool_options = {
@@ -463,15 +472,15 @@ ArgOptions SDContextParams::get_options() {
          true, &enable_mmap},
         {"",
          "--control-net-cpu",
-         "keep controlnet in cpu (for low vram)",
+         "deprecated; use --backend controlnet=cpu",
          true, &control_net_cpu},
         {"",
          "--clip-on-cpu",
-         "keep clip in cpu (for low vram)",
+         "deprecated; use --backend te=cpu",
          true, &clip_on_cpu},
         {"",
          "--vae-on-cpu",
-         "keep vae in cpu (for low vram)",
+         "deprecated; use --backend vae=cpu",
          true, &vae_on_cpu},
         {"",
          "--fa",
@@ -688,6 +697,25 @@ bool SDContextParams::resolve_and_validate(SDMode mode) {
     return true;
 }
 
+void SDContextParams::prepare_backend_assignments() {
+    effective_backend        = backend;
+    effective_params_backend = params_backend;
+
+    if (offload_params_to_cpu) {
+        prepend_backend_assignment(effective_params_backend, "*=cpu");
+    }
+
+    if (clip_on_cpu) {
+        prepend_backend_assignment(effective_backend, "te=cpu");
+    }
+    if (vae_on_cpu) {
+        prepend_backend_assignment(effective_backend, "vae=cpu");
+    }
+    if (control_net_cpu) {
+        prepend_backend_assignment(effective_backend, "controlnet=cpu");
+    }
+}
+
 std::string SDContextParams::to_string() const {
     std::ostringstream emb_ss;
     emb_ss << "{\n";
@@ -731,7 +759,7 @@ std::string SDContextParams::to_string() const {
         << "  rng_type: " << sd_rng_type_name(rng_type) << ",\n"
         << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
         << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
-        << "  max_vram: " << max_vram << ",\n"
+        << "  max_vram: \"" << max_vram << "\",\n"
         << "  stream_layers: " << (stream_layers ? "true" : "false") << ",\n"
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
@@ -757,7 +785,8 @@ std::string SDContextParams::to_string() const {
     return oss.str();
 }
 
-sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool free_params_immediately, bool taesd_preview) {
+sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
+    prepare_backend_assignments();
     embedding_vec.clear();
     embedding_vec.reserve(embedding_map.size());
     for (const auto& kv : embedding_map) {
@@ -767,57 +796,53 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         embedding_vec.emplace_back(item);
     }
 
-    sd_ctx_params_t sd_ctx_params = {
-        model_path.c_str(),
-        clip_l_path.c_str(),
-        clip_g_path.c_str(),
-        clip_vision_path.c_str(),
-        t5xxl_path.c_str(),
-        llm_path.c_str(),
-        llm_vision_path.c_str(),
-        diffusion_model_path.c_str(),
-        high_noise_diffusion_model_path.c_str(),
-        uncond_diffusion_model_path.c_str(),
-        embeddings_connectors_path.c_str(),
-        vae_path.c_str(),
-        audio_vae_path.c_str(),
-        taesd_path.c_str(),
-        control_net_path.c_str(),
-        embedding_vec.data(),
-        static_cast<uint32_t>(embedding_vec.size()),
-        photo_maker_path.c_str(),
-        tensor_type_rules.c_str(),
-        vae_decode_only,
-        free_params_immediately,
-        n_threads,
-        wtype,
-        rng_type,
-        sampler_rng_type,
-        prediction,
-        lora_apply_mode,
-        offload_params_to_cpu,
-        enable_mmap,
-        clip_on_cpu,
-        control_net_cpu,
-        vae_on_cpu,
-        flash_attn,
-        diffusion_flash_attn,
-        taesd_preview,
-        diffusion_conv_direct,
-        vae_conv_direct,
-        circular || circular_x,
-        circular || circular_y,
-        force_sdxl_vae_conv_scale,
-        chroma_use_dit_mask,
-        chroma_use_t5_mask,
-        chroma_t5_mask_pad,
-        qwen_image_zero_cond_t,
-        str_to_vae_format(vae_format),
-        max_vram,
-        stream_layers,
-        backend.c_str(),
-        params_backend.c_str(),
-    };
+    sd_ctx_params_t sd_ctx_params;
+    sd_ctx_params_init(&sd_ctx_params);
+    sd_ctx_params.model_path                      = model_path.c_str();
+    sd_ctx_params.clip_l_path                     = clip_l_path.c_str();
+    sd_ctx_params.clip_g_path                     = clip_g_path.c_str();
+    sd_ctx_params.clip_vision_path                = clip_vision_path.c_str();
+    sd_ctx_params.t5xxl_path                      = t5xxl_path.c_str();
+    sd_ctx_params.llm_path                        = llm_path.c_str();
+    sd_ctx_params.llm_vision_path                 = llm_vision_path.c_str();
+    sd_ctx_params.diffusion_model_path            = diffusion_model_path.c_str();
+    sd_ctx_params.high_noise_diffusion_model_path = high_noise_diffusion_model_path.c_str();
+    sd_ctx_params.uncond_diffusion_model_path     = uncond_diffusion_model_path.c_str();
+    sd_ctx_params.embeddings_connectors_path      = embeddings_connectors_path.c_str();
+    sd_ctx_params.vae_path                        = vae_path.c_str();
+    sd_ctx_params.audio_vae_path                  = audio_vae_path.c_str();
+    sd_ctx_params.taesd_path                      = taesd_path.c_str();
+    sd_ctx_params.control_net_path                = control_net_path.c_str();
+    sd_ctx_params.embeddings                      = embedding_vec.data();
+    sd_ctx_params.embedding_count                 = static_cast<uint32_t>(embedding_vec.size());
+    sd_ctx_params.photo_maker_path                = photo_maker_path.c_str();
+    sd_ctx_params.pulid_weights_path              = pulid_weights_path.c_str();
+    sd_ctx_params.tensor_type_rules               = tensor_type_rules.c_str();
+    sd_ctx_params.n_threads                       = n_threads;
+    sd_ctx_params.wtype                           = wtype;
+    sd_ctx_params.rng_type                        = rng_type;
+    sd_ctx_params.sampler_rng_type                = sampler_rng_type;
+    sd_ctx_params.prediction                      = prediction;
+    sd_ctx_params.lora_apply_mode                 = lora_apply_mode;
+    sd_ctx_params.enable_mmap                     = enable_mmap;
+    sd_ctx_params.flash_attn                      = flash_attn;
+    sd_ctx_params.diffusion_flash_attn            = diffusion_flash_attn;
+    sd_ctx_params.tae_preview_only                = taesd_preview;
+    sd_ctx_params.diffusion_conv_direct           = diffusion_conv_direct;
+    sd_ctx_params.vae_conv_direct                 = vae_conv_direct;
+    sd_ctx_params.circular_x                      = circular || circular_x;
+    sd_ctx_params.circular_y                      = circular || circular_y;
+    sd_ctx_params.force_sdxl_vae_conv_scale       = force_sdxl_vae_conv_scale;
+    sd_ctx_params.chroma_use_dit_mask             = chroma_use_dit_mask;
+    sd_ctx_params.chroma_use_t5_mask              = chroma_use_t5_mask;
+    sd_ctx_params.chroma_t5_mask_pad              = chroma_t5_mask_pad;
+    sd_ctx_params.qwen_image_zero_cond_t          = qwen_image_zero_cond_t;
+    sd_ctx_params.vae_format                      = str_to_vae_format(vae_format);
+    sd_ctx_params.max_vram                        = max_vram.c_str();
+    sd_ctx_params.stream_layers                   = stream_layers;
+    sd_ctx_params.backend                         = effective_backend.c_str();
+    sd_ctx_params.params_backend                  = effective_params_backend.c_str();
+    sd_ctx_params.rpc_servers                     = rpc_servers.c_str();
     return sd_ctx_params;
 }
 
@@ -867,6 +892,10 @@ ArgOptions SDGenerationParams::get_options() {
          "--pm-id-embed-path",
          "path to PHOTOMAKER v2 id embed",
          &pm_id_embed_path},
+        {"",
+         "--pulid-id-embedding",
+         "path to a .pulidembd binary produced by pulid_extract_id.py. Carries a (32, 2048) identity embedding extracted from a source portrait. Pair with --pulid-weights on the context.",
+         &pulid_id_embedding_path},
         {"",
          "--hires-upscaler",
          "highres fix upscaler, Lanczos, Nearest, Latent, Latent (nearest), Latent (nearest-exact), "
@@ -1017,6 +1046,10 @@ ArgOptions SDGenerationParams::get_options() {
          "--pm-style-strength",
          "",
          &pm_style_strength},
+        {"",
+         "--pulid-id-weight",
+         "strength of PuLID identity injection (default: 1.0). 0.7-1.2 are typical; lower lets the prompt override the face more, higher tightens identity match.",
+         &pulid_id_weight},
         {"",
          "--control-strength",
          "strength to apply Control Net (default: 0.9). 1.0 corresponds to full destruction of information in init image",
@@ -2249,6 +2282,11 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
         pm_style_strength,
     };
 
+    sd_pulid_params_t pulid_params = {
+        pulid_id_embedding_path.empty() ? nullptr : pulid_id_embedding_path.c_str(),
+        pulid_id_weight,
+    };
+
     params.loras                 = lora_vec.empty() ? nullptr : lora_vec.data();
     params.lora_count            = static_cast<uint32_t>(lora_vec.size());
     params.prompt                = prompt.c_str();
@@ -2269,6 +2307,7 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     params.control_image         = control_image.get();
     params.control_strength      = control_strength;
     params.pm_params             = pm_params;
+    params.pulid_params          = pulid_params;
     params.vae_tiling_params     = vae_tiling_params;
     params.cache                 = cache_params;
 

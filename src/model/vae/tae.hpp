@@ -623,14 +623,14 @@ struct TinyImageAutoEncoder : public VAE {
     bool decode_only = false;
 
     TinyImageAutoEncoder(ggml_backend_t backend,
-                         ggml_backend_t params_backend,
                          const String2TensorStorage& tensor_storage_map,
                          const std::string prefix,
-                         bool decoder_only = true,
-                         SDVersion version = VERSION_SD1)
-        : decode_only(decoder_only),
-          taesd(decoder_only, version),
-          VAE(version, backend, params_backend) {
+                         bool decoder_only                                   = true,
+                         SDVersion version                                   = VERSION_SD1,
+                         std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : VAE(version, backend, "tae", weight_manager),
+          decode_only(decoder_only),
+          taesd(decoder_only, version) {
         scale_input = false;
         taesd.init(params_ctx, tensor_storage_map, prefix);
     }
@@ -639,8 +639,8 @@ struct TinyImageAutoEncoder : public VAE {
         return "taesd";
     }
 
-    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
-        taesd.get_param_tensors(tensors, prefix);
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        taesd.get_param_tensors(tensors, weight_prefix);
     }
 
     sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) override {
@@ -676,7 +676,7 @@ struct TinyImageAutoEncoder : public VAE {
             return build_graph(z_tensor, decode_graph);
         };
 
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), z_tensor.dim());
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), z_tensor.dim());
     }
 };
 
@@ -686,13 +686,13 @@ struct TinyVideoAutoEncoder : public VAE {
     bool is_wide     = false;
 
     TinyVideoAutoEncoder(ggml_backend_t backend,
-                         ggml_backend_t params_backend,
                          const String2TensorStorage& tensor_storage_map,
                          const std::string prefix,
-                         bool decoder_only = true,
-                         SDVersion version = VERSION_WAN2)
-        : decode_only(decoder_only),
-          VAE(version, backend, params_backend) {
+                         bool decoder_only                                   = true,
+                         SDVersion version                                   = VERSION_WAN2,
+                         std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : VAE(version, backend, "tae", weight_manager),
+          decode_only(decoder_only) {
         for (auto tensor_storage : tensor_storage_map) {
             if (tensor_storage.first.find(prefix + ".3.conv.6.weight") != std::string::npos) {
                 is_wide = true;
@@ -708,8 +708,8 @@ struct TinyVideoAutoEncoder : public VAE {
         return "taehv";
     }
 
-    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
-        taehv.get_param_tensors(tensors, prefix);
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        taehv.get_param_tensors(tensors, weight_prefix);
     }
 
     sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) override {
@@ -746,7 +746,7 @@ struct TinyVideoAutoEncoder : public VAE {
             return build_graph(z_tensor, decode_graph);
         };
 
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), z_tensor.dim());
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), z_tensor.dim());
     }
 };
 

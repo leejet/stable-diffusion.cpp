@@ -1,4 +1,4 @@
-#ifndef __SD_MODEL_TE_CLIP_HPP__
+﻿#ifndef __SD_MODEL_TE_CLIP_HPP__
 #define __SD_MODEL_TE_CLIP_HPP__
 
 #include "core/ggml_extend.hpp"
@@ -469,13 +469,13 @@ struct CLIPTextModelRunner : public GGMLRunner {
     std::vector<float> attention_mask_vec;
 
     CLIPTextModelRunner(ggml_backend_t backend,
-                        ggml_backend_t params_backend,
                         const String2TensorStorage& tensor_storage_map,
                         const std::string prefix,
-                        CLIPVersion version = OPENAI_CLIP_VIT_L_14,
-                        bool with_final_ln  = true,
-                        bool force_clip_f32 = false)
-        : GGMLRunner(backend, params_backend) {
+                        CLIPVersion version                                 = OPENAI_CLIP_VIT_L_14,
+                        bool with_final_ln                                  = true,
+                        bool force_clip_f32                                 = false,
+                        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : GGMLRunner(backend, weight_manager) {
         bool proj_in = false;
         for (const auto& [name, tensor_storage] : tensor_storage_map) {
             if (!starts_with(name, prefix)) {
@@ -567,11 +567,14 @@ struct CLIPTextModelRunner : public GGMLRunner {
                               void* custom_embeddings_data,
                               size_t max_token_idx,
                               bool return_pooled,
-                              int clip_skip) {
+                              int clip_skip,
+                              bool auto_free           = true,
+                              bool free_compute_buffer = true,
+                              bool free_compute_params = true) {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(input_ids, num_custom_embeddings, custom_embeddings_data, max_token_idx, return_pooled, clip_skip);
         };
-        auto result = GGMLRunner::compute<float>(get_graph, n_threads, true);
+        auto result = GGMLRunner::compute<float>(get_graph, n_threads, auto_free, free_compute_buffer, free_compute_params);
         if (return_pooled) {
             return take_or_empty(std::move(result));
         }

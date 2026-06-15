@@ -133,6 +133,11 @@ struct SDContextParams {
     std::string control_net_path;
     std::string embedding_dir;
     std::string photo_maker_path;
+    // PuLID-Flux identity-preservation context path: the safetensors blob
+    // carrying the PerceiverAttentionCA cross-attention weights. Loaded
+    // once with the model. Per-generation pulid_id_embedding_path lives in
+    // SDGenerationParams below.
+    std::string pulid_weights_path;
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string tensor_type_rules;
     std::string lora_model_dir = ".";
@@ -144,10 +149,13 @@ struct SDContextParams {
     rng_type_t rng_type         = CUDA_RNG;
     rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
     bool offload_params_to_cpu  = false;
-    float max_vram              = 0.f;
+    std::string max_vram        = "0";
     bool stream_layers          = false;
     std::string backend;
     std::string params_backend;
+    std::string rpc_servers;
+    std::string effective_backend;
+    std::string effective_params_backend;
     bool enable_mmap           = false;
     bool control_net_cpu       = false;
     bool clip_on_cpu           = false;
@@ -175,11 +183,12 @@ struct SDContextParams {
     float flow_shift = INFINITY;
     ArgOptions get_options();
     void build_embedding_map();
+    void prepare_backend_assignments();
     bool resolve(SDMode mode);
     bool validate(SDMode mode);
     bool resolve_and_validate(SDMode mode);
     std::string to_string() const;
-    sd_ctx_params_t to_sd_ctx_params_t(bool vae_decode_only, bool free_params_immediately, bool taesd_preview);
+    sd_ctx_params_t to_sd_ctx_params_t(bool taesd_preview);
 };
 
 struct SDGenerationParams {
@@ -229,6 +238,12 @@ struct SDGenerationParams {
     std::string pm_id_images_dir;
     std::string pm_id_embed_path;
     float pm_style_strength = 20.f;
+
+    // PuLID-Flux: per-generation identity embedding (binary file produced by
+    // runtime-scripts/pulid_extract_id.py). Format documented in
+    // include/stable-diffusion.h sd_pulid_params_t.
+    std::string pulid_id_embedding_path;
+    float pulid_id_weight = 1.0f;
 
     int upscale_repeats   = 1;
     int upscale_tile_size = 128;

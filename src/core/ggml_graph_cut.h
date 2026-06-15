@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -68,6 +69,17 @@ namespace sd::ggml_graph_cut {
 
     static constexpr const char* GGML_RUNNER_CUT_PREFIX = "ggml_runner_cut:";
 
+    struct MaxVramAssignment {
+        float default_gib = 0.f;
+        std::unordered_map<std::string, float> backend_gib;
+        std::unordered_map<std::string, size_t> resolved_backend_bytes;
+
+        void reset(float fallback_gib);
+        bool parse(const std::string& raw_spec, std::string* error);
+        bool canonicalize_backend_keys(std::string* error);
+        size_t bytes_for_backend(ggml_backend_t backend);
+    };
+
     bool is_graph_cut_tensor(const ggml_tensor* tensor);
     std::string make_graph_cut_name(const std::string& group, const std::string& output);
     void mark_graph_cut(ggml_tensor* tensor, const std::string& group, const std::string& output);
@@ -80,7 +92,6 @@ namespace sd::ggml_graph_cut {
     ggml_tensor* output_tensor(ggml_cgraph* gf, const Segment& segment, size_t output_index);
     ggml_tensor* input_tensor(ggml_cgraph* gf, const Segment::InputRef& input_ref);
     std::vector<ggml_tensor*> param_tensors(ggml_cgraph* gf, const Segment& segment);
-    std::vector<ggml_tensor*> runtime_param_tensors(ggml_cgraph* gf, const Segment& segment, const char* log_desc);
     std::unordered_set<std::string> collect_future_input_names(ggml_cgraph* gf,
                                                                const Plan& plan,
                                                                size_t current_segment_index);
