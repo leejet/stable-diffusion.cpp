@@ -452,6 +452,17 @@ SD_API void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params);
 SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params);
 SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params);
 
+enum sd_cancel_mode_t {
+    // Stop the current generation as soon as possible.
+    SD_CANCEL_ALL,
+    // Finish the current image sample, then skip additional batch latents and return completed images.
+    SD_CANCEL_NEW_LATENTS,
+    // Clear a pending cancellation request.
+    SD_CANCEL_RESET
+};
+
+SD_API void sd_cancel_generation(sd_ctx_t* sd_ctx, enum sd_cancel_mode_t mode);
+
 SD_API void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params);
 SD_API bool generate_video(sd_ctx_t* sd_ctx,
                            const sd_vid_gen_params_t* sd_vid_gen_params,
