@@ -52,14 +52,15 @@ to a `.pulidembd` binary file (about 131 KB). Run it once per source
 person; the same file is reused for any number of generations.
 
 A reference Python script is provided alongside this docs file at
-[`scripts/pulid_extract_id.py`](../scripts/pulid_extract_id.py). It
+[`script/pulid_extract_id.py`](../script/pulid_extract_id.py). It
 requires:
-- A working CUDA / CPU PyTorch + diffusers stack
-- `insightface`, `facexlib`, `eva-clip`, `torchvision`
+- A working CUDA / CPU PyTorch stack
+- `insightface`, `facexlib`, `eva-clip`, `torchvision`, `opencv-python`,
+  `huggingface_hub`, `gguf`
 - The PuLID weights file (same one stable-diffusion.cpp will load below)
-- The ToTheBeginning/PuLID repo's `pulid/pipeline_flux.py` (and its
-  dependencies under `pulid/` and `flux/`) -- recommended to vendor
-  rather than pip-install due to upstream packaging quirks
+- The ToTheBeginning/PuLID repo's `pulid/` package (including
+  `pulid/pipeline_flux.py`) and `eva_clip/` package on `PYTHONPATH`; `flux/`
+  is not needed for embedding extraction
 
 Run it as:
 

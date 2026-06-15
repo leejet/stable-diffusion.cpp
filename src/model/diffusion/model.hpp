@@ -22,9 +22,6 @@ struct SkipLayerDiffusionExtra {
 struct FluxDiffusionExtra {
     const sd::Tensor<float>* guidance   = nullptr;
     const std::vector<int>* skip_layers = nullptr;
-    // PuLID-Flux: precomputed (N=1, num_tokens=32, kv_dim=2048) identity embedding
-    // produced by runtime-scripts/pulid_extract_id.py. nullptr when PuLID is
-    // disabled. id_weight is per-job (typical 0.7-1.2; default 1.0).
     const sd::Tensor<float>* pulid_id   = nullptr;
     float pulid_id_weight               = 1.0f;
 };

@@ -7,24 +7,15 @@
 #include "core/util.h"
 #include "gguf.h"
 
-// Load the precomputed PuLID identity embedding produced by
-// scripts/pulid_extract_id.py into a sd::Tensor<float> (always materialized as
-// fp32 for the diffusion path). Returns an empty tensor on any failure (the
-// caller treats empty as "PuLID off").
-//
-// The file is a standard gguf container holding a single tensor named
-// "pulid_id" with shape [token_dim, num_tokens] (ggml order; typically
-// [2048, 32]) in f16 / bf16 / f32. Using gguf rather than a bespoke header
-// means the shape + dtype are self-describing and we reuse ggml's reader.
 static sd::Tensor<float> load_pulid_id_embedding(const char* path) {
     sd::Tensor<float> empty;
     if (path == nullptr || strlen(path) == 0) {
         return empty;
     }
 
-    struct ggml_context* ctx_data   = nullptr;
-    struct gguf_init_params gp       = {/*.no_alloc =*/false, /*.ctx =*/&ctx_data};
-    struct gguf_context* gguf_ctx    = gguf_init_from_file(path, gp);
+    struct ggml_context* ctx_data = nullptr;
+    struct gguf_init_params gp    = {/*.no_alloc =*/false, /*.ctx =*/&ctx_data};
+    struct gguf_context* gguf_ctx = gguf_init_from_file(path, gp);
     if (gguf_ctx == nullptr || ctx_data == nullptr) {
         LOG_WARN("PuLID id-embedding: cannot read gguf '%s'", path);
         if (gguf_ctx != nullptr)
@@ -83,20 +74,9 @@ static sd::Tensor<float> load_pulid_id_embedding(const char* path) {
     return out;
 }
 
-// PuLID-Flux identity injection as a generation extension.
-//
-// Unlike PhotoMaker, PuLID does NOT modify the conditioning -- it injects an
-// identity embedding via cross-attention *inside* the Flux denoise forward (the
-// pulid_ca.* blocks). Those cross-attention weights are part of the Flux
-// diffusion model and are loaded into the model tensor map before the model is
-// constructed (see SDImpl ctor, gated on sd_ctx_params.pulid_weights_path), so
-// this extension does not own a separate model. Its job is purely runtime:
-//   - prepare_condition: load the per-generation id-embedding file.
-//   - before_diffusion:  hand that embedding (+ weight) to FluxDiffusionExtra,
-//                        which flux.hpp reads to drive the pulid_ca injection.
 struct PuLIDExtension : public GenerationExtension {
     bool enabled = false;
-    sd::Tensor<float> id_embedding;  // per-generation; empty when PuLID is off for this request
+    sd::Tensor<float> id_embedding;
     float id_weight = 1.0f;
 
     const char* name() const override {
