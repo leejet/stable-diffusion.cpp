@@ -2,26 +2,18 @@
 Precompute a PuLID-Flux identity embedding from a single source portrait.
 
 Writes a gguf file (a single tensor `pulid_id`) that stable-diffusion.cpp's
-`--pulid-id-embedding` flag consumes. See docs/pulid.md for the format and
-overall PuLID-Flux flow.
-
-This script intentionally lives outside the C++ build: identity extraction
-needs insightface + EVA-CLIP-L + IDFormer, which are PyTorch-only stacks
-that would be impractical to reimplement in ggml just to run once per
-source person. The C++ side downstream of this file is cross-vendor and
-backend-agnostic.
+`--pulid-id-embedding` flag consumes.
 
 Dependencies (recommended: vendor rather than pip-install due to upstream
 packaging quirks):
   - torch + safetensors
-  - The ToTheBeginning/PuLID repository's `pulid/pipeline_flux.py` and
-    its sibling packages (`flux/`, `eva_clip/`, `models/`). Put them on
-    PYTHONPATH or sys.path before running this script.
-  - insightface, facexlib (PuLID pipeline pulls these in)
+  - The ToTheBeginning/PuLID repository's `pulid/` package and `eva_clip/`.
+    Put them on PYTHONPATH or sys.path before running this script.
+  - insightface, facexlib, torchvision, opencv-python, huggingface_hub, gguf
   - numpy, Pillow
 
 Usage:
-  python pulid_extract_id.py \\
+  python script/pulid_extract_id.py \\
     --portrait /path/to/source-photo.jpg \\
     --pulid-weights /path/to/pulid_flux_v0.9.1.safetensors \\
     --out /path/to/source.pulidembd
@@ -35,21 +27,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-
-
-def _make_minimal_flux_skeleton(device):
-    """PuLIDPipeline expects a `dit` (Flux transformer) to attach its
-    PerceiverAttentionCA modules to during construction. We never run a
-    forward pass on it -- the encoders alone (which is what we actually
-    need) live on the pipeline object, not the dit. So we instantiate a
-    real Flux skeleton with default params and never load its weights."""
-    import torch
-    from flux.model import Flux
-    from flux.util import configs
-
-    with torch.device("cpu"):
-        model = Flux(configs["flux-dev"].params).to(torch.bfloat16)
-    return model
+from types import SimpleNamespace
 
 
 def extract(portrait_path: str, pulid_weights: str) -> "torch.Tensor":
@@ -65,18 +43,17 @@ def extract(portrait_path: str, pulid_weights: str) -> "torch.Tensor":
 
     print(f"device={device}", flush=True)
 
-    print("constructing minimal Flux skeleton (no weights loaded)", flush=True)
-    dit = _make_minimal_flux_skeleton(device)
-
-    print("instantiating PuLIDPipeline", flush=True)
-    pulid = PuLIDPipeline(dit=dit, device=device,
+    # PuLIDPipeline only attaches pulid_ca attributes to `dit` during
+    # construction; get_id_embedding() never runs Flux, so a dummy object is
+    # enough and avoids importing/building a Flux skeleton.
+    print("instantiating PuLIDPipeline with a dummy Flux object", flush=True)
+    dit = SimpleNamespace()
+    pulid = PuLIDPipeline(dit=dit,
+                          device=device,
                           weight_dtype=torch.bfloat16,
                           onnx_provider=onnx_provider)
 
     print(f"loading PuLID weights from {pulid_weights}", flush=True)
-    # PuLIDPipeline.load_pretrain expects a "version" string used to construct
-    # the default filename when pretrain_path is None. We pass the file
-    # directly so the version string is informational only.
     pulid.load_pretrain(pretrain_path=pulid_weights, version="v0.9.1")
 
     print(f"extracting ID embedding from {portrait_path}", flush=True)
@@ -100,10 +77,6 @@ def write_embd(tensor, out_path: str, dtype_choice: str) -> None:
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
-    # The embedding ships as a standard gguf container holding a single tensor
-    # named "pulid_id". numpy is row-major (num_tokens, token_dim); gguf stores
-    # dims reversed, so stable-diffusion.cpp reads it back as
-    # ne[0]=token_dim, ne[1]=num_tokens (see load_pulid_id_embedding).
     writer = gguf.GGUFWriter(out_path, arch="pulid")
     writer.add_uint32("pulid.version", 1)
 
