@@ -428,6 +428,22 @@ public:
             }
         }
 
+        if (strlen(SAFE_STR(sd_ctx_params->pulid_weights_path)) > 0) {
+            LOG_INFO("loading PuLID weights from '%s'", sd_ctx_params->pulid_weights_path);
+            // PuLID's cross-attention (pulid_ca.*) weights are part of the Flux
+            // diffusion model -- its blocks are constructed inside FluxModel when
+            // the tensor map contains pulid_ca.* keys. So they must be merged into
+            // the model loader here, BEFORE the diffusion model is built; that is
+            // why this stays in the ctor rather than in the pulid generation
+            // extension (whose init runs after model construction). The runtime
+            // side -- per-generation id-embedding + per-step injection -- lives in
+            // src/extensions/pulid_extension.cpp.
+            if (!model_loader.init_from_file(sd_ctx_params->pulid_weights_path,
+                                             "model.diffusion_model.")) {
+                LOG_WARN("loading PuLID weights from '%s' failed", sd_ctx_params->pulid_weights_path);
+            }
+        }
+
         if (strlen(SAFE_STR(sd_ctx_params->llm_path)) > 0) {
             LOG_INFO("loading llm from '%s'", sd_ctx_params->llm_path);
             if (!model_loader.init_from_file(sd_ctx_params->llm_path, "text_encoders.llm.")) {
@@ -1012,6 +1028,14 @@ public:
                 if (photomaker_extension->is_enabled()) {
                     generation_extensions.push_back(photomaker_extension);
                 }
+
+                auto pulid_extension = create_pulid_extension();
+                if (!pulid_extension->init(extension_ctx)) {
+                    return false;
+                }
+                if (pulid_extension->is_enabled()) {
+                    generation_extensions.push_back(pulid_extension);
+                }
             }
             for (auto& extension : generation_extensions) {
                 if (!register_runner_params(extension->name(),
@@ -1522,6 +1546,7 @@ public:
     }
 
     void prepare_generation_extensions(const sd_pm_params_t& pm_params,
+                                       const sd_pulid_params_t& pulid_params,
                                        ConditionerParams& condition_params,
                                        int total_steps) {
         reset_generation_extensions();
@@ -1529,6 +1554,7 @@ public:
             cond_stage_model.get(),
             condition_params,
             pm_params,
+            pulid_params,
             n_threads,
             total_steps,
         };
@@ -2041,6 +2067,10 @@ public:
                 sd::Tensor<float> cached_output;
                 if (step_cache.before_condition(&condition, noised_input, &cached_output)) {
                     return std::move(cached_output);
+                }
+
+                for (const auto& extension : generation_extensions) {
+                    extension->before_diffusion(diffusion_params, step);
                 }
 
                 auto output_opt = work_diffusion_model->compute(n_threads, diffusion_params);
@@ -2642,6 +2672,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->backend              = nullptr;
     sd_ctx_params->params_backend       = nullptr;
     sd_ctx_params->rpc_servers          = nullptr;
+    sd_ctx_params->pulid_weights_path   = nullptr;
 }
 
 char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
@@ -2667,6 +2698,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "taesd_path: %s\n"
              "control_net_path: %s\n"
              "photo_maker_path: %s\n"
+             "pulid_weights_path: %s\n"
              "tensor_type_rules: %s\n"
              "n_threads: %d\n"
              "wtype: %s\n"
@@ -2701,6 +2733,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->taesd_path),
              SAFE_STR(sd_ctx_params->control_net_path),
              SAFE_STR(sd_ctx_params->photo_maker_path),
+             SAFE_STR(sd_ctx_params->pulid_weights_path),
              SAFE_STR(sd_ctx_params->tensor_type_rules),
              sd_ctx_params->n_threads,
              sd_type_name(sd_ctx_params->wtype),
@@ -2795,6 +2828,7 @@ void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     sd_img_gen_params->batch_count       = 1;
     sd_img_gen_params->control_strength  = 0.9f;
     sd_img_gen_params->pm_params         = {nullptr, 0, nullptr, 20.f};
+    sd_img_gen_params->pulid_params      = {nullptr, 1.0f};
     sd_img_gen_params->vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
     sd_cache_params_init(&sd_img_gen_params->cache);
     sd_hires_params_init(&sd_img_gen_params->hires);
@@ -3096,6 +3130,7 @@ struct GenerationRequest {
     sd_guidance_params_t guidance            = {};
     sd_guidance_params_t high_noise_guidance = {};
     sd_pm_params_t pm_params                 = {};
+    sd_pulid_params_t pulid_params           = {};
     sd_hires_params_t hires                  = {};
     int frames                               = -1;
     int requested_frames                     = -1;
@@ -3121,6 +3156,7 @@ struct GenerationRequest {
         has_ref_images              = sd_img_gen_params->ref_images_count > 0;
         guidance                    = sd_img_gen_params->sample_params.guidance;
         pm_params                   = sd_img_gen_params->pm_params;
+        pulid_params                = sd_img_gen_params->pulid_params;
         hires                       = sd_img_gen_params->hires;
         cache_params                = &sd_img_gen_params->cache;
         resolve(sd_ctx);
@@ -4047,6 +4083,7 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
     condition_params.ref_images = &latents->ref_images;
 
     sd_ctx->sd->prepare_generation_extensions(request->pm_params,
+                                              request->pulid_params,
                                               condition_params,
                                               plan->total_steps);
     int64_t prepare_start_ms         = ggml_time_ms();
