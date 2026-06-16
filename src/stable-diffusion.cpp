@@ -522,9 +522,7 @@ public:
         auto& tensor_storage_map = model_loader.get_tensor_storage_map();
 
         LOG_INFO("Version: %s ", model_version_to_str[version]);
-        ggml_type wtype               = (int)sd_ctx_params->wtype < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)
-                                            ? (ggml_type)sd_ctx_params->wtype
-                                            : GGML_TYPE_COUNT;
+        ggml_type wtype               = sd_type_to_ggml_type(sd_ctx_params->wtype);
         std::string tensor_type_rules = SAFE_STR(sd_ctx_params->tensor_type_rules);
         if (wtype != GGML_TYPE_COUNT || tensor_type_rules.size() > 0) {
             model_loader.set_wtype_override(wtype, tensor_type_rules);
