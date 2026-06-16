@@ -559,6 +559,168 @@ struct LTX2Scheduler : SigmaScheduler {
     }
 };
 
+/*
+ * Logit-Normal Scheduler
+ * Based on: https://github.com/ideogram-oss/ideogram4/blob/main/src/ideogram4/scheduler.py
+ */
+struct LogitNormalScheduler : SigmaScheduler {
+    float mean       = 0.0f;
+    float std        = 1.0f;
+    float logsnr_min = -15.0f;
+    float logsnr_max = 18.0f;
+
+    LogitNormalScheduler(float mean, float std, float logsnr_min, float logsnr_max)
+        : mean(mean), std(std), logsnr_min(logsnr_min), logsnr_max(logsnr_max) {}
+
+    // https://stackedboxes.org/2017/05/01/acklams-normal-quantile-function/
+    // translated to c++ with Qwen
+    double ndtri(double p) {
+        if (p <= 0.0) {
+            return -std::numeric_limits<double>::infinity();
+        } else if (p >= 1.0) {
+            return std::numeric_limits<double>::infinity();
+        }
+
+        static const double p_low  = 0.02425;
+        static const double p_high = 1.0 - p_low;
+
+        static const double c[6] = {
+            -7.784894002430293e-03,
+            -3.223964580411365e-01,
+            -2.400758277161838e+00,
+            -2.549732539343734e+00,
+            4.374664141464968e+00,
+            2.938163982698783e+00};
+
+        static const double d[5] = {
+            7.784695709041462e-03,
+            3.224671290700398e-01,
+            2.445134137142996e+00,
+            3.754408661907416e+00,
+            1.0  // Implicit +1 in denominator
+        };
+
+        // Coefficients for the central region
+        static const double a[6] = {
+            -3.969683028665376e+01,
+            2.209460984245205e+02,
+            -2.759285104469687e+02,
+            1.383577518672690e+02,
+            -3.066479806614716e+01,
+            2.506628277459239e+00};
+
+        static const double b[5] = {
+            -5.447609879822406e+01,
+            1.615858368580409e+02,
+            -1.556989798598866e+02,
+            6.680131188771972e+01,
+            -1.328068155288572e+01};
+
+        double x = 0.0;
+
+        if (p < p_low) {
+            // Lower region
+            double q = std::sqrt(-2.0 * std::log(p));
+
+            // Numerator: c[0]*q^5 + c[1]*q^4 + ... + c[5]
+            // Using Horner's method for polynomial evaluation
+            double numerator = c[0];
+            for (int i = 1; i < 6; ++i) {
+                numerator = numerator * q + c[i];
+            }
+
+            // Denominator: d[0]*q^4 + d[1]*q^3 + ... + d[3]*q + 1
+            double denominator = d[0];
+            for (int i = 1; i < 4; ++i) {
+                denominator = denominator * q + d[i];
+            }
+            denominator = denominator * q + 1.0;  // Add the final +1
+
+            x = numerator / denominator;
+
+        } else if (p > p_high) {
+            // Upper region
+            double q = std::sqrt(-2.0 * std::log(1.0 - p));
+
+            // Same polynomial structure as lower region, but result is negated
+            double numerator = c[0];
+            for (int i = 1; i < 6; ++i) {
+                numerator = numerator * q + c[i];
+            }
+
+            double denominator = d[0];
+            for (int i = 1; i < 4; ++i) {
+                denominator = denominator * q + d[i];
+            }
+            denominator = denominator * q + 1.0;
+
+            x = -(numerator / denominator);
+
+        } else {
+            // Central region
+            double q = p - 0.5;
+            double r = q * q;
+
+            // Numerator: a[0]*r^5 + a[1]*r^4 + ... + a[5]
+            // Then multiply by q
+            double numerator = a[0];
+            for (int i = 1; i < 6; ++i) {
+                numerator = numerator * r + a[i];
+            }
+            numerator *= q;
+
+            // Denominator: b[0]*r^4 + b[1]*r^3 + ... + b[4]*r + 1
+            double denominator = b[0];
+            for (int i = 1; i < 5; ++i) {
+                denominator = denominator * r + b[i];
+            }
+            denominator = denominator * r + 1.0;  // Add the final +1
+
+            x = numerator / denominator;
+        }
+
+        return x;
+    }
+
+    static float expit(float x) {
+        return 1.0f / (1.0f + std::exp(-x));
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, float /*sigma_min*/, float /*sigma_max*/, t_to_sigma_t /*t_to_sigma*/) override {
+        std::vector<float> sigmas;
+        sigmas.reserve(n + 1);
+
+        // Precompute bounds based on logsnr
+        float t_min = 1.0f / (1.0f + std::exp(0.5f * logsnr_max));
+        float t_max = 1.0f / (1.0f + std::exp(0.5f * logsnr_min));
+
+        for (uint32_t i = 0; i <= n; ++i) {
+            float t = static_cast<float>(i) / static_cast<float>(n);
+
+            float z = ndtri(t);
+
+            float y = mean + std * z;
+
+            float t_ = expit(y);
+
+            float sigma = 1.0f - t_;
+
+            if (sigma < t_min)
+                sigma = t_min;
+            if (sigma > t_max)
+                sigma = t_max;
+
+            sigmas.push_back(sigma);
+        }
+
+        if (!sigmas.empty()) {
+            sigmas.back() = 0.0f;
+        }
+
+        return sigmas;
+    }
+};
+
 struct Denoiser {
     virtual float sigma_min()                                                        = 0;
     virtual float sigma_max()                                                        = 0;
@@ -623,6 +785,31 @@ struct Denoiser {
                 LOG_INFO("get_sigmas with LTX2 scheduler");
                 scheduler = std::make_shared<LTX2Scheduler>(image_seq_len, extra_sample_args);
                 break;
+            case LOGIT_NORMAL_SCHEDULER: {
+                const int known_seq_len = (512 * 512) / (16 * 16);
+                // todo: mu and std from extra_sample_args
+                float mu  = 0.;
+                float std = 1.75;
+
+                if(extra_sample_args) {
+                    for (const auto& [key, value] : parse_key_value_args(extra_sample_args, "logit-normal scheduler arg")) {
+                        if (key == "mu") {
+                            if (!parse_strict_float(value, mu)) {
+                                LOG_WARN("ignoring invalid logit-normal scheduler arg '%s=%s'", key.c_str(), value.c_str());
+                            }
+                        } else if (key == "std") {
+                            if (!parse_strict_float(value, std)) {
+                                LOG_WARN("ignoring invalid logit-normal scheduler arg '%s=%s'", key.c_str(), value.c_str());
+                            }
+                        }
+                    }
+                }
+                
+                float mean = mu + 0.5 * std::log(static_cast<float>(image_seq_len) / static_cast<float>(known_seq_len));
+                LOG_INFO("get_sigmas with Logit-Normal scheduler with mean=%.4f (mu=%.4f) and std=%.4f", mean, mu, std);
+                scheduler  = std::make_shared<LogitNormalScheduler>(mean, std, -15.0f, 18.0f);
+                break;
+            }
             default:
                 LOG_INFO("get_sigmas with discrete scheduler (default)");
                 scheduler = std::make_shared<DiscreteScheduler>();

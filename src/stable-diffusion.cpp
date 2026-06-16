@@ -2535,6 +2535,7 @@ const char* scheduler_to_str[] = {
     "lcm",
     "bong_tangent",
     "ltx2",
+    "logit_normal",
 };
 
 const char* sd_scheduler_name(enum scheduler_t scheduler) {
@@ -3137,6 +3138,8 @@ enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_me
         return SIMPLE_SCHEDULER;
     } else if (sd_ctx != nullptr && sd_ctx->sd != nullptr && sd_version_is_ltxav(sd_ctx->sd->version)) {
         return LTX2_SCHEDULER;
+    } else if(sd_ctx != nullptr && sd_ctx->sd != nullptr && sd_version_is_ideogram4(sd_ctx->sd->version)) {
+        return LOGIT_NORMAL_SCHEDULER;
     }
     return DISCRETE_SCHEDULER;
 }
