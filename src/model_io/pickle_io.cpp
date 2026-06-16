@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "binary_io.h"
-#include "util.h"
+#include "core/util.h"
 
 // $ python -m pickletools sd-v1-4/archive/data.pkl | head -n 100
 //     0: \x80 PROTO      2

@@ -56,11 +56,42 @@ struct BoolOption {
     bool* target;
 };
 
+struct ManualFunction {
+    std::function<int(int, const char**, int, bool&)> _func;
+
+    ManualFunction() = default;
+
+    ManualFunction(std::function<int(int argc, const char** argv, int index, bool& valid)> func)
+        : _func(std::move(func)) {
+    }
+
+    template <typename F>
+    ManualFunction(F func)
+        : _func(make_function(func)) {
+    }
+
+    int operator()(int argc, const char** argv, int index, bool& valid) const {
+        return _func(argc, argv, index, valid);
+    }
+
+private:
+    template <typename F>
+    static std::function<int(int, const char**, int, bool&)> make_function(F func) {
+        if constexpr (std::is_invocable_v<F, int, const char**, int, bool&>) {
+            return func;
+        } else {
+            return [func](int argc, const char** argv, int index, bool&) {
+                return func(argc, argv, index);
+            };
+        }
+    }
+};
+
 struct ManualOption {
     std::string short_name;
     std::string long_name;
     std::string desc;
-    std::function<int(int argc, const char** argv, int index)> cb;
+    ManualFunction cb;
 };
 
 struct ArgOptions {
@@ -92,14 +123,17 @@ struct SDContextParams {
     std::string llm_vision_path;
     std::string diffusion_model_path;
     std::string high_noise_diffusion_model_path;
+    std::string uncond_diffusion_model_path;
     std::string embeddings_connectors_path;
     std::string vae_path;
+    std::string vae_format = "auto";
     std::string audio_vae_path;
     std::string taesd_path;
     std::string esrgan_path;
     std::string control_net_path;
     std::string embedding_dir;
     std::string photo_maker_path;
+    std::string pulid_weights_path;
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string tensor_type_rules;
     std::string lora_model_dir = ".";
@@ -111,9 +145,13 @@ struct SDContextParams {
     rng_type_t rng_type         = CUDA_RNG;
     rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
     bool offload_params_to_cpu  = false;
-    float max_vram              = 0.f;
+    std::string max_vram        = "0";
+    bool stream_layers          = false;
     std::string backend;
     std::string params_backend;
+    std::string rpc_servers;
+    std::string effective_backend;
+    std::string effective_params_backend;
     bool enable_mmap           = false;
     bool control_net_cpu       = false;
     bool clip_on_cpu           = false;
@@ -141,11 +179,12 @@ struct SDContextParams {
     float flow_shift = INFINITY;
     ArgOptions get_options();
     void build_embedding_map();
+    void prepare_backend_assignments();
     bool resolve(SDMode mode);
     bool validate(SDMode mode);
     bool resolve_and_validate(SDMode mode);
     std::string to_string() const;
-    sd_ctx_params_t to_sd_ctx_params_t(bool vae_decode_only, bool free_params_immediately, bool taesd_preview);
+    sd_ctx_params_t to_sd_ctx_params_t(bool taesd_preview);
 };
 
 struct SDGenerationParams {
@@ -189,11 +228,15 @@ struct SDGenerationParams {
     int video_frames                     = 1;
     int fps                              = 16;
     float vace_strength                  = 1.f;
-    sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f};
+    sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
+    std::string extra_tiling_args;
 
     std::string pm_id_images_dir;
     std::string pm_id_embed_path;
     float pm_style_strength = 20.f;
+
+    std::string pulid_id_embedding_path;
+    float pulid_id_weight = 1.0f;
 
     int upscale_repeats   = 1;
     int upscale_tile_size = 128;
@@ -207,6 +250,7 @@ struct SDGenerationParams {
     int hires_steps                = 0;
     float hires_denoising_strength = 0.7f;
     int hires_upscale_tile_size    = 128;
+    std::vector<float> hires_custom_sigmas;
 
     std::map<std::string, float> lora_map;
     std::map<std::string, float> high_noise_lora_map;

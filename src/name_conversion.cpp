@@ -1,8 +1,9 @@
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 
+#include "core/util.h"
 #include "name_conversion.h"
-#include "util.h"
 
 void replace_with_name_map(std::string& name, const std::vector<std::pair<std::string, std::string>>& name_map) {
     for (auto kv : name_map) {
@@ -128,6 +129,7 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix) 
     };
 
     static const std::vector<std::pair<std::string, std::string>> llm_name_map{
+        {"attn_sinks.weight", "self_attn.sinks"},
         {"token_embd.", "model.embed_tokens."},
         {"blk.", "model.layers."},
         {"attn_q.", "self_attn.q_proj."},
@@ -137,9 +139,15 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix) 
         {"attn_k_norm.", "self_attn.k_norm."},
         {"attn_output.", "self_attn.o_proj."},
         {"attn_norm.", "input_layernorm."},
+        {"attn_post_norm.", "post_attention_norm."},
+        {"ffn_gate_inp.", "mlp.router."},
+        {"ffn_gate_exps.", "mlp.experts.gate_proj."},
+        {"ffn_up_exps.", "mlp.experts.up_proj."},
+        {"ffn_down_exps.", "mlp.experts.down_proj."},
         {"ffn_down.", "mlp.down_proj."},
         {"ffn_gate.", "mlp.gate_proj."},
         {"ffn_up.", "mlp.up_proj."},
+        {"ffn_post_norm.", "post_ffw_norm."},
         {"ffn_norm.", "post_attention_layernorm."},
         {"output_norm.", "model.norm."},
     };
@@ -508,6 +516,12 @@ std::string convert_diffusers_dit_to_original_flux(std::string name) {
     static std::unordered_map<std::string, std::string> flux_name_map;
 
     if (flux_name_map.empty()) {
+        // --- time_embed (longcat) ---
+        flux_name_map["time_embed.timestep_embedder.linear_1.weight"] = "time_in.in_layer.weight";
+        flux_name_map["time_embed.timestep_embedder.linear_1.bias"]   = "time_in.in_layer.bias";
+        flux_name_map["time_embed.timestep_embedder.linear_2.weight"] = "time_in.out_layer.weight";
+        flux_name_map["time_embed.timestep_embedder.linear_2.bias"]   = "time_in.out_layer.bias";
+
         // --- time_text_embed ---
         flux_name_map["time_text_embed.timestep_embedder.linear_1.weight"] = "time_in.in_layer.weight";
         flux_name_map["time_text_embed.timestep_embedder.linear_1.bias"]   = "time_in.in_layer.bias";
@@ -561,6 +575,11 @@ std::string convert_diffusers_dit_to_original_flux(std::string name) {
             flux_name_map[block_prefix + "attn.norm_k.weight"]       = dst_prefix + "img_attn.norm.key_norm.scale";
             flux_name_map[block_prefix + "attn.norm_added_q.weight"] = dst_prefix + "txt_attn.norm.query_norm.scale";
             flux_name_map[block_prefix + "attn.norm_added_k.weight"] = dst_prefix + "txt_attn.norm.key_norm.scale";
+            // Comfy-Org/LongCat-Image stores already-converted RMSNorm tensors as *.weight.
+            flux_name_map[dst_prefix + "img_attn.norm.query_norm.weight"] = dst_prefix + "img_attn.norm.query_norm.scale";
+            flux_name_map[dst_prefix + "img_attn.norm.key_norm.weight"]   = dst_prefix + "img_attn.norm.key_norm.scale";
+            flux_name_map[dst_prefix + "txt_attn.norm.query_norm.weight"] = dst_prefix + "txt_attn.norm.query_norm.scale";
+            flux_name_map[dst_prefix + "txt_attn.norm.key_norm.weight"]   = dst_prefix + "txt_attn.norm.key_norm.scale";
 
             // ff
             flux_name_map[block_prefix + "ff.net.0.proj.weight"] = dst_prefix + "img_mlp.0.weight";
@@ -599,8 +618,11 @@ std::string convert_diffusers_dit_to_original_flux(std::string name) {
 
             flux_name_map[block_prefix + "attn.norm_q.weight"] = dst_prefix + "norm.query_norm.scale";
             flux_name_map[block_prefix + "attn.norm_k.weight"] = dst_prefix + "norm.key_norm.scale";
-            flux_name_map[block_prefix + "proj_out.weight"]    = dst_prefix + "linear2.weight";
-            flux_name_map[block_prefix + "proj_out.bias"]      = dst_prefix + "linear2.bias";
+            // Comfy-Org/LongCat-Image stores already-converted RMSNorm tensors as *.weight.
+            flux_name_map[dst_prefix + "norm.query_norm.weight"] = dst_prefix + "norm.query_norm.scale";
+            flux_name_map[dst_prefix + "norm.key_norm.weight"]   = dst_prefix + "norm.key_norm.scale";
+            flux_name_map[block_prefix + "proj_out.weight"]      = dst_prefix + "linear2.weight";
+            flux_name_map[block_prefix + "proj_out.bias"]        = dst_prefix + "linear2.bias";
         }
 
         // --- final layers ---
@@ -668,7 +690,7 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_diffusers_unet_to_original_sdxl(name);
     } else if (sd_version_is_sd3(version)) {
         name = convert_diffusers_dit_to_original_sd3(name);
-    } else if (sd_version_is_flux(version) || sd_version_is_flux2(version)) {
+    } else if (sd_version_is_flux(version) || sd_version_is_flux2(version) || sd_version_is_longcat(version)) {
         name = convert_diffusers_dit_to_original_flux(name);
     } else if (sd_version_is_z_image(version)) {
         name = convert_diffusers_dit_to_original_lumina2(name);
@@ -968,7 +990,46 @@ bool is_first_stage_model_name(const std::string& name) {
     return false;
 }
 
+static std::string convert_esrgan_tensor_name(std::string name) {
+    static std::unordered_map<std::string, std::string> esrgan_name_map;
+
+    if (esrgan_name_map.empty()) {
+        esrgan_name_map["model.0."] = "conv_first.";
+
+        constexpr int max_num_blocks = 64;
+        for (int i = 0; i < max_num_blocks; i++) {
+            std::string block_prefix = "model.1.sub." + std::to_string(i) + ".";
+            for (int rdb = 1; rdb <= 3; rdb++) {
+                for (int conv = 1; conv <= 5; conv++) {
+                    esrgan_name_map[block_prefix + "RDB" + std::to_string(rdb) + ".conv" + std::to_string(conv) + ".0."] =
+                        "body." + std::to_string(i) + ".rdb" + std::to_string(rdb) + ".conv" + std::to_string(conv) + ".";
+                }
+            }
+            esrgan_name_map[block_prefix + "weight"] = "conv_body.weight";
+            esrgan_name_map[block_prefix + "bias"]   = "conv_body.bias";
+        }
+
+        // RealESRGAN stores only the learned layers in a Sequential. These indices
+        // cover the common x1, x2 and x4 layouts.
+        esrgan_name_map["model.2."]  = "conv_hr.";
+        esrgan_name_map["model.3."]  = "conv_up1.";
+        esrgan_name_map["model.4."]  = "conv_last.";
+        esrgan_name_map["model.5."]  = "conv_hr.";
+        esrgan_name_map["model.6."]  = "conv_up2.";
+        esrgan_name_map["model.7."]  = "conv_last.";
+        esrgan_name_map["model.8."]  = "conv_hr.";
+        esrgan_name_map["model.10."] = "conv_last.";
+    }
+
+    replace_with_prefix_map(name, esrgan_name_map);
+    return name;
+}
+
 std::string convert_tensor_name(std::string name, SDVersion version) {
+    if (version == VERSION_ESRGAN) {
+        return convert_esrgan_tensor_name(std::move(name));
+    }
+
     bool is_lora                             = false;
     bool is_lycoris_underline                = false;
     bool is_underline                        = false;

@@ -6,9 +6,9 @@
 #include <regex>
 #include <sstream>
 
+#include "core/util.h"
 #include "json.hpp"
 #include "tokenize_util.h"
-#include "util.h"
 #include "vocab/vocab.h"
 
 // Port from: https://github.com/google/sentencepiece/blob/master/src/unigram_model.h

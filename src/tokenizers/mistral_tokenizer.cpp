@@ -1,8 +1,8 @@
 #include "mistral_tokenizer.h"
 
+#include "core/util.h"
 #include "ggml.h"
 #include "json.hpp"
-#include "util.h"
 #include "vocab/vocab.h"
 
 void MistralTokenizer::load_from_merges(const std::string& merges_utf8_str, const std::string& vocab_utf8_str) {

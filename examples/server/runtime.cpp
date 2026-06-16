@@ -203,8 +203,9 @@ ArgOptions SDSvrParams::get_options() {
         {"", "--color", "colors the logging tags according to level", true, &color},
     };
 
-    auto on_help_arg = [&](int, const char**, int) {
+    auto on_help_arg = [&](int, const char**, int, bool& valid) {
         normal_exit = true;
+        valid       = true;
         return -1;
     };
 
@@ -254,7 +255,7 @@ void refresh_lora_cache(ServerRuntime& rt) {
 
     fs::path lora_dir = rt.ctx_params->lora_model_dir;
     if (fs::exists(lora_dir) && fs::is_directory(lora_dir)) {
-        for (auto& entry : fs::recursive_directory_iterator(lora_dir)) {
+        for (auto& entry : fs::recursive_directory_iterator(lora_dir, fs::directory_options::skip_permission_denied)) {
             if (!entry.is_regular_file()) {
                 continue;
             }

@@ -4,7 +4,7 @@
 #include <cmath>
 #include <regex>
 
-#include "util.h"
+#include "core/util.h"
 
 void Tokenizer::add_special_token(const std::string& token) {
     special_tokens.push_back(token);
