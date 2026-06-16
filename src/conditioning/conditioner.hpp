@@ -142,8 +142,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                       std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
         : version(version), tokenizer(sd_version_is_sd2(version) ? 0 : 49407) {
         for (const auto& kv : orig_embedding_map) {
-            std::string name = kv.first;
-            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+            std::string name    = normalize_embedding_name(kv.first);
             embedding_map[name] = kv.second;
             tokenizer.add_special_token(name);
         }
@@ -278,17 +277,23 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         return true;
     }
 
+    static std::string normalize_embedding_name(std::string name) {
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+        return name;
+    }
+
+    bool append_embedding_tokens(std::string str, std::vector<int32_t>& bpe_tokens) {
+        std::string name = normalize_embedding_name(std::move(str));
+        auto iter        = embedding_map.find(name);
+        if (iter == embedding_map.end()) {
+            return false;
+        }
+        return load_embedding(name, iter->second, bpe_tokens);
+    }
+
     std::vector<int> convert_token_to_id(std::string text) {
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
-            auto iter = embedding_map.find(str);
-            if (iter == embedding_map.end()) {
-                return false;
-            }
-            std::string embedding_path = iter->second;
-            if (load_embedding(str, embedding_path, bpe_tokens)) {
-                return true;
-            }
-            return false;
+            return append_embedding_tokens(str, bpe_tokens);
         };
         std::vector<int> curr_tokens = tokenizer.encode(text, on_new_token_cb);
         return curr_tokens;
@@ -315,15 +320,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         }
 
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
-            auto iter = embedding_map.find(str);
-            if (iter == embedding_map.end()) {
-                return false;
-            }
-            std::string embedding_path = iter->second;
-            if (load_embedding(str, embedding_path, bpe_tokens)) {
-                return true;
-            }
-            return false;
+            return append_embedding_tokens(str, bpe_tokens);
         };
 
         std::vector<int> tokens;
