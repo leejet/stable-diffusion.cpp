@@ -60,6 +60,8 @@ Please do not submit AI-generated code that you do not understand, and do not in
 
 Do not submit PRs that update `ggml`. `ggml` updates are performed only after local validation by the maintainer.
 
+Prebuilt `ggml` SDKs used with `SD_USE_PREBUILT_GGML` must match the validated `ggml` revision and ABI-sensitive build options used by this repository, including `GGML_MAX_NAME=128`.
+
 Other third-party dependencies are not updated unless necessary. If you want to update a dependency, please open an issue first instead of submitting a direct PR.
 
 ## Security & Configuration

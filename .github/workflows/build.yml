@@ -1,12 +1,17 @@
 name: CI
 
 on:
-  workflow_dispatch: # allows manual triggering
+  workflow_dispatch:
     inputs:
       create_release:
         description: "Create new release"
         required: true
         type: boolean
+      ggml_release_tag:
+        description: "Prebuilt ggml SDK release tag"
+        required: false
+        default: "v0.14.0"
+        type: string
   push:
     branches:
       - master
@@ -14,6 +19,7 @@ on:
     paths:
       [
         ".github/workflows/**",
+        "cmake/**",
         ".dockerignore",
         "Dockerfile*",
         "**/CMakeLists.txt",
@@ -31,6 +37,7 @@ on:
     paths:
       [
         ".github/workflows/**",
+        "cmake/**",
         ".dockerignore",
         "Dockerfile*",
         "**/CMakeLists.txt",
@@ -46,19 +53,20 @@ on:
 
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+  GGML_RELEASE_BASE_URL: https://github.com/seasonjs/ggml.cpp-build/releases/download
+  GGML_RELEASE_TAG: ${{ github.event.inputs.ggml_release_tag || 'v0.14.0' }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
-  ubuntu-latest-cmake:
-    runs-on: ubuntu-latest
+  build-linux-x86_64:
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Clone
-        id: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
@@ -73,110 +81,64 @@ jobs:
           version: 10.15.1
 
       - name: Dependencies
-        id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential
+          sudo apt-get install -y build-essential cmake ninja-build zip
+
+      - name: Cache prebuilt ggml SDK
+        uses: actions/cache@v4
+        with:
+          path: .cache/ggml
+          key: ggml-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ env.GGML_RELEASE_TAG }}
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DSD_BUILD_SHARED_LIBS=ON \
+            -DSD_USE_PREBUILT_GGML=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_RELEASE_BASE_URL="${GGML_RELEASE_BASE_URL}" \
+            -DGGML_RELEASE_TAG="${GGML_RELEASE_TAG}" \
+            -DGGML_CACHE_DIR="${GITHUB_WORKSPACE}/.cache/ggml"
 
       - name: Build
-        id: cmake_build
-        run: |
-          mkdir build
-          cd build
-          cmake .. -DGGML_AVX2=ON -DSD_BUILD_SHARED_LIBS=ON
-          cmake --build . --config Release
-
-      - name: Get commit hash
-        id: commit
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
-
-      - name: Fetch system info
-        id: system-info
-        run: |
-          echo "CPU_ARCH=`uname -m`" >> "$GITHUB_OUTPUT"
-          echo "OS_NAME=`lsb_release -s -i`" >> "$GITHUB_OUTPUT"
-          echo "OS_VERSION=`lsb_release -s -r`" >> "$GITHUB_OUTPUT"
-          echo "OS_TYPE=`uname -s`" >> "$GITHUB_OUTPUT"
+        run: cmake --build build --config Release -j "$(nproc)"
 
       - name: Pack artifacts
-        id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') || github.event.inputs.create_release == 'true' }}
+        shell: bash
         run: |
-          cp ggml/LICENSE ./build/bin/ggml.txt
-          cp LICENSE ./build/bin/stable-diffusion.cpp.txt
-          zip -j sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip ./build/bin/*
+          set -euo pipefail
+
+          short="$(git rev-parse --short HEAD)"
+          safe_branch="${BRANCH_NAME//\//-}"
+          stage="artifact/sd-linux-x86_64"
+          archive="artifact/sd-${safe_branch}-${short}-bin-linux-x86_64.zip"
+
+          rm -rf artifact
+          mkdir -p "$stage"
+          cp -a build/bin/. "$stage/"
+          cp ggml/LICENSE "$stage/ggml.txt"
+          cp LICENSE "$stage/stable-diffusion.cpp.txt"
+          printf '%s\n' \
+            "platform=linux-x86_64" \
+            "ggml_release_base_url=${GGML_RELEASE_BASE_URL}" \
+            "ggml_release_tag=${GGML_RELEASE_TAG}" \
+            "ggml_linkage=prebuilt-sdk" \
+            > "$stage/SDK-METADATA.txt"
+
+          (cd artifact && zip -y -r "$(basename "$archive")" sd-linux-x86_64)
 
       - name: Upload artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip
-          path: |
-            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip
-
-  ubuntu-latest-cmake-vulkan:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v3
-        with:
-          submodules: recursive
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.15.1
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt-get update
-          sudo apt-get install build-essential libvulkan-dev glslc spirv-headers
-
-      - name: Build
-        id: cmake_build
-        run: |
-          mkdir build
-          cd build
-          cmake .. -DSD_BUILD_SHARED_LIBS=ON -DSD_VULKAN=ON
-          cmake --build . --config Release
-
-      - name: Get commit hash
-        id: commit
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
-
-      - name: Fetch system info
-        id: system-info
-        run: |
-          echo "CPU_ARCH=`uname -m`" >> "$GITHUB_OUTPUT"
-          echo "OS_NAME=`lsb_release -s -i`" >> "$GITHUB_OUTPUT"
-          echo "OS_VERSION=`lsb_release -s -r`" >> "$GITHUB_OUTPUT"
-          echo "OS_TYPE=`uname -s`" >> "$GITHUB_OUTPUT"
-
-      - name: Pack artifacts
-        id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        run: |
-          cp ggml/LICENSE ./build/bin/ggml.txt
-          cp LICENSE ./build/bin/stable-diffusion.cpp.txt
-          zip -j sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-vulkan.zip ./build/bin/*
-
-      - name: Upload artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-vulkan.zip
-          path: |
-            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-vulkan.zip
+          name: sd-linux-x86_64
+          path: artifact/*.zip
+          if-no-files-found: error
 
   build-and-push-docker-images:
     name: Build and push container images
@@ -269,13 +231,12 @@ jobs:
           annotations: ${{ steps.meta.outputs.annotations }}
           build-args: ${{ matrix.build-args }}
 
-  macOS-latest-cmake:
-    runs-on: macos-latest
+  build-macos-arm64:
+    runs-on: macos-14
 
     steps:
       - name: Clone
-        id: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
@@ -290,587 +251,183 @@ jobs:
           version: 10.15.1
 
       - name: Dependencies
-        id: depends
-        run: |
-          brew install zip
+        run: brew install cmake ninja zip
 
-      - name: Build
-        id: cmake_build
-        run: |
-          sysctl -a
-          mkdir build
-          cd build
-          cmake .. -DGGML_AVX2=ON -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DSD_BUILD_SHARED_LIBS=ON
-          cmake --build . --config Release
-
-      - name: Get commit hash
-        id: commit
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
-
-      - name: Fetch system info
-        id: system-info
-        run: |
-          echo "CPU_ARCH=`uname -m`" >> "$GITHUB_OUTPUT"
-          echo "OS_NAME=`sw_vers -productName`" >> "$GITHUB_OUTPUT"
-          echo "OS_VERSION=`sw_vers -productVersion`" >> "$GITHUB_OUTPUT"
-          echo "OS_TYPE=`uname -s`" >> "$GITHUB_OUTPUT"
-
-      - name: Pack artifacts
-        id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        run: |
-          cp ggml/LICENSE ./build/bin/ggml.txt
-          cp LICENSE ./build/bin/stable-diffusion.cpp.txt
-          zip -j sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip ./build/bin/*
-
-      - name: Upload artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip
-          path: |
-            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip
-
-  windows-latest-cmake:
-    runs-on: windows-2022
-
-    env:
-      VULKAN_VERSION: 1.4.328.1
-
-    strategy:
-      matrix:
-        include:
-          - build: "noavx"
-            defines: "-DGGML_NATIVE=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DSD_BUILD_SHARED_LIBS=ON"
-          - build: "avx2"
-            defines: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DSD_BUILD_SHARED_LIBS=ON"
-          - build: "avx"
-            defines: "-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=OFF -DSD_BUILD_SHARED_LIBS=ON"
-          - build: "avx512"
-            defines: "-DGGML_NATIVE=OFF -DGGML_AVX512=ON -DGGML_AVX=ON -DGGML_AVX2=ON -DSD_BUILD_SHARED_LIBS=ON"
-          - build: "cuda12"
-            defines: "-DSD_CUDA=ON -DSD_BUILD_SHARED_LIBS=ON -DCMAKE_CUDA_ARCHITECTURES='61;70;75;80;86;89;90;100;120' -DCMAKE_CUDA_FLAGS='-Xcudafe \"--diag_suppress=177\" -Xcudafe \"--diag_suppress=550\"'"
-          - build: "vulkan"
-            defines: "-DSD_VULKAN=ON -DSD_BUILD_SHARED_LIBS=ON"
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v3
-        with:
-          submodules: recursive
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.15.1
-
-      - name: Install cuda-toolkit
-        id: cuda-toolkit
-        if: ${{ matrix.build == 'cuda12' }}
-        uses: Jimver/cuda-toolkit@v0.2.22
-        with:
-          cuda: "12.8.1"
-          method: "network"
-          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "thrust", "visual_studio_integration"]'
-
-      - name: Install Vulkan SDK
-        id: get_vulkan
-        if: ${{ matrix.build == 'vulkan' }}
-        run: |
-          curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
-          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
-          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
-          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
-
-      - name: Activate MSVC environment
-        id: msvc_dev_cmd
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Build
-        id: cmake_build
-        run: |
-          mkdir build
-          cd build
-          cmake .. -DCMAKE_CXX_FLAGS='/bigobj' -G Ninja -DCMAKE_C_COMPILER=cl.exe -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_BUILD_TYPE=Release ${{ matrix.defines }}
-          cmake --build .
-
-      - name: Check AVX512F support
-        id: check_avx512f
-        if: ${{ matrix.build == 'avx512' }}
-        continue-on-error: true
-        run: |
-          cd build
-          $vcdir = $(vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)
-          $msvc = $(join-path $vcdir $('VC\Tools\MSVC\'+$(gc -raw $(join-path $vcdir 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt')).Trim()))
-          $cl =  $(join-path $msvc 'bin\Hostx64\x64\cl.exe')
-          echo 'int main(void){unsigned int a[4];__cpuid(a,7);return !(a[1]&65536);}' >> avx512f.c
-          & $cl /O2 /GS- /kernel avx512f.c /link /nodefaultlib /entry:main
-          .\avx512f.exe && echo "AVX512F: YES" && ( echo HAS_AVX512F=1 >> $env:GITHUB_ENV ) || echo "AVX512F: NO"
-
-      - name: Get commit hash
-        id: commit
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
-
-      - name: Pack artifacts
-        id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        run: |
-          $filePath = ".\build\bin\Release\*"
-          if (Test-Path $filePath) {
-            echo "Exists at path $filePath"
-            Copy-Item ggml/LICENSE .\build\bin\Release\ggml.txt
-            Copy-Item LICENSE .\build\bin\Release\stable-diffusion.cpp.txt
-          } elseif (Test-Path ".\build\bin\stable-diffusion.dll") {
-          $filePath = ".\build\bin\*"
-            echo "Exists at path $filePath"
-            Copy-Item ggml/LICENSE .\build\bin\ggml.txt
-            Copy-Item LICENSE .\build\bin\stable-diffusion.cpp.txt
-          } else {
-            ls .\build\bin
-            throw "Can't find stable-diffusion.dll"
-          }
-          7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip $filePath
-
-      - name: Copy and pack Cuda runtime
-        id: pack_cuda_runtime
-        if: ${{ matrix.build == 'cuda12' && (github.event_name == 'push' && github.ref == 'refs/heads/master' || github.event.inputs.create_release == 'true') }}
-        run: |
-          echo "Cuda install location: ${{steps.cuda-toolkit.outputs.CUDA_PATH}}"
-          $dst='.\build\bin\cudart\'
-          robocopy "${{steps.cuda-toolkit.outputs.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
-          7z a cudart-sd-bin-win-cu12-x64.zip $dst\*
-
-      - name: Upload Cuda runtime
-        if: ${{ matrix.build == 'cuda12' && (github.event_name == 'push' && github.ref == 'refs/heads/master' || github.event.inputs.create_release == 'true') }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: sd-cudart-sd-bin-win-cu12-x64.zip
-          path: |
-            cudart-sd-bin-win-cu12-x64.zip
-
-      - name: Upload artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip
-          path: |
-            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip
-
-  windows-latest-rocm:
-    runs-on: windows-2022
-
-    env:
-      ROCM_VERSION: "7.13.0"
-      GPU_TARGETS: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
-
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          submodules: recursive
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.15.1
-
-      - name: Cache ROCm Installation
-        id: cache-rocm
+      - name: Cache prebuilt ggml SDK
         uses: actions/cache@v4
         with:
-          path: C:\TheRock\build
-          key: rocm-${{ env.ROCM_VERSION }}-gfx1151-${{ runner.os }}
+          path: .cache/ggml
+          key: ggml-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ env.GGML_RELEASE_TAG }}
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: windows-latest-rocm-${{ env.ROCM_VERSION }}-x64
-          evict-old-files: 1d
-
-      - name: Install ROCm
-        if: steps.cache-rocm.outputs.cache-hit != 'true'
+      - name: Configure CMake
         run: |
-          $ErrorActionPreference = "Stop"
-          write-host "Downloading AMD ROCm ${{ env.ROCM_VERSION }} tarball"
-          Invoke-WebRequest -Uri "https://repo.amd.com/rocm/tarball/therock-dist-windows-gfx1151-${{ env.ROCM_VERSION }}.tar.gz" -OutFile "${env:RUNNER_TEMP}\rocm.tar.gz"
-          write-host "Extracting ROCm tarball"
-          mkdir C:\TheRock\build -Force
-          tar -xzf "${env:RUNNER_TEMP}\rocm.tar.gz" -C C:\TheRock\build --strip-components=1
-          write-host "Completed ROCm extraction"
-
-      - name: Setup ROCm Environment
-        run: |
-          $rocmPath = "C:\TheRock\build"
-          echo "HIP_PATH=$rocmPath" >> $env:GITHUB_ENV
-          echo "HIP_DEVICE_LIB_PATH=$rocmPath\lib\llvm\amdgcn\bitcode" >> $env:GITHUB_ENV
-          echo "HIP_PLATFORM=amd" >> $env:GITHUB_ENV
-          echo "LLVM_PATH=$rocmPath\lib\llvm" >> $env:GITHUB_ENV
-          echo "$rocmPath\bin" >> $env:GITHUB_PATH
-          echo "$rocmPath\lib\llvm\bin" >> $env:GITHUB_PATH
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          cmake .. `
-            -G "Unix Makefiles" `
-            -DCMAKE_PREFIX_PATH="${env:HIP_PATH}" `
-            -DSD_HIPBLAS=ON `
-            -DSD_BUILD_SHARED_LIBS=ON `
-            -DGGML_NATIVE=OFF `
-            -DCMAKE_C_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
-            -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang++.exe" `
-            -DCMAKE_HIP_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
-            -DHIP_PATH="${env:HIP_PATH}" `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DGPU_TARGETS="${{ env.GPU_TARGETS }}"
-          cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
-
-      - name: Get commit hash
-        id: commit
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: pr-mpt/actions-commit-hash@v2
-
-      - name: Pack artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $dst = "build\bin"
-          $rocmBin = Join-Path "${env:HIP_PATH}" "bin"
-          $requiredRocmPaths = @(
-            (Join-Path $rocmBin "rocblas.dll"),
-            (Join-Path $rocmBin "rocblas\library")
-          )
-          foreach ($path in $requiredRocmPaths) {
-            if (!(Test-Path $path)) {
-              throw "Missing ROCm runtime dependency: $path"
-            }
-          }
-
-          foreach ($pattern in @("rocblas*.dll", "hipblas*.dll", "libhipblas*.dll")) {
-            Copy-Item -Path (Join-Path $rocmBin $pattern) -Destination $dst -Force -ErrorAction SilentlyContinue
-          }
-
-          foreach ($dir in @("rocblas", "hipblaslt")) {
-            $src = Join-Path $rocmBin $dir
-            if (Test-Path $src) {
-              Copy-Item -Path $src -Destination $dst -Recurse -Force
-            }
-          }
-
-          7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip .\build\bin\*
-
-      - name: Upload artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip
-          path: |
-            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip
-
-  windows-latest-cmake-hip:
-    runs-on: windows-2022
-
-    env:
-      HIPSDK_INSTALLER_VERSION: "26.Q1"
-      ROCM_VERSION: "7.1.1"
-      GPU_TARGETS: "gfx1150;gfx1151;gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
-
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          submodules: recursive
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.15.1
-
-      - name: Cache ROCm Installation
-        id: cache-rocm
-        uses: actions/cache@v4
-        with:
-          path: C:\Program Files\AMD\ROCm
-          key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: windows-latest-cmake-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-x64
-          evict-old-files: 1d
-
-      - name: Install ROCm
-        if: steps.cache-rocm.outputs.cache-hit != 'true'
-        run: |
-          $ErrorActionPreference = "Stop"
-          write-host "Downloading AMD HIP SDK Installer"
-          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-${{ env.HIPSDK_INSTALLER_VERSION }}-Win11-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
-          write-host "Installing AMD HIP SDK"
-          $proc = Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -PassThru
-          $completed = $proc.WaitForExit(600000)
-          if (-not $completed) {
-              Write-Error "ROCm installation timed out after 10 minutes. Killing the process"
-              $proc.Kill()
-              exit 1
-          }
-          if ($proc.ExitCode -ne 0) {
-              Write-Error "ROCm installation failed with exit code $($proc.ExitCode)"
-              exit 1
-          }
-          write-host "Completed AMD HIP SDK installation"
-
-      - name: Verify ROCm
-        run: |
-          # Find and test ROCm installation
-          $clangPath = Get-ChildItem 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | Select-Object -First 1
-          if (-not $clangPath) {
-            Write-Error "ROCm installation not found"
-            exit 1
-          }
-          & $clangPath.FullName --version
-          # Set HIP_PATH environment variable for later steps
-          echo "HIP_PATH=$(Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | split-path | split-path)" >> $env:GITHUB_ENV
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          $env:CMAKE_PREFIX_PATH="${env:HIP_PATH}"
-          cmake .. `
-            -G "Unix Makefiles" `
-            -DSD_HIPBLAS=ON `
-            -DSD_BUILD_SHARED_LIBS=ON `
-            -DGGML_NATIVE=OFF `
-            -DCMAKE_C_COMPILER=clang `
-            -DCMAKE_CXX_COMPILER=clang++ `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DGPU_TARGETS="${{ env.GPU_TARGETS }}"
-          cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
-
-      - name: Get commit hash
-        id: commit
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
-
-      - name: Pack artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        run: |
-          md "build\bin\rocblas\library\"
-          md "build\bin\hipblaslt\library"
-          cp "${env:HIP_PATH}\bin\libhipblas.dll" "build\bin\"
-          cp "${env:HIP_PATH}\bin\libhipblaslt.dll" "build\bin\"
-          cp "${env:HIP_PATH}\bin\rocblas.dll" "build\bin\"
-          cp "${env:HIP_PATH}\bin\rocblas\library\*" "build\bin\rocblas\library\"
-          cp "${env:HIP_PATH}\bin\hipblaslt\library\*" "build\bin\hipblaslt\library\"
-          7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip .\build\bin\*
-
-      - name: Upload artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip
-          path: |
-            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip
-
-  ubuntu-latest-rocm:
-    runs-on: ubuntu-24.04
-
-    env:
-      UBUNTU_VERSION: "24.04"
-
-    strategy:
-      matrix:
-        include:
-          - ROCM_VERSION: "7.2.1"
-            gpu_targets: "gfx908;gfx90a;gfx942;gfx1030;gfx1031;gfx1032;gfx1100;gfx1101;gfx1102;gfx1151;gfx1150;gfx1200;gfx1201"
-            build: 'x64'
-          - ROCM_VERSION: "7.13.0"
-            gpu_targets: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
-            build: x64
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: ubuntu-rocm-cmake-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
-          evict-old-files: 1d
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt install -y build-essential cmake wget zip ninja-build
-
-      - name: Setup Legacy ROCm
-        if: matrix.ROCM_VERSION == '7.2.1'
-        id: legacy_env
-        run: |
-          sudo mkdir --parents --mode=0755 /etc/apt/keyrings
-          wget https://repo.radeon.com/rocm/rocm.gpg.key -O - | \
-            gpg --dearmor | sudo tee /etc/apt/keyrings/rocm.gpg > /dev/null
-
-          sudo tee /etc/apt/sources.list.d/rocm.list << EOF
-          deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/${{ matrix.ROCM_VERSION }} noble main
-          EOF
-
-          sudo tee /etc/apt/preferences.d/rocm-pin-600 << EOF
-          Package: *
-          Pin: release o=repo.radeon.com
-          Pin-Priority: 600
-          EOF
-
-          sudo apt update
-          sudo apt-get install -y libssl-dev rocm-hip-sdk
-
-      - name: Free disk space
-        run: |
-          # Remove preinstalled SDKs and caches not needed for this job
-          sudo rm -rf /usr/share/dotnet || true
-          sudo rm -rf /usr/local/lib/android || true
-          sudo rm -rf /opt/ghc || true
-          sudo rm -rf /usr/local/.ghcup || true
-          sudo rm -rf /opt/hostedtoolcache || true
-
-          # Remove old package lists and caches
-          sudo rm -rf /var/lib/apt/lists/* || true
-          sudo apt clean
-
-      - name: Setup TheRock
-        if: matrix.ROCM_VERSION != '7.2.1'
-        id: therock_env
-        run: |
-          wget https://repo.amd.com/rocm/tarball/therock-dist-linux-gfx1151-${{ matrix.ROCM_VERSION }}.tar.gz
-          mkdir install
-          tar -xf *.tar.gz -C install
-          export ROCM_PATH=$(pwd)/install
-          echo ROCM_PATH=$ROCM_PATH >> $GITHUB_ENV
-          echo PATH=$PATH:$ROCM_PATH/bin >> $GITHUB_ENV
-          echo LD_LIBRARY_PATH=$ROCM_PATH/lib:$ROCM_PATH/llvm/lib:$ROCM_PATH/lib/rocprofiler-systems >> $GITHUB_ENV
-
-      # setup-node installs into /opt/hostedtoolcache, which is removed above.
-      # Keep Node/pnpm setup after disk cleanup so the server frontend can be embedded.
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.15.1
-
-      - name: Build
-        id: cmake_build
-        run: |
-          mkdir build
-          cd build
-          cmake .. -G Ninja \
-            -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
-            -DCMAKE_HIP_FLAGS="-mllvm --amdgpu-unroll-threshold-local=600" \
+          cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DSD_HIPBLAS=ON \
-            -DHIP_PLATFORM=amd \
-            -DGPU_TARGETS="${{ matrix.gpu_targets }}" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DSD_BUILD_SHARED_LIBS=ON
-          cmake --build . --config Release
+            -DCMAKE_INSTALL_RPATH="@loader_path" \
+            -DSD_BUILD_SHARED_LIBS=ON \
+            -DSD_USE_PREBUILT_GGML=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_RELEASE_BASE_URL="${GGML_RELEASE_BASE_URL}" \
+            -DGGML_RELEASE_TAG="${GGML_RELEASE_TAG}" \
+            -DGGML_CACHE_DIR="${GITHUB_WORKSPACE}/.cache/ggml"
 
-      - name: Get commit hash
-        id: commit
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
-
-      - name: Prepare artifacts
-        id: prepare_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        run: |
-          # Copy licenses
-          cp ggml/LICENSE ./build/bin/ggml.txt
-          cp LICENSE ./build/bin/stable-diffusion.cpp.txt
-
-      - name: Fetch system info
-        id: system-info
-        run: |
-          echo "CPU_ARCH=`uname -m`" >> "$GITHUB_OUTPUT"
-          echo "OS_NAME=`lsb_release -s -i`" >> "$GITHUB_OUTPUT"
-          echo "OS_VERSION=`lsb_release -s -r`" >> "$GITHUB_OUTPUT"
-          echo "OS_TYPE=`uname -s`" >> "$GITHUB_OUTPUT"
+      - name: Build
+        run: cmake --build build --config Release -j "$(sysctl -n hw.ncpu)"
 
       - name: Pack artifacts
-        id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') || github.event.inputs.create_release == 'true' }}
+        shell: bash
         run: |
-          cp ggml/LICENSE ./build/bin/ggml.txt
-          cp LICENSE ./build/bin/stable-diffusion.cpp.txt
-          zip -y -r sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm-${{ matrix.ROCM_VERSION }}.zip ./build/bin
+          set -euo pipefail
+
+          short="$(git rev-parse --short HEAD)"
+          safe_branch="${BRANCH_NAME//\//-}"
+          stage="artifact/sd-macos-arm64"
+          archive="artifact/sd-${safe_branch}-${short}-bin-macos-arm64.zip"
+
+          rm -rf artifact
+          mkdir -p "$stage"
+          cp -a build/bin/. "$stage/"
+          cp ggml/LICENSE "$stage/ggml.txt"
+          cp LICENSE "$stage/stable-diffusion.cpp.txt"
+          printf '%s\n' \
+            "platform=macos-arm64" \
+            "ggml_release_base_url=${GGML_RELEASE_BASE_URL}" \
+            "ggml_release_tag=${GGML_RELEASE_TAG}" \
+            "ggml_linkage=prebuilt-sdk" \
+            > "$stage/SDK-METADATA.txt"
+
+          (cd artifact && zip -y -r "$(basename "$archive")" sd-macos-arm64)
 
       - name: Upload artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm-${{ matrix.ROCM_VERSION }}.zip
-          path: |
-            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm-${{ matrix.ROCM_VERSION }}.zip
+          name: sd-macos-arm64
+          path: artifact/*.zip
+          if-no-files-found: error
+
+  build-windows-x86_64:
+    runs-on: windows-2022
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Cache prebuilt ggml SDK
+        uses: actions/cache@v4
+        with:
+          path: .cache/ggml
+          key: ggml-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ env.GGML_RELEASE_TAG }}
+
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          cmake -S . -B build -A x64 `
+            -DCMAKE_CXX_FLAGS="/bigobj" `
+            -DSD_BUILD_SHARED_LIBS=ON `
+            -DSD_USE_PREBUILT_GGML=ON `
+            -DGGML_BACKEND_DL=ON `
+            -DGGML_RELEASE_BASE_URL="${env:GGML_RELEASE_BASE_URL}" `
+            -DGGML_RELEASE_TAG="${env:GGML_RELEASE_TAG}" `
+            -DGGML_CACHE_DIR="${env:GITHUB_WORKSPACE}\.cache\ggml"
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build --config Release --parallel $env:NUMBER_OF_PROCESSORS
+
+      - name: Pack artifacts
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') || github.event.inputs.create_release == 'true' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $short = git rev-parse --short HEAD
+          $safeBranch = $env:BRANCH_NAME -replace '[\\/:"*?<>| ]', '-'
+          $binDir = "build\bin\Release"
+          if (!(Test-Path $binDir)) {
+            $binDir = "build\bin"
+          }
+          if (!(Test-Path $binDir)) {
+            throw "Could not find build output directory"
+          }
+
+          $stage = "artifact\sd-windows-x86_64"
+          $archive = "artifact\sd-$safeBranch-$short-bin-windows-x86_64.zip"
+
+          if (Test-Path "artifact") {
+            Remove-Item -LiteralPath "artifact" -Recurse -Force
+          }
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -Path "$binDir\*" -Destination $stage -Recurse -Force
+          Copy-Item -Path "ggml\LICENSE" -Destination "$stage\ggml.txt" -Force
+          Copy-Item -Path "LICENSE" -Destination "$stage\stable-diffusion.cpp.txt" -Force
+
+          $metadata = @(
+            "platform=windows-x86_64",
+            "ggml_release_base_url=$env:GGML_RELEASE_BASE_URL",
+            "ggml_release_tag=$env:GGML_RELEASE_TAG",
+            "ggml_linkage=prebuilt-sdk"
+          ) -join "`n"
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllText((Join-Path (Resolve-Path $stage) "SDK-METADATA.txt"), $metadata, $utf8NoBom)
+
+          Compress-Archive -Path $stage -DestinationPath $archive -Force
+
+      - name: Upload artifacts
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') || github.event.inputs.create_release == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sd-windows-x86_64
+          path: artifact/*.zip
+          if-no-files-found: error
 
   release:
-    if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') || github.event.inputs.create_release == 'true' }}
 
     runs-on: ubuntu-latest
 
     needs:
-      - ubuntu-latest-cmake
-      - ubuntu-latest-cmake-vulkan
-      - ubuntu-latest-rocm
+      - build-linux-x86_64
       - build-and-push-docker-images
-      - macOS-latest-cmake
-      - windows-latest-cmake
-      - windows-latest-cmake-hip
-      - windows-latest-rocm
+      - build-macos-arm64
+      - build-windows-x86_64
 
     steps:
       - name: Clone
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Download artifacts
-        id: download-artifact
         uses: actions/download-artifact@v4
         with:
           path: ./artifact
           pattern: sd-*
           merge-multiple: true
 
-      - name: Get commit count
-        id: commit_count
+      - name: Get release version
+        id: version
         run: |
-          echo "count=$(git rev-list --count HEAD)" >> $GITHUB_OUTPUT
-
-      - name: Get commit hash
-        id: commit
-        uses: prompt/actions-commit-hash@v2
+          echo "count=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
+          echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Create release
         id: create_release
@@ -879,25 +436,24 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ format('{0}-{1}-{2}', env.BRANCH_NAME, steps.commit_count.outputs.count, steps.commit.outputs.short) }}
+          tag_name: ${{ format('{0}-{1}-{2}', env.BRANCH_NAME, steps.version.outputs.count, steps.version.outputs.short) }}
 
       - name: Upload release
-        id: upload_release
         if: ${{ github.event_name == 'workflow_dispatch' || github.ref_name == 'master' }}
         uses: actions/github-script@v3
         with:
-          github-token: ${{secrets.GITHUB_TOKEN}}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const path = require('path');
             const fs = require('fs');
             const release_id = '${{ steps.create_release.outputs.id }}';
-            for (let file of await fs.readdirSync('./artifact')) {
+            for (const file of await fs.readdirSync('./artifact')) {
               if (path.extname(file) === '.zip') {
                 console.log('uploadReleaseAsset', file);
                 await github.repos.uploadReleaseAsset({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  release_id: release_id,
+                  release_id,
                   name: file,
                   data: await fs.readFileSync(`./artifact/${file}`)
                 });
