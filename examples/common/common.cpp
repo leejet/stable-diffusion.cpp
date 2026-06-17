@@ -872,7 +872,7 @@ ArgOptions SDGenerationParams::get_options() {
          &end_image_path},
         {"",
          "--init-audio",
-         "path to the init audio WAV, required by audio-to-video models",
+         "path to the init audio WAV, for use with audio-to-video models",
          &init_audio_path},
         {"",
          "--mask",
