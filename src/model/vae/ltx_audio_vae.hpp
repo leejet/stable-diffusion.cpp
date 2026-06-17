@@ -250,9 +250,9 @@ namespace LTXV {
         sd::Tensor<float> basis({n_fft, 1, n_freqs * 2});
         for (int k = 0; k < n_freqs; ++k) {
             for (int n = 0; n < n_fft; ++n) {
-                double window          = 0.5 - 0.5 * std::cos(2.0 * kPi * n / static_cast<double>(n_fft));
-                double phase           = 2.0 * kPi * k * n / static_cast<double>(n_fft);
-                basis.index(n, 0, k)   = static_cast<float>(std::cos(phase) * window);
+                double window                  = 0.5 - 0.5 * std::cos(2.0 * kPi * n / static_cast<double>(n_fft));
+                double phase                   = 2.0 * kPi * k * n / static_cast<double>(n_fft);
+                basis.index(n, 0, k)           = static_cast<float>(std::cos(phase) * window);
                 basis.index(n, 0, k + n_freqs) = static_cast<float>(-std::sin(phase) * window);
             }
         }
@@ -276,12 +276,12 @@ namespace LTXV {
         }
 
         for (int m = 0; m < n_mels; ++m) {
-            double lower = mel_f[m];
+            double lower  = mel_f[m];
             double center = mel_f[m + 1];
-            double upper = mel_f[m + 2];
-            double enorm = 2.0 / std::max(upper - lower, 1e-12);
+            double upper  = mel_f[m + 2];
+            double enorm  = 2.0 / std::max(upper - lower, 1e-12);
             for (int f = 0; f < n_freqs; ++f) {
-                double freq = fft_freqs[f];
+                double freq  = fft_freqs[f];
                 double value = 0.0;
                 if (freq > lower && freq <= center) {
                     value = (freq - lower) / std::max(center - lower, 1e-12);

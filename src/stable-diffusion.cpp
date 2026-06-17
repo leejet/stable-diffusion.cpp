@@ -3068,8 +3068,8 @@ static sd::Tensor<float> sd_audio_to_ltx_waveform_tensor(const sd_audio_t* audio
 
     int64_t out_samples = static_cast<int64_t>(out_samples_u64);
     sd::Tensor<float> waveform({out_samples, target_channels, 1, 1});
-    const double src_rate = static_cast<double>(audio->sample_rate);
-    const double dst_rate = static_cast<double>(target_sample_rate);
+    const double src_rate  = static_cast<double>(audio->sample_rate);
+    const double dst_rate  = static_cast<double>(target_sample_rate);
     const int src_channels = static_cast<int>(audio->channels);
 
     auto src_value = [&](uint64_t sample, int channel) -> float {
@@ -3088,8 +3088,8 @@ static sd::Tensor<float> sd_audio_to_ltx_waveform_tensor(const sd_audio_t* audio
         uint64_t i1    = std::min<uint64_t>(i0 + 1, audio->sample_count - 1);
         float frac     = static_cast<float>(src_pos - static_cast<double>(i0));
         for (int ch = 0; ch < target_channels; ++ch) {
-            float v0 = src_value(i0, ch);
-            float v1 = src_value(i1, ch);
+            float v0                    = src_value(i0, ch);
+            float v1                    = src_value(i1, ch);
             waveform.index(t, ch, 0, 0) = v0 + (v1 - v0) * frac;
         }
     }
@@ -4760,9 +4760,9 @@ static std::optional<ImageGenerationLatents> prepare_video_generation_latents(sd
             }
 
             int64_t audio_encode_start = ggml_time_ms();
-            auto waveform = sd_audio_to_ltx_waveform_tensor(sd_vid_gen_params->input_audio,
-                                                            sd_ctx->sd->audio_vae_model->config.sample_rate,
-                                                            sd_ctx->sd->audio_vae_model->config.audio_channels);
+            auto waveform              = sd_audio_to_ltx_waveform_tensor(sd_vid_gen_params->input_audio,
+                                                                         sd_ctx->sd->audio_vae_model->config.sample_rate,
+                                                                         sd_ctx->sd->audio_vae_model->config.audio_channels);
             if (waveform.empty()) {
                 LOG_ERROR("failed to convert source audio for LTX A2V encoding");
                 return std::nullopt;

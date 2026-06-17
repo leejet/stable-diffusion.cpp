@@ -1405,29 +1405,29 @@ sd_audio_t load_pcm_wav_from_file(const std::string& path) {
         return audio;
     }
 
-    uint16_t format = 0;
-    uint16_t channels = 0;
-    uint32_t sample_rate = 0;
+    uint16_t format          = 0;
+    uint16_t channels        = 0;
+    uint32_t sample_rate     = 0;
     uint16_t bits_per_sample = 0;
-    const uint8_t* data = nullptr;
-    uint32_t data_size = 0;
+    const uint8_t* data      = nullptr;
+    uint32_t data_size       = 0;
 
     size_t pos = 12;
     while (pos + 8 <= wav.size()) {
         const uint8_t* chunk = wav.data() + pos;
-        uint32_t chunk_size = read_u32_le_bytes(chunk + 4);
-        size_t chunk_data = pos + 8;
+        uint32_t chunk_size  = read_u32_le_bytes(chunk + 4);
+        size_t chunk_data    = pos + 8;
         if (chunk_data + chunk_size > wav.size()) {
             break;
         }
 
         if (std::memcmp(chunk, "fmt ", 4) == 0 && chunk_size >= 16) {
-            format = read_u16_le_bytes(wav.data() + chunk_data);
-            channels = read_u16_le_bytes(wav.data() + chunk_data + 2);
-            sample_rate = read_u32_le_bytes(wav.data() + chunk_data + 4);
+            format          = read_u16_le_bytes(wav.data() + chunk_data);
+            channels        = read_u16_le_bytes(wav.data() + chunk_data + 2);
+            sample_rate     = read_u32_le_bytes(wav.data() + chunk_data + 4);
             bits_per_sample = read_u16_le_bytes(wav.data() + chunk_data + 14);
         } else if (std::memcmp(chunk, "data", 4) == 0) {
-            data = wav.data() + chunk_data;
+            data      = wav.data() + chunk_data;
             data_size = chunk_size;
         }
         pos = chunk_data + chunk_size + (chunk_size & 1);
@@ -1445,15 +1445,15 @@ sd_audio_t load_pcm_wav_from_file(const std::string& path) {
     }
 
     uint16_t bytes_per_sample = static_cast<uint16_t>((bits_per_sample + 7) / 8);
-    uint32_t frame_bytes = static_cast<uint32_t>(bytes_per_sample) * channels;
+    uint32_t frame_bytes      = static_cast<uint32_t>(bytes_per_sample) * channels;
     if (bytes_per_sample == 0 || frame_bytes == 0 || data_size < frame_bytes) {
         LOG_ERROR("invalid WAV sample format in '%s'", path.c_str());
         return audio;
     }
 
     uint64_t sample_count = data_size / frame_bytes;
-    size_t float_count = static_cast<size_t>(sample_count) * channels;
-    float* samples = (float*)malloc(float_count * sizeof(float));
+    size_t float_count    = static_cast<size_t>(sample_count) * channels;
+    float* samples        = (float*)malloc(float_count * sizeof(float));
     if (samples == nullptr) {
         return audio;
     }
@@ -1461,7 +1461,7 @@ sd_audio_t load_pcm_wav_from_file(const std::string& path) {
     for (uint64_t i = 0; i < sample_count; ++i) {
         for (uint16_t ch = 0; ch < channels; ++ch) {
             const uint8_t* src = data + i * frame_bytes + ch * bytes_per_sample;
-            float sample = 0.f;
+            float sample       = 0.f;
             if (format == 3 && bits_per_sample == 32) {
                 std::memcpy(&sample, src, sizeof(float));
             } else if (format == 1 && bits_per_sample == 8) {
@@ -1483,9 +1483,9 @@ sd_audio_t load_pcm_wav_from_file(const std::string& path) {
         }
     }
 
-    audio.sample_rate = sample_rate;
-    audio.channels = channels;
+    audio.sample_rate  = sample_rate;
+    audio.channels     = channels;
     audio.sample_count = sample_count;
-    audio.data = samples;
+    audio.data         = samples;
     return audio;
 }
