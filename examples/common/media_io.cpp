@@ -191,6 +191,20 @@ uint32_t read_u32_le_bytes(const uint8_t* data) {
            (static_cast<uint32_t>(data[3]) << 24);
 }
 
+uint16_t read_u16_le_bytes(const uint8_t* p) {
+    return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
+}
+
+int32_t read_s24_le_bytes(const uint8_t* p) {
+    int32_t value = static_cast<int32_t>(p[0]) |
+                    (static_cast<int32_t>(p[1]) << 8) |
+                    (static_cast<int32_t>(p[2]) << 16);
+    if (value & 0x00800000) {
+        value |= 0xff000000;
+    }
+    return value;
+}
+
 int stbi_ext_write_png_to_func(stbi_write_func* func,
                                void* context,
                                int x,
@@ -1373,4 +1387,105 @@ bool write_wav_to_file(const std::string& path,
     }
     file.write(reinterpret_cast<const char*>(pcm.data()), static_cast<std::streamsize>(pcm.size() * sizeof(int16_t)));
     return file.good();
+}
+
+sd_audio_t load_pcm_wav_from_file(const std::string& path) {
+    sd_audio_t audio = {0, 0, 0, nullptr};
+    if (path.empty()) {
+        return audio;
+    }
+
+    std::vector<uint8_t> wav;
+    if (!read_binary_file_bytes(path.c_str(), wav)) {
+        LOG_ERROR("load WAV from '%s' failed", path.c_str());
+        return audio;
+    }
+    if (wav.size() < 44 || std::memcmp(wav.data(), "RIFF", 4) != 0 || std::memcmp(wav.data() + 8, "WAVE", 4) != 0) {
+        LOG_ERROR("input audio file '%s' is not a RIFF/WAVE file", path.c_str());
+        return audio;
+    }
+
+    uint16_t format = 0;
+    uint16_t channels = 0;
+    uint32_t sample_rate = 0;
+    uint16_t bits_per_sample = 0;
+    const uint8_t* data = nullptr;
+    uint32_t data_size = 0;
+
+    size_t pos = 12;
+    while (pos + 8 <= wav.size()) {
+        const uint8_t* chunk = wav.data() + pos;
+        uint32_t chunk_size = read_u32_le_bytes(chunk + 4);
+        size_t chunk_data = pos + 8;
+        if (chunk_data + chunk_size > wav.size()) {
+            break;
+        }
+
+        if (std::memcmp(chunk, "fmt ", 4) == 0 && chunk_size >= 16) {
+            format = read_u16_le_bytes(wav.data() + chunk_data);
+            channels = read_u16_le_bytes(wav.data() + chunk_data + 2);
+            sample_rate = read_u32_le_bytes(wav.data() + chunk_data + 4);
+            bits_per_sample = read_u16_le_bytes(wav.data() + chunk_data + 14);
+        } else if (std::memcmp(chunk, "data", 4) == 0) {
+            data = wav.data() + chunk_data;
+            data_size = chunk_size;
+        }
+        pos = chunk_data + chunk_size + (chunk_size & 1);
+    }
+
+    if (data == nullptr || data_size == 0 || channels == 0 || sample_rate == 0) {
+        LOG_ERROR("input WAV '%s' is missing fmt/data chunks", path.c_str());
+        return audio;
+    }
+    if (format != 1 && format != 3) {
+        LOG_ERROR("unsupported WAV format %u in '%s', only PCM and float WAV are supported",
+                  static_cast<unsigned>(format),
+                  path.c_str());
+        return audio;
+    }
+
+    uint16_t bytes_per_sample = static_cast<uint16_t>((bits_per_sample + 7) / 8);
+    uint32_t frame_bytes = static_cast<uint32_t>(bytes_per_sample) * channels;
+    if (bytes_per_sample == 0 || frame_bytes == 0 || data_size < frame_bytes) {
+        LOG_ERROR("invalid WAV sample format in '%s'", path.c_str());
+        return audio;
+    }
+
+    uint64_t sample_count = data_size / frame_bytes;
+    size_t float_count = static_cast<size_t>(sample_count) * channels;
+    float* samples = (float*)malloc(float_count * sizeof(float));
+    if (samples == nullptr) {
+        return audio;
+    }
+
+    for (uint64_t i = 0; i < sample_count; ++i) {
+        for (uint16_t ch = 0; ch < channels; ++ch) {
+            const uint8_t* src = data + i * frame_bytes + ch * bytes_per_sample;
+            float sample = 0.f;
+            if (format == 3 && bits_per_sample == 32) {
+                std::memcpy(&sample, src, sizeof(float));
+            } else if (format == 1 && bits_per_sample == 8) {
+                sample = (static_cast<int>(src[0]) - 128) / 128.f;
+            } else if (format == 1 && bits_per_sample == 16) {
+                sample = static_cast<int16_t>(read_u16_le_bytes(src)) / 32768.f;
+            } else if (format == 1 && bits_per_sample == 24) {
+                sample = read_s24_le_bytes(src) / 8388608.f;
+            } else if (format == 1 && bits_per_sample == 32) {
+                sample = static_cast<int32_t>(read_u32_le_bytes(src)) / 2147483648.f;
+            } else {
+                LOG_ERROR("unsupported WAV bit depth %u in '%s'",
+                          static_cast<unsigned>(bits_per_sample),
+                          path.c_str());
+                free(samples);
+                return audio;
+            }
+            samples[i * channels + ch] = std::clamp(sample, -1.0f, 1.0f);
+        }
+    }
+
+    audio.sample_rate = sample_rate;
+    audio.channels = channels;
+    audio.sample_count = sample_count;
+    audio.data = samples;
+    return audio;
 }
