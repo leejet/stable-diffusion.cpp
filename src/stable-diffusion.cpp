@@ -29,6 +29,7 @@
 #include "model/diffusion/krea2.hpp"
 #include "model/diffusion/lens.hpp"
 #include "model/diffusion/ltxv.hpp"
+#include "model/diffusion/minit2i.hpp"
 #include "model/diffusion/mmdit.hpp"
 #include "model/diffusion/model.hpp"
 #include "model/diffusion/pid.hpp"
@@ -93,6 +94,7 @@ const char* model_version_to_str[] = {
     "Ovis Image",
     "Ernie Image",
     "Lens",
+    "MiniT2I",
     "Longcat-Image",
     "PiD",
     "Ideogram 4",
@@ -785,6 +787,14 @@ public:
                                                                                tensor_storage_map,
                                                                                "model",
                                                                                model_manager);
+            } else if (sd_version_is_minit2i(version)) {
+                cond_stage_model = std::make_shared<MiniT2IConditioner>(backend_for(SDBackendModule::TE),
+                                                                        tensor_storage_map,
+                                                                        model_manager);
+                diffusion_model  = std::make_shared<MiniT2I::MiniT2IRunner>(backend_for(SDBackendModule::DIFFUSION),
+                                                                            tensor_storage_map,
+                                                                            "",
+                                                                            model_manager);
             } else if (sd_version_is_anima(version)) {
                 cond_stage_model = std::make_shared<AnimaConditioner>(backend_for(SDBackendModule::TE),
                                                                       tensor_storage_map,
@@ -958,7 +968,7 @@ public:
                 }
             };
 
-            if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1) {
+            if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version)) {
                 LOG_INFO("using FakeVAE");
                 first_stage_model = std::make_shared<FakeVAE>(version,
                                                               backend_for(SDBackendModule::VAE),
@@ -2032,11 +2042,93 @@ public:
         }
 
         int64_t last_progress_us     = ggml_time_us();
+        SamplePreviewContext preview = prepare_sample_preview_context();
+
+        if (sd_version_is_minit2i(version)) {
+            if (noise.empty()) {
+                LOG_ERROR("MiniT2I sampling requires initial noise");
+                return {};
+            }
+            if (cond.c_crossattn.empty() || cond.c_vector.empty()) {
+                LOG_ERROR("MiniT2I requires T5 hidden states and prompt mask");
+                return {};
+            }
+            size_t minit2i_steps = steps > 0 ? steps : 100;
+            sd::Tensor<float> x_t = noise * 2.0f;
+            sd::Tensor<float> denoised = x_t;
+            sd::Tensor<float> uncond_mask = sd::Tensor<float>::zeros_like(cond.c_vector);
+
+            auto run_minit2i = [&](const sd::Tensor<float>& x,
+                                   float t_value,
+                                   const sd::Tensor<float>& mask) -> sd::Tensor<float> {
+                int64_t batch = x.dim() >= 4 ? x.shape()[3] : 1;
+                if (batch <= 0) {
+                    LOG_ERROR("MiniT2I got invalid input shape for sampling");
+                    return {};
+                }
+                LOG_DEBUG("MiniT2I sampling input shape: dim=%" PRId64 ", batch=%" PRId64,
+                          x.dim(),
+                          batch);
+                std::vector<float> t_vec(static_cast<size_t>(batch), t_value);
+                const int64_t t_vec_size = static_cast<int64_t>(t_vec.size());
+                sd::Tensor<float> timesteps_tensor({t_vec_size}, std::move(t_vec));
+                DiffusionParams diffusion_params;
+                diffusion_params.x         = &x;
+                diffusion_params.timesteps = &timesteps_tensor;
+                diffusion_params.context   = &cond.c_crossattn;
+                diffusion_params.y         = &mask;
+                auto out = work_diffusion_model->compute(n_threads, diffusion_params);
+                if (out.empty()) {
+                    LOG_ERROR("MiniT2I diffusion model compute failed");
+                    return {};
+                }
+                return out;
+            };
+
+            pretty_progress(0, static_cast<int>(minit2i_steps), 0);
+            last_progress_us = ggml_time_us();
+            for (size_t i = 0; i < minit2i_steps; ++i) {
+                if (get_cancel_flag() == SD_CANCEL_ALL) {
+                    LOG_DEBUG("cancelling generation");
+                    return {};
+                }
+                float t_cur  = static_cast<float>(i) / static_cast<float>(minit2i_steps);
+                float t_next = static_cast<float>(i + 1) / static_cast<float>(minit2i_steps);
+
+                if (sd_should_preview_noisy() && preview.callback != nullptr) {
+                    preview_image(static_cast<int>(i + 1), x_t, version, preview.mode, preview.callback, preview.data, true);
+                }
+
+                auto cond_x0 = run_minit2i(x_t, t_cur, cond.c_vector);
+                if (cond_x0.empty()) {
+                    return {};
+                }
+                auto uncond_x0 = run_minit2i(x_t, t_cur, uncond_mask);
+                if (uncond_x0.empty()) {
+                    return {};
+                }
+                float denom = std::max(1.0f - t_cur, 0.001f);
+                auto cond_v = (cond_x0 - x_t) / denom;
+                auto uncond_v = (uncond_x0 - x_t) / denom;
+                auto v = uncond_v + (cond_v - uncond_v) * cfg_scale;
+                x_t += v * (t_next - t_cur);
+                denoised = x_t;
+
+                if (sd_should_preview_denoised() && preview.callback != nullptr) {
+                    preview_image(static_cast<int>(i + 1), denoised, version, preview.mode, preview.callback, preview.data, false);
+                }
+                report_sample_progress(static_cast<int>(i + 1), minit2i_steps, &last_progress_us);
+            }
+            if (work_diffusion_model) {
+                work_diffusion_model->free_compute_buffer();
+            }
+            return denoised;
+        }
+
         sd::Tensor<float> x_t        = !noise.empty()
                                            ? denoiser->noise_scaling(sigmas[0], noise, init_latent)
                                            : init_latent;
         sd::Tensor<float> denoised   = x_t;
-        SamplePreviewContext preview = prepare_sample_preview_context();
 
         auto denoise = [&](const sd::Tensor<float>& x, float sigma, int step) -> sd::guidance::GuiderOutput {
             if (get_cancel_flag() == SD_CANCEL_ALL) {
@@ -2335,6 +2427,8 @@ public:
                 latent_channel = 3;
             } else if (version == VERSION_CHROMA_RADIANCE) {
                 latent_channel = 3;
+            } else if (sd_version_is_minit2i(version)) {
+                latent_channel = 3;
             } else if (sd_version_is_pid(version)) {
                 latent_channel = 3;
             } else if (sd_version_is_sefi_image(version)) {
@@ -2416,7 +2510,7 @@ public:
     }
 
     sd::Tensor<float> decode_first_stage(const sd::Tensor<float>& x, bool decode_video = false) {
-        if (sd_version_is_pid(version)) {
+        if (sd_version_is_pid(version) || sd_version_is_minit2i(version)) {
             return sd::ops::clamp((x + 1.f) * 0.5f, 0.0f, 1.0f);
         }
         auto latents = first_stage_model->diffusion_to_vae_latents(x);
