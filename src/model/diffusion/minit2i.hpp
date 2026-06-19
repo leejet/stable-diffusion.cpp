@@ -420,17 +420,14 @@ namespace MiniT2I {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* img,
-                             ggml_tensor* t,
                              ggml_tensor* context,
                              ggml_tensor* mask,
                              ggml_tensor* pos_embed,
                              ggml_tensor* txt_pe,
                              ggml_tensor* joint_pe) {
-            auto img_embedder    = std::dynamic_pointer_cast<BottleneckPatchEmbed>(blocks["img_embedder"]);
-            auto txt_embedder    = std::dynamic_pointer_cast<Linear>(blocks["txt_embedder"]);
-            auto t_embedder      = std::dynamic_pointer_cast<TimestepEmbedder>(blocks["t_embedder"]);
-            auto pooled_embedder = std::dynamic_pointer_cast<Linear>(blocks["pooled_embedder"]);
-            auto final_layer     = std::dynamic_pointer_cast<FinalLayer>(blocks["final_layer"]);
+            auto img_embedder = std::dynamic_pointer_cast<BottleneckPatchEmbed>(blocks["img_embedder"]);
+            auto txt_embedder = std::dynamic_pointer_cast<Linear>(blocks["txt_embedder"]);
+            auto final_layer  = std::dynamic_pointer_cast<FinalLayer>(blocks["final_layer"]);
 
             int64_t W  = img->ne[0];
             int64_t H  = img->ne[1];
@@ -440,11 +437,6 @@ namespace MiniT2I {
             context = apply_text_mask(ctx, context, mask);
             auto x  = img_embedder->forward(ctx, img);
             x       = ggml_add(ctx->ggml_ctx, x, pos_embed);
-
-            auto t_vec       = t_embedder->forward(ctx, t);
-            auto pooled_text = pool_context(ctx, context);
-            auto vec         = ggml_add(ctx->ggml_ctx, t_vec, pooled_embedder->forward(ctx, pooled_text));
-            SD_UNUSED(vec);
 
             auto txt = txt_embedder->forward(ctx, context);
             for (int64_t i = 0; i < config.txt_preamble_depth; ++i) {
@@ -590,9 +582,9 @@ namespace MiniT2I {
                                  const sd::Tensor<float>& mask_tensor) {
             ggml_cgraph* gf        = new_graph_custom(MINIT2I_GRAPH_SIZE);
             ggml_tensor* x         = make_input(x_tensor);
-            ggml_tensor* timesteps = make_input(timesteps_tensor);
             ggml_tensor* context   = make_input(context_tensor);
             ggml_tensor* mask      = make_input(mask_tensor);
+            SD_UNUSED(timesteps_tensor);
 
             int64_t W        = x->ne[0];
             int64_t H        = x->ne[1];
@@ -601,7 +593,7 @@ namespace MiniT2I {
             ensure_position_cache(img_side, txt_len);
 
             auto runner_ctx = get_context();
-            auto out        = model.forward(&runner_ctx, x, timesteps, context, mask, cached_pos_embed, cached_txt_pe, cached_joint_pe);
+            auto out        = model.forward(&runner_ctx, x, context, mask, cached_pos_embed, cached_txt_pe, cached_joint_pe);
             ggml_build_forward_expand(gf, out);
             return gf;
         }
