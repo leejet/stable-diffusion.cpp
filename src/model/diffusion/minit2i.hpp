@@ -487,9 +487,15 @@ namespace MiniT2I {
     struct MiniT2IRunner : public DiffusionModelRunner {
         MiniT2IConfig config;
         MMJiT model;
-        std::vector<float> pos_embed_vec;
-        std::vector<float> txt_pe_vec;
-        std::vector<float> joint_pe_vec;
+        ggml_context* position_cache_ctx            = nullptr;
+        ggml_backend_buffer_t position_cache_buffer = nullptr;
+        ggml_tensor* cached_pos_embed               = nullptr;
+        ggml_tensor* cached_txt_pe                  = nullptr;
+        ggml_tensor* cached_joint_pe                = nullptr;
+        int64_t cached_img_side                     = -1;
+        int64_t cached_txt_len                      = -1;
+        int64_t cached_hidden_size                  = -1;
+        int64_t cached_head_dim                     = -1;
 
         MiniT2IRunner(ggml_backend_t backend,
                       const String2TensorStorage& tensor_storage_map      = {},
@@ -501,12 +507,81 @@ namespace MiniT2I {
             model.init(params_ctx, tensor_storage_map, this->prefix);
         }
 
+        ~MiniT2IRunner() override {
+            free_position_cache();
+        }
+
         std::string get_desc() override {
             return "MiniT2I";
         }
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
             model.get_param_tensors(tensors, prefix);
+        }
+
+        void free_position_cache() {
+            if (position_cache_buffer != nullptr) {
+                ggml_backend_buffer_free(position_cache_buffer);
+                position_cache_buffer = nullptr;
+            }
+            if (position_cache_ctx != nullptr) {
+                ggml_free(position_cache_ctx);
+                position_cache_ctx = nullptr;
+            }
+            cached_pos_embed   = nullptr;
+            cached_txt_pe      = nullptr;
+            cached_joint_pe    = nullptr;
+            cached_img_side    = -1;
+            cached_txt_len     = -1;
+            cached_hidden_size = -1;
+            cached_head_dim    = -1;
+        }
+
+        void ensure_position_cache(int64_t img_side, int64_t txt_len) {
+            if (cached_img_side == img_side &&
+                cached_txt_len == txt_len &&
+                cached_hidden_size == config.hidden_size &&
+                cached_head_dim == config.head_dim &&
+                cached_pos_embed != nullptr &&
+                cached_txt_pe != nullptr &&
+                cached_joint_pe != nullptr) {
+                return;
+            }
+
+            free_position_cache();
+
+            auto pos_embed_vec = make_2d_sincos_pos_embed(static_cast<int>(img_side), static_cast<int>(config.hidden_size));
+            auto txt_pe_vec    = make_text_rope(static_cast<int>(txt_len), static_cast<int>(config.head_dim));
+            auto img_pe_vec = make_vision_rope(static_cast<int>(img_side), static_cast<int>(config.head_dim));
+            auto joint_pe_vec = txt_pe_vec;
+            joint_pe_vec.insert(joint_pe_vec.end(), img_pe_vec.begin(), img_pe_vec.end());
+
+            ggml_init_params params;
+            params.mem_size   = static_cast<size_t>(3 * ggml_tensor_overhead());
+            params.mem_buffer = nullptr;
+            params.no_alloc   = true;
+            position_cache_ctx = ggml_init(params);
+            GGML_ASSERT(position_cache_ctx != nullptr);
+
+            cached_pos_embed = ggml_new_tensor_3d(position_cache_ctx, GGML_TYPE_F32, config.hidden_size, img_side * img_side, 1);
+            ggml_set_name(cached_pos_embed, "minit2i.pos_embed");
+            cached_txt_pe = ggml_new_tensor_4d(position_cache_ctx, GGML_TYPE_F32, 2, 2, config.head_dim / 2, txt_len);
+            ggml_set_name(cached_txt_pe, "minit2i.txt_pe");
+            cached_joint_pe = ggml_new_tensor_4d(position_cache_ctx, GGML_TYPE_F32, 2, 2, config.head_dim / 2, txt_len + img_side * img_side);
+            ggml_set_name(cached_joint_pe, "minit2i.joint_pe");
+
+            position_cache_buffer = ggml_backend_alloc_ctx_tensors(position_cache_ctx, runtime_backend);
+            GGML_ASSERT(position_cache_buffer != nullptr);
+            ggml_backend_buffer_set_usage(position_cache_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            ggml_backend_tensor_set(cached_pos_embed, pos_embed_vec.data(), 0, ggml_nbytes(cached_pos_embed));
+            ggml_backend_tensor_set(cached_txt_pe, txt_pe_vec.data(), 0, ggml_nbytes(cached_txt_pe));
+            ggml_backend_tensor_set(cached_joint_pe, joint_pe_vec.data(), 0, ggml_nbytes(cached_joint_pe));
+            ggml_backend_synchronize(runtime_backend);
+
+            cached_img_side    = img_side;
+            cached_txt_len     = txt_len;
+            cached_hidden_size = config.hidden_size;
+            cached_head_dim    = config.head_dim;
         }
 
         ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor,
@@ -523,23 +598,10 @@ namespace MiniT2I {
             int64_t H        = x->ne[1];
             int64_t img_side = H / config.patch_size;
             int64_t txt_len  = context->ne[1];
-
-            pos_embed_vec = make_2d_sincos_pos_embed(static_cast<int>(img_side), static_cast<int>(config.hidden_size));
-            auto pos_embed = ggml_new_tensor_3d(compute_ctx, GGML_TYPE_F32, config.hidden_size, img_side * img_side, 1);
-            set_backend_tensor_data(pos_embed, pos_embed_vec.data());
-
-            txt_pe_vec = make_text_rope(static_cast<int>(txt_len), static_cast<int>(config.head_dim));
-            auto txt_pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.head_dim / 2, txt_len);
-            set_backend_tensor_data(txt_pe, txt_pe_vec.data());
-
-            auto img_pe_vec = make_vision_rope(static_cast<int>(img_side), static_cast<int>(config.head_dim));
-            joint_pe_vec    = txt_pe_vec;
-            joint_pe_vec.insert(joint_pe_vec.end(), img_pe_vec.begin(), img_pe_vec.end());
-            auto joint_pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.head_dim / 2, txt_len + img_side * img_side);
-            set_backend_tensor_data(joint_pe, joint_pe_vec.data());
+            ensure_position_cache(img_side, txt_len);
 
             auto runner_ctx = get_context();
-            auto out        = model.forward(&runner_ctx, x, timesteps, context, mask, pos_embed, txt_pe, joint_pe);
+            auto out        = model.forward(&runner_ctx, x, timesteps, context, mask, cached_pos_embed, cached_txt_pe, cached_joint_pe);
             ggml_build_forward_expand(gf, out);
             return gf;
         }
