@@ -1941,6 +1941,20 @@ public:
         float img_cfg_scale = guidance.img_cfg;
         float slg_scale     = guidance.slg.scale;
         bool slg_uncond     = sd::guidance::parse_skip_layer_guidance_uncond_arg(extra_sample_args);
+        
+        std::vector<float> guidance_schedule = sd::guidance::parse_guidance_schedule(extra_sample_args);
+        if(!guidance_schedule.empty() && guidance_schedule.size() != sigmas.size()) {
+            if(guidance_schedule.size() > sigmas.size()) {
+                LOG_WARN("guidance_schedule length (%zu) is greater than sigmas length (%zu)", guidance_schedule.size(), sigmas.size());
+                LOG_WARN("truncating guidance_schedule to match sigmas length");
+                guidance_schedule.resize(sigmas.size());
+            } else {
+                LOG_INFO("padding guidance_schedule with cfg_scale");
+                while(guidance_schedule.size() < sigmas.size()) {
+                    guidance_schedule.push_back(cfg_scale);
+                }
+            }
+        }
 
         sd_sample::SampleCacheRuntime cache_runtime = sd_sample::init_sample_cache_runtime(version,
                                                                                            cache_params,
@@ -2182,7 +2196,9 @@ public:
             guidance_input.pred_uncond     = uncond_out.empty() ? nullptr : &uncond_out;
             guidance_input.pred_img_uncond = img_uncond_out.empty() ? nullptr : &img_uncond_out;
 
-            sd::guidance::GuiderOutput guided = primary_guidance.forward(guidance_input, {});
+            sd::guidance::GuiderOutput guided =  guidance_schedule.empty()? 
+                                            primary_guidance.forward(guidance_input, {}):
+                                            primary_guidance.forward(guidance_input, {}, guidance_schedule[guidance_schedule.size() - 1 - step]);
             if (guided.pred.empty()) {
                 return {};
             }

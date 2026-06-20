@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <string>
 #include <utility>
+#include <optional>
+#include <charconv>
 
 #include "core/util.h"
 
@@ -63,6 +65,82 @@ namespace sd::guidance {
         return uncond;
     }
 
+    std::vector<float> parse_guidance_schedule_from_spec(std::string spec) {
+        std::vector<float> schedule;
+
+        while (!spec.empty()) {
+            auto sep   = spec.find('+');
+            auto segment = spec.substr(0, sep);
+
+            auto x = segment.find('x');
+            if (x == std::string::npos) {
+                LOG_ERROR("Invalid guidance schedule segment: '%s' (expected <count>x<guidance>)", segment.c_str());
+                return {};
+            }
+
+            int count;
+            float guidance;
+
+            auto count_str    = segment.substr(0, x);
+            auto guidance_str = segment.substr(x + 1);
+
+            // Use std::from_chars for parsing
+            auto [count_ptr, count_ec] =
+                std::from_chars(count_str.data(),
+                                count_str.data() + count_str.size(),
+                                count);
+
+            if (count_ec != std::errc{} ||
+                count_ptr != count_str.data() + count_str.size()) {
+                LOG_ERROR("Invalid count in guidance schedule: '%s'", count_str.c_str());
+                return {};
+            }
+
+            auto [guidance_ptr, guidance_ec] =
+                std::from_chars(guidance_str.data(),
+                                guidance_str.data() + guidance_str.size(),
+                                guidance);
+
+            if (guidance_ec != std::errc{} ||
+                guidance_ptr != guidance_str.data() + guidance_str.size()) {
+                LOG_ERROR("Invalid guidance value in guidance schedule: '%s'", guidance_str.c_str());
+                return {};
+            }
+
+            if (count <= 0) {
+                LOG_ERROR("Guidance schedule count must be positive");
+                return {};
+            }
+
+            schedule.insert(schedule.end(), count, guidance);
+
+            if (sep == std::string::npos) {
+                break;
+            }
+
+            // Use substr to remove the processed part
+            spec = spec.substr(sep + 1);
+        }
+
+        return schedule;
+    }
+
+    std::vector<float> parse_guidance_schedule(const char* extra_sample_args) {
+        std::vector<float> guidance_schedule;
+        std::string guidance_schedule_str = "";
+         for (const auto& [key, value] : parse_key_value_args(extra_sample_args, "extra sample arg")) {
+            float parsed = 0.0f;
+            if (key == "guidance_schedule") {
+                guidance_schedule_str = value;
+            }
+        }
+
+        if (!guidance_schedule_str.empty()) {
+            guidance_schedule = parse_guidance_schedule_from_spec(guidance_schedule_str);
+        }
+        return guidance_schedule;
+    }
+
     ClassifierFreeGuidance::ClassifierFreeGuidance(float guidance_scale,
                                                    float image_guidance_scale)
         : guidance_scale_(guidance_scale),
@@ -70,8 +148,10 @@ namespace sd::guidance {
     }
 
     GuiderOutput ClassifierFreeGuidance::forward(const GuidanceInput& input,
-                                                 GuiderOutput previous) const {
+                                                 GuiderOutput previous,
+                                                std::optional<float> scale_override) const {
         (void)previous;
+        float guidance_scale       = scale_override.value_or(guidance_scale_);
 
         GuiderOutput output;
         if (!has_tensor(input.pred_cond)) {
@@ -86,14 +166,14 @@ namespace sd::guidance {
                 const sd::Tensor<float>& pred_img_uncond = *input.pred_img_uncond;
                 output.pred                              = pred_img_uncond +
                               image_guidance_scale_ * (pred_uncond - pred_img_uncond) +
-                              guidance_scale_ * (pred_cond - pred_uncond);
+                              guidance_scale * (pred_cond - pred_uncond);
 
             } else {
-                output.pred = pred_uncond + guidance_scale_ * (pred_cond - pred_uncond);
+                output.pred = pred_uncond + guidance_scale * (pred_cond - pred_uncond);
             }
         } else if (has_tensor(input.pred_img_uncond)) {
             const sd::Tensor<float>& pred_img_uncond = *input.pred_img_uncond;
-            output.pred                              = pred_img_uncond + guidance_scale_ * (pred_cond - pred_img_uncond);
+            output.pred                              = pred_img_uncond + guidance_scale * (pred_cond - pred_img_uncond);
         }
 
         return output;
@@ -128,8 +208,10 @@ namespace sd::guidance {
     }
 
     GuiderOutput AdaptiveProjectedGuidance::forward(const GuidanceInput& input,
-                                                    GuiderOutput previous) const {
+                                                    GuiderOutput previous,
+                                                    std::optional<float> scale_override) const {
         (void)previous;
+        float guidance_scale       = scale_override.value_or(guidance_scale_);
 
         GuiderOutput output;
         if (!has_tensor(input.pred_cond)) {
@@ -144,13 +226,13 @@ namespace sd::guidance {
                 const sd::Tensor<float>& pred_img_uncond = *input.pred_img_uncond;
                 output.pred                              = pred_img_uncond +
                               image_guidance_scale_ * (pred_uncond - pred_img_uncond) +
-                              guidance_scale_ * (pred_cond - pred_uncond);
+                              guidance_scale * (pred_cond - pred_uncond);
             } else {
-                output.pred = pred_uncond + guidance_scale_ * (pred_cond - pred_uncond);
+                output.pred = pred_uncond + guidance_scale * (pred_cond - pred_uncond);
             }
         } else if (has_tensor(input.pred_img_uncond)) {
             const sd::Tensor<float>& pred_img_uncond = *input.pred_img_uncond;
-            output.pred                              = pred_img_uncond + guidance_scale_ * (pred_cond - pred_img_uncond);
+            output.pred                              = pred_img_uncond + guidance_scale * (pred_cond - pred_img_uncond);
         }
         if (!has_tensor(input.pred_uncond) && !has_tensor(input.pred_img_uncond)) {
             return output;
@@ -162,7 +244,7 @@ namespace sd::guidance {
         sd::Tensor<float> deltas = calculate_guidance_delta(pred_cond,
                                                             pred_uncond,
                                                             pred_img_uncond,
-                                                            guidance_scale_,
+                                                            guidance_scale,
                                                             image_guidance_scale_);
         if (params_.momentum != 0.0f) {
             if (momentum_buffer_.shape() != deltas.shape()) {
@@ -239,7 +321,8 @@ namespace sd::guidance {
     }
 
     GuiderOutput SkipLayerGuidance::forward(const GuidanceInput& input,
-                                            GuiderOutput output) const {
+                                            GuiderOutput output,
+                                            std::optional<float> /*scale_override*/) const {
         if (scale_ == 0.0f || !is_enabled_for_step(input) || !input.predict_skip_layer) {
             return output;
         }
