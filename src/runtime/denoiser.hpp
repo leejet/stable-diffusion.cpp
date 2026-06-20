@@ -571,7 +571,7 @@ struct LogitNormalScheduler : SigmaScheduler {
 
     bool resolution_aware = true;
 
-    float t_min, t_max;
+    float one_minus_t_min, one_minus_t_max;
 
     void parse_extra_sample_args(int image_seq_len = 0, const char* extra_sample_args = nullptr) {
         const int known_seq_len = (512 * 512) / (16 * 16);
@@ -606,10 +606,17 @@ struct LogitNormalScheduler : SigmaScheduler {
         }
     }
 
+    float sigmoid(float x) {
+        return 1.0f / (1.0f + std::exp(-x));
+    }
+
     LogitNormalScheduler(float mean = 0.0f, float std = 1.75f, float logsnr_min = -18.0f, float logsnr_max = 15.0f)
         : mean(mean), std(std), logsnr_min(logsnr_min), logsnr_max(logsnr_max) {
-        t_min = 1.0f / (1.0f + std::exp(0.5f * logsnr_max));
-        t_max = 1.0f / (1.0f + std::exp(0.5f * logsnr_min));
+        // t_min = 1.0f / (1.0f + std::exp(0.5f * logsnr_max));
+        one_minus_t_min = sigmoid(0.5f * logsnr_max);
+        // t_max = 1.0f / (1.0f + std::exp(0.5f * logsnr_min));
+        one_minus_t_max = sigmoid(0.5f * logsnr_min);
+
     }
 
     LogitNormalScheduler(int image_seq_len = 0, const char* extra_sample_args = nullptr) {
@@ -619,8 +626,10 @@ struct LogitNormalScheduler : SigmaScheduler {
         logsnr_max = 18.0f;
 
         parse_extra_sample_args(image_seq_len, extra_sample_args);
-        t_min = 1.0f / (1.0f + std::exp(0.5f * logsnr_max));
-        t_max = 1.0f / (1.0f + std::exp(0.5f * logsnr_min));
+        // t_min = 1.0f / (1.0f + std::exp(0.5f * logsnr_max));
+        one_minus_t_min = sigmoid(0.5f * logsnr_max);
+        // t_max = 1.0f / (1.0f + std::exp(0.5f * logsnr_min));
+        one_minus_t_max = sigmoid(0.5f * logsnr_min);
     }
 
     // https://stackedboxes.org/2017/05/01/acklams-normal-quantile-function/
@@ -719,24 +728,30 @@ struct LogitNormalScheduler : SigmaScheduler {
         return x;
     }
 
-    std::vector<float> get_sigmas(uint32_t n, float /*sigma_min*/, float /*sigma_max*/, t_to_sigma_t /*t_to_sigma*/) override {
+    std::vector<float> get_sigmas(uint32_t n, float /*sigma_min*/, float /*sigma_max*/, t_to_sigma_t t_to_sigma) override {
         std::vector<float> sigmas;
-        LOG_WARN("LOGIT_NORMAL_SCHEDULER using mean=%.4f, std=%.4f, logsnr_min=%.4f (t_max=%.4f), logsnr_max=%.4f (t_min=%.4f)", mean, std, logsnr_min, t_max, logsnr_max, t_min);
+        LOG_INFO("LOGIT_NORMAL_SCHEDULER using mean=%.4f, std=%.4f, logsnr_min=%.4f, logsnr_max=%.4f", mean, std, logsnr_min, logsnr_max);
         sigmas.reserve(n + 1);
-
         for (uint32_t i = 0; i <= n; ++i) {
             float t = static_cast<float>(i) / static_cast<float>(n);
 
-            float z = ndtri(t);
+            // ndtri(1-t) == -ndtri(t)
+            float z = -ndtri(t);
 
             float y = mean + std * z;
 
-            float sigma = 1.0f / (1.0f + exp(y));  // == 1 - sigmoid(y)
+            float timestep = sigmoid(y);
 
-            if (sigma < t_min)
-                sigma = t_min;
-            if (sigma > t_max)
-                sigma = t_max;
+            if (timestep > one_minus_t_min)
+                timestep = one_minus_t_min;
+            if (timestep < one_minus_t_max)
+                timestep = one_minus_t_max;
+
+            // which one is corrrect ?
+            float sigma = timestep;
+            // float sigma = t_to_sigma(timestep * TIMESTEPS);
+            // float sigma = t_to_sigma(timestep * (TIMESTEPS - 1));
+            // float sigma = t_to_sigma(timestep * TIMESTEPS - 1);
 
             sigmas.push_back(sigma);
         }
