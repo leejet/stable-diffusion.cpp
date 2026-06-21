@@ -1954,7 +1954,7 @@ struct LLMEmbedder : public Conditioner {
                     auto image_embed = llm->encode_image(n_threads, resized_image, false, true, true);
                     GGML_ASSERT(!image_embed.empty());
 
-                    img_prompt += "Picture " + std::to_string(i + 1) + ": <|vision_start|>";
+                    img_prompt += "Picture " + std::to_string(i) + ": <|vision_start|>";
 
                     int image_embed_idx      = static_cast<int>(tokenizer->encode(img_prompt, nullptr).size());
                     image_embeds.emplace_back(image_embed_idx, image_embed);
