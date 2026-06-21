@@ -127,7 +127,8 @@ static bool sd_version_supports_ref_latent_img_cfg(SDVersion version) {
            sd_version_is_qwen_image(version) ||
            sd_version_is_longcat(version) ||
            sd_version_is_z_image(version) ||
-           sd_version_is_boogu_image(version);
+           sd_version_is_boogu_image(version) ||
+           sd_version_is_ideogram4(version);
 }
 
 static bool sd_version_supports_img_cfg(SDVersion version, bool has_ref_images) {
