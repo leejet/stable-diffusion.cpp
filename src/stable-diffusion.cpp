@@ -635,7 +635,7 @@ public:
                                                                  tensor_storage_map,
                                                                  version,
                                                                  "",
-                                                                 false,
+                                                                 (strlen(SAFE_STR(sd_ctx_params->llm_vision_path)) > 0),
                                                                  model_manager);
                 diffusion_model  = std::make_shared<Ideogram4::Ideogram4Runner>(backend_for(SDBackendModule::DIFFUSION),
                                                                                tensor_storage_map,

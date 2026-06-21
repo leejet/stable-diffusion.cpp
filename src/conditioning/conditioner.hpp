@@ -1918,9 +1918,60 @@ struct LLMEmbedder : public Conditioner {
             prompt_template_encode_start_idx = 0;
             out_layers                       = {1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34, 36};
 
+            // If the loaded LLM has a vision encoder and reference images were provided,
+            // encode images into LLM image-embeds and insert vision placeholders into the prompt.
             prompt = "<|im_start|>user\n";
+            if (llm->enable_vision && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
+                LOG_INFO("Experimental Ideogram4 vision Pipeline");
+                std::string placeholder = "<|image_pad|>";
+                std::string img_prompt;
+
+                int min_pixels = 384 * 384;
+                int max_pixels = 560 * 560;
+
+                for (int i = 0; i < conditioner_params.ref_images->size(); i++) {
+                    const auto& image = (*conditioner_params.ref_images)[i];
+                    double factor     = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
+                    int height        = static_cast<int>(image.shape()[1]);
+                    int width         = static_cast<int>(image.shape()[0]);
+                    int h_bar         = static_cast<int>(std::round(height / factor) * factor);
+                    int w_bar         = static_cast<int>(std::round(width / factor) * factor);
+
+                    if (static_cast<double>(h_bar) * w_bar > max_pixels) {
+                        double beta = std::sqrt((height * width) / static_cast<double>(max_pixels));
+                        h_bar       = std::max(static_cast<int>(factor),
+                                               static_cast<int>(std::floor(height / beta / factor)) * static_cast<int>(factor));
+                        w_bar       = std::max(static_cast<int>(factor),
+                                               static_cast<int>(std::floor(width / beta / factor)) * static_cast<int>(factor));
+                    } else if (static_cast<double>(h_bar) * w_bar < min_pixels) {
+                        double beta = std::sqrt(static_cast<double>(min_pixels) / (height * width));
+                        h_bar       = static_cast<int>(std::ceil(height * beta / factor)) * static_cast<int>(factor);
+                        w_bar       = static_cast<int>(std::ceil(width * beta / factor)) * static_cast<int>(factor);
+                    }
+
+                    auto resized_image = clip_preprocess(image, w_bar, h_bar);
+
+                    auto image_embed = llm->encode_image(n_threads, resized_image, false, true, true);
+                    GGML_ASSERT(!image_embed.empty());
+
+                    img_prompt += "Picture " + std::to_string(i + 1) + ": <|vision_start|>";
+
+                    int image_embed_idx      = static_cast<int>(tokenizer->encode(img_prompt, nullptr).size());
+                    image_embeds.emplace_back(image_embed_idx, image_embed);
+
+                    int64_t num_image_tokens = image_embed.shape()[1];
+                    img_prompt.reserve(img_prompt.size() + static_cast<size_t>(num_image_tokens) * placeholder.size() + 32);
+                    for (int j = 0; j < num_image_tokens; j++) {
+                        img_prompt += placeholder;
+                    }
+                    img_prompt += "<|vision_end|>";
+                }
+
+                prompt += img_prompt;
+            } 
             prompt += conditioner_params.text;
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
+            
             prompt_attn_range = {0, 0};
         } else if (sd_version_is_ernie_image(version)) {
             prompt_template_encode_start_idx = 0;
