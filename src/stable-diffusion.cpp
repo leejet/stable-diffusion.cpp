@@ -1956,6 +1956,18 @@ public:
             }
         }
 
+        if(!guidance_schedule.empty()) {
+            std::string schedule_str = "[";
+            for(size_t i = 0; i < guidance_schedule.size(); ++i) {
+                schedule_str += std::to_string(guidance_schedule[i]);
+                if(i < guidance_schedule.size() - 1) {
+                    schedule_str += ", ";
+                }
+            }
+            schedule_str += "]";
+            LOG_DEBUG("using guidance schedule: %s", schedule_str.c_str());
+        }
+
         sd_sample::SampleCacheRuntime cache_runtime = sd_sample::init_sample_cache_runtime(version,
                                                                                            cache_params,
                                                                                            denoiser.get(),
