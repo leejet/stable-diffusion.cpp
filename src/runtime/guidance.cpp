@@ -6,7 +6,6 @@
 #include <string>
 #include <utility>
 #include <optional>
-#include <charconv>
 
 #include "core/util.h"
 
@@ -84,25 +83,27 @@ namespace sd::guidance {
             auto count_str    = segment.substr(0, x);
             auto guidance_str = segment.substr(x + 1);
 
-            // Use std::from_chars for parsing
-            auto [count_ptr, count_ec] =
-                std::from_chars(count_str.data(),
-                                count_str.data() + count_str.size(),
-                                count);
-
-            if (count_ec != std::errc{} ||
-                count_ptr != count_str.data() + count_str.size()) {
+            // Replaced std::from_chars with std::stoi for Xcode compatibility
+            try {
+                size_t idx = 0;
+                count = std::stoi(count_str, &idx);
+                if (idx != count_str.size()) {
+                    LOG_ERROR("Invalid count in guidance schedule: '%s'", count_str.c_str());
+                    return {};
+                }
+            } catch (const std::exception&) {
                 LOG_ERROR("Invalid count in guidance schedule: '%s'", count_str.c_str());
                 return {};
             }
 
-            auto [guidance_ptr, guidance_ec] =
-                std::from_chars(guidance_str.data(),
-                                guidance_str.data() + guidance_str.size(),
-                                guidance);
-
-            if (guidance_ec != std::errc{} ||
-                guidance_ptr != guidance_str.data() + guidance_str.size()) {
+            try {
+                size_t idx = 0;
+                guidance = std::stof(guidance_str, &idx);
+                if (idx != guidance_str.size()) {
+                    LOG_ERROR("Invalid guidance value in guidance schedule: '%s'", guidance_str.c_str());
+                    return {};
+                }
+            } catch (const std::exception&) {
                 LOG_ERROR("Invalid guidance value in guidance schedule: '%s'", guidance_str.c_str());
                 return {};
             }
