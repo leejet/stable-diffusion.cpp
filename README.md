@@ -50,12 +50,14 @@ API and command-line option may change frequently.***
     - [Ovis-Image](./docs/ovis_image.md)
     - [Anima](./docs/anima.md)
     - [ERNIE-Image](./docs/ernie_image.md)
+    - [Boogu Image](./docs/boogu_image.md)
     - [HiDream-O1-Image](./docs/hidream_o1_image.md)
     - [Ideogram4](./docs/ideogram4.md)
   - Image Edit Models
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
     - [Qwen Image Edit series](./docs/qwen_image_edit.md)
     - [LongCat Image Edit](./docs/longcat_image.md)
+    - [Boogu Image Edit](./docs/boogu_image.md)
   - Video Models
     - [Wan2.1/Wan2.2](./docs/wan.md)
     - [LTX-2.3](./docs/ltx2.md)
