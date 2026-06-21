@@ -1943,14 +1943,14 @@ public:
         bool slg_uncond     = sd::guidance::parse_skip_layer_guidance_uncond_arg(extra_sample_args);
         
         std::vector<float> guidance_schedule = sd::guidance::parse_guidance_schedule(extra_sample_args);
-        if(!guidance_schedule.empty() && guidance_schedule.size() != sigmas.size()) {
+        if(!guidance_schedule.empty() && guidance_schedule.size() != sigmas.size() - 1) {
             if(guidance_schedule.size() > sigmas.size()) {
-                LOG_WARN("guidance_schedule length (%zu) is greater than sigmas length (%zu)", guidance_schedule.size(), sigmas.size());
-                LOG_WARN("truncating guidance_schedule to match sigmas length");
-                guidance_schedule.resize(sigmas.size());
+                LOG_WARN("guidance_schedule length (%zu) is greater than number of steps (%zu)", guidance_schedule.size(), sigmas.size() - 1);
+                LOG_WARN("truncating guidance_schedule to match step count");
+                guidance_schedule.resize(sigmas.size() - 1);
             } else {
                 LOG_INFO("padding guidance_schedule with cfg_scale");
-                while(guidance_schedule.size() < sigmas.size()) {
+                while(guidance_schedule.size() < sigmas.size() - 1) {
                     guidance_schedule.push_back(cfg_scale);
                 }
             }
