@@ -532,7 +532,6 @@ public:
         if (wtype != GGML_TYPE_COUNT || tensor_type_rules.size() > 0) {
             model_loader.set_wtype_override(wtype, tensor_type_rules);
         }
-        model_loader.process_model_files(enable_mmap, true);
 
         std::map<ggml_type, uint32_t> wtype_stat                 = model_loader.get_wtype_stat();
         std::map<ggml_type, uint32_t> conditioner_wtype_stat     = model_loader.get_conditioner_wtype_stat();
@@ -586,9 +585,12 @@ public:
             apply_lora_immediately = false;
         }
 
+        bool needs_writable_mmap = enable_mmap && apply_lora_immediately;
+        model_manager->set_writable_mmap(needs_writable_mmap);
         if (enable_mmap && apply_lora_immediately) {
             LOG_WARN("in mode 'immediately', LoRAs will cause extra memory usage with mmap");
         }
+        model_loader.process_model_files(enable_mmap, needs_writable_mmap);
         load_alphas_cumprod(model_loader);
 
         size_t text_encoder_params_mem_size = 0;
@@ -1941,26 +1943,26 @@ public:
         float img_cfg_scale = guidance.img_cfg;
         float slg_scale     = guidance.slg.scale;
         bool slg_uncond     = sd::guidance::parse_skip_layer_guidance_uncond_arg(extra_sample_args);
-        
+
         std::vector<float> guidance_schedule = sd::guidance::parse_guidance_schedule(extra_sample_args);
-        if(!guidance_schedule.empty() && guidance_schedule.size() != sigmas.size() - 1) {
-            if(guidance_schedule.size() > sigmas.size()) {
+        if (!guidance_schedule.empty() && guidance_schedule.size() != sigmas.size() - 1) {
+            if (guidance_schedule.size() > sigmas.size()) {
                 LOG_WARN("guidance_schedule length (%zu) is greater than number of steps (%zu)", guidance_schedule.size(), sigmas.size() - 1);
                 LOG_WARN("truncating guidance_schedule to match step count");
                 guidance_schedule.resize(sigmas.size() - 1);
             } else {
                 LOG_INFO("padding guidance_schedule with cfg_scale");
-                while(guidance_schedule.size() < sigmas.size() - 1) {
+                while (guidance_schedule.size() < sigmas.size() - 1) {
                     guidance_schedule.push_back(cfg_scale);
                 }
             }
         }
 
-        if(!guidance_schedule.empty()) {
+        if (!guidance_schedule.empty()) {
             std::string schedule_str = "[";
-            for(size_t i = 0; i < guidance_schedule.size(); ++i) {
+            for (size_t i = 0; i < guidance_schedule.size(); ++i) {
                 schedule_str += std::to_string(guidance_schedule[i]);
-                if(i < guidance_schedule.size() - 1) {
+                if (i < guidance_schedule.size() - 1) {
                     schedule_str += ", ";
                 }
             }
@@ -2208,9 +2210,7 @@ public:
             guidance_input.pred_uncond     = uncond_out.empty() ? nullptr : &uncond_out;
             guidance_input.pred_img_uncond = img_uncond_out.empty() ? nullptr : &img_uncond_out;
 
-            sd::guidance::GuiderOutput guided =  guidance_schedule.empty()? 
-                                            primary_guidance.forward(guidance_input, {}):
-                                            primary_guidance.forward(guidance_input, {}, guidance_schedule[guidance_schedule.size() - 1 - step]);
+            sd::guidance::GuiderOutput guided = guidance_schedule.empty() ? primary_guidance.forward(guidance_input, {}) : primary_guidance.forward(guidance_input, {}, guidance_schedule[guidance_schedule.size() - 1 - step]);
             if (guided.pred.empty()) {
                 return {};
             }
