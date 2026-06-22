@@ -728,7 +728,7 @@ struct LogitNormalScheduler : SigmaScheduler {
         return x;
     }
 
-    std::vector<float> get_sigmas(uint32_t n, float /*sigma_min*/, float /*sigma_max*/, t_to_sigma_t t_to_sigma) override {
+    std::vector<float> get_sigmas(uint32_t n, float /*sigma_min*/, float /*sigma_max*/, t_to_sigma_t /*t_to_sigma*/) override {
         std::vector<float> sigmas;
         LOG_INFO("LOGIT_NORMAL_SCHEDULER using mean=%.4f, std=%.4f, logsnr_min=%.4f, logsnr_max=%.4f", mean, std, logsnr_min, logsnr_max);
         sigmas.reserve(n + 1);
@@ -747,11 +747,7 @@ struct LogitNormalScheduler : SigmaScheduler {
             if (timestep < one_minus_t_max)
                 timestep = one_minus_t_max;
 
-            // which one is corrrect ?
             float sigma = timestep;
-            // float sigma = t_to_sigma(timestep * TIMESTEPS);
-            // float sigma = t_to_sigma(timestep * (TIMESTEPS - 1));
-            // float sigma = t_to_sigma(timestep * TIMESTEPS - 1);
 
             sigmas.push_back(sigma);
         }
