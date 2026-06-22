@@ -261,15 +261,15 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                         invalid_arg = true;
                         return;
                     }
-                    if(option.concat && !option.target->empty()){
-                        if(option.concat > 0 && option.concat <= 0xff){
+                    if (option.concat && !option.target->empty()) {
+                        if (option.concat > 0 && option.concat <= 0xff) {
                             *option.target += static_cast<char>(option.concat);
                         }
                         *option.target += argv_to_utf8(i, argv);
                     } else {
                         *option.target = argv_to_utf8(i, argv);
                     }
-                    found_arg      = true;
+                    found_arg = true;
                 }))
                 break;
 

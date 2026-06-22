@@ -480,7 +480,7 @@ bool ModelManager::mmap_params(const std::vector<TensorState*>& states,
         return true;
     }
 
-    auto mmap_store = model_loader_.mmap_tensors(mmap_candidates, {}, true);
+    auto mmap_store = model_loader_.mmap_tensors(mmap_candidates, {}, writable_mmap_);
     if (mmap_store.empty()) {
         return true;
     }

@@ -3,8 +3,8 @@
 
 #include <cstddef>
 #include <functional>
-#include <vector>
 #include <optional>
+#include <vector>
 
 #include "core/tensor.hpp"
 
@@ -42,7 +42,7 @@ namespace sd::guidance {
 
     class BaseGuidance {
     public:
-        virtual ~BaseGuidance()                                   = default;
+        virtual ~BaseGuidance()                                                                = default;
         virtual GuiderOutput forward(const GuidanceInput& input,
                                      GuiderOutput previous,
                                      std::optional<float> scale_override = std::nullopt) const = 0;

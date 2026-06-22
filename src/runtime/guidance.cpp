@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <optional>
 #include <string>
 #include <utility>
-#include <optional>
 
 #include "core/util.h"
 
@@ -127,7 +127,7 @@ namespace sd::guidance {
     std::vector<float> parse_guidance_schedule(const char* extra_sample_args) {
         std::vector<float> guidance_schedule;
         std::string guidance_schedule_str = "";
-         for (const auto& [key, value] : parse_key_value_args(extra_sample_args, "extra sample arg")) {
+        for (const auto& [key, value] : parse_key_value_args(extra_sample_args, "extra sample arg")) {
             float parsed = 0.0f;
             if (key == "guidance_schedule") {
                 guidance_schedule_str = value;
@@ -148,9 +148,9 @@ namespace sd::guidance {
 
     GuiderOutput ClassifierFreeGuidance::forward(const GuidanceInput& input,
                                                  GuiderOutput previous,
-                                                std::optional<float> scale_override) const {
+                                                 std::optional<float> scale_override) const {
         (void)previous;
-        float guidance_scale       = scale_override.value_or(guidance_scale_);
+        float guidance_scale = scale_override.value_or(guidance_scale_);
 
         GuiderOutput output;
         if (!has_tensor(input.pred_cond)) {
@@ -210,7 +210,7 @@ namespace sd::guidance {
                                                     GuiderOutput previous,
                                                     std::optional<float> scale_override) const {
         (void)previous;
-        float guidance_scale       = scale_override.value_or(guidance_scale_);
+        float guidance_scale = scale_override.value_or(guidance_scale_);
 
         GuiderOutput output;
         if (!has_tensor(input.pred_cond)) {
