@@ -1518,7 +1518,7 @@ struct LLMEmbedder : public Conditioner {
             arch = LLM::LLMArch::GPT_OSS_20B;
         } else if (sd_version_is_pid(version)) {
             arch = LLM::LLMArch::GEMMA2_2B;
-        } else if (sd_version_is_ideogram4(version)) {
+        } else if (sd_version_is_ideogram4(version) || sd_version_is_boogu_image(version)) {
             arch = LLM::LLMArch::QWEN3_VL;
         } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
             arch = LLM::LLMArch::QWEN3;
@@ -1777,6 +1777,65 @@ struct LLMEmbedder : public Conditioner {
                 prompt_attn_range.second = static_cast<int>(prompt.size());
 
                 prompt += "<|im_end|>\n<|im_start|>assistant\n";
+            }
+        } else if (sd_version_is_boogu_image(version)) {
+            prompt_template_encode_start_idx = 0;
+
+            const std::string t2i_system_prompt =
+                "You are a helpful assistant that generates high-quality images based on user instructions. The instructions are as follows.";
+            const std::string edit_system_prompt =
+                "Describe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.";
+            const bool has_ref_images = llm->enable_vision && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty();
+            const bool text_empty     = conditioner_params.text.find_first_not_of(" \t\r\n") == std::string::npos;
+
+            if (has_ref_images) {
+                LOG_INFO("BooguImageEditPipeline");
+                const std::string prompt_prefix = "<|im_start|>system\n" + edit_system_prompt + "<|im_end|>\n<|im_start|>user\n";
+                std::string img_prompt;
+                const std::string placeholder = "<|image_pad|>";
+
+                for (int i = 0; i < conditioner_params.ref_images->size(); i++) {
+                    const auto& image = (*conditioner_params.ref_images)[i];
+                    double factor     = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
+                    int height        = static_cast<int>(image.shape()[1]);
+                    int width         = static_cast<int>(image.shape()[0]);
+                    double beta       = std::sqrt((384.0 * 384.0) / (static_cast<double>(height) * static_cast<double>(width)));
+                    int h_bar         = std::max(static_cast<int>(factor),
+                                                 static_cast<int>(std::round(height * beta / factor)) * static_cast<int>(factor));
+                    int w_bar         = std::max(static_cast<int>(factor),
+                                                 static_cast<int>(std::round(width * beta / factor)) * static_cast<int>(factor));
+
+                    LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
+
+                    auto resized_image = clip_preprocess(image, w_bar, h_bar);
+                    auto image_embed   = llm->encode_image(n_threads, resized_image, false, true, true);
+                    GGML_ASSERT(!image_embed.empty());
+
+                    std::string image_prefix = prompt_prefix + img_prompt + "<|vision_start|>";
+                    int image_embed_idx      = static_cast<int>(tokenizer->encode(image_prefix, nullptr).size());
+                    image_embeds.emplace_back(image_embed_idx, image_embed);
+
+                    img_prompt += "<|vision_start|>";
+                    int64_t num_image_tokens = image_embed.shape()[1];
+                    img_prompt.reserve(img_prompt.size() + static_cast<size_t>(num_image_tokens) * placeholder.size() + 32);
+                    for (int j = 0; j < num_image_tokens; j++) {
+                        img_prompt += placeholder;
+                    }
+                    img_prompt += "<|vision_end|>";
+                }
+
+                prompt                  = prompt_prefix + img_prompt;
+                prompt_attn_range.first = static_cast<int>(prompt.size());
+                prompt += conditioner_params.text;
+                prompt_attn_range.second = static_cast<int>(prompt.size());
+                prompt += "<|im_end|>\n";
+            } else {
+                const std::string& system_prompt = text_empty ? edit_system_prompt : t2i_system_prompt;
+                prompt                           = "<|im_start|>system\n" + system_prompt + "<|im_end|>\n<|im_start|>user\n";
+                prompt_attn_range.first          = static_cast<int>(prompt.size());
+                prompt += conditioner_params.text;
+                prompt_attn_range.second = static_cast<int>(prompt.size());
+                prompt += "<|im_end|>\n";
             }
         } else if (sd_version_is_longcat(version)) {
             spell_quotes = true;
