@@ -1941,6 +1941,32 @@ public:
         float img_cfg_scale = guidance.img_cfg;
         float slg_scale     = guidance.slg.scale;
         bool slg_uncond     = sd::guidance::parse_skip_layer_guidance_uncond_arg(extra_sample_args);
+        
+        std::vector<float> guidance_schedule = sd::guidance::parse_guidance_schedule(extra_sample_args);
+        if(!guidance_schedule.empty() && guidance_schedule.size() != sigmas.size() - 1) {
+            if(guidance_schedule.size() > sigmas.size()) {
+                LOG_WARN("guidance_schedule length (%zu) is greater than number of steps (%zu)", guidance_schedule.size(), sigmas.size() - 1);
+                LOG_WARN("truncating guidance_schedule to match step count");
+                guidance_schedule.resize(sigmas.size() - 1);
+            } else {
+                LOG_INFO("padding guidance_schedule with cfg_scale");
+                while(guidance_schedule.size() < sigmas.size() - 1) {
+                    guidance_schedule.push_back(cfg_scale);
+                }
+            }
+        }
+
+        if(!guidance_schedule.empty()) {
+            std::string schedule_str = "[";
+            for(size_t i = 0; i < guidance_schedule.size(); ++i) {
+                schedule_str += std::to_string(guidance_schedule[i]);
+                if(i < guidance_schedule.size() - 1) {
+                    schedule_str += ", ";
+                }
+            }
+            schedule_str += "]";
+            LOG_DEBUG("using guidance schedule: %s", schedule_str.c_str());
+        }
 
         sd_sample::SampleCacheRuntime cache_runtime = sd_sample::init_sample_cache_runtime(version,
                                                                                            cache_params,
@@ -2182,7 +2208,9 @@ public:
             guidance_input.pred_uncond     = uncond_out.empty() ? nullptr : &uncond_out;
             guidance_input.pred_img_uncond = img_uncond_out.empty() ? nullptr : &img_uncond_out;
 
-            sd::guidance::GuiderOutput guided = primary_guidance.forward(guidance_input, {});
+            sd::guidance::GuiderOutput guided =  guidance_schedule.empty()? 
+                                            primary_guidance.forward(guidance_input, {}):
+                                            primary_guidance.forward(guidance_input, {}, guidance_schedule[guidance_schedule.size() - 1 - step]);
             if (guided.pred.empty()) {
                 return {};
             }
