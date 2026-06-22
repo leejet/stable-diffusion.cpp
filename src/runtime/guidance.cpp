@@ -68,43 +68,42 @@ namespace sd::guidance {
         std::vector<float> schedule;
 
         while (!spec.empty()) {
-            auto sep   = spec.find('+');
+            auto sep     = spec.find('+');
             auto segment = spec.substr(0, sep);
 
             auto x = segment.find('x');
             if (x == std::string::npos) {
-                LOG_ERROR("Invalid guidance schedule segment: '%s' (expected <count>x<guidance>)", segment.c_str());
+                LOG_ERROR("Invalid guidance schedule segment: '%s' (expected <guidance>x<count>)", segment.c_str());
                 return {};
             }
 
-            int count;
             float guidance;
+            int count;
 
-            auto count_str    = segment.substr(0, x);
-            auto guidance_str = segment.substr(x + 1);
-
-            // Replaced std::from_chars with std::stoi for Xcode compatibility
-            try {
-                size_t idx = 0;
-                count = std::stoi(count_str, &idx);
-                if (idx != count_str.size()) {
-                    LOG_ERROR("Invalid count in guidance schedule: '%s'", count_str.c_str());
-                    return {};
-                }
-            } catch (const std::exception&) {
-                LOG_ERROR("Invalid count in guidance schedule: '%s'", count_str.c_str());
-                return {};
-            }
+            auto guidance_str = segment.substr(0, x);
+            auto count_str    = segment.substr(x + 1);
 
             try {
                 size_t idx = 0;
-                guidance = std::stof(guidance_str, &idx);
+                guidance   = std::stof(guidance_str, &idx);
                 if (idx != guidance_str.size()) {
                     LOG_ERROR("Invalid guidance value in guidance schedule: '%s'", guidance_str.c_str());
                     return {};
                 }
             } catch (const std::exception&) {
                 LOG_ERROR("Invalid guidance value in guidance schedule: '%s'", guidance_str.c_str());
+                return {};
+            }
+
+            try {
+                size_t idx = 0;
+                count      = std::stoi(count_str, &idx);
+                if (idx != count_str.size()) {
+                    LOG_ERROR("Invalid count in guidance schedule: '%s'", count_str.c_str());
+                    return {};
+                }
+            } catch (const std::exception&) {
+                LOG_ERROR("Invalid count in guidance schedule: '%s'", count_str.c_str());
                 return {};
             }
 
@@ -119,7 +118,6 @@ namespace sd::guidance {
                 break;
             }
 
-            // Use substr to remove the processed part
             spec = spec.substr(sep + 1);
         }
 
