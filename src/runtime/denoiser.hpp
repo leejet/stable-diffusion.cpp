@@ -571,13 +571,19 @@ struct Denoiser {
     virtual sd::Tensor<float> inverse_noise_scaling(float sigma,
                                                     const sd::Tensor<float>& latent) = 0;
 
+    virtual float apply_shift_warp(float sigma) {
+        return sigma;
+    }
+
     virtual std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler_type, SDVersion version, const char* extra_sample_args = nullptr) {
         auto bound_t_to_sigma = std::bind(&Denoiser::t_to_sigma, this, std::placeholders::_1);
         std::shared_ptr<SigmaScheduler> scheduler;
+        bool shifted_scheduler = false;
         switch (scheduler_type) {
             case DISCRETE_SCHEDULER:
                 LOG_INFO("get_sigmas with discrete scheduler");
                 scheduler = std::make_shared<DiscreteScheduler>();
+                shifted_scheduler = true;
                 break;
             case KARRAS_SCHEDULER:
                 LOG_INFO("get_sigmas with Karras scheduler");
@@ -598,14 +604,17 @@ struct Denoiser {
             case SGM_UNIFORM_SCHEDULER:
                 LOG_INFO("get_sigmas with SGM Uniform scheduler");
                 scheduler = std::make_shared<SGMUniformScheduler>();
+                shifted_scheduler = true;
                 break;
             case SIMPLE_SCHEDULER:
                 LOG_INFO("get_sigmas with Simple scheduler");
                 scheduler = std::make_shared<SimpleScheduler>();
+                shifted_scheduler = true;
                 break;
             case SMOOTHSTEP_SCHEDULER:
                 LOG_INFO("get_sigmas with SmoothStep scheduler");
                 scheduler = std::make_shared<SmoothStepScheduler>();
+                shifted_scheduler = true;
                 break;
             case BONG_TANGENT_SCHEDULER:
                 LOG_INFO("get_sigmas with bong_tangent scheduler");
@@ -618,6 +627,7 @@ struct Denoiser {
             case LCM_SCHEDULER:
                 LOG_INFO("get_sigmas with LCM scheduler");
                 scheduler = std::make_shared<LCMScheduler>();
+                shifted_scheduler = true;
                 break;
             case LTX2_SCHEDULER:
                 LOG_INFO("get_sigmas with LTX2 scheduler");
@@ -628,7 +638,14 @@ struct Denoiser {
                 scheduler = std::make_shared<DiscreteScheduler>();
                 break;
         }
-        return scheduler->get_sigmas(n, sigma_min(), sigma_max(), bound_t_to_sigma);
+        std::vector<float> sigmas = scheduler->get_sigmas(n, sigma_min(), sigma_max(), bound_t_to_sigma);
+
+        if (!shifted_scheduler) {
+            for (size_t i = 0; i < sigmas.size() - 1; ++i) {
+                sigmas[i] = apply_shift_warp(sigmas[i]);
+            }
+        }
+        return sigmas;
     }
 };
 
@@ -763,6 +780,10 @@ struct DiscreteFlowDenoiser : public Denoiser {
     float sigma_to_t(float sigma) override {
         return sigma * 1000.f;
     }
+    
+    float apply_shift_warp(float sigma) override {
+        return time_snr_shift(shift, sigma);
+    }
 
     float t_to_sigma(float t) override {
         t = t + 1;
@@ -798,9 +819,13 @@ struct FluxFlowDenoiser : public DiscreteFlowDenoiser {
         return sigma;
     }
 
+    float apply_shift_warp(float sigma) override {
+        return flux_time_shift(shift, 1.0f, sigma);
+    }
+
     float t_to_sigma(float t) override {
         t = t + 1;
-        return flux_time_shift(shift, 1.0f, t / TIMESTEPS);
+        return apply_shift_warp(t / TIMESTEPS);
     }
 };
 
