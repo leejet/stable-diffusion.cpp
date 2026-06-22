@@ -497,6 +497,10 @@ ArgOptions SDContextParams::get_options() {
          "enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram; defaults to false)",
          true, &stream_layers},
         {"",
+         "--eager-load",
+         "load all params into the params backend at model-load time instead of lazily on first use (defaults to false)",
+         true, &eager_load},
+        {"",
          "--force-sdxl-vae-conv-scale",
          "force use of conv scale on sdxl vae",
          true, &force_sdxl_vae_conv_scale},
@@ -799,6 +803,7 @@ std::string SDContextParams::to_string() const {
         << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
         << "  max_vram: \"" << max_vram << "\",\n"
         << "  stream_layers: " << (stream_layers ? "true" : "false") << ",\n"
+        << "  eager_load: " << (eager_load ? "true" : "false") << ",\n"
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
         << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
@@ -878,6 +883,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.vae_format                      = str_to_vae_format(vae_format);
     sd_ctx_params.max_vram                        = max_vram.c_str();
     sd_ctx_params.stream_layers                   = stream_layers;
+    sd_ctx_params.eager_load                      = eager_load;
     sd_ctx_params.backend                         = effective_backend.c_str();
     sd_ctx_params.params_backend                  = effective_params_backend.c_str();
     sd_ctx_params.rpc_servers                     = rpc_servers.c_str();

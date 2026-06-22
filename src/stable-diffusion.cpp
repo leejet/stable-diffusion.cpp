@@ -199,6 +199,7 @@ public:
     bool enable_mmap                     = false;
     sd::ggml_graph_cut::MaxVramAssignment max_vram_assignment;
     bool stream_layers = false;
+    bool eager_load    = false;
     std::string backend_spec;
     std::string params_backend_spec;
 
@@ -342,6 +343,7 @@ public:
         n_threads           = sd_ctx_params->n_threads;
         enable_mmap         = sd_ctx_params->enable_mmap;
         stream_layers       = sd_ctx_params->stream_layers;
+        eager_load          = sd_ctx_params->eager_load;
         backend_spec        = SAFE_STR(sd_ctx_params->backend);
         params_backend_spec = SAFE_STR(sd_ctx_params->params_backend);
         max_vram_assignment.reset(0.f);
@@ -1153,7 +1155,15 @@ public:
             return false;
         }
 
-        LOG_DEBUG("model metadata validated; weights will be prepared lazily");
+        if (eager_load) {
+            if (!model_manager->load_all_params_eagerly()) {
+                LOG_ERROR("model params eager load failed");
+                return false;
+            }
+            LOG_DEBUG("model metadata validated; weights pre-loaded to params backend");
+        } else {
+            LOG_DEBUG("model metadata validated; weights will be prepared lazily");
+        }
 
         {
             size_t total_params_ram_size  = 0;
@@ -2696,6 +2706,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->lora_apply_mode      = LORA_APPLY_AUTO;
     sd_ctx_params->max_vram             = nullptr;
     sd_ctx_params->stream_layers        = false;
+    sd_ctx_params->eager_load           = false;
     sd_ctx_params->enable_mmap          = false;
     sd_ctx_params->diffusion_flash_attn = false;
     sd_ctx_params->circular_x           = false;
@@ -2742,6 +2753,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "prediction: %s\n"
              "max_vram: %s\n"
              "stream_layers: %s\n"
+             "eager_load: %s\n"
              "backend: %s\n"
              "params_backend: %s\n"
              "flash_attn: %s\n"
@@ -2777,6 +2789,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              sd_prediction_name(sd_ctx_params->prediction),
              SAFE_STR(sd_ctx_params->max_vram),
              BOOL_STR(sd_ctx_params->stream_layers),
+             BOOL_STR(sd_ctx_params->eager_load),
              SAFE_STR(sd_ctx_params->backend),
              SAFE_STR(sd_ctx_params->params_backend),
              BOOL_STR(sd_ctx_params->flash_attn),
