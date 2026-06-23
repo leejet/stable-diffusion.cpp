@@ -26,6 +26,7 @@
 #include "model/diffusion/flux.hpp"
 #include "model/diffusion/hidream_o1.hpp"
 #include "model/diffusion/ideogram4.hpp"
+#include "model/diffusion/krea2.hpp"
 #include "model/diffusion/lens.hpp"
 #include "model/diffusion/ltxv.hpp"
 #include "model/diffusion/mmdit.hpp"
@@ -95,6 +96,7 @@ const char* model_version_to_str[] = {
     "Longcat-Image",
     "PiD",
     "Ideogram 4",
+    "Krea2",
     "ESRGAN",
 };
 
@@ -645,6 +647,17 @@ public:
                                                                                tensor_storage_map,
                                                                                "model.diffusion_model",
                                                                                model_manager);
+            } else if (sd_version_is_krea2(version)) {
+                cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
+                                                                 tensor_storage_map,
+                                                                 version,
+                                                                 "",
+                                                                 false,
+                                                                 model_manager);
+                diffusion_model  = std::make_shared<Krea2::Krea2Runner>(backend_for(SDBackendModule::DIFFUSION),
+                                                                       tensor_storage_map,
+                                                                       "model.diffusion_model",
+                                                                       model_manager);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
                 for (auto pair : tensor_storage_map) {
@@ -881,6 +894,7 @@ public:
             auto create_tae = [&](bool decode_only) -> std::shared_ptr<VAE> {
                 if (sd_version_is_wan(version) ||
                     sd_version_is_qwen_image(version) ||
+                    sd_version_is_krea2(version) ||
                     sd_version_is_anima(version) ||
                     sd_version_is_ltxav(version)) {
                     return std::make_shared<TinyVideoAutoEncoder>(backend_for(SDBackendModule::VAE),
@@ -921,6 +935,7 @@ public:
                                                          model_manager);
                 } else if (sd_version_is_wan(version) ||
                            sd_version_is_qwen_image(version) ||
+                           sd_version_is_krea2(version) ||
                            sd_version_is_anima(version)) {
                     return std::make_shared<WAN::WanVAERunner>(backend_for(SDBackendModule::VAE),
                                                                tensor_storage_map,
@@ -1267,7 +1282,8 @@ public:
                 } else if (sd_version_is_flux(version) ||
                            sd_version_is_longcat(version) ||
                            sd_version_is_lens(version) ||
-                           sd_version_is_ltxav(version)) {
+                           sd_version_is_ltxav(version) ||
+                           sd_version_is_krea2(version)) {
                     pred_type = FLUX_FLOW_PRED;
 
                     default_flow_shift = 1.0f;  // TODO: validate
@@ -1283,6 +1299,8 @@ public:
                         default_flow_shift = 1.83f;
                     } else if (sd_version_is_ltxav(version)) {
                         default_flow_shift = 2.37f;
+                    } else if (sd_version_is_krea2(version)) {
+                        default_flow_shift = 1.15f;
                     }
                 } else if (sd_version_is_flux2(version)) {
                     pred_type = FLUX2_FLOW_PRED;
@@ -1724,7 +1742,7 @@ public:
                 } else if (sd_version_uses_flux_vae(version)) {
                     latent_rgb_proj = flux_latent_rgb_proj;
                     latent_rgb_bias = flux_latent_rgb_bias;
-                } else if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_anima(version)) {
+                } else if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_anima(version) || sd_version_is_krea2(version)) {
                     latent_rgb_proj = wan_21_latent_rgb_proj;
                     latent_rgb_bias = wan_21_latent_rgb_bias;
                 } else {
