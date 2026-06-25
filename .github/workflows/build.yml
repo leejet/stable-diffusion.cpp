@@ -511,8 +511,6 @@ jobs:
             -DSD_BUILD_SHARED_LIBS=ON `
             -DGGML_NATIVE=OFF `
             -DSD_BUILD_SHARED_GGML_LIB=ON `
-            -DGGML_BACKEND_DL=ON `
-            -DGGML_CPU_ALL_VARIANTS=ON `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang++.exe" `
             -DCMAKE_HIP_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
@@ -642,8 +640,6 @@ jobs:
             -DSD_BUILD_SHARED_LIBS=ON `
             -DGGML_NATIVE=OFF `
             -DSD_BUILD_SHARED_GGML_LIB=ON `
-            -DGGML_BACKEND_DL=ON `
-            -DGGML_CPU_ALL_VARIANTS=ON `
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON `
             -DCMAKE_INSTALL_RPATH='$ORIGIN' `
             -DCMAKE_C_COMPILER=clang `
