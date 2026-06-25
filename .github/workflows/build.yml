@@ -519,24 +519,7 @@ jobs:
             -DHIP_PATH="${env:HIP_PATH}" `
             -DCMAKE_BUILD_TYPE=Release `
             -DGPU_TARGETS="${{ env.GPU_TARGETS }}"
-          cmake --build . --config Release --parallel 1 --verbose 2>&1 | Tee-Object -FilePath build.log
-          $buildExitCode = $LASTEXITCODE
-          if ($buildExitCode -ne 0) {
-            Write-Host "Build failed. First matching error context from build.log:"
-            Select-String -Path build.log -Pattern 'error:|fatal error|FAILED:|No space left|Access is denied|undefined reference|unresolved external|LNK[0-9]+|C[0-9]{4}' -Context 5,8 | Select-Object -First 80
-            exit $buildExitCode
-          }
-
-      - name: Upload build logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-therock-rocm-build-logs
-          path: |
-            build/build.log
-            build/CMakeFiles/CMakeOutput.log
-            build/CMakeFiles/CMakeError.log
-          if-no-files-found: ignore
+          cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
 
       - name: Get commit hash
         id: commit
@@ -667,24 +650,7 @@ jobs:
             -DCMAKE_CXX_COMPILER=clang++ `
             -DCMAKE_BUILD_TYPE=Release `
             -DGPU_TARGETS="${{ env.GPU_TARGETS }}"
-          cmake --build . --config Release --parallel 1 --verbose 2>&1 | Tee-Object -FilePath build.log
-          $buildExitCode = $LASTEXITCODE
-          if ($buildExitCode -ne 0) {
-            Write-Host "Build failed. First matching error context from build.log:"
-            Select-String -Path build.log -Pattern 'error:|fatal error|FAILED:|No space left|Access is denied|undefined reference|unresolved external|LNK[0-9]+|C[0-9]{4}' -Context 5,8 | Select-Object -First 80
-            exit $buildExitCode
-          }
-
-      - name: Upload build logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-hip-sdk-build-logs
-          path: |
-            build/build.log
-            build/CMakeFiles/CMakeOutput.log
-            build/CMakeFiles/CMakeError.log
-          if-no-files-found: ignore
+          cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
 
       - name: Get commit hash
         id: commit
