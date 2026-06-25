@@ -707,6 +707,25 @@ jobs:
         run: |
           sudo apt install -y build-essential cmake wget zip ninja-build
 
+      - name: Free disk space
+        run: |
+          df -h
+
+          # Remove preinstalled SDKs and caches not needed for this job before
+          # installing ROCm. The legacy ROCm apt packages are large enough to
+          # exhaust ubuntu-latest if cleanup runs after installation.
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo rm -rf /opt/hostedtoolcache || true
+          sudo rm -rf /usr/share/swift || true
+          sudo rm -rf /usr/local/share/boost || true
+          docker system prune -af || true
+
+          sudo apt clean
+          df -h
+
       - name: Setup Legacy ROCm
         if: matrix.ROCM_VERSION == '7.2.1'
         id: legacy_env
@@ -727,19 +746,6 @@ jobs:
 
           sudo apt update
           sudo apt-get install -y libssl-dev rocm-hip-sdk
-
-      - name: Free disk space
-        run: |
-          # Remove preinstalled SDKs and caches not needed for this job
-          sudo rm -rf /usr/share/dotnet || true
-          sudo rm -rf /usr/local/lib/android || true
-          sudo rm -rf /opt/ghc || true
-          sudo rm -rf /usr/local/.ghcup || true
-          sudo rm -rf /opt/hostedtoolcache || true
-
-          # Remove old package lists and caches
-          sudo rm -rf /var/lib/apt/lists/* || true
-          sudo apt clean
 
       - name: Setup TheRock
         if: matrix.ROCM_VERSION != '7.2.1'
