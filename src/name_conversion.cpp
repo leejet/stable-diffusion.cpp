@@ -743,7 +743,7 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_diffusers_unet_to_original_sdxl(name);
     } else if (sd_version_is_sd3(version)) {
         name = convert_diffusers_dit_to_original_sd3(name);
-    } else if (sd_version_is_flux(version) || sd_version_is_flux2(version) || sd_version_is_longcat(version)) {
+    } else if (sd_version_is_flux(version) || sd_version_is_flux2(version) || sd_version_is_longcat(version) || sd_version_is_sefi_image(version)) {
         name = convert_diffusers_dit_to_original_flux(name);
     } else if (sd_version_is_z_image(version)) {
         name = convert_diffusers_dit_to_original_lumina2(name);
