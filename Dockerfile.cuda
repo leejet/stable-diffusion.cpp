@@ -26,12 +26,12 @@ ARG GGML_CUDA_FA_ALL_QUANTS=""
 ARG GGML_CUDA_ENABLE_DYNAMIC_CPU_BACKENDS=ON
 
 RUN set -- \
-        -DSD_CUDA=ON \
-        -DSD_BUILD_SHARED_LIBS=ON \
-        -DGGML_NATIVE=OFF \
-        -DSD_BUILD_SHARED_GGML_LIB=ON; \
+        -DSD_CUDA=ON; \
     if [ "${GGML_CUDA_ENABLE_DYNAMIC_CPU_BACKENDS}" = "ON" ]; then \
         set -- "$@" \
+            -DSD_BUILD_SHARED_LIBS=ON \
+            -DGGML_NATIVE=OFF \
+            -DSD_BUILD_SHARED_GGML_LIB=ON \
             -DGGML_BACKEND_DL=ON \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
