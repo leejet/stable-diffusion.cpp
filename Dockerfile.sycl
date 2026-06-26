@@ -21,12 +21,23 @@ WORKDIR /sd.cpp
 COPY . .
 
 RUN mkdir build && cd build && \
-    cmake .. -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DSD_SYCL=ON -DCMAKE_BUILD_TYPE=Release && \
+    cmake .. -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx \
+        -DSD_SYCL=ON \
+        -DSD_BUILD_SHARED_LIBS=ON \
+        -DGGML_NATIVE=OFF \
+        -DSD_BUILD_SHARED_GGML_LIB=ON \
+        -DGGML_BACKEND_DL=ON \
+        -DGGML_CPU_ALL_VARIANTS=ON \
+        -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+        -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+        -DCMAKE_BUILD_TYPE=Release && \
     cmake --build . --config Release -j$(nproc)
 
 FROM intel/oneapi-basekit:${SYCL_VERSION}-devel-ubuntu24.04 AS runtime
 
-COPY --from=build /sd.cpp/build/bin/sd-cli /sd-cli
-COPY --from=build /sd.cpp/build/bin/sd-server /sd-server
+COPY --from=build /sd.cpp/build/bin /sd.cpp/bin
+RUN printf '#!/bin/sh\nexec /sd.cpp/bin/sd-cli "$@"\n' > /sd-cli && \
+    printf '#!/bin/sh\nexec /sd.cpp/bin/sd-server "$@"\n' > /sd-server && \
+    chmod +x /sd-cli /sd-server
 
 ENTRYPOINT [ "/sd-cli" ]
