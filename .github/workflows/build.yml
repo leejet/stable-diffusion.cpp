@@ -207,6 +207,7 @@ jobs:
               UBUNTU_VERSION=24.04
               CUDA_ARCHITECTURES=121
               GGML_CUDA_FA_ALL_QUANTS=ON
+              GGML_CUDA_ENABLE_DYNAMIC_CPU_BACKENDS=OFF
 
     env:
       REGISTRY: ghcr.io

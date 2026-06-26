@@ -23,18 +23,27 @@ COPY . .
 ARG CUDACXX=/usr/local/cuda/bin/nvcc
 ARG CUDA_ARCHITECTURES=""
 ARG GGML_CUDA_FA_ALL_QUANTS=""
+ARG GGML_CUDA_ENABLE_DYNAMIC_CPU_BACKENDS=ON
 
-RUN cmake . -B ./build \
-    -DSD_CUDA=ON \
-    -DSD_BUILD_SHARED_LIBS=ON \
-    -DGGML_NATIVE=OFF \
-    -DSD_BUILD_SHARED_GGML_LIB=ON \
-    -DGGML_BACKEND_DL=ON \
-    -DGGML_CPU_ALL_VARIANTS=ON \
-    -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-    -DCMAKE_INSTALL_RPATH='$ORIGIN' \
-    ${CUDA_ARCHITECTURES:+-DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}"} \
-    ${GGML_CUDA_FA_ALL_QUANTS:+-DGGML_CUDA_FA_ALL_QUANTS=${GGML_CUDA_FA_ALL_QUANTS}}
+RUN set -- \
+        -DSD_CUDA=ON; \
+    if [ "${GGML_CUDA_ENABLE_DYNAMIC_CPU_BACKENDS}" = "ON" ]; then \
+        set -- "$@" \
+            -DSD_BUILD_SHARED_LIBS=ON \
+            -DGGML_NATIVE=OFF \
+            -DSD_BUILD_SHARED_GGML_LIB=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            "-DCMAKE_INSTALL_RPATH=\$ORIGIN"; \
+    fi; \
+    if [ -n "${CUDA_ARCHITECTURES}" ]; then \
+        set -- "$@" "-DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES}"; \
+    fi; \
+    if [ -n "${GGML_CUDA_FA_ALL_QUANTS}" ]; then \
+        set -- "$@" "-DGGML_CUDA_FA_ALL_QUANTS=${GGML_CUDA_FA_ALL_QUANTS}"; \
+    fi; \
+    cmake . -B ./build "$@"
 RUN cmake --build ./build --config Release -j$(nproc)
 
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu${UBUNTU_VERSION} AS runtime
