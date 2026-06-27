@@ -905,10 +905,16 @@ std::string convert_diffusers_to_original_wan_vae(std::string name) {
         {".conv2.", ".6."},
     };
 
-    replace_with_name_map(name, resnet_name_map);
     replace_with_name_map(name, shared_name_map);
     replace_with_prefix_map(name, prefix_map);
 
+    // Only apply the ResNet-specific renaming if the tensor belongs to a ResNet block.
+    // This prevents generic ".conv1." or ".conv2." matching on top-level encoder/decoder convolutions.
+    if (name.find(".residual.") != std::string::npos) {
+        replace_with_name_map(name, resnet_name_map);
+    }
+    
+    
     return name;
 }
 
