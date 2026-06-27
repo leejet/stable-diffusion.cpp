@@ -850,7 +850,7 @@ std::string convert_diffusers_vae_to_original_sd1(std::string name) {
     return result;
 }
 
-std::string convert_original_qwen_to_comfy(std::string name) {
+std::string convert_diffusers_to_original_wan_vae(std::string name) {
     static const std::vector<std::pair<std::string, std::string>> prefix_map = {
         {"quant_conv.", "conv1."},
         {"post_quant_conv.", "conv2."},
@@ -914,7 +914,7 @@ std::string convert_original_qwen_to_comfy(std::string name) {
 
 std::string convert_first_stage_model_name(std::string name, std::string prefix, SDVersion version) {
     if (sd_version_uses_wan_vae(version)) {
-        return convert_original_qwen_to_comfy(name);
+        return convert_diffusers_to_original_wan_vae(name);
     }
     static std::unordered_map<std::string, std::string> vae_name_map = {
         {"decoder.post_quant_conv.", "post_quant_conv."},
