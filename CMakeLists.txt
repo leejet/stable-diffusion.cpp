@@ -331,7 +331,8 @@ endif()
 
 add_subdirectory(thirdparty)
 
-target_link_libraries(${SD_LIB} PUBLIC ggml zip)
+target_sources(${SD_LIB} PRIVATE $<TARGET_OBJECTS:zip>)
+target_link_libraries(${SD_LIB} PUBLIC ggml)
 target_include_directories(${SD_LIB} PUBLIC . src include)
 target_include_directories(${SD_LIB} PRIVATE src/core)
 target_include_directories(${SD_LIB} PUBLIC . thirdparty)
@@ -342,7 +343,58 @@ if (SD_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
-set(SD_PUBLIC_HEADERS include/stable-diffusion.h)
-set_target_properties(${SD_LIB} PROPERTIES PUBLIC_HEADER "${SD_PUBLIC_HEADERS}")
 
-install(TARGETS ${SD_LIB} LIBRARY PUBLIC_HEADER)
+
+#
+# install
+#
+
+include(CMakePackageConfigHelpers)
+include(GNUInstallDirs)
+
+set(SD_INSTALL_VERSION "${SDCPP_BUILD_VERSION}")
+set(SD_INSTALL_COMMIT  "${SDCPP_BUILD_COMMIT}")
+set(SD_SHARED_LIB      ${SD_BUILD_SHARED_LIBS})
+
+set(SD_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
+set(SD_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
+set(SD_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")
+
+set(SD_PUBLIC_HEADERS
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/stable-diffusion.h)
+
+set_target_properties(${SD_LIB}
+    PROPERTIES
+        PUBLIC_HEADER "${SD_PUBLIC_HEADERS}")
+
+
+install(TARGETS ${SD_LIB}
+        ARCHIVE
+        LIBRARY
+        RUNTIME
+        PUBLIC_HEADER)
+
+
+configure_package_config_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/stable-diffusion-config.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/stable-diffusion-config.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/stable-diffusion
+    PATH_VARS SD_INCLUDE_INSTALL_DIR
+              SD_LIB_INSTALL_DIR
+              SD_BIN_INSTALL_DIR )
+
+write_basic_package_version_file(
+        ${CMAKE_CURRENT_BINARY_DIR}/stable-diffusion-version.cmake
+    VERSION ${SD_INSTALL_VERSION}
+    COMPATIBILITY SameMajorVersion)
+
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/stable-diffusion-config.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/stable-diffusion-version.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/stable-diffusion)
+
+configure_file(cmake/stable-diffusion.pc.in
+        "${CMAKE_CURRENT_BINARY_DIR}/stable-diffusion.pc"
+        @ONLY)
+
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/stable-diffusion.pc"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
