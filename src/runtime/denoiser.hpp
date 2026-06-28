@@ -602,7 +602,7 @@ struct LogitNormalScheduler : SigmaScheduler {
             }
         }
         if (image_seq_len > 0 && resolution_aware) {
-            mean += 0.5 * std::log(static_cast<float>(image_seq_len) / static_cast<float>(known_seq_len));
+            mean += 0.5f * std::log(static_cast<float>(image_seq_len) / static_cast<float>(known_seq_len));
         }
     }
 
@@ -735,7 +735,7 @@ struct LogitNormalScheduler : SigmaScheduler {
             float t = static_cast<float>(i) / static_cast<float>(n);
 
             // ndtri(1-t) == -ndtri(t)
-            float z = -ndtri(t);
+            float z = static_cast<float>(-ndtri(t));
 
             float y = mean + std * z;
 

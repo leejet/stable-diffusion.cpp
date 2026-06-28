@@ -913,8 +913,7 @@ std::string convert_diffusers_to_original_wan_vae(std::string name) {
     if (name.find(".residual.") != std::string::npos) {
         replace_with_name_map(name, resnet_name_map);
     }
-    
-    
+
     return name;
 }
 
