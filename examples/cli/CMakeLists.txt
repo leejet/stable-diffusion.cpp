@@ -15,7 +15,7 @@ target_include_directories(${TARGET} PRIVATE
     "${PROJECT_SOURCE_DIR}/src"
 )
 install(TARGETS ${TARGET} RUNTIME)
-target_link_libraries(${TARGET} PRIVATE stable-diffusion ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(${TARGET} PRIVATE stable-diffusion zip ${CMAKE_THREAD_LIBS_INIT})
 if(SD_WEBP)
     target_compile_definitions(${TARGET} PRIVATE SD_USE_WEBP)
     target_link_libraries(${TARGET} PRIVATE webp libwebpmux)
