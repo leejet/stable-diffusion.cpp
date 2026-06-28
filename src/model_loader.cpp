@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cinttypes>
 #include <cstdarg>
 #include <cstdlib>
 #include <fstream>
@@ -65,7 +66,6 @@ const char* unused_tensors[] = {
     // "v_pred", // Used to detect SDXL vpred models
     "text_encoders.llm.output.weight",
     "text_encoders.llm.lm_head.",
-    "first_stage_model.bn.",
 };
 
 bool is_unused_tensor(const std::string& name) {
@@ -204,8 +204,26 @@ void convert_tensor(void* src,
 
 /*================================================= ModelLoader ==================================================*/
 
+ModelLoader::ModelLoader()
+    : n_threads_(sd_get_num_physical_cores()) {
+}
+
+size_t ModelLoader::add_file_path(const std::string& file_path) {
+    if (model_files_processed) {
+        file_data.clear();
+        model_files_processed = false;
+    }
+    file_paths_.push_back(file_path);
+    return file_paths_.size() - 1;
+}
+
 void ModelLoader::add_tensor_storage(const TensorStorage& tensor_storage) {
     tensor_storage_map[tensor_storage.name] = tensor_storage;
+}
+
+void ModelLoader::set_n_threads(int n_threads) {
+    n_threads_ = n_threads > 0 ? n_threads : sd_get_num_physical_cores();
+    LOG_DEBUG("using %d threads for model loading", n_threads_);
 }
 
 bool ModelLoader::init_from_file(const std::string& file_path, const std::string& prefix) {
@@ -271,8 +289,7 @@ bool ModelLoader::init_from_gguf_file(const std::string& file_path, const std::s
         return false;
     }
 
-    file_paths_.push_back(file_path);
-    size_t file_index = file_paths_.size() - 1;
+    size_t file_index = add_file_path(file_path);
 
     for (auto& tensor_storage : tensor_storages) {
         // LOG_DEBUG("%s", tensor_storage.name.c_str());
@@ -300,8 +317,7 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         return false;
     }
 
-    file_paths_.push_back(file_path);
-    size_t file_index = file_paths_.size() - 1;
+    size_t file_index = add_file_path(file_path);
 
     for (auto& tensor_storage : tensor_storages) {
         if (is_unused_tensor(tensor_storage.name)) {
@@ -335,8 +351,7 @@ bool ModelLoader::init_from_torch_legacy_file(const std::string& file_path, cons
         return false;
     }
 
-    file_paths_.push_back(file_path);
-    size_t file_index = file_paths_.size() - 1;
+    size_t file_index = add_file_path(file_path);
 
     for (auto& tensor_storage : tensor_storages) {
         if (is_unused_tensor(tensor_storage.name)) {
@@ -366,8 +381,7 @@ bool ModelLoader::init_from_torch_zip_file(const std::string& file_path, const s
         return false;
     }
 
-    file_paths_.push_back(file_path);
-    size_t file_index = file_paths_.size() - 1;
+    size_t file_index = add_file_path(file_path);
 
     for (auto& tensor_storage : tensor_storages) {
         if (!starts_with(tensor_storage.name, prefix)) {
@@ -438,6 +452,10 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("embed_image_indicator.weight") != std::string::npos) {
             return VERSION_IDEOGRAM4;
         }
+        if (tensor_storage.name.find("model.diffusion_model.txtfusion.projector.weight") != std::string::npos ||
+            tensor_storage.name.find("model.diffusion_model.text_fusion.projector.weight") != std::string::npos) {
+            return VERSION_KREA2;
+        }
         if (tensor_storage.name.find("model.diffusion_model.nerf_final_layer_conv.") != std::string::npos) {
             return VERSION_CHROMA_RADIANCE;
         }
@@ -461,6 +479,9 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("model.diffusion_model.double_stream_modulation_img.lin.weight") != std::string::npos) {
             is_flux2 = true;
         }
+        if (tensor_storage.name.find("dual_time_embed.semantic_embedder.linear_1.weight") != std::string::npos) {
+            return VERSION_SEFI_IMAGE;
+        }
         if (tensor_storage.name.find("single_blocks.47.linear1.weight") != std::string::npos) {
             has_single_block_47 = true;
         }
@@ -469,6 +490,9 @@ SDVersion ModelLoader::get_sd_version() {
         }
         if (tensor_storage.name.find("model.diffusion_model.cap_embedder.0.weight") != std::string::npos) {
             return VERSION_Z_IMAGE;
+        }
+        if (tensor_storage.name.find("double_stream_layers.0.img_instruct_attn.processor.img_to_q.weight") != std::string::npos) {
+            return VERSION_BOOGU_IMAGE;
         }
         if (tensor_storage.name.find("model.diffusion_model.layers.0.adaLN_sa_ln.weight") != std::string::npos) {
             return VERSION_ERNIE_IMAGE;
@@ -760,8 +784,6 @@ void ModelLoader::process_model_files(bool enable_mmap, bool writable_mmap) {
         return;
     }
 
-    int64_t start_time = ggml_time_ms();
-
     std::vector<TensorStorage> processed_tensor_storages;
     for (const auto& [name, tensor_storage] : tensor_storage_map) {
         if (is_unused_tensor(tensor_storage.name)) {
@@ -812,20 +834,12 @@ void ModelLoader::process_model_files(bool enable_mmap, bool writable_mmap) {
             } else {
                 LOG_WARN("failed to memory-map '%s' (falling back to read())", file_path.c_str());
             }
-        } else if (!is_zip) {
-            LOG_INFO("NOT using mmap for '%s' (mmap disabled by caller)",
-                     file_path.c_str());
         }
 
         file_data.push_back(std::move(fdata));
     }
 
     model_files_processed = true;
-
-    int64_t end_time        = ggml_time_ms();
-    int64_t process_time_ms = end_time - start_time;
-
-    LOG_INFO("model files processing completed in %.2fs", process_time_ms / 1000.f);
 }
 
 std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggml_tensor*>& tensors,
@@ -919,7 +933,9 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
     return result;
 }
 
-bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads_p, bool enable_mmap) {
+bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
+                               bool enable_mmap,
+                               const std::set<std::string>* target_tensor_names) {
     process_model_files(enable_mmap, false);
 
     std::atomic<int64_t> read_time_ms(0);
@@ -928,14 +944,26 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
     std::atomic<int64_t> convert_time_ms(0);
     std::atomic<uint64_t> bytes_processed(0);
 
-    int num_threads_to_use = n_threads_p > 0 ? n_threads_p : sd_get_num_physical_cores();
-    LOG_DEBUG("using %d threads for model loading", num_threads_to_use);
+    int num_threads_to_use = n_threads_;
 
     int64_t start_time = ggml_time_ms();
 
     size_t total_tensors_to_process = 0;
+    std::vector<size_t> file_tensors_to_process_counts;
+    file_tensors_to_process_counts.reserve(file_data.size());
     for (const auto& fdata : file_data) {
-        total_tensors_to_process += fdata.tensors.size();
+        size_t file_tensors_to_process = 0;
+        if (target_tensor_names == nullptr) {
+            file_tensors_to_process = fdata.tensors.size();
+        } else {
+            for (const TensorStorage& tensor_storage : fdata.tensors) {
+                if (target_tensor_names->find(tensor_storage.name) != target_tensor_names->end()) {
+                    file_tensors_to_process++;
+                }
+            }
+        }
+        file_tensors_to_process_counts.push_back(file_tensors_to_process);
+        total_tensors_to_process += file_tensors_to_process;
     }
 
     bool success                   = true;
@@ -943,17 +971,38 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
     const int64_t t_start          = start_time;
     int last_n_threads             = 1;
 
-    for (auto& fdata : file_data) {
+    for (size_t file_index = 0; file_index < file_data.size(); ++file_index) {
+        auto& fdata                  = file_data[file_index];
         const std::string& file_path = fdata.path;
-        LOG_DEBUG("loading tensors from %s", file_path.c_str());
 
         const std::vector<TensorStorage>& file_tensors = fdata.tensors;
+        std::vector<const TensorStorage*> tensors_to_process;
+        size_t file_tensors_to_process = file_tensors_to_process_counts[file_index];
+        tensors_to_process.reserve(file_tensors_to_process);
+        if (target_tensor_names == nullptr) {
+            for (const TensorStorage& tensor_storage : file_tensors) {
+                tensors_to_process.push_back(&tensor_storage);
+            }
+        } else {
+            for (const TensorStorage& tensor_storage : file_tensors) {
+                if (target_tensor_names->find(tensor_storage.name) != target_tensor_names->end()) {
+                    tensors_to_process.push_back(&tensor_storage);
+                }
+            }
+        }
+        if (tensors_to_process.empty()) {
+            continue;
+        }
+        LOG_DEBUG("loading %zu/%zu tensors from %s",
+                  tensors_to_process.size(),
+                  file_tensors.size(),
+                  file_path.c_str());
 
         bool is_zip = fdata.is_zip;
 
         std::shared_ptr<MmapWrapper> mmapped = fdata.mmapped;
 
-        int n_threads = is_zip ? 1 : std::min(num_threads_to_use, (int)file_tensors.size());
+        int n_threads = is_zip ? 1 : std::min(num_threads_to_use, (int)tensors_to_process.size());
         if (n_threads < 1) {
             n_threads = 1;
         }
@@ -962,6 +1011,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
         std::atomic<size_t> tensor_idx(0);
         std::atomic<bool> failed(false);
         std::vector<std::thread> workers;
+        std::mutex rpc_backend_mutex;
 
         for (int i = 0; i < n_threads; ++i) {
             workers.emplace_back([&, file_path, is_zip]() {
@@ -989,11 +1039,11 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                 while (true) {
                     int64_t t0, t1;
                     size_t idx = tensor_idx.fetch_add(1);
-                    if (idx >= file_tensors.size() || failed) {
+                    if (idx >= tensors_to_process.size() || failed) {
                         break;
                     }
 
-                    const TensorStorage& tensor_storage = file_tensors[idx];
+                    const TensorStorage& tensor_storage = *tensors_to_process[idx];
                     ggml_tensor* dst_tensor             = nullptr;
 
                     t0 = ggml_time_ms();
@@ -1118,7 +1168,19 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
 
                     if (dst_tensor->buffer != nullptr && !ggml_backend_buffer_is_host(dst_tensor->buffer)) {
                         t0 = ggml_time_ms();
-                        ggml_backend_tensor_set(dst_tensor, convert_buf, 0, ggml_nbytes(dst_tensor));
+
+                        // RPC backends require serialized access to prevent concurrency issues
+                        const char* buffer_type_name = ggml_backend_buft_name(ggml_backend_buffer_get_type(dst_tensor->buffer));
+                        bool is_rpc_buffer           = buffer_type_name != nullptr &&
+                                             std::string(buffer_type_name).find("RPC") != std::string::npos;
+
+                        if (is_rpc_buffer) {
+                            std::lock_guard<std::mutex> lock(rpc_backend_mutex);
+                            ggml_backend_tensor_set(dst_tensor, convert_buf, 0, ggml_nbytes(dst_tensor));
+                        } else {
+                            ggml_backend_tensor_set(dst_tensor, convert_buf, 0, ggml_nbytes(dst_tensor));
+                        }
+
                         t1 = ggml_time_ms();
                         copy_to_backend_time_ms.fetch_add(t1 - t0);
                     }
@@ -1133,16 +1195,18 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
 
         while (true) {
             size_t current_idx = tensor_idx.load();
-            if (current_idx >= file_tensors.size() || failed) {
+            if (current_idx >= tensors_to_process.size() || failed) {
                 break;
             }
             size_t curr_num       = total_tensors_processed + current_idx;
             float elapsed_seconds = (ggml_time_ms() - t_start) / 1000.0f;
-            pretty_bytes_progress(static_cast<int>(curr_num),
-                                  static_cast<int>(total_tensors_to_process),
-                                  bytes_processed.load(),
-                                  elapsed_seconds);
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            if (total_tensors_to_process > 0) {
+                pretty_bytes_progress(static_cast<int>(curr_num),
+                                      static_cast<int>(total_tensors_to_process),
+                                      bytes_processed.load(),
+                                      elapsed_seconds);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(total_tensors_to_process <= 4 ? 10 : 200));
         }
 
         for (auto& w : workers) {
@@ -1153,12 +1217,14 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
             success = false;
             break;
         }
-        total_tensors_processed += file_tensors.size();
-        pretty_bytes_progress(static_cast<int>(total_tensors_processed),
-                              static_cast<int>(total_tensors_to_process),
-                              bytes_processed.load(),
-                              (ggml_time_ms() - t_start) / 1000.0f);
-        if (total_tensors_processed < total_tensors_to_process) {
+        total_tensors_processed += tensors_to_process.size();
+        if (total_tensors_to_process > 0) {
+            pretty_bytes_progress(static_cast<int>(total_tensors_processed),
+                                  static_cast<int>(total_tensors_to_process),
+                                  bytes_processed.load(),
+                                  (ggml_time_ms() - t_start) / 1000.0f);
+        }
+        if (total_tensors_processed < total_tensors_to_process && total_tensors_to_process > 0) {
             printf("\n");
         }
     }
@@ -1173,9 +1239,77 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
     return success;
 }
 
+bool ModelLoader::load_float_tensor(const std::string& name,
+                                    std::vector<float>& data,
+                                    int n_threads,
+                                    bool use_mmap) {
+    data.clear();
+
+    auto tensor_storage_it = tensor_storage_map.find(name);
+    if (tensor_storage_it == tensor_storage_map.end()) {
+        return false;
+    }
+
+    const TensorStorage& tensor_storage = tensor_storage_it->second;
+    int64_t n_elements                  = tensor_storage.nelements();
+    if (n_elements <= 0) {
+        LOG_ERROR("tensor '%s' has invalid element count: %" PRId64, name.c_str(), n_elements);
+        return false;
+    }
+    if (tensor_storage.n_dims <= 0 || tensor_storage.n_dims > GGML_MAX_DIMS) {
+        LOG_ERROR("tensor '%s' has unsupported dims: %d", name.c_str(), tensor_storage.n_dims);
+        return false;
+    }
+
+    std::vector<float> loaded_data(static_cast<size_t>(n_elements));
+    ggml_init_params params;
+    params.mem_size   = ggml_tensor_overhead();
+    params.mem_buffer = nullptr;
+    params.no_alloc   = true;
+
+    ggml_context* ctx = ggml_init(params);
+    if (ctx == nullptr) {
+        LOG_ERROR("failed to create context for tensor '%s'", name.c_str());
+        return false;
+    }
+
+    ggml_tensor* tensor = ggml_new_tensor(ctx, GGML_TYPE_F32, tensor_storage.n_dims, tensor_storage.ne);
+    ggml_set_name(tensor, name.c_str());
+    tensor->data = loaded_data.data();
+
+    bool loaded           = false;
+    auto on_new_tensor_cb = [&](const TensorStorage& current_tensor_storage, ggml_tensor** dst_tensor) -> bool {
+        *dst_tensor = nullptr;
+        if (current_tensor_storage.name != name) {
+            return true;
+        }
+        if (current_tensor_storage.nelements() != n_elements) {
+            LOG_ERROR("tensor '%s' element count changed during load", name.c_str());
+            return false;
+        }
+        *dst_tensor = tensor;
+        loaded      = true;
+        return true;
+    };
+
+    std::set<std::string> target_tensor_names{name};
+    if (n_threads > 0) {
+        set_n_threads(n_threads);
+    }
+    bool success = load_tensors(on_new_tensor_cb, use_mmap, &target_tensor_names);
+    ggml_free(ctx);
+
+    if (!success || !loaded) {
+        data.clear();
+        return false;
+    }
+
+    data = std::move(loaded_data);
+    return true;
+}
+
 bool ModelLoader::load_tensors(std::map<std::string, ggml_tensor*>& tensors,
                                std::set<std::string> ignore_tensors,
-                               int n_threads,
                                bool enable_mmap) {
     std::set<std::string> tensor_names_in_file;
     std::mutex tensor_names_mutex;
@@ -1219,7 +1353,7 @@ bool ModelLoader::load_tensors(std::map<std::string, ggml_tensor*>& tensors,
         return true;
     };
 
-    bool success = load_tensors(on_new_tensor_cb, n_threads, enable_mmap);
+    bool success = load_tensors(on_new_tensor_cb, enable_mmap);
     if (!success) {
         LOG_ERROR("load tensors from file failed");
         return false;

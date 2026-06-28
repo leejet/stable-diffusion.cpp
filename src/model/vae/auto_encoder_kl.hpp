@@ -213,9 +213,9 @@ protected:
         params["mix_factor"] = ggml_new_tensor_1d(ctx, wtype, 1);
     }
 
-    float get_alpha() {
-        float alpha = ggml_ext_backend_tensor_get_f32(params["mix_factor"]);
-        return sigmoid(alpha);
+    ggml_tensor* get_alpha(GGMLRunnerContext* ctx) {
+        auto mix_factor = ggml_ext_cast_f32(ctx->ggml_ctx, ctx->backend, params["mix_factor"]);
+        return ggml_sigmoid(ctx->ggml_ctx, mix_factor);
     }
 
 public:
@@ -250,10 +250,12 @@ public:
 
         x = time_stack->forward(ctx, x);  // b t c (h w)
 
-        float alpha = get_alpha();
-        x           = ggml_add(ctx->ggml_ctx,
-                               ggml_ext_scale(ctx->ggml_ctx, x, alpha),
-                               ggml_ext_scale(ctx->ggml_ctx, x_mix, 1.0f - alpha));
+        auto alpha = get_alpha(ctx);
+        x          = ggml_add(ctx->ggml_ctx,
+                              x_mix,
+                              ggml_mul(ctx->ggml_ctx,
+                                       ggml_sub(ctx->ggml_ctx, x, x_mix),
+                                       alpha));
 
         x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
         x = ggml_reshape_4d(ctx->ggml_ctx, x, W, H, C, T * B);                     // b t c (h w) -> (b t) c h w
@@ -664,13 +666,13 @@ struct AutoEncoderKL : public VAE {
     AutoEncoderKLModel ae;
 
     AutoEncoderKL(ggml_backend_t backend,
-                  ggml_backend_t params_backend,
                   const String2TensorStorage& tensor_storage_map,
                   const std::string prefix,
-                  bool decode_only       = false,
-                  bool use_video_decoder = false,
-                  SDVersion version      = VERSION_SD1)
-        : decode_only(decode_only), VAE(version, backend, params_backend) {
+                  bool decode_only                                    = false,
+                  bool use_video_decoder                              = false,
+                  SDVersion version                                   = VERSION_SD1,
+                  std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : VAE(version, backend, prefix, weight_manager), decode_only(decode_only) {
         if (sd_version_is_sd1(version) || sd_version_is_sd2(version)) {
             scale_factor = 0.18215f;
             shift_factor = 0.f;
@@ -680,7 +682,7 @@ struct AutoEncoderKL : public VAE {
         } else if (sd_version_is_sd3(version)) {
             scale_factor = 1.5305f;
             shift_factor = 0.0609f;
-        } else if (sd_version_is_flux(version) || sd_version_is_z_image(version) || sd_version_is_longcat(version)) {
+        } else if (sd_version_uses_flux_vae(version)) {
             scale_factor = 0.3611f;
             shift_factor = 0.1159f;
         } else if (sd_version_uses_flux2_vae(version)) {
@@ -718,8 +720,8 @@ struct AutoEncoderKL : public VAE {
         return "vae";
     }
 
-    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) override {
-        ae.get_param_tensors(tensors, prefix);
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        ae.get_param_tensors(tensors, weight_prefix);
     }
 
     ggml_cgraph* build_graph(const sd::Tensor<float>& z_tensor, bool decode_graph) {
@@ -742,7 +744,7 @@ struct AutoEncoderKL : public VAE {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(z, decode_graph);
         };
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), z.dim());
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), z.dim());
     }
 
     sd::Tensor<float> gaussian_latent_sample(const sd::Tensor<float>& moments, std::shared_ptr<RNG> rng) {
@@ -814,12 +816,13 @@ struct AutoEncoderKL : public VAE {
     }
 
     sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latents) override {
+        auto latents_ = sd_version_is_sefi_image(version) ? sd::ops::slice(latents, 2, 16, 144) : latents;
         if (sd_version_uses_flux2_vae(version)) {
             int channel_dim                = 2;
-            auto [mean_tensor, std_tensor] = get_latents_mean_std(latents, channel_dim);
-            return (latents * std_tensor) / scale_factor + mean_tensor;
+            auto [mean_tensor, std_tensor] = get_latents_mean_std(latents_, channel_dim);
+            return (latents_ * std_tensor) / scale_factor + mean_tensor;
         }
-        return (latents / scale_factor) + shift_factor;
+        return (latents_ / scale_factor) + shift_factor;
     }
 
     sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents) override {

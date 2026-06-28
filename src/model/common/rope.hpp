@@ -253,7 +253,8 @@ namespace Rope {
                                                                  int bs,
                                                                  float theta,
                                                                  int head_dim,
-                                                                 const std::vector<int>& mrope_section) {
+                                                                 const std::vector<int>& mrope_section,
+                                                                 const std::vector<std::vector<int>>& axis_wrap_dims = {}) {
         GGML_ASSERT(bs > 0);
         GGML_ASSERT(head_dim % 2 == 0);
         GGML_ASSERT(mrope_section.size() >= 3);
@@ -265,7 +266,11 @@ namespace Rope {
         std::vector<std::vector<std::vector<float>>> axis_embs;
         axis_embs.reserve(3);
         for (int axis = 0; axis < 3; ++axis) {
-            axis_embs.push_back(rope(trans_ids[axis], head_dim, theta));
+            std::vector<int> axis_wrap;
+            if (axis < static_cast<int>(axis_wrap_dims.size())) {
+                axis_wrap = axis_wrap_dims[axis];
+            }
+            axis_embs.push_back(rope(trans_ids[axis], head_dim, theta, axis_wrap));
         }
 
         std::vector<std::vector<float>> emb = axis_embs[0];
@@ -894,10 +899,12 @@ namespace Rope {
         // q,k,v: [N, L, n_head, d_head]
         // pe: [L, d_head/2, 2, 2]
         // return: [N, L, n_head*d_head]
+        int64_t n_head = q->ne[1];
+
         q = apply_rope(ctx->ggml_ctx, q, pe, rope_interleaved);  // [N*n_head, L, d_head]
         k = apply_rope(ctx->ggml_ctx, k, pe, rope_interleaved);  // [N*n_head, L, d_head]
 
-        auto x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, v->ne[1], mask, true, ctx->flash_attn_enabled, kv_scale);  // [N, L, n_head*d_head]
+        auto x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, n_head, mask, true, ctx->flash_attn_enabled, kv_scale);  // [N, L, n_head*d_head]
         return x;
     }
 };  // namespace Rope
