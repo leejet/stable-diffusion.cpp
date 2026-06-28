@@ -53,6 +53,7 @@ API and command-line option may change frequently.***
     - [ERNIE-Image](./docs/ernie_image.md)
     - [Boogu Image](./docs/boogu_image.md)
     - [Krea2](./docs/krea2.md)
+    - [SeFi-Image](./docs/sefi_image.md)
     - [HiDream-O1-Image](./docs/hidream_o1_image.md)
     - [Ideogram4](./docs/ideogram4.md)
   - Image Edit Models
