@@ -747,6 +747,7 @@ namespace WAN {
                 x = conv1->forward(ctx, x);
             }
             // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.encoder.prelude", "x");
+
             // downsamples
             std::vector<int64_t> dims = {dim};
             for (int u : dim_mult) {
@@ -803,6 +804,7 @@ namespace WAN {
             } else {
                 x = head_2->forward(ctx, x);
             }
+
             return x;
         }
     };
@@ -1117,7 +1119,7 @@ namespace WAN {
             GGML_ASSERT(b == 1);
             GGML_ASSERT(decode_only == false);
 
-            if(x->ne[2]>1 && is_2D) {
+            if (x->ne[2] > 1 && is_2D) {
                 LOG_WARN("Using 2D VAE to encode video, expect poor results");
             }
 
@@ -1164,7 +1166,7 @@ namespace WAN {
             // z: [b*c, t, h, w]
             GGML_ASSERT(b == 1);
 
-            if(z->ne[2]>1 && is_2D) {
+            if (z->ne[2] > 1 && is_2D) {
                 LOG_WARN("Using 2D VAE to decode video, expect poor results");
             }
 
