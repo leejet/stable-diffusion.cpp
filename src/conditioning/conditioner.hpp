@@ -116,6 +116,13 @@ public:
     virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors)           = 0;
     virtual void set_max_graph_vram_bytes(size_t max_vram_bytes) {}
     virtual void set_stream_layers_enabled(bool enabled) {}
+    // Multi-GPU + lazy-load hooks. Default no-op; LLM-backed conditioners
+    // forward them to their (heavy) LLM sub-runner so it can be split across
+    // GPUs (layer-split) and/or have its params alloc+load deferred to the
+    // first compute so it time-shares VRAM with the DiT.
+    virtual void set_lazy_load(std::function<bool()> fn) {}
+    virtual void set_multi_backend_spec(const MultiBackendSpec& spec) {}
+    virtual void set_weight_manager(std::shared_ptr<RunnerWeightManager> manager) {}
     virtual void set_flash_attention_enabled(bool enabled) = 0;
     virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {}
     virtual void runner_done() {}
@@ -1407,6 +1414,18 @@ struct AnimaConditioner : public Conditioner {
         llm->set_stream_layers_enabled(enabled);
     }
 
+    void set_lazy_load(std::function<bool()> fn) override {
+        llm->set_lazy_load(std::move(fn));
+    }
+
+    void set_multi_backend_spec(const MultiBackendSpec& spec) override {
+        llm->set_multi_backend_spec(spec);
+    }
+
+    void set_weight_manager(std::shared_ptr<RunnerWeightManager> manager) override {
+        llm->set_weight_manager(std::move(manager));
+    }
+
     void set_flash_attention_enabled(bool enabled) override {
         llm->set_flash_attention_enabled(enabled);
     }
@@ -1550,6 +1569,20 @@ struct LLMEmbedder : public Conditioner {
 
     void set_stream_layers_enabled(bool enabled) override {
         llm->set_stream_layers_enabled(enabled);
+    }
+
+    void set_lazy_load(std::function<bool()> fn) override {
+        llm->set_lazy_load(std::move(fn));
+    }
+
+    void set_multi_backend_spec(const MultiBackendSpec& spec) override {
+        llm->set_multi_backend_spec(spec);
+    }
+
+    void set_weight_manager(std::shared_ptr<RunnerWeightManager> manager) override {
+        if (llm) {
+            llm->set_weight_manager(std::move(manager));
+        }
     }
 
     void set_flash_attention_enabled(bool enabled) override {
@@ -2216,6 +2249,20 @@ struct LTXAVEmbedder : public Conditioner {
         projector->set_flash_attention_enabled(enabled);
     }
 
+    // Split/lazy apply to the heavy LLM only; the small projector stays on the
+    // main backend and loads eagerly.
+    void set_lazy_load(std::function<bool()> fn) override {
+        llm->set_lazy_load(std::move(fn));
+    }
+
+    void set_multi_backend_spec(const MultiBackendSpec& spec) override {
+        llm->set_multi_backend_spec(spec);
+    }
+
+    void set_weight_manager(std::shared_ptr<RunnerWeightManager> manager) override {
+        llm->set_weight_manager(std::move(manager));
+    }
+
     void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
         llm->set_max_graph_vram_bytes(max_vram_bytes);
         projector->set_max_graph_vram_bytes(max_vram_bytes);
@@ -2259,6 +2306,7 @@ struct LTXAVEmbedder : public Conditioner {
 
         std::vector<float> mask;
         tokenizer->pad_tokens(tokens, &weights, &mask, kMinLength);
+
         return {tokens, weights, mask};
     }
 
@@ -2299,6 +2347,7 @@ struct LTXAVEmbedder : public Conditioner {
                                           true,
                                           true);
         GGML_ASSERT(!hidden_states.empty());
+
         hidden_states = apply_token_weights(std::move(hidden_states), weights);
 
         int64_t valid_tokens = 0;

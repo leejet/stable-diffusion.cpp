@@ -474,6 +474,18 @@ ArgOptions SDContextParams::get_options() {
          (int)',',
          &rpc_servers},
         {"",
+         "--multi-gpu-mode",
+         "how to split a too-large DiT across GPUs (auto-fit): "
+         "row (matmul rows, CUDA/SYCL), layer (whole blocks, generic), or off "
+         "(default: row)",
+         &multi_gpu_mode},
+        {"",
+         "--fit-compute-reserve",
+         "auto-fit: per-component compute-buffer reserve in MiB as a component "
+         "map, e.g. dit=2048,vae=1024,cond=512 (missing keys keep the built-in "
+         "defaults)",
+         &fit_compute_reserve},
+        {"",
          "--max-vram",
          "maximum VRAM budget in GiB for graph-cut segmented execution. Accepts a single value or assignments by backend/device, e.g. 6 or cuda0=6,vulkan0=4. 0 disables graph splitting; a negative value auto-detects free VRAM, sparing the specified value",
          0,
@@ -490,6 +502,10 @@ ArgOptions SDContextParams::get_options() {
          "--chroma-t5-mask-pad",
          "t5 mask pad size of chroma",
          &chroma_t5_mask_pad},
+        {"",
+         "--fit-target",
+         "auto-fit: MiB of free memory to leave on each GPU (default: 512)",
+         &auto_fit_target_mb},
     };
 
     options.bool_options = {
@@ -565,6 +581,24 @@ ArgOptions SDContextParams::get_options() {
          "--chroma-enable-t5-mask",
          "enable t5 mask for chroma",
          true, &chroma_use_t5_mask},
+        {"",
+         "--auto-fit",
+         "automatically pick DiT/VAE/Conditioner device placements based on "
+         "free GPU memory (default ON)",
+         true, &auto_fit},
+        {"",
+         "--no-auto-fit",
+         "disable auto-fit and use the explicit --backend / --params-backend flags",
+         false, &auto_fit},
+        {"",
+         "--no-multi-gpu",
+         "auto-fit: keep all components on a single GPU when they fit "
+         "(by default, multi-GPU placements are preferred to balance load)",
+         false, &auto_multi_gpu},
+        {"",
+         "--fit-dry-run",
+         "auto-fit: print the computed plan and exit without loading models",
+         true, &auto_fit_dry_run},
     };
 
     auto on_type_arg = [&](int argc, const char** argv, int index) {
@@ -663,6 +697,15 @@ ArgOptions SDContextParams::get_options() {
          "but it usually offers faster inference speed and, in some cases, lower memory usage. "
          "The at_runtime mode, on the other hand, is exactly the opposite.",
          on_lora_apply_mode_arg},
+        {"",
+         "--list-devices",
+         "list available ggml backend devices (one per line, "
+         "name<TAB>description) and exit",
+         [](int /*argc*/, const char** /*argv*/, int /*index*/) {
+             sd_list_devices();
+             std::exit(0);
+             return 0;
+         }},
     };
 
     return options;
@@ -808,9 +851,12 @@ std::string SDContextParams::to_string() const {
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
         << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
-        << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
-        << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
-        << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
+        << "  auto_fit: " << (auto_fit ? "true" : "false") << ",\n"
+        << "  auto_fit_target_mb: " << auto_fit_target_mb << ",\n"
+        << "  auto_fit_dry_run: " << (auto_fit_dry_run ? "true" : "false") << ",\n"
+        << "  fit_compute_reserve: \"" << fit_compute_reserve << "\",\n"
+        << "  auto_multi_gpu: " << (auto_multi_gpu ? "true" : "false") << ",\n"
+        << "  multi_gpu_mode: \"" << multi_gpu_mode << "\",\n"
         << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
@@ -887,6 +933,12 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.eager_load                      = eager_load;
     sd_ctx_params.backend                         = effective_backend.c_str();
     sd_ctx_params.params_backend                  = effective_params_backend.c_str();
+    sd_ctx_params.auto_fit                        = auto_fit;
+    sd_ctx_params.auto_fit_target_mb              = auto_fit_target_mb;
+    sd_ctx_params.auto_fit_dry_run                = auto_fit_dry_run;
+    sd_ctx_params.auto_fit_compute_reserve        = fit_compute_reserve.c_str();
+    sd_ctx_params.auto_multi_gpu                  = auto_multi_gpu;
+    sd_ctx_params.multi_gpu_mode                  = multi_gpu_mode.c_str();
     sd_ctx_params.rpc_servers                     = rpc_servers.c_str();
     return sd_ctx_params;
 }

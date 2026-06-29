@@ -1606,8 +1606,13 @@ namespace LTXV {
             if (config.cross_attention_adaln) {
                 auto prompt_adaln_single       = std::dynamic_pointer_cast<AdaLayerNormSingle>(blocks["prompt_adaln_single"]);
                 auto audio_prompt_adaln_single = std::dynamic_pointer_cast<AdaLayerNormSingle>(blocks["audio_prompt_adaln_single"]);
-                v_prompt_timestep_mod          = prompt_adaln_single->forward(ctx, a_timestep_scaled).first;
-                a_prompt_timestep_mod          = audio_prompt_adaln_single->forward(ctx, a_timestep_scaled).first;
+                // The reference feeds modality.sigma (the RAW per-batch sigma) to
+                // both prompt adalns. effective_audio_timestep is exactly that:
+                // audio timesteps are never denoise-masked, so it carries the
+                // unmasked sigma even in i2v. The VIDEO timestep tensor is the
+                // denoise-masked per-token one and must NOT be used here.
+                v_prompt_timestep_mod = prompt_adaln_single->forward(ctx, a_timestep_scaled).first;
+                a_prompt_timestep_mod = audio_prompt_adaln_single->forward(ctx, a_timestep_scaled).first;
             }
 
             auto av_ca_video_timestep = repeat_scalar_timestep_like(ctx, effective_audio_timestep, timestep);

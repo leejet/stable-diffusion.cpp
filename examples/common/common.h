@@ -155,9 +155,6 @@ struct SDContextParams {
     std::string effective_backend;
     std::string effective_params_backend;
     bool enable_mmap           = false;
-    bool control_net_cpu       = false;
-    bool clip_on_cpu           = false;
-    bool vae_on_cpu            = false;
     bool flash_attn            = false;
     bool diffusion_flash_attn  = false;
     bool diffusion_conv_direct = false;
@@ -172,6 +169,23 @@ struct SDContextParams {
     int chroma_t5_mask_pad   = 1;
 
     bool qwen_image_zero_cond_t = false;
+
+    // Auto-fit defaults — placement is computed automatically based on free
+    // VRAM. Pass --no-auto-fit to disable and use explicit --backend specs.
+    bool auto_fit           = true;
+    int  auto_fit_target_mb = 512;
+    bool auto_fit_dry_run   = false;
+    // Per-component compute-buffer reserve in MiB as a component map,
+    // e.g. "dit=2048,vae=1024,cond=512"; missing keys keep built-in defaults.
+    std::string fit_compute_reserve;
+    bool auto_multi_gpu = true;
+    std::string multi_gpu_mode = "row";
+
+    // Deprecated aliases for --backend <component>=cpu (kept for
+    // backwards compatibility with the pre-auto-fit CLI).
+    bool control_net_cpu = false;
+    bool clip_on_cpu     = false;
+    bool vae_on_cpu      = false;
 
     prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;

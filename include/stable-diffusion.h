@@ -224,6 +224,35 @@ typedef struct {
     bool eager_load;  // Load all params into the params backend at model-load time instead of lazily on first use
     const char* backend;
     const char* params_backend;
+
+    // Auto-fit: pick DiT/VAE/Conditioner devices based on free GPU memory.
+    // When `auto_fit` is true (default), `backend` / `params_backend` are
+    // ignored and the placement is computed automatically (the plan is fed
+    // into the same backend assignment that `backend` / `params_backend` use).
+    // `auto_fit_target_mb` is the memory to leave free per GPU (default 512).
+    // `auto_fit_dry_run` prints the plan and aborts init before loading.
+    // `auto_fit_compute_reserve` tunes the per-component compute-buffer
+    // reserve in MiB as a component map, e.g. "dit=2048,vae=1024,cond=512"
+    // (same component-key style as `backend`); missing keys / NULL keep the
+    // built-in defaults.
+    bool auto_fit;
+    int  auto_fit_target_mb;
+    bool auto_fit_dry_run;
+    const char* auto_fit_compute_reserve;
+
+    // When more than one GPU device is present, prefer placing different
+    // components on different GPUs to balance load and fit larger total
+    // working sets. Set false to keep all components on a single GPU when
+    // they fit. Defaults to true. Each component still lives entirely on
+    // one device unless multi_gpu_mode splits it (see below).
+    bool auto_multi_gpu;
+
+    // How to split a single component (currently only the DiT) across GPUs
+    // when it doesn't fit on one but fits across several: "row" (matmul rows
+    // split via the backend's stock split buffer type, CUDA/SYCL),
+    // "layer" (whole blocks per GPU, routed by a scheduler, backend-generic),
+    // or "off" (never split a single component). NULL / empty => "row".
+    const char* multi_gpu_mode;
     const char* rpc_servers;
 } sd_ctx_params_t;
 
@@ -505,6 +534,11 @@ SD_API bool preprocess_canny(sd_image_t image,
 
 SD_API const char* sd_commit(void);
 SD_API const char* sd_version(void);
+
+// List available ggml backend devices to stdout, in `name<TAB>description<NL>`
+// per-line format. The output is intended to be parsed by tools and used as
+// device names in the --backend / --params-backend assignment specs.
+SD_API void sd_list_devices(void);
 
 // for C API, caller needs to call free_sd_images to free the memory after use
 // This helps avoid CRT problems on Windows when memory is allocated in the library but freed in the caller, which may use a different CRT.

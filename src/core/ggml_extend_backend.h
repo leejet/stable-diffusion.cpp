@@ -57,6 +57,12 @@ public:
     ggml_backend_t runtime_backend(SDBackendModule module);
     ggml_backend_t params_backend(SDBackendModule module);
 
+    // Return (creating + caching on first use) the backend for an explicit
+    // ggml device name (e.g. "CUDA1"). Used to obtain the additional GPU
+    // backends a multi-GPU split needs; the manager owns the handle and frees
+    // it once at teardown, so callers only borrow it.
+    ggml_backend_t ensure_backend(const std::string& device_name);
+
     bool runtime_backend_is_cpu(SDBackendModule module);
     bool params_backend_is_cpu(SDBackendModule module);
     bool params_backend_is_disk(SDBackendModule module) const;
@@ -74,5 +80,13 @@ bool sd_backend_cpu_set_n_threads(ggml_backend_t backend_cpu, int n_threads);
 std::string sd_backend_resolve_name(const std::string& name);
 const char* sd_backend_module_name(SDBackendModule module);
 void ggml_ext_im_set_f32_1d(const struct ggml_tensor* tensor, int i, float value);
+
+// Runtime lookup of a backend's row-split buffer type, published by the CUDA
+// and SYCL backends as the "ggml_backend_split_buffer_type" proc. Returns
+// nullptr when the backend does not support row-split (the caller then falls
+// back to a non-split single-GPU path). `tensor_split` is a per-device weight
+// array of length = the backend registry's device count; `main_device` is the
+// index of the device that owns the non-split portion.
+ggml_backend_buffer_type_t sd_backend_split_buffer_type(ggml_backend_t backend, int main_device, const float* tensor_split);
 bool add_rpc_devices(const std::string& servers);
 #endif  // __SD_CORE_GGML_EXTEND_BACKEND_H__

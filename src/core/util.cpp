@@ -25,6 +25,7 @@
 #include <unistd.h>
 #endif
 
+#include "ggml-backend.h"
 #include "ggml.h"
 #include "stable-diffusion.h"
 
@@ -980,4 +981,13 @@ std::vector<std::pair<std::string, float>> split_quotation_attention(
         }
     }
     return result;
+}
+
+void sd_list_devices(void) {
+    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        const char* name       = ggml_backend_dev_name(dev);
+        const char* desc       = ggml_backend_dev_description(dev);
+        printf("%s\t%s\n", name ? name : "", desc ? desc : "");
+    }
 }
