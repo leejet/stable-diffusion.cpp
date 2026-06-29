@@ -2572,6 +2572,9 @@ const char* sd_scheduler_name(enum scheduler_t scheduler) {
 }
 
 enum scheduler_t str_to_scheduler(const char* str) {
+    if (!strcmp(str, "normal")) {
+        return DISCRETE_SCHEDULER;
+    }
     for (int i = 0; i < SCHEDULER_COUNT; i++) {
         if (!strcmp(str, scheduler_to_str[i])) {
             return (enum scheduler_t)i;
