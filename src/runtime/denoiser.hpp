@@ -563,6 +563,65 @@ inline float flux_time_shift(float mu, float sigma, float t) {
     return ::expf(mu) / (::expf(mu) + ::powf((1.0f / t - 1.0f), sigma));
 }
 
+// https://github.com/black-forest-labs/flux/blob/main/src/flux/sampling.py#L289
+struct FluxScheduler : SigmaScheduler {
+    int image_seq_len = 0;
+    float base_shift  = 0.5f;
+    float max_shift   = 1.15f;
+
+    explicit FluxScheduler(int image_seq_len, const char* extra_sample_args = nullptr)
+        : image_seq_len(image_seq_len) {
+        parse_extra_sample_args(extra_sample_args);
+    }
+
+    void parse_extra_sample_args(const char* extra_sample_args) {
+        for (const auto& [key, value] : parse_key_value_args(extra_sample_args, "flux scheduler arg")) {
+            if (key == "base_shift") {
+                if (!parse_strict_float(value, base_shift)) {
+                    LOG_WARN("ignoring invalid flux scheduler arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            } else if (key == "max_shift") {
+                if (!parse_strict_float(value, max_shift)) {
+                    LOG_WARN("ignoring invalid flux scheduler arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            }
+        }
+    }
+
+    float compute_mu() const {
+        constexpr float base_shift_anchor = 256.0f;
+        constexpr float max_shift_anchor  = 4096.0f;
+        float m                           = (max_shift - base_shift) / (max_shift_anchor - base_shift_anchor);
+        float b                           = base_shift - m * base_shift_anchor;
+        return static_cast<float>(image_seq_len) * m + b;
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, float /*sigma_min*/, float /*sigma_max*/, t_to_sigma_t /*t_to_sigma*/) override {
+        std::vector<float> sigmas;
+        sigmas.reserve(n + 1);
+
+        float mu = compute_mu();
+        LOG_DEBUG("Flux scheduler: image_seq_len=%d, steps=%u, mu=%.3f", image_seq_len, n, mu);
+
+        if (n == 0) {
+            sigmas.push_back(1.0f);
+            return sigmas;
+        }
+
+        for (uint32_t i = 0; i <= n; ++i) {
+            float t = 1.0f - static_cast<float>(i) / static_cast<float>(n);
+            if (t <= 0.0f) {
+                sigmas.push_back(0.0f);
+            } else {
+                sigmas.push_back(flux_time_shift(mu, 1.0f, t));
+            }
+        }
+
+        sigmas[n] = 0.0f;
+        return sigmas;
+    }
+};
+
 // https://github.com/black-forest-labs/flux2/blob/main/src/flux2/sampling.py#L244
 struct Flux2Scheduler : SigmaScheduler {
     int image_seq_len = 0;
@@ -884,6 +943,11 @@ struct Denoiser {
             case FLUX2_SCHEDULER: {
                 LOG_INFO("get_sigmas with Flux2 scheduler");
                 scheduler = std::make_shared<Flux2Scheduler>(image_seq_len);
+                break;
+            }
+            case FLUX_SCHEDULER: {
+                LOG_INFO("get_sigmas with Flux scheduler");
+                scheduler = std::make_shared<FluxScheduler>(image_seq_len, extra_sample_args);
                 break;
             }
             default:
