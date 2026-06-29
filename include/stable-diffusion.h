@@ -71,6 +71,7 @@ enum scheduler_t {
     BONG_TANGENT_SCHEDULER,
     LTX2_SCHEDULER,
     LOGIT_NORMAL_SCHEDULER,
+    FLUX2_SCHEDULER,
     SCHEDULER_COUNT
 };
 
@@ -80,7 +81,6 @@ enum prediction_t {
     EDM_V_PRED,
     FLOW_PRED,
     FLUX_FLOW_PRED,
-    FLUX2_FLOW_PRED,
     SEFI_FLOW_PRED,
     PREDICTION_COUNT
 };
