@@ -632,12 +632,12 @@ int main(int argc, const char* argv[]) {
             std::find(cli_params.imatrix_in.begin(), cli_params.imatrix_in.end(), cli_params.imatrix_out) == cli_params.imatrix_in.end()) {
             LOG_WARN("imatrix file '%s' already exists and will be overwritten", cli_params.imatrix_out.c_str());
         }
-        enableImatrixCollection();
+        enable_imatrix_collection();
     }
 
     for (const auto& in_file : cli_params.imatrix_in) {
         LOG_INFO("loading imatrix from '%s'", in_file.c_str());
-        if (!loadImatrix(in_file.c_str())) {
+        if (!load_imatrix(in_file.c_str())) {
             LOG_WARN("failed to load imatrix from '%s'", in_file.c_str());
         }
     }
@@ -875,7 +875,7 @@ int main(int argc, const char* argv[]) {
     }
 
     if (!cli_params.imatrix_out.empty()) {
-        saveImatrix(cli_params.imatrix_out.c_str());
+        save_imatrix(cli_params.imatrix_out.c_str());
     }
 
     free_sd_audio(generated_audio);

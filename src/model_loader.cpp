@@ -20,7 +20,7 @@
 #include "model_io/torch_legacy_io.h"
 #include "model_io/torch_zip_io.h"
 #include "model_loader.h"
-#include "runtime/imatrix.hpp"
+#include "runtime/imatrix.h"
 #include "stable-diffusion.h"
 
 #include "core/ggml_extend_backend.h"
@@ -1157,8 +1157,8 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                             failed = true;
                             return;
                         }
-                        std::string processed_name    = convert_tensor_name(tensor_storage.name, imatrix_version);
-                        std::vector<float> imatrix     = get_imatrix_collector().get_values(processed_name);
+                        std::string processed_name = convert_tensor_name(tensor_storage.name, imatrix_version);
+                        std::vector<float> imatrix = get_imatrix_collector().get_values(processed_name);
                         convert_tensor((void*)target_buf,
                                        tensor_storage.type,
                                        convert_buf,

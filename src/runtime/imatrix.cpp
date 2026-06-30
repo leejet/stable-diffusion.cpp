@@ -1,11 +1,11 @@
-#include "runtime/imatrix.hpp"
+#include "runtime/imatrix.h"
 
-/*Stolen from llama.cpp (credits: Kawrakow)*/
+/* Adapted from llama.cpp (credits: Kawrakow). */
 
+#include "core/util.h"
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "stable-diffusion.h"
-#include "core/util.h"
 
 #include <cmath>
 #include <cstdlib>
@@ -50,7 +50,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
     if (src0 == nullptr || src1 == nullptr) {
         return false;
     }
-    std::string wname              = filter_tensor_name(src0->name);
+    std::string wname = filter_tensor_name(src0->name);
 
     // when ask is true, the scheduler wants to know if we are interested in data from this tensor
     // if we return true, a follow-up call will be made with ask=false in which we can do the actual collection
@@ -67,17 +67,17 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
     }
     // LOG_DEBUG("%s", wname.c_str());
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(mutex_);
 
     // copy the data from the GPU memory if needed
     const bool is_host = src1->buffer == NULL || ggml_backend_buffer_is_host(src1->buffer);
 
     if (!is_host) {
-        m_src1_data.resize(ggml_nelements(src1));
-        ggml_backend_tensor_get(src1, m_src1_data.data(), 0, ggml_nbytes(src1));
+        src1_data_.resize(ggml_nelements(src1));
+        ggml_backend_tensor_get(src1, src1_data_.data(), 0, ggml_nbytes(src1));
     }
 
-    const float* data = is_host ? (const float*)src1->data : m_src1_data.data();
+    const float* data = is_host ? (const float*)src1->data : src1_data_.data();
 
     // this has been adapted to the new format of storing merged experts in a single 3d tensor
     // ref: https://github.com/ggml-org/llama.cpp/pull/6387
@@ -85,8 +85,8 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
         //   ids  -> [n_experts_used, n_tokens]
         //   src1 -> [cols, n_expert_used, n_tokens]
         const ggml_tensor* ids = t->src[2];
-        const int n_as         = src0->ne[2];
-        const int n_ids        = ids->ne[0];
+        const int n_as         = static_cast<int>(src0->ne[2]);
+        const int n_ids        = static_cast<int>(ids->ne[0]);
 
         // the top-k selected expert ids are stored in the ids tensor
         // for simplicity, always copy ids to host, because it is small
@@ -94,10 +94,10 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
 
         GGML_ASSERT(ids->ne[1] == src1->ne[2]);
 
-        m_ids.resize(ggml_nbytes(ids));
-        ggml_backend_tensor_get(ids, m_ids.data(), 0, ggml_nbytes(ids));
+        ids_.resize(ggml_nbytes(ids));
+        ggml_backend_tensor_get(ids, ids_.data(), 0, ggml_nbytes(ids));
 
-        auto& e = m_stats[wname];
+        auto& e = stats_[wname];
 
         ++e.ncall;
 
@@ -108,14 +108,14 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
             LOG_ERROR("inconsistent size for %s (%d vs %d)\n", wname.c_str(), (int)e.values.size(), (int)src1->ne[0] * n_as);
             exit(1);  // GGML_ABORT("fatal error");
         }
-        // LOG_DEBUG("%s[%d]: %32s, %s, %5d x %5d, %d\n", m_last_call, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[2], (int)src1->type);
+        // LOG_DEBUG("%s[%d]: %32s, %s, %5d x %5d, %d\n", last_call_, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[2], (int)src1->type);
         // loop over all possible experts, regardless if they are used or not in the batch
         for (int ex = 0; ex < n_as; ++ex) {
             size_t e_start = ex * src1->ne[0];
 
             for (int idx = 0; idx < n_ids; ++idx) {
                 for (int row = 0; row < (int)src1->ne[2]; ++row) {
-                    const int excur = *(const int32_t*)(m_ids.data() + row * ids->nb[1] + idx * ids->nb[0]);
+                    const int excur = *(const int32_t*)(ids_.data() + row * ids->nb[1] + idx * ids->nb[0]);
 
                     GGML_ASSERT(excur >= 0 && excur < n_as);  // sanity check
 
@@ -139,7 +139,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
             }
         }
     } else {
-        auto& e = m_stats[wname];
+        auto& e = stats_[wname];
         if (e.values.empty()) {
             e.values.resize(src1->ne[0], 0);
             e.counts.resize(src1->ne[0], 0);
@@ -149,7 +149,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
         }
 
         ++e.ncall;
-        // LOG_DEBUG("%s[%d]: %32s, %s, %5d x %5d, %d\n", m_last_call, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[1], (int)src1->type);
+        // LOG_DEBUG("%s[%d]: %32s, %s, %5d x %5d, %d\n", last_call_, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[1], (int)src1->type);
         for (int row = 0; row < (int)src1->ne[1]; ++row) {
             const float* x = data + row * src1->ne[0];
             for (int j = 0; j < (int)src1->ne[0]; ++j) {
@@ -170,11 +170,11 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
     return true;
 }
 
-bool loadImatrix(const char* imatrix_path) {
+bool load_imatrix(const char* imatrix_path) {
     return imatrix_collector.load_imatrix(imatrix_path);
 }
 
-void saveImatrix(const char* imatrix_path) {
+void save_imatrix(const char* imatrix_path) {
     imatrix_collector.save_imatrix(imatrix_path);
 }
 
@@ -182,11 +182,11 @@ static bool collect_imatrix(struct ggml_tensor* t, bool ask, void* user_data) {
     return imatrix_collector.collect_imatrix(t, ask, user_data);
 }
 
-void enableImatrixCollection() {
+void enable_imatrix_collection() {
     sd_set_backend_eval_callback(collect_imatrix, nullptr);
 }
 
-void disableImatrixCollection() {
+void disable_imatrix_collection() {
     sd_set_backend_eval_callback(nullptr, nullptr);
 }
 
@@ -204,8 +204,8 @@ void IMatrixCollector::save_imatrix(std::string fname, int ncall) const {
     std::vector<std::string> to_store;
 
     bool is_first = true;  // for printing
-    for (const auto& kv : m_stats) {
-        const int n_all = kv.second.counts.size();
+    for (const auto& kv : stats_) {
+        const int n_all = static_cast<int>(kv.second.counts.size());
 
         if (n_all == 0) {
             continue;
@@ -237,19 +237,19 @@ void IMatrixCollector::save_imatrix(std::string fname, int ncall) const {
         to_store.push_back(kv.first);
     }
 
-    if (to_store.size() < m_stats.size()) {
-        LOG_WARN("storing only %zu out of %zu entries\n", to_store.size(), m_stats.size());
+    if (to_store.size() < stats_.size()) {
+        LOG_WARN("storing only %zu out of %zu entries\n", to_store.size(), stats_.size());
     }
 
     std::ofstream out(fname, std::ios::binary);
     out.write((const char*)&n_entries, sizeof(n_entries));
     for (const auto& name : to_store) {
-        const auto& stat = m_stats.at(name);
-        int len          = name.size();
+        const auto& stat = stats_.at(name);
+        int len          = static_cast<int>(name.size());
         out.write((const char*)&len, sizeof(len));
         out.write(name.c_str(), len);
         out.write((const char*)&stat.ncall, sizeof(stat.ncall));
-        int nval = stat.values.size();
+        int nval = static_cast<int>(stat.values.size());
         out.write((const char*)&nval, sizeof(nval));
         if (nval > 0) {
             std::vector<float> tmp(nval);
@@ -261,10 +261,10 @@ void IMatrixCollector::save_imatrix(std::string fname, int ncall) const {
     }
 
     // Write the number of call the matrix was computed with
-    out.write((const char*)&m_last_call, sizeof(m_last_call));
+    out.write((const char*)&last_call_, sizeof(last_call_));
 
     // LOG_DEBUG("\n");
-    // LOG_DEBUG("stored collected data after %d chunks in %s\n", m_last_call, fname.c_str());
+    // LOG_DEBUG("stored collected data after %d chunks in %s\n", last_call_, fname.c_str());
 }
 
 bool IMatrixCollector::load_imatrix(const char* fname) {
@@ -290,14 +290,14 @@ bool IMatrixCollector::load_imatrix(const char* fname) {
         }
         name_as_vec[len] = 0;
         std::string name{name_as_vec.data()};
-        auto& e = m_stats[std::move(name)];
+        auto& e = stats_[std::move(name)];
         int ncall;
         in.read((char*)&ncall, sizeof(ncall));
         int nval;
         in.read((char*)&nval, sizeof(nval));
         if (in.fail() || nval < 1) {
             LOG_ERROR("failed reading number of values for entry %d\n", i);
-            m_stats = {};
+            stats_ = {};
             return false;
         }
 
@@ -310,7 +310,7 @@ bool IMatrixCollector::load_imatrix(const char* fname) {
         in.read((char*)tmp.data(), nval * sizeof(float));
         if (in.fail()) {
             LOG_ERROR("failed reading data for entry %d\n", i);
-            m_stats = {};
+            stats_ = {};
             return false;
         }
 

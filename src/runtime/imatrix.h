@@ -1,43 +1,45 @@
-#ifndef IMATRIX_HPP
-#define IMATRIX_HPP
+#ifndef __SD_RUNTIME_IMATRIX_H__
+#define __SD_RUNTIME_IMATRIX_H__
+
 #include <fstream>
 #include <mutex>
-#include <unordered_map>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
-/*Stolen from llama.cpp (credits: Kawrakow)*/
+/* Adapted from llama.cpp (credits: Kawrakow). */
 
 struct ggml_tensor;
 
-struct Stats {
+struct IMatrixStats {
     std::vector<float> values{};
     std::vector<int> counts{};
     int ncall = 0;
 };
 
 class IMatrixCollector {
+private:
+    std::unordered_map<std::string, IMatrixStats> stats_ = {};
+    std::mutex mutex_;
+    int last_call_ = 0;
+    std::vector<float> src1_data_;
+    std::vector<char> ids_;  // the expert ids from ggml_mul_mat_id
+
 public:
     IMatrixCollector() = default;
     bool collect_imatrix(struct ggml_tensor* t, bool ask, void* user_data);
     void save_imatrix(std::string fname, int ncall = -1) const;
     bool load_imatrix(const char* fname);
     std::vector<float> get_values(const std::string& key) const {
-        auto it = m_stats.find(key);
-        if (it != m_stats.end()) {
+        auto it = stats_.find(key);
+        if (it != stats_.end()) {
             return it->second.values;
         } else {
             return {};
         }
     }
-private:
-    std::unordered_map<std::string, Stats> m_stats = {};
-    std::mutex m_mutex;
-    int m_last_call = 0;
-    std::vector<float> m_src1_data;
-    std::vector<char> m_ids;  // the expert ids from ggml_mul_mat_id
 };
 
 IMatrixCollector& get_imatrix_collector();
 
-#endif
+#endif  // __SD_RUNTIME_IMATRIX_H__

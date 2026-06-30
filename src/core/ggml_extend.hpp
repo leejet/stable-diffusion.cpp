@@ -27,8 +27,8 @@
 #include "core/ggml_graph_cut.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
-#include "ggml/src/ggml-impl.h"
 #include "ggml.h"
+#include "ggml/src/ggml-impl.h"
 
 #include "core/tensor.hpp"
 #include "model.h"
