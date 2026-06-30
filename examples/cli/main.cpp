@@ -802,12 +802,16 @@ int main(int argc, const char* argv[]) {
                 SDImageOwner current_image(results[i]);
                 results[i] = {0, 0, 0, nullptr};
                 for (int u = 0; u < gen_params.upscale_repeats; ++u) {
-                    SDImageOwner upscaled_image(upscale(upscaler_ctx.get(), current_image.get(), upscale_factor));
-                    if (upscaled_image.get().data == nullptr) {
+                    sd_image_t* upscaled_images = upscale(upscaler_ctx.get(), current_image.get(), upscale_factor);
+                    if (upscaled_images == nullptr || upscaled_images[0].data == nullptr) {
+                        free_sd_images(upscaled_images, 1);
                         LOG_ERROR("upscale failed");
                         break;
                     }
-                    current_image = std::move(upscaled_image);
+                    sd_image_t upscaled_image = upscaled_images[0];
+                    upscaled_images[0]        = {0, 0, 0, nullptr};
+                    free_sd_images(upscaled_images, 1);
+                    current_image.reset(upscaled_image);
                 }
                 results[i] = current_image.release();  // Set the final upscaled image as the result
             }

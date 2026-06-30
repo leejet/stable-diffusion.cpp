@@ -4,6 +4,7 @@
 #include "model_loader.h"
 #include "stable-diffusion.h"
 
+#include <cstdlib>
 #include <utility>
 
 UpscalerGGML::UpscalerGGML(int n_threads,
@@ -198,8 +199,23 @@ upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
     return upscaler_ctx;
 }
 
-sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, uint32_t upscale_factor) {
-    return upscaler_ctx->upscaler->upscale(input_image, upscale_factor);
+sd_image_t* upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, uint32_t upscale_factor) {
+    if (upscaler_ctx == nullptr || upscaler_ctx->upscaler == nullptr) {
+        return nullptr;
+    }
+
+    sd_image_t* result_images = (sd_image_t*)calloc(1, sizeof(sd_image_t));
+    if (result_images == nullptr) {
+        return nullptr;
+    }
+
+    result_images[0] = upscaler_ctx->upscaler->upscale(input_image, upscale_factor);
+    if (result_images[0].data == nullptr) {
+        free(result_images);
+        return nullptr;
+    }
+
+    return result_images;
 }
 
 int get_upscale_factor(upscaler_ctx_t* upscaler_ctx) {
