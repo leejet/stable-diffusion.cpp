@@ -359,7 +359,7 @@ struct BetaScheduler : SigmaScheduler {
             if (std::abs(c) < tiny) {
                 c = tiny;
             }
-            d              = 1.0 / d;
+            d                = 1.0 / d;
             const double del = d * c;
             h *= del;
 
