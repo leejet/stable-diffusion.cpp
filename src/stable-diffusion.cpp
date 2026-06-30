@@ -2562,6 +2562,7 @@ const char* scheduler_to_str[] = {
     "logit_normal",
     "flux2",
     "flux",
+    "beta",
 };
 
 const char* sd_scheduler_name(enum scheduler_t scheduler) {
