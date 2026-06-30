@@ -70,6 +70,9 @@ enum scheduler_t {
     LCM_SCHEDULER,
     BONG_TANGENT_SCHEDULER,
     LTX2_SCHEDULER,
+    LOGIT_NORMAL_SCHEDULER,
+    FLUX2_SCHEDULER,
+    FLUX_SCHEDULER,
     SCHEDULER_COUNT
 };
 
@@ -79,7 +82,7 @@ enum prediction_t {
     EDM_V_PRED,
     FLOW_PRED,
     FLUX_FLOW_PRED,
-    FLUX2_FLOW_PRED,
+    SEFI_FLOW_PRED,
     PREDICTION_COUNT
 };
 
@@ -195,20 +198,15 @@ typedef struct {
     const sd_embedding_t* embeddings;
     uint32_t embedding_count;
     const char* photo_maker_path;
+    const char* pulid_weights_path;
     const char* tensor_type_rules;
-    bool vae_decode_only;
-    bool free_params_immediately;
     int n_threads;
     enum sd_type_t wtype;
     enum rng_type_t rng_type;
     enum rng_type_t sampler_rng_type;
     enum prediction_t prediction;
     enum lora_apply_mode_t lora_apply_mode;
-    bool offload_params_to_cpu;
     bool enable_mmap;
-    bool keep_clip_on_cpu;
-    bool keep_control_net_on_cpu;
-    bool keep_vae_on_cpu;
     bool flash_attn;
     bool diffusion_flash_attn;
     bool tae_preview_only;
@@ -222,10 +220,12 @@ typedef struct {
     int chroma_t5_mask_pad;
     bool qwen_image_zero_cond_t;
     enum sd_vae_format_t vae_format;
-    float max_vram;  // GiB budget for graph-cut segmented param offload (0 = disabled, -1 = auto free VRAM minus 1 GiB)
+    const char* max_vram;  // GiB budget or backend assignment spec for graph-cut segmented param offload (0 = disabled, -1 = auto)
     bool stream_layers;  // Enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram)
+    bool eager_load;  // Load all params into the params backend at model-load time instead of lazily on first use
     const char* backend;
     const char* params_backend;
+    const char* rpc_servers;
 } sd_ctx_params_t;
 
 typedef struct {
@@ -276,6 +276,11 @@ typedef struct {
     const char* id_embed_path;
     float style_strength;
 } sd_pm_params_t;  // photo maker
+
+typedef struct {
+    const char* id_embedding_path;
+    float id_weight;
+} sd_pulid_params_t;
 
 enum sd_cache_mode_t {
     SD_CACHE_DISABLED = 0,
@@ -369,6 +374,7 @@ typedef struct {
     sd_image_t control_image;
     float control_strength;
     sd_pm_params_t pm_params;
+    sd_pulid_params_t pulid_params;
     sd_tiling_params_t vae_tiling_params;
     sd_cache_params_t cache;
     sd_hires_params_t hires;
@@ -450,6 +456,17 @@ SD_API void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params);
 SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params);
 SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params);
 
+enum sd_cancel_mode_t {
+    // Stop the current generation as soon as possible.
+    SD_CANCEL_ALL,
+    // Finish the current image sample, then skip additional batch latents and return completed images.
+    SD_CANCEL_NEW_LATENTS,
+    // Clear a pending cancellation request.
+    SD_CANCEL_RESET
+};
+
+SD_API void sd_cancel_generation(sd_ctx_t* sd_ctx, enum sd_cancel_mode_t mode);
+
 SD_API void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params);
 SD_API bool generate_video(sd_ctx_t* sd_ctx,
                            const sd_vid_gen_params_t* sd_vid_gen_params,
@@ -460,7 +477,6 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 
 SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
-                                        bool offload_params_to_cpu,
                                         bool direct,
                                         int n_threads,
                                         int tile_size,
@@ -490,6 +506,10 @@ SD_API bool preprocess_canny(sd_image_t image,
 
 SD_API const char* sd_commit(void);
 SD_API const char* sd_version(void);
+
+// for C API, caller needs to call free_sd_images to free the memory after use
+// This helps avoid CRT problems on Windows when memory is allocated in the library but freed in the caller, which may use a different CRT.
+SD_API void free_sd_images(sd_image_t* result_images, int num_images);
 
 #ifdef __cplusplus
 }

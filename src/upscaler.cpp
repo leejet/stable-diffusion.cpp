@@ -19,6 +19,12 @@ UpscalerGGML::UpscalerGGML(int n_threads,
       params_backend_spec(std::move(params_backend_spec)) {
 }
 
+UpscalerGGML::~UpscalerGGML() {
+    // ModelManager holds raw ggml tensor pointers owned by the runner context.
+    model_manager.reset();
+    esrgan_upscaler.reset();
+}
+
 void UpscalerGGML::set_max_graph_vram_bytes(size_t max_vram_bytes) {
     max_graph_vram_bytes = max_vram_bytes;
     if (esrgan_upscaler) {
@@ -34,17 +40,12 @@ void UpscalerGGML::set_stream_layers_enabled(bool enabled) {
 }
 
 bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
-                                  bool offload_params_to_cpu,
                                   int n_threads) {
     ggml_log_set(ggml_log_callback_default, nullptr);
 
     std::string error;
     if (!backend_manager.init(backend_spec.c_str(),
                               params_backend_spec.c_str(),
-                              offload_params_to_cpu,
-                              false,
-                              false,
-                              false,
                               &error)) {
         LOG_ERROR("upscaler backend config failed: %s", error.c_str());
         return false;
@@ -73,22 +74,39 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
         return false;
     }
 
-    ModelLoader model_loader;
-    if (!model_loader.init_from_file_and_convert_name(esrgan_path)) {
+    model_manager = std::make_shared<ModelManager>();
+    model_manager->set_n_threads(n_threads);
+    model_manager->set_enable_mmap(false);
+
+    ModelLoader& model_loader = model_manager->loader();
+    if (!model_loader.init_from_file_and_convert_name(esrgan_path, "", VERSION_ESRGAN)) {
         LOG_ERROR("init model loader from file failed: '%s'", esrgan_path.c_str());
+        return false;
     }
     model_loader.set_wtype_override(model_data_type);
     LOG_INFO("Upscaler weight type: %s", ggml_type_name(model_data_type));
     esrgan_upscaler = std::make_shared<ESRGAN>(backend_for(SDBackendModule::UPSCALER),
-                                               params_backend_for(SDBackendModule::UPSCALER),
-                                               tile_size,
-                                               model_loader.get_tensor_storage_map());
+                                               model_loader.get_tensor_storage_map(),
+                                               model_manager);
+    if (esrgan_upscaler == nullptr || esrgan_upscaler->rrdb_net == nullptr) {
+        LOG_ERROR("init esrgan model from metadata failed: '%s'", esrgan_path.c_str());
+        return false;
+    }
     esrgan_upscaler->set_max_graph_vram_bytes(max_graph_vram_bytes);
     esrgan_upscaler->set_stream_layers_enabled(stream_layers_enabled);
     if (direct) {
         esrgan_upscaler->set_conv2d_direct_enabled(true);
     }
-    if (!esrgan_upscaler->load_from_file(esrgan_path, n_threads)) {
+
+    std::map<std::string, ggml_tensor*> tensors;
+    esrgan_upscaler->get_param_tensors(tensors);
+    if (!model_manager->register_param_tensors("ESRGAN",
+                                               std::move(tensors),
+                                               backend_manager.params_backend_is_disk(SDBackendModule::UPSCALER) ? ModelManager::ResidencyMode::Disk : ModelManager::ResidencyMode::ParamBackend,
+                                               backend_for(SDBackendModule::UPSCALER),
+                                               params_backend_for(SDBackendModule::UPSCALER)) ||
+        !model_manager->validate_registered_tensors()) {
+        LOG_ERROR("register esrgan tensors with model manager failed");
         return false;
     }
     return true;
@@ -96,6 +114,7 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
 
 sd::Tensor<float> UpscalerGGML::upscale_tensor(const sd::Tensor<float>& input_tensor) {
     sd::Tensor<float> upscaled;
+    const int scale = esrgan_upscaler->config.scale;
     if (tile_size <= 0 || (input_tensor.shape()[0] <= tile_size && input_tensor.shape()[1] <= tile_size)) {
         upscaled = esrgan_upscaler->compute(n_threads, input_tensor);
     } else {
@@ -109,9 +128,9 @@ sd::Tensor<float> UpscalerGGML::upscale_tensor(const sd::Tensor<float>& input_te
         };
 
         upscaled = process_tiles_2d(input_tensor,
-                                    static_cast<int>(input_tensor.shape()[0] * esrgan_upscaler->scale),
-                                    static_cast<int>(input_tensor.shape()[1] * esrgan_upscaler->scale),
-                                    esrgan_upscaler->scale,
+                                    static_cast<int>(input_tensor.shape()[0] * scale),
+                                    static_cast<int>(input_tensor.shape()[1] * scale),
+                                    scale,
                                     tile_size,
                                     tile_size,
                                     0.25f,
@@ -130,8 +149,9 @@ sd::Tensor<float> UpscalerGGML::upscale_tensor(const sd::Tensor<float>& input_te
 sd_image_t UpscalerGGML::upscale(sd_image_t input_image, uint32_t upscale_factor) {
     // upscale_factor, unused for RealESRGAN_x4plus_anime_6B.pth
     sd_image_t upscaled_image = {0, 0, 0, nullptr};
-    int output_width          = (int)input_image.width * esrgan_upscaler->scale;
-    int output_height         = (int)input_image.height * esrgan_upscaler->scale;
+    const int scale           = esrgan_upscaler->config.scale;
+    int output_width          = (int)input_image.width * scale;
+    int output_height         = (int)input_image.height * scale;
     LOG_INFO("upscaling from (%i x %i) to (%i x %i)",
              input_image.width, input_image.height, output_width, output_height);
 
@@ -154,7 +174,6 @@ struct upscaler_ctx_t {
 };
 
 upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
-                                 bool offload_params_to_cpu,
                                  bool direct,
                                  int n_threads,
                                  int tile_size,
@@ -171,7 +190,7 @@ upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
         return nullptr;
     }
 
-    if (!upscaler_ctx->upscaler->load_from_file(esrgan_path, offload_params_to_cpu, n_threads)) {
+    if (!upscaler_ctx->upscaler->load_from_file(esrgan_path, n_threads)) {
         delete upscaler_ctx->upscaler;
         upscaler_ctx->upscaler = nullptr;
         free(upscaler_ctx);
@@ -203,7 +222,7 @@ int get_upscale_factor(upscaler_ctx_t* upscaler_ctx) {
     if (upscaler_ctx == nullptr || upscaler_ctx->upscaler == nullptr || upscaler_ctx->upscaler->esrgan_upscaler == nullptr) {
         return 1;
     }
-    return upscaler_ctx->upscaler->esrgan_upscaler->scale;
+    return upscaler_ctx->upscaler->esrgan_upscaler->config.scale;
 }
 
 void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx) {

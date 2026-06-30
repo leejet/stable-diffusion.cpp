@@ -1,6 +1,8 @@
 #include "core/ggml_graph_cut.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <cstring>
 #include <map>
 #include <set>
@@ -8,6 +10,7 @@
 #include <stack>
 #include <unordered_map>
 
+#include "core/ggml_extend_backend.h"
 #include "core/util.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -44,7 +47,9 @@ namespace sd::ggml_graph_cut {
         if (tensor == nullptr) {
             return false;
         }
-        return params_tensor_set.find(tensor) != params_tensor_set.end();
+        return params_tensor_set.find(tensor) != params_tensor_set.end() ||
+               (tensor->view_src != nullptr &&
+                params_tensor_set.find(tensor->view_src) != params_tensor_set.end());
     }
 
     static int graph_node_index_by_name(ggml_cgraph* gf, const char* name) {
@@ -79,6 +84,157 @@ namespace sd::ggml_graph_cut {
                segment.input_param_bytes +
                segment.input_previous_cut_bytes +
                segment.output_bytes;
+    }
+
+    static std::string lower_ascii_copy(std::string value) {
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return value;
+    }
+
+    static std::string normalize_backend_budget_key(const std::string& value) {
+        return lower_ascii_copy(trim(value));
+    }
+
+    static bool is_default_max_vram_key(const std::string& key) {
+        std::string normalized = normalize_backend_budget_key(key);
+        return normalized == "all" || normalized == "default" || normalized == "*";
+    }
+
+    static bool parse_max_vram_budget_value(const std::string& text, float* value, std::string* error) {
+        float parsed = 0.f;
+        if (!parse_strict_float(text, parsed) || !std::isfinite(parsed)) {
+            if (error != nullptr) {
+                *error = "invalid --max-vram value '" + text + "'";
+            }
+            return false;
+        }
+        *value = parsed;
+        return true;
+    }
+
+    static std::vector<std::string> backend_budget_keys(ggml_backend_t backend) {
+        std::vector<std::string> keys;
+        if (backend == nullptr) {
+            return keys;
+        }
+
+        ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+        if (dev != nullptr) {
+            keys.push_back(normalize_backend_budget_key(ggml_backend_dev_name(dev)));
+        }
+        const char* backend_name = ggml_backend_name(backend);
+        if (backend_name != nullptr) {
+            keys.push_back(normalize_backend_budget_key(backend_name));
+        }
+        return keys;
+    }
+
+    void MaxVramAssignment::reset(float fallback_gib) {
+        default_gib = fallback_gib;
+        backend_gib.clear();
+        resolved_backend_bytes.clear();
+    }
+
+    bool MaxVramAssignment::parse(const std::string& raw_spec, std::string* error) {
+        const std::string in = trim(raw_spec);
+        if (in.empty()) {
+            return true;
+        }
+
+        for (const std::string& raw_part : split_string(in, ',')) {
+            const std::string part = trim(raw_part);
+            if (part.empty()) {
+                continue;
+            }
+
+            const size_t eq = part.find('=');
+            if (eq == std::string::npos) {
+                float value = 0.f;
+                if (!parse_max_vram_budget_value(part, &value, error)) {
+                    return false;
+                }
+                default_gib = value;
+                continue;
+            }
+
+            const std::string key        = trim(part.substr(0, eq));
+            const std::string value_text = trim(part.substr(eq + 1));
+            if (key.empty() || value_text.empty()) {
+                if (error != nullptr) {
+                    *error = "invalid --max-vram assignment '" + part + "'";
+                }
+                return false;
+            }
+
+            float value = 0.f;
+            if (!parse_max_vram_budget_value(value_text, &value, error)) {
+                return false;
+            }
+
+            if (is_default_max_vram_key(key)) {
+                default_gib = value;
+                continue;
+            }
+
+            const std::string backend_key = trim(key);
+            if (backend_key.empty()) {
+                if (error != nullptr) {
+                    *error = "invalid --max-vram backend key in '" + part + "'";
+                }
+                return false;
+            }
+            backend_gib[backend_key] = value;
+        }
+        resolved_backend_bytes.clear();
+        return true;
+    }
+
+    bool MaxVramAssignment::canonicalize_backend_keys(std::string* error) {
+        if (backend_gib.empty()) {
+            return true;
+        }
+
+        std::unordered_map<std::string, float> normalized;
+        for (const auto& kv : backend_gib) {
+            std::string resolved = sd_backend_resolve_name(kv.first);
+            if (resolved.empty()) {
+                if (error != nullptr) {
+                    *error = "unknown --max-vram backend '" + kv.first + "'";
+                }
+                return false;
+            }
+            normalized[normalize_backend_budget_key(resolved)] = kv.second;
+        }
+        backend_gib = std::move(normalized);
+        resolved_backend_bytes.clear();
+        return true;
+    }
+
+    size_t MaxVramAssignment::bytes_for_backend(ggml_backend_t backend) {
+        std::vector<std::string> keys = backend_budget_keys(backend);
+        const std::string cache_key   = keys.empty() ? std::string("<none>") : keys.front();
+        auto cached                   = resolved_backend_bytes.find(cache_key);
+        if (cached != resolved_backend_bytes.end()) {
+            return cached->second;
+        }
+
+        float budget_gib = default_gib;
+        if (!backend_gib.empty()) {
+            for (const std::string& key : keys) {
+                auto backend_it = backend_gib.find(key);
+                if (backend_it != backend_gib.end()) {
+                    budget_gib = backend_it->second;
+                    break;
+                }
+            }
+        }
+
+        const float resolved_gib          = resolve_max_vram_gib(budget_gib, backend);
+        const size_t bytes                = max_vram_gib_to_bytes(resolved_gib);
+        resolved_backend_bytes[cache_key] = bytes;
+        return bytes;
     }
 
     size_t max_vram_gib_to_bytes(float max_vram) {
@@ -135,6 +291,24 @@ namespace sd::ggml_graph_cut {
         return max_vram_bytes_to_gib(resolve_auto_max_vram_bytes(-max_vram, backend));
     }
 
+    static bool is_segment_output_needed_after(const Plan& plan,
+                                               size_t end_segment_index,
+                                               int output_node_index) {
+        if (end_segment_index + 1 >= plan.segments.size()) {
+            return false;
+        }
+        for (size_t seg_idx = end_segment_index + 1; seg_idx < plan.segments.size(); ++seg_idx) {
+            const auto& segment = plan.segments[seg_idx];
+            for (const auto& input_ref : segment.input_refs) {
+                if (input_ref.type == Segment::INPUT_PREVIOUS_CUT &&
+                    input_ref.node_index == output_node_index) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     static Segment make_segment_seed(const Plan& plan,
                                      size_t start_segment_index,
                                      size_t end_segment_index) {
@@ -147,8 +321,11 @@ namespace sd::ggml_graph_cut {
         const auto& target_segment = plan.segments[end_segment_index];
         std::unordered_set<int> seen_output_node_indices;
         for (size_t seg_idx = start_segment_index; seg_idx <= end_segment_index; ++seg_idx) {
+            const bool is_boundary_segment = seg_idx == end_segment_index;
             for (int output_node_index : plan.segments[seg_idx].output_node_indices) {
-                if (seen_output_node_indices.insert(output_node_index).second) {
+                if ((is_boundary_segment ||
+                     is_segment_output_needed_after(plan, end_segment_index, output_node_index)) &&
+                    seen_output_node_indices.insert(output_node_index).second) {
                     seed.output_node_indices.push_back(output_node_index);
                 }
             }
@@ -400,23 +577,6 @@ namespace sd::ggml_graph_cut {
         return tensors;
     }
 
-    std::vector<ggml_tensor*> runtime_param_tensors(ggml_cgraph* gf, const Segment& segment, const char* log_desc) {
-        std::vector<ggml_tensor*> tensors = param_tensors(gf, segment);
-        std::vector<ggml_tensor*> filtered_tensors;
-        filtered_tensors.reserve(tensors.size());
-        for (ggml_tensor* tensor : tensors) {
-            if (tensor_buffer(tensor) == nullptr) {
-                LOG_WARN("%s graph cut skipping param input without buffer: segment=%s tensor=%s",
-                         log_desc == nullptr ? "unknown" : log_desc,
-                         segment.group_name.c_str(),
-                         tensor->name);
-                continue;
-            }
-            filtered_tensors.push_back(tensor);
-        }
-        return filtered_tensors;
-    }
-
     std::unordered_set<std::string> collect_future_input_names(ggml_cgraph* gf,
                                                                const Plan& plan,
                                                                size_t current_segment_index) {
@@ -487,6 +647,44 @@ namespace sd::ggml_graph_cut {
             return 0;
         }
 
+        struct TensorRuntimeBinding {
+            ggml_backend_buffer_t buffer = nullptr;
+            void* data                   = nullptr;
+            void* extra                  = nullptr;
+        };
+        std::unordered_map<ggml_tensor*, TensorRuntimeBinding> saved_bindings;
+        auto mark_measurement_external = [&](ggml_tensor* tensor) {
+            if (tensor == nullptr) {
+                return;
+            }
+            auto save_tensor = [&](ggml_tensor* t) {
+                if (t == nullptr || saved_bindings.find(t) != saved_bindings.end()) {
+                    return;
+                }
+                saved_bindings[t] = {t->buffer, t->data, t->extra};
+                // During real execution params and previous-cut inputs already
+                // have backend/cache buffers, so gallocr must not reserve them.
+                t->data = reinterpret_cast<void*>(static_cast<uintptr_t>(1));
+            };
+            save_tensor(tensor);
+            save_tensor(tensor->view_src);
+        };
+        for (const auto& input : segment.input_refs) {
+            if (input.type != Segment::INPUT_PARAM &&
+                input.type != Segment::INPUT_PREVIOUS_CUT) {
+                continue;
+            }
+            mark_measurement_external(input_tensor(gf, input));
+        }
+
+        std::unordered_map<ggml_tensor*, int32_t> saved_output_flags;
+        for (int output_node_index : segment.output_node_indices) {
+            ggml_tensor* output = ggml_graph_node(gf, output_node_index);
+            if (output != nullptr && saved_output_flags.find(output) == saved_output_flags.end()) {
+                saved_output_flags[output] = output->flags;
+            }
+        }
+
         ggml_context* graph_ctx    = nullptr;
         ggml_cgraph* segment_graph = build_segment_graph(gf, segment, &graph_ctx);
         ggml_gallocr_t allocr      = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
@@ -502,6 +700,14 @@ namespace sd::ggml_graph_cut {
 
         ggml_gallocr_free(allocr);
         ggml_free(graph_ctx);
+        for (const auto& kv : saved_output_flags) {
+            kv.first->flags = kv.second;
+        }
+        for (const auto& kv : saved_bindings) {
+            kv.first->buffer = kv.second.buffer;
+            kv.first->data   = kv.second.data;
+            kv.first->extra  = kv.second.extra;
+        }
         return buffer_size;
     }
 
@@ -669,7 +875,8 @@ namespace sd::ggml_graph_cut {
                 GGML_ASSERT(!candidate_plan.segments.empty());
 
                 const auto& candidate_segment = candidate_plan.segments.back();
-                if (graph_cut_segment_vram_bytes(candidate_segment) > max_graph_vram_bytes) {
+                const size_t candidate_bytes  = graph_cut_segment_vram_bytes(candidate_segment);
+                if (candidate_bytes > max_graph_vram_bytes) {
                     break;
                 }
 

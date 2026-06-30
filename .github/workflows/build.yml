@@ -83,7 +83,7 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake .. -DGGML_AVX2=ON -DSD_BUILD_SHARED_LIBS=ON
+          cmake .. -DSD_BUILD_SHARED_LIBS=ON -DGGML_NATIVE=OFF -DSD_BUILD_SHARED_GGML_LIB=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$ORIGIN'
           cmake --build . --config Release
 
       - name: Get commit hash
@@ -146,7 +146,7 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake .. -DSD_BUILD_SHARED_LIBS=ON -DSD_VULKAN=ON
+          cmake .. -DSD_BUILD_SHARED_LIBS=ON -DSD_VULKAN=ON -DGGML_NATIVE=OFF -DSD_BUILD_SHARED_GGML_LIB=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$ORIGIN'
           cmake --build . --config Release
 
       - name: Get commit hash
@@ -207,6 +207,7 @@ jobs:
               UBUNTU_VERSION=24.04
               CUDA_ARCHITECTURES=121
               GGML_CUDA_FA_ALL_QUANTS=ON
+              GGML_CUDA_ENABLE_DYNAMIC_CPU_BACKENDS=OFF
 
     env:
       REGISTRY: ghcr.io
@@ -341,18 +342,12 @@ jobs:
     strategy:
       matrix:
         include:
-          - build: "noavx"
-            defines: "-DGGML_NATIVE=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DSD_BUILD_SHARED_LIBS=ON"
-          - build: "avx2"
-            defines: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DSD_BUILD_SHARED_LIBS=ON"
-          - build: "avx"
-            defines: "-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=OFF -DSD_BUILD_SHARED_LIBS=ON"
-          - build: "avx512"
-            defines: "-DGGML_NATIVE=OFF -DGGML_AVX512=ON -DGGML_AVX=ON -DGGML_AVX2=ON -DSD_BUILD_SHARED_LIBS=ON"
+          - build: "cpu"
+            defines: "-DGGML_NATIVE=OFF -DSD_BUILD_SHARED_LIBS=ON -DSD_BUILD_SHARED_GGML_LIB=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON"
           - build: "cuda12"
-            defines: "-DSD_CUDA=ON -DSD_BUILD_SHARED_LIBS=ON -DCMAKE_CUDA_ARCHITECTURES='61;70;75;80;86;89;90;100;120' -DCMAKE_CUDA_FLAGS='-Xcudafe \"--diag_suppress=177\" -Xcudafe \"--diag_suppress=550\"'"
+            defines: "-DSD_CUDA=ON -DSD_BUILD_SHARED_LIBS=ON -DCMAKE_CUDA_ARCHITECTURES='61;70;75;80;86;89;90;100;120' -DCMAKE_CUDA_FLAGS='-Xcudafe \"--diag_suppress=177\" -Xcudafe \"--diag_suppress=550\"' -DGGML_NATIVE=OFF -DSD_BUILD_SHARED_GGML_LIB=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON"
           - build: "vulkan"
-            defines: "-DSD_VULKAN=ON -DSD_BUILD_SHARED_LIBS=ON"
+            defines: "-DSD_VULKAN=ON -DSD_BUILD_SHARED_LIBS=ON -DGGML_NATIVE=OFF -DSD_BUILD_SHARED_GGML_LIB=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON"
     steps:
       - name: Clone
         id: checkout
@@ -399,19 +394,6 @@ jobs:
           cd build
           cmake .. -DCMAKE_CXX_FLAGS='/bigobj' -G Ninja -DCMAKE_C_COMPILER=cl.exe -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_BUILD_TYPE=Release ${{ matrix.defines }}
           cmake --build .
-
-      - name: Check AVX512F support
-        id: check_avx512f
-        if: ${{ matrix.build == 'avx512' }}
-        continue-on-error: true
-        run: |
-          cd build
-          $vcdir = $(vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)
-          $msvc = $(join-path $vcdir $('VC\Tools\MSVC\'+$(gc -raw $(join-path $vcdir 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt')).Trim()))
-          $cl =  $(join-path $msvc 'bin\Hostx64\x64\cl.exe')
-          echo 'int main(void){unsigned int a[4];__cpuid(a,7);return !(a[1]&65536);}' >> avx512f.c
-          & $cl /O2 /GS- /kernel avx512f.c /link /nodefaultlib /entry:main
-          .\avx512f.exe && echo "AVX512F: YES" && ( echo HAS_AVX512F=1 >> $env:GITHUB_ENV ) || echo "AVX512F: NO"
 
       - name: Get commit hash
         id: commit
@@ -722,6 +704,25 @@ jobs:
         run: |
           sudo apt install -y build-essential cmake wget zip ninja-build
 
+      - name: Free disk space
+        run: |
+          df -h
+
+          # Remove preinstalled SDKs and caches not needed for this job before
+          # installing ROCm. The legacy ROCm apt packages are large enough to
+          # exhaust ubuntu-latest if cleanup runs after installation.
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo rm -rf /opt/hostedtoolcache || true
+          sudo rm -rf /usr/share/swift || true
+          sudo rm -rf /usr/local/share/boost || true
+          docker system prune -af || true
+
+          sudo apt clean
+          df -h
+
       - name: Setup Legacy ROCm
         if: matrix.ROCM_VERSION == '7.2.1'
         id: legacy_env
@@ -742,19 +743,6 @@ jobs:
 
           sudo apt update
           sudo apt-get install -y libssl-dev rocm-hip-sdk
-
-      - name: Free disk space
-        run: |
-          # Remove preinstalled SDKs and caches not needed for this job
-          sudo rm -rf /usr/share/dotnet || true
-          sudo rm -rf /usr/local/lib/android || true
-          sudo rm -rf /opt/ghc || true
-          sudo rm -rf /usr/local/.ghcup || true
-          sudo rm -rf /opt/hostedtoolcache || true
-
-          # Remove old package lists and caches
-          sudo rm -rf /var/lib/apt/lists/* || true
-          sudo apt clean
 
       - name: Setup TheRock
         if: matrix.ROCM_VERSION != '7.2.1'
@@ -794,6 +782,11 @@ jobs:
             -DGPU_TARGETS="${{ matrix.gpu_targets }}" \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DGGML_NATIVE=OFF \
+            -DSD_BUILD_SHARED_GGML_LIB=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_CPU_ALL_VARIANTS=ON \
             -DSD_BUILD_SHARED_LIBS=ON
           cmake --build . --config Release
 

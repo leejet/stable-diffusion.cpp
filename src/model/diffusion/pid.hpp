@@ -710,10 +710,10 @@ namespace Pid {
         std::vector<float> pixel_pos_comp_vec;
 
         PiDRunner(ggml_backend_t backend,
-                  ggml_backend_t params_backend,
                   const String2TensorStorage& tensor_storage_map,
-                  const std::string prefix = "model.diffusion_model")
-            : DiffusionModelRunner(backend, params_backend, prefix),
+                  const std::string prefix                            = "model.diffusion_model",
+                  std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+            : DiffusionModelRunner(backend, prefix, weight_manager),
               config(PixelDiTConfig::detect_from_weights(tensor_storage_map, prefix)) {
             model = PixelDiT(config);
             model.init(params_ctx, tensor_storage_map, prefix);
@@ -823,7 +823,7 @@ namespace Pid {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(x, timesteps, context, lq_latent, degrade_sigma);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,

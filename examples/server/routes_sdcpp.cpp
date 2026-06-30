@@ -219,6 +219,9 @@ static json make_capabilities_json(ServerRuntime& runtime) {
 
     for (int i = 0; i < SCHEDULER_COUNT; ++i) {
         schedulers.push_back(sd_scheduler_name((scheduler_t)i));
+        if (i == DISCRETE_SCHEDULER) {
+            schedulers.push_back("normal");
+        }
     }
 
     {

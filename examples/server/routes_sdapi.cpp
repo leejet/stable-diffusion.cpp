@@ -438,6 +438,9 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         scheduler_names.push_back("default");
         for (int i = 0; i < SCHEDULER_COUNT; i++) {
             scheduler_names.push_back(sd_scheduler_name((scheduler_t)i));
+            if (i == DISCRETE_SCHEDULER) {
+                scheduler_names.push_back("normal");
+            }
         }
         json r = json::array();
         for (auto name : scheduler_names) {
