@@ -229,8 +229,11 @@ static bool execute_sync_img_gen_request(ServerRuntime& runtime,
 
     {
         std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
-        sd_image_t* raw_results = generate_image(runtime.sd_ctx, &img_gen_params);
-        num_results             = request.gen_params.batch_count;
+        sd_image_t* raw_results = nullptr;
+        if (!generate_image(runtime.sd_ctx, &img_gen_params, &raw_results, &num_results)) {
+            raw_results = nullptr;
+            num_results = 0;
+        }
         results.adopt(raw_results, num_results);
     }
 
