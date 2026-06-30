@@ -1,0 +1,60 @@
+ARG CUDA_VERSION=12.6.3
+ARG UBUNTU_VERSION=24.04
+
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu${UBUNTU_VERSION} AS build
+
+# sd-server embeds the web UI at build time, so the build image needs Node/pnpm.
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential git ccache cmake ca-certificates curl gnupg && \
+    mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource-repo.gpg.key && \
+    gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg /tmp/nodesource-repo.gpg.key && \
+    rm /tmp/nodesource-repo.gpg.key && \
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends nodejs && \
+    npm install -g pnpm@10.15.1 && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /sd.cpp
+
+COPY . .
+
+ARG CUDACXX=/usr/local/cuda/bin/nvcc
+ARG CUDA_ARCHITECTURES=""
+ARG GGML_CUDA_FA_ALL_QUANTS=""
+ARG GGML_CUDA_ENABLE_DYNAMIC_CPU_BACKENDS=ON
+
+RUN set -- \
+        -DSD_CUDA=ON; \
+    if [ "${GGML_CUDA_ENABLE_DYNAMIC_CPU_BACKENDS}" = "ON" ]; then \
+        set -- "$@" \
+            -DSD_BUILD_SHARED_LIBS=ON \
+            -DGGML_NATIVE=OFF \
+            -DSD_BUILD_SHARED_GGML_LIB=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            "-DCMAKE_INSTALL_RPATH=\$ORIGIN"; \
+    fi; \
+    if [ -n "${CUDA_ARCHITECTURES}" ]; then \
+        set -- "$@" "-DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES}"; \
+    fi; \
+    if [ -n "${GGML_CUDA_FA_ALL_QUANTS}" ]; then \
+        set -- "$@" "-DGGML_CUDA_FA_ALL_QUANTS=${GGML_CUDA_FA_ALL_QUANTS}"; \
+    fi; \
+    cmake . -B ./build "$@"
+RUN cmake --build ./build --config Release -j$(nproc)
+
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu${UBUNTU_VERSION} AS runtime
+
+RUN apt-get update && \
+    apt-get install --yes --no-install-recommends libgomp1 && \
+    apt-get clean
+
+COPY --from=build /sd.cpp/build/bin /sd.cpp/bin
+RUN printf '#!/bin/sh\nexec /sd.cpp/bin/sd-cli "$@"\n' > /sd-cli && \
+    printf '#!/bin/sh\nexec /sd.cpp/bin/sd-server "$@"\n' > /sd-server && \
+    chmod +x /sd-cli /sd-server
+
+ENTRYPOINT [ "/sd-cli" ]

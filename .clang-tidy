@@ -1,0 +1,10 @@
+Checks: >
+  modernize-make-shared,
+  modernize-use-nullptr,
+  modernize-use-override,
+  modernize-pass-by-value,
+  modernize-return-braced-init-list,
+  modernize-deprecated-headers,
+HeaderFilterRegex: '^$'
+WarningsAsErrors: ''
+FormatStyle: none
