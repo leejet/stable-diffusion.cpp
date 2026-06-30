@@ -173,8 +173,13 @@ bool execute_img_gen_job(ServerRuntime& runtime,
 
     {
         std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
-        sd_image_t* raw_results = generate_image(runtime.sd_ctx, &params);
-        results.adopt(raw_results, params.batch_count);
+        sd_image_t* raw_results = nullptr;
+        int num_results         = 0;
+        if (!generate_image(runtime.sd_ctx, &params, &raw_results, &num_results)) {
+            raw_results = nullptr;
+            num_results = 0;
+        }
+        results.adopt(raw_results, num_results);
     }
 
     const int num_results = results.count();
