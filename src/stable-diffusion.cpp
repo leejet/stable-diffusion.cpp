@@ -29,6 +29,7 @@
 #include "model/diffusion/krea2.hpp"
 #include "model/diffusion/lens.hpp"
 #include "model/diffusion/ltxv.hpp"
+#include "model/diffusion/minit2i.hpp"
 #include "model/diffusion/mmdit.hpp"
 #include "model/diffusion/model.hpp"
 #include "model/diffusion/pid.hpp"
@@ -93,6 +94,7 @@ const char* model_version_to_str[] = {
     "Ovis Image",
     "Ernie Image",
     "Lens",
+    "MiniT2I",
     "Longcat-Image",
     "PiD",
     "Ideogram 4",
@@ -785,6 +787,14 @@ public:
                                                                                tensor_storage_map,
                                                                                "model",
                                                                                model_manager);
+            } else if (sd_version_is_minit2i(version)) {
+                cond_stage_model = std::make_shared<MiniT2IConditioner>(backend_for(SDBackendModule::TE),
+                                                                        tensor_storage_map,
+                                                                        model_manager);
+                diffusion_model  = std::make_shared<MiniT2I::MiniT2IRunner>(backend_for(SDBackendModule::DIFFUSION),
+                                                                           tensor_storage_map,
+                                                                           "model.diffusion_model.model.net",
+                                                                           model_manager);
             } else if (sd_version_is_anima(version)) {
                 cond_stage_model = std::make_shared<AnimaConditioner>(backend_for(SDBackendModule::TE),
                                                                       tensor_storage_map,
@@ -958,7 +968,7 @@ public:
                 }
             };
 
-            if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1) {
+            if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version)) {
                 LOG_INFO("using FakeVAE");
                 first_stage_model = std::make_shared<FakeVAE>(version,
                                                               backend_for(SDBackendModule::VAE),
@@ -1299,6 +1309,8 @@ public:
                     }
                 } else if (sd_version_is_sefi_image(version)) {
                     pred_type = SEFI_FLOW_PRED;
+                } else if (sd_version_is_minit2i(version)) {
+                    pred_type = MINIT2I_FLOW_PRED;
                 } else {
                     pred_type = EPS_PRED;
                 }
@@ -1334,6 +1346,11 @@ public:
                 case SEFI_FLOW_PRED: {
                     LOG_INFO("running in SeFi-Image dual-time FLOW mode");
                     denoiser = std::make_shared<SefiFlowDenoiser>();
+                    break;
+                }
+                case MINIT2I_FLOW_PRED: {
+                    LOG_INFO("running in MiniT2I FLOW mode");
+                    denoiser = std::make_shared<MiniT2IFlowDenoiser>();
                     break;
                 }
                 default: {
@@ -2032,11 +2049,12 @@ public:
         }
 
         int64_t last_progress_us     = ggml_time_us();
-        sd::Tensor<float> x_t        = !noise.empty()
-                                           ? denoiser->noise_scaling(sigmas[0], noise, init_latent)
-                                           : init_latent;
-        sd::Tensor<float> denoised   = x_t;
         SamplePreviewContext preview = prepare_sample_preview_context();
+
+        sd::Tensor<float> x_t      = !noise.empty()
+                                         ? denoiser->noise_scaling(sigmas[0], noise, init_latent)
+                                         : init_latent;
+        sd::Tensor<float> denoised = x_t;
 
         auto denoise = [&](const sd::Tensor<float>& x, float sigma, int step) -> sd::guidance::GuiderOutput {
             if (get_cancel_flag() == SD_CANCEL_ALL) {
@@ -2155,6 +2173,9 @@ public:
                         audio_length,
                         frame_rate,
                         video_positions.empty() ? nullptr : &video_positions};
+                } else if (sd_version_is_minit2i(version)) {
+                    diffusion_params.extra = MiniT2IDiffusionExtra{
+                        condition.c_vector.empty() ? nullptr : &condition.c_vector};
                 } else {
                     diffusion_params.extra = std::monostate{};
                 }
@@ -2335,6 +2356,8 @@ public:
                 latent_channel = 3;
             } else if (version == VERSION_CHROMA_RADIANCE) {
                 latent_channel = 3;
+            } else if (sd_version_is_minit2i(version)) {
+                latent_channel = 3;
             } else if (sd_version_is_pid(version)) {
                 latent_channel = 3;
             } else if (sd_version_is_sefi_image(version)) {
@@ -2416,7 +2439,7 @@ public:
     }
 
     sd::Tensor<float> decode_first_stage(const sd::Tensor<float>& x, bool decode_video = false) {
-        if (sd_version_is_pid(version)) {
+        if (sd_version_is_pid(version) || sd_version_is_minit2i(version)) {
             return sd::ops::clamp((x + 1.f) * 0.5f, 0.0f, 1.0f);
         }
         auto latents = first_stage_model->diffusion_to_vae_latents(x);
@@ -2591,6 +2614,7 @@ const char* prediction_to_str[] = {
     "sd3_flow",
     "flux_flow",
     "sefi_flow",
+    "minit2i_flow",
 };
 
 const char* sd_prediction_name(enum prediction_t prediction) {
@@ -4224,6 +4248,11 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
     if (request->use_uncond || request->use_high_noise_uncond) {
         if (sd_version_is_ideogram4(sd_ctx->sd->version)) {
             uncond.c_vector = sd::Tensor<float>::from_vector({1.0f});
+        } else if (sd_version_is_minit2i(sd_ctx->sd->version)) {
+            // MiniT2I derives the unconditional signal from the same T5 hidden
+            // states with a zeroed prompt mask, so no extra text encode is needed.
+            uncond.c_crossattn = cond.c_crossattn;
+            uncond.c_vector    = sd::Tensor<float>::zeros_like(cond.c_vector);
         } else {
             bool zero_out_masked = false;
             if (sd_version_is_sdxl(sd_ctx->sd->version) &&

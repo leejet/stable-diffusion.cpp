@@ -472,6 +472,9 @@ SDVersion ModelLoader::get_sd_version() {
             tensor_storage_map.find("model.diffusion_model.transformer_blocks.0.img_mlp.w1.weight") != tensor_storage_map.end()) {
             return VERSION_LENS;
         }
+        if (tensor_storage.name.find("net.img_embedder.proj1.weight") != std::string::npos) {
+            return VERSION_MINIT2I;
+        }
         if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.img_mod.1.weight") != std::string::npos) {
             return VERSION_QWEN_IMAGE;
         }
