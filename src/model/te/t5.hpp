@@ -51,7 +51,7 @@ struct T5Config {
         }
         if (const TensorStorage* q = find_tensor("encoder.block.0.layer.0.SelfAttention.q.weight")) {
             if (q->n_dims == 2) {
-                config.model_dim = q->ne[0];
+                config.model_dim  = q->ne[0];
                 int64_t inner_dim = q->ne[1];
                 // Flan-T5/T5 uses d_kv=64 for common sizes.
                 if (inner_dim % 64 == 0) {
@@ -80,7 +80,7 @@ struct T5Config {
             if (dot == std::string::npos) {
                 continue;
             }
-            int64_t layer = atoi(name.substr(pos, dot - pos).c_str());
+            int64_t layer   = atoi(name.substr(pos, dot - pos).c_str());
             detected_layers = std::max(detected_layers, layer + 1);
         }
         if (detected_layers > 0) {

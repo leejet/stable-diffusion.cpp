@@ -47,8 +47,8 @@ namespace MiniT2I {
                     continue;
                 }
                 if (ends_with(name, "img_embedder.proj1.weight") && tensor_storage.n_dims == 4) {
-                    config.patch_size  = tensor_storage.ne[0];
-                    config.in_channels = tensor_storage.ne[2];
+                    config.patch_size   = tensor_storage.ne[0];
+                    config.in_channels  = tensor_storage.ne[2];
                     config.pca_channels = tensor_storage.ne[3];
                 } else if (ends_with(name, "img_embedder.proj2.weight") && tensor_storage.n_dims == 4) {
                     config.pca_channels = tensor_storage.ne[2];
@@ -59,8 +59,8 @@ namespace MiniT2I {
                 } else if (ends_with(name, "pooled_embedder.weight") && tensor_storage.n_dims == 2) {
                     config.cond_vec_size = tensor_storage.ne[1];
                 } else if (ends_with(name, "double_blocks.0.img_qkv.weight") && tensor_storage.n_dims == 2) {
-                    int64_t inner3 = tensor_storage.ne[1];
-                    int64_t inner  = inner3 / 3;
+                    int64_t inner3     = tensor_storage.ne[1];
+                    int64_t inner      = inner3 / 3;
                     config.hidden_size = tensor_storage.ne[0];
                     if (config.hidden_size == 768) {
                         config.num_heads = 12;
@@ -73,9 +73,9 @@ namespace MiniT2I {
                         config.num_heads = std::max<int64_t>(1, inner / config.head_dim);
                     }
                 } else if (ends_with(name, "final_layer.linear.weight") && tensor_storage.n_dims == 2) {
-                    int64_t patch_area  = config.patch_size * config.patch_size;
-                    config.hidden_size  = tensor_storage.ne[0];
-                    config.in_channels  = patch_area > 0 ? tensor_storage.ne[1] / patch_area : config.in_channels;
+                    int64_t patch_area = config.patch_size * config.patch_size;
+                    config.hidden_size = tensor_storage.ne[0];
+                    config.in_channels = patch_area > 0 ? tensor_storage.ne[1] / patch_area : config.in_channels;
                 } else if (ends_with(name, "mask_token") && tensor_storage.n_dims >= 2) {
                     config.prompt_length = tensor_storage.ne[1];
                 }
@@ -92,8 +92,8 @@ namespace MiniT2I {
                 if (pos != std::string::npos) {
                     auto items = split_string(name.substr(pos), '.');
                     if (items.size() > 1) {
-                        int64_t idx                 = atoi(items[1].c_str());
-                        config.txt_preamble_depth   = std::max<int64_t>(config.txt_preamble_depth, idx + 1);
+                        int64_t idx               = atoi(items[1].c_str());
+                        config.txt_preamble_depth = std::max<int64_t>(config.txt_preamble_depth, idx + 1);
                     }
                 }
             }
@@ -134,8 +134,8 @@ namespace MiniT2I {
             for (int x = 0; x < grid_size; ++x) {
                 size_t base = static_cast<size_t>(y * grid_size + x) * dim;
                 for (int i = 0; i < quarter; ++i) {
-                    float ay = y * omega[i];
-                    float ax = x * omega[i];
+                    float ay                           = y * omega[i];
+                    float ax                           = x * omega[i];
                     out[base + i]                      = std::sin(ax);
                     out[base + quarter + i]            = std::cos(ax);
                     out[base + half_dim + i]           = std::sin(ay);
@@ -152,9 +152,9 @@ namespace MiniT2I {
 
     inline std::vector<float> make_vision_rope(int side, int head_dim) {
         GGML_ASSERT(head_dim % 4 == 0);
-        int dim      = head_dim / 2;
-        int quarter  = dim / 2;
-        int length   = side * side;
+        int dim     = head_dim / 2;
+        int quarter = dim / 2;
+        int length  = side * side;
         std::vector<float> out(static_cast<size_t>(length) * (head_dim / 2) * 4);
         std::vector<float> freqs(quarter);
         for (int i = 0; i < quarter; ++i) {
@@ -165,15 +165,15 @@ namespace MiniT2I {
                 int pos     = y * side + x;
                 size_t base = static_cast<size_t>(pos) * (head_dim / 2) * 4;
                 for (int i = 0; i < quarter; ++i) {
-                    float ay = y * freqs[i];
-                    float ax = x * freqs[i];
+                    float ay        = y * freqs[i];
+                    float ax        = x * freqs[i];
                     float angles[2] = {ay, ax};
                     for (int axis = 0; axis < 2; ++axis) {
-                        int j                   = axis * quarter + i;
-                        out[base + 4 * j]       = std::cos(angles[axis]);
-                        out[base + 4 * j + 1]   = -std::sin(angles[axis]);
-                        out[base + 4 * j + 2]   = std::sin(angles[axis]);
-                        out[base + 4 * j + 3]   = std::cos(angles[axis]);
+                        int j                 = axis * quarter + i;
+                        out[base + 4 * j]     = std::cos(angles[axis]);
+                        out[base + 4 * j + 1] = -std::sin(angles[axis]);
+                        out[base + 4 * j + 2] = std::sin(angles[axis]);
+                        out[base + 4 * j + 3] = std::cos(angles[axis]);
                     }
                 }
             }
@@ -184,15 +184,15 @@ namespace MiniT2I {
     struct SwiGLUMlp : public GGMLBlock {
         SwiGLUMlp(int64_t in_features, int64_t hidden_features) {
             int64_t hidden_dim = ((hidden_features + 7) / 8) * 8;
-            blocks["w1"] = std::make_shared<Linear>(in_features, hidden_dim, false);
-            blocks["w3"] = std::make_shared<Linear>(in_features, hidden_dim, false);
-            blocks["w2"] = std::make_shared<Linear>(hidden_dim, in_features, false);
+            blocks["w1"]       = std::make_shared<Linear>(in_features, hidden_dim, false);
+            blocks["w3"]       = std::make_shared<Linear>(in_features, hidden_dim, false);
+            blocks["w2"]       = std::make_shared<Linear>(hidden_dim, in_features, false);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
-            auto w1 = std::dynamic_pointer_cast<Linear>(blocks["w1"]);
-            auto w3 = std::dynamic_pointer_cast<Linear>(blocks["w3"]);
-            auto w2 = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
+            auto w1   = std::dynamic_pointer_cast<Linear>(blocks["w1"]);
+            auto w3   = std::dynamic_pointer_cast<Linear>(blocks["w3"]);
+            auto w2   = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
             auto gate = ggml_silu(ctx->ggml_ctx, w1->forward(ctx, x));
             auto up   = w3->forward(ctx, x);
             return w2->forward(ctx, ggml_mul(ctx->ggml_ctx, gate, up));
@@ -205,28 +205,28 @@ namespace MiniT2I {
         BottleneckPatchEmbed(int64_t patch_size, int64_t in_channels, int64_t pca_channels, int64_t hidden_size)
             : patch_size(patch_size) {
             blocks["proj1"] = std::make_shared<Conv2d>(in_channels,
-                                                        pca_channels,
-                                                        std::pair<int, int>{static_cast<int>(patch_size), static_cast<int>(patch_size)},
-                                                        std::pair<int, int>{static_cast<int>(patch_size), static_cast<int>(patch_size)},
-                                                        std::pair<int, int>{0, 0},
-                                                        std::pair<int, int>{1, 1},
-                                                        false);
+                                                       pca_channels,
+                                                       std::pair<int, int>{static_cast<int>(patch_size), static_cast<int>(patch_size)},
+                                                       std::pair<int, int>{static_cast<int>(patch_size), static_cast<int>(patch_size)},
+                                                       std::pair<int, int>{0, 0},
+                                                       std::pair<int, int>{1, 1},
+                                                       false);
             blocks["proj2"] = std::make_shared<Conv2d>(pca_channels,
-                                                        hidden_size,
-                                                        std::pair<int, int>{1, 1},
-                                                        std::pair<int, int>{1, 1},
-                                                        std::pair<int, int>{0, 0},
-                                                        std::pair<int, int>{1, 1},
-                                                        true);
+                                                       hidden_size,
+                                                       std::pair<int, int>{1, 1},
+                                                       std::pair<int, int>{1, 1},
+                                                       std::pair<int, int>{0, 0},
+                                                       std::pair<int, int>{1, 1},
+                                                       true);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             auto proj1 = std::dynamic_pointer_cast<Conv2d>(blocks["proj1"]);
             auto proj2 = std::dynamic_pointer_cast<Conv2d>(blocks["proj2"]);
-            x = proj1->forward(ctx, x);
-            x = proj2->forward(ctx, x);
-            x = ggml_reshape_3d(ctx->ggml_ctx, x, x->ne[0] * x->ne[1], x->ne[2], x->ne[3]);
-            x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));
+            x          = proj1->forward(ctx, x);
+            x          = proj2->forward(ctx, x);
+            x          = ggml_reshape_3d(ctx->ggml_ctx, x, x->ne[0] * x->ne[1], x->ne[2], x->ne[3]);
+            x          = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));
             return x;
         }
     };
@@ -253,12 +253,12 @@ namespace MiniT2I {
     inline std::vector<ggml_tensor*> split_qkv(ggml_context* ctx, ggml_tensor* qkv, int64_t num_heads, int64_t head_dim) {
         int64_t N = qkv->ne[2];
         int64_t L = qkv->ne[1];
-        auto q = ggml_view_4d(ctx, qkv, head_dim, num_heads, L, N,
-                              qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], 0);
-        auto k = ggml_view_4d(ctx, qkv, head_dim, num_heads, L, N,
-                              qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], qkv->nb[0] * head_dim * num_heads);
-        auto v = ggml_view_4d(ctx, qkv, head_dim, num_heads, L, N,
-                              qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], qkv->nb[0] * head_dim * num_heads * 2);
+        auto q    = ggml_view_4d(ctx, qkv, head_dim, num_heads, L, N,
+                                 qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], 0);
+        auto k    = ggml_view_4d(ctx, qkv, head_dim, num_heads, L, N,
+                                 qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], qkv->nb[0] * head_dim * num_heads);
+        auto v    = ggml_view_4d(ctx, qkv, head_dim, num_heads, L, N,
+                                 qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], qkv->nb[0] * head_dim * num_heads * 2);
         return {q, k, v};
     }
 
@@ -268,7 +268,7 @@ namespace MiniT2I {
 
         PlainTextTransformerBlock(int64_t hidden_size, int64_t num_heads, int64_t head_dim, float mlp_ratio)
             : num_heads(num_heads), head_dim(head_dim) {
-            int64_t inner_dim = num_heads * head_dim;
+            int64_t inner_dim   = num_heads * head_dim;
             blocks["norm1"]     = std::make_shared<RMSNorm>(hidden_size, 1e-6f);
             blocks["norm2"]     = std::make_shared<RMSNorm>(hidden_size, 1e-6f);
             blocks["qkv"]       = std::make_shared<Linear>(hidden_size, inner_dim * 3, true);
@@ -304,7 +304,7 @@ namespace MiniT2I {
 
         DoubleStreamDiTBlock(int64_t hidden_size, int64_t txt_hidden_size, int64_t num_heads, int64_t head_dim, float mlp_ratio)
             : num_heads(num_heads), head_dim(head_dim) {
-            int64_t inner_dim = num_heads * head_dim;
+            int64_t inner_dim       = num_heads * head_dim;
             blocks["img_norm1"]     = std::make_shared<RMSNorm>(hidden_size, 1e-6f);
             blocks["img_norm2"]     = std::make_shared<RMSNorm>(hidden_size, 1e-6f);
             blocks["txt_norm1"]     = std::make_shared<RMSNorm>(txt_hidden_size, 1e-6f);
@@ -346,7 +346,7 @@ namespace MiniT2I {
             auto k = ggml_concat(ctx->ggml_ctx, k_norm->forward(ctx, txt_qkv[1]), k_norm->forward(ctx, img_qkv[1]), 2);
             auto v = ggml_concat(ctx->ggml_ctx, txt_qkv[2], img_qkv[2], 2);
 
-            auto out = Rope::attention(ctx, q, k, v, pe, nullptr, 1.0f, false);
+            auto out     = Rope::attention(ctx, q, k, v, pe, nullptr, 1.0f, false);
             auto out_txt = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, lt);
             auto out_img = ggml_ext_slice(ctx->ggml_ctx, out, 1, lt, lt + li);
 
@@ -399,10 +399,10 @@ namespace MiniT2I {
             if (mask == nullptr) {
                 return context;
             }
-            mask = ggml_reshape_3d(ctx->ggml_ctx, mask, 1, mask->ne[0], mask->ne[1]);
-            mask = ggml_repeat(ctx->ggml_ctx, mask, context);
-            auto keep = ggml_mul(ctx->ggml_ctx, context, mask);
-            auto inv  = ggml_sub(ctx->ggml_ctx, ggml_ext_ones_like(ctx->ggml_ctx, mask), mask);
+            mask            = ggml_reshape_3d(ctx->ggml_ctx, mask, 1, mask->ne[0], mask->ne[1]);
+            mask            = ggml_repeat(ctx->ggml_ctx, mask, context);
+            auto keep       = ggml_mul(ctx->ggml_ctx, context, mask);
+            auto inv        = ggml_sub(ctx->ggml_ctx, ggml_ext_ones_like(ctx->ggml_ctx, mask), mask);
             auto mask_token = ggml_repeat(ctx->ggml_ctx, params["mask_token"], context);
             return ggml_add(ctx->ggml_ctx, keep, ggml_mul(ctx->ggml_ctx, mask_token, inv));
         }
@@ -411,10 +411,10 @@ namespace MiniT2I {
             int64_t dim = context->ne[0];
             int64_t len = context->ne[1];
             int64_t N   = context->ne[2];
-            auto x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, context, 1, 0, 2, 3));
-            x      = ggml_reshape_3d(ctx->ggml_ctx, x, len, dim, N);
-            x      = ggml_mean(ctx->ggml_ctx, x);
-            x      = ggml_reshape_2d(ctx->ggml_ctx, x, dim, N);
+            auto x      = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, context, 1, 0, 2, 3));
+            x           = ggml_reshape_3d(ctx->ggml_ctx, x, len, dim, N);
+            x           = ggml_mean(ctx->ggml_ctx, x);
+            x           = ggml_reshape_2d(ctx->ggml_ctx, x, dim, N);
             return x;
         }
 
@@ -527,14 +527,14 @@ namespace MiniT2I {
 
             auto pos_embed_vec = make_2d_sincos_pos_embed(static_cast<int>(img_side), static_cast<int>(config.hidden_size));
             auto txt_pe_vec    = make_text_rope(static_cast<int>(txt_len), static_cast<int>(config.head_dim));
-            auto img_pe_vec = make_vision_rope(static_cast<int>(img_side), static_cast<int>(config.head_dim));
-            auto joint_pe_vec = txt_pe_vec;
+            auto img_pe_vec    = make_vision_rope(static_cast<int>(img_side), static_cast<int>(config.head_dim));
+            auto joint_pe_vec  = txt_pe_vec;
             joint_pe_vec.insert(joint_pe_vec.end(), img_pe_vec.begin(), img_pe_vec.end());
 
             ggml_init_params params;
-            params.mem_size   = static_cast<size_t>(3 * ggml_tensor_overhead());
-            params.mem_buffer = nullptr;
-            params.no_alloc   = true;
+            params.mem_size    = static_cast<size_t>(3 * ggml_tensor_overhead());
+            params.mem_buffer  = nullptr;
+            params.no_alloc    = true;
             position_cache_ctx = ggml_init(params);
             GGML_ASSERT(position_cache_ctx != nullptr);
 
@@ -563,10 +563,10 @@ namespace MiniT2I {
                                  const sd::Tensor<float>& timesteps_tensor,
                                  const sd::Tensor<float>& context_tensor,
                                  const sd::Tensor<float>& mask_tensor) {
-            ggml_cgraph* gf        = new_graph_custom(MINIT2I_GRAPH_SIZE);
-            ggml_tensor* x         = make_input(x_tensor);
-            ggml_tensor* context   = make_input(context_tensor);
-            ggml_tensor* mask      = make_input(mask_tensor);
+            ggml_cgraph* gf      = new_graph_custom(MINIT2I_GRAPH_SIZE);
+            ggml_tensor* x       = make_input(x_tensor);
+            ggml_tensor* context = make_input(context_tensor);
+            ggml_tensor* mask    = make_input(mask_tensor);
             SD_UNUSED(timesteps_tensor);
 
             int64_t W        = x->ne[0];

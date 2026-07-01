@@ -792,9 +792,9 @@ public:
                                                                         tensor_storage_map,
                                                                         model_manager);
                 diffusion_model  = std::make_shared<MiniT2I::MiniT2IRunner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                            tensor_storage_map,
-                                                                            "model.diffusion_model.model.net",
-                                                                            model_manager);
+                                                                           tensor_storage_map,
+                                                                           "model.diffusion_model.model.net",
+                                                                           model_manager);
             } else if (sd_version_is_anima(version)) {
                 cond_stage_model = std::make_shared<AnimaConditioner>(backend_for(SDBackendModule::TE),
                                                                       tensor_storage_map,
@@ -2051,10 +2051,10 @@ public:
         int64_t last_progress_us     = ggml_time_us();
         SamplePreviewContext preview = prepare_sample_preview_context();
 
-        sd::Tensor<float> x_t        = !noise.empty()
-                                           ? denoiser->noise_scaling(sigmas[0], noise, init_latent)
-                                           : init_latent;
-        sd::Tensor<float> denoised   = x_t;
+        sd::Tensor<float> x_t      = !noise.empty()
+                                         ? denoiser->noise_scaling(sigmas[0], noise, init_latent)
+                                         : init_latent;
+        sd::Tensor<float> denoised = x_t;
 
         auto denoise = [&](const sd::Tensor<float>& x, float sigma, int step) -> sd::guidance::GuiderOutput {
             if (get_cancel_flag() == SD_CANCEL_ALL) {
