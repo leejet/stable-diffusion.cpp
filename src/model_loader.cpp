@@ -470,15 +470,7 @@ SDVersion ModelLoader::get_sd_version() {
             tensor_storage_map.find("model.diffusion_model.transformer_blocks.0.img_mlp.w1.weight") != tensor_storage_map.end()) {
             return VERSION_LENS;
         }
-        if ((tensor_storage_map.find("model.net.img_embedder.proj1.weight") != tensor_storage_map.end() &&
-             tensor_storage_map.find("model.net.double_blocks.0.img_qkv.weight") != tensor_storage_map.end() &&
-             tensor_storage_map.find("model.net.txt_embedder.weight") != tensor_storage_map.end()) ||
-            (tensor_storage_map.find("model.diffusion_model.net.img_embedder.proj1.weight") != tensor_storage_map.end() &&
-             tensor_storage_map.find("model.diffusion_model.net.double_blocks.0.img_qkv.weight") != tensor_storage_map.end() &&
-             tensor_storage_map.find("model.diffusion_model.net.txt_embedder.weight") != tensor_storage_map.end()) ||
-            (tensor_storage_map.find("model.diffusion_model.model.net.img_embedder.proj1.weight") != tensor_storage_map.end() &&
-             tensor_storage_map.find("model.diffusion_model.model.net.double_blocks.0.img_qkv.weight") != tensor_storage_map.end() &&
-             tensor_storage_map.find("model.diffusion_model.model.net.txt_embedder.weight") != tensor_storage_map.end())) {
+        if (tensor_storage.name.find("net.img_embedder.proj1.weight") != std::string::npos) {
             return VERSION_MINIT2I;
         }
         if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.img_mod.1.weight") != std::string::npos) {

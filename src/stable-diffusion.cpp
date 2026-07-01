@@ -793,7 +793,7 @@ public:
                                                                         model_manager);
                 diffusion_model  = std::make_shared<MiniT2I::MiniT2IRunner>(backend_for(SDBackendModule::DIFFUSION),
                                                                             tensor_storage_map,
-                                                                            "",
+                                                                            "model.diffusion_model.model.net",
                                                                             model_manager);
             } else if (sd_version_is_anima(version)) {
                 cond_stage_model = std::make_shared<AnimaConditioner>(backend_for(SDBackendModule::TE),

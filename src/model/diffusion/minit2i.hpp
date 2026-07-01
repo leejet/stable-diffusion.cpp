@@ -459,23 +459,6 @@ namespace MiniT2I {
         }
     };
 
-    inline std::string resolve_prefix(const String2TensorStorage& tensor_storage_map, const std::string& requested) {
-        if (!requested.empty() && tensor_storage_map.find(requested + ".img_embedder.proj1.weight") != tensor_storage_map.end()) {
-            return requested;
-        }
-        static const std::vector<std::string> candidates = {
-            "model.net",
-            "model.diffusion_model.net",
-            "model.diffusion_model.model.net",
-        };
-        for (const auto& candidate : candidates) {
-            if (tensor_storage_map.find(candidate + ".img_embedder.proj1.weight") != tensor_storage_map.end()) {
-                return candidate;
-            }
-        }
-        return requested.empty() ? "model.net" : requested;
-    }
-
     struct MiniT2IRunner : public DiffusionModelRunner {
         MiniT2IConfig config;
         MMJiT model;
@@ -493,7 +476,7 @@ namespace MiniT2I {
                       const String2TensorStorage& tensor_storage_map      = {},
                       const std::string prefix                            = "",
                       std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
-            : DiffusionModelRunner(backend, resolve_prefix(tensor_storage_map, prefix), weight_manager),
+            : DiffusionModelRunner(backend, prefix, weight_manager),
               config(MiniT2IConfig::detect_from_weights(tensor_storage_map, this->prefix)),
               model(config) {
             model.init(params_ctx, tensor_storage_map, this->prefix);
