@@ -4,7 +4,7 @@
 
 Quantization reduces the precision of a model's weights, decreasing its size and computational requirements. However, this can lead to a loss of quality. An importance matrix helps mitigate this by identifying which weights are *most* important for the model's performance. During quantization, these important weights are preserved with higher precision, while less important weights are quantized more aggressively.  This allows for better overall quality at a given quantization level.
 
-This originates from work done with language models in [llama.cpp](https://github.com/ggml-org/llama.cpp/blob/master/examples/imatrix/README.md).
+This originates from work done with language models in [llama.cpp](https://github.com/ggml-org/llama.cpp/blob/master/tools/imatrix/README.md).
 
 ## Usage
 
