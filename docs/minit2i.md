@@ -5,7 +5,7 @@ MiniT2I uses a MiniT2I diffusion transformer and `google/flan-t5-large` as the t
 ## Download weights
 
 - Download MiniT2I diffusion model
-    - safetensors: https://huggingface.co/MiniT2I/minit2i-b-16/tree/main/transformer (`diffusion_pytorch_model.safetensors`)
+    - safetensors: https://huggingface.co/MiniT2I/MiniT2I/tree/main/minit2i-b-16/transformer (`diffusion_pytorch_model.safetensors`)
 - Download flan-t5-large text encoder
     - safetensors: https://huggingface.co/google/flan-t5-large/tree/main (`model.safetensors`)
 
