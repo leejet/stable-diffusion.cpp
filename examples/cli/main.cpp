@@ -875,6 +875,7 @@ int main(int argc, const char* argv[]) {
     }
 
     if (!cli_params.imatrix_out.empty()) {
+        LOG_INFO("saving imatrix to '%s'", cli_params.imatrix_out.c_str());
         save_imatrix(cli_params.imatrix_out.c_str());
     }
 

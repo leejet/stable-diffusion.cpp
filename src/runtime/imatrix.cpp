@@ -65,8 +65,6 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
         }
         return true;
     }
-    // LOG_DEBUG("%s", wname.c_str());
-
     std::lock_guard<std::mutex> lock(mutex_);
 
     // copy the data from the GPU memory if needed
@@ -108,7 +106,6 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
             LOG_ERROR("inconsistent size for %s (%d vs %d)\n", wname.c_str(), (int)e.values.size(), (int)src1->ne[0] * n_as);
             exit(1);  // GGML_ABORT("fatal error");
         }
-        // LOG_DEBUG("%s[%d]: %32s, %s, %5d x %5d, %d\n", last_call_, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[2], (int)src1->type);
         // loop over all possible experts, regardless if they are used or not in the batch
         for (int ex = 0; ex < n_as; ++ex) {
             size_t e_start = ex * src1->ne[0];
@@ -130,7 +127,6 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
                         e.values[e_start + j] += x[j] * x[j];
                         e.counts[e_start + j]++;
                         if (!std::isfinite(e.values[e_start + j])) {
-                            printf("\n");
                             LOG_ERROR("%f detected in %s\n", e.values[e_start + j], wname.c_str());
                             exit(1);
                         }
@@ -149,7 +145,6 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
         }
 
         ++e.ncall;
-        // LOG_DEBUG("%s[%d]: %32s, %s, %5d x %5d, %d\n", last_call_, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[1], (int)src1->type);
         for (int row = 0; row < (int)src1->ne[1]; ++row) {
             const float* x = data + row * src1->ne[0];
             for (int j = 0; j < (int)src1->ne[0]; ++j) {
@@ -162,7 +157,6 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
                     }
                 } else {
                     // Likely something from an attention mask?
-                    // LOG_WARN("%f detected in %s INPUT\n", x[j], wname.c_str());
                 }
             }
         }
@@ -191,8 +185,6 @@ void disable_imatrix_collection() {
 }
 
 void IMatrixCollector::save_imatrix(std::string fname, int ncall) const {
-    LOG_INFO("SAVING_IMATRIX to %s\n", fname.c_str());
-
     if (ncall > 0) {
         fname += ".at_";
         fname += std::to_string(ncall);
@@ -203,7 +195,6 @@ void IMatrixCollector::save_imatrix(std::string fname, int ncall) const {
     int n_entries = 0;
     std::vector<std::string> to_store;
 
-    bool is_first = true;  // for printing
     for (const auto& kv : stats_) {
         const int n_all = static_cast<int>(kv.second.counts.size());
 
@@ -216,11 +207,6 @@ void IMatrixCollector::save_imatrix(std::string fname, int ncall) const {
             if (c == 0) {
                 n_zeros++;
             }
-        }
-
-        if (n_zeros != 0 && is_first) {
-            printf("\n");
-            is_first = false;
         }
 
         if (n_zeros == n_all) {
@@ -262,9 +248,6 @@ void IMatrixCollector::save_imatrix(std::string fname, int ncall) const {
 
     // Write the number of call the matrix was computed with
     out.write((const char*)&last_call_, sizeof(last_call_));
-
-    // LOG_DEBUG("\n");
-    // LOG_DEBUG("stored collected data after %d chunks in %s\n", last_call_, fname.c_str());
 }
 
 bool IMatrixCollector::load_imatrix(const char* fname) {
