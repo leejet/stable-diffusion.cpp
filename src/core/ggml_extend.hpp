@@ -28,7 +28,6 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml.h"
-#include "ggml/src/ggml-impl.h"
 
 #include "core/tensor.hpp"
 #include "model.h"
@@ -2474,46 +2473,10 @@ protected:
             sd_backend_cpu_set_n_threads(runtime_backend, n_threads);
         }
 
-        ggml_status status = GGML_STATUS_SUCCESS;
-        auto callback_eval = sd_get_backend_eval_callback();
-        if (callback_eval == nullptr) {
-            status = ggml_backend_graph_compute(runtime_backend, gf);
-        } else {
-            void* callback_eval_user_data = sd_get_backend_eval_callback_data();
-            const int n_nodes             = ggml_graph_n_nodes(gf);
-            bool stopped                  = false;
-
-            for (int j0 = 0; j0 < n_nodes; ++j0) {
-                struct ggml_tensor* t = ggml_graph_node(gf, j0);
-                bool need             = callback_eval(t, true, callback_eval_user_data);
-                int j1                = j0;
-
-                while (!need && j1 < n_nodes - 1) {
-                    t    = ggml_graph_node(gf, ++j1);
-                    need = callback_eval(t, true, callback_eval_user_data);
-                }
-
-                struct ggml_cgraph gv = ggml_graph_view(gf, j0, j1 + 1);
-                status                = ggml_backend_graph_compute_async(runtime_backend, &gv);
-                if (status != GGML_STATUS_SUCCESS) {
-                    break;
-                }
-
-                ggml_backend_synchronize(runtime_backend);
-
-                if (need && !callback_eval(t, false, callback_eval_user_data)) {
-                    stopped = true;
-                    break;
-                }
-
-                j0 = j1;
-            }
-
-            ggml_backend_synchronize(runtime_backend);
-            if (stopped && status == GGML_STATUS_SUCCESS) {
-                status = GGML_STATUS_ABORTED;
-            }
-        }
+        ggml_status status = sd_backend_graph_compute_with_eval_callback(runtime_backend,
+                                                                         gf,
+                                                                         sd_get_backend_eval_callback(),
+                                                                         sd_get_backend_eval_callback_data());
         if (status != GGML_STATUS_SUCCESS) {
             LOG_ERROR("%s compute failed: %s", get_desc().c_str(), ggml_status_to_string(status));
             return std::nullopt;

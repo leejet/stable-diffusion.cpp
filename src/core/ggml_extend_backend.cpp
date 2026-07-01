@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "core/util.h"
+#include "ggml/src/ggml-impl.h"
 #include "stable-diffusion.h"
 
 static std::string trim_copy(const std::string& value) {
@@ -362,6 +363,51 @@ bool sd_backend_cpu_set_n_threads(ggml_backend_t backend, int n_threads) {
         }
     }
     return false;
+}
+
+ggml_status sd_backend_graph_compute_with_eval_callback(ggml_backend_t backend,
+                                                        ggml_cgraph* gf,
+                                                        sd_graph_eval_callback_t callback_eval,
+                                                        void* callback_eval_user_data) {
+    if (callback_eval == nullptr) {
+        return ggml_backend_graph_compute(backend, gf);
+    }
+
+    ggml_status status = GGML_STATUS_SUCCESS;
+    const int n_nodes  = ggml_graph_n_nodes(gf);
+    bool stopped       = false;
+
+    for (int j0 = 0; j0 < n_nodes; ++j0) {
+        ggml_tensor* t = ggml_graph_node(gf, j0);
+        bool need      = callback_eval(t, true, callback_eval_user_data);
+        int j1         = j0;
+
+        while (!need && j1 < n_nodes - 1) {
+            t    = ggml_graph_node(gf, ++j1);
+            need = callback_eval(t, true, callback_eval_user_data);
+        }
+
+        ggml_cgraph gv = ggml_graph_view(gf, j0, j1 + 1);
+        status         = ggml_backend_graph_compute_async(backend, &gv);
+        if (status != GGML_STATUS_SUCCESS) {
+            break;
+        }
+
+        ggml_backend_synchronize(backend);
+
+        if (need && !callback_eval(t, false, callback_eval_user_data)) {
+            stopped = true;
+            break;
+        }
+
+        j0 = j1;
+    }
+
+    ggml_backend_synchronize(backend);
+    if (stopped && status == GGML_STATUS_SUCCESS) {
+        status = GGML_STATUS_ABORTED;
+    }
+    return status;
 }
 
 const char* sd_get_system_info() {
