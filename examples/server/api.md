@@ -518,7 +518,7 @@ Shared default fields used by both `img_gen` and `vid_gen`:
 | `output_format` | `string` |
 | `output_compression` | `integer` |
 
-`vae_tiling_params.extra_tiling_args` accepts a key=value list. For LTX video VAE temporal tiling, `temporal_tile_frames` defaults to `4` and `temporal_tile_overlap` defaults to `1`.
+`vae_tiling_params.extra_tiling_args` accepts a key=value list. `max_buffer_size` (bytes) forces the automatic tiling fallback when an untiled VAE compute buffer would exceed it. For LTX video VAE temporal tiling, `temporal_tile_frames` defaults to `4` and `temporal_tile_overlap` defaults to `1`.
 
 `img_gen`-specific default fields:
 

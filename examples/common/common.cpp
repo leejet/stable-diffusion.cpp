@@ -976,7 +976,7 @@ ArgOptions SDGenerationParams::get_options() {
          &extra_sample_args},
         {"",
          "--extra-tiling-args",
-         "extra VAE tiling args, key=value list. LTX video VAE supports temporal_tile_frames (default: 4), temporal_tile_overlap (default: 1)",
+         "extra VAE tiling args, key=value list. max_buffer_size (bytes) forces the auto fallback to tile when an untiled VAE compute buffer would exceed it. LTX video VAE supports temporal_tile_frames (default: 4), temporal_tile_overlap (default: 1)",
          (int)',',
          &extra_tiling_args},
     };
@@ -1166,6 +1166,12 @@ ArgOptions SDGenerationParams::get_options() {
          "process vae in tiles to reduce memory usage",
          true,
          &vae_tiling_params.enabled},
+        {"",
+         "--no-vae-tiling-fallback",
+         "disable the automatic fallback to VAE tiling when an untiled decode would exceed the "
+         "backend's max buffer size (fail instead of tiling)",
+         false,
+         &vae_tiling_params.auto_tile},
         {"",
          "--temporal-tiling",
          "enable temporal tiling for LTX video VAE decode",
@@ -1953,6 +1959,9 @@ bool SDGenerationParams::from_json_str(
         const json& tiling_json = j["vae_tiling_params"];
         if (tiling_json.contains("enabled") && tiling_json["enabled"].is_boolean()) {
             vae_tiling_params.enabled = tiling_json["enabled"];
+        }
+        if (tiling_json.contains("auto_tile") && tiling_json["auto_tile"].is_boolean()) {
+            vae_tiling_params.auto_tile = tiling_json["auto_tile"];
         }
         if (tiling_json.contains("temporal_tiling") && tiling_json["temporal_tiling"].is_boolean()) {
             vae_tiling_params.temporal_tiling = tiling_json["temporal_tiling"];
@@ -2773,10 +2782,12 @@ std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
     }
 
     if (gen_params.vae_tiling_params.enabled ||
+        !gen_params.vae_tiling_params.auto_tile ||
         gen_params.vae_tiling_params.temporal_tiling ||
         !gen_params.extra_tiling_args.empty()) {
         root["vae_tiling"] = {
             {"enabled", gen_params.vae_tiling_params.enabled},
+            {"auto_tile", gen_params.vae_tiling_params.auto_tile},
             {"temporal_tiling", gen_params.vae_tiling_params.temporal_tiling},
             {"tile_size_x", gen_params.vae_tiling_params.tile_size_x},
             {"tile_size_y", gen_params.vae_tiling_params.tile_size_y},
