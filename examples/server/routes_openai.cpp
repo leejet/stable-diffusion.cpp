@@ -291,10 +291,10 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                     continue;
                 }
                 std::string params = request.gen_params.embed_image_metadata
-                                          ? get_image_params(*runtime->ctx_params,
-                                                             request.gen_params,
-                                                             request.gen_params.seed + i / images_per_batch)
-                                          : "";
+                                         ? get_image_params(*runtime->ctx_params,
+                                                            request.gen_params,
+                                                            request.gen_params.seed + i / images_per_batch)
+                                         : "";
                 auto image_bytes   = encode_image_to_vector(request.output_format == "jpeg"
                                                                 ? EncodedImageFormat::JPEG
                                                             : request.output_format == "webp"
@@ -365,10 +365,10 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                     continue;
                 }
                 std::string params = request.gen_params.embed_image_metadata
-                                          ? get_image_params(*runtime->ctx_params,
-                                                             request.gen_params,
-                                                             request.gen_params.seed + i / images_per_batch)
-                                          : "";
+                                         ? get_image_params(*runtime->ctx_params,
+                                                            request.gen_params,
+                                                            request.gen_params.seed + i / images_per_batch)
+                                         : "";
                 auto image_bytes   = encode_image_to_vector(request.output_format == "jpeg" ? EncodedImageFormat::JPEG : EncodedImageFormat::PNG,
                                                           results[i].data,
                                                           results[i].width,

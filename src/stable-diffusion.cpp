@@ -756,13 +756,13 @@ public:
                 }
             } else if (sd_version_is_qwen_image(version)) {
                 bool enable_vision = version != VERSION_QWEN_IMAGE_LAYERED;
-                cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
+                cond_stage_model   = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
                                                                  tensor_storage_map,
                                                                  version,
                                                                  "",
                                                                  enable_vision,
                                                                  model_manager);
-                diffusion_model  = std::make_shared<Qwen::QwenImageRunner>(backend_for(SDBackendModule::DIFFUSION),
+                diffusion_model    = std::make_shared<Qwen::QwenImageRunner>(backend_for(SDBackendModule::DIFFUSION),
                                                                           tensor_storage_map,
                                                                           "model.diffusion_model",
                                                                           version,
@@ -4118,7 +4118,7 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
 
     if (ref_images.empty() && sd_version_is_unet_edit(sd_ctx->sd->version)) {
         LOG_WARN("This model needs at least one reference image; using an empty reference");
-            ref_images.push_back(sd::zeros<float>({request->width, request->height, image_channels, 1}));
+        ref_images.push_back(sd::zeros<float>({request->width, request->height, image_channels, 1}));
         request->guidance.img_cfg = request->guidance.txt_cfg;
         request->use_img_uncond   = false;
     }

@@ -1234,7 +1234,7 @@ namespace WAN {
             auto in   = ggml_ext_slice(ctx->ggml_ctx, x, 2, i, i + 1);  // [b*c, 1, h, w]
             _conv_idx = 0;
             auto out  = decoder->forward(ctx, in, b, _feat_map, _conv_idx, i);
-            out = unpatchify(ctx->ggml_ctx, out, patch_size, b);
+            out       = unpatchify(ctx->ggml_ctx, out, patch_size, b);
             // sd::ggml_graph_cut::mark_graph_cut(out, "wan_vae.decode_partial.final", "out");
             return out;
         }

@@ -609,12 +609,12 @@ namespace Anima {
                                           patch_size,
                                           bs,
                                           static_cast<int>(axes_dim.size()),
-                                           0,
-                                           {},
-                                           empty_ref_latents,
-                                           Rope::RefIndexMode::FIXED,
-                                           1.0f,
-                                           false);
+                                          0,
+                                          {},
+                                          empty_ref_latents,
+                                          Rope::RefIndexMode::FIXED,
+                                          1.0f,
+                                          false);
 
             std::vector<float> axis_thetas = {
                 static_cast<float>(theta) * calc_ntk_factor(t_extrapolation_ratio, axes_dim[0]),

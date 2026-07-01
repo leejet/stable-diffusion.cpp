@@ -498,10 +498,10 @@ namespace Qwen {
             // pe: [L, d_head/2, 2, 2]
             // return: [N, C, H, W] or [N*C, T, H, W]
 
-            int64_t W = x->ne[0];
-            int64_t H = x->ne[1];
-            int64_t T = 1;
-            int64_t N = addition_t_cond != nullptr ? addition_t_cond->ne[0] : x->ne[3];
+            int64_t W          = x->ne[0];
+            int64_t H          = x->ne[1];
+            int64_t T          = 1;
+            int64_t N          = addition_t_cond != nullptr ? addition_t_cond->ne[0] : x->ne[3];
             bool has_time_axis = false;
             if (x->ne[3] != 1) {
                 T             = x->ne[2];

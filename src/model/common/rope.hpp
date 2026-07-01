@@ -353,13 +353,13 @@ namespace Rope {
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_refs_ids(int patch_size,
                                                                    int bs,
-                                                                    int axes_dim_num,
-                                                                    int start_index,
-                                                                    const std::vector<ggml_tensor*>& ref_latents,
-                                                                    RefIndexMode ref_index_mode,
-                                                                    float ref_index_scale,
-                                                                    bool scale_rope,
-                                                                    int base_offset = 0) {
+                                                                   int axes_dim_num,
+                                                                   int start_index,
+                                                                   const std::vector<ggml_tensor*>& ref_latents,
+                                                                   RefIndexMode ref_index_mode,
+                                                                   float ref_index_scale,
+                                                                   bool scale_rope,
+                                                                   int base_offset = 0) {
         std::vector<std::vector<float>> ids;
         int curr_h_offset = 0;
         int curr_w_offset = 0;
@@ -404,12 +404,12 @@ namespace Rope {
                                                                    int patch_size,
                                                                    int bs,
                                                                    int axes_dim_num,
-                                                                    int context_len,
-                                                                    std::set<int> txt_arange_dims,
-                                                                    const std::vector<ggml_tensor*>& ref_latents,
-                                                                    RefIndexMode ref_index_mode,
-                                                                    float ref_index_scale,
-                                                                    bool is_longcat) {
+                                                                   int context_len,
+                                                                   std::set<int> txt_arange_dims,
+                                                                   const std::vector<ggml_tensor*>& ref_latents,
+                                                                   RefIndexMode ref_index_mode,
+                                                                   float ref_index_scale,
+                                                                   bool is_longcat) {
         int x_index = is_longcat ? 1 : 0;
 
         auto txt_ids = is_longcat ? gen_longcat_txt_ids(bs, context_len, axes_dim_num) : gen_flux_txt_ids(bs, context_len, axes_dim_num, txt_arange_dims);
@@ -429,12 +429,12 @@ namespace Rope {
                                                      int w,
                                                      int patch_size,
                                                      int bs,
-                                                      int context_len,
-                                                      std::set<int> txt_arange_dims,
-                                                      const std::vector<ggml_tensor*>& ref_latents,
-                                                      RefIndexMode ref_index_mode,
-                                                      float ref_index_scale,
-                                                      int theta,
+                                                     int context_len,
+                                                     std::set<int> txt_arange_dims,
+                                                     const std::vector<ggml_tensor*>& ref_latents,
+                                                     RefIndexMode ref_index_mode,
+                                                     float ref_index_scale,
+                                                     int theta,
                                                      bool circular_h,
                                                      bool circular_w,
                                                      const std::vector<int>& axes_dim,
@@ -557,7 +557,7 @@ namespace Rope {
         if (ref_latents.size() > 0) {
             int ref_start_index = ref_index_mode == RefIndexMode::DECREASE ? 0 : 1;
             auto refs_ids       = gen_refs_ids(patch_size, bs, axes_dim_num, ref_start_index, ref_latents, ref_index_mode, 1.f, true);
-            ids           = concat_ids(ids, refs_ids, bs);
+            ids                 = concat_ids(ids, refs_ids, bs);
         }
         return ids;
     }
