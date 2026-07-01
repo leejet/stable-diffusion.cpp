@@ -1309,6 +1309,8 @@ public:
                     }
                 } else if (sd_version_is_sefi_image(version)) {
                     pred_type = SEFI_FLOW_PRED;
+                } else if (sd_version_is_minit2i(version)) {
+                    pred_type = MINIT2I_FLOW_PRED;
                 } else {
                     pred_type = EPS_PRED;
                 }
@@ -1344,6 +1346,11 @@ public:
                 case SEFI_FLOW_PRED: {
                     LOG_INFO("running in SeFi-Image dual-time FLOW mode");
                     denoiser = std::make_shared<SefiFlowDenoiser>();
+                    break;
+                }
+                case MINIT2I_FLOW_PRED: {
+                    LOG_INFO("running in MiniT2I FLOW mode");
+                    denoiser = std::make_shared<MiniT2IFlowDenoiser>();
                     break;
                 }
                 default: {
@@ -2044,87 +2051,6 @@ public:
         int64_t last_progress_us     = ggml_time_us();
         SamplePreviewContext preview = prepare_sample_preview_context();
 
-        if (sd_version_is_minit2i(version)) {
-            if (noise.empty()) {
-                LOG_ERROR("MiniT2I sampling requires initial noise");
-                return {};
-            }
-            if (cond.c_crossattn.empty() || cond.c_vector.empty()) {
-                LOG_ERROR("MiniT2I requires T5 hidden states and prompt mask");
-                return {};
-            }
-            size_t minit2i_steps = steps > 0 ? steps : 100;
-            sd::Tensor<float> x_t = noise * 2.0f;
-            sd::Tensor<float> denoised = x_t;
-            sd::Tensor<float> uncond_mask = sd::Tensor<float>::zeros_like(cond.c_vector);
-
-            auto run_minit2i = [&](const sd::Tensor<float>& x,
-                                   float t_value,
-                                   const sd::Tensor<float>& mask) -> sd::Tensor<float> {
-                int64_t batch = x.dim() >= 4 ? x.shape()[3] : 1;
-                if (batch <= 0) {
-                    LOG_ERROR("MiniT2I got invalid input shape for sampling");
-                    return {};
-                }
-                LOG_DEBUG("MiniT2I sampling input shape: dim=%" PRId64 ", batch=%" PRId64,
-                          x.dim(),
-                          batch);
-                std::vector<float> t_vec(static_cast<size_t>(batch), t_value);
-                const int64_t t_vec_size = static_cast<int64_t>(t_vec.size());
-                sd::Tensor<float> timesteps_tensor({t_vec_size}, std::move(t_vec));
-                DiffusionParams diffusion_params;
-                diffusion_params.x         = &x;
-                diffusion_params.timesteps = &timesteps_tensor;
-                diffusion_params.context   = &cond.c_crossattn;
-                diffusion_params.y         = &mask;
-                auto out = work_diffusion_model->compute(n_threads, diffusion_params);
-                if (out.empty()) {
-                    LOG_ERROR("MiniT2I diffusion model compute failed");
-                    return {};
-                }
-                return out;
-            };
-
-            pretty_progress(0, static_cast<int>(minit2i_steps), 0);
-            last_progress_us = ggml_time_us();
-            for (size_t i = 0; i < minit2i_steps; ++i) {
-                if (get_cancel_flag() == SD_CANCEL_ALL) {
-                    LOG_DEBUG("cancelling generation");
-                    return {};
-                }
-                float t_cur  = static_cast<float>(i) / static_cast<float>(minit2i_steps);
-                float t_next = static_cast<float>(i + 1) / static_cast<float>(minit2i_steps);
-
-                if (sd_should_preview_noisy() && preview.callback != nullptr) {
-                    preview_image(static_cast<int>(i + 1), x_t, version, preview.mode, preview.callback, preview.data, true);
-                }
-
-                auto cond_x0 = run_minit2i(x_t, t_cur, cond.c_vector);
-                if (cond_x0.empty()) {
-                    return {};
-                }
-                auto uncond_x0 = run_minit2i(x_t, t_cur, uncond_mask);
-                if (uncond_x0.empty()) {
-                    return {};
-                }
-                float denom = std::max(1.0f - t_cur, 0.001f);
-                auto cond_v = (cond_x0 - x_t) / denom;
-                auto uncond_v = (uncond_x0 - x_t) / denom;
-                auto v = uncond_v + (cond_v - uncond_v) * cfg_scale;
-                x_t += v * (t_next - t_cur);
-                denoised = x_t;
-
-                if (sd_should_preview_denoised() && preview.callback != nullptr) {
-                    preview_image(static_cast<int>(i + 1), denoised, version, preview.mode, preview.callback, preview.data, false);
-                }
-                report_sample_progress(static_cast<int>(i + 1), minit2i_steps, &last_progress_us);
-            }
-            if (work_diffusion_model) {
-                work_diffusion_model->free_compute_buffer();
-            }
-            return denoised;
-        }
-
         sd::Tensor<float> x_t        = !noise.empty()
                                            ? denoiser->noise_scaling(sigmas[0], noise, init_latent)
                                            : init_latent;
@@ -2247,6 +2173,9 @@ public:
                         audio_length,
                         frame_rate,
                         video_positions.empty() ? nullptr : &video_positions};
+                } else if (sd_version_is_minit2i(version)) {
+                    diffusion_params.extra = MiniT2IDiffusionExtra{
+                        condition.c_vector.empty() ? nullptr : &condition.c_vector};
                 } else {
                     diffusion_params.extra = std::monostate{};
                 }
@@ -2685,6 +2614,7 @@ const char* prediction_to_str[] = {
     "sd3_flow",
     "flux_flow",
     "sefi_flow",
+    "minit2i_flow",
 };
 
 const char* sd_prediction_name(enum prediction_t prediction) {
@@ -4318,6 +4248,11 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
     if (request->use_uncond || request->use_high_noise_uncond) {
         if (sd_version_is_ideogram4(sd_ctx->sd->version)) {
             uncond.c_vector = sd::Tensor<float>::from_vector({1.0f});
+        } else if (sd_version_is_minit2i(sd_ctx->sd->version)) {
+            // MiniT2I derives the unconditional signal from the same T5 hidden
+            // states with a zeroed prompt mask, so no extra text encode is needed.
+            uncond.c_crossattn = cond.c_crossattn;
+            uncond.c_vector    = sd::Tensor<float>::zeros_like(cond.c_vector);
         } else {
             bool zero_out_masked = false;
             if (sd_version_is_sdxl(sd_ctx->sd->version) &&

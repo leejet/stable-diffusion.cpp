@@ -597,12 +597,13 @@ namespace MiniT2I {
             GGML_ASSERT(diffusion_params.x != nullptr);
             GGML_ASSERT(diffusion_params.timesteps != nullptr);
             GGML_ASSERT(diffusion_params.context != nullptr);
-            GGML_ASSERT(diffusion_params.y != nullptr);
+            const auto* extra = diffusion_extra_as<MiniT2IDiffusionExtra>(diffusion_params);
+            GGML_ASSERT(extra->mask != nullptr);
             return compute(n_threads,
                            *diffusion_params.x,
                            *diffusion_params.timesteps,
                            *diffusion_params.context,
-                           *diffusion_params.y);
+                           *extra->mask);
         }
     };
 }  // namespace MiniT2I
