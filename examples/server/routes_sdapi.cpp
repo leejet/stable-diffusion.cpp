@@ -292,8 +292,11 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             {
                 std::lock_guard<std::mutex> lock(*runtime->sd_ctx_mutex);
-                sd_image_t* raw_results = generate_image(runtime->sd_ctx, &img_gen_params);
-                num_results             = sd_get_image_result_count(runtime->sd_ctx, &img_gen_params);
+                sd_image_t* raw_results = nullptr;
+                if (!generate_image(runtime->sd_ctx, &img_gen_params, &raw_results, &num_results)) {
+                    raw_results = nullptr;
+                    num_results = 0;
+                }
                 results.adopt(raw_results, num_results);
             }
 
@@ -439,6 +442,9 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         scheduler_names.push_back("default");
         for (int i = 0; i < SCHEDULER_COUNT; i++) {
             scheduler_names.push_back(sd_scheduler_name((scheduler_t)i));
+            if (i == DISCRETE_SCHEDULER) {
+                scheduler_names.push_back("normal");
+            }
         }
         json r = json::array();
         for (auto name : scheduler_names) {

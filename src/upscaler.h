@@ -1,16 +1,18 @@
 #ifndef __SD_UPSCALER_H__
 #define __SD_UPSCALER_H__
 
-#include "esrgan.hpp"
-#include "ggml_extend_backend.h"
+#include "core/ggml_extend_backend.h"
+#include "core/tensor.hpp"
+#include "model/upscaler/esrgan.hpp"
+#include "model_manager.h"
 #include "stable-diffusion.h"
-#include "tensor.hpp"
 
 #include <memory>
 #include <string>
 
 struct UpscalerGGML {
     SDBackendManager backend_manager;
+    std::shared_ptr<ModelManager> model_manager;
     ggml_type model_data_type = GGML_TYPE_F16;
     std::shared_ptr<ESRGAN> esrgan_upscaler;
     std::string esrgan_path;
@@ -27,9 +29,9 @@ struct UpscalerGGML {
                  int tile_size                   = 128,
                  std::string backend_spec        = "",
                  std::string params_backend_spec = "");
+    ~UpscalerGGML();
 
     bool load_from_file(const std::string& esrgan_path,
-                        bool offload_params_to_cpu,
                         int n_threads);
     void set_max_graph_vram_bytes(size_t max_vram_bytes);
     void set_stream_layers_enabled(bool enabled);

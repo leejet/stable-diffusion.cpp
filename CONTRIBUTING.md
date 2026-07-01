@@ -44,6 +44,8 @@ Naming conventions:
 
 Some older code in the project may not fully follow the current conventions. Please do not submit PRs that only rewrite existing code to match style rules.
 
+When adding or modifying model implementations, follow the model config and weight detection conventions in [docs/model_config.md](docs/model_config.md).
+
 ## AI-Assisted Contributions
 
 AI tools may be used to assist development, but contributors are responsible for the quality and correctness of the submitted code.

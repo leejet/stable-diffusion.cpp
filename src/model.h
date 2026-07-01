@@ -1,17 +1,14 @@
 #ifndef __MODEL_H__
 #define __MODEL_H__
 
-#include <functional>
-#include <map>
-#include <memory>
-#include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "core/ordered_map.hpp"
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "model_io/tensor_storage.h"
-#include "ordered_map.hpp"
 
 enum SDVersion {
     VERSION_SD1,
@@ -46,11 +43,17 @@ enum SDVersion {
     VERSION_LTXAV,
     VERSION_HIDREAM_O1,
     VERSION_Z_IMAGE,
+    VERSION_BOOGU_IMAGE,
     VERSION_OVIS_IMAGE,
     VERSION_ERNIE_IMAGE,
     VERSION_LENS,
+    VERSION_MINIT2I,
     VERSION_LONGCAT,
     VERSION_PID,
+    VERSION_IDEOGRAM4,
+    VERSION_SEFI_IMAGE,
+    VERSION_KREA2,
+    VERSION_ESRGAN,
     VERSION_COUNT,
 };
 
@@ -145,6 +148,13 @@ static inline bool sd_version_is_z_image(SDVersion version) {
     return false;
 }
 
+static inline bool sd_version_is_boogu_image(SDVersion version) {
+    if (version == VERSION_BOOGU_IMAGE) {
+        return true;
+    }
+    return false;
+}
+
 static inline bool sd_version_is_longcat(SDVersion version) {
     if (version == VERSION_LONGCAT) {
         return true;
@@ -166,6 +176,13 @@ static inline bool sd_version_is_lens(SDVersion version) {
     return false;
 }
 
+static inline bool sd_version_is_minit2i(SDVersion version) {
+    if (version == VERSION_MINIT2I) {
+        return true;
+    }
+    return false;
+}
+
 static inline bool sd_version_is_pid(SDVersion version) {
     if (version == VERSION_PID) {
         return true;
@@ -173,8 +190,43 @@ static inline bool sd_version_is_pid(SDVersion version) {
     return false;
 }
 
+static inline bool sd_version_is_ideogram4(SDVersion version) {
+    if (version == VERSION_IDEOGRAM4) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_is_sefi_image(SDVersion version) {
+    if (version == VERSION_SEFI_IMAGE) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_is_krea2(SDVersion version) {
+    if (version == VERSION_KREA2) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_uses_flux_vae(SDVersion version) {
+    if (sd_version_is_flux(version) || sd_version_is_z_image(version) || sd_version_is_boogu_image(version) || sd_version_is_longcat(version)) {
+        return true;
+    }
+    return false;
+}
+
 static inline bool sd_version_uses_flux2_vae(SDVersion version) {
-    if (sd_version_is_flux2(version) || sd_version_is_ernie_image(version) || sd_version_is_lens(version)) {
+    if (sd_version_is_flux2(version) || sd_version_is_ernie_image(version) || sd_version_is_lens(version) || sd_version_is_ideogram4(version) || sd_version_is_sefi_image(version)) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_uses_wan_vae(SDVersion version) {
+    if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_krea2(version) || sd_version_is_anima(version)) {
         return true;
     }
     return false;
@@ -201,10 +253,15 @@ static inline bool sd_version_is_dit(SDVersion version) {
         version == VERSION_HIDREAM_O1 ||
         sd_version_is_anima(version) ||
         sd_version_is_z_image(version) ||
+        sd_version_is_boogu_image(version) ||
         sd_version_is_ernie_image(version) ||
         sd_version_is_lens(version) ||
+        sd_version_is_minit2i(version) ||
         sd_version_is_longcat(version) ||
-        sd_version_is_pid(version)) {
+        sd_version_is_pid(version) ||
+        sd_version_is_ideogram4(version) ||
+        sd_version_is_sefi_image(version) ||
+        sd_version_is_krea2(version)) {
         return true;
     }
     return false;
@@ -229,74 +286,5 @@ enum PMVersion {
 
 typedef OrderedMap<std::string, TensorStorage> String2TensorStorage;
 using TensorTypeRules = std::vector<std::pair<std::string, ggml_type>>;
-
-TensorTypeRules parse_tensor_type_rules(const std::string& tensor_type_rules);
-
-class MmapWrapper;
-
-struct ModelFileData {
-    std::string path;
-    std::vector<TensorStorage> tensors;
-    std::shared_ptr<MmapWrapper> mmapped;
-    std::shared_ptr<struct ggml_backend_buffer> mmbuffer;
-    bool is_zip;
-};
-
-struct MmapTensorStore {
-    std::shared_ptr<MmapWrapper> mmapped;
-    std::shared_ptr<struct ggml_backend_buffer> mmbuffer;
-};
-
-class ModelLoader {
-protected:
-    SDVersion version_ = VERSION_COUNT;
-    std::vector<std::string> file_paths_;
-    std::vector<ModelFileData> file_data;
-    bool model_files_processed = false;
-    String2TensorStorage tensor_storage_map;
-
-    void add_tensor_storage(const TensorStorage& tensor_storage);
-
-    bool init_from_gguf_file(const std::string& file_path, const std::string& prefix = "");
-    bool init_from_safetensors_file(const std::string& file_path, const std::string& prefix = "");
-    bool init_from_torch_zip_file(const std::string& file_path, const std::string& prefix = "");
-    bool init_from_torch_legacy_file(const std::string& file_path, const std::string& prefix = "");
-    bool init_from_diffusers_file(const std::string& file_path, const std::string& prefix = "");
-
-public:
-    bool init_from_file(const std::string& file_path, const std::string& prefix = "");
-    void convert_tensors_name();
-    bool init_from_file_and_convert_name(const std::string& file_path,
-                                         const std::string& prefix = "",
-                                         SDVersion version         = VERSION_COUNT);
-    SDVersion get_sd_version();
-    std::map<ggml_type, uint32_t> get_wtype_stat();
-    std::map<ggml_type, uint32_t> get_conditioner_wtype_stat();
-    std::map<ggml_type, uint32_t> get_diffusion_model_wtype_stat();
-    std::map<ggml_type, uint32_t> get_vae_wtype_stat();
-    String2TensorStorage& get_tensor_storage_map() { return tensor_storage_map; }
-    void set_wtype_override(ggml_type wtype, std::string tensor_type_rules = "");
-    void process_model_files(bool enable_mmap = false, bool writable_mmap = true);
-    std::vector<MmapTensorStore> mmap_tensors(std::map<std::string, ggml_tensor*>& tensors,
-                                              std::set<std::string> ignore_tensors = {},
-                                              bool writable                        = true);
-    bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads = 0, bool use_mmap = false);
-    bool load_tensors(std::map<std::string, ggml_tensor*>& tensors,
-                      std::set<std::string> ignore_tensors = {},
-                      int n_threads                        = 0,
-                      bool use_mmap                        = false);
-
-    std::vector<std::string> get_tensor_names() const {
-        std::vector<std::string> names;
-        for (const auto& [name, tensor_storage] : tensor_storage_map) {
-            names.push_back(name);
-        }
-        return names;
-    }
-
-    bool tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type);
-    int64_t get_params_mem_size(ggml_backend_t backend, ggml_type type = GGML_TYPE_COUNT);
-    ~ModelLoader() = default;
-};
 
 #endif  // __MODEL_H__
