@@ -20,6 +20,7 @@
 #include "model_io/torch_legacy_io.h"
 #include "model_io/torch_zip_io.h"
 #include "model_loader.h"
+#include "runtime/imatrix.h"
 #include "stable-diffusion.h"
 
 #include "core/ggml_extend_backend.h"
@@ -156,7 +157,8 @@ void convert_tensor(void* src,
                     void* dst,
                     ggml_type dst_type,
                     int nrows,
-                    int n_per_row) {
+                    int n_per_row,
+                    std::vector<float> imatrix = {}) {
     int n = nrows * n_per_row;
     if (src_type == dst_type) {
         size_t nbytes = n * ggml_type_size(src_type) / ggml_blck_size(src_type);
@@ -165,7 +167,7 @@ void convert_tensor(void* src,
         if (dst_type == GGML_TYPE_F16) {
             ggml_fp32_to_fp16_row((float*)src, (ggml_fp16_t*)dst, n);
         } else {
-            std::vector<float> imatrix(n_per_row, 1.0f);  // dummy importance matrix
+            imatrix.resize(n_per_row, 1.0f);
             const float* im = imatrix.data();
             ggml_quantize_chunk(dst_type, (float*)src, dst, 0, nrows, n_per_row, im);
         }
@@ -195,7 +197,7 @@ void convert_tensor(void* src,
         if (dst_type == GGML_TYPE_F16) {
             ggml_fp32_to_fp16_row((float*)src_data_f32, (ggml_fp16_t*)dst, n);
         } else {
-            std::vector<float> imatrix(n_per_row, 1.0f);  // dummy importance matrix
+            imatrix.resize(n_per_row, 1.0f);
             const float* im = imatrix.data();
             ggml_quantize_chunk(dst_type, (float*)src_data_f32, dst, 0, nrows, n_per_row, im);
         }
@@ -970,6 +972,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
     size_t total_tensors_processed = 0;
     const int64_t t_start          = start_time;
     int last_n_threads             = 1;
+    SDVersion imatrix_version      = (version_ == VERSION_COUNT) ? get_sd_version() : version_;
 
     for (size_t file_index = 0; file_index < file_data.size(); ++file_index) {
         auto& fdata                  = file_data[file_index];
@@ -1154,12 +1157,15 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                             failed = true;
                             return;
                         }
+                        std::string processed_name = convert_tensor_name(tensor_storage.name, imatrix_version);
+                        std::vector<float> imatrix = get_imatrix_collector().get_values(processed_name);
                         convert_tensor((void*)target_buf,
                                        tensor_storage.type,
                                        convert_buf,
                                        dst_tensor->type,
                                        (int)tensor_storage.nelements() / (int)tensor_storage.ne[0],
-                                       (int)tensor_storage.ne[0]);
+                                       (int)tensor_storage.ne[0],
+                                       std::move(imatrix));
                     } else {
                         convert_buf = read_buf;
                     }
