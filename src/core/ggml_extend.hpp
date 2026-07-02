@@ -1038,6 +1038,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_linear(ggml_context* ctx,
 }
 
 __STATIC_INLINE__ ggml_tensor* ggml_ext_pad_ext(ggml_context* ctx,
+                                                ggml_backend_t backend,
                                                 ggml_tensor* x,
                                                 int lp0,
                                                 int rp0,
@@ -1063,14 +1064,16 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_pad_ext(ggml_context* ctx,
     }
 
     if (lp0 != 0 || rp0 != 0 || lp1 != 0 || rp1 != 0 || lp2 != 0 || rp2 != 0 || lp3 != 0 || rp3 != 0) {
-        if (lp0 != 0 || lp1 != 0 || lp2 != 0 || lp3 != 0) {
-            // Metal's PAD kernel only implements right-padding
-            // (leejet/stable-diffusion.cpp#850): pad right by lp+rp, then roll
-            // the zeros around to the left. shift < ne holds since ne grew by lp+rp.
+        ggml_tensor* padded = ggml_pad_ext(ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
+        if (backend == nullptr || ggml_backend_supports_op(backend, padded)) {
+            x = padded;
+        } else {
+            // Some backends (e.g. Metal) only implement right-padding for
+            // GGML_OP_PAD (see #850): pad right by lp+rp instead, then roll
+            // the padding around to the left. shift < ne always holds because
+            // ne grew by lp+rp.
             x = ggml_pad_ext(ctx, x, 0, lp0 + rp0, 0, lp1 + rp1, 0, lp2 + rp2, 0, lp3 + rp3);
             x = ggml_roll(ctx, x, lp0, lp1, lp2, lp3);
-        } else {
-            x = ggml_pad_ext(ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
         }
     }
     return x;
@@ -1084,7 +1087,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_pad(ggml_context* ctx,
                                             int p3          = 0,
                                             bool circular_x = false,
                                             bool circular_y = false) {
-    return ggml_ext_pad_ext(ctx, x, 0, p0, 0, p1, 0, p2, 0, p3, circular_x, circular_y);
+    return ggml_ext_pad_ext(ctx, nullptr, x, 0, p0, 0, p1, 0, p2, 0, p3, circular_x, circular_y);
 }
 
 // w: [OC，IC, KH, KW]
@@ -1113,7 +1116,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_conv_2d(ggml_context* ctx,
     }
 
     if ((p0 != 0 || p1 != 0) && (circular_x || circular_y)) {
-        x  = ggml_ext_pad_ext(ctx, x, p0, p0, p1, p1, 0, 0, 0, 0, circular_x, circular_y);
+        x  = ggml_ext_pad_ext(ctx, nullptr, x, p0, p0, p1, p1, 0, 0, 0, 0, circular_x, circular_y);
         p0 = 0;
         p1 = 0;
     }
@@ -1138,6 +1141,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_conv_2d(ggml_context* ctx,
 // b: [OC,]
 // result: [N*OC, OD, OH, OW]
 __STATIC_INLINE__ ggml_tensor* ggml_ext_conv_3d(ggml_context* ctx,
+                                                ggml_backend_t backend,
                                                 ggml_tensor* x,
                                                 ggml_tensor* w,
                                                 ggml_tensor* b,
@@ -1167,11 +1171,21 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_conv_3d(ggml_context* ctx,
         x          = ggml_cont(ctx, ggml_permute(ctx, x, 0, 1, 3, 2));
         x          = ggml_reshape_4d(ctx, x, im2col->ne[1], im2col->ne[2], OD, OC * N);
     } else {
-        // ggml_conv_3d decomposes into IM2COL_3D which the Metal backend does not
-        // implement (leejet/stable-diffusion.cpp#850); GGML_OP_CONV_3D is supported.
-        int64_t OC = w->ne[3] / IC;
-        int64_t N  = x->ne[3] / IC;
-        x          = ggml_conv_3d_direct(ctx, w, x, s0, s1, s2, p0, p1, p2, d0, d1, d2, (int)IC, (int)N, (int)OC);
+        // ggml_conv_3d decomposes into GGML_OP_IM2COL_3D, which some backends
+        // (e.g. Metal, see #850) do not implement. Fall back to
+        // GGML_OP_CONV_3D on those backends.
+        bool im2col_3d_supported = true;
+        if (backend != nullptr) {
+            ggml_tensor* im2col = ggml_im2col_3d(ctx, w, x, IC, s0, s1, s2, p0, p1, p2, d0, d1, d2, w->type);
+            im2col_3d_supported = ggml_backend_supports_op(backend, im2col);
+        }
+        if (im2col_3d_supported) {
+            x = ggml_conv_3d(ctx, w, x, IC, s0, s1, s2, p0, p1, p2, d0, d1, d2);
+        } else {
+            int64_t OC = w->ne[3] / IC;
+            int64_t N  = x->ne[3] / IC;
+            x          = ggml_conv_3d_direct(ctx, w, x, s0, s1, s2, p0, p1, p2, d0, d1, d2, (int)IC, (int)N, (int)OC);
+        }
     }
 
     if (b != nullptr) {
@@ -3377,7 +3391,7 @@ public:
                 b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
             }
         }
-        return ggml_ext_conv_3d(ctx->ggml_ctx, x, w, b, in_channels,
+        return ggml_ext_conv_3d(ctx->ggml_ctx, ctx->backend, x, w, b, in_channels,
                                 std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
                                 std::get<2>(padding), std::get<1>(padding), std::get<0>(padding),
                                 std::get<2>(dilation), std::get<1>(dilation), std::get<0>(dilation),
