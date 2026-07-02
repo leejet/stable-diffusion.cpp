@@ -1063,7 +1063,15 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_pad_ext(ggml_context* ctx,
     }
 
     if (lp0 != 0 || rp0 != 0 || lp1 != 0 || rp1 != 0 || lp2 != 0 || rp2 != 0 || lp3 != 0 || rp3 != 0) {
-        x = ggml_pad_ext(ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
+        if (lp0 != 0 || lp1 != 0 || lp2 != 0 || lp3 != 0) {
+            // Metal's PAD kernel only implements right-padding
+            // (leejet/stable-diffusion.cpp#850): pad right by lp+rp, then roll
+            // the zeros around to the left. shift < ne holds since ne grew by lp+rp.
+            x = ggml_pad_ext(ctx, x, 0, lp0 + rp0, 0, lp1 + rp1, 0, lp2 + rp2, 0, lp3 + rp3);
+            x = ggml_roll(ctx, x, lp0, lp1, lp2, lp3);
+        } else {
+            x = ggml_pad_ext(ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
+        }
     }
     return x;
 }
@@ -1159,7 +1167,11 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_conv_3d(ggml_context* ctx,
         x          = ggml_cont(ctx, ggml_permute(ctx, x, 0, 1, 3, 2));
         x          = ggml_reshape_4d(ctx, x, im2col->ne[1], im2col->ne[2], OD, OC * N);
     } else {
-        x = ggml_conv_3d(ctx, w, x, IC, s0, s1, s2, p0, p1, p2, d0, d1, d2);
+        // ggml_conv_3d decomposes into IM2COL_3D which the Metal backend does not
+        // implement (leejet/stable-diffusion.cpp#850); GGML_OP_CONV_3D is supported.
+        int64_t OC = w->ne[3] / IC;
+        int64_t N  = x->ne[3] / IC;
+        x          = ggml_conv_3d_direct(ctx, w, x, s0, s1, s2, p0, p1, p2, d0, d1, d2, (int)IC, (int)N, (int)OC);
     }
 
     if (b != nullptr) {
