@@ -4090,7 +4090,7 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
     sd::Tensor<float> control_latent;
     if (init_image_tensor.empty()) {
         if (sd_ctx->sd->version == VERSION_QWEN_IMAGE_LAYERED) {
-            init_latent = sd_ctx->sd->generate_init_latent(request->width, request->height, 5, true);
+            init_latent = sd_ctx->sd->generate_init_latent(request->width, request->height, 4, true);
         } else {
             init_latent = sd_ctx->sd->generate_init_latent(request->width, request->height);
         }
@@ -4380,9 +4380,9 @@ static sd_image_t* decode_image_outputs(sd_ctx_t* sd_ctx,
         int64_t t1 = ggml_time_ms();
         if (sd_ctx->sd->version == VERSION_QWEN_IMAGE_LAYERED) {
             constexpr int kLayerCount = 4;
-            if (final_latents[i].dim() < 5 || final_latents[i].shape()[2] <= kLayerCount) {
+            if (final_latents[i].dim() < 5 || final_latents[i].shape()[2] < kLayerCount) {
                 LOG_ERROR("qwen image layered expected at least %d latent layers, got shape dim=%d",
-                          kLayerCount + 1,
+                          kLayerCount,
                           final_latents[i].dim());
                 return nullptr;
             }
@@ -4392,7 +4392,7 @@ static sd_image_t* decode_image_outputs(sd_ctx_t* sd_ctx,
                     cancelled = true;
                     break;
                 }
-                sd::Tensor<float> layer_latent = sd::ops::slice(final_latents[i], 2, layer_index + 1, layer_index + 2);
+                sd::Tensor<float> layer_latent = sd::ops::slice(final_latents[i], 2, layer_index, layer_index + 1);
                 layer_latent.squeeze_(2);
                 sd::Tensor<float> image = sd_ctx->sd->decode_first_stage(layer_latent);
                 if (image.empty()) {

@@ -542,7 +542,7 @@ namespace Qwen {
                 int pad_w = (config.patch_size - W % config.patch_size) % config.patch_size;
                 int h_len = static_cast<int>((H + pad_h) / config.patch_size);
                 int w_len = static_cast<int>((W + pad_w) / config.patch_size);
-                out       = DiT::unpatchify(ctx->ggml_ctx, out, T, h_len, w_len, 1, config.patch_size, config.patch_size);
+                out       = DiT::unpatchify_3d(ctx->ggml_ctx, out, T, h_len, w_len, 1, config.patch_size, config.patch_size);
                 out       = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, H);  // [N*C, T, H, W + pad_w]
                 out       = ggml_ext_slice(ctx->ggml_ctx, out, 0, 0, W);  // [N*C, T, H, W]
             } else {
