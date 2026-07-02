@@ -1295,7 +1295,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
                                                       ggml_tensor* mask = nullptr,
                                                       bool skip_reshape = false,
                                                       bool flash_attn   = false,
-                                                      float kv_scale    = 1.0f / 256.f) {  // avoid overflow
+                                                      float kv_scale    = 1.0f) {  // avoid overflow
     int64_t L_q;
     int64_t L_k;
     int64_t C;
