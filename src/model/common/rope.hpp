@@ -500,14 +500,20 @@ namespace Rope {
                                                                   int ph,
                                                                   int pw,
                                                                   int bs,
-                                                                  int t_offset = 0,
-                                                                  int h_offset = 0,
-                                                                  int w_offset = 0) {
+                                                                  int t_offset    = 0,
+                                                                  int h_offset    = 0,
+                                                                  int w_offset    = 0,
+                                                                  bool scale_rope = false) {
         int t_len = (t + (pt / 2)) / pt;
         int h_len = (h + (ph / 2)) / ph;
         int w_len = (w + (pw / 2)) / pw;
 
         std::vector<std::vector<float>> vid_ids(t_len * h_len * w_len, std::vector<float>(3, 0.0));
+
+        if (scale_rope) {
+            h_offset -= h_len / 2;
+            w_offset -= w_len / 2;
+        }
 
         std::vector<float> t_ids = linspace<float>(1.f * t_offset, 1.f * t_len - 1 + t_offset, t_len);
         std::vector<float> h_ids = linspace<float>(1.f * h_offset, 1.f * h_len - 1 + h_offset, h_len);
@@ -533,92 +539,6 @@ namespace Rope {
         return vid_ids_repeated;
     }
 
-    __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen_image_img_ids(int t,
-                                                                             int h,
-                                                                             int w,
-                                                                             int patch_size,
-                                                                             int bs,
-                                                                             int index    = 0,
-                                                                             int h_offset = 0,
-                                                                             int w_offset = 0) {
-        int t_len = t;
-        int h_len = (h + (patch_size / 2)) / patch_size;
-        int w_len = (w + (patch_size / 2)) / patch_size;
-
-        h_offset = (h_offset + (patch_size / 2)) / patch_size;
-        w_offset = (w_offset + (patch_size / 2)) / patch_size;
-
-        std::vector<std::vector<float>> img_ids(t_len * h_len * w_len, std::vector<float>(3, 0.0f));
-
-        std::vector<float> t_ids = t_len > 1 ? linspace<float>(0.f, 1.f * t_len - 1, t_len)
-                                             : std::vector<float>{1.f * index};
-        std::vector<float> h_ids = linspace<float>(1.f * h_offset - (h_len / 2),
-                                                   1.f * h_offset + h_len - 1 - (h_len / 2),
-                                                   h_len);
-        std::vector<float> w_ids = linspace<float>(1.f * w_offset - (w_len / 2),
-                                                   1.f * w_offset + w_len - 1 - (w_len / 2),
-                                                   w_len);
-
-        for (int i = 0; i < t_len; ++i) {
-            for (int j = 0; j < h_len; ++j) {
-                for (int k = 0; k < w_len; ++k) {
-                    int idx         = i * h_len * w_len + j * w_len + k;
-                    img_ids[idx][0] = t_ids[i];
-                    img_ids[idx][1] = h_ids[j];
-                    img_ids[idx][2] = w_ids[k];
-                }
-            }
-        }
-
-        std::vector<std::vector<float>> img_ids_repeated(bs * img_ids.size(), std::vector<float>(3));
-        for (int i = 0; i < bs; ++i) {
-            for (int j = 0; j < img_ids.size(); ++j) {
-                img_ids_repeated[i * img_ids.size() + j] = img_ids[j];
-            }
-        }
-        return img_ids_repeated;
-    }
-
-    __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen_image_refs_ids(int patch_size,
-                                                                              int bs,
-                                                                              const std::vector<ggml_tensor*>& ref_latents,
-                                                                              RefIndexMode ref_index_mode) {
-        std::vector<std::vector<float>> ids;
-        int h     = 0;
-        int w     = 0;
-        int index = 0;
-        for (ggml_tensor* ref : ref_latents) {
-            int h_offset = 0;
-            int w_offset = 0;
-
-            if (ref_index_mode == RefIndexMode::INCREASE) {
-                index += 1;
-            } else if (ref_index_mode == RefIndexMode::DECREASE) {
-                index -= 1;
-            } else {
-                index = 1;
-                if (ref->ne[1] + h > ref->ne[0] + w) {
-                    w_offset = w;
-                } else {
-                    h_offset = h;
-                }
-                h = std::max(h, static_cast<int>(ref->ne[1]) + h_offset);
-                w = std::max(w, static_cast<int>(ref->ne[0]) + w_offset);
-            }
-
-            auto ref_ids = gen_qwen_image_img_ids(1,
-                                                  static_cast<int>(ref->ne[1]),
-                                                  static_cast<int>(ref->ne[0]),
-                                                  patch_size,
-                                                  bs,
-                                                  index,
-                                                  h_offset,
-                                                  w_offset);
-            ids          = concat_ids(ids, ref_ids, bs);
-        }
-        return ids;
-    }
-
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen_image_ids(int t,
                                                                          int h,
                                                                          int w,
@@ -637,11 +557,13 @@ namespace Rope {
                 txt_ids_repeated[i * txt_ids.size() + j] = {txt_ids[j], txt_ids[j], txt_ids[j]};
             }
         }
-        auto img_ids = gen_qwen_image_img_ids(t, h, w, patch_size, bs);
-        auto ids     = concat_ids(txt_ids_repeated, img_ids, bs);
+        int axes_dim_num = 3;
+        auto img_ids     = gen_vid_ids(t, h, w, 1, patch_size, patch_size, bs, 0, 0, 0, true);
+        auto ids         = concat_ids(txt_ids_repeated, img_ids, bs);
         if (ref_latents.size() > 0) {
-            auto refs_ids = gen_qwen_image_refs_ids(patch_size, bs, ref_latents, ref_index_mode);
-            ids           = concat_ids(ids, refs_ids, bs);
+            int ref_start_index = ref_index_mode == RefIndexMode::DECREASE ? 0 : 1;
+            auto refs_ids       = gen_refs_ids(patch_size, bs, axes_dim_num, ref_start_index, ref_latents, ref_index_mode, 1.f, true);
+            ids                 = concat_ids(ids, refs_ids, bs);
         }
         return ids;
     }
