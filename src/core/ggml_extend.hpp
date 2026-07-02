@@ -391,7 +391,7 @@ __STATIC_INLINE__ uint8_t* ggml_tensor_to_sd_image(ggml_tensor* input, uint8_t* 
     int64_t width    = input->ne[0];
     int64_t height   = input->ne[1];
     int64_t channels = input->ne[2];
-    GGML_ASSERT(channels == 3 && input->type == GGML_TYPE_F32);
+    GGML_ASSERT(input->type == GGML_TYPE_F32);
     if (image_data == nullptr) {
         image_data = (uint8_t*)malloc(width * height * channels);
     }

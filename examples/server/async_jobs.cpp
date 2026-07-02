@@ -2,6 +2,7 @@
 
 #include "async_jobs.h"
 
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
 
@@ -195,6 +196,8 @@ bool execute_img_gen_job(ServerRuntime& runtime,
         encoded_format = EncodedImageFormat::WEBP;
     }
 
+    int batch_count      = job.img_gen.gen_params.batch_count;
+    int images_per_batch = batch_count > 0 ? std::max(1, num_results / batch_count) : 1;
     for (int i = 0; i < num_results; ++i) {
         if (results[i].data == nullptr) {
             continue;
@@ -203,7 +206,7 @@ bool execute_img_gen_job(ServerRuntime& runtime,
         const std::string metadata = job.img_gen.gen_params.embed_image_metadata
                                          ? get_image_params(*runtime.ctx_params,
                                                             job.img_gen.gen_params,
-                                                            job.img_gen.gen_params.seed + i)
+                                                            job.img_gen.gen_params.seed + i / images_per_batch)
                                          : "";
         auto image_bytes           = encode_image_to_vector(encoded_format,
                                                             results[i].data,

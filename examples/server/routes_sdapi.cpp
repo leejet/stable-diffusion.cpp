@@ -311,6 +311,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             out["parameters"] = j;
             out["info"]       = "";
 
+            int images_per_batch = request.gen_params.batch_count > 0 ? std::max(1, num_results / request.gen_params.batch_count) : 1;
             for (int i = 0; i < num_results; ++i) {
                 if (results[i].data == nullptr) {
                     continue;
@@ -319,7 +320,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 std::string params = request.gen_params.embed_image_metadata
                                          ? get_image_params(*runtime->ctx_params,
                                                             request.gen_params,
-                                                            request.gen_params.seed + i)
+                                                            request.gen_params.seed + i / images_per_batch)
                                          : "";
                 auto image_bytes   = encode_image_to_vector(EncodedImageFormat::PNG,
                                                             results[i].data,
