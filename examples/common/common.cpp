@@ -931,6 +931,10 @@ ArgOptions SDGenerationParams::get_options() {
          0,
          &end_image_path},
         {"",
+         "--init-audio",
+         "path to the init audio WAV, for use with audio-to-video models",
+         &init_audio_path},
+        {"",
          "--mask",
          "path to the mask image",
          0,
@@ -2346,6 +2350,11 @@ bool SDGenerationParams::validate(SDMode mode) {
         }
     }
 
+    if (mode != VID_GEN && init_audio_path.length() > 0) {
+        LOG_ERROR("error: init audio (--init-audio) is only supported in vid_gen mode\n");
+        return false;
+    }
+
     return true;
 }
 
@@ -2486,6 +2495,7 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
     params.clip_skip                 = clip_skip;
     params.init_image                = init_image.get();
     params.end_image                 = end_image.get();
+    params.input_audio               = input_audio;
     params.control_frames            = control_frame_views.empty() ? nullptr : control_frame_views.data();
     params.control_frames_size       = static_cast<int>(control_frame_views.size());
     params.width                     = get_resolved_width();
@@ -2556,6 +2566,7 @@ std::string SDGenerationParams::to_string() const {
         << "  qwen_image_layers: " << qwen_image_layers << ",\n"
         << "  init_image_path: \"" << init_image_path << "\",\n"
         << "  end_image_path: \"" << end_image_path << "\",\n"
+        << "  init_audio_path: \"" << init_audio_path << "\",\n"
         << "  mask_image_path: \"" << mask_image_path << "\",\n"
         << "  control_image_path: \"" << control_image_path << "\",\n"
         << "  ref_image_paths: " << vec_str_to_string(ref_image_paths) << ",\n"

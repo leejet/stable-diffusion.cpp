@@ -40,12 +40,21 @@ struct UpscalerCtxDeleter {
     }
 };
 
+struct SDAudioDeleter {
+    void operator()(sd_audio_t* audio) const {
+        if (audio != nullptr) {
+            free_sd_audio(audio);
+        }
+    }
+};
+
 template <typename T>
 using FreeUniquePtr = std::unique_ptr<T, FreeDeleter>;
 
 using FilePtr        = std::unique_ptr<FILE, FileCloser>;
 using SDCtxPtr       = std::unique_ptr<sd_ctx_t, SDCtxDeleter>;
 using UpscalerCtxPtr = std::unique_ptr<upscaler_ctx_t, UpscalerCtxDeleter>;
+using SDAudioPtr     = std::unique_ptr<sd_audio_t, SDAudioDeleter>;
 
 class SDImageOwner {
 private:
