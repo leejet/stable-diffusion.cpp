@@ -2964,6 +2964,7 @@ void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     sd_img_gen_params->seed              = -1;
     sd_img_gen_params->batch_count       = 1;
     sd_img_gen_params->control_strength  = 0.9f;
+    sd_img_gen_params->qwen_image_layers = 3;
     sd_img_gen_params->pm_params         = {nullptr, 0, nullptr, 20.f};
     sd_img_gen_params->pulid_params      = {nullptr, 1.0f};
     sd_img_gen_params->vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
@@ -2990,6 +2991,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "seed: %" PRId64
              "\n"
              "batch_count: %d\n"
+             "qwen_image_layers: %d\n"
              "ref_images_count: %d\n"
              "auto_resize_ref_image: %s\n"
              "increase_ref_index: %s\n"
@@ -3006,6 +3008,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              sd_img_gen_params->strength,
              sd_img_gen_params->seed,
              sd_img_gen_params->batch_count,
+             sd_img_gen_params->qwen_image_layers,
              sd_img_gen_params->ref_images_count,
              BOOL_STR(sd_img_gen_params->auto_resize_ref_image),
              BOOL_STR(sd_img_gen_params->increase_ref_index),
@@ -3273,6 +3276,7 @@ struct GenerationRequest {
     bool has_ref_images                      = false;
     const sd_cache_params_t* cache_params    = nullptr;
     int batch_count                          = 1;
+    int qwen_image_layers                    = 3;
     int shifted_timestep                     = 0;
     float strength                           = 1.f;
     float control_strength                   = 0.f;
@@ -3298,6 +3302,7 @@ struct GenerationRequest {
         diffusion_model_down_factor = sd_ctx->sd->get_diffusion_model_down_factor();
         seed                        = sd_img_gen_params->seed;
         batch_count                 = sd_img_gen_params->batch_count;
+        qwen_image_layers           = std::max(0, sd_img_gen_params->qwen_image_layers);
         clip_skip                   = sd_img_gen_params->clip_skip;
         shifted_timestep            = sd_img_gen_params->sample_params.shifted_timestep;
         strength                    = sd_img_gen_params->strength;
@@ -4090,7 +4095,7 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
     sd::Tensor<float> control_latent;
     if (init_image_tensor.empty()) {
         if (sd_ctx->sd->version == VERSION_QWEN_IMAGE_LAYERED) {
-            init_latent = sd_ctx->sd->generate_init_latent(request->width, request->height, 4, true);
+            init_latent = sd_ctx->sd->generate_init_latent(request->width, request->height, request->qwen_image_layers + 1, true);
         } else {
             init_latent = sd_ctx->sd->generate_init_latent(request->width, request->height);
         }
@@ -4379,14 +4384,14 @@ static sd_image_t* decode_image_outputs(sd_ctx_t* sd_ctx,
         }
         int64_t t1 = ggml_time_ms();
         if (sd_ctx->sd->version == VERSION_QWEN_IMAGE_LAYERED) {
-            constexpr int kLayerCount = 4;
-            if (final_latents[i].dim() < 5 || final_latents[i].shape()[2] < kLayerCount) {
+            int qwen_image_latent_layers = request.qwen_image_layers + 1;
+            if (final_latents[i].dim() < 5 || final_latents[i].shape()[2] < qwen_image_latent_layers) {
                 LOG_ERROR("qwen image layered expected at least %d latent layers, got shape dim=%d",
-                          kLayerCount,
+                          qwen_image_latent_layers,
                           final_latents[i].dim());
                 return nullptr;
             }
-            for (int layer_index = 0; layer_index < kLayerCount; layer_index++) {
+            for (int layer_index = 0; layer_index < qwen_image_latent_layers; layer_index++) {
                 if (sd_ctx->sd->get_cancel_flag() == SD_CANCEL_ALL) {
                     LOG_ERROR("cancelling latent decodings");
                     cancelled = true;

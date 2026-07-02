@@ -126,6 +126,7 @@ static json make_img_gen_defaults_json(const SDGenerationParams& defaults, const
         {"strength", defaults.strength},
         {"seed", defaults.seed},
         {"batch_count", defaults.batch_count},
+        {"qwen_image_layers", defaults.qwen_image_layers},
         {"auto_resize_ref_image", defaults.auto_resize_ref_image},
         {"increase_ref_index", defaults.increase_ref_index},
         {"control_strength", defaults.control_strength},
