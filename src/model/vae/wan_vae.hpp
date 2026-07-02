@@ -72,8 +72,8 @@ namespace WAN {
                 lp2 -= (int)cache_x->ne[2];
             }
 
-            x = ggml_ext_pad_ext(ctx->ggml_ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
-            return ggml_ext_conv_3d(ctx->ggml_ctx, x, w, b, in_channels,
+            x = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, x, lp0, rp0, lp1, rp1, lp2, rp2, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
+            return ggml_ext_conv_3d(ctx->ggml_ctx, ctx->backend, x, w, b, in_channels,
                                     std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
                                     0, 0, 0,
                                     std::get<2>(dilation), std::get<1>(dilation), std::get<0>(dilation));
@@ -195,7 +195,7 @@ namespace WAN {
                                                   2);
                         }
                         if (chunk_idx == 1 && cache_x->ne[2] < 2) {  // Rep
-                            cache_x = ggml_pad_ext(ctx->ggml_ctx, cache_x, 0, 0, 0, 0, (int)cache_x->ne[2], 0, 0, 0);
+                            cache_x = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, cache_x, 0, 0, 0, 0, (int)cache_x->ne[2], 0, 0, 0);
                             // aka cache_x = torch.cat([torch.zeros_like(cache_x).to(cache_x.device),cache_x],dim=2)
                         }
                         if (chunk_idx == 1) {
@@ -283,7 +283,7 @@ namespace WAN {
 
             int pad_t = (factor_t - T % factor_t) % factor_t;
 
-            x = ggml_pad_ext(ctx->ggml_ctx, x, 0, 0, 0, 0, pad_t, 0, 0, 0);
+            x = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, x, 0, 0, 0, 0, pad_t, 0, 0, 0);
             T = x->ne[2];
 
             x = ggml_reshape_4d(ctx->ggml_ctx, x, W * H, factor_t, T / factor_t, C);                                                  // [C, T/factor_t, factor_t, H*W]
