@@ -56,6 +56,7 @@ struct SDCliParams {
 
     std::string imatrix_out;
     std::vector<std::string> imatrix_in;
+    std::string att_options;
 
     bool normal_exit = false;
 
@@ -88,6 +89,15 @@ struct SDCliParams {
              "compute the imatrix for this run and save it to the provided path",
              0,
              &imatrix_out},
+            {"",
+             "--att",
+             "auto-tensor-type: during this run, measure per-tensor quantization error of the diffusion model "
+             "on real activations and write an optimal --tensor-type-rules string for -M convert. "
+             "Options: out=rules.txt,bpw=3.5[,types=q2_K|q3_K|q4_K|q5_K|q6_K|q8_0][,buckets=3][,reps=2]"
+             "[,samples=2][,stride=7][,max-tokens=256][,threads=4]. "
+             "Combine with --imat-in (or --imat-out to collect in the same run) for imatrix-weighted candidates",
+             0,
+             &att_options},
         };
 
         options.int_options = {
@@ -643,6 +653,24 @@ int main(int argc, const char* argv[]) {
         }
     }
 
+    if (!cli_params.att_options.empty()) {
+        std::string att_model_path = ctx_params.diffusion_model_path;
+        if (att_model_path.empty()) {
+            LOG_ERROR("--att requires a standalone diffusion model (--diffusion-model)");
+            return 1;
+        }
+        if (cli_params.imatrix_in.empty() && cli_params.imatrix_out.empty()) {
+            LOG_WARN("--att without --imat-in/--imat-out: candidate quantization will use uniform importance");
+        }
+        // The auto-tensor-type callback also forwards to the imatrix collector
+        // when --imat-out is set, so both can be produced in one run.
+        if (!sd_enable_auto_tensor_type(att_model_path.c_str(),
+                                        cli_params.att_options.c_str(),
+                                        !cli_params.imatrix_out.empty())) {
+            return 1;
+        }
+    }
+
     if (cli_params.mode == CONVERT) {
         bool success = convert_with_components(ctx_params.model_path.c_str(),
                                                ctx_params.clip_l_path.c_str(),
@@ -879,6 +907,13 @@ int main(int argc, const char* argv[]) {
     if (!cli_params.imatrix_out.empty()) {
         LOG_INFO("saving imatrix to '%s'", cli_params.imatrix_out.c_str());
         save_imatrix(cli_params.imatrix_out.c_str());
+    }
+
+    if (!cli_params.att_options.empty()) {
+        if (!sd_finish_auto_tensor_type()) {
+            LOG_ERROR("auto-tensor-type analysis failed");
+            return 1;
+        }
     }
 
     free_sd_audio(generated_audio);
