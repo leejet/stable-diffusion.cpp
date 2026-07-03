@@ -51,6 +51,40 @@ Module names are case-insensitive. Hyphens and underscores in module names are i
 sd-cli -m model.safetensors -p "a cat" --backend all=cuda0,te=cpu
 ```
 
+## Multiple devices per module (layer split)
+
+A `--backend` module assignment can list several devices separated by `&`:
+
+```shell
+sd-cli -m model.safetensors -p "a cat" --backend "diffusion=cuda0&cuda1"
+```
+
+The module's transformer blocks are then distributed across the listed devices
+in contiguous ranges sized proportionally to each device's free memory (minus a
+compute-buffer headroom of about 2 GiB per device), and the
+module's graphs are executed with a `ggml_backend_sched` that runs each block
+on the device holding its weights, copying the residual stream at the range
+boundaries. The first device in the list is the module's main device: it also
+holds the non-block tensors (embeddings, final norms, small sub-runners such as
+CLIP models or projectors) and the graph inputs/outputs.
+
+Layer split is supported for the `diffusion` and `te` modules. For `te` it
+applies to the dominant text encoder (`t5xxl` or the LLM); other modules accept
+only a single device. If the module has no recognizable transformer blocks, the
+assignment falls back to the first listed device.
+
+`--params-backend` accepts no device lists. If the module has no explicit
+params assignment, each block range's parameters are loaded directly to (and,
+with `--params-backend diffusion=disk`, released directly from) its own device;
+an explicit assignment such as `te=cpu` keeps the parameters on that backend
+and stages each range to its device on demand.
+
+Layer split cannot be combined with `--max-vram` graph-cut segmentation or
+`--stream-layers` for the split module; those are single-device mechanisms and
+are disabled for it.
+
+Use `--list-devices` to see the device names available on the system.
+
 ## Modules
 
 | Module | Purpose | Accepted names |

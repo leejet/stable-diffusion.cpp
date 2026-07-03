@@ -663,6 +663,15 @@ ArgOptions SDContextParams::get_options() {
          "but it usually offers faster inference speed and, in some cases, lower memory usage. "
          "The at_runtime mode, on the other hand, is exactly the opposite.",
          on_lora_apply_mode_arg},
+        {"",
+         "--list-devices",
+         "list available ggml backend devices (one 'name<TAB>description' per line) and exit; "
+         "the names are the device names accepted by --backend and --params-backend",
+         [](int /*argc*/, const char** /*argv*/, int /*index*/) {
+             sd_list_devices();
+             std::exit(0);
+             return 0;
+         }},
     };
 
     return options;

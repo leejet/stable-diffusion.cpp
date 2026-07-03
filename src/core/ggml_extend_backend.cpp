@@ -669,8 +669,49 @@ void SDBackendManager::reset() {
     params_assignment_  = {};
 }
 
+// Split an '&'-separated device list ("cuda0&cuda1") into its entries.
+// A plain single name yields one entry.
+static std::vector<std::string> split_device_list(const std::string& value) {
+    std::vector<std::string> names;
+    for (const std::string& raw : split_copy(value, '&')) {
+        const std::string name = trim_copy(raw);
+        if (!name.empty()) {
+            names.push_back(name);
+        }
+    }
+    return names;
+}
+
+static std::string primary_device_name(const std::string& value) {
+    std::vector<std::string> names = split_device_list(value);
+    return names.empty() ? std::string() : names.front();
+}
+
 ggml_backend_t SDBackendManager::runtime_backend(SDBackendModule module) {
-    return init_cached_backend(runtime_assignment_.get(module));
+    return init_cached_backend(primary_device_name(runtime_assignment_.get(module)));
+}
+
+std::vector<ggml_backend_t> SDBackendManager::runtime_backends(SDBackendModule module) {
+    std::vector<ggml_backend_t> backends;
+    for (const std::string& name : split_device_list(runtime_assignment_.get(module))) {
+        ggml_backend_t backend = init_cached_backend(name);
+        if (backend == nullptr) {
+            LOG_ERROR("failed to initialize backend '%s' for module %s",
+                      name.c_str(),
+                      sd_backend_module_name(module));
+            continue;
+        }
+        if (std::find(backends.begin(), backends.end(), backend) == backends.end()) {
+            backends.push_back(backend);
+        }
+    }
+    if (backends.empty()) {
+        ggml_backend_t backend = runtime_backend(module);
+        if (backend != nullptr) {
+            backends.push_back(backend);
+        }
+    }
+    return backends;
 }
 
 ggml_backend_t SDBackendManager::params_backend(SDBackendModule module) {
@@ -694,6 +735,10 @@ bool SDBackendManager::params_backend_is_cpu(SDBackendModule module) {
 
 bool SDBackendManager::params_backend_is_disk(SDBackendModule module) const {
     return is_disk_backend_token(params_assignment_.get(module));
+}
+
+bool SDBackendManager::params_backend_follows_runtime(SDBackendModule module) const {
+    return params_assignment_.get(module).empty();
 }
 
 bool SDBackendManager::runtime_backend_supports_host_buffer(SDBackendModule module) {
@@ -729,7 +774,7 @@ bool SDBackendManager::init(const char* backend_spec,
 }
 
 bool SDBackendManager::validate(std::string* error) const {
-    auto validate_runtime_name = [&](const std::string& name) -> bool {
+    auto validate_single_runtime_name = [&](const std::string& name) -> bool {
         if (is_default_backend_token(name)) {
             return true;
         }
@@ -747,11 +792,42 @@ bool SDBackendManager::validate(std::string* error) const {
         }
         return false;
     };
+    auto validate_runtime_name = [&](const std::string& name) -> bool {
+        // A runtime assignment may be an '&'-separated device list.
+        if (name.find('&') == std::string::npos) {
+            return validate_single_runtime_name(name);
+        }
+        std::vector<std::string> names = split_device_list(name);
+        if (names.empty()) {
+            if (error != nullptr) {
+                *error = "invalid backend device list '" + name + "'";
+            }
+            return false;
+        }
+        for (const std::string& entry : names) {
+            if (is_default_backend_token(entry)) {
+                if (error != nullptr) {
+                    *error = "default backend token is not allowed in a device list '" + name + "'";
+                }
+                return false;
+            }
+            if (!validate_single_runtime_name(entry)) {
+                return false;
+            }
+        }
+        return true;
+    };
     auto validate_params_name = [&](const std::string& name) -> bool {
         if (is_disk_backend_token(name)) {
             return true;
         }
-        return validate_runtime_name(name);
+        if (name.find('&') != std::string::npos) {
+            if (error != nullptr) {
+                *error = "params_backend does not accept device lists ('" + name + "')";
+            }
+            return false;
+        }
+        return validate_single_runtime_name(name);
     };
 
     if (!validate_runtime_name(runtime_assignment_.default_name) ||

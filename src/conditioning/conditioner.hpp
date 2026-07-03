@@ -116,6 +116,15 @@ public:
     virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors)           = 0;
     virtual void set_max_graph_vram_bytes(size_t max_vram_bytes) {}
     virtual void set_stream_layers_enabled(bool enabled) {}
+    // Multi-device (layer split) hooks. When the TE module is assigned more
+    // than one runtime backend, set_runtime_backends hands the backend list to
+    // the conditioner's dominant runner (t5 / llm), and
+    // get_layer_split_param_tensors returns that runner's tensors — the ones
+    // whose transformer blocks may be distributed across the devices. The
+    // defaults mean "no layer split support"; smaller sub-runners (clip_l,
+    // projectors, ...) always stay on the main backend.
+    virtual void set_runtime_backends(const std::vector<ggml_backend_t>& backends) {}
+    virtual void get_layer_split_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {}
     virtual void set_flash_attention_enabled(bool enabled) = 0;
     virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {}
     virtual void runner_done() {}
@@ -635,6 +644,18 @@ struct SD3CLIPEmbedder : public Conditioner {
         }
     }
 
+    void set_runtime_backends(const std::vector<ggml_backend_t>& backends) override {
+        if (t5) {
+            t5->set_runtime_backends(backends);
+        }
+    }
+
+    void get_layer_split_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        if (t5) {
+            t5->get_param_tensors(tensors, "text_encoders.t5xxl.transformer");
+        }
+    }
+
     void set_flash_attention_enabled(bool enabled) override {
         if (clip_l) {
             clip_l->set_flash_attention_enabled(enabled);
@@ -994,6 +1015,18 @@ struct FluxCLIPEmbedder : public Conditioner {
         }
     }
 
+    void set_runtime_backends(const std::vector<ggml_backend_t>& backends) override {
+        if (t5) {
+            t5->set_runtime_backends(backends);
+        }
+    }
+
+    void get_layer_split_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        if (t5) {
+            t5->get_param_tensors(tensors, "text_encoders.t5xxl.transformer");
+        }
+    }
+
     void set_flash_attention_enabled(bool enabled) override {
         if (clip_l) {
             clip_l->set_flash_attention_enabled(enabled);
@@ -1226,6 +1259,18 @@ struct T5CLIPEmbedder : public Conditioner {
         }
     }
 
+    void set_runtime_backends(const std::vector<ggml_backend_t>& backends) override {
+        if (t5) {
+            t5->set_runtime_backends(backends);
+        }
+    }
+
+    void get_layer_split_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        if (t5) {
+            t5->get_param_tensors(tensors, "text_encoders.t5xxl.transformer");
+        }
+    }
+
     void set_flash_attention_enabled(bool enabled) override {
         if (t5) {
             t5->set_flash_attention_enabled(enabled);
@@ -1418,6 +1463,18 @@ struct MiniT2IConditioner : public Conditioner {
         }
     }
 
+    void set_runtime_backends(const std::vector<ggml_backend_t>& backends) override {
+        if (t5) {
+            t5->set_runtime_backends(backends);
+        }
+    }
+
+    void get_layer_split_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        if (t5) {
+            t5->get_param_tensors(tensors, "text_encoders.t5xxl.transformer");
+        }
+    }
+
     void set_flash_attention_enabled(bool enabled) override {
         if (t5) {
             t5->set_flash_attention_enabled(enabled);
@@ -1500,6 +1557,14 @@ struct AnimaConditioner : public Conditioner {
 
     void set_stream_layers_enabled(bool enabled) override {
         llm->set_stream_layers_enabled(enabled);
+    }
+
+    void set_runtime_backends(const std::vector<ggml_backend_t>& backends) override {
+        llm->set_runtime_backends(backends);
+    }
+
+    void get_layer_split_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        llm->get_param_tensors(tensors, "text_encoders.llm");
     }
 
     void set_flash_attention_enabled(bool enabled) override {
@@ -1645,6 +1710,14 @@ struct LLMEmbedder : public Conditioner {
 
     void set_stream_layers_enabled(bool enabled) override {
         llm->set_stream_layers_enabled(enabled);
+    }
+
+    void set_runtime_backends(const std::vector<ggml_backend_t>& backends) override {
+        llm->set_runtime_backends(backends);
+    }
+
+    void get_layer_split_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        llm->get_param_tensors(tensors, "text_encoders.llm");
     }
 
     void set_flash_attention_enabled(bool enabled) override {
@@ -2314,6 +2387,16 @@ struct LTXAVEmbedder : public Conditioner {
     void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
         llm->set_max_graph_vram_bytes(max_vram_bytes);
         projector->set_max_graph_vram_bytes(max_vram_bytes);
+    }
+
+    // Layer split applies to the heavy LLM only; the small projector stays on
+    // the main backend.
+    void set_runtime_backends(const std::vector<ggml_backend_t>& backends) override {
+        llm->set_runtime_backends(backends);
+    }
+
+    void get_layer_split_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        llm->get_param_tensors(tensors, "text_encoders.llm");
     }
 
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
