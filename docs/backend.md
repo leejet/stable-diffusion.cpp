@@ -115,6 +115,33 @@ Direct ("immediately") LoRA application cannot patch row-split tensors; with
 explicit `--lora-apply-mode immediately` skips the split tensors with a
 warning.
 
+## Automatic placement (`--auto-fit`)
+
+`--auto-fit` derives the `diffusion` / `te` / `vae` placements from the model
+metadata and the per-device memory budgets, then feeds them into the same
+backend assignment mechanism described above (the chosen specs are printed).
+`--backend` and `--params-backend` are ignored while auto-fit is enabled.
+
+```shell
+sd-cli -m model.safetensors -p "a cat" --auto-fit
+sd-cli -m model.safetensors -p "a cat" --auto-fit --max-vram cuda0=8,cuda1=14
+sd-cli -m model.safetensors -p "a cat" --auto-fit --split-mode row
+```
+
+Budgets reuse `--max-vram`: a positive per-device value caps what auto-fit
+plans with on that device, a negative value means "free memory minus that many
+GiB", and with no budget set each device's free memory minus a 512 MiB margin
+is used. (The same values still drive graph-cut segmented execution for
+modules that end up on a single device.)
+
+When everything fits resident, components are simply spread across the
+available GPUs. When it does not, auto-fit switches to time-share mode: the
+heavy components get `disk` params residency (loaded for their phase, freed
+after), and a component too large for any single device is split across all
+GPUs with the layer/row split mechanism (`--split-mode` selects which, layer
+by default). Components that fit nowhere fall back to the CPU. If a VAE decode
+still runs out of memory, tiling is enabled and the decode retried once.
+
 ## Modules
 
 | Module | Purpose | Accepted names |

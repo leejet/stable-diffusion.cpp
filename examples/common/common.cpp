@@ -509,6 +509,12 @@ ArgOptions SDContextParams::get_options() {
          "load all params into the params backend at model-load time instead of lazily on first use (defaults to false)",
          true, &eager_load},
         {"",
+         "--auto-fit",
+         "pick the diffusion/te/vae device placements automatically from the model size and the per-device "
+         "memory budgets (--max-vram; defaults to free memory minus a small margin). Overrides --backend and "
+         "--params-backend; may split modules across GPUs (--split-mode still selects layer or row)",
+         true, &auto_fit},
+        {"",
          "--force-sdxl-vae-conv-scale",
          "force use of conv scale on sdxl vae",
          true, &force_sdxl_vae_conv_scale},
@@ -835,6 +841,7 @@ std::string SDContextParams::to_string() const {
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
         << "  split_mode: \"" << split_mode << "\",\n"
+        << "  auto_fit: " << (auto_fit ? "true" : "false") << ",\n"
         << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
         << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
         << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
@@ -916,6 +923,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.backend                         = effective_backend.c_str();
     sd_ctx_params.params_backend                  = effective_params_backend.c_str();
     sd_ctx_params.split_mode                      = split_mode.c_str();
+    sd_ctx_params.auto_fit                        = auto_fit;
     sd_ctx_params.rpc_servers                     = rpc_servers.c_str();
     return sd_ctx_params;
 }
