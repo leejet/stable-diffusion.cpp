@@ -38,10 +38,20 @@ struct SDBackendHandleDeleter {
 
 using SDBackendHandle = std::unique_ptr<struct ggml_backend, SDBackendHandleDeleter>;
 
+// How a module with a multi-device runtime assignment distributes its weights:
+// LAYER assigns whole transformer blocks to devices (backend-generic), ROW
+// splits each matmul weight row-wise via the backend's split buffer type
+// (currently CUDA only).
+enum class SDSplitMode {
+    LAYER,
+    ROW,
+};
+
 class SDBackendManager {
 private:
     SDBackendAssignment runtime_assignment_;
     SDBackendAssignment params_assignment_;
+    SDBackendAssignment split_mode_assignment_;
     std::unordered_map<std::string, SDBackendHandle> backends_;
 
 public:
@@ -53,6 +63,7 @@ public:
 
     bool init(const char* backend_spec,
               const char* params_backend_spec,
+              const char* split_mode_spec,
               std::string* error);
     void reset();
 
@@ -64,6 +75,19 @@ public:
     // e.g. --backend "diffusion=cuda0&cuda1". The first entry is the main
     // backend (the same one runtime_backend() returns); duplicates are folded.
     std::vector<ggml_backend_t> runtime_backends(SDBackendModule module);
+
+    // The module's --split-mode assignment ("layer" when unset).
+    SDSplitMode split_mode(SDBackendModule module) const;
+
+    // Row (tensor) split buffer type for the backend, with tensor_split
+    // holding per-registry-device weight proportions (normalized by the
+    // backend) and the backend's own device as the main device. Returns
+    // nullptr when the backend does not publish the
+    // "ggml_backend_split_buffer_type" proc (currently CUDA only; callers
+    // fall back to a layer split). The buffer type is cached by the backend
+    // and must not be freed.
+    ggml_backend_buffer_type_t split_buffer_type(ggml_backend_t backend,
+                                                 const std::vector<float>& tensor_split);
 
     bool runtime_backend_is_cpu(SDBackendModule module);
     bool params_backend_is_cpu(SDBackendModule module);

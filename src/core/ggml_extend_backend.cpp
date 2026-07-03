@@ -760,6 +760,7 @@ bool SDBackendManager::runtime_backend_supports_host_buffer(SDBackendModule modu
 
 bool SDBackendManager::init(const char* backend_spec,
                             const char* params_backend_spec,
+                            const char* split_mode_spec,
                             std::string* error) {
     reset();
 
@@ -769,8 +770,52 @@ bool SDBackendManager::init(const char* backend_spec,
     if (!sd_parse_backend_assignment(SAFE_STR(params_backend_spec), &params_assignment_, error)) {
         return false;
     }
+    if (!sd_parse_backend_assignment(SAFE_STR(split_mode_spec), &split_mode_assignment_, error)) {
+        return false;
+    }
 
     return validate(error);
+}
+
+SDSplitMode SDBackendManager::split_mode(SDBackendModule module) const {
+    return lower_copy(trim_copy(split_mode_assignment_.get(module))) == "row" ? SDSplitMode::ROW
+                                                                              : SDSplitMode::LAYER;
+}
+
+ggml_backend_buffer_type_t SDBackendManager::split_buffer_type(ggml_backend_t backend,
+                                                               const std::vector<float>& tensor_split) {
+    if (backend == nullptr) {
+        return nullptr;
+    }
+    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+    if (dev == nullptr) {
+        return nullptr;
+    }
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    if (reg == nullptr) {
+        return nullptr;
+    }
+    auto fn = (ggml_backend_split_buffer_type_t)ggml_backend_reg_get_proc_address(reg, "ggml_backend_split_buffer_type");
+    if (fn == nullptr) {
+        return nullptr;  // backend has no row-split support
+    }
+    // main_device is the backend's device index WITHIN its registry.
+    int main_device        = -1;
+    const size_t dev_count = ggml_backend_reg_dev_count(reg);
+    for (size_t i = 0; i < dev_count; ++i) {
+        if (ggml_backend_reg_dev_get(reg, i) == dev) {
+            main_device = (int)i;
+            break;
+        }
+    }
+    if (main_device < 0) {
+        return nullptr;
+    }
+    // The backend reads a fixed-size proportion array (e.g. CUDA scans
+    // GGML_CUDA_MAX_DEVICES entries); pad generously to stay in bounds.
+    std::vector<float> padded_split(std::max<size_t>(tensor_split.size(), 64), 0.0f);
+    std::copy(tensor_split.begin(), tensor_split.end(), padded_split.begin());
+    return fn(main_device, padded_split.data());
 }
 
 bool SDBackendManager::validate(std::string* error) const {
@@ -830,8 +875,20 @@ bool SDBackendManager::validate(std::string* error) const {
         return validate_single_runtime_name(name);
     };
 
+    auto validate_split_mode_name = [&](const std::string& name) -> bool {
+        const std::string lower = lower_copy(trim_copy(name));
+        if (lower.empty() || lower == "layer" || lower == "row") {
+            return true;
+        }
+        if (error != nullptr) {
+            *error = "invalid split mode '" + name + "' (expected layer or row)";
+        }
+        return false;
+    };
+
     if (!validate_runtime_name(runtime_assignment_.default_name) ||
-        !validate_params_name(params_assignment_.default_name)) {
+        !validate_params_name(params_assignment_.default_name) ||
+        !validate_split_mode_name(split_mode_assignment_.default_name)) {
         return false;
     }
     for (const auto& kv : runtime_assignment_.module_names) {
@@ -841,6 +898,11 @@ bool SDBackendManager::validate(std::string* error) const {
     }
     for (const auto& kv : params_assignment_.module_names) {
         if (!validate_params_name(kv.second)) {
+            return false;
+        }
+    }
+    for (const auto& kv : split_mode_assignment_.module_names) {
+        if (!validate_split_mode_name(kv.second)) {
             return false;
         }
     }

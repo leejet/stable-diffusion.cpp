@@ -85,6 +85,36 @@ are disabled for it.
 
 Use `--list-devices` to see the device names available on the system.
 
+### Row split (`--split-mode row`)
+
+`--split-mode` selects how a multi-device module distributes its weights:
+`layer` (the default, described above) or `row`. It accepts a single mode or
+per-module assignments:
+
+```shell
+sd-cli -m model.safetensors -p "a cat" --backend "diffusion=cuda0&cuda1" --split-mode row
+sd-cli -m model.safetensors -p "a cat" --backend "diffusion=cuda0&cuda1,te=cuda0&cuda1" --split-mode diffusion=row,te=layer
+```
+
+In row mode the module keeps executing on its main (first listed) device, but
+its transformer-block matmul weights are allocated in the backend's row-split
+buffer type, which slices each weight's rows across the listed devices in
+proportion to free memory and runs those matmuls on all devices in parallel.
+Compared to a layer split this uses all GPUs within every layer (instead of
+sequentially device by device) at the cost of a cross-device reduction per
+matmul — usually the faster option when the devices have fast interconnect.
+
+Row split requires backend support for split buffers and is currently
+available on CUDA only; on other backends (or when the listed devices belong
+to different backend registries) the module falls back to a layer split.
+Embeddings, normalization weights, biases and other non-block tensors stay in
+regular buffers on the main device.
+
+Direct ("immediately") LoRA application cannot patch row-split tensors; with
+`--split-mode row` the automatic LoRA mode selects runtime application, and an
+explicit `--lora-apply-mode immediately` skips the split tensors with a
+warning.
+
 ## Modules
 
 | Module | Purpose | Accepted names |

@@ -36,7 +36,12 @@ private:
         ResidencyMode residency_mode   = ResidencyMode::ParamBackend;
         ggml_backend_t compute_backend = nullptr;
         ggml_backend_t params_backend  = nullptr;
-        bool metadata_validated        = false;
+        // Set at registration for tensors that may live in the compute
+        // backend's row-split buffer type (weights only ever consumed by
+        // matmuls). Only takes effect when a split buffer type was registered
+        // for the compute backend (set_split_buffer_type).
+        bool allow_split_buffer = false;
+        bool metadata_validated = false;
 
         int active_prepare_count = 0;
 
@@ -63,6 +68,9 @@ private:
     std::map<std::string, TensorState*> tensor_states_by_name_;
     std::vector<std::unique_ptr<ParamsStorageBlock>> params_storage_blocks_;
     std::vector<std::unique_ptr<ComputeStagingBlock>> compute_staging_blocks_;
+    // Row-split buffer type per compute backend (backend-cached, not owned).
+    std::map<ggml_backend_t, ggml_backend_buffer_type_t> split_buffer_types_;
+    bool warned_split_lora_skip_ = false;
     std::set<std::string> common_ignore_tensors_;
     std::vector<LoraSpec> loras_;
     SDVersion lora_version_      = VERSION_COUNT;
@@ -91,6 +99,7 @@ private:
     bool stage_tensors_to_compute_backend(const std::vector<TensorState*>& states);
 
     ggml_backend_buffer_type_t params_buffer_type_for(const TensorState& state) const;
+    ggml_backend_buffer_type_t split_buffer_type_for(const TensorState& state) const;
     void release_compute_staging_blocks(bool force                                            = false,
                                         const std::unordered_set<TensorState*>* target_states = nullptr);
     void release_params_storage_blocks(bool force                                            = false,
@@ -114,6 +123,14 @@ public:
     void set_writable_mmap(bool writable_mmap) { writable_mmap_ = writable_mmap; }
     void set_common_ignore_tensors(std::set<std::string> ignore_tensors);
     void set_loras(std::vector<LoraSpec> loras, SDVersion version);
+    // Register the row-split buffer type used for split-eligible tensors whose
+    // compute backend is `compute_backend`. The buffer type is owned by the
+    // backend (never freed here).
+    void set_split_buffer_type(ggml_backend_t compute_backend, ggml_backend_buffer_type_t split_buft);
+
+    // Shape constraints of the backend split buffer types: contiguous,
+    // non-view, rank-2 (split along rows, matmul weights only).
+    static bool tensor_shape_supports_split_buffer(const ggml_tensor* tensor);
 
     std::set<std::string> tensor_names() const;
 
@@ -122,7 +139,8 @@ public:
                                 ResidencyMode residency_mode,
                                 ggml_backend_t compute_backend,
                                 ggml_backend_t params_backend,
-                                size_t* registered_tensor_size = nullptr);
+                                size_t* registered_tensor_size = nullptr,
+                                bool allow_split_buffer        = false);
 
     template <typename Runner>
     bool register_runner_params(const std::string& desc,

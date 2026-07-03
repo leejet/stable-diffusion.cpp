@@ -469,6 +469,13 @@ ArgOptions SDContextParams::get_options() {
          (int)',',
          &params_backend},
         {"",
+         "--split-mode",
+         "weight distribution for modules assigned multiple devices (--backend \"diffusion=cuda0&cuda1\"): "
+         "layer (whole transformer blocks per device, default) or row (matmul rows split across devices, CUDA only). "
+         "Accepts a single mode or per-module assignments, e.g. row or diffusion=row,te=layer",
+         (int)',',
+         &split_mode},
+        {"",
          "--rpc-servers",
          "comma-separated list of RPC servers to connect to for offloading, in the format host:port, e.g. localhost:50052,192.168.1.3:50052",
          (int)',',
@@ -827,6 +834,7 @@ std::string SDContextParams::to_string() const {
         << "  eager_load: " << (eager_load ? "true" : "false") << ",\n"
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
+        << "  split_mode: \"" << split_mode << "\",\n"
         << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
         << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
         << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
@@ -907,6 +915,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.eager_load                      = eager_load;
     sd_ctx_params.backend                         = effective_backend.c_str();
     sd_ctx_params.params_backend                  = effective_params_backend.c_str();
+    sd_ctx_params.split_mode                      = split_mode.c_str();
     sd_ctx_params.rpc_servers                     = rpc_servers.c_str();
     return sd_ctx_params;
 }
