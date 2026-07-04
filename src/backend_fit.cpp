@@ -1,31 +1,17 @@
-#ifndef __SD_BACKEND_FIT_HPP__
-#define __SD_BACKEND_FIT_HPP__
+#include "backend_fit.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
-#include <string>
 #include <utility>
 #include <vector>
 
 #include "core/ggml_extend_backend.h"
-#include "core/ggml_graph_cut.h"
 #include "core/util.h"
 #include "ggml-backend.h"
-#include "model_loader.h"
-#include "stable-diffusion.h"
 
-// Auto-fit (--auto-fit): derive --backend / --params-backend placements for
-// the DiT / conditioner / VAE from the model metadata and per-device memory
-// budgets. This is a policy layer only — it emits the same backend assignment
-// specs a user would pass manually (including '&' device lists for the layer /
-// row split mechanisms) and feeds them to SDBackendManager.
-//
-// Budgets come from --max-vram: a positive per-device value caps the memory
-// auto-fit plans with on that device, a negative value means "free memory
-// minus that many GiB", and an unset budget defaults to the device's free
-// memory minus a 512 MiB margin.
-namespace backend_fit {
+namespace sd::backend_fit {
+namespace {
 
 constexpr int64_t MiB = 1024ll * 1024;
 
@@ -68,7 +54,7 @@ struct Plan {
     std::vector<Decision> decisions;
 };
 
-inline bool classify_tensor(const std::string& name, ComponentKind& out) {
+bool classify_tensor(const std::string& name, ComponentKind& out) {
     auto contains = [&](const char* s) { return name.find(s) != std::string::npos; };
 
     if (contains("model.diffusion_model.") || contains("unet.")) {
@@ -96,7 +82,7 @@ inline bool classify_tensor(const std::string& name, ComponentKind& out) {
     return false;
 }
 
-inline std::vector<Component> estimate_components(ModelLoader& loader, ggml_type override_wtype) {
+std::vector<Component> estimate_components(ModelLoader& loader, ggml_type override_wtype) {
     const auto& storage = loader.get_tensor_storage_map();
 
     int64_t bytes[3] = {0, 0, 0};
@@ -128,7 +114,7 @@ inline std::vector<Component> estimate_components(ModelLoader& loader, ggml_type
     return out;
 }
 
-inline std::vector<Device> enumerate_gpu_devices(const sd::ggml_graph_cut::MaxVramAssignment& budgets) {
+std::vector<Device> enumerate_gpu_devices(const sd::ggml_graph_cut::MaxVramAssignment& budgets) {
     std::vector<Device> out;
     for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
@@ -172,7 +158,7 @@ inline std::vector<Device> enumerate_gpu_devices(const sd::ggml_graph_cut::MaxVr
 // on demand and frees them afterwards, so each component only has to fit on
 // its own. A component that cannot fit a single device splits across all
 // GPUs when its module supports it, and lands on the CPU otherwise.
-inline Plan compute_plan(const std::vector<Component>& components, const std::vector<Device>& devices) {
+Plan compute_plan(const std::vector<Component>& components, const std::vector<Device>& devices) {
     Plan plan;
     if (devices.empty()) {
         return plan;
@@ -227,9 +213,9 @@ inline Plan compute_plan(const std::vector<Component>& components, const std::ve
     // Time-share regime: each component fits on its own (params=disk).
     plan.decisions.assign(components.size(), {});
     for (size_t ci : order) {
-        const Component& comp   = components[ci];
-        Decision& decision      = plan.decisions[ci];
-        decision.kind           = comp.kind;
+        const Component& comp = components[ci];
+        Decision& decision    = plan.decisions[ci];
+        decision.kind         = comp.kind;
         if (comp.params_bytes == 0) {
             continue;
         }
@@ -270,9 +256,9 @@ inline Plan compute_plan(const std::vector<Component>& components, const std::ve
     return plan;
 }
 
-inline void print_plan(const Plan& plan,
-                       const std::vector<Component>& components,
-                       const std::vector<Device>& devices) {
+void print_plan(const Plan& plan,
+                const std::vector<Component>& components,
+                const std::vector<Device>& devices) {
     LOG_INFO("auto-fit plan%s:", plan.time_share ? " (time-share: params load per phase and free after)" : "");
     LOG_INFO("  devices:");
     for (const Device& d : devices) {
@@ -282,7 +268,7 @@ inline void print_plan(const Plan& plan,
     }
     LOG_INFO("  components:");
     for (size_t ci = 0; ci < components.size(); ci++) {
-        const Component& comp   = components[ci];
+        const Component& comp     = components[ci];
         const Decision& decision = plan.decisions[ci];
         std::string target;
         if (comp.params_bytes == 0) {
@@ -308,7 +294,7 @@ inline void print_plan(const Plan& plan,
     }
 }
 
-inline void append_assignment(std::string& spec, const char* key, const std::string& value) {
+void append_assignment(std::string& spec, const char* key, const std::string& value) {
     if (!spec.empty()) {
         spec += ",";
     }
@@ -317,13 +303,13 @@ inline void append_assignment(std::string& spec, const char* key, const std::str
     spec += value;
 }
 
-inline void append_component_decision(const std::vector<Component>& components,
-                                      const std::vector<Device>& devices,
-                                      const Plan& plan,
-                                      ComponentKind kind,
-                                      const char* module_key,
-                                      std::string& runtime_spec,
-                                      std::string& params_spec) {
+void append_component_decision(const std::vector<Component>& components,
+                               const std::vector<Device>& devices,
+                               const Plan& plan,
+                               ComponentKind kind,
+                               const char* module_key,
+                               std::string& runtime_spec,
+                               std::string& params_spec) {
     for (size_t ci = 0; ci < components.size(); ci++) {
         if (components[ci].kind != kind || components[ci].params_bytes == 0) {
             continue;
@@ -351,11 +337,13 @@ inline void append_component_decision(const std::vector<Component>& components,
     }
 }
 
-inline bool derive_backend_specs(ModelLoader& loader,
-                                 ggml_type override_wtype,
-                                 sd::ggml_graph_cut::MaxVramAssignment& budgets,
-                                 std::string& runtime_spec,
-                                 std::string& params_spec) {
+}  // namespace
+
+bool derive_backend_specs(ModelLoader& loader,
+                          ggml_type override_wtype,
+                          sd::ggml_graph_cut::MaxVramAssignment& budgets,
+                          std::string& runtime_spec,
+                          std::string& params_spec) {
     if (!runtime_spec.empty() || !params_spec.empty()) {
         LOG_WARN("--auto-fit is enabled; ignoring --backend / --params-backend");
     }
@@ -399,7 +387,7 @@ inline bool derive_backend_specs(ModelLoader& loader,
     return true;
 }
 
-inline bool prepare_vae_decode_retry_tiling(sd_tiling_params_t& tiling_params, bool prefer_temporal_tiling) {
+bool prepare_vae_decode_retry_tiling(sd_tiling_params_t& tiling_params, bool prefer_temporal_tiling) {
     if (prefer_temporal_tiling) {
         if (tiling_params.temporal_tiling) {
             return false;
@@ -423,6 +411,4 @@ inline bool prepare_vae_decode_retry_tiling(sd_tiling_params_t& tiling_params, b
     return true;
 }
 
-}  // namespace backend_fit
-
-#endif  // __SD_BACKEND_FIT_HPP__
+}  // namespace sd::backend_fit

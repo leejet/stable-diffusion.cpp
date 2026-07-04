@@ -19,7 +19,7 @@
 #include "model_manager.h"
 #include "stable-diffusion.h"
 
-#include "backend_fit.hpp"
+#include "backend_fit.h"
 #include "conditioning/conditioner.hpp"
 #include "extensions/generation_extension.h"
 #include "model/adapter/lora.hpp"
@@ -766,11 +766,11 @@ public:
         }
 
         if (auto_fit_enabled) {
-            if (!backend_fit::derive_backend_specs(model_loader,
-                                                   wtype,
-                                                   max_vram_assignment,
-                                                   backend_spec,
-                                                   params_backend_spec)) {
+            if (!sd::backend_fit::derive_backend_specs(model_loader,
+                                                       wtype,
+                                                       max_vram_assignment,
+                                                       backend_spec,
+                                                       params_backend_spec)) {
                 return false;
             }
         }
@@ -2714,7 +2714,7 @@ public:
         // failing the whole generation.
         if (decoded.empty() && auto_fit_enabled) {
             bool prefer_temporal_tiling = decode_video && std::dynamic_pointer_cast<LTXVideoVAE>(first_stage_model) != nullptr;
-            if (backend_fit::prepare_vae_decode_retry_tiling(vae_tiling_params, prefer_temporal_tiling)) {
+            if (sd::backend_fit::prepare_vae_decode_retry_tiling(vae_tiling_params, prefer_temporal_tiling)) {
                 first_stage_model->free_compute_buffer();
                 first_stage_model->set_temporal_tiling_enabled(vae_tiling_params.temporal_tiling);
                 decoded = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
