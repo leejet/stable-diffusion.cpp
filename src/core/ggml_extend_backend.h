@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "ggml-backend.h"
 #include "ggml.h"
@@ -58,9 +59,12 @@ public:
     ggml_backend_t runtime_backend(SDBackendModule module);
     ggml_backend_t params_backend(SDBackendModule module);
 
+    std::vector<ggml_backend_t> runtime_backends(SDBackendModule module);
+
     bool runtime_backend_is_cpu(SDBackendModule module);
     bool params_backend_is_cpu(SDBackendModule module);
     bool params_backend_is_disk(SDBackendModule module) const;
+    bool params_backend_follows_runtime(SDBackendModule module) const;
     bool runtime_backend_supports_host_buffer(SDBackendModule module);
 
 private:
