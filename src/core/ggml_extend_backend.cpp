@@ -669,8 +669,6 @@ void SDBackendManager::reset() {
     params_assignment_  = {};
 }
 
-// Split an '&'-separated device list ("cuda0&cuda1") into its entries.
-// A plain single name yields one entry.
 static std::vector<std::string> split_device_list(const std::string& value) {
     std::vector<std::string> names;
     for (const std::string& raw : split_copy(value, '&')) {
@@ -793,7 +791,6 @@ bool SDBackendManager::validate(std::string* error) const {
         return false;
     };
     auto validate_runtime_name = [&](const std::string& name) -> bool {
-        // A runtime assignment may be an '&'-separated device list.
         if (name.find('&') == std::string::npos) {
             return validate_single_runtime_name(name);
         }

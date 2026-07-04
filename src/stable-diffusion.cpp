@@ -173,8 +173,6 @@ static float get_cache_reuse_threshold(const sd_cache_params_t& params) {
 
 /*=============================================== StableDiffusionGGML ================================================*/
 
-// Detects the multi-device hook shared by GGMLRunner and Conditioner; runner
-// types without it (e.g. generation extensions) never layer-split.
 template <typename T, typename = void>
 struct has_set_runtime_backends : std::false_type {};
 template <typename T>
@@ -315,14 +313,8 @@ public:
                                                      params_mem_size);
     }
 
-    // Layer split registration: partition the module's tensors into contiguous
-    // transformer-block ranges (one per runtime backend) and register each
-    // range with that backend as its per-tensor compute backend — the
-    // ModelManager's existing allocation/staging/LoRA paths already group by
-    // backend and buffer type, so no special weight handling is needed. When
-    // the module has no explicit params assignment (or uses disk residency),
-    // each range's params follow its own device so weights load straight to
-    // (and release straight from) the device that computes with them.
+    // Register each layer-split partition with its compute backend; the
+    // ModelManager handles allocation, staging, and LoRA by backend.
     template <typename T>
     bool register_layer_split_runner_params(const std::string& desc,
                                             const std::shared_ptr<T>& model,

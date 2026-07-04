@@ -9,9 +9,6 @@
 
 namespace sd {
 
-    // Parse a transformer block index out of a weight name, or -1 if the tensor
-    // does not belong to a block ("model.diffusion_model.transformer_blocks.12.*"
-    // -> 12, "text_encoders.llm.model.layers.30.*" -> 30).
     static int tensor_block_index(const std::string& name) {
         static const char* block_keywords[] = {"transformer_blocks.", "joint_blocks.", "double_blocks.",
                                                "single_blocks.", "blocks.", "block.", "layers."};
@@ -122,14 +119,8 @@ namespace sd {
             return partitions;
         }
 
-        // Weight each device by its free memory minus a fixed compute headroom:
-        // every device participating in a layer split also hosts a share of the
-        // scheduler's compute buffers (the activations of its block range), which
-        // for large models runs into gigabytes; without the headroom the weight
-        // share fills the device exactly and the compute allocation OOMs.
-        // Non-block tensors prefer the first backend, but are moved to another
-        // split backend when the preferred backend cannot support that tensor;
-        // subtract each device's actual non-block bytes from its block budget.
+        // Reserve compute headroom and subtract each device's actual non-block
+        // bytes from its block budget.
         constexpr int64_t compute_headroom_bytes = 2ll * 1024 * 1024 * 1024;
         std::vector<double> device_weights(backends.size(), 1.0);
         double weight_sum = 0.0;
@@ -154,9 +145,6 @@ namespace sd {
             block_budgets[i] = budget;
         }
 
-        // Assign contiguous block ranges: boundaries[i] is the first block index
-        // NOT owned by backend i. Every backend keeps at least one block while
-        // blocks remain, and the last backend absorbs the remainder.
         std::vector<int> boundaries(backends.size(), n_blocks);
         size_t current = 0;
         int64_t used   = 0;

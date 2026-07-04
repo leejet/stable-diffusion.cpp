@@ -59,17 +59,11 @@ public:
     ggml_backend_t runtime_backend(SDBackendModule module);
     ggml_backend_t params_backend(SDBackendModule module);
 
-    // All runtime backends assigned to a module, in assignment order. A module
-    // is assigned more than one backend with an '&'-separated device list,
-    // e.g. --backend "diffusion=cuda0&cuda1". The first entry is the main
-    // backend (the same one runtime_backend() returns); duplicates are folded.
     std::vector<ggml_backend_t> runtime_backends(SDBackendModule module);
 
     bool runtime_backend_is_cpu(SDBackendModule module);
     bool params_backend_is_cpu(SDBackendModule module);
     bool params_backend_is_disk(SDBackendModule module) const;
-    // True when the module has no explicit params assignment, so params
-    // placement follows the runtime backend (per device for layer splits).
     bool params_backend_follows_runtime(SDBackendModule module) const;
     bool runtime_backend_supports_host_buffer(SDBackendModule module);
 
