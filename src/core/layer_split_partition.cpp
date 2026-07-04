@@ -38,16 +38,60 @@ namespace sd {
         return name != nullptr ? name : "unknown";
     }
 
+    static bool layer_split_backend_supports_tensor(ggml_backend_t backend, const ggml_tensor* tensor) {
+        return backend != nullptr && tensor != nullptr && ggml_backend_supports_op(backend, tensor);
+    }
+
+    static size_t layer_split_supported_target(const std::string& desc,
+                                               const std::string& tensor_name,
+                                               const ggml_tensor* tensor,
+                                               const std::vector<ggml_backend_t>& backends,
+                                               size_t preferred) {
+        if (tensor == nullptr || backends.empty()) {
+            return preferred;
+        }
+        size_t preferred_safe = std::min(preferred, backends.size() - 1);
+        if (layer_split_backend_supports_tensor(backends[preferred_safe], tensor)) {
+            return preferred_safe;
+        }
+        for (size_t i = 0; i < backends.size(); i++) {
+            if (layer_split_backend_supports_tensor(backends[i], tensor)) {
+                LOG_WARN("%s layer split: moving tensor '%s' from %s to %s because the preferred backend cannot run op=%s type=%s nbytes=%.2f MB",
+                         desc.c_str(),
+                         tensor_name.c_str(),
+                         layer_split_backend_device_display_name(backends[preferred_safe]).c_str(),
+                         layer_split_backend_device_display_name(backends[i]).c_str(),
+                         ggml_op_name(tensor->op),
+                         ggml_type_name(tensor->type),
+                         ggml_nbytes(tensor) / (1024.0 * 1024.0));
+                return i;
+            }
+        }
+        LOG_WARN("%s layer split: tensor '%s' is not supported by any split backend: op=%s type=%s nbytes=%.2f MB",
+                 desc.c_str(),
+                 tensor_name.c_str(),
+                 ggml_op_name(tensor->op),
+                 ggml_type_name(tensor->type),
+                 ggml_nbytes(tensor) / (1024.0 * 1024.0));
+        return preferred_safe;
+    }
+
     std::vector<std::map<std::string, ggml_tensor*>> partition_layer_split_tensors(
         const std::string& desc,
         const std::map<std::string, ggml_tensor*>& tensors,
         const std::map<std::string, ggml_tensor*>& split_tensors,
         const std::vector<ggml_backend_t>& backends) {
         std::vector<std::map<std::string, ggml_tensor*>> partitions(backends.size());
+        if (backends.empty()) {
+            LOG_WARN("%s: no backend available for a layer split", desc.c_str());
+            return partitions;
+        }
 
         std::map<int, int64_t> block_bytes;
+        std::map<std::string, size_t> non_block_targets;
+        std::vector<int64_t> other_bytes_by_backend(backends.size(), 0);
         int64_t total_block_bytes = 0;
-        int64_t other_bytes       = 0;
+        int64_t total_other_bytes = 0;
         int n_blocks              = 0;
         for (const auto& kv : tensors) {
             int64_t bytes = (int64_t)ggml_nbytes(kv.second);
@@ -57,14 +101,24 @@ namespace sd {
                 total_block_bytes += bytes;
                 n_blocks = std::max(n_blocks, idx + 1);
             } else {
-                other_bytes += bytes;
+                size_t target = layer_split_supported_target(desc, kv.first, kv.second, backends, 0);
+                non_block_targets[kv.first] = target;
+                other_bytes_by_backend[target] += bytes;
+                total_other_bytes += bytes;
             }
         }
         if (n_blocks == 0) {
-            LOG_WARN("%s: no transformer blocks found for a layer split; keeping the module on %s",
+            LOG_WARN("%s: no transformer blocks found for a layer split; keeping tensors on compatible backends starting from %s",
                      desc.c_str(),
                      layer_split_backend_device_display_name(backends[0]).c_str());
-            partitions[0] = tensors;
+            for (const auto& kv : tensors) {
+                size_t target = 0;
+                auto target_it = non_block_targets.find(kv.first);
+                if (target_it != non_block_targets.end()) {
+                    target = target_it->second;
+                }
+                partitions[target][kv.first] = kv.second;
+            }
             return partitions;
         }
 
@@ -72,9 +126,10 @@ namespace sd {
         // every device participating in a layer split also hosts a share of the
         // scheduler's compute buffers (the activations of its block range), which
         // for large models runs into gigabytes; without the headroom the weight
-        // share fills the device exactly and the compute allocation OOMs. The main
-        // backend additionally holds the non-block tensors, so those are
-        // subtracted from its block budget below.
+        // share fills the device exactly and the compute allocation OOMs.
+        // Non-block tensors prefer the first backend, but are moved to another
+        // split backend when the preferred backend cannot support that tensor;
+        // subtract each device's actual non-block bytes from its block budget.
         constexpr int64_t compute_headroom_bytes = 2ll * 1024 * 1024 * 1024;
         std::vector<double> device_weights(backends.size(), 1.0);
         double weight_sum = 0.0;
@@ -92,11 +147,10 @@ namespace sd {
         }
 
         std::vector<int64_t> block_budgets(backends.size(), 0);
+        const int64_t total_bytes = total_block_bytes + total_other_bytes;
         for (size_t i = 0; i < backends.size(); i++) {
-            int64_t budget = (int64_t)((double)(total_block_bytes + other_bytes) * device_weights[i] / weight_sum);
-            if (i == 0) {
-                budget = std::max<int64_t>(budget - other_bytes, 0);
-            }
+            int64_t budget = (int64_t)((double)total_bytes * device_weights[i] / weight_sum);
+            budget         = std::max<int64_t>(budget - other_bytes_by_backend[i], 0);
             block_budgets[i] = budget;
         }
 
@@ -124,6 +178,12 @@ namespace sd {
                     target++;
                 }
                 target = std::min(target, backends.size() - 1);
+                target = layer_split_supported_target(desc, kv.first, kv.second, backends, target);
+            } else {
+                auto target_it = non_block_targets.find(kv.first);
+                if (target_it != non_block_targets.end()) {
+                    target = target_it->second;
+                }
             }
             partitions[target][kv.first] = kv.second;
         }
@@ -131,12 +191,13 @@ namespace sd {
         int range_start = 0;
         for (size_t i = 0; i < backends.size(); i++) {
             int range_end = boundaries[i];
+            const char* non_block_suffix = other_bytes_by_backend[i] > 0 ? " + non-block tensors" : "";
             LOG_INFO("%s layer split: %s <- blocks [%d, %d)%s",
                      desc.c_str(),
                      layer_split_backend_device_display_name(backends[i]).c_str(),
                      range_start,
                      range_end,
-                     i == 0 ? " + non-block tensors" : "");
+                     non_block_suffix);
             range_start = range_end;
         }
         return partitions;
