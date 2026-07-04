@@ -38,7 +38,6 @@ struct SDBackendHandleDeleter {
 
 using SDBackendHandle = std::unique_ptr<struct ggml_backend, SDBackendHandleDeleter>;
 
-// How a module with a multi-device runtime assignment distributes its weights.
 enum class SDSplitMode {
     LAYER,
     ROW,

@@ -367,7 +367,7 @@ public:
             size_t free_bytes = 0, total_bytes = 0;
             ggml_backend_dev_memory(dev, &free_bytes, &total_bytes);
             int64_t usable_bytes    = std::max<int64_t>((int64_t)free_bytes - compute_headroom_bytes,
-                                                        (int64_t)free_bytes / 8);
+                                                     (int64_t)free_bytes / 8);
             tensor_split[reg_index] = usable_bytes > 0 ? (float)((double)usable_bytes / (1024.0 * 1024.0)) : 1.0f;
         }
 
@@ -821,8 +821,9 @@ public:
             }
         } else if (sd_ctx_params->lora_apply_mode == LORA_APPLY_IMMEDIATELY) {
             if (row_split_active()) {
-                LOG_WARN("row-split tensors do not support the immediately LoRA apply mode; "
-                         "LoRAs will not be applied to them (use --lora-apply-mode at_runtime)");
+                LOG_WARN(
+                    "row-split tensors do not support the immediately LoRA apply mode; "
+                    "LoRAs will not be applied to them (use --lora-apply-mode at_runtime)");
             }
             apply_lora_immediately = true;
         } else {
