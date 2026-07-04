@@ -19,8 +19,8 @@
 #include "model_manager.h"
 #include "stable-diffusion.h"
 
-#include "core/backend_fit.h"
 #include "conditioning/conditioner.hpp"
+#include "core/backend_fit.h"
 #include "extensions/generation_extension.h"
 #include "model/adapter/lora.hpp"
 #include "model/diffusion/anima.hpp"
