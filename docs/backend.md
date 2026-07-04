@@ -102,7 +102,7 @@ buffer type, which slices each weight's rows across the listed devices in
 proportion to free memory and runs those matmuls on all devices in parallel.
 Compared to a layer split this uses all GPUs within every layer (instead of
 sequentially device by device) at the cost of a cross-device reduction per
-matmul — usually the faster option when the devices have fast interconnect.
+matmul - usually the faster option when the devices have fast interconnect.
 
 Row split requires backend support for split buffers and is currently
 available on CUDA only; on other backends (or when the listed devices belong

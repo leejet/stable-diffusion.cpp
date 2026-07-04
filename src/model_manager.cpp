@@ -112,11 +112,6 @@ void ModelManager::set_split_buffer_type(ggml_backend_t compute_backend, ggml_ba
 }
 
 bool ModelManager::tensor_shape_supports_split_buffer(const ggml_tensor* tensor) {
-    // Split buffers assert on views and non-contiguous tensors, split along
-    // rows (ne[1]) and are only usable as matmul weights. The size floor keeps
-    // small 2D block tensors (modulation/scale-shift tables) out: those are
-    // sliced into views inside the graphs, and views of split tensors are not
-    // supported.
     return tensor != nullptr &&
            tensor->view_src == nullptr &&
            ggml_is_contiguous(tensor) &&
@@ -272,9 +267,6 @@ bool ModelManager::load_tensors_to_params_backend(const std::vector<TensorState*
 }
 
 bool ModelManager::stage_tensors_to_compute_backend(const std::vector<TensorState*>& states) {
-    // Group by (compute backend, staging buffer type): split-eligible tensors
-    // stage into the backend's row-split buffer type, the rest into its
-    // default buffer type.
     std::map<std::pair<ggml_backend_t, ggml_backend_buffer_type_t>, std::vector<TensorState*>> states_by_staging_target;
     for (TensorState* state : states) {
         if (state == nullptr || should_ignore(*state) || is_optional_missing_tensor(state->name)) {
@@ -395,12 +387,10 @@ bool ModelManager::apply_loras_to_params(const std::vector<TensorState*>& states
         }
         if (state->tensor->buffer != nullptr &&
             ggml_backend_buffer_get_type(state->tensor->buffer) == split_buffer_type_for(*state)) {
-            // Direct LoRA application builds add/cpy graphs over the model
-            // tensors, and row-split tensors only support matmul; skip them
-            // here (use the at_runtime LoRA apply mode with row split).
             if (!warned_split_lora_skip_) {
-                LOG_WARN("model manager skipping direct lora application to row-split tensors "
-                         "(use --lora-apply-mode at_runtime with row split)");
+                LOG_WARN(
+                    "model manager skipping direct lora application to row-split tensors "
+                    "(use --lora-apply-mode at_runtime with row split)");
                 warned_split_lora_skip_ = true;
             }
             state->applied_lora_epoch = current_lora_epoch_;
@@ -751,8 +741,6 @@ ggml_backend_buffer_type_t ModelManager::params_buffer_type_for(const TensorStat
             params_buft = ggml_backend_dev_host_buffer_type(compute_dev);
         }
     } else if (state.params_backend == state.compute_backend) {
-        // When params live on the compute backend, split-eligible tensors go
-        // straight into the row-split buffer type.
         params_buft = split_buffer_type_for(state);
     }
     if (params_buft == nullptr) {
