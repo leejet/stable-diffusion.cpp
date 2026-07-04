@@ -228,6 +228,7 @@ typedef struct {
     const char* backend;
     const char* params_backend;
     const char* split_mode;  // weight distribution for multi-device modules: layer (default) or row, or per-module assignments e.g. "diffusion=row"
+    bool auto_fit;
     const char* rpc_servers;
 } sd_ctx_params_t;
 

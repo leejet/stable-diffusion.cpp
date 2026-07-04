@@ -20,6 +20,7 @@
 #include "stable-diffusion.h"
 
 #include "conditioning/conditioner.hpp"
+#include "core/backend_fit.h"
 #include "extensions/generation_extension.h"
 #include "model/adapter/lora.hpp"
 #include "model/diffusion/anima.hpp"
@@ -219,6 +220,7 @@ public:
     std::string backend_spec;
     std::string params_backend_spec;
     std::string split_mode_spec;
+    bool auto_fit_enabled = false;
 
     bool is_using_v_parameterization     = false;
     bool is_using_edm_v_parameterization = false;
@@ -586,6 +588,7 @@ public:
         backend_spec        = SAFE_STR(sd_ctx_params->backend);
         params_backend_spec = SAFE_STR(sd_ctx_params->params_backend);
         split_mode_spec     = SAFE_STR(sd_ctx_params->split_mode);
+        auto_fit_enabled    = sd_ctx_params->auto_fit;
         max_vram_assignment.reset(0.f);
         {
             std::string error;
@@ -610,21 +613,6 @@ public:
         }
 
         ggml_log_set(ggml_log_callback_default, nullptr);
-
-        if (!init_backend()) {
-            return false;
-        }
-        {
-            std::string error;
-            if (!max_vram_assignment.canonicalize_backend_keys(&error)) {
-                LOG_ERROR("%s", error.c_str());
-                return false;
-            }
-        }
-        if (stream_layers && !backend_manager.params_backend_is_cpu(SDBackendModule::DIFFUSION)) {
-            LOG_WARN("--stream-layers has no effect unless diffusion params backend is cpu; ignoring");
-            stream_layers = false;
-        }
 
         model_manager = std::make_shared<ModelManager>();
         model_manager->set_n_threads(n_threads);
@@ -771,6 +759,31 @@ public:
         std::string tensor_type_rules = SAFE_STR(sd_ctx_params->tensor_type_rules);
         if (wtype != GGML_TYPE_COUNT || tensor_type_rules.size() > 0) {
             model_loader.set_wtype_override(wtype, tensor_type_rules);
+        }
+
+        if (auto_fit_enabled) {
+            if (!sd::backend_fit::derive_backend_specs(model_loader,
+                                                       wtype,
+                                                       max_vram_assignment,
+                                                       backend_spec,
+                                                       params_backend_spec)) {
+                return false;
+            }
+        }
+
+        if (!init_backend()) {
+            return false;
+        }
+        {
+            std::string error;
+            if (!max_vram_assignment.canonicalize_backend_keys(&error)) {
+                LOG_ERROR("%s", error.c_str());
+                return false;
+            }
+        }
+        if (stream_layers && !backend_manager.params_backend_is_cpu(SDBackendModule::DIFFUSION)) {
+            LOG_WARN("--stream-layers has no effect unless diffusion params backend is cpu; ignoring");
+            stream_layers = false;
         }
 
         std::map<ggml_type, uint32_t> wtype_stat                 = model_loader.get_wtype_stat();
@@ -2689,7 +2702,16 @@ public:
         }
         auto latents = first_stage_model->diffusion_to_vae_latents(x);
         first_stage_model->set_temporal_tiling_enabled(vae_tiling_params.temporal_tiling);
-        return first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
+        auto decoded = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
+        if (decoded.empty() && auto_fit_enabled) {
+            bool prefer_temporal_tiling = decode_video && std::dynamic_pointer_cast<LTXVideoVAE>(first_stage_model) != nullptr;
+            if (sd::backend_fit::prepare_vae_decode_retry_tiling(vae_tiling_params, prefer_temporal_tiling)) {
+                first_stage_model->free_compute_buffer();
+                first_stage_model->set_temporal_tiling_enabled(vae_tiling_params.temporal_tiling);
+                decoded = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
+            }
+        }
+        return decoded;
     }
 
     sd::Tensor<float> normalize_ltx_video_latents(const sd::Tensor<float>& x) {
@@ -3046,6 +3068,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->backend              = nullptr;
     sd_ctx_params->params_backend       = nullptr;
     sd_ctx_params->split_mode           = nullptr;
+    sd_ctx_params->auto_fit             = false;
     sd_ctx_params->rpc_servers          = nullptr;
     sd_ctx_params->pulid_weights_path   = nullptr;
 }
@@ -3086,6 +3109,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "backend: %s\n"
              "params_backend: %s\n"
              "split_mode: %s\n"
+             "auto_fit: %s\n"
              "flash_attn: %s\n"
              "diffusion_flash_attn: %s\n"
              "circular_x: %s\n"
@@ -3123,6 +3147,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->backend),
              SAFE_STR(sd_ctx_params->params_backend),
              SAFE_STR(sd_ctx_params->split_mode),
+             BOOL_STR(sd_ctx_params->auto_fit),
              BOOL_STR(sd_ctx_params->flash_attn),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
              BOOL_STR(sd_ctx_params->circular_x),
