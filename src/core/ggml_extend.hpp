@@ -1746,11 +1746,6 @@ protected:
     bool stream_layers_enabled            = false;
     size_t observed_max_effective_budget_ = 0;
 
-    // Multi-device execution (layer split): when the module is assigned more
-    // than one runtime backend (--backend "diffusion=cuda0&cuda1"), the
-    // runner's weights are registered with per-tensor compute backends and the
-    // graph is executed with a ggml_backend_sched that routes each op to the
-    // device holding its weights. runtime_backend stays the main device.
     std::vector<ggml_backend_t> extra_runtime_backends;  // borrowed (SDBackendManager-owned)
     ggml_backend_sched_t sched             = nullptr;    // owned, multi-device only
     ggml_backend_t cpu_fallback_backend    = nullptr;    // owned, sched requires a trailing CPU backend
@@ -2023,15 +2018,8 @@ protected:
         return true;
     }
 
-    // Build the multi-device scheduler on first use. Backend order: the main
-    // runtime backend, the extra device backends, then a CPU backend last
-    // (ggml_backend_sched_new requires the final backend to be CPU). An
-    // explicit buffer-type array is passed instead of nullptr: the sched uses
-    // these in buffer_supported() to decide whether a cross-backend src needs
-    // a copy, and with the synthesized defaults CUDA devices can spuriously
-    // report supporting each other's buffers, skipping a required copy. The
-    // CPU slot uses the main device's host (pinned) buffer type when
-    // available, as llama.cpp does.
+    // Pass explicit buffer types: synthesized defaults can make CUDA devices
+    // report supporting each other's buffers and skip a required copy.
     bool ensure_sched(ggml_cgraph* gf) {
         if (sched != nullptr) {
             return true;
@@ -2080,9 +2068,6 @@ protected:
         return true;
     }
 
-    // Map a weight tensor to the runner backend whose device holds its data,
-    // or nullptr for non-weight tensors and weights outside the sched devices
-    // (e.g. mmap'd or pinned host buffers).
     ggml_backend_t backend_for_weight(const ggml_tensor* tensor) const {
         if (tensor == nullptr || tensor->buffer == nullptr) {
             return nullptr;
@@ -2106,18 +2091,9 @@ protected:
         return nullptr;
     }
 
-    // Pin compute nodes to their layer's device. The sched anchors
-    // weight-bearing ops (matmuls) to the weight's device, but weightless ops
-    // (norm, residual add, cont) have no anchor and its placement heuristic
-    // can land them on the wrong device, which is then read without a
-    // cross-device copy. llama.cpp pins each layer-boundary norm to the
-    // layer's device for the same reason (llama_context::graph_compute). This
-    // generalizes that: walk the graph in execution order, track the device of
-    // the most recently consumed weight (= the current layer's device), and
-    // pin every node to it, so the sched only copies the residual stream at
-    // layer boundaries. View ops must never be pinned: a view assigned to a
-    // different backend than its view_src's data makes the sched skip the
-    // cross-device copy for consumers.
+    // Weightless ops have no scheduler anchor, so pin them to the most recent
+    // weight device. Views must stay unpinned or cross-device copies can be
+    // skipped for their consumers.
     void pin_multi_device_nodes(ggml_cgraph* gf) {
         if (sched == nullptr || gf == nullptr) {
             return;
@@ -2668,9 +2644,9 @@ protected:
             }
         } else {
             status = sd_backend_graph_compute_with_eval_callback(runtime_backend,
-                                                                         gf,
-                                                                         sd_get_backend_eval_callback(),
-                                                                         sd_get_backend_eval_callback_data());
+                                                                 gf,
+                                                                 sd_get_backend_eval_callback(),
+                                                                 sd_get_backend_eval_callback_data());
         }
         if (status != GGML_STATUS_SUCCESS) {
             LOG_ERROR("%s compute failed: %s", get_desc().c_str(), ggml_status_to_string(status));
@@ -3049,11 +3025,6 @@ public:
         stream_layers_enabled = enabled;
     }
 
-    // Hand the runner its module's runtime backend list (layer split). The
-    // list is the SDBackendManager assignment order with backends[0] = the
-    // runner's main runtime backend; only the extra devices are kept. Layer
-    // streaming works through graph-cut segmentation, which is a
-    // single-backend mechanism, so it is turned off for a split runner.
     void set_runtime_backends(const std::vector<ggml_backend_t>& backends) {
         extra_runtime_backends.clear();
         for (ggml_backend_t backend : backends) {

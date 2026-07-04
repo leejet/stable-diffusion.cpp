@@ -665,12 +665,11 @@ SDBackendManager::~SDBackendManager() {
 
 void SDBackendManager::reset() {
     backends_.clear();
-    runtime_assignment_ = {};
-    params_assignment_  = {};
+    runtime_assignment_    = {};
+    params_assignment_     = {};
+    split_mode_assignment_ = {};
 }
 
-// Split an '&'-separated device list ("cuda0&cuda1") into its entries.
-// A plain single name yields one entry.
 static std::vector<std::string> split_device_list(const std::string& value) {
     std::vector<std::string> names;
     for (const std::string& raw : split_copy(value, '&')) {
@@ -797,9 +796,8 @@ ggml_backend_buffer_type_t SDBackendManager::split_buffer_type(ggml_backend_t ba
     }
     auto fn = (ggml_backend_split_buffer_type_t)ggml_backend_reg_get_proc_address(reg, "ggml_backend_split_buffer_type");
     if (fn == nullptr) {
-        return nullptr;  // backend has no row-split support
+        return nullptr;
     }
-    // main_device is the backend's device index WITHIN its registry.
     int main_device        = -1;
     const size_t dev_count = ggml_backend_reg_dev_count(reg);
     for (size_t i = 0; i < dev_count; ++i) {
@@ -811,8 +809,6 @@ ggml_backend_buffer_type_t SDBackendManager::split_buffer_type(ggml_backend_t ba
     if (main_device < 0) {
         return nullptr;
     }
-    // The backend reads a fixed-size proportion array (e.g. CUDA scans
-    // GGML_CUDA_MAX_DEVICES entries); pad generously to stay in bounds.
     std::vector<float> padded_split(std::max<size_t>(tensor_split.size(), 64), 0.0f);
     std::copy(tensor_split.begin(), tensor_split.end(), padded_split.begin());
     return fn(main_device, padded_split.data());
@@ -838,7 +834,6 @@ bool SDBackendManager::validate(std::string* error) const {
         return false;
     };
     auto validate_runtime_name = [&](const std::string& name) -> bool {
-        // A runtime assignment may be an '&'-separated device list.
         if (name.find('&') == std::string::npos) {
             return validate_single_runtime_name(name);
         }
@@ -874,7 +869,6 @@ bool SDBackendManager::validate(std::string* error) const {
         }
         return validate_single_runtime_name(name);
     };
-
     auto validate_split_mode_name = [&](const std::string& name) -> bool {
         const std::string lower = lower_copy(trim_copy(name));
         if (lower.empty() || lower == "layer" || lower == "row") {

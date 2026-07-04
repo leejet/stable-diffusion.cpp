@@ -675,7 +675,10 @@ ArgOptions SDContextParams::get_options() {
          "list available ggml backend devices (one 'name<TAB>description' per line) and exit; "
          "the names are the device names accepted by --backend and --params-backend",
          [](int /*argc*/, const char** /*argv*/, int /*index*/) {
-             sd_list_devices();
+             size_t device_list_size = sd_list_devices(nullptr, 0);
+             std::vector<char> devices(device_list_size + 1);
+             sd_list_devices(devices.data(), devices.size());
+             fputs(devices.data(), stdout);
              std::exit(0);
              return 0;
          }},
