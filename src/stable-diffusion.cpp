@@ -614,10 +614,6 @@ public:
 
         ggml_log_set(ggml_log_callback_default, nullptr);
 
-        // Backend initialization happens after the model metadata is loaded,
-        // so --auto-fit can size the components and derive device placements
-        // before any backend is created.
-
         model_manager = std::make_shared<ModelManager>();
         model_manager->set_n_threads(n_threads);
         model_manager->set_enable_mmap(enable_mmap);
@@ -2707,11 +2703,6 @@ public:
         auto latents = first_stage_model->diffusion_to_vae_latents(x);
         first_stage_model->set_temporal_tiling_enabled(vae_tiling_params.temporal_tiling);
         auto decoded = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
-        // Auto-fit picks the placement without knowing the output size; a
-        // full-frame decode can exceed the VAE compute reserve and fail
-        // gracefully with an empty result. Enable tiling and retry once
-        // (temporal for the LTX video VAE, spatial otherwise) instead of
-        // failing the whole generation.
         if (decoded.empty() && auto_fit_enabled) {
             bool prefer_temporal_tiling = decode_video && std::dynamic_pointer_cast<LTXVideoVAE>(first_stage_model) != nullptr;
             if (sd::backend_fit::prepare_vae_decode_retry_tiling(vae_tiling_params, prefer_temporal_tiling)) {

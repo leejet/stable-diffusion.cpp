@@ -228,11 +228,6 @@ typedef struct {
     const char* backend;
     const char* params_backend;
     const char* split_mode;  // weight distribution for multi-device modules: layer (default) or row, or per-module assignments e.g. "diffusion=row"
-    // Pick the diffusion/te/vae device placements automatically from the model
-    // metadata and the per-device memory budgets (max_vram). When enabled,
-    // `backend` and `params_backend` are ignored and derived instead; the
-    // plan may use multi-device layer/row splits (`split_mode` still applies)
-    // and disk params residency so components time-share VRAM.
     bool auto_fit;
     const char* rpc_servers;
 } sd_ctx_params_t;
