@@ -766,72 +766,12 @@ public:
         }
 
         if (auto_fit_enabled) {
-            if (!backend_spec.empty() || !params_backend_spec.empty()) {
-                LOG_WARN("--auto-fit is enabled; ignoring --backend / --params-backend");
-            }
-            // The budgets are keyed by device name; canonicalize against the
-            // registry (no backend needs to exist yet).
-            {
-                std::string error;
-                if (!max_vram_assignment.canonicalize_backend_keys(&error)) {
-                    LOG_ERROR("%s", error.c_str());
-                    return false;
-                }
-            }
-            auto components = backend_fit::estimate_components(model_loader, wtype);
-            auto devices    = backend_fit::enumerate_gpu_devices(max_vram_assignment);
-            auto plan       = backend_fit::compute_plan(components, devices);
-            if (!plan.valid) {
-                LOG_WARN("auto-fit: no usable GPU devices; using the default backend");
-            } else {
-                backend_fit::print_plan(plan, components, devices);
-                std::string runtime_spec;
-                std::string params_spec;
-                auto append_assignment = [](std::string& spec, const char* key, const std::string& value) {
-                    if (!spec.empty()) {
-                        spec += ",";
-                    }
-                    spec += key;
-                    spec += "=";
-                    spec += value;
-                };
-                auto apply_decision = [&](backend_fit::ComponentKind kind, const char* module_key) {
-                    for (size_t ci = 0; ci < components.size(); ci++) {
-                        if (components[ci].kind != kind || components[ci].params_bytes == 0) {
-                            continue;
-                        }
-                        const backend_fit::Decision& decision = plan.decisions[ci];
-                        if (decision.on_cpu) {
-                            append_assignment(runtime_spec, module_key, "cpu");
-                            return;
-                        }
-                        if (decision.device_idxs.empty()) {
-                            return;  // default backend
-                        }
-                        std::string device_list;
-                        for (size_t k = 0; k < decision.device_idxs.size(); k++) {
-                            if (k > 0) {
-                                device_list += "&";
-                            }
-                            device_list += devices[decision.device_idxs[k]].name;
-                        }
-                        append_assignment(runtime_spec, module_key, device_list);
-                        if (plan.time_share) {
-                            append_assignment(params_spec, module_key, "disk");
-                        }
-                        return;
-                    }
-                };
-                apply_decision(backend_fit::ComponentKind::DIT, "diffusion");
-                apply_decision(backend_fit::ComponentKind::CONDITIONER, "te");
-                apply_decision(backend_fit::ComponentKind::VAE, "vae");
-                backend_spec        = runtime_spec;
-                params_backend_spec = params_spec;
-                LOG_INFO("auto-fit: --backend \"%s\"%s%s%s",
-                         backend_spec.empty() ? "(default)" : backend_spec.c_str(),
-                         params_backend_spec.empty() ? "" : " --params-backend \"",
-                         params_backend_spec.c_str(),
-                         params_backend_spec.empty() ? "" : "\"");
+            if (!backend_fit::derive_backend_specs(model_loader,
+                                                   wtype,
+                                                   max_vram_assignment,
+                                                   backend_spec,
+                                                   params_backend_spec)) {
+                return false;
             }
         }
 
@@ -2773,25 +2713,8 @@ public:
         // (temporal for the LTX video VAE, spatial otherwise) instead of
         // failing the whole generation.
         if (decoded.empty() && auto_fit_enabled) {
-            bool changed = false;
-            if (decode_video && std::dynamic_pointer_cast<LTXVideoVAE>(first_stage_model) != nullptr) {
-                if (!vae_tiling_params.temporal_tiling) {
-                    vae_tiling_params.temporal_tiling = true;
-                    changed                           = true;
-                }
-            } else if (!vae_tiling_params.enabled) {
-                vae_tiling_params.enabled = true;
-                if (vae_tiling_params.tile_size_x <= 0) {
-                    vae_tiling_params.tile_size_x = 256;
-                }
-                if (vae_tiling_params.tile_size_y <= 0) {
-                    vae_tiling_params.tile_size_y = 256;
-                }
-                changed = true;
-            }
-            if (changed) {
-                LOG_WARN("auto-fit: VAE decode failed (likely out of memory); retrying with %s tiling",
-                         vae_tiling_params.temporal_tiling ? "temporal" : "spatial");
+            bool prefer_temporal_tiling = decode_video && std::dynamic_pointer_cast<LTXVideoVAE>(first_stage_model) != nullptr;
+            if (backend_fit::prepare_vae_decode_retry_tiling(vae_tiling_params, prefer_temporal_tiling)) {
                 first_stage_model->free_compute_buffer();
                 first_stage_model->set_temporal_tiling_enabled(vae_tiling_params.temporal_tiling);
                 decoded = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);

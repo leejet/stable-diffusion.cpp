@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/ggml_extend_backend.h"
@@ -12,6 +13,7 @@
 #include "core/util.h"
 #include "ggml-backend.h"
 #include "model_loader.h"
+#include "stable-diffusion.h"
 
 // Auto-fit (--auto-fit): derive --backend / --params-backend placements for
 // the DiT / conditioner / VAE from the model metadata and per-device memory
@@ -304,6 +306,121 @@ inline void print_plan(const Plan& plan,
                  (long long)(comp.reserve_bytes / MiB),
                  target.c_str());
     }
+}
+
+inline void append_assignment(std::string& spec, const char* key, const std::string& value) {
+    if (!spec.empty()) {
+        spec += ",";
+    }
+    spec += key;
+    spec += "=";
+    spec += value;
+}
+
+inline void append_component_decision(const std::vector<Component>& components,
+                                      const std::vector<Device>& devices,
+                                      const Plan& plan,
+                                      ComponentKind kind,
+                                      const char* module_key,
+                                      std::string& runtime_spec,
+                                      std::string& params_spec) {
+    for (size_t ci = 0; ci < components.size(); ci++) {
+        if (components[ci].kind != kind || components[ci].params_bytes == 0) {
+            continue;
+        }
+        const Decision& decision = plan.decisions[ci];
+        if (decision.on_cpu) {
+            append_assignment(runtime_spec, module_key, "cpu");
+            return;
+        }
+        if (decision.device_idxs.empty()) {
+            return;
+        }
+        std::string device_list;
+        for (size_t k = 0; k < decision.device_idxs.size(); k++) {
+            if (k > 0) {
+                device_list += "&";
+            }
+            device_list += devices[decision.device_idxs[k]].name;
+        }
+        append_assignment(runtime_spec, module_key, device_list);
+        if (plan.time_share) {
+            append_assignment(params_spec, module_key, "disk");
+        }
+        return;
+    }
+}
+
+inline bool derive_backend_specs(ModelLoader& loader,
+                                 ggml_type override_wtype,
+                                 sd::ggml_graph_cut::MaxVramAssignment& budgets,
+                                 std::string& runtime_spec,
+                                 std::string& params_spec) {
+    if (!runtime_spec.empty() || !params_spec.empty()) {
+        LOG_WARN("--auto-fit is enabled; ignoring --backend / --params-backend");
+    }
+
+    // The budgets are keyed by device name; canonicalize against the registry
+    // before SDBackendManager creates any backend instance.
+    {
+        std::string error;
+        if (!budgets.canonicalize_backend_keys(&error)) {
+            LOG_ERROR("%s", error.c_str());
+            return false;
+        }
+    }
+
+    auto components = estimate_components(loader, override_wtype);
+    auto devices    = enumerate_gpu_devices(budgets);
+    auto plan       = compute_plan(components, devices);
+    if (!plan.valid) {
+        LOG_WARN("auto-fit: no usable GPU devices; using the default backend");
+        runtime_spec.clear();
+        params_spec.clear();
+        return true;
+    }
+
+    print_plan(plan, components, devices);
+
+    std::string derived_runtime_spec;
+    std::string derived_params_spec;
+    append_component_decision(components, devices, plan, ComponentKind::DIT, "diffusion", derived_runtime_spec, derived_params_spec);
+    append_component_decision(components, devices, plan, ComponentKind::CONDITIONER, "te", derived_runtime_spec, derived_params_spec);
+    append_component_decision(components, devices, plan, ComponentKind::VAE, "vae", derived_runtime_spec, derived_params_spec);
+
+    runtime_spec = std::move(derived_runtime_spec);
+    params_spec  = std::move(derived_params_spec);
+
+    LOG_INFO("auto-fit: --backend \"%s\"%s%s%s",
+             runtime_spec.empty() ? "(default)" : runtime_spec.c_str(),
+             params_spec.empty() ? "" : " --params-backend \"",
+             params_spec.c_str(),
+             params_spec.empty() ? "" : "\"");
+    return true;
+}
+
+inline bool prepare_vae_decode_retry_tiling(sd_tiling_params_t& tiling_params, bool prefer_temporal_tiling) {
+    if (prefer_temporal_tiling) {
+        if (tiling_params.temporal_tiling) {
+            return false;
+        }
+        tiling_params.temporal_tiling = true;
+    } else {
+        if (tiling_params.enabled) {
+            return false;
+        }
+        tiling_params.enabled = true;
+        if (tiling_params.tile_size_x <= 0) {
+            tiling_params.tile_size_x = 256;
+        }
+        if (tiling_params.tile_size_y <= 0) {
+            tiling_params.tile_size_y = 256;
+        }
+    }
+
+    LOG_WARN("auto-fit: VAE decode failed (likely out of memory); retrying with %s tiling",
+             tiling_params.temporal_tiling ? "temporal" : "spatial");
+    return true;
 }
 
 }  // namespace backend_fit
