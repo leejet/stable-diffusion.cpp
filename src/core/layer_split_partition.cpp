@@ -9,7 +9,7 @@
 
 namespace sd {
 
-    static int tensor_block_index(const std::string& name) {
+    int layer_split_tensor_block_index(const std::string& name) {
         static const char* block_keywords[] = {"transformer_blocks.", "joint_blocks.", "double_blocks.",
                                                "single_blocks.", "blocks.", "block.", "layers."};
         for (const char* keyword : block_keywords) {
@@ -92,7 +92,7 @@ namespace sd {
         int n_blocks              = 0;
         for (const auto& kv : tensors) {
             int64_t bytes = (int64_t)ggml_nbytes(kv.second);
-            int idx       = split_tensors.count(kv.first) != 0 ? tensor_block_index(kv.first) : -1;
+            int idx       = split_tensors.count(kv.first) != 0 ? layer_split_tensor_block_index(kv.first) : -1;
             if (idx >= 0) {
                 block_bytes[idx] += bytes;
                 total_block_bytes += bytes;
@@ -160,7 +160,7 @@ namespace sd {
 
         for (const auto& kv : tensors) {
             size_t target = 0;
-            int idx       = split_tensors.count(kv.first) != 0 ? tensor_block_index(kv.first) : -1;
+            int idx       = split_tensors.count(kv.first) != 0 ? layer_split_tensor_block_index(kv.first) : -1;
             if (idx >= 0) {
                 while (target < boundaries.size() && idx >= boundaries[target]) {
                     target++;

@@ -38,10 +38,16 @@ struct SDBackendHandleDeleter {
 
 using SDBackendHandle = std::unique_ptr<struct ggml_backend, SDBackendHandleDeleter>;
 
+enum class SDSplitMode {
+    LAYER,
+    ROW,
+};
+
 class SDBackendManager {
 private:
     SDBackendAssignment runtime_assignment_;
     SDBackendAssignment params_assignment_;
+    SDBackendAssignment split_mode_assignment_;
     std::unordered_map<std::string, SDBackendHandle> backends_;
 
 public:
@@ -53,6 +59,7 @@ public:
 
     bool init(const char* backend_spec,
               const char* params_backend_spec,
+              const char* split_mode_spec,
               std::string* error);
     void reset();
 
@@ -60,6 +67,10 @@ public:
     ggml_backend_t params_backend(SDBackendModule module);
 
     std::vector<ggml_backend_t> runtime_backends(SDBackendModule module);
+
+    SDSplitMode split_mode(SDBackendModule module) const;
+    ggml_backend_buffer_type_t split_buffer_type(ggml_backend_t backend,
+                                                 const std::vector<float>& tensor_split);
 
     bool runtime_backend_is_cpu(SDBackendModule module);
     bool params_backend_is_cpu(SDBackendModule module);
