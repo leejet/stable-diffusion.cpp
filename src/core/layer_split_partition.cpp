@@ -101,7 +101,7 @@ namespace sd {
                 total_block_bytes += bytes;
                 n_blocks = std::max(n_blocks, idx + 1);
             } else {
-                size_t target = layer_split_supported_target(desc, kv.first, kv.second, backends, 0);
+                size_t target               = layer_split_supported_target(desc, kv.first, kv.second, backends, 0);
                 non_block_targets[kv.first] = target;
                 other_bytes_by_backend[target] += bytes;
                 total_other_bytes += bytes;
@@ -112,7 +112,7 @@ namespace sd {
                      desc.c_str(),
                      layer_split_backend_device_display_name(backends[0]).c_str());
             for (const auto& kv : tensors) {
-                size_t target = 0;
+                size_t target  = 0;
                 auto target_it = non_block_targets.find(kv.first);
                 if (target_it != non_block_targets.end()) {
                     target = target_it->second;
@@ -149,8 +149,8 @@ namespace sd {
         std::vector<int64_t> block_budgets(backends.size(), 0);
         const int64_t total_bytes = total_block_bytes + total_other_bytes;
         for (size_t i = 0; i < backends.size(); i++) {
-            int64_t budget = (int64_t)((double)total_bytes * device_weights[i] / weight_sum);
-            budget         = std::max<int64_t>(budget - other_bytes_by_backend[i], 0);
+            int64_t budget   = (int64_t)((double)total_bytes * device_weights[i] / weight_sum);
+            budget           = std::max<int64_t>(budget - other_bytes_by_backend[i], 0);
             block_budgets[i] = budget;
         }
 
@@ -190,7 +190,7 @@ namespace sd {
 
         int range_start = 0;
         for (size_t i = 0; i < backends.size(); i++) {
-            int range_end = boundaries[i];
+            int range_end                = boundaries[i];
             const char* non_block_suffix = other_bytes_by_backend[i] > 0 ? " + non-block tensors" : "";
             LOG_INFO("%s layer split: %s <- blocks [%d, %d)%s",
                      desc.c_str(),
