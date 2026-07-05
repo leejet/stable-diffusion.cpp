@@ -13,7 +13,7 @@ packaging quirks):
   - numpy, Pillow
 
 Usage:
-  python script/pulid_extract_id.py \\
+  python scripts/pulid_extract_id.py \\
     --portrait /path/to/source-photo.jpg \\
     --pulid-weights /path/to/pulid_flux_v0.9.1.safetensors \\
     --out /path/to/source.pulidembd

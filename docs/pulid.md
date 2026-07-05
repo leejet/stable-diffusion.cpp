@@ -52,7 +52,7 @@ to a `.pulidembd` binary file (about 131 KB). Run it once per source
 person; the same file is reused for any number of generations.
 
 A reference Python script is provided alongside this docs file at
-[`script/pulid_extract_id.py`](../script/pulid_extract_id.py). It
+[`scripts/pulid_extract_id.py`](../scripts/pulid_extract_id.py). It
 requires:
 - A working CUDA / CPU PyTorch stack
 - `insightface`, `facexlib`, `eva-clip`, `torchvision`, `opencv-python`,

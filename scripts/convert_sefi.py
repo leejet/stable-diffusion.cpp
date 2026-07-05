@@ -5,7 +5,7 @@ Operates on raw safetensors bytes so any dtype (BF16, F32, ...) is preserved exa
 No numpy or torch dependency required.
 
 Usage:
-    python3 script/convert_sefi.py <sefi_diffusers_dir> <output.safetensors>
+    python3 scripts/convert_sefi.py <sefi_diffusers_dir> <output.safetensors>
 """
 
 import argparse

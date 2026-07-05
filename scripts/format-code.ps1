@@ -31,24 +31,30 @@ $patterns = @(
     "examples/common/*.cpp"
 )
 
-$root = (Get-Location).Path
+Push-Location (Join-Path $PSScriptRoot "..")
 
-foreach ($pattern in $patterns) {
-    $files = Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue | Sort-Object FullName
+try {
+    $root = (Get-Location).Path
 
-    foreach ($file in $files) {
-        $relativePath = $file.FullName.Substring($root.Length).TrimStart('\', '/') -replace '\\', '/'
+    foreach ($pattern in $patterns) {
+        $files = Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue | Sort-Object FullName
 
-        if ($relativePath -like "vocab*") {
-            continue
+        foreach ($file in $files) {
+            $relativePath = $file.FullName.Substring($root.Length).TrimStart('\', '/') -replace '\\', '/'
+
+            if ($relativePath -like "vocab*") {
+                continue
+            }
+
+            Write-Host "formatting '$relativePath'"
+
+            # if ($relativePath -ne "stable-diffusion.h") {
+            #     clang-tidy -fix -p build_linux/ "$relativePath"
+            # }
+
+            & clang-format -style=file -i $relativePath
         }
-
-        Write-Host "formatting '$relativePath'"
-
-        # if ($relativePath -ne "stable-diffusion.h") {
-        #     clang-tidy -fix -p build_linux/ "$relativePath"
-        # }
-
-        & clang-format -style=file -i $relativePath
     }
+} finally {
+    Pop-Location
 }

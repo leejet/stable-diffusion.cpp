@@ -9,7 +9,7 @@ the text side; the vision side is converted by sd.cpp's own
 Operates on raw safetensors bytes so any dtype (BF16/F16/F32) is preserved.
 
 Usage:
-    python3 script/convert_qwen3_vl.py <hf_qwen3_vl_dir_or_safetensors> <output.safetensors>
+    python3 scripts/convert_qwen3_vl.py <hf_qwen3_vl_dir_or_safetensors> <output.safetensors>
 """
 
 import argparse

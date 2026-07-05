@@ -27,7 +27,7 @@ PRs should include:
 
 Format code according to the repository style before submitting changes.
 
-Formatting follows `.clang-format` (Chromium base, 4-space indent, no tabs). Run `format-code.sh` before opening a PR. Keep C++ standard at C++17-compatible patterns used in this repo.
+Formatting follows `.clang-format` (Chromium base, 4-space indent, no tabs). Run `scripts/format-code.sh` or `scripts/format-code.ps1` before opening a PR. Keep C++ standard at C++17-compatible patterns used in this repo.
 
 Naming conventions:
 

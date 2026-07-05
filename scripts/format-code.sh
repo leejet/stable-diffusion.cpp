@@ -1,3 +1,10 @@
+#!/usr/bin/env bash
+
+set -e
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$repo_root"
+
 for f in src/*.cpp src/*.h src/*.hpp \
          src/conditioning/*.cpp src/conditioning/*.h src/conditioning/*.hpp \
          src/core/*.cpp src/core/*.h src/core/*.hpp \
