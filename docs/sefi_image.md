@@ -13,8 +13,8 @@ The SeFi-Image family ships in three scales (1B / 2B / 5B) and three families (B
 Convert the transformer and text encoder to sd.cpp safetensors:
 
 ```bash
-python3 script/convert_sefi.py     <hf_repo_dir>                          <out_dir>/sefi_<scale>_<family>.safetensors
-python3 script/convert_qwen3_vl.py  <hf_repo_dir>/Qwen3-VL-XB-Instruct    <out_dir>/qwen3_vl_<X>b.safetensors
+python3 scripts/convert_sefi.py     <hf_repo_dir>                          <out_dir>/sefi_<scale>_<family>.safetensors
+python3 scripts/convert_qwen3_vl.py  <hf_repo_dir>/Qwen3-VL-XB-Instruct    <out_dir>/qwen3_vl_<X>b.safetensors
 ```
 
 ## Variant defaults
