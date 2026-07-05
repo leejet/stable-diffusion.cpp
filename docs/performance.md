@@ -53,6 +53,26 @@ Per-module assignments can target only the largest modules:
 
 See [backend selection](./backend.md) for full syntax.
 
+## Run models that don't fit in VRAM (CPU streaming).
+
+`--offload-to-cpu` alone keeps every parameter in system RAM and stages it to the runtime backend on first use, then leaves it resident there. If the diffusion model is larger than the runtime backend's free memory (e.g. Flux dev at bf16 on an 8 GiB GPU), that residency stops fitting during the sampling loop and generation fails. Two additional flags make it fit by trading a small amount of speed for room:
+
+- `--max-vram <GiB>` sets a VRAM budget the graph-cut segmenter respects. It cuts each forward pass into segments sized to fit the budget, running them in sequence and freeing intermediate activations between them. Negative values auto-detect free VRAM and spare the given amount (`--max-vram -1` uses most of the free VRAM and keeps ~1 GiB headroom), a positive value caps the budget, `0` disables segmentation.
+- `--stream-layers` streams the diffusion model's transformer blocks one at a time. Each block's parameters are copied from the CPU to the runtime backend just before it runs and evicted when the residency budget is reached. Prefetching hides most of the copy latency behind compute. This flag only takes effect when the diffusion params backend is CPU, so it must be combined with `--offload-to-cpu` (or an explicit `--params-backend diffusion=cpu`); a warning is logged and the flag is ignored otherwise.
+
+The three flags stack. The recommended shape for "biggest model my card can host":
+
+```shell
+sd-cli --diffusion-model flux1-dev.safetensors ... \
+       --offload-to-cpu --max-vram -1 --stream-layers
+```
+
+- `--offload-to-cpu`: params in RAM, staged as needed.
+- `--max-vram -1`: use most of the free VRAM as the compute budget, spare 1 GiB headroom, let the graph-cut segmenter split each forward pass to fit.
+- `--stream-layers`: on top of the segmenter, stream individual transformer blocks so their weights don't all need to be resident at once.
+
+Ordered from fastest to smallest-VRAM: no flags → `--offload-to-cpu` → `--offload-to-cpu --max-vram <N>` → `--offload-to-cpu --max-vram <N> --stream-layers`. Each step down costs a few percent of throughput to buy more room; combined they can run models roughly 3-4x larger than the raw VRAM would allow.
+
 ## Use quantization to reduce memory usage.
 
 [quantization](./quantization_and_gguf.md)
