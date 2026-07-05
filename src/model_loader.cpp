@@ -1256,88 +1256,48 @@ bool ModelLoader::load_tensor(const TensorStorage& tensor_storage, ggml_tensor* 
         LOG_ERROR("load tensor failed: null destination for '%s'", tensor_storage.name.c_str());
         return false;
     }
-    if (tensor_storage.file_index >= file_paths_.size()) {
-        LOG_ERROR("load tensor failed: invalid file index for '%s'", tensor_storage.name.c_str());
+
+    bool loaded = false;
+    std::set<std::string> target_tensor_names{tensor_storage.name};
+    auto on_new_tensor_cb = [&](const TensorStorage& current_tensor_storage, ggml_tensor** out_tensor) -> bool {
+        *out_tensor = nullptr;
+        if (current_tensor_storage.name != tensor_storage.name) {
+            return true;
+        }
+
+        if (current_tensor_storage.file_index != tensor_storage.file_index ||
+            current_tensor_storage.offset != tensor_storage.offset ||
+            current_tensor_storage.index_in_zip != tensor_storage.index_in_zip) {
+            LOG_ERROR("load tensor failed: storage mismatch for '%s'", tensor_storage.name.c_str());
+            return false;
+        }
+
+        if (current_tensor_storage.n_dims != tensor_storage.n_dims ||
+            current_tensor_storage.nelements() != tensor_storage.nelements()) {
+            LOG_ERROR("load tensor failed: metadata changed for '%s'", tensor_storage.name.c_str());
+            return false;
+        }
+
+        for (int i = 0; i < current_tensor_storage.n_dims; i++) {
+            if (current_tensor_storage.ne[i] != dst_tensor->ne[i]) {
+                LOG_ERROR("load tensor failed: shape mismatch for '%s'", tensor_storage.name.c_str());
+                return false;
+            }
+        }
+
+        *out_tensor = dst_tensor;
+        loaded      = true;
+        return true;
+    };
+
+    if (!load_tensors(on_new_tensor_cb, false, &target_tensor_names)) {
+        LOG_ERROR("load tensor failed: '%s'", tensor_storage.name.c_str());
         return false;
     }
 
-    const std::string& file_path = file_paths_[tensor_storage.file_index];
-    const size_t nbytes_to_read  = tensor_storage.nbytes_to_read();
-
-    std::vector<uint8_t> read_buffer;
-    std::vector<uint8_t> convert_buffer;
-
-    char* read_buf    = nullptr;
-    char* target_buf  = nullptr;
-    char* convert_buf = nullptr;
-    if (tensor_storage.type == dst_tensor->type) {
-        if (tensor_storage.is_f64 || tensor_storage.is_i64) {
-            read_buffer.resize(nbytes_to_read);
-            read_buf = reinterpret_cast<char*>(read_buffer.data());
-        } else {
-            read_buf = reinterpret_cast<char*>(dst_tensor->data);
-        }
-        target_buf = reinterpret_cast<char*>(dst_tensor->data);
-    } else {
-        read_buffer.resize(std::max(static_cast<size_t>(tensor_storage.nbytes()), nbytes_to_read));
-        read_buf    = reinterpret_cast<char*>(read_buffer.data());
-        target_buf  = read_buf;
-        convert_buf = reinterpret_cast<char*>(dst_tensor->data);
-    }
-
-    if (tensor_storage.index_in_zip >= 0) {
-        zip_t* zip = zip_open(file_path.c_str(), 0, 'r');
-        if (zip == nullptr) {
-            LOG_ERROR("load tensor failed: failed to open zip '%s'", file_path.c_str());
-            return false;
-        }
-        zip_entry_openbyindex(zip, tensor_storage.index_in_zip);
-        size_t entry_size = zip_entry_size(zip);
-        if (entry_size != nbytes_to_read) {
-            std::vector<uint8_t> entry_buffer(entry_size);
-            zip_entry_noallocread(zip, entry_buffer.data(), entry_size);
-            memcpy(read_buf, entry_buffer.data() + tensor_storage.offset, nbytes_to_read);
-        } else {
-            zip_entry_noallocread(zip, read_buf, nbytes_to_read);
-        }
-        zip_entry_close(zip);
-        zip_close(zip);
-    } else {
-        std::ifstream file(file_path, std::ios::binary);
-        if (!file.is_open()) {
-            LOG_ERROR("load tensor failed: failed to open '%s'", file_path.c_str());
-            return false;
-        }
-        file.seekg(tensor_storage.offset);
-        file.read(read_buf, nbytes_to_read);
-        if (!file) {
-            LOG_ERROR("load tensor failed: failed to read '%s' from '%s'", tensor_storage.name.c_str(), file_path.c_str());
-            return false;
-        }
-    }
-
-    if (tensor_storage.is_f8_e4m3) {
-        f8_e4m3_to_f16_vec(reinterpret_cast<uint8_t*>(read_buf), reinterpret_cast<uint16_t*>(target_buf), tensor_storage.nelements());
-    } else if (tensor_storage.is_f8_e5m2) {
-        f8_e5m2_to_f16_vec(reinterpret_cast<uint8_t*>(read_buf), reinterpret_cast<uint16_t*>(target_buf), tensor_storage.nelements());
-    } else if (tensor_storage.is_f64) {
-        f64_to_f32_vec(reinterpret_cast<double*>(read_buf), reinterpret_cast<float*>(target_buf), tensor_storage.nelements());
-    } else if (tensor_storage.is_i64) {
-        i64_to_i32_vec(reinterpret_cast<int64_t*>(read_buf), reinterpret_cast<int32_t*>(target_buf), tensor_storage.nelements());
-    }
-    if (tensor_storage.type != dst_tensor->type) {
-        if (convert_buf == nullptr) {
-            LOG_ERROR("load tensor failed: missing conversion buffer for '%s'", tensor_storage.name.c_str());
-            return false;
-        }
-        convert_tensor(target_buf,
-                       tensor_storage.type,
-                       convert_buf,
-                       dst_tensor->type,
-                       static_cast<int>(tensor_storage.nelements() / tensor_storage.ne[0]),
-                       static_cast<int>(tensor_storage.ne[0]),
-                       get_imatrix_collector().get_values(convert_tensor_name(tensor_storage.name,
-                                                                              (version_ == VERSION_COUNT) ? get_sd_version() : version_)));
+    if (!loaded) {
+        LOG_ERROR("load tensor failed: tensor '%s' not found", tensor_storage.name.c_str());
+        return false;
     }
 
     return true;
