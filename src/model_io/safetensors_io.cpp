@@ -9,8 +9,8 @@
 #include <vector>
 
 #include "binary_io.h"
+#include "core/util.h"
 #include "json.hpp"
-#include "util.h"
 
 static constexpr size_t ST_HEADER_SIZE_LEN = 8;
 

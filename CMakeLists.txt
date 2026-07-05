@@ -125,6 +125,12 @@ endif ()
 if (SD_HIPBLAS)
     message("-- Use HIPBLAS as backend stable-diffusion")
     set(GGML_HIP ON)
+    # ggml-hip's device-stub objects must be position-independent, or the
+    # default-PIE sd-cli link fails with `relocation R_X86_64_32 ... cannot be
+    # used when making a PIE object` on distros that default to PIE
+    # (Ubuntu 24.04, Fedora 40+, Debian 12+). The shared-library branch below
+    # already sets this; the static build (the HIP default) did not.
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 endif ()
 
 if(SD_MUSA)
@@ -198,12 +204,33 @@ if(SD_WEBM)
     endif()
 endif()
 
+if (SD_RPC)
+    message("-- Use RPC as backend stable-diffusion")
+    set(GGML_RPC ON)
+    add_definitions(-DSD_USE_RPC)
+endif ()
+
 set(SD_LIB stable-diffusion)
 
 file(GLOB SD_LIB_SOURCES CONFIGURE_DEPENDS
     "src/*.h"
     "src/*.cpp"
     "src/*.hpp"
+    "src/conditioning/*.h"
+    "src/conditioning/*.cpp"
+    "src/conditioning/*.hpp"
+    "src/core/*.h"
+    "src/core/*.cpp"
+    "src/core/*.hpp"
+    "src/extensions/*.h"
+    "src/extensions/*.cpp"
+    "src/extensions/*.hpp"
+    "src/model/*/*.h"
+    "src/model/*/*.cpp"
+    "src/model/*/*.hpp"
+    "src/runtime/*.h"
+    "src/runtime/*.cpp"
+    "src/runtime/*.hpp"
     "src/model_io/*.h"
     "src/model_io/*.cpp"
     "src/tokenizers/*.h"
@@ -304,8 +331,10 @@ endif()
 
 add_subdirectory(thirdparty)
 
-target_link_libraries(${SD_LIB} PUBLIC ggml zip)
+target_sources(${SD_LIB} PRIVATE $<TARGET_OBJECTS:zip>)
+target_link_libraries(${SD_LIB} PUBLIC ggml)
 target_include_directories(${SD_LIB} PUBLIC . src include)
+target_include_directories(${SD_LIB} PRIVATE src/core)
 target_include_directories(${SD_LIB} PUBLIC . thirdparty)
 target_compile_features(${SD_LIB} PUBLIC c_std_11 cxx_std_17)
 
@@ -314,7 +343,58 @@ if (SD_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
-set(SD_PUBLIC_HEADERS include/stable-diffusion.h)
-set_target_properties(${SD_LIB} PROPERTIES PUBLIC_HEADER "${SD_PUBLIC_HEADERS}")
 
-install(TARGETS ${SD_LIB} LIBRARY PUBLIC_HEADER)
+
+#
+# install
+#
+
+include(CMakePackageConfigHelpers)
+include(GNUInstallDirs)
+
+set(SD_INSTALL_VERSION "${SDCPP_BUILD_VERSION}")
+set(SD_INSTALL_COMMIT  "${SDCPP_BUILD_COMMIT}")
+set(SD_SHARED_LIB      ${SD_BUILD_SHARED_LIBS})
+
+set(SD_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
+set(SD_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
+set(SD_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")
+
+set(SD_PUBLIC_HEADERS
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/stable-diffusion.h)
+
+set_target_properties(${SD_LIB}
+    PROPERTIES
+        PUBLIC_HEADER "${SD_PUBLIC_HEADERS}")
+
+
+install(TARGETS ${SD_LIB}
+        ARCHIVE
+        LIBRARY
+        RUNTIME
+        PUBLIC_HEADER)
+
+
+configure_package_config_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/stable-diffusion-config.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/stable-diffusion-config.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/stable-diffusion
+    PATH_VARS SD_INCLUDE_INSTALL_DIR
+              SD_LIB_INSTALL_DIR
+              SD_BIN_INSTALL_DIR )
+
+write_basic_package_version_file(
+        ${CMAKE_CURRENT_BINARY_DIR}/stable-diffusion-version.cmake
+    VERSION ${SD_INSTALL_VERSION}
+    COMPATIBILITY SameMajorVersion)
+
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/stable-diffusion-config.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/stable-diffusion-version.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/stable-diffusion)
+
+configure_file(cmake/stable-diffusion.pc.in
+        "${CMAKE_CURRENT_BINARY_DIR}/stable-diffusion.pc"
+        @ONLY)
+
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/stable-diffusion.pc"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)

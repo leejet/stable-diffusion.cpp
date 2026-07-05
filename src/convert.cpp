@@ -1,6 +1,7 @@
 #include <algorithm>
-#include <cstring>
 #include <condition_variable>
+#include <cstdint>
+#include <cstring>
 #include <exception>
 #include <fstream>
 #include <memory>
@@ -10,13 +11,11 @@
 #include <thread>
 #include <vector>
 
-#include "model.h"
+#include "core/util.h"
 #include "model_io/gguf_io.h"
 #include "model_io/safetensors_io.h"
 #include "model_io/streaming_writer.h"
-#include "util.h"
-
-#include "ggml-cpu.h"
+#include "model_loader.h"
 
 struct TensorExportInfo {
     TensorStorage storage;
@@ -29,6 +28,46 @@ struct TensorExportJob {
     std::string error;
     bool success = false;
 };
+
+static ggml_type get_export_tensor_type(ModelLoader& model_loader,
+                                        const TensorStorage& tensor_storage,
+                                        ggml_type type,
+                                        const TensorTypeRules& tensor_type_rules) {
+    const std::string& name = tensor_storage.name;
+    ggml_type tensor_type   = tensor_storage.type;
+    ggml_type dst_type      = type;
+
+    for (const auto& tensor_type_rule : tensor_type_rules) {
+        std::regex pattern(tensor_type_rule.first);
+        if (std::regex_search(name, pattern)) {
+            dst_type = tensor_type_rule.second;
+            break;
+        }
+    }
+
+    if (model_loader.tensor_should_be_converted(tensor_storage, dst_type)) {
+        tensor_type = dst_type;
+    }
+
+    return tensor_type;
+}
+
+static bool collect_tensors_for_export(ModelLoader& model_loader,
+                                       ggml_type type,
+                                       const TensorTypeRules& tensor_type_rules,
+                                       std::vector<TensorExportInfo>& tensors) {
+    tensors.clear();
+    tensors.reserve(model_loader.get_tensor_storage_map().size());
+    for (const auto& kv : model_loader.get_tensor_storage_map()) {
+        const TensorStorage& tensor_storage = kv.second;
+        TensorExportInfo info;
+        info.storage = tensor_storage;
+        info.type    = get_export_tensor_type(model_loader, tensor_storage, type, tensor_type_rules);
+        tensors.push_back(std::move(info));
+    }
+    LOG_INFO("collected %zu tensors for export", tensors.size());
+    return true;
+}
 
 static size_t export_tensor_nbytes(const TensorExportInfo& info) {
     TensorStorage output_storage = info.storage;
@@ -80,46 +119,6 @@ static bool preallocate_output_file(const std::string& output_path, uint64_t fil
         }
         return false;
     }
-    return true;
-}
-
-static ggml_type get_export_tensor_type(ModelLoader& model_loader,
-                                        const TensorStorage& tensor_storage,
-                                        ggml_type type,
-                                        const TensorTypeRules& tensor_type_rules) {
-    const std::string& name = tensor_storage.name;
-    ggml_type tensor_type   = tensor_storage.type;
-    ggml_type dst_type      = type;
-
-    for (const auto& tensor_type_rule : tensor_type_rules) {
-        std::regex pattern(tensor_type_rule.first);
-        if (std::regex_search(name, pattern)) {
-            dst_type = tensor_type_rule.second;
-            break;
-        }
-    }
-
-    if (model_loader.tensor_should_be_converted(tensor_storage, dst_type)) {
-        tensor_type = dst_type;
-    }
-
-    return tensor_type;
-}
-
-static bool collect_tensors_for_export(ModelLoader& model_loader,
-                                       ggml_type type,
-                                       const TensorTypeRules& tensor_type_rules,
-                                       std::vector<TensorExportInfo>& tensors) {
-    tensors.clear();
-    tensors.reserve(model_loader.get_tensor_storage_map().size());
-    for (const auto& kv : model_loader.get_tensor_storage_map()) {
-        const TensorStorage& tensor_storage = kv.second;
-        TensorExportInfo info;
-        info.storage = tensor_storage;
-        info.type    = get_export_tensor_type(model_loader, tensor_storage, type, tensor_type_rules);
-        tensors.push_back(std::move(info));
-    }
-    LOG_INFO("collected %zu tensors for export", tensors.size());
     return true;
 }
 
@@ -310,31 +309,24 @@ static bool write_model_file_streaming(ModelLoader& model_loader,
     return stream_tensor_data(model_loader, output_path, tensors, writer, n_threads, error);
 }
 
-bool convert_with_threads(const char* input_path,
-                          const char* vae_path,
-                          const char* output_path,
-                          sd_type_t output_type,
-                          const char* tensor_type_rules,
-                          bool convert_name,
-                          int n_threads) {
-    ModelLoader model_loader;
-
-    if (!model_loader.init_from_file(input_path)) {
-        LOG_ERROR("init model loader from file failed: '%s'", input_path);
+static bool init_convert_path(ModelLoader& model_loader, const char* path, const char* prefix, bool& loaded_any) {
+    if (path == nullptr || strlen(path) == 0) {
+        return true;
+    }
+    if (!model_loader.init_from_file(path, prefix)) {
+        LOG_ERROR("init model loader from file failed: '%s'", path);
         return false;
     }
+    loaded_any = true;
+    return true;
+}
 
-    if (vae_path != nullptr && strlen(vae_path) > 0) {
-        if (!model_loader.init_from_file(vae_path, "vae.")) {
-            LOG_ERROR("init model loader from file failed: '%s'", vae_path);
-            return false;
-        }
-    }
-    if (convert_name) {
-        model_loader.convert_tensors_name();
-    }
-
-    ggml_type type             = (ggml_type)output_type;
+static bool export_loaded_model(ModelLoader& model_loader,
+                                const char* output_path,
+                                sd_type_t output_type,
+                                const char* tensor_type_rules,
+                                int n_threads) {
+    ggml_type type             = sd_type_to_ggml_type(output_type);
     bool output_is_safetensors = ends_with(output_path, ".safetensors");
     TensorTypeRules type_rules = parse_tensor_type_rules(tensor_type_rules);
 
@@ -356,6 +348,84 @@ bool convert_with_threads(const char* input_path,
     }
 
     return success;
+}
+
+bool convert_with_components_with_threads(const char* model_path,
+                                          const char* clip_l_path,
+                                          const char* clip_g_path,
+                                          const char* t5xxl_path,
+                                          const char* diffusion_model_path,
+                                          const char* vae_path,
+                                          const char* output_path,
+                                          sd_type_t output_type,
+                                          const char* tensor_type_rules,
+                                          bool convert_name,
+                                          int n_threads) {
+    ModelLoader model_loader;
+    bool loaded_any = false;
+
+    if (!init_convert_path(model_loader, model_path, "", loaded_any) ||
+        !init_convert_path(model_loader, clip_l_path, "text_encoders.clip_l.transformer.", loaded_any) ||
+        !init_convert_path(model_loader, clip_g_path, "text_encoders.clip_g.transformer.", loaded_any) ||
+        !init_convert_path(model_loader, t5xxl_path, "text_encoders.t5xxl.transformer.", loaded_any) ||
+        !init_convert_path(model_loader, diffusion_model_path, "model.diffusion_model.", loaded_any) ||
+        !init_convert_path(model_loader, vae_path, "vae.", loaded_any)) {
+        return false;
+    }
+
+    if (!loaded_any) {
+        LOG_ERROR("no input model path provided for convert");
+        return false;
+    }
+
+    if (convert_name) {
+        model_loader.convert_tensors_name();
+    }
+
+    return export_loaded_model(model_loader, output_path, output_type, tensor_type_rules, n_threads);
+}
+
+bool convert_with_components(const char* model_path,
+                             const char* clip_l_path,
+                             const char* clip_g_path,
+                             const char* t5xxl_path,
+                             const char* diffusion_model_path,
+                             const char* vae_path,
+                             const char* output_path,
+                             sd_type_t output_type,
+                             const char* tensor_type_rules,
+                             bool convert_name) {
+    return convert_with_components_with_threads(model_path,
+                                                clip_l_path,
+                                                clip_g_path,
+                                                t5xxl_path,
+                                                diffusion_model_path,
+                                                vae_path,
+                                                output_path,
+                                                output_type,
+                                                tensor_type_rules,
+                                                convert_name,
+                                                0);
+}
+
+bool convert_with_threads(const char* input_path,
+                          const char* vae_path,
+                          const char* output_path,
+                          sd_type_t output_type,
+                          const char* tensor_type_rules,
+                          bool convert_name,
+                          int n_threads) {
+    return convert_with_components_with_threads(input_path,
+                                                nullptr,
+                                                nullptr,
+                                                nullptr,
+                                                nullptr,
+                                                vae_path,
+                                                output_path,
+                                                output_type,
+                                                tensor_type_rules,
+                                                convert_name,
+                                                n_threads);
 }
 
 bool convert(const char* input_path,

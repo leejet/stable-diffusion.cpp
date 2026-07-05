@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <functional>
@@ -53,6 +54,9 @@ struct SDCliParams {
     bool metadata_brief      = false;
     bool metadata_all        = false;
 
+    std::string imatrix_out;
+    std::vector<std::string> imatrix_in;
+
     bool normal_exit = false;
 
     ArgOptions get_options() {
@@ -62,19 +66,28 @@ struct SDCliParams {
             {"-o",
              "--output",
              "path to write result image to. you can use printf-style %d format specifiers for image sequences (default: ./output.png) (eg. output_%03d.png). Single-file video outputs support .avi, .webm, and animated .webp",
+             0,
              &output_path},
             {"",
              "--image",
              "path to the image to inspect (for metadata mode)",
+             0,
              &image_path},
             {"",
              "--metadata-format",
              "metadata output format, one of [text, json] (default: text)",
+             0,
              &metadata_format},
             {"",
              "--preview-path",
              "path to write preview image to (default: ./preview.png). Multi-frame previews support .avi, .webm, and animated .webp",
+             0,
              &preview_path},
+            {"",
+             "--imat-out",
+             "compute the imatrix for this run and save it to the provided path",
+             0,
+             &imatrix_out},
         };
 
         options.int_options = {
@@ -169,9 +182,18 @@ struct SDCliParams {
             return 1;
         };
 
-        auto on_help_arg = [&](int argc, const char** argv, int index) {
+        auto on_help_arg = [&](int argc, const char** argv, int index, bool& valid) {
             normal_exit = true;
+            valid       = true;
             return -1;
+        };
+
+        auto on_imatrix_in_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            imatrix_in.push_back(argv[index]);
+            return 1;
         };
 
         options.manual_options = {
@@ -187,6 +209,10 @@ struct SDCliParams {
              "--help",
              "show this help message and exit",
              on_help_arg},
+            {"",
+             "--imat-in",
+             "load an imatrix file for quantization or continued collection; can be specified multiple times",
+             on_imatrix_in_arg},
         };
 
         return options;
@@ -248,6 +274,7 @@ struct SDCliParams {
             << "  preview_fps: " << preview_fps << ",\n"
             << "  taesd_preview: " << (taesd_preview ? "true" : "false") << ",\n"
             << "  preview_noisy: " << (preview_noisy ? "true" : "false") << ",\n"
+            << "  imatrix_out: \"" << imatrix_out << "\",\n"
             << "  metadata_raw: " << (metadata_raw ? "true" : "false") << ",\n"
             << "  metadata_brief: " << (metadata_brief ? "true" : "false") << ",\n"
             << "  metadata_all: " << (metadata_all ? "true" : "false") << "\n"
@@ -454,7 +481,8 @@ bool save_results(const SDCliParams& cli_params,
         if (!img.data)
             return false;
 
-        const int64_t metadata_seed = cli_params.mode == VID_GEN ? gen_params.seed : gen_params.seed + idx;
+        int images_per_batch        = gen_params.batch_count > 0 ? std::max(1, num_results / gen_params.batch_count) : 1;
+        const int64_t metadata_seed = cli_params.mode == VID_GEN ? gen_params.seed : gen_params.seed + idx / images_per_batch;
         std::string params          = gen_params.embed_image_metadata
                                           ? get_image_params(ctx_params, gen_params, metadata_seed, cli_params.mode)
                                           : "";
@@ -600,14 +628,33 @@ int main(int argc, const char* argv[]) {
     LOG_DEBUG("%s", ctx_params.to_string().c_str());
     LOG_DEBUG("%s", gen_params.to_string().c_str());
 
+    if (!cli_params.imatrix_out.empty()) {
+        if (fs::exists(cli_params.imatrix_out) &&
+            std::find(cli_params.imatrix_in.begin(), cli_params.imatrix_in.end(), cli_params.imatrix_out) == cli_params.imatrix_in.end()) {
+            LOG_WARN("imatrix file '%s' already exists and will be overwritten", cli_params.imatrix_out.c_str());
+        }
+        enable_imatrix_collection();
+    }
+
+    for (const auto& in_file : cli_params.imatrix_in) {
+        LOG_INFO("loading imatrix from '%s'", in_file.c_str());
+        if (!load_imatrix(in_file.c_str())) {
+            LOG_WARN("failed to load imatrix from '%s'", in_file.c_str());
+        }
+    }
+
     if (cli_params.mode == CONVERT) {
-        bool success = convert_with_threads(ctx_params.model_path.c_str(),
-                                            ctx_params.vae_path.c_str(),
-                                            cli_params.output_path.c_str(),
-                                            ctx_params.wtype,
-                                            ctx_params.tensor_type_rules.c_str(),
-                                            cli_params.convert_name,
-                                            ctx_params.n_threads);
+        bool success = convert_with_components_with_threads(ctx_params.model_path.c_str(),
+                                                            ctx_params.clip_l_path.c_str(),
+                                                            ctx_params.clip_g_path.c_str(),
+                                                            ctx_params.t5xxl_path.c_str(),
+                                                            ctx_params.diffusion_model_path.c_str(),
+                                                            ctx_params.vae_path.c_str(),
+                                                            cli_params.output_path.c_str(),
+                                                            ctx_params.wtype,
+                                                            ctx_params.tensor_type_rules.c_str(),
+                                                            cli_params.convert_name,
+                                                            ctx_params.n_threads);
         if (!success) {
             LOG_ERROR("convert '%s'/'%s' to '%s' failed",
                       ctx_params.model_path.c_str(),
@@ -622,8 +669,6 @@ int main(int argc, const char* argv[]) {
             return 0;
         }
     }
-
-    bool vae_decode_only = true;
 
     auto load_image_and_update_size = [&](const std::string& path,
                                           SDImageOwner& image,
@@ -646,21 +691,18 @@ int main(int argc, const char* argv[]) {
     };
 
     if (gen_params.init_image_path.size() > 0) {
-        vae_decode_only = false;
         if (!load_image_and_update_size(gen_params.init_image_path, gen_params.init_image)) {
             return 1;
         }
     }
 
     if (gen_params.end_image_path.size() > 0) {
-        vae_decode_only = false;
         if (!load_image_and_update_size(gen_params.end_image_path, gen_params.end_image)) {
             return 1;
         }
     }
 
     if (gen_params.ref_image_paths.size() > 0) {
-        vae_decode_only = false;
         gen_params.ref_images.clear();
         for (auto& path : gen_params.ref_image_paths) {
             SDImageOwner ref_image({0, 0, 3, nullptr});
@@ -735,18 +777,7 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    if (cli_params.mode == VID_GEN) {
-        vae_decode_only = false;
-    }
-
-    if (gen_params.hires_enabled &&
-        (gen_params.resolved_hires_upscaler == SD_HIRES_UPSCALER_MODEL ||
-         gen_params.resolved_hires_upscaler == SD_HIRES_UPSCALER_LANCZOS ||
-         gen_params.resolved_hires_upscaler == SD_HIRES_UPSCALER_NEAREST)) {
-        vae_decode_only = false;
-    }
-
-    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(vae_decode_only, true, cli_params.taesd_preview);
+    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(cli_params.taesd_preview);
 
     SDImageVec results;
     int num_results             = 0;
@@ -778,8 +809,12 @@ int main(int argc, const char* argv[]) {
         if (cli_params.mode == IMG_GEN) {
             sd_img_gen_params_t img_gen_params = gen_params.to_sd_img_gen_params_t();
 
-            num_results = gen_params.batch_count;
-            results.adopt(generate_image(sd_ctx.get(), &img_gen_params), num_results);
+            sd_image_t* generated_images = nullptr;
+            if (!generate_image(sd_ctx.get(), &img_gen_params, &generated_images, &num_results)) {
+                generated_images = nullptr;
+                num_results      = 0;
+            }
+            results.adopt(generated_images, num_results);
         } else if (cli_params.mode == VID_GEN) {
             sd_vid_gen_params_t vid_gen_params = gen_params.to_sd_vid_gen_params_t();
             sd_image_t* generated_video        = nullptr;
@@ -798,12 +833,11 @@ int main(int argc, const char* argv[]) {
     int upscale_factor = 4;  // unused for RealESRGAN_x4plus_anime_6B.pth
     if (ctx_params.esrgan_path.size() > 0 && gen_params.upscale_repeats > 0) {
         UpscalerCtxPtr upscaler_ctx(new_upscaler_ctx(ctx_params.esrgan_path.c_str(),
-                                                     ctx_params.offload_params_to_cpu,
                                                      ctx_params.diffusion_conv_direct,
                                                      ctx_params.n_threads,
                                                      gen_params.upscale_tile_size,
-                                                     ctx_params.backend.c_str(),
-                                                     ctx_params.params_backend.c_str()));
+                                                     sd_ctx_params.backend,
+                                                     sd_ctx_params.params_backend));
 
         if (upscaler_ctx == nullptr) {
             LOG_ERROR("new_upscaler_ctx failed");
@@ -815,12 +849,22 @@ int main(int argc, const char* argv[]) {
                 SDImageOwner current_image(results[i]);
                 results[i] = {0, 0, 0, nullptr};
                 for (int u = 0; u < gen_params.upscale_repeats; ++u) {
-                    SDImageOwner upscaled_image(upscale(upscaler_ctx.get(), current_image.get(), upscale_factor));
-                    if (upscaled_image.get().data == nullptr) {
+                    sd_image_t* upscaled_images = nullptr;
+                    int upscaled_count          = 0;
+                    bool upscale_ok             = upscale(upscaler_ctx.get(),
+                                                          current_image.get(),
+                                                          upscale_factor,
+                                                          &upscaled_images,
+                                                          &upscaled_count);
+                    if (!upscale_ok || upscaled_count <= 0 || upscaled_images[0].data == nullptr) {
+                        free_sd_images(upscaled_images, upscaled_count);
                         LOG_ERROR("upscale failed");
                         break;
                     }
-                    current_image = std::move(upscaled_image);
+                    sd_image_t upscaled_image = upscaled_images[0];
+                    upscaled_images[0]        = {0, 0, 0, nullptr};
+                    free_sd_images(upscaled_images, upscaled_count);
+                    current_image.reset(upscaled_image);
                 }
                 results[i] = current_image.release();  // Set the final upscaled image as the result
             }
@@ -830,6 +874,11 @@ int main(int argc, const char* argv[]) {
     if (!save_results(cli_params, ctx_params, gen_params, results.data(), num_results, generated_audio)) {
         free_sd_audio(generated_audio);
         return 1;
+    }
+
+    if (!cli_params.imatrix_out.empty()) {
+        LOG_INFO("saving imatrix to '%s'", cli_params.imatrix_out.c_str());
+        save_imatrix(cli_params.imatrix_out.c_str());
     }
 
     free_sd_audio(generated_audio);

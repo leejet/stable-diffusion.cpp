@@ -8,9 +8,9 @@
 #include <string>
 #include <vector>
 
+#include "core/util.h"
 #include "gguf.h"
 #include "gguf_reader_ext.h"
-#include "util.h"
 
 static void set_error(std::string* error, const std::string& message) {
     if (error != nullptr) {

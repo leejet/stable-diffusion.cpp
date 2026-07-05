@@ -63,6 +63,8 @@ static enum sample_method_t get_sdapi_sample_method(std::string name) {
         {"ddim", DDIM_TRAILING_SAMPLE_METHOD},
         {"dpm++ 2m", DPMPP2M_SAMPLE_METHOD},
         {"k_dpmpp_2m", DPMPP2M_SAMPLE_METHOD},
+        {"dpm++ 2m sde", DPMPP2M_SDE_SAMPLE_METHOD},
+        {"k_dpmpp_2m_sde", DPMPP2M_SDE_SAMPLE_METHOD},
         {"res multistep", RES_MULTISTEP_SAMPLE_METHOD},
         {"k_res_multistep", RES_MULTISTEP_SAMPLE_METHOD},
         {"res 2s", RES_2S_SAMPLE_METHOD},
@@ -259,6 +261,48 @@ static bool build_sdapi_img_gen_request(const json& j,
     return true;
 }
 
+static nlohmann::json prepare_info_field(const SDContextParams& ctx_params,
+                                         const SDGenerationParams& gen_params,
+                                         bool img2img) {
+    nlohmann::json jsoninfo = nlohmann::json::object();
+    jsoninfo["prompt"]      = gen_params.prompt;
+    if (!gen_params.negative_prompt.empty()) {
+        jsoninfo["negative_prompt"] = gen_params.negative_prompt;
+    }
+    jsoninfo["seed"]         = gen_params.seed;
+    jsoninfo["cfg_scale"]    = gen_params.sample_params.guidance.txt_cfg;
+    jsoninfo["width"]        = gen_params.get_resolved_width();
+    jsoninfo["height"]       = gen_params.get_resolved_height();
+    jsoninfo["steps"]        = gen_params.sample_params.sample_steps;
+    jsoninfo["sampler_name"] = sd_sample_method_name(gen_params.sample_params.sample_method);
+    if (gen_params.clip_skip != -1) {
+        jsoninfo["clip_skip"] = gen_params.clip_skip;
+    }
+    if (gen_params.sample_params.scheduler != scheduler_t::SCHEDULER_COUNT) {
+        jsoninfo["extra_generation_params"] = nlohmann::json::object();
+        jsoninfo["extra_generation_params"]["Schedule type"] = sd_scheduler_name(gen_params.sample_params.scheduler);
+    }
+    if (img2img) {
+        jsoninfo["denoising_strength"] = gen_params.strength;
+    }
+    // not clear what should happen if we have both model and diffusion_model
+    if (!ctx_params.diffusion_model_path.empty()) {
+        jsoninfo["sd_model_name"] = sd_basename(ctx_params.diffusion_model_path);
+    } else if (!ctx_params.model_path.empty()) {
+        jsoninfo["sd_model_name"] = sd_basename(ctx_params.model_path);
+    }
+    if (!ctx_params.vae_path.empty()) {
+        jsoninfo["sd_vae_name"] = sd_basename(ctx_params.vae_path);
+    }
+    jsoninfo["version"] = "stable-diffusion.cpp";
+
+    jsoninfo["infotexts"]            = nlohmann::json::array();
+    jsoninfo["all_prompts"]          = nlohmann::json::array();
+    jsoninfo["all_negative_prompts"] = nlohmann::json::array();
+    jsoninfo["all_seeds"]            = nlohmann::json::array();
+    return jsoninfo;
+}
+
 void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
     ServerRuntime* runtime = &rt;
 
@@ -292,8 +336,11 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             {
                 std::lock_guard<std::mutex> lock(*runtime->sd_ctx_mutex);
-                sd_image_t* raw_results = generate_image(runtime->sd_ctx, &img_gen_params);
-                num_results             = request.gen_params.batch_count;
+                sd_image_t* raw_results = nullptr;
+                if (!generate_image(runtime->sd_ctx, &img_gen_params, &raw_results, &num_results)) {
+                    raw_results = nullptr;
+                    num_results = 0;
+                }
                 results.adopt(raw_results, num_results);
             }
 
@@ -306,24 +353,26 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             json out;
             out["images"]     = json::array();
             out["parameters"] = j;
-            out["info"]       = "";
+            json jsoninfo     = prepare_info_field(*runtime->ctx_params, request.gen_params, img2img);
 
+            int images_per_batch = request.gen_params.batch_count > 0 ? std::max(1, num_results / request.gen_params.batch_count) : 1;
             for (int i = 0; i < num_results; ++i) {
                 if (results[i].data == nullptr) {
                     continue;
                 }
 
-                std::string params = request.gen_params.embed_image_metadata
-                                         ? get_image_params(*runtime->ctx_params,
-                                                            request.gen_params,
-                                                            request.gen_params.seed + i)
-                                         : "";
+                bool embed_meta    = request.gen_params.embed_image_metadata;
+
+                std::string params = get_image_params(*runtime->ctx_params,
+                                                      request.gen_params,
+                                                      request.gen_params.seed + i / images_per_batch);
+
                 auto image_bytes   = encode_image_to_vector(EncodedImageFormat::PNG,
                                                             results[i].data,
                                                             results[i].width,
                                                             results[i].height,
                                                             results[i].channel,
-                                                            params);
+                                                            embed_meta ? params : "");
 
                 if (image_bytes.empty()) {
                     LOG_ERROR("write image to mem failed");
@@ -331,7 +380,15 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 }
 
                 out["images"].push_back(base64_encode(image_bytes));
+
+                jsoninfo["infotexts"][i]            = params;
+                jsoninfo["all_seeds"][i]            = request.gen_params.seed + i;
+                jsoninfo["all_prompts"][i]          = request.gen_params.prompt;
+                jsoninfo["all_negative_prompts"][i] = request.gen_params.negative_prompt;
             }
+
+            // not a mistake: it is supposed to be a string in json format
+            out["info"] = jsoninfo.dump();
 
             res.set_content(out.dump(), "application/json");
             res.status = 200;
@@ -438,6 +495,9 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         scheduler_names.push_back("default");
         for (int i = 0; i < SCHEDULER_COUNT; i++) {
             scheduler_names.push_back(sd_scheduler_name((scheduler_t)i));
+            if (i == DISCRETE_SCHEDULER) {
+                scheduler_names.push_back("normal");
+            }
         }
         json r = json::array();
         for (auto name : scheduler_names) {

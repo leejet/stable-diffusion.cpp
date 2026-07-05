@@ -2,6 +2,7 @@
 
 #include "async_jobs.h"
 
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
 
@@ -173,8 +174,13 @@ bool execute_img_gen_job(ServerRuntime& runtime,
 
     {
         std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
-        sd_image_t* raw_results = generate_image(runtime.sd_ctx, &params);
-        results.adopt(raw_results, params.batch_count);
+        sd_image_t* raw_results = nullptr;
+        int num_results         = 0;
+        if (!generate_image(runtime.sd_ctx, &params, &raw_results, &num_results)) {
+            raw_results = nullptr;
+            num_results = 0;
+        }
+        results.adopt(raw_results, num_results);
     }
 
     const int num_results = results.count();
@@ -190,6 +196,8 @@ bool execute_img_gen_job(ServerRuntime& runtime,
         encoded_format = EncodedImageFormat::WEBP;
     }
 
+    int batch_count      = job.img_gen.gen_params.batch_count;
+    int images_per_batch = batch_count > 0 ? std::max(1, num_results / batch_count) : 1;
     for (int i = 0; i < num_results; ++i) {
         if (results[i].data == nullptr) {
             continue;
@@ -198,7 +206,7 @@ bool execute_img_gen_job(ServerRuntime& runtime,
         const std::string metadata = job.img_gen.gen_params.embed_image_metadata
                                          ? get_image_params(*runtime.ctx_params,
                                                             job.img_gen.gen_params,
-                                                            job.img_gen.gen_params.seed + i)
+                                                            job.img_gen.gen_params.seed + i / images_per_batch)
                                          : "";
         auto image_bytes           = encode_image_to_vector(encoded_format,
                                                             results[i].data,

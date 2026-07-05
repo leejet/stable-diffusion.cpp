@@ -15,6 +15,9 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
+* **2026/06/25** 🚀 stable-diffusion.cpp now supports **Krea2**
+* **2026/06/04** 🚀 stable-diffusion.cpp now supports **Ideogram4**
+* **2026/05/31** 🚀 stable-diffusion.cpp now supports **PiD**
 * **2026/05/27** 🚀 stable-diffusion.cpp now supports **Lens**
 * **2026/05/17** 🚀 stable-diffusion.cpp now supports **LTX-2.3**
 * **2026/04/11** 🚀 stable-diffusion.cpp now uses a brand-new embedded web UI.  
@@ -32,8 +35,8 @@ API and command-line option may change frequently.***
 - Super lightweight and without external dependencies
 - Supported models
   - Image Models
-    - SD1.x, SD2.x, [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo)
-    - SDXL, [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo)
+    - [SD1.x, SD2.x, SD-Turbo](./docs/sd.md)
+    - [SDXL, SDXL-Turbo](./docs/sd.md)
     - [Some SD1.x and SDXL distilled models](./docs/distilled_sd.md)
     - [SD3/SD3.5](./docs/sd3.md)
     - [FLUX.1-dev/FLUX.1-schnell](./docs/flux.md)
@@ -42,25 +45,32 @@ API and command-line option may change frequently.***
     - [Chroma](./docs/chroma.md)
     - [Chroma1-Radiance](./docs/chroma_radiance.md)
     - [Qwen Image](./docs/qwen_image.md)
+    - [PiD](./docs/pid.md)
     - [LongCat Image](./docs/longcat_image.md)
     - [Z-Image](./docs/z_image.md)
+    - [MiniT2I](./docs/minit2i.md)
     - [Ovis-Image](./docs/ovis_image.md)
     - [Anima](./docs/anima.md)
     - [ERNIE-Image](./docs/ernie_image.md)
+    - [Boogu Image](./docs/boogu_image.md)
+    - [Krea2](./docs/krea2.md)
+    - [SeFi-Image](./docs/sefi_image.md)
     - [HiDream-O1-Image](./docs/hidream_o1_image.md)
+    - [Ideogram4](./docs/ideogram4.md)
   - Image Edit Models
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
     - [Qwen Image Edit series](./docs/qwen_image_edit.md)
     - [LongCat Image Edit](./docs/longcat_image.md)
+    - [Boogu Image Edit](./docs/boogu_image.md)
   - Video Models
     - [Wan2.1/Wan2.2](./docs/wan.md)
     - [LTX-2.3](./docs/ltx2.md)
-  - [PhotoMaker](https://github.com/TencentARC/PhotoMaker) support.
+  - [PhotoMaker](./docs/photo_maker.md) support.
   - Control Net support with SD 1.5
   - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
   - Latent Consistency Models support (LCM/LCM-LoRA)
-  - Faster and memory efficient latent decoding with [TAESD](https://github.com/madebyollin/taesd)
-  - Upscale images generated with [ESRGAN](https://github.com/xinntao/Real-ESRGAN)
+  - Faster and memory efficient latent decoding with [TAESD](./docs/taesd.md)
+  - Upscale images generated with [ESRGAN](./docs/esrgan.md)
 - Supported backends
   - CPU (AVX, AVX2 and AVX512 support for x86 architectures)
   - CUDA
@@ -129,28 +139,9 @@ For runtime and parameter backend placement, see the [backend selection guide](.
 ## More Guides
 
 - [Backend selection](./docs/backend.md)
-- [SD1.x/SD2.x/SDXL](./docs/sd.md)
-- [SD3/SD3.5](./docs/sd3.md)
-- [FLUX.1-dev/FLUX.1-schnell](./docs/flux.md)
-- [FLUX.2-dev/FLUX.2-klein](./docs/flux2.md)
-- [FLUX.1-Kontext-dev](./docs/kontext.md)
-- [Chroma](./docs/chroma.md)
-- [🔥Qwen Image](./docs/qwen_image.md)
-- [🔥Qwen Image Edit series](./docs/qwen_image_edit.md)
-- [🔥Wan2.1/Wan2.2](./docs/wan.md)
-- [🔥LTX-2.3](./docs/ltx2.md)
-- [🔥Z-Image](./docs/z_image.md)
-- [Ovis-Image](./docs/ovis_image.md)
-- [Anima](./docs/anima.md)
-- [ERNIE-Image](./docs/ernie_image.md)
-- [HiDream-O1-Image](./docs/hidream_o1_image.md)
-- [Lens](./docs/lens.md)
-- [LongCat Image / LongCat Image Edit](./docs/longcat_image.md)
+- [RPC](./docs/rpc.md)
 - [LoRA](./docs/lora.md)
 - [LCM/LCM-LoRA](./docs/lcm.md)
-- [Using PhotoMaker to personalize image generation](./docs/photo_maker.md)
-- [Using ESRGAN to upscale results](./docs/esrgan.md)
-- [Using TAESD to faster decoding](./docs/taesd.md)
 - [Docker](./docs/docker.md)
 - [Quantization and GGUF](./docs/quantization_and_gguf.md)
 - [Inference acceleration via caching](./docs/caching.md)
