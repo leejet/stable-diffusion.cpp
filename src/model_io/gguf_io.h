@@ -37,7 +37,7 @@ public:
 private:
     std::vector<TensorWritePlan> tensors_;
     std::vector<uint64_t> tensor_offsets_;
-    uint64_t file_size_    = 0;
+    uint64_t file_size_     = 0;
     ggml_context* meta_ctx_ = nullptr;
     gguf_context* gguf_ctx_ = nullptr;
 };

@@ -353,9 +353,9 @@ bool SafetensorsStreamingWriter::write_metadata(const std::string& file_path,
         data_offsets.push_back(data_offset + plan.nbytes());
         json_tensor_info["data_offsets"] = data_offsets;
 
-        header[plan.name]    = json_tensor_info;
-        tensor_offsets_[i]   = data_offset;
-        data_offset         += plan.nbytes();
+        header[plan.name]  = json_tensor_info;
+        tensor_offsets_[i] = data_offset;
+        data_offset += plan.nbytes();
     }
 
     const std::string header_str = header.dump();
