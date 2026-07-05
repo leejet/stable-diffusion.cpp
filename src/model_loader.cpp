@@ -943,7 +943,8 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
 
 bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                                bool enable_mmap,
-                               const std::set<std::string>* target_tensor_names) {
+                               const std::set<std::string>* target_tensor_names,
+                               bool log_progress) {
     process_model_files(enable_mmap, false);
 
     std::atomic<int64_t> read_time_ms(0);
@@ -1212,7 +1213,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
             }
             size_t curr_num       = total_tensors_processed + current_idx;
             float elapsed_seconds = (ggml_time_ms() - t_start) / 1000.0f;
-            if (total_tensors_to_process > 0) {
+            if (log_progress && total_tensors_to_process > 0) {
                 pretty_bytes_progress(static_cast<int>(curr_num),
                                       static_cast<int>(total_tensors_to_process),
                                       bytes_processed.load(),
@@ -1230,24 +1231,26 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
             break;
         }
         total_tensors_processed += tensors_to_process.size();
-        if (total_tensors_to_process > 0) {
+        if (log_progress && total_tensors_to_process > 0) {
             pretty_bytes_progress(static_cast<int>(total_tensors_processed),
                                   static_cast<int>(total_tensors_to_process),
                                   bytes_processed.load(),
                                   (ggml_time_ms() - t_start) / 1000.0f);
         }
-        if (total_tensors_processed < total_tensors_to_process && total_tensors_to_process > 0) {
+        if (log_progress && total_tensors_processed < total_tensors_to_process && total_tensors_to_process > 0) {
             printf("\n");
         }
     }
 
     int64_t end_time = ggml_time_ms();
-    LOG_INFO("loading tensors completed, taking %.2fs (read: %.2fs, memcpy: %.2fs, convert: %.2fs, copy_to_backend: %.2fs)",
-             (end_time - start_time) / 1000.f,
-             (read_time_ms.load() / (float)last_n_threads) / 1000.f,
-             (memcpy_time_ms.load() / (float)last_n_threads) / 1000.f,
-             (convert_time_ms.load() / (float)last_n_threads) / 1000.f,
-             (copy_to_backend_time_ms.load() / (float)last_n_threads) / 1000.f);
+    if (log_progress) {
+        LOG_INFO("loading tensors completed, taking %.2fs (read: %.2fs, memcpy: %.2fs, convert: %.2fs, copy_to_backend: %.2fs)",
+                 (end_time - start_time) / 1000.f,
+                 (read_time_ms.load() / (float)last_n_threads) / 1000.f,
+                 (memcpy_time_ms.load() / (float)last_n_threads) / 1000.f,
+                 (convert_time_ms.load() / (float)last_n_threads) / 1000.f,
+                 (copy_to_backend_time_ms.load() / (float)last_n_threads) / 1000.f);
+    }
     return success;
 }
 
@@ -1290,7 +1293,7 @@ bool ModelLoader::load_tensor(const TensorStorage& tensor_storage, ggml_tensor* 
         return true;
     };
 
-    if (!load_tensors(on_new_tensor_cb, false, &target_tensor_names)) {
+    if (!load_tensors(on_new_tensor_cb, false, &target_tensor_names, false)) {
         LOG_ERROR("load tensor failed: '%s'", tensor_storage.name.c_str());
         return false;
     }

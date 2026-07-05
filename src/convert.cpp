@@ -306,6 +306,7 @@ static bool write_model_file_streaming(ModelLoader& model_loader,
     if (!preallocate_output_file(output_path, writer.file_size(), error)) {
         return false;
     }
+    model_loader.process_model_files(false, false);
     return stream_tensor_data(model_loader, output_path, tensors, writer, n_threads, error);
 }
 
