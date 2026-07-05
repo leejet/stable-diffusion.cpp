@@ -21,7 +21,7 @@ Krea2 uses a Krea2 diffusion transformer, the Wan2.1 VAE, and Qwen3-VL 4B as the
 ### Krea2
 
 ```
-.\bin\Release\sd-cli.exe --diffusion-model ..\..\ComfyUI\models\diffusion_models\Krea-2-Raw-Q8_0.gguf --llm ..\..\ComfyUI\models\text_encoders\Qwen3-VL-4B-Instruct-Q4_K_M.gguf --vae ..\..\ComfyUI\models\vae\wan_2.1_vae.safetensors -p "a lovely cat holding a sign says 'krea2.cpp'"  --diffusion-fa -v --offload-to-cpu
+.\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\Krea-2-Raw-Q8_0.gguf --llm ..\models\text_encoders\Qwen3-VL-4B-Instruct-Q4_K_M.gguf --vae ..\models\vae\wan_2.1_vae.safetensors -p "a lovely cat holding a sign says 'krea2.cpp'"  --diffusion-fa -v --offload-to-cpu
 ```
 
 <img width="256" alt="Krea2 Raw example" src="../assets/krea2/example.png" />

@@ -16,7 +16,7 @@ You can run Kontext using stable-diffusion.cpp with a GPU that has 6GB or even 4
 You can download the preconverted gguf weights from [FLUX.1-Kontext-dev-GGUF](https://huggingface.co/QuantStack/FLUX.1-Kontext-dev-GGUF), this way you don't have to do the conversion yourself.
 
 ```
-.\bin\Release\sd-cli.exe -M convert -m ..\..\ComfyUI\models\unet\flux1-kontext-dev.safetensors -o ..\models\flux1-kontext-dev-q8_0.gguf -v --type q8_0
+.\bin\Release\sd-cli.exe -M convert -m ..\models\unet\flux1-kontext-dev.safetensors -o ..\models\flux1-kontext-dev-q8_0.gguf -v --type q8_0
 ```
 
 ## Run

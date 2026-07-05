@@ -12,7 +12,7 @@
 ### HiDream-O1-Image-Dev
 
 ```
-.\bin\Release\sd-cli.exe -m  ..\..\ComfyUI\models\diffusion_models\hidream_o1_image_dev_bf16.safetensors -p "a lovely cat holding a sign says 
+.\bin\Release\sd-cli.exe -m  ..\models\diffusion_models\hidream_o1_image_dev_bf16.safetensors -p "a lovely cat holding a sign says 
 'hidream o1 cpp'" --cfg-scale 1.0  -v -H 1024 -W 1024
 ```
 

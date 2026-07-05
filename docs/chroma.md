@@ -15,7 +15,7 @@ You can run Chroma using stable-diffusion.cpp with a GPU that has 6GB or even 4G
 You can download the preconverted gguf weights from [silveroxides/Chroma-GGUF](https://huggingface.co/silveroxides/Chroma-GGUF), this way you don't have to do the conversion yourself.
 
 ```
-.\bin\Release\sd-cli.exe -M convert -m ..\..\ComfyUI\models\unet\chroma-unlocked-v40.safetensors -o ..\models\chroma-unlocked-v40-q8_0.gguf -v --type q8_0
+.\bin\Release\sd-cli.exe -M convert -m ..\models\unet\chroma-unlocked-v40.safetensors -o ..\models\chroma-unlocked-v40-q8_0.gguf -v --type q8_0
 ```
 
 ## Run

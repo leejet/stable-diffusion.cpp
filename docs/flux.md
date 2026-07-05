@@ -17,7 +17,7 @@ You can download the preconverted gguf weights from [FLUX.1-dev-gguf](https://hu
 
 For example:
 ```
-.\bin\Release\sd-cli.exe -M convert -m ..\..\ComfyUI\models\unet\flux1-dev.sft -o ..\models\flux1-dev-q8_0.gguf -v --type q8_0
+.\bin\Release\sd-cli.exe -M convert -m ..\models\unet\flux1-dev.sft -o ..\models\flux1-dev-q8_0.gguf -v --type q8_0
 ```
 
 ## Run

@@ -24,7 +24,7 @@ LongCat uses quoted text for character-level text rendering. Put target text ins
 ### LongCat Image
 
 ```
-.\bin\Release\sd-cli.exe --diffusion-model  ..\..\ComfyUI\models\diffusion_models\LongCat-Image-Q4_K_M.gguf --vae ..\..\ComfyUI\models\vae\ae.sft --llm ..\..\ComfyUI\models\text_encoders\Qwen2.5-VL-7B-Instruct-Q8_0.gguf -p "a lovely cat holding a sign says 'longcat.cpp'" --cfg-scale 5.0 --sampling-method euler --flow-shift 3 -v --offload-to-cpu --diffusion-fa
+.\bin\Release\sd-cli.exe --diffusion-model  ..\models\diffusion_models\LongCat-Image-Q4_K_M.gguf --vae ..\models\vae\ae.sft --llm ..\models\text_encoders\Qwen2.5-VL-7B-Instruct-Q8_0.gguf -p "a lovely cat holding a sign says 'longcat.cpp'" --cfg-scale 5.0 --sampling-method euler --flow-shift 3 -v --offload-to-cpu --diffusion-fa
 ```
 
 <img alt="longcat example" src="../assets/longcat/example.png" />

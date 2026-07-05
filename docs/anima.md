@@ -15,7 +15,7 @@
 ## Examples
 
 ```sh
-.\bin\Release\sd-cli.exe --diffusion-model  ..\..\ComfyUI\models\diffusion_models\anima-preview.safetensors --vae ..\..\ComfyUI\models\vae\qwen_image_vae.safetensors  --llm ..\..\ComfyUI\models\text_encoders\qwen_3_06b_base.safetensors  -p "a lovely cat holding a sign says 'anima.cpp'" --cfg-scale 6.0 --sampling-method euler -v --offload-to-cpu --diffusion-fa
+.\bin\Release\sd-cli.exe --diffusion-model  ..\models\diffusion_models\anima-preview.safetensors --vae ..\models\vae\qwen_image_vae.safetensors  --llm ..\models\text_encoders\qwen_3_06b_base.safetensors  -p "a lovely cat holding a sign says 'anima.cpp'" --cfg-scale 6.0 --sampling-method euler -v --offload-to-cpu --diffusion-fa
 ```
 
 <img alt="anima image example" src="../assets/anima/example.png" />

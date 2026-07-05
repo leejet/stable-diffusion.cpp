@@ -22,7 +22,7 @@ The official PiD model card should be checked before use. At the time of the ini
 ## Examples
 
 ```
-.\bin\Release\sd-cli.exe --diffusion-model ..\..\ComfyUI\models\diffusion_models\pid_flux1_512_to_2048_4step_bf16.safetensors --llm "..\..\ComfyUI\models\text_encoders\gemma_2_2b_it_elm_bf16.safetensors" --vae ..\..\ComfyUI\models\vae\ae.sft --vae-format flux --cfg-scale 1.0  -p "a lovely cat" -r ..\assets\ernie_image\turbo_example.png --diffusion-fa -v --steps 4 -H 2048 -W 2048 --rng cpu
+.\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\pid_flux1_512_to_2048_4step_bf16.safetensors --llm "..\models\text_encoders\gemma_2_2b_it_elm_bf16.safetensors" --vae ..\models\vae\ae.sft --vae-format flux --cfg-scale 1.0  -p "a lovely cat" -r ..\assets\ernie_image\turbo_example.png --diffusion-fa -v --steps 4 -H 2048 -W 2048 --rng cpu
 ```
 
 Before:

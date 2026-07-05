@@ -21,7 +21,7 @@ You can run ERNIE-Image with stable-diffusion.cpp on GPUs with 4GB of VRAM — o
 ### ERNIE-Image-Turbo
 
 ```
-.\bin\Release\sd-cli.exe --diffusion-model  ..\..\ComfyUI\models\diffusion_models\ernie-image-turbo.safetensors --vae ..\..\ComfyUI\models\vae\flux2_ae.safetensors  --llm ..\..\ComfyUI\models\text_encoders\ministral-3-3b.safetensors -p "a lovely cat" --cfg-scale 1.0 --steps 8 -v --offload-to-cpu --diffusion-fa
+.\bin\Release\sd-cli.exe --diffusion-model  ..\models\diffusion_models\ernie-image-turbo.safetensors --vae ..\models\vae\flux2_ae.safetensors  --llm ..\models\text_encoders\ministral-3-3b.safetensors -p "a lovely cat" --cfg-scale 1.0 --steps 8 -v --offload-to-cpu --diffusion-fa
 ```
 
 <img width="256" alt="ERNIE-Image Turbo example" src="../assets/ernie_image/turbo_example.png" />
@@ -29,7 +29,7 @@ You can run ERNIE-Image with stable-diffusion.cpp on GPUs with 4GB of VRAM — o
 ### ERNIE-Image
 
 ```
-.\bin\Release\sd-cli.exe --diffusion-model  ..\..\ComfyUI\models\diffusion_models\ernie-image-UD-Q4_K_M.gguf --vae ..\..\ComfyUI\models\vae\flux2_ae.safetensors  --llm ..\..\ComfyUI\models\text_encoders\ministral-3-3b.safetensors -p "a lovely cat" --cfg-scale 5.0 -v --offload-to-cpu --diffusion-fa
+.\bin\Release\sd-cli.exe --diffusion-model  ..\models\diffusion_models\ernie-image-UD-Q4_K_M.gguf --vae ..\models\vae\flux2_ae.safetensors  --llm ..\models\text_encoders\ministral-3-3b.safetensors -p "a lovely cat" --cfg-scale 5.0 -v --offload-to-cpu --diffusion-fa
 ```
 
 <img width="256" alt="ERNIE-Image example" src="../assets/ernie_image/example.png" />

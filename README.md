@@ -180,19 +180,3 @@ Thank you to all the people who have already contributed to stable-diffusion.cpp
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=leejet/stable-diffusion.cpp&type=Date)](https://star-history.com/#leejet/stable-diffusion.cpp&Date)
-
-## References
-
-- [ggml](https://github.com/ggml-org/ggml)
-- [diffusers](https://github.com/huggingface/diffusers)
-- [stable-diffusion](https://github.com/CompVis/stable-diffusion)
-- [sd3-ref](https://github.com/Stability-AI/sd3-ref)
-- [stable-diffusion-stability-ai](https://github.com/Stability-AI/stablediffusion)
-- [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui)
-- [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
-- [k-diffusion](https://github.com/crowsonkb/k-diffusion)
-- [latent-consistency-model](https://github.com/luosiallen/latent-consistency-model)
-- [generative-models](https://github.com/Stability-AI/generative-models/)
-- [PhotoMaker](https://github.com/TencentARC/PhotoMaker)
-- [Wan2.1](https://github.com/Wan-Video/Wan2.1)
-- [Wan2.2](https://github.com/Wan-Video/Wan2.2)
