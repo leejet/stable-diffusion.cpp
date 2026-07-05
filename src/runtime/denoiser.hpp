@@ -1013,6 +1013,7 @@ struct Denoiser {
                                             const sd::Tensor<float>& latent)         = 0;
     virtual sd::Tensor<float> inverse_noise_scaling(float sigma,
                                                     const sd::Tensor<float>& latent) = 0;
+    virtual float noise_level_to_sigma(float noise_level)                            = 0;
 
     virtual std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler_type, SDVersion version, const char* extra_sample_args = nullptr) {
         auto bound_t_to_sigma = std::bind(&Denoiser::t_to_sigma, this, std::placeholders::_1);
@@ -1160,6 +1161,10 @@ struct CompVisDenoiser : public Denoiser {
         SD_UNUSED(sigma);
         return latent;
     }
+
+    float noise_level_to_sigma(float noise_level) {
+        return noise_level / (1.0f - noise_level);
+    }
 };
 
 struct CompVisVDenoiser : public CompVisDenoiser {
@@ -1246,6 +1251,10 @@ struct DiscreteFlowDenoiser : public Denoiser {
     }
     sd::Tensor<float> inverse_noise_scaling(float sigma, const sd::Tensor<float>& latent) override {
         return latent * (1.0f / (1.0f - sigma));
+    }
+
+    float noise_level_to_sigma(float noise_level) {
+        return noise_level;
     }
 };
 
@@ -1382,6 +1391,11 @@ struct MiniT2IFlowDenoiser : public Denoiser {
     sd::Tensor<float> inverse_noise_scaling(float sigma, const sd::Tensor<float>& latent) override {
         SD_UNUSED(sigma);
         return latent;
+    }
+
+    float noise_level_to_sigma(float noise_level) {
+        SD_UNUSED(noise_level);
+        return 1.0f;
     }
 
     std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler_type, SDVersion version, const char* extra_sample_args = nullptr) override {
