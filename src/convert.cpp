@@ -350,17 +350,17 @@ static bool export_loaded_model(ModelLoader& model_loader,
     return success;
 }
 
-bool convert_with_components_with_threads(const char* model_path,
-                                          const char* clip_l_path,
-                                          const char* clip_g_path,
-                                          const char* t5xxl_path,
-                                          const char* diffusion_model_path,
-                                          const char* vae_path,
-                                          const char* output_path,
-                                          sd_type_t output_type,
-                                          const char* tensor_type_rules,
-                                          bool convert_name,
-                                          int n_threads) {
+bool convert_with_components(const char* model_path,
+                             const char* clip_l_path,
+                             const char* clip_g_path,
+                             const char* t5xxl_path,
+                             const char* diffusion_model_path,
+                             const char* vae_path,
+                             const char* output_path,
+                             sd_type_t output_type,
+                             const char* tensor_type_rules,
+                             bool convert_name,
+                             int n_threads) {
     ModelLoader model_loader;
     bool loaded_any = false;
 
@@ -385,60 +385,21 @@ bool convert_with_components_with_threads(const char* model_path,
     return export_loaded_model(model_loader, output_path, output_type, tensor_type_rules, n_threads);
 }
 
-bool convert_with_components(const char* model_path,
-                             const char* clip_l_path,
-                             const char* clip_g_path,
-                             const char* t5xxl_path,
-                             const char* diffusion_model_path,
-                             const char* vae_path,
-                             const char* output_path,
-                             sd_type_t output_type,
-                             const char* tensor_type_rules,
-                             bool convert_name) {
-    return convert_with_components_with_threads(model_path,
-                                                clip_l_path,
-                                                clip_g_path,
-                                                t5xxl_path,
-                                                diffusion_model_path,
-                                                vae_path,
-                                                output_path,
-                                                output_type,
-                                                tensor_type_rules,
-                                                convert_name,
-                                                0);
-}
-
-bool convert_with_threads(const char* input_path,
-                          const char* vae_path,
-                          const char* output_path,
-                          sd_type_t output_type,
-                          const char* tensor_type_rules,
-                          bool convert_name,
-                          int n_threads) {
-    return convert_with_components_with_threads(input_path,
-                                                nullptr,
-                                                nullptr,
-                                                nullptr,
-                                                nullptr,
-                                                vae_path,
-                                                output_path,
-                                                output_type,
-                                                tensor_type_rules,
-                                                convert_name,
-                                                n_threads);
-}
-
 bool convert(const char* input_path,
              const char* vae_path,
              const char* output_path,
              sd_type_t output_type,
              const char* tensor_type_rules,
              bool convert_name) {
-    return convert_with_threads(input_path,
-                                vae_path,
-                                output_path,
-                                output_type,
-                                tensor_type_rules,
-                                convert_name,
-                                0);
+    return convert_with_components(input_path,
+                                   nullptr,
+                                   nullptr,
+                                   nullptr,
+                                   nullptr,
+                                   vae_path,
+                                   output_path,
+                                   output_type,
+                                   tensor_type_rules,
+                                   convert_name,
+                                   0);
 }
