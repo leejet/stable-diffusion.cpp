@@ -281,7 +281,7 @@ static nlohmann::json prepare_info_field(const SDContextParams& ctx_params,
         jsoninfo["clip_skip"] = gen_params.clip_skip;
     }
     if (gen_params.sample_params.scheduler != scheduler_t::SCHEDULER_COUNT) {
-        jsoninfo["extra_generation_params"] = nlohmann::json::object();
+        jsoninfo["extra_generation_params"]                  = nlohmann::json::object();
         jsoninfo["extra_generation_params"]["Schedule type"] = sd_scheduler_name(gen_params.sample_params.scheduler);
     }
     if (img2img) {
@@ -363,18 +363,18 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                     continue;
                 }
 
-                bool embed_meta    = request.gen_params.embed_image_metadata;
+                bool embed_meta = request.gen_params.embed_image_metadata;
 
                 std::string params = get_image_params(*runtime->ctx_params,
                                                       request.gen_params,
                                                       request.gen_params.seed + i / images_per_batch);
 
-                auto image_bytes   = encode_image_to_vector(EncodedImageFormat::PNG,
-                                                            results[i].data,
-                                                            results[i].width,
-                                                            results[i].height,
-                                                            results[i].channel,
-                                                            embed_meta ? params : "");
+                auto image_bytes = encode_image_to_vector(EncodedImageFormat::PNG,
+                                                          results[i].data,
+                                                          results[i].width,
+                                                          results[i].height,
+                                                          results[i].channel,
+                                                          embed_meta ? params : "");
 
                 if (image_bytes.empty()) {
                     LOG_ERROR("write image to mem failed");
