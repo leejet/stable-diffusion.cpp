@@ -63,6 +63,8 @@ static enum sample_method_t get_sdapi_sample_method(std::string name) {
         {"ddim", DDIM_TRAILING_SAMPLE_METHOD},
         {"dpm++ 2m", DPMPP2M_SAMPLE_METHOD},
         {"k_dpmpp_2m", DPMPP2M_SAMPLE_METHOD},
+        {"dpm++ 2m sde", DPMPP2M_SDE_SAMPLE_METHOD},
+        {"k_dpmpp_2m_sde", DPMPP2M_SDE_SAMPLE_METHOD},
         {"res multistep", RES_MULTISTEP_SAMPLE_METHOD},
         {"k_res_multistep", RES_MULTISTEP_SAMPLE_METHOD},
         {"res 2s", RES_2S_SAMPLE_METHOD},

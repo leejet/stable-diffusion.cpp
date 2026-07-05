@@ -2818,6 +2818,7 @@ const char* sample_method_to_str[] = {
     "euler_cfg_pp",
     "euler_a_cfg_pp",
     "euler_ge",
+    "dpm++2m_sde",
 };
 
 const char* sd_sample_method_name(enum sample_method_t sample_method) {
@@ -3519,6 +3520,7 @@ static float resolve_eta(sd_ctx_t* sd_ctx,
             case DPMPP2S_A_SAMPLE_METHOD:
             case ER_SDE_SAMPLE_METHOD:
             case EULER_A_CFG_PP_SAMPLE_METHOD:
+            case DPMPP2M_SDE_SAMPLE_METHOD:
                 return 1.0f;
             default:;
         }
