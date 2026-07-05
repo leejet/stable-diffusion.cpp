@@ -165,10 +165,6 @@ struct SDContextParams {
     bool diffusion_conv_direct = false;
     bool vae_conv_direct       = false;
 
-    bool circular   = false;
-    bool circular_x = false;
-    bool circular_y = false;
-
     bool chroma_use_dit_mask = true;
     bool chroma_use_t5_mask  = false;
     int chroma_t5_mask_pad   = 1;
@@ -245,6 +241,10 @@ struct SDGenerationParams {
 
     int upscale_repeats   = 1;
     int upscale_tile_size = 128;
+
+    bool circular   = false;
+    bool circular_x = false;
+    bool circular_y = false;
 
     bool hires_enabled         = false;
     std::string hires_upscaler = "Latent";

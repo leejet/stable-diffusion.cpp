@@ -555,18 +555,6 @@ ArgOptions SDContextParams::get_options() {
          "use ggml_conv2d_direct in the vae model",
          true, &vae_conv_direct},
         {"",
-         "--circular",
-         "enable circular padding for convolutions",
-         true, &circular},
-        {"",
-         "--circularx",
-         "enable circular RoPE wrapping on x-axis (width) only",
-         true, &circular_x},
-        {"",
-         "--circulary",
-         "enable circular RoPE wrapping on y-axis (height) only",
-         true, &circular_y},
-        {"",
          "--chroma-disable-dit-mask",
          "disable dit mask for chroma",
          false, &chroma_use_dit_mask},
@@ -853,9 +841,6 @@ std::string SDContextParams::to_string() const {
         << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
         << "  vae_conv_direct: " << (vae_conv_direct ? "true" : "false") << ",\n"
-        << "  circular: " << (circular ? "true" : "false") << ",\n"
-        << "  circular_x: " << (circular_x ? "true" : "false") << ",\n"
-        << "  circular_y: " << (circular_y ? "true" : "false") << ",\n"
         << "  chroma_use_dit_mask: " << (chroma_use_dit_mask ? "true" : "false") << ",\n"
         << "  qwen_image_zero_cond_t: " << (qwen_image_zero_cond_t ? "true" : "false") << ",\n"
         << "  chroma_use_t5_mask: " << (chroma_use_t5_mask ? "true" : "false") << ",\n"
@@ -912,8 +897,6 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.tae_preview_only                = taesd_preview;
     sd_ctx_params.diffusion_conv_direct           = diffusion_conv_direct;
     sd_ctx_params.vae_conv_direct                 = vae_conv_direct;
-    sd_ctx_params.circular_x                      = circular || circular_x;
-    sd_ctx_params.circular_y                      = circular || circular_y;
     sd_ctx_params.force_sdxl_vae_conv_scale       = force_sdxl_vae_conv_scale;
     sd_ctx_params.chroma_use_dit_mask             = chroma_use_dit_mask;
     sd_ctx_params.chroma_use_t5_mask              = chroma_use_t5_mask;
@@ -1189,6 +1172,18 @@ ArgOptions SDGenerationParams::get_options() {
          "disable auto resize of ref images",
          false,
          &auto_resize_ref_image},
+        {"",
+         "--circular",
+         "enable circular padding on both axes for tileable output",
+         true, &circular},
+        {"",
+         "--circularx",
+         "enable circular padding on x-axis (width) only",
+         true, &circular_x},
+        {"",
+         "--circulary",
+         "enable circular padding on y-axis (height) only",
+         true, &circular_y},
         {"",
          "--disable-image-metadata",
          "do not embed generation metadata on image files",
@@ -2475,6 +2470,8 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     params.hires.upscale_tile_size   = hires_upscale_tile_size;
     params.hires.custom_sigmas       = hires_custom_sigmas.empty() ? nullptr : hires_custom_sigmas.data();
     params.hires.custom_sigmas_count = static_cast<int>(hires_custom_sigmas.size());
+    params.circular_x                = circular || circular_x;
+    params.circular_y                = circular || circular_y;
     return params;
 }
 
@@ -2540,6 +2537,8 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
     params.hires.upscale_tile_size   = hires_upscale_tile_size;
     params.hires.custom_sigmas       = hires_custom_sigmas.empty() ? nullptr : hires_custom_sigmas.data();
     params.hires.custom_sigmas_count = static_cast<int>(hires_custom_sigmas.size());
+    params.circular_x                = circular || circular_x;
+    params.circular_y                = circular || circular_y;
     return params;
 }
 
