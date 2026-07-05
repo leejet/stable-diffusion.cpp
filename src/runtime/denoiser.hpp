@@ -1814,6 +1814,52 @@ static sd::Tensor<float> sample_dpmpp_2m_v2(denoise_cb_t model,
     return x;
 }
 
+// DPM-Solver++(2M) SDE, midpoint variant. Ref: Lu et al. arXiv:2211.01095;
+// k-diffusion sample_dpmpp_2m_sde.
+static sd::Tensor<float> sample_dpmpp_2m_sde(denoise_cb_t model,
+                                             sd::Tensor<float> x,
+                                             const std::vector<float>& sigmas,
+                                             std::shared_ptr<RNG> rng,
+                                             float eta) {
+    sd::Tensor<float> old_denoised;
+    bool have_old_denoised = false;
+    float h_last           = 0.f;
+
+    int steps = static_cast<int>(sigmas.size()) - 1;
+    for (int i = 0; i < steps; i++) {
+        auto denoised_opt = model(x, sigmas[i], i + 1);
+        if (denoised_opt.pred.empty()) {
+            return {};
+        }
+        sd::Tensor<float> denoised = std::move(denoised_opt.pred);
+
+        if (sigmas[i + 1] == 0.f) {
+            x = denoised;
+        } else {
+            float t     = -std::log(sigmas[i]);
+            float s     = -std::log(sigmas[i + 1]);
+            float h     = s - t;
+            float eta_h = eta * h;
+            float a     = sigmas[i + 1] / sigmas[i] * std::exp(-eta_h);
+            float b     = -std::expm1(-h - eta_h);
+
+            x = a * x + b * denoised;
+
+            if (have_old_denoised) {
+                float r = h_last / h;
+                x += (0.5f * b / r) * (denoised - old_denoised);
+            }
+            if (eta > 0.f) {
+                x += sd::Tensor<float>::randn_like(x, rng) * (sigmas[i + 1] * std::sqrt(-std::expm1(-2.f * eta_h)));
+            }
+            h_last = h;
+        }
+        old_denoised      = denoised;
+        have_old_denoised = true;
+    }
+    return x;
+}
+
 using SamplerExtraArgs = KeyValueArgs;
 
 static sd::Tensor<float> sample_lcm(denoise_cb_t model,
@@ -2490,6 +2536,8 @@ static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
             return sample_res_2s(model, std::move(x), sigmas, rng, is_flow_denoiser, eta);
         case ER_SDE_SAMPLE_METHOD:
             return sample_er_sde(model, std::move(x), sigmas, rng, is_flow_denoiser, eta);
+        case DPMPP2M_SDE_SAMPLE_METHOD:
+            return sample_dpmpp_2m_sde(model, std::move(x), sigmas, rng, eta);
         case DDIM_TRAILING_SAMPLE_METHOD:
             // DDIM is equivalent to Euler Ancestral with the Simple scheduler
             return sample_euler_ancestral(model, std::move(x), sigmas, rng, is_flow_denoiser, eta);
