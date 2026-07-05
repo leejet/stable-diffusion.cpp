@@ -19,7 +19,7 @@ docker run --rm --init -v /path/to/models:/models -v /path/to/output/:/output -p
 ## Building using Docker
 
 ```shell
-docker build -t sd .
+docker build -f docker/Dockerfile -t sd .
 ```
 
 ## Building variants using Docker
@@ -27,7 +27,7 @@ docker build -t sd .
 Vulkan:
 
 ```shell
-docker build -f Dockerfile.vulkan -t sd .
+docker build -f docker/Dockerfile.vulkan -t sd .
 ```
 
 ## Run locally built image's CLI
