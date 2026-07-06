@@ -39,10 +39,10 @@
 
 ### Qwen Image Edit 2511
 
-To use the new Qwen Image Edit 2511 mode, the  `--qwen-image-zero-cond-t` flag must be enabled; otherwise, image editing quality will degrade significantly.
+To use the new Qwen Image Edit 2511 mode, `--model-args qwen_image_zero_cond_t=true` must be enabled; otherwise, image editing quality will degrade significantly.
 
 ```
-.\bin\Release\sd-cli.exe --diffusion-model  ..\models\diffusion_models\qwen-image-edit-2511-Q4_K_M.gguf --vae ..\models\vae\qwen_image_vae.safetensors  --llm ..\models\text_encoders\qwen_2.5_vl_7b.safetensors --cfg-scale 2.5 --sampling-method euler -v --offload-to-cpu --diffusion-fa --flow-shift 3 -r ..\assets\flux\flux1-dev-q8_0.png -p "change 'flux.cpp' to 'edit.cpp'"  --qwen-image-zero-cond-t
+.\bin\Release\sd-cli.exe --diffusion-model  ..\models\diffusion_models\qwen-image-edit-2511-Q4_K_M.gguf --vae ..\models\vae\qwen_image_vae.safetensors  --llm ..\models\text_encoders\qwen_2.5_vl_7b.safetensors --cfg-scale 2.5 --sampling-method euler -v --offload-to-cpu --diffusion-fa --flow-shift 3 -r ..\assets\flux\flux1-dev-q8_0.png -p "change 'flux.cpp' to 'edit.cpp'" --model-args qwen_image_zero_cond_t=true
 ```
 
 <img alt="qwen_image_edit_2509" src="../assets/qwen/qwen_image_edit_2511.png" />

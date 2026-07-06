@@ -57,10 +57,10 @@
 #include "name_conversion.h"
 #include "runtime/latent-preview.h"
 
+#include <atomic>
+
 const char* sd_vae_format_name(enum sd_vae_format_t format);
 static SDVersion sd_vae_format_to_version(enum sd_vae_format_t format, SDVersion fallback);
-
-#include <atomic>
 
 const char* model_version_to_str[] = {
     "SD 1.x",
@@ -921,10 +921,11 @@ public:
                 if (is_chroma) {
                     cond_stage_model = std::make_shared<T5CLIPEmbedder>(backend_for(SDBackendModule::TE),
                                                                         tensor_storage_map,
-                                                                        sd_ctx_params->chroma_use_t5_mask,
-                                                                        sd_ctx_params->chroma_t5_mask_pad,
                                                                         false,
-                                                                        model_manager);
+                                                                        1,
+                                                                        false,
+                                                                        model_manager,
+                                                                        sd_ctx_params->model_args);
                 } else if (version == VERSION_OVIS_IMAGE) {
                     cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
                                                                      tensor_storage_map,
@@ -941,8 +942,8 @@ public:
                                                                      tensor_storage_map,
                                                                      "model.diffusion_model",
                                                                      version,
-                                                                     sd_ctx_params->chroma_use_dit_mask,
-                                                                     model_manager);
+                                                                     model_manager,
+                                                                     sd_ctx_params->model_args);
             } else if (sd_version_is_flux2(version) || sd_version_is_sefi_image(version)) {
                 bool is_chroma   = false;
                 cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
@@ -955,8 +956,8 @@ public:
                                                                      tensor_storage_map,
                                                                      "model.diffusion_model",
                                                                      version,
-                                                                     sd_ctx_params->chroma_use_dit_mask,
-                                                                     model_manager);
+                                                                     model_manager,
+                                                                     sd_ctx_params->model_args);
             } else if (sd_version_is_ltxav(version)) {
                 cond_stage_model = std::make_shared<LTXAVEmbedder>(backend_for(SDBackendModule::TE),
                                                                    tensor_storage_map,
@@ -1014,8 +1015,8 @@ public:
                                                                           tensor_storage_map,
                                                                           "model.diffusion_model",
                                                                           version,
-                                                                          sd_ctx_params->qwen_image_zero_cond_t,
-                                                                          model_manager);
+                                                                          model_manager,
+                                                                          sd_ctx_params->model_args);
             } else if (sd_version_is_longcat(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
                                                                  tensor_storage_map,
@@ -1027,8 +1028,8 @@ public:
                                                                      tensor_storage_map,
                                                                      "model.diffusion_model",
                                                                      version,
-                                                                     sd_ctx_params->chroma_use_dit_mask,
-                                                                     model_manager);
+                                                                     model_manager,
+                                                                     sd_ctx_params->model_args);
             } else if (version == VERSION_HIDREAM_O1) {
                 cond_stage_model = std::make_shared<HiDreamO1::HiDreamO1Conditioner>(backend_for(SDBackendModule::TE),
                                                                                      tensor_storage_map,
@@ -1364,7 +1365,6 @@ public:
                     high_noise_diffusion_model->set_flash_attention_enabled(true);
                 }
             }
-
         }
 
         LOG_DEBUG("validating model metadata");
@@ -3048,15 +3048,13 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->eager_load           = false;
     sd_ctx_params->enable_mmap          = false;
     sd_ctx_params->diffusion_flash_attn = false;
-    sd_ctx_params->chroma_use_dit_mask  = true;
-    sd_ctx_params->chroma_use_t5_mask   = false;
-    sd_ctx_params->chroma_t5_mask_pad   = 1;
     sd_ctx_params->vae_format           = SD_VAE_FORMAT_AUTO;
     sd_ctx_params->backend              = nullptr;
     sd_ctx_params->params_backend       = nullptr;
     sd_ctx_params->split_mode           = nullptr;
     sd_ctx_params->auto_fit             = false;
     sd_ctx_params->rpc_servers          = nullptr;
+    sd_ctx_params->model_args           = nullptr;
     sd_ctx_params->pulid_weights_path   = nullptr;
 }
 
@@ -3096,12 +3094,10 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "backend: %s\n"
              "params_backend: %s\n"
              "split_mode: %s\n"
+             "model_args: %s\n"
              "auto_fit: %s\n"
              "flash_attn: %s\n"
              "diffusion_flash_attn: %s\n"
-             "chroma_use_dit_mask: %s\n"
-             "chroma_use_t5_mask: %s\n"
-             "chroma_t5_mask_pad: %d\n"
              "vae_format: %s\n",
              SAFE_STR(sd_ctx_params->model_path),
              SAFE_STR(sd_ctx_params->clip_l_path),
@@ -3132,12 +3128,10 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->backend),
              SAFE_STR(sd_ctx_params->params_backend),
              SAFE_STR(sd_ctx_params->split_mode),
+             SAFE_STR(sd_ctx_params->model_args),
              BOOL_STR(sd_ctx_params->auto_fit),
              BOOL_STR(sd_ctx_params->flash_attn),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
-             BOOL_STR(sd_ctx_params->chroma_use_dit_mask),
-             BOOL_STR(sd_ctx_params->chroma_use_t5_mask),
-             sd_ctx_params->chroma_t5_mask_pad,
              sd_vae_format_name(sd_ctx_params->vae_format));
 
     return buf;
