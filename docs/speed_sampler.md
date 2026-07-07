@@ -29,7 +29,7 @@ All parsed out of `--extra-sample-args`. The list is comma-separated at the top 
 | `speed_levels` | *(unset)* | Shortcut: `speed_levels=2` → `{0.5, 1.0}`; `=3` → `{0.25, 0.5, 1.0}`. Ignored if `speed_scales` is set. |
 | `speed_delta` | `0.01` | Noise-dominated tolerance (paper Eq. 9). Smaller values push transitions later in the trajectory. |
 | `speed_manual_sigmas` | *(unset)* | Colon-separated sigma thresholds, one per transition (length `= scales.size() - 1`). Bypasses `speed_delta` and the power-spectrum formula. Values must be strictly decreasing and each in `(0, 1)`. |
-| `speed_preset` | `flux` | Power-spectrum preset. `flux` uses `A=203.615, β=1.915`; `wan21` uses `A=219.485, β=2.423`. Values fitted from the respective VAEs in the reference impl's `configs.yaml`. |
+| `speed_preset` | *auto* | Power-spectrum preset. Auto-selected from the loaded model: `wan21` (`A=219.485, β=2.423`) for WAN, `flux` (`A=203.615, β=1.915`) for every other flow model. Values fitted from the respective VAEs in the reference impl's `configs.yaml`. Set explicitly to override. |
 | `speed_A`, `speed_beta` | *(preset)* | Power-spectrum override for custom models. Overrides `speed_preset`. |
 | `speed_transform` | `dct` | Spectral basis for the resolution expansion. `dct` handles any ratio; `fft` also handles any ratio, provided both spatial dims are powers of 2. |
 | `speed_seed` | `0` | Seed for the Gaussian noise placed into the new high-frequency bands at each transition. |

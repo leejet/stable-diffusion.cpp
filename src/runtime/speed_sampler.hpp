@@ -50,13 +50,31 @@ struct Config {
     std::vector<float> manual_sigmas;
 };
 
-// Presets from the reference impl's configs.yaml.
+// Power-spectrum presets fitted per VAE in the reference impl's configs.yaml.
 struct Preset {
     float A;
     float beta;
 };
 inline Preset preset_flux()  { return {203.615097f, 1.915461f}; }
 inline Preset preset_wan21() { return {219.484718f, 2.422687f}; }
+
+// Auto-select a preset based on which VAE the model uses. All Flux-family
+// image models (Flux, Flux2, SeFi, Z-Image, Qwen Image, ...) share the Flux
+// VAE calibration in the reference impl; only WAN gets a distinct preset.
+inline Preset preset_for(SDVersion version) {
+    if (sd_version_is_wan(version)) {
+        return preset_wan21();
+    }
+    return preset_flux();
+}
+
+inline Config default_config_for(SDVersion version) {
+    Config cfg;
+    Preset p          = preset_for(version);
+    cfg.spectrum_A    = p.A;
+    cfg.spectrum_beta = p.beta;
+    return cfg;
+}
 
 // Power-law radial spectrum P(omega) = A * |omega|^(-beta) (Eq. 8).
 inline float power_spectrum(float omega, float A, float beta) {

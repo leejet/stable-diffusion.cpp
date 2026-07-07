@@ -2576,7 +2576,7 @@ public:
         if (method == SPEED_FLOW_SAMPLE_METHOD && !ref_latents.empty()) {
             LOG_WARN("SPEED sampler with reference latents (edit / ref-guided model): the low-resolution segments see a downscaled reference so fine detail from the source image (backgrounds, textures, layout beyond broad structure) is likely to drift. Composition will remain plausible but fidelity to the reference is reduced. See docs/speed_sampler.md.");
         }
-        auto x0_opt = sample_k_diffusion(method, denoise, x_t, sigmas, sampler_rng, eta, is_flow_denoiser, extra_sample_args, denoiser);
+        auto x0_opt = sample_k_diffusion(method, denoise, x_t, sigmas, sampler_rng, eta, is_flow_denoiser, extra_sample_args, denoiser, version);
         if (x0_opt.empty()) {
             LOG_ERROR("Diffusion model sampling failed");
             if (control_net) {
