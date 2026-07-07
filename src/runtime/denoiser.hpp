@@ -15,6 +15,7 @@
 #include "core/tensor.hpp"
 #include "runtime/gits_noise.h"
 #include "runtime/guidance.h"
+#include "runtime/speed_sampler.hpp"
 
 /*================================================= CompVisDenoiser ==================================================*/
 
@@ -2720,6 +2721,11 @@ static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
             return sample_euler_ancestral_cfg_pp(model, std::move(x), sigmas, rng, eta);
         case EULER_GE_SAMPLE_METHOD:
             return sample_gradient_estimation(model, std::move(x), sigmas, rng, is_flow_denoiser, eta, extra_args);
+        case SPEED_FLOW_SAMPLE_METHOD: {
+            sd::speed::Config cfg;
+            sd::speed::parse_config_from_args(cfg, extra_args);
+            return sd::speed::sample_speed_flow(model, std::move(x), sigmas, cfg);
+        }
         default:
             return {};
     }
