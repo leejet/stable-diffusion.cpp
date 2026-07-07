@@ -1,0 +1,47 @@
+name: Close inactive issues
+
+on:
+  schedule:
+    # Run daily. GitHub cron schedules use UTC.
+    - cron: "30 1 * * *"
+  workflow_dispatch:
+    inputs:
+      debug_only:
+        description: "Dry run: log intended actions without changing issues"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  close-inactive-issues:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment and close inactive issues
+        uses: actions/stale@v10
+        with:
+          days-before-issue-stale: 365
+          days-before-issue-close: 0
+
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+
+          stale-issue-label: issue:inactive
+          close-issue-label: issue:auto-closed
+          stale-issue-message: ""
+          close-issue-message: >
+            This issue has had no activity for one year. The latest version of
+            the code may already have fixed the problem.
+
+            If the issue still exists in the latest version, you can reopen
+            this issue at any time with updated reproduction details.
+
+          remove-issue-stale-when-updated: true
+          operations-per-run: 1000
+          debug-only: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_only || false }}
