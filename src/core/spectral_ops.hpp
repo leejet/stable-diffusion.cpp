@@ -24,6 +24,10 @@ namespace spectral {
 
 using cplx = std::complex<float>;
 
+// Locally defined so the header stays portable to compilers that don't
+// expose M_PI in <cmath> without _USE_MATH_DEFINES (MSVC, some clangs).
+constexpr float k_pi = 3.14159265358979323846f;
+
 inline bool is_pow2(int64_t n) {
     return n > 0 && (n & (n - 1)) == 0;
 }
@@ -45,7 +49,7 @@ inline void fft_1d(cplx* a, int64_t n, int sign) {
         }
     }
     for (int64_t len = 2; len <= n; len <<= 1) {
-        float ang = sign * 2.0f * static_cast<float>(M_PI) / static_cast<float>(len);
+        float ang = sign * 2.0f * k_pi / static_cast<float>(len);
         cplx wlen(std::cos(ang), std::sin(ang));
         for (int64_t i = 0; i < n; i += len) {
             cplx w(1.0f, 0.0f);
@@ -178,7 +182,7 @@ inline void dct1d_direct(const float* in, float* out_row, int64_t N) {
     for (int64_t k = 0; k < N; ++k) {
         float sum = 0.0f;
         for (int64_t n = 0; n < N; ++n) {
-            sum += in[n] * std::cos(static_cast<float>(M_PI) * (2 * n + 1) * k * inv_2N);
+            sum += in[n] * std::cos(k_pi * (2 * n + 1) * k * inv_2N);
         }
         out_row[k] = sum * ((k == 0) ? scale0 : scale);
     }
@@ -192,7 +196,7 @@ inline void idct1d_direct(const float* in, float* out_row, int64_t N) {
     for (int64_t n = 0; n < N; ++n) {
         float sum = in[0] * scale0;
         for (int64_t k = 1; k < N; ++k) {
-            sum += in[k] * scale * std::cos(static_cast<float>(M_PI) * (2 * n + 1) * k * inv_2N);
+            sum += in[k] * scale * std::cos(k_pi * (2 * n + 1) * k * inv_2N);
         }
         out_row[n] = sum;
     }
