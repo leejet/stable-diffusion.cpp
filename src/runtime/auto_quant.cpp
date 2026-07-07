@@ -16,369 +16,344 @@
 #include "model_loader.h"
 #include "runtime/imatrix.h"
 
-/* Adapted from llama.cpp's tools/auto-tensor-type (q3_pt branch). */
-
 namespace {
 
-constexpr char RB_SEP = '\x01';
+    constexpr char RB_SEP = '\x01';
 
-std::string make_rb_key(const std::string& role, int bucket) {
-    return role + RB_SEP + std::to_string(bucket);
-}
-
-std::string rb_role(const std::string& key) {
-    auto p = key.find(RB_SEP);
-    return (p == std::string::npos) ? key : key.substr(0, p);
-}
-
-int rb_bucket(const std::string& key) {
-    auto p = key.find(RB_SEP);
-    return (p == std::string::npos) ? 0 : std::stoi(key.substr(p + 1));
-}
-
-std::string rb_display(const std::string& key) {
-    int b = rb_bucket(key);
-    if (b < 0) {
-        return rb_role(key) + "[G]";
+    std::string make_rb_key(const std::string& role, int bucket) {
+        return role + RB_SEP + std::to_string(bucket);
     }
-    return rb_role(key) + "[" + std::to_string(b) + "]";
-}
 
-// Bucket of a layer given its position within its role class.
-int compute_bucket(int pos_in_class, int n_in_class, int n_buckets) {
-    if (n_in_class <= 1 || n_buckets <= 1) {
-        return 0;
+    std::string rb_role(const std::string& key) {
+        auto p = key.find(RB_SEP);
+        return (p == std::string::npos) ? key : key.substr(0, p);
     }
-    int b = (int)(((long long)n_buckets * pos_in_class) / n_in_class);
-    return std::min(std::max(b, 0), n_buckets - 1);
-}
 
-// "model.diffusion_model.layers.30.attention.qkv.weight"
-//   -> role "model.diffusion_model.layers.#.attention.qkv.weight", layer 30
-// Returns false (layer -1) for tensors without a block index.
-bool split_block_name(const std::string& name, std::string& role, int& layer) {
-    static const char* block_keywords[] = {"transformer_blocks.", "joint_blocks.", "double_blocks.",
-                                           "single_blocks.", "blocks.", "block.", "layers."};
-    for (const char* keyword : block_keywords) {
-        size_t pos = name.find(keyword);
-        if (pos == std::string::npos) {
-            continue;
-        }
-        pos += strlen(keyword);
-        size_t end = pos;
-        while (end < name.size() && name[end] >= '0' && name[end] <= '9') {
-            end++;
-        }
-        if (end > pos && (end == name.size() || name[end] == '.')) {
-            layer = atoi(name.substr(pos, end - pos).c_str());
-            role  = name.substr(0, pos) + "#" + name.substr(end);
-            return true;
-        }
+    int rb_bucket(const std::string& key) {
+        auto p = key.find(RB_SEP);
+        return (p == std::string::npos) ? 0 : std::stoi(key.substr(p + 1));
     }
-    role  = name;
-    layer = -1;
-    return false;
-}
 
-// remove backend decorations: CUDA0#model.diffusion_model...#0 -> model.diffusion_model...
-std::string filter_tensor_name(const char* name) {
-    std::string wname;
-    const char* p = strchr(name, '#');
-    if (p != NULL) {
-        p             = p + 1;
-        const char* q = strchr(p, '#');
-        if (q != NULL) {
-            wname = std::string(p, q - p);
+    std::string rb_display(const std::string& key) {
+        int b = rb_bucket(key);
+        if (b < 0) {
+            return rb_role(key) + "[G]";
+        }
+        return rb_role(key) + "[" + std::to_string(b) + "]";
+    }
+
+    int compute_bucket(int pos_in_class, int n_in_class, int n_buckets) {
+        if (n_in_class <= 1 || n_buckets <= 1) {
+            return 0;
+        }
+        int b = (int)(((long long)n_buckets * pos_in_class) / n_in_class);
+        return std::min(std::max(b, 0), n_buckets - 1);
+    }
+
+    bool split_block_name(const std::string& name, std::string& role, int& layer) {
+        static const char* block_keywords[] = {"transformer_blocks.", "joint_blocks.", "double_blocks.",
+                                               "single_blocks.", "blocks.", "block.", "layers."};
+        for (const char* keyword : block_keywords) {
+            size_t pos = name.find(keyword);
+            if (pos == std::string::npos) {
+                continue;
+            }
+            pos += strlen(keyword);
+            size_t end = pos;
+            while (end < name.size() && name[end] >= '0' && name[end] <= '9') {
+                end++;
+            }
+            if (end > pos && (end == name.size() || name[end] == '.')) {
+                layer = atoi(name.substr(pos, end - pos).c_str());
+                role  = name.substr(0, pos) + "#" + name.substr(end);
+                return true;
+            }
+        }
+        role  = name;
+        layer = -1;
+        return false;
+    }
+
+    std::string filter_tensor_name(const char* name) {
+        std::string wname;
+        const char* p = strchr(name, '#');
+        if (p != NULL) {
+            p             = p + 1;
+            const char* q = strchr(p, '#');
+            if (q != NULL) {
+                wname = std::string(p, q - p);
+            } else {
+                wname = p;
+            }
         } else {
-            wname = p;
+            wname = name;
         }
-    } else {
-        wname = name;
+        return wname;
     }
-    return wname;
-}
 
-// Relative squared L2 error per output row: ||ref - quant||^2 / ||ref||^2.
-// Scale-free, so residual-stream writers (small-magnitude outputs) are not
-// underweighted the way a softmax-KLD over raw matmul outputs would.
-double relative_l2_row(const float* ref, const float* quant, int64_t n) {
-    double num = 0;
-    double den = 0;
-    for (int64_t i = 0; i < n; i++) {
-        double r = (double)ref[i];
-        double d = r - (double)quant[i];
-        num += d * d;
-        den += r * r;
-    }
-    if (den <= 1e-20) {
-        return num > 1e-20 ? 1.0 : 0.0;
-    }
-    return num / den;
-}
-
-// Per-row (here: per-token) relative-L2 errors of one capture, finite only.
-void relative_l2_rows(const float* ref, const float* quant, int64_t ne0, int64_t ne1,
-                      std::vector<double>& out) {
-    out.clear();
-    out.reserve(ne1);
-    for (int64_t row = 0; row < ne1; row++) {
-        double e = relative_l2_row(ref + row * ne0, quant + row * ne0, ne0);
-        if (std::isfinite(e)) {
-            out.push_back(e);
+    double relative_l2_row(const float* ref, const float* quant, int64_t n) {
+        double num = 0;
+        double den = 0;
+        for (int64_t i = 0; i < n; i++) {
+            double r = (double)ref[i];
+            double d = r - (double)quant[i];
+            num += d * d;
+            den += r * r;
         }
+        if (den <= 1e-20) {
+            return num > 1e-20 ? 1.0 : 0.0;
+        }
+        return num / den;
     }
-}
 
-// Reduce per-row errors to a single capture score. Mean is the original LLM-
-// tuned objective; Tail (a high quantile) and MaxMean (mean + lambda*max)
-// penalize the worst-row error that breaks diffusion glyph formation. (Iter 1.)
-double aggregate_rows(std::vector<double>& errs, const AutoQuantConfig& cfg) {
-    if (errs.empty()) {
-        return 1e30;
-    }
-    double sum = 0;
-    for (double e : errs) {
-        sum += e;
-    }
-    const double mean = sum / (double)errs.size();
-    switch (cfg.cost_mode) {
-        case CostMode::Mean:
-            return mean;
-        case CostMode::Tail: {
-            std::sort(errs.begin(), errs.end());
-            double q   = std::min(1.0f, std::max(0.0f, cfg.tail_q));
-            size_t idx = (size_t)std::ceil(q * errs.size());  // nearest-rank
-            if (idx > 0) {
-                idx--;
+    void relative_l2_rows(const float* ref, const float* quant, int64_t ne0, int64_t ne1, std::vector<double>& out) {
+        out.clear();
+        out.reserve(ne1);
+        for (int64_t row = 0; row < ne1; row++) {
+            double e = relative_l2_row(ref + row * ne0, quant + row * ne0, ne0);
+            if (std::isfinite(e)) {
+                out.push_back(e);
             }
-            if (idx >= errs.size()) {
-                idx = errs.size() - 1;
-            }
-            return errs[idx];
-        }
-        case CostMode::MaxMean: {
-            double mx = errs[0];
-            for (double e : errs) {
-                mx = std::max(mx, e);
-            }
-            return mean + (double)cfg.tail_lambda * mx;
         }
     }
-    return mean;
-}
 
-double type_bpw(ggml_type type) {
-    return 8.0 * (double)ggml_type_size(type) / (double)ggml_blck_size(type);
-}
-
-// result = weight^T * input on the given backend.
-bool eval_mul_mat(ggml_type weight_type,
-                  const void* weight_data,
-                  int64_t weight_ne0,
-                  int64_t weight_ne1,
-                  const float* input_data,
-                  int64_t input_ne0,
-                  int64_t input_ne1,
-                  std::vector<float>& result_data,
-                  ggml_backend_t backend) {
-    size_t weight_bytes = ggml_row_size(weight_type, weight_ne0) * weight_ne1;
-    size_t input_bytes  = (size_t)input_ne0 * input_ne1 * sizeof(float);
-
-    size_t ctx_size          = ggml_tensor_overhead() * 16 + ggml_graph_overhead() + 4096;
-    ggml_init_params params  = {ctx_size, NULL, /*no_alloc=*/true};
-    struct ggml_context* ctx = ggml_init(params);
-    if (!ctx) {
-        return false;
+    double aggregate_rows(std::vector<double>& errs, const AutoQuantConfig& cfg) {
+        if (errs.empty()) {
+            return 1e30;
+        }
+        double sum = 0;
+        for (double e : errs) {
+            sum += e;
+        }
+        const double mean = sum / (double)errs.size();
+        switch (cfg.cost_mode) {
+            case CostMode::Mean:
+                return mean;
+            case CostMode::Tail: {
+                std::sort(errs.begin(), errs.end());
+                double q   = std::min(1.0f, std::max(0.0f, cfg.tail_q));
+                size_t idx = (size_t)std::ceil(q * errs.size());
+                if (idx > 0) {
+                    idx--;
+                }
+                if (idx >= errs.size()) {
+                    idx = errs.size() - 1;
+                }
+                return errs[idx];
+            }
+            case CostMode::MaxMean: {
+                double mx = errs[0];
+                for (double e : errs) {
+                    mx = std::max(mx, e);
+                }
+                return mean + (double)cfg.tail_lambda * mx;
+            }
+        }
+        return mean;
     }
 
-    struct ggml_tensor* w      = ggml_new_tensor_2d(ctx, weight_type, weight_ne0, weight_ne1);
-    struct ggml_tensor* x      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, input_ne0, input_ne1);
-    struct ggml_tensor* result = ggml_mul_mat(ctx, w, x);
-
-    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
-    if (!buf) {
-        ggml_free(ctx);
-        return false;
+    double type_bpw(ggml_type type) {
+        return 8.0 * (double)ggml_type_size(type) / (double)ggml_blck_size(type);
     }
 
-    ggml_backend_tensor_set(w, weight_data, 0, weight_bytes);
-    ggml_backend_tensor_set(x, input_data, 0, input_bytes);
+    bool eval_mul_mat(ggml_type weight_type,
+                      const void* weight_data,
+                      int64_t weight_ne0,
+                      int64_t weight_ne1,
+                      const float* input_data,
+                      int64_t input_ne0,
+                      int64_t input_ne1,
+                      std::vector<float>& result_data,
+                      ggml_backend_t backend) {
+        size_t weight_bytes = ggml_row_size(weight_type, weight_ne0) * weight_ne1;
+        size_t input_bytes  = (size_t)input_ne0 * input_ne1 * sizeof(float);
 
-    struct ggml_cgraph* graph = ggml_new_graph(ctx);
-    ggml_build_forward_expand(graph, result);
+        size_t ctx_size          = ggml_tensor_overhead() * 16 + ggml_graph_overhead() + 4096;
+        ggml_init_params params  = {ctx_size, NULL, true};
+        struct ggml_context* ctx = ggml_init(params);
+        if (!ctx) {
+            return false;
+        }
 
-    if (ggml_backend_graph_compute(backend, graph) != GGML_STATUS_SUCCESS) {
+        struct ggml_tensor* w      = ggml_new_tensor_2d(ctx, weight_type, weight_ne0, weight_ne1);
+        struct ggml_tensor* x      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, input_ne0, input_ne1);
+        struct ggml_tensor* result = ggml_mul_mat(ctx, w, x);
+
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+        if (!buf) {
+            ggml_free(ctx);
+            return false;
+        }
+
+        ggml_backend_tensor_set(w, weight_data, 0, weight_bytes);
+        ggml_backend_tensor_set(x, input_data, 0, input_bytes);
+
+        struct ggml_cgraph* graph = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph, result);
+
+        if (ggml_backend_graph_compute(backend, graph) != GGML_STATUS_SUCCESS) {
+            ggml_backend_buffer_free(buf);
+            ggml_free(ctx);
+            return false;
+        }
+
+        result_data.resize((size_t)weight_ne1 * input_ne1);
+        ggml_backend_tensor_get(result, result_data.data(), 0, ggml_nbytes(result));
+
         ggml_backend_buffer_free(buf);
         ggml_free(ctx);
-        return false;
+        return true;
     }
 
-    result_data.resize((size_t)weight_ne1 * input_ne1);
-    ggml_backend_tensor_get(result, result_data.data(), 0, ggml_nbytes(result));
+    struct CostEntry {
+        double err   = 1e30;
+        double bpw   = 0;
+        bool allowed = false;
+    };
 
-    ggml_backend_buffer_free(buf);
-    ggml_free(ctx);
-    return true;
-}
+    struct Assignment {
+        std::map<std::string, ggml_type> rb_to_type;
+        double total_err = 0;
+        double total_bpw = 0;
+        bool valid       = false;
+    };
 
-struct CostEntry {
-    double err = 1e30;  // element-averaged relative-L2
-    double bpw = 0;
-    bool allowed = false;  // some tensor in the group cannot take this type
-};
-
-struct Assignment {
-    std::map<std::string, ggml_type> rb_to_type;
-    double total_err = 0;
-    double total_bpw = 0;
-    bool valid       = false;
-};
-
-bool parse_options(const std::string& options, AutoQuantConfig& cfg) {
-    std::stringstream ss(options);
-    std::string item;
-    while (std::getline(ss, item, ',')) {
-        size_t eq = item.find('=');
-        if (eq == std::string::npos) {
-            LOG_WARN("auto-tensor-type: ignoring malformed option '%s'", item.c_str());
-            continue;
-        }
-        std::string key = item.substr(0, eq);
-        std::string val = item.substr(eq + 1);
-        if (key == "out") {
-            cfg.out_path = val;
-        } else if (key == "bpw") {
-            cfg.target_bpw = std::stof(val);
-        } else if (key == "tol-high") {
-            cfg.bpw_tol_high = std::stof(val);
-        } else if (key == "tol-low") {
-            cfg.bpw_tol_low = std::stof(val);
-        } else if (key == "types") {
-            cfg.quant_types.clear();
-            std::stringstream ts(val);
-            std::string tname;
-            while (std::getline(ts, tname, '|')) {
-                ggml_type found = GGML_TYPE_COUNT;
-                for (int i = 0; i < GGML_TYPE_COUNT; i++) {
-                    const auto* traits = ggml_get_type_traits((ggml_type)i);
-                    if (traits->type_name != nullptr && tname == traits->type_name) {
-                        found = (ggml_type)i;
-                        break;
+    bool parse_options(const std::string& options, AutoQuantConfig& cfg) {
+        std::stringstream ss(options);
+        std::string item;
+        while (std::getline(ss, item, ',')) {
+            size_t eq = item.find('=');
+            if (eq == std::string::npos) {
+                LOG_WARN("auto-tensor-type: ignoring malformed option '%s'", item.c_str());
+                continue;
+            }
+            std::string key = item.substr(0, eq);
+            std::string val = item.substr(eq + 1);
+            if (key == "out") {
+                cfg.out_path = val;
+            } else if (key == "bpw") {
+                cfg.target_bpw = std::stof(val);
+            } else if (key == "tol-high") {
+                cfg.bpw_tol_high = std::stof(val);
+            } else if (key == "tol-low") {
+                cfg.bpw_tol_low = std::stof(val);
+            } else if (key == "types") {
+                cfg.quant_types.clear();
+                std::stringstream ts(val);
+                std::string tname;
+                while (std::getline(ts, tname, '|')) {
+                    ggml_type found = GGML_TYPE_COUNT;
+                    for (int i = 0; i < GGML_TYPE_COUNT; i++) {
+                        const auto* traits = ggml_get_type_traits((ggml_type)i);
+                        if (traits->type_name != nullptr && tname == traits->type_name) {
+                            found = (ggml_type)i;
+                            break;
+                        }
                     }
+                    if (found == GGML_TYPE_COUNT) {
+                        LOG_ERROR("auto-tensor-type: unknown quant type '%s'", tname.c_str());
+                        return false;
+                    }
+                    cfg.quant_types.push_back(found);
                 }
-                if (found == GGML_TYPE_COUNT) {
-                    LOG_ERROR("auto-tensor-type: unknown quant type '%s'", tname.c_str());
+            } else if (key == "cost") {
+                if (val == "mean") {
+                    cfg.cost_mode = CostMode::Mean;
+                } else if (val == "tail") {
+                    cfg.cost_mode = CostMode::Tail;
+                } else if (val == "maxmean") {
+                    cfg.cost_mode = CostMode::MaxMean;
+                } else {
+                    LOG_ERROR("auto-tensor-type: unknown cost mode '%s' (mean|tail|maxmean)", val.c_str());
                     return false;
                 }
-                cfg.quant_types.push_back(found);
-            }
-        } else if (key == "cost") {
-            if (val == "mean") {
-                cfg.cost_mode = CostMode::Mean;
-            } else if (val == "tail") {
-                cfg.cost_mode = CostMode::Tail;
-            } else if (val == "maxmean") {
-                cfg.cost_mode = CostMode::MaxMean;
+            } else if (key == "tail-q") {
+                cfg.tail_q = std::stof(val);
+            } else if (key == "tail-lambda") {
+                cfg.tail_lambda = std::stof(val);
+            } else if (key == "role-floor") {
+                cfg.role_floor_bpw = std::stof(val);
+            } else if (key == "floor-roles") {
+                cfg.floor_roles = val;
+            } else if (key == "sigma") {
+                if (val == "uniform") {
+                    cfg.sigma_mode = SigmaMode::Uniform;
+                } else if (val == "low") {
+                    cfg.sigma_mode = SigmaMode::Low;
+                } else {
+                    LOG_ERROR("auto-tensor-type: unknown sigma mode '%s' (uniform|low)", val.c_str());
+                    return false;
+                }
+            } else if (key == "topk") {
+                cfg.top_k = std::max(1, std::stoi(val));
+            } else if (key == "buckets") {
+                cfg.n_layer_buckets = std::stoi(val);
+            } else if (key == "reps") {
+                cfg.n_reps_per_bucket = std::stoi(val);
+            } else if (key == "samples") {
+                cfg.n_samples_per_weight = std::stoi(val);
+            } else if (key == "stride") {
+                cfg.occurrence_stride = std::stoi(val);
+            } else if (key == "max-tokens") {
+                cfg.max_tokens = std::stoll(val);
+            } else if (key == "min-elements") {
+                cfg.min_elements = std::stoll(val);
+            } else if (key == "threads") {
+                cfg.n_threads = std::stoi(val);
             } else {
-                LOG_ERROR("auto-tensor-type: unknown cost mode '%s' (mean|tail|maxmean)", val.c_str());
-                return false;
+                LOG_WARN("auto-tensor-type: ignoring unknown option '%s'", key.c_str());
             }
-        } else if (key == "tail-q") {
-            cfg.tail_q = std::stof(val);
-        } else if (key == "tail-lambda") {
-            cfg.tail_lambda = std::stof(val);
-        } else if (key == "role-floor") {
-            cfg.role_floor_bpw = std::stof(val);
-        } else if (key == "floor-roles") {
-            cfg.floor_roles = val;
-        } else if (key == "sigma") {
-            if (val == "uniform") {
-                cfg.sigma_mode = SigmaMode::Uniform;
-            } else if (val == "low") {
-                cfg.sigma_mode = SigmaMode::Low;
-            } else {
-                LOG_ERROR("auto-tensor-type: unknown sigma mode '%s' (uniform|low)", val.c_str());
-                return false;
-            }
-        } else if (key == "topk") {
-            cfg.top_k = std::max(1, std::stoi(val));
-        } else if (key == "buckets") {
-            cfg.n_layer_buckets = std::stoi(val);
-        } else if (key == "reps") {
-            cfg.n_reps_per_bucket = std::stoi(val);
-        } else if (key == "samples") {
-            cfg.n_samples_per_weight = std::stoi(val);
-        } else if (key == "stride") {
-            cfg.occurrence_stride = std::stoi(val);
-        } else if (key == "max-tokens") {
-            cfg.max_tokens = std::stoll(val);
-        } else if (key == "min-elements") {
-            cfg.min_elements = std::stoll(val);
-        } else if (key == "threads") {
-            cfg.n_threads = std::stoi(val);
-        } else {
-            LOG_WARN("auto-tensor-type: ignoring unknown option '%s'", key.c_str());
         }
+        if (cfg.out_path.empty()) {
+            LOG_ERROR("auto-tensor-type: missing required option out=<path>");
+            return false;
+        }
+        if (cfg.target_bpw <= 0.f) {
+            LOG_ERROR("auto-tensor-type: missing/invalid bpw=<target>");
+            return false;
+        }
+        if (cfg.quant_types.empty()) {
+            for (ggml_type t : {GGML_TYPE_Q2_K, GGML_TYPE_IQ2_S, GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S,
+                                GGML_TYPE_Q3_K, GGML_TYPE_IQ4_XS, GGML_TYPE_IQ4_NL, GGML_TYPE_Q4_K,
+                                GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0}) {
+                cfg.quant_types.push_back(t);
+            }
+        }
+        return true;
     }
-    if (cfg.out_path.empty()) {
-        LOG_ERROR("auto-tensor-type: missing required option out=<path>");
+
+    std::string to_lower(const std::string& s) {
+        std::string out = s;
+        std::transform(out.begin(), out.end(), out.begin(),
+                       [](unsigned char c) { return (char)std::tolower(c); });
+        return out;
+    }
+
+    bool role_matches_floor(const std::string& role, const std::string& floor_roles) {
+        std::string lc = to_lower(role);
+        std::stringstream ss(floor_roles);
+        std::string tok;
+        while (std::getline(ss, tok, '|')) {
+            if (!tok.empty() && lc.find(to_lower(tok)) != std::string::npos) {
+                return true;
+            }
+        }
         return false;
     }
-    if (cfg.target_bpw <= 0.f) {
-        LOG_ERROR("auto-tensor-type: missing/invalid bpw=<target>");
-        return false;
-    }
-    if (cfg.quant_types.empty()) {
-        // Default candidate ladder, ~2.5-8.5 bpw. The IQ types are the
-        // interesting low end and are what the imatrix buys quality for;
-        // IQ2_XXS/IQ2_XS/IQ1_S are not defaulted (near-unusable without a
-        // strong imatrix) but can be requested via types=.
-        for (ggml_type t : {GGML_TYPE_Q2_K, GGML_TYPE_IQ2_S, GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S,
-                            GGML_TYPE_Q3_K, GGML_TYPE_IQ4_XS, GGML_TYPE_IQ4_NL, GGML_TYPE_Q4_K,
-                            GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0}) {
-            cfg.quant_types.push_back(t);
+
+    std::string escape_regex(const std::string& s) {
+        std::string out;
+        out.reserve(s.size() * 2);
+        for (char c : s) {
+            if (strchr(".^$|()[]{}*+?\\", c) != nullptr) {
+                out += '\\';
+            }
+            out += c;
         }
+        return out;
     }
-    return true;
+
 }
-
-std::string to_lower(const std::string& s) {
-    std::string out = s;
-    std::transform(out.begin(), out.end(), out.begin(),
-                   [](unsigned char c) { return (char)std::tolower(c); });
-    return out;
-}
-
-// True if role contains any of the '|'-separated (case-insensitive) substrings.
-bool role_matches_floor(const std::string& role, const std::string& floor_roles) {
-    std::string lc = to_lower(role);
-    std::stringstream ss(floor_roles);
-    std::string tok;
-    while (std::getline(ss, tok, '|')) {
-        if (!tok.empty() && lc.find(to_lower(tok)) != std::string::npos) {
-            return true;
-        }
-    }
-    return false;
-}
-
-std::string escape_regex(const std::string& s) {
-    std::string out;
-    out.reserve(s.size() * 2);
-    for (char c : s) {
-        if (strchr(".^$|()[]{}*+?\\", c) != nullptr) {
-            out += '\\';
-        }
-        out += c;
-    }
-    return out;
-}
-
-}  // namespace
-
-// ============================================================================
-// Inventory + capture
-// ============================================================================
 
 bool AutoQuantCollector::build_inventory() {
     ModelLoader loader;
@@ -388,7 +363,6 @@ bool AutoQuantCollector::build_inventory() {
     }
     loader.convert_tensors_name();
 
-    // Collect 2D weights; group block tensors into role classes.
     std::map<std::string, std::vector<int>> role_layers;
     for (const auto& [name, ts] : loader.get_tensor_storage_map()) {
         if (ts.n_dims != 2 || ts.ne[0] <= 1 || ts.ne[1] <= 1) {
@@ -400,7 +374,7 @@ bool AutoQuantCollector::build_inventory() {
         e.ne1        = ts.ne[1];
         e.n_elements = ts.ne[0] * ts.ne[1];
         split_block_name(name, e.role, e.layer);
-        e.quantizable = e.n_elements >= cfg_.min_elements;
+        e.quantizable       = e.n_elements >= cfg_.min_elements;
         tensor_index_[name] = tensors_.size();
         tensors_.push_back(e);
         if (e.quantizable && e.layer >= 0) {
@@ -412,7 +386,6 @@ bool AutoQuantCollector::build_inventory() {
         return false;
     }
 
-    // Assign buckets by position within the role class.
     for (auto& [role, layers] : role_layers) {
         std::sort(layers.begin(), layers.end());
         layers.erase(std::unique(layers.begin(), layers.end()), layers.end());
@@ -422,7 +395,7 @@ bool AutoQuantCollector::build_inventory() {
             continue;
         }
         if (e.layer < 0) {
-            e.bucket = -1;  // global tensor: its own measurement group
+            e.bucket = -1;
             continue;
         }
         const auto& layers = role_layers[e.role];
@@ -430,7 +403,6 @@ bool AutoQuantCollector::build_inventory() {
         e.bucket           = compute_bucket(pos, (int)layers.size(), cfg_.n_layer_buckets);
     }
 
-    // Representative layers per (role, bucket): first + last + evenly spaced.
     for (const auto& [role, layers] : role_layers) {
         std::map<int, std::vector<int>> layers_by_bucket;
         for (size_t i = 0; i < layers.size(); i++) {
@@ -456,7 +428,7 @@ bool AutoQuantCollector::build_inventory() {
             }
         }
     }
-    // Global quantizable tensors are always measured directly.
+
     for (const auto& e : tensors_) {
         if (e.quantizable && e.layer < 0) {
             target_names_.insert(e.name);
@@ -505,7 +477,7 @@ bool AutoQuantCollector::enable(const std::string& diffusion_model_path,
     LOG_INFO("auto-tensor-type: target %.3f bpw, candidates %s, %d buckets x %d reps, %d samples/weight",
              cfg_.target_bpw, type_list.c_str(), cfg_.n_layer_buckets, cfg_.n_reps_per_bucket,
              cfg_.n_samples_per_weight);
-    const char* cost_name  = cfg_.cost_mode == CostMode::Mean ? "mean"
+    const char* cost_name  = cfg_.cost_mode == CostMode::Mean   ? "mean"
                              : cfg_.cost_mode == CostMode::Tail ? "tail"
                                                                 : "maxmean";
     const char* sigma_name = cfg_.sigma_mode == SigmaMode::Low ? "low" : "uniform";
@@ -520,14 +492,12 @@ bool AutoQuantCollector::want_capture(const std::string& weight_name) {
         return false;
     }
     int occurrence = occurrences_[weight_name]++;
-    // Uniform: stop once n_samples are taken. Low: keep capturing; the ring
-    // buffer in do_capture retains the most-recent (lowest-sigma) occurrences.
+
     if (cfg_.sigma_mode == SigmaMode::Uniform &&
         samples_taken_[weight_name] >= cfg_.n_samples_per_weight) {
         return false;
     }
-    // Space the samples across occurrences so different denoise timesteps
-    // (and cond/uncond passes) are represented.
+
     return occurrence % std::max(1, cfg_.occurrence_stride) == 0;
 }
 
@@ -541,13 +511,11 @@ void AutoQuantCollector::do_capture(struct ggml_tensor* t, const std::string& we
     }
     const TensorEntry& entry = tensors_[it->second];
 
-    // Only plain 2D activations (collapse higher batch dims by treating
-    // ne1*ne2*ne3 as tokens; matmul is column-wise so this is exact).
     const int64_t in_ne0    = src1->ne[0];
     const int64_t in_tokens = src1->ne[1] * src1->ne[2] * src1->ne[3];
     const int64_t out_ne0   = t->ne[0];
     if (in_ne0 != entry.ne0 || out_ne0 != entry.ne1) {
-        return;  // unexpected shape (e.g. weight used transposed) — skip
+        return;
     }
     if (!ggml_is_contiguous(src1) || !ggml_is_contiguous(t)) {
         return;
@@ -564,8 +532,6 @@ void AutoQuantCollector::do_capture(struct ggml_tensor* t, const std::string& we
     cap.input.resize((size_t)take * in_ne0);
     cap.ref_output.resize((size_t)take * out_ne0);
 
-    // Column-strided copy of the token subset (per-token columns are
-    // contiguous in ggml layout).
     for (int64_t k = 0; k < take; k++) {
         const int64_t col = std::min(k * stride, in_tokens - 1);
         ggml_backend_tensor_get(const_cast<ggml_tensor*>(src1),
@@ -579,27 +545,21 @@ void AutoQuantCollector::do_capture(struct ggml_tensor* t, const std::string& we
     }
 
     samples_taken_[weight_name]++;
-    // Store per-weight; regrouped into (role,bucket) classes in finish(). In Low
-    // mode keep only the most-recent n_samples (ring buffer): later occurrences
-    // are lower-sigma / detail-formation steps.
+
     auto& vec = captures_[weight_name];
     vec.push_back(std::move(cap));
     if (cfg_.sigma_mode == SigmaMode::Low && (int)vec.size() > cfg_.n_samples_per_weight) {
-        vec.erase(vec.begin());  // drop oldest (highest-sigma) occurrence
+        vec.erase(vec.begin());
     }
 }
 
 bool AutoQuantCollector::collect(struct ggml_tensor* t, bool ask) {
     if (!active_ || t == nullptr) {
-        // Never return false on a collect pass — the runner treats that as an
-        // abort request.
         return !ask;
     }
 
     bool imatrix_wants = false;
     if (chain_imatrix_ && ask) {
-        // Forward strictly following the ask/collect protocol: only collect
-        // for the imatrix if it asked for this tensor.
         imatrix_wants = get_imatrix_collector().collect_imatrix(t, true, nullptr);
     }
 
@@ -636,17 +596,12 @@ bool AutoQuantCollector::collect(struct ggml_tensor* t, bool ask) {
     return true;
 }
 
-// ============================================================================
-// Analysis
-// ============================================================================
-
 bool AutoQuantCollector::finish() {
     if (!active_) {
         return false;
     }
     active_ = false;
 
-    // Regroup the per-weight captures into (role, bucket) classes.
     std::map<std::string, std::vector<AutoQuantCapture>> by_rb;
     size_t n_captures = 0;
     for (auto& [weight_name, caps] : captures_) {
@@ -689,12 +644,11 @@ bool AutoQuantCollector::finish() {
         ggml_quantize_init(t);
     }
 
-    // ---- Cost matrix: (role, bucket) x qtype -> mean relative-L2 ----
     std::map<std::string, std::map<ggml_type, CostEntry>> cost_matrix;
     int group_idx = 0;
     for (auto& [rb, caps] : by_rb) {
         group_idx++;
-        // group captures by weight so each weight is read+quantized once
+
         std::map<std::string, std::vector<const AutoQuantCapture*>> by_weight;
         for (const auto& cap : caps) {
             by_weight[cap.weight_name].push_back(&cap);
@@ -733,8 +687,6 @@ bool AutoQuantCollector::finish() {
                 imatrix.assign(ne0, 1.0f);
             }
 
-            // Quantize once per type (parallel on CPU), then evaluate serially
-            // on the backend.
             std::map<ggml_type, std::vector<uint8_t>> quantized;
             {
                 std::mutex m;
@@ -790,13 +742,10 @@ bool AutoQuantCollector::finish() {
             }
             cost_matrix[rb][qt] = entry;
         }
-        std::vector<AutoQuantCapture>().swap(caps);  // release capture memory
+        std::vector<AutoQuantCapture>().swap(caps);
     }
     ggml_backend_free(backend);
 
-    // ---- BPW accounting over the whole diffusion model ----
-    // Quantizable groups are DP items; everything else keeps its source type
-    // and counts as fixed overhead bits.
     std::map<std::string, int64_t> rb_elements;
     std::map<std::string, std::vector<int>> rb_layers;
     int64_t total_elements = 0;
@@ -806,8 +755,8 @@ bool AutoQuantCollector::finish() {
             continue;
         }
         total_elements += ts.nelements();
-        auto iit          = tensor_index_.find(name);
-        bool in_dp        = false;
+        auto iit   = tensor_index_.find(name);
+        bool in_dp = false;
         if (iit != tensor_index_.end()) {
             const TensorEntry& e = tensors_[iit->second];
             std::string rb       = make_rb_key(e.role, e.bucket);
@@ -817,8 +766,7 @@ bool AutoQuantCollector::finish() {
                     rb_layers[rb].push_back(e.layer);
                 }
                 in_dp = true;
-                // A type is only allowed for the group if every member tensor
-                // can take it (block-size divisibility etc.).
+
                 for (auto& [qt, ce] : cost_matrix[rb]) {
                     if (ce.allowed && !loader.tensor_should_be_converted(ts, qt)) {
                         ce.allowed = false;
@@ -831,7 +779,6 @@ bool AutoQuantCollector::finish() {
         }
     }
 
-    // ---- Element-weighted multi-choice knapsack DP ----
     struct DPChoice {
         ggml_type qt;
         int units;
@@ -843,13 +790,13 @@ bool AutoQuantCollector::finish() {
         std::vector<DPChoice> choices;
     };
 
-    constexpr int N_UNITS     = 16384;
+    constexpr int N_UNITS      = 16384;
     const double bits_per_unit = (double)total_elements / (double)N_UNITS;
 
-    const double hi_bpw = cfg_.target_bpw + cfg_.bpw_tol_high;
-    const double lo_bpw = std::max(0.0, (double)cfg_.target_bpw - (double)cfg_.bpw_tol_low);
-    const int budget_hi = (int)std::ceil(hi_bpw * N_UNITS);
-    const int budget_lo = (int)std::floor(lo_bpw * N_UNITS);
+    const double hi_bpw   = cfg_.target_bpw + cfg_.bpw_tol_high;
+    const double lo_bpw   = std::max(0.0, (double)cfg_.target_bpw - (double)cfg_.bpw_tol_low);
+    const int budget_hi   = (int)std::ceil(hi_bpw * N_UNITS);
+    const int budget_lo   = (int)std::floor(lo_bpw * N_UNITS);
     const int fixed_units = (int)std::round(fixed_bits / bits_per_unit);
     const int overshoot   = (int)std::ceil(2.0 * N_UNITS);
     const int B           = budget_hi + overshoot + 1;
@@ -863,8 +810,7 @@ bool AutoQuantCollector::finish() {
         DPItem item;
         item.rb         = rb;
         item.n_elements = eit->second;
-        // Iteration 2: enforce a per-role bpw floor for sensitive roles
-        // (attention / adaLN etc.), which the mean objective otherwise starves.
+
         const bool floored = cfg_.role_floor_bpw > 0.f &&
                              role_matches_floor(rb_role(rb), cfg_.floor_roles);
         for (const auto& [qt, ce] : row) {
@@ -880,8 +826,7 @@ bool AutoQuantCollector::finish() {
             c.err   = ce.err * (double)item.n_elements;
             item.choices.push_back(c);
         }
-        // If the floor removed every candidate, fall back to the single
-        // highest-bpw allowed type so the item stays feasible.
+
         if (item.choices.empty() && floored) {
             ggml_type best_qt = GGML_TYPE_COUNT;
             double best_bpw   = -1;
@@ -910,7 +855,7 @@ bool AutoQuantCollector::finish() {
         return false;
     }
 
-    const int n = (int)items.size();
+    const int n          = (int)items.size();
     constexpr double INF = 1e300;
     std::vector<double> dp(B, INF), next_dp(B, INF);
     std::vector<std::vector<int>> choice_taken(n, std::vector<int>(B, -1));
@@ -942,7 +887,6 @@ bool AutoQuantCollector::finish() {
         dp.swap(next_dp);
     }
 
-    // ---- Collect feasible budget points, best error first ----
     auto in_band = [&](int u) {
         return u >= std::max(0, budget_lo) && u <= budget_hi && u < B;
     };
@@ -993,11 +937,6 @@ bool AutoQuantCollector::finish() {
         return true;
     };
 
-    // ---- Iteration 4: keep the top-K distinct assignments for e2e validation.
-    // Prefer candidates spread across the bpw band (min_gap apart) so validation
-    // compares genuinely different recipes, not near-identical DP neighbours; the
-    // best-error point is always first (-> out_path). Backfill if the gap
-    // constraint under-fills on a tight band.
     const int u_min   = *std::min_element(feasible_us.begin(), feasible_us.end());
     const int u_max   = *std::max_element(feasible_us.begin(), feasible_us.end());
     const int min_gap = std::max(1, (u_max - u_min) / std::max(1, cfg_.top_k));
@@ -1027,10 +966,10 @@ bool AutoQuantCollector::finish() {
         chosen_u.push_back(u);
     };
     for (int u : feasible_us) {
-        try_add(u, /*enforce_gap=*/true);
+        try_add(u, true);
     }
-    for (int u : feasible_us) {  // backfill (tight band / too few distinct)
-        try_add(u, /*enforce_gap=*/false);
+    for (int u : feasible_us) {
+        try_add(u, false);
     }
     if (candidates.empty()) {
         LOG_ERROR("auto-tensor-type: DP reconstruction failed");
@@ -1041,7 +980,6 @@ bool AutoQuantCollector::finish() {
                  cfg_.target_bpw, candidates.front().total_bpw);
     }
 
-    // Build the --tensor-type-rules string for one assignment.
     auto build_rules = [&](const Assignment& a) -> std::string {
         std::string rules;
         for (const auto& [rb, qt] : a.rb_to_type) {
@@ -1077,7 +1015,6 @@ bool AutoQuantCollector::finish() {
         return rules;
     };
 
-    // ---- Report the best assignment ----
     const Assignment& best = candidates.front();
     LOG_INFO("auto-tensor-type: assignment at %.4f bpw (weighted rel-L2 %.4e):", best.total_bpw, best.total_err);
     for (const auto& item : items) {
@@ -1092,7 +1029,6 @@ bool AutoQuantCollector::finish() {
                  (long long)item.n_elements);
     }
 
-    // ---- Write rules (best -> out_path; extra candidates + manifest) ----
     {
         std::ofstream file(cfg_.out_path);
         if (!file) {
@@ -1130,10 +1066,6 @@ AutoQuantCollector& get_auto_quant_collector() {
     static AutoQuantCollector collector;
     return collector;
 }
-
-// ============================================================================
-// C API
-// ============================================================================
 
 #include "stable-diffusion.h"
 
