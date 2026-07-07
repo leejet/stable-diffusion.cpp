@@ -94,7 +94,9 @@ struct SDCliParams {
              "auto-tensor-type: during this run, measure per-tensor quantization error of the diffusion model "
              "on real activations and write an optimal --tensor-type-rules string for -M convert. "
              "Options: out=rules.txt,bpw=3.5[,types=q2_K|q3_K|q4_K|q5_K|q6_K|q8_0][,buckets=3][,reps=2]"
-             "[,samples=2][,stride=7][,max-tokens=256][,threads=4]. "
+             "[,samples=2][,stride=7][,max-tokens=256][,threads=4]"
+             "[,cost=mean|tail|maxmean][,tail-q=0.95][,tail-lambda=1.0]"
+             "[,role-floor=3.0][,floor-roles=attention|adaln|mod][,sigma=uniform|low][,topk=3]. "
              "Combine with --imat-in (or --imat-out to collect in the same run) for imatrix-weighted candidates",
              0,
              &att_options},

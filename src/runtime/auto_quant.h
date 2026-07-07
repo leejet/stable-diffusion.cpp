@@ -19,6 +19,17 @@
  * lowest-error type assignment within a bits-per-weight budget. The result is
  * written as a --tensor-type-rules string for `sd-cli -M convert`. */
 
+// How the per-capture output error is reduced over output rows. LLM logits are
+// fine with the mean, but diffusion glyph formation is punished by worst-case
+// error, so Tail/MaxMean expose the catastrophic per-tensor trades that a mean
+// hides. (Iteration 1.)
+enum class CostMode { Mean, Tail, MaxMean };
+
+// Which denoise occurrences of a weight are kept. Uniform spaces samples across
+// the whole trajectory; Low keeps the most-recent (lowest-sigma / detail-
+// formation) occurrences via a ring buffer. (Iteration 3.)
+enum class SigmaMode { Uniform, Low };
+
 struct AutoQuantConfig {
     std::string out_path;
     float target_bpw   = 4.0f;
@@ -26,6 +37,32 @@ struct AutoQuantConfig {
     float bpw_tol_low  = 0.5f;   // may undershoot by this much
     // Candidate quant types (default: q2_K..q6_K, q8_0, iq4_xs).
     std::vector<ggml_type> quant_types;
+
+    // --- Iteration 1: tail-aware cost -------------------------------------
+    CostMode cost_mode = CostMode::Mean;
+    float tail_q       = 0.95f;  // quantile of per-row rel-L2 for Tail mode
+    float tail_lambda  = 1.0f;   // weight of max term for MaxMean mode
+
+    // --- Iteration 2: per-role bpw floor ----------------------------------
+    // Drop candidate types below this bpw for roles matching floor_roles.
+    // 0 disables. floor_roles is a '|'-separated list of case-insensitive
+    // substrings matched against the role name.
+    float role_floor_bpw    = 0.0f;
+    std::string floor_roles = "attention|attn|adaln|ada_ln|modulation|mod.";
+
+    // --- Iteration 3: low-sigma capture bias ------------------------------
+    // Default: Low. A 2x2 (sigma x samples) factorial on Z-Image showed the
+    // low-sigma ring buffer cuts output error ~15% (mean rel-L2 / MSE-to-full-
+    // precision) vs Uniform, consistently across two backends (Vulkan, ROCm)
+    // and independent of sample count. Set sigma=uniform to restore trajectory-
+    // wide sampling. See docs/AUTO_TYPE_FINDINGS.md.
+    SigmaMode sigma_mode = SigmaMode::Low;
+
+    // --- Iteration 4: end-to-end candidate validation ---------------------
+    // Emit the top-K distinct DP assignments (best -> out_path, the rest to
+    // out_path.candN) plus a manifest, so an e2e driver can generate with each
+    // and pick the one closest to the full-precision reference.
+    int top_k = 1;
     // Layer buckets per role: early/middle/late layers of the same role can
     // get different types. Representative layers are sampled per bucket.
     int n_layer_buckets   = 3;
@@ -77,7 +114,9 @@ private:
     std::unordered_set<std::string> target_names_;
     std::unordered_map<std::string, int> occurrences_;
     std::unordered_map<std::string, int> samples_taken_;
-    // rb key ("role\x01bucket") -> captures
+    // weight_name -> captures. In Uniform mode this fills to n_samples_per_weight
+    // and stops; in Low mode it is a ring buffer keeping the most-recent
+    // n_samples_per_weight occurrences. Regrouped by (role,bucket) in finish().
     std::map<std::string, std::vector<AutoQuantCapture>> captures_;
     // per-node ask results (the runner calls ask/collect strictly in order)
     std::unordered_map<const ggml_tensor*, std::pair<bool, bool>> pending_;

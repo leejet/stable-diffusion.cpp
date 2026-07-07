@@ -1,6 +1,7 @@
 #include "runtime/auto_quant.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -115,17 +116,55 @@ double relative_l2_row(const float* ref, const float* quant, int64_t n) {
     return num / den;
 }
 
-double relative_l2(const float* ref, const float* quant, int64_t ne0, int64_t ne1) {
-    double total       = 0;
-    int64_t valid_rows = 0;
+// Per-row (here: per-token) relative-L2 errors of one capture, finite only.
+void relative_l2_rows(const float* ref, const float* quant, int64_t ne0, int64_t ne1,
+                      std::vector<double>& out) {
+    out.clear();
+    out.reserve(ne1);
     for (int64_t row = 0; row < ne1; row++) {
         double e = relative_l2_row(ref + row * ne0, quant + row * ne0, ne0);
         if (std::isfinite(e)) {
-            total += e;
-            valid_rows++;
+            out.push_back(e);
         }
     }
-    return valid_rows > 0 ? total / valid_rows : 1e30;
+}
+
+// Reduce per-row errors to a single capture score. Mean is the original LLM-
+// tuned objective; Tail (a high quantile) and MaxMean (mean + lambda*max)
+// penalize the worst-row error that breaks diffusion glyph formation. (Iter 1.)
+double aggregate_rows(std::vector<double>& errs, const AutoQuantConfig& cfg) {
+    if (errs.empty()) {
+        return 1e30;
+    }
+    double sum = 0;
+    for (double e : errs) {
+        sum += e;
+    }
+    const double mean = sum / (double)errs.size();
+    switch (cfg.cost_mode) {
+        case CostMode::Mean:
+            return mean;
+        case CostMode::Tail: {
+            std::sort(errs.begin(), errs.end());
+            double q   = std::min(1.0f, std::max(0.0f, cfg.tail_q));
+            size_t idx = (size_t)std::ceil(q * errs.size());  // nearest-rank
+            if (idx > 0) {
+                idx--;
+            }
+            if (idx >= errs.size()) {
+                idx = errs.size() - 1;
+            }
+            return errs[idx];
+        }
+        case CostMode::MaxMean: {
+            double mx = errs[0];
+            for (double e : errs) {
+                mx = std::max(mx, e);
+            }
+            return mean + (double)cfg.tail_lambda * mx;
+        }
+    }
+    return mean;
 }
 
 double type_bpw(ggml_type type) {
@@ -233,6 +272,36 @@ bool parse_options(const std::string& options, AutoQuantConfig& cfg) {
                 }
                 cfg.quant_types.push_back(found);
             }
+        } else if (key == "cost") {
+            if (val == "mean") {
+                cfg.cost_mode = CostMode::Mean;
+            } else if (val == "tail") {
+                cfg.cost_mode = CostMode::Tail;
+            } else if (val == "maxmean") {
+                cfg.cost_mode = CostMode::MaxMean;
+            } else {
+                LOG_ERROR("auto-tensor-type: unknown cost mode '%s' (mean|tail|maxmean)", val.c_str());
+                return false;
+            }
+        } else if (key == "tail-q") {
+            cfg.tail_q = std::stof(val);
+        } else if (key == "tail-lambda") {
+            cfg.tail_lambda = std::stof(val);
+        } else if (key == "role-floor") {
+            cfg.role_floor_bpw = std::stof(val);
+        } else if (key == "floor-roles") {
+            cfg.floor_roles = val;
+        } else if (key == "sigma") {
+            if (val == "uniform") {
+                cfg.sigma_mode = SigmaMode::Uniform;
+            } else if (val == "low") {
+                cfg.sigma_mode = SigmaMode::Low;
+            } else {
+                LOG_ERROR("auto-tensor-type: unknown sigma mode '%s' (uniform|low)", val.c_str());
+                return false;
+            }
+        } else if (key == "topk") {
+            cfg.top_k = std::max(1, std::stoi(val));
         } else if (key == "buckets") {
             cfg.n_layer_buckets = std::stoi(val);
         } else if (key == "reps") {
@@ -271,6 +340,26 @@ bool parse_options(const std::string& options, AutoQuantConfig& cfg) {
         }
     }
     return true;
+}
+
+std::string to_lower(const std::string& s) {
+    std::string out = s;
+    std::transform(out.begin(), out.end(), out.begin(),
+                   [](unsigned char c) { return (char)std::tolower(c); });
+    return out;
+}
+
+// True if role contains any of the '|'-separated (case-insensitive) substrings.
+bool role_matches_floor(const std::string& role, const std::string& floor_roles) {
+    std::string lc = to_lower(role);
+    std::stringstream ss(floor_roles);
+    std::string tok;
+    while (std::getline(ss, tok, '|')) {
+        if (!tok.empty() && lc.find(to_lower(tok)) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
 }
 
 std::string escape_regex(const std::string& s) {
@@ -416,6 +505,13 @@ bool AutoQuantCollector::enable(const std::string& diffusion_model_path,
     LOG_INFO("auto-tensor-type: target %.3f bpw, candidates %s, %d buckets x %d reps, %d samples/weight",
              cfg_.target_bpw, type_list.c_str(), cfg_.n_layer_buckets, cfg_.n_reps_per_bucket,
              cfg_.n_samples_per_weight);
+    const char* cost_name  = cfg_.cost_mode == CostMode::Mean ? "mean"
+                             : cfg_.cost_mode == CostMode::Tail ? "tail"
+                                                                : "maxmean";
+    const char* sigma_name = cfg_.sigma_mode == SigmaMode::Low ? "low" : "uniform";
+    LOG_INFO("auto-tensor-type: cost=%s (q=%.2f, lambda=%.2f), sigma=%s, role-floor=%.2f bpw [%s], topk=%d",
+             cost_name, cfg_.tail_q, cfg_.tail_lambda, sigma_name, cfg_.role_floor_bpw,
+             cfg_.role_floor_bpw > 0.f ? cfg_.floor_roles.c_str() : "-", cfg_.top_k);
     return true;
 }
 
@@ -424,7 +520,10 @@ bool AutoQuantCollector::want_capture(const std::string& weight_name) {
         return false;
     }
     int occurrence = occurrences_[weight_name]++;
-    if (samples_taken_[weight_name] >= cfg_.n_samples_per_weight) {
+    // Uniform: stop once n_samples are taken. Low: keep capturing; the ring
+    // buffer in do_capture retains the most-recent (lowest-sigma) occurrences.
+    if (cfg_.sigma_mode == SigmaMode::Uniform &&
+        samples_taken_[weight_name] >= cfg_.n_samples_per_weight) {
         return false;
     }
     // Space the samples across occurrences so different denoise timesteps
@@ -480,7 +579,14 @@ void AutoQuantCollector::do_capture(struct ggml_tensor* t, const std::string& we
     }
 
     samples_taken_[weight_name]++;
-    captures_[make_rb_key(entry.role, entry.bucket)].push_back(std::move(cap));
+    // Store per-weight; regrouped into (role,bucket) classes in finish(). In Low
+    // mode keep only the most-recent n_samples (ring buffer): later occurrences
+    // are lower-sigma / detail-formation steps.
+    auto& vec = captures_[weight_name];
+    vec.push_back(std::move(cap));
+    if (cfg_.sigma_mode == SigmaMode::Low && (int)vec.size() > cfg_.n_samples_per_weight) {
+        vec.erase(vec.begin());  // drop oldest (highest-sigma) occurrence
+    }
 }
 
 bool AutoQuantCollector::collect(struct ggml_tensor* t, bool ask) {
@@ -540,16 +646,29 @@ bool AutoQuantCollector::finish() {
     }
     active_ = false;
 
+    // Regroup the per-weight captures into (role, bucket) classes.
+    std::map<std::string, std::vector<AutoQuantCapture>> by_rb;
     size_t n_captures = 0;
-    for (const auto& [rb, caps] : captures_) {
+    for (auto& [weight_name, caps] : captures_) {
+        auto it = tensor_index_.find(weight_name);
+        if (it == tensor_index_.end()) {
+            continue;
+        }
+        const TensorEntry& e = tensors_[it->second];
+        std::string rb       = make_rb_key(e.role, e.bucket);
+        auto& dst            = by_rb[rb];
         n_captures += caps.size();
+        for (auto& cap : caps) {
+            dst.push_back(std::move(cap));
+        }
     }
+    captures_.clear();
     if (n_captures == 0) {
         LOG_ERROR("auto-tensor-type: no activations captured — did the generation run?");
         return false;
     }
     LOG_INFO("auto-tensor-type: analyzing %zu captures across %zu (role, bucket) groups",
-             n_captures, captures_.size());
+             n_captures, by_rb.size());
 
     ModelLoader loader;
     if (!loader.init_from_file(model_path_, prefix_)) {
@@ -573,7 +692,7 @@ bool AutoQuantCollector::finish() {
     // ---- Cost matrix: (role, bucket) x qtype -> mean relative-L2 ----
     std::map<std::string, std::map<ggml_type, CostEntry>> cost_matrix;
     int group_idx = 0;
-    for (auto& [rb, caps] : captures_) {
+    for (auto& [rb, caps] : by_rb) {
         group_idx++;
         // group captures by weight so each weight is read+quantized once
         std::map<std::string, std::vector<const AutoQuantCapture*>> by_weight;
@@ -581,7 +700,7 @@ bool AutoQuantCollector::finish() {
             by_weight[cap.weight_name].push_back(&cap);
         }
         LOG_INFO("auto-tensor-type: [%d/%zu] %s (%zu weights, %zu captures)",
-                 group_idx, captures_.size(), rb_display(rb).c_str(), by_weight.size(), caps.size());
+                 group_idx, by_rb.size(), rb_display(rb).c_str(), by_weight.size(), caps.size());
 
         std::map<ggml_type, double> err_sums;
         std::map<ggml_type, int> err_counts;
@@ -650,8 +769,10 @@ bool AutoQuantCollector::finish() {
                                       quant_output, backend)) {
                         continue;
                     }
-                    double err = relative_l2(cap->ref_output.data(), quant_output.data(),
-                                             cap->weight_ne1, cap->n_tokens);
+                    std::vector<double> row_errs;
+                    relative_l2_rows(cap->ref_output.data(), quant_output.data(),
+                                     cap->weight_ne1, cap->n_tokens, row_errs);
+                    double err = aggregate_rows(row_errs, cfg_);
                     if (std::isfinite(err)) {
                         err_sums[qt] += err;
                         err_counts[qt]++;
@@ -742,8 +863,15 @@ bool AutoQuantCollector::finish() {
         DPItem item;
         item.rb         = rb;
         item.n_elements = eit->second;
+        // Iteration 2: enforce a per-role bpw floor for sensitive roles
+        // (attention / adaLN etc.), which the mean objective otherwise starves.
+        const bool floored = cfg_.role_floor_bpw > 0.f &&
+                             role_matches_floor(rb_role(rb), cfg_.floor_roles);
         for (const auto& [qt, ce] : row) {
             if (!ce.allowed) {
+                continue;
+            }
+            if (floored && ce.bpw < (double)cfg_.role_floor_bpw) {
                 continue;
             }
             DPChoice c;
@@ -751,6 +879,27 @@ bool AutoQuantCollector::finish() {
             c.units = std::max(1, (int)std::round((double)item.n_elements * ce.bpw / bits_per_unit));
             c.err   = ce.err * (double)item.n_elements;
             item.choices.push_back(c);
+        }
+        // If the floor removed every candidate, fall back to the single
+        // highest-bpw allowed type so the item stays feasible.
+        if (item.choices.empty() && floored) {
+            ggml_type best_qt = GGML_TYPE_COUNT;
+            double best_bpw   = -1;
+            double best_err   = 0;
+            for (const auto& [qt, ce] : row) {
+                if (ce.allowed && ce.bpw > best_bpw) {
+                    best_bpw = ce.bpw;
+                    best_qt  = qt;
+                    best_err = ce.err;
+                }
+            }
+            if (best_qt != GGML_TYPE_COUNT) {
+                DPChoice c;
+                c.qt    = best_qt;
+                c.units = std::max(1, (int)std::round((double)item.n_elements * best_bpw / bits_per_unit));
+                c.err   = best_err * (double)item.n_elements;
+                item.choices.push_back(c);
+            }
         }
         if (!item.choices.empty()) {
             items.push_back(std::move(item));
@@ -793,103 +942,187 @@ bool AutoQuantCollector::finish() {
         dp.swap(next_dp);
     }
 
-    int best_u      = -1;
-    double best_err = INF;
-    for (int u = std::max(0, budget_lo); u <= budget_hi && u < B; u++) {
-        if (dp[u] < best_err) {
-            best_err = dp[u];
-            best_u   = u;
+    // ---- Collect feasible budget points, best error first ----
+    auto in_band = [&](int u) {
+        return u >= std::max(0, budget_lo) && u <= budget_hi && u < B;
+    };
+    std::vector<int> feasible_us;
+    for (int u = 0; u < B; u++) {
+        if (dp[u] < INF && in_band(u)) {
+            feasible_us.push_back(u);
         }
     }
-    if (best_u < 0) {
+    bool relaxed_band = false;
+    if (feasible_us.empty()) {
         for (int u = 0; u <= budget_hi && u < B; u++) {
-            if (dp[u] < best_err) {
-                best_err = dp[u];
-                best_u   = u;
+            if (dp[u] < INF) {
+                feasible_us.push_back(u);
             }
         }
+        relaxed_band = !feasible_us.empty();
     }
-    if (best_u < 0) {
+    if (feasible_us.empty()) {
         for (int u = 0; u < B; u++) {
             if (dp[u] < INF) {
-                best_u   = u;
-                best_err = dp[u];
-                LOG_WARN("auto-tensor-type: target %.3f bpw infeasible; best achievable is %.3f bpw",
-                         cfg_.target_bpw, (double)u / N_UNITS);
-                break;
+                feasible_us.push_back(u);
             }
         }
+        relaxed_band = !feasible_us.empty();
     }
-    if (best_u < 0) {
+    if (feasible_us.empty()) {
         LOG_ERROR("auto-tensor-type: no feasible assignment");
         return false;
     }
+    std::stable_sort(feasible_us.begin(), feasible_us.end(),
+                     [&](int a, int b) { return dp[a] < dp[b]; });
 
-    Assignment assignment;
-    assignment.valid = true;
-    int cur_u        = best_u;
-    for (int i = n - 1; i >= 0; i--) {
-        int ci = choice_taken[i][cur_u];
-        if (ci < 0) {
-            LOG_ERROR("auto-tensor-type: DP reconstruction failed");
-            return false;
+    auto reconstruct = [&](int end_u, Assignment& out) -> bool {
+        out       = Assignment();
+        int cur_u = end_u;
+        for (int i = n - 1; i >= 0; i--) {
+            int ci = choice_taken[i][cur_u];
+            if (ci < 0) {
+                return false;
+            }
+            out.rb_to_type[items[i].rb] = items[i].choices[ci].qt;
+            cur_u                       = prev_u[i][cur_u];
         }
-        assignment.rb_to_type[items[i].rb] = items[i].choices[ci].qt;
-        cur_u                              = prev_u[i][cur_u];
-    }
-    assignment.total_bpw = (double)best_u / N_UNITS;
-    assignment.total_err = best_err;
+        out.total_bpw = (double)end_u / N_UNITS;
+        out.total_err = dp[end_u];
+        out.valid     = true;
+        return true;
+    };
 
-    // ---- Report + rules output ----
-    LOG_INFO("auto-tensor-type: assignment at %.4f bpw (weighted rel-L2 %.4e):", assignment.total_bpw, best_err);
+    // ---- Iteration 4: keep the top-K distinct assignments for e2e validation.
+    // Prefer candidates spread across the bpw band (min_gap apart) so validation
+    // compares genuinely different recipes, not near-identical DP neighbours; the
+    // best-error point is always first (-> out_path). Backfill if the gap
+    // constraint under-fills on a tight band.
+    const int u_min   = *std::min_element(feasible_us.begin(), feasible_us.end());
+    const int u_max   = *std::max_element(feasible_us.begin(), feasible_us.end());
+    const int min_gap = std::max(1, (u_max - u_min) / std::max(1, cfg_.top_k));
+    std::vector<Assignment> candidates;
+    std::vector<int> chosen_u;
+    auto try_add = [&](int u, bool enforce_gap) {
+        if ((int)candidates.size() >= cfg_.top_k) {
+            return;
+        }
+        if (enforce_gap) {
+            for (int cu : chosen_u) {
+                if (std::abs(cu - u) < min_gap) {
+                    return;
+                }
+            }
+        }
+        Assignment a;
+        if (!reconstruct(u, a)) {
+            return;
+        }
+        for (const auto& c : candidates) {
+            if (c.rb_to_type == a.rb_to_type) {
+                return;
+            }
+        }
+        candidates.push_back(std::move(a));
+        chosen_u.push_back(u);
+    };
+    for (int u : feasible_us) {
+        try_add(u, /*enforce_gap=*/true);
+    }
+    for (int u : feasible_us) {  // backfill (tight band / too few distinct)
+        try_add(u, /*enforce_gap=*/false);
+    }
+    if (candidates.empty()) {
+        LOG_ERROR("auto-tensor-type: DP reconstruction failed");
+        return false;
+    }
+    if (relaxed_band) {
+        LOG_WARN("auto-tensor-type: target %.3f bpw band infeasible; best achievable is %.3f bpw",
+                 cfg_.target_bpw, candidates.front().total_bpw);
+    }
+
+    // Build the --tensor-type-rules string for one assignment.
+    auto build_rules = [&](const Assignment& a) -> std::string {
+        std::string rules;
+        for (const auto& [rb, qt] : a.rb_to_type) {
+            std::string role = rb_role(rb);
+            std::string pattern;
+            size_t hash = role.find('#');
+            if (hash == std::string::npos) {
+                pattern = "^" + escape_regex(role) + "$";
+            } else {
+                auto lit                = rb_layers.find(rb);
+                std::string alternation = "\\d+";
+                if (lit != rb_layers.end() && !lit->second.empty()) {
+                    std::vector<int> ls = lit->second;
+                    std::sort(ls.begin(), ls.end());
+                    ls.erase(std::unique(ls.begin(), ls.end()), ls.end());
+                    alternation = "(";
+                    for (size_t i = 0; i < ls.size(); i++) {
+                        if (i) {
+                            alternation += "|";
+                        }
+                        alternation += std::to_string(ls[i]);
+                    }
+                    alternation += ")";
+                }
+                pattern = "^" + escape_regex(role.substr(0, hash)) + alternation +
+                          escape_regex(role.substr(hash + 1)) + "$";
+            }
+            if (!rules.empty()) {
+                rules += ",";
+            }
+            rules += pattern + "=" + ggml_type_name(qt);
+        }
+        return rules;
+    };
+
+    // ---- Report the best assignment ----
+    const Assignment& best = candidates.front();
+    LOG_INFO("auto-tensor-type: assignment at %.4f bpw (weighted rel-L2 %.4e):", best.total_bpw, best.total_err);
     for (const auto& item : items) {
-        ggml_type qt   = assignment.rb_to_type[item.rb];
+        auto qit = best.rb_to_type.find(item.rb);
+        if (qit == best.rb_to_type.end()) {
+            continue;
+        }
+        ggml_type qt   = qit->second;
         const auto& ce = cost_matrix[item.rb][qt];
         LOG_INFO("  %-64s -> %-8s (%.2f bpw, err %.3e, %lld elem)",
                  rb_display(item.rb).c_str(), ggml_type_name(qt), ce.bpw, ce.err,
                  (long long)item.n_elements);
     }
 
-    std::ofstream file(cfg_.out_path);
-    if (!file) {
-        LOG_ERROR("auto-tensor-type: cannot write '%s'", cfg_.out_path.c_str());
-        return false;
+    // ---- Write rules (best -> out_path; extra candidates + manifest) ----
+    {
+        std::ofstream file(cfg_.out_path);
+        if (!file) {
+            LOG_ERROR("auto-tensor-type: cannot write '%s'", cfg_.out_path.c_str());
+            return false;
+        }
+        file << build_rules(best) << "\n";
     }
-    std::string rules;
-    for (const auto& [rb, qt] : assignment.rb_to_type) {
-        std::string role = rb_role(rb);
-        std::string pattern;
-        size_t hash = role.find('#');
-        if (hash == std::string::npos) {
-            pattern = "^" + escape_regex(role) + "$";
-        } else {
-            auto lit = rb_layers.find(rb);
-            std::string alternation = "\\d+";
-            if (lit != rb_layers.end() && !lit->second.empty()) {
-                std::vector<int> ls = lit->second;
-                std::sort(ls.begin(), ls.end());
-                ls.erase(std::unique(ls.begin(), ls.end()), ls.end());
-                alternation = "(";
-                for (size_t i = 0; i < ls.size(); i++) {
-                    if (i) {
-                        alternation += "|";
-                    }
-                    alternation += std::to_string(ls[i]);
+    if (cfg_.top_k > 1) {
+        std::ofstream manifest(cfg_.out_path + ".candidates");
+        for (size_t k = 0; k < candidates.size(); k++) {
+            std::string path = (k == 0) ? cfg_.out_path : cfg_.out_path + ".cand" + std::to_string(k + 1);
+            if (k > 0) {
+                std::ofstream cf(path);
+                if (cf) {
+                    cf << build_rules(candidates[k]) << "\n";
                 }
-                alternation += ")";
             }
-            pattern = "^" + escape_regex(role.substr(0, hash)) + alternation +
-                      escape_regex(role.substr(hash + 1)) + "$";
+            if (manifest) {
+                manifest << path << "\t" << candidates[k].total_bpw << "\t" << candidates[k].total_err << "\n";
+            }
+            LOG_INFO("auto-tensor-type: candidate %zu/%zu: %.4f bpw (rel-L2 %.4e) -> %s",
+                     k + 1, candidates.size(), candidates[k].total_bpw, candidates[k].total_err, path.c_str());
         }
-        if (!rules.empty()) {
-            rules += ",";
-        }
-        rules += pattern + "=" + ggml_type_name(qt);
+        LOG_INFO("auto-tensor-type: wrote %zu candidate(s) + manifest %s.candidates (validate each e2e, keep the best)",
+                 candidates.size(), cfg_.out_path.c_str());
+    } else {
+        LOG_INFO("auto-tensor-type: wrote rules to %s (pass as --tensor-type-rules \"$(cat %s)\" to -M convert)",
+                 cfg_.out_path.c_str(), cfg_.out_path.c_str());
     }
-    file << rules << "\n";
-    file.close();
-    LOG_INFO("auto-tensor-type: wrote rules to %s (pass as --tensor-type-rules \"$(cat %s)\" to -M convert)",
-             cfg_.out_path.c_str(), cfg_.out_path.c_str());
     return true;
 }
 
