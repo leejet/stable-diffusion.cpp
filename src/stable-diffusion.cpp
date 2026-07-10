@@ -905,7 +905,7 @@ public:
                                                                  tensor_storage_map,
                                                                  version,
                                                                  "",
-                                                                 false,
+                                                                 true,
                                                                  model_manager);
                 diffusion_model  = std::make_shared<Krea2::Krea2Runner>(backend_for(SDBackendModule::DIFFUSION),
                                                                        tensor_storage_map,
