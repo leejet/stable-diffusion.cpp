@@ -503,7 +503,9 @@ public:
             return true;
         }
         if (model_manager != nullptr) {
-            model_manager->unregister_param_tensors("ControlNet", &control_net_params_mem_size);
+            if (!model_manager->unregister_param_tensors("ControlNet", &control_net_params_mem_size)) {
+                return false;
+            }
         }
         control_net.reset();
         control_net_params_mem_size = 0;
@@ -520,7 +522,9 @@ public:
             return false;
         }
 
-        unload_control_net();
+        if (!unload_control_net()) {
+            return false;
+        }
 
         ModelLoader& shared_loader = model_manager->loader();
         if (!shared_loader.init_from_file(path)) {
