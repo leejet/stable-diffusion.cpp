@@ -179,6 +179,55 @@ bool ModelManager::register_param_tensors(const std::string& desc,
     return true;
 }
 
+void ModelManager::unregister_param_tensors(const std::string& desc, size_t* registered_tensor_size) {
+    if (desc.empty()) {
+        return;
+    }
+
+    std::unordered_set<TensorState*> target_states;
+    std::vector<ggml_tensor*> backend_tensors;
+    size_t released_size = 0;
+    for (auto& state : tensor_states_) {
+        if (state == nullptr || state->desc != desc) {
+            continue;
+        }
+        target_states.insert(state.get());
+        if (state->tensor != nullptr) {
+            backend_tensors.push_back(state->tensor);
+            released_size += ggml_nbytes(state->tensor);
+        }
+    }
+
+    if (target_states.empty()) {
+        return;
+    }
+
+    release_compute_backend_params(backend_tensors);
+    release_params_backend_params(backend_tensors);
+
+    for (auto it = tensor_states_by_name_.begin(); it != tensor_states_by_name_.end();) {
+        if (target_states.count(it->second) > 0) {
+            it = tensor_states_by_name_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    tensor_states_.erase(std::remove_if(tensor_states_.begin(),
+                                        tensor_states_.end(),
+                                        [&](const std::unique_ptr<TensorState>& s) {
+                                            return s == nullptr || target_states.count(s.get()) > 0;
+                                        }),
+                         tensor_states_.end());
+
+    if (registered_tensor_size != nullptr) {
+        if (released_size > *registered_tensor_size) {
+            *registered_tensor_size = 0;
+        } else {
+            *registered_tensor_size -= released_size;
+        }
+    }
+}
+
 bool ModelManager::load_all_params_eagerly() {
     std::vector<TensorState*> all_states;
     all_states.reserve(tensor_states_.size());
