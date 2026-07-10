@@ -428,18 +428,9 @@ SD_API const char* sd_get_system_info();
 SD_API bool sd_ctx_supports_image_generation(const sd_ctx_t* sd_ctx);
 SD_API bool sd_ctx_supports_video_generation(const sd_ctx_t* sd_ctx);
 
-// Hot-swap the ControlNet weights on an already-initialized context.
-// Loads the file at `path`, replaces any currently loaded ControlNet, and re-
-// registers it with the model manager. The file must be compatible with the
-// diffusion model the context was created with. Safe to call only when no
-// generation is in flight. Returns true on success.
+// ControlNet hot-swap APIs are not safe to call while generation is in flight.
 SD_API bool sd_ctx_load_control_net(sd_ctx_t* sd_ctx, const char* path);
-
-// Release the currently loaded ControlNet (if any). Subsequent generations
-// will run without ControlNet guidance. Always returns true.
 SD_API bool sd_ctx_unload_control_net(sd_ctx_t* sd_ctx);
-
-// Returns true if a ControlNet is currently loaded on the context.
 SD_API bool sd_ctx_has_control_net(const sd_ctx_t* sd_ctx);
 
 SD_API const char* sd_type_name(enum sd_type_t type);

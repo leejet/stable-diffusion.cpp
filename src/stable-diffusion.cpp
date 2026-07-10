@@ -926,7 +926,7 @@ public:
         model_loader.process_model_files(enable_mmap, needs_writable_mmap);
         load_alphas_cumprod(model_loader);
 
-        diffusion_conv_direct               = sd_ctx_params->diffusion_conv_direct;
+        diffusion_conv_direct = sd_ctx_params->diffusion_conv_direct;
 
         size_t text_encoder_params_mem_size = 0;
         size_t unet_params_mem_size         = 0;
