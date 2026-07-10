@@ -759,9 +759,6 @@ namespace Krea2 {
                                   const std::vector<sd::Tensor<float>>& ref_latents = {},
                                   Rope::RefIndexMode ref_index_mode                 = Rope::RefIndexMode::FIXED) {
             auto get_graph = [&]() -> ggml_cgraph* {
-                if (ref_latents.size() > 0) {
-                    LOG_DEBUG("Running in OSTRIS Krea2 edit mode");
-                }
                 return build_graph(x, timesteps, context, ref_latents, ref_index_mode);
             };
             return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
