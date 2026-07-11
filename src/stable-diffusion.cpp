@@ -2297,7 +2297,6 @@ public:
                              const char* extra_sample_args,
                              const std::vector<float>& sigmas,
                              const std::vector<sd::Tensor<float>>& ref_latents,
-                             bool increase_ref_index,
                              EditModeParams& edit_params,
                              const sd::Tensor<float>& denoise_mask,
                              const sd::Tensor<float>& vace_context,
@@ -5218,6 +5217,10 @@ SD_API bool generate_image(sd_ctx_t* sd_ctx,
     // TODO: parse EditModeParams from sd_img_gen_params->ref_image_mode
     sd_ctx->sd->set_edit_mode_params(edit_params, sd_img_gen_params->ref_image_mode);
 
+    if (request.increase_ref_index){
+        edit_params.ref_index_mode = Rope::RefIndexMode::INCREASE;
+    }
+
     ImageVaeAxesGuard axes_guard(sd_ctx, sd_img_gen_params, request);
 
     SamplePlan plan(sd_ctx, sd_img_gen_params, request);
@@ -5282,7 +5285,6 @@ SD_API bool generate_image(sd_ctx_t* sd_ctx,
                                                    plan.extra_sample_args,
                                                    plan.sigmas,
                                                    latents.ref_latents,
-                                                   request.increase_ref_index,
                                                    edit_params,
                                                    latents.denoise_mask,
                                                    sd::Tensor<float>(),
@@ -5404,7 +5406,6 @@ SD_API bool generate_image(sd_ctx_t* sd_ctx,
                                                             plan.extra_sample_args,
                                                             hires_sigma_sched,
                                                             latents.ref_latents,
-                                                            request.increase_ref_index,
                                                             edit_params,
                                                             hires_denoise_mask,
                                                             sd::Tensor<float>(),
@@ -6167,7 +6168,6 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                                            plan.high_noise_extra_sample_args,
                                                            high_noise_sigmas,
                                                            std::vector<sd::Tensor<float>>{},
-                                                           false,
                                                            edit_params,
                                                            latents.denoise_mask,
                                                            latents.vace_context,
@@ -6210,7 +6210,6 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                                         plan.extra_sample_args,
                                                         plan.sigmas,
                                                         std::vector<sd::Tensor<float>>{},
-                                                        false,
                                                         edit_params,
                                                         latents.denoise_mask,
                                                         latents.vace_context,
@@ -6349,7 +6348,6 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                             plan.extra_sample_args,
                                             hires_sigma_sched,
                                             std::vector<sd::Tensor<float>>{},
-                                            false,
                                             edit_params,
                                             hires_denoise_mask,
                                             sd::Tensor<float>(),
