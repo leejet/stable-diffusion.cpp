@@ -103,7 +103,6 @@ struct DiffusionParams {
     const sd::Tensor<float>* y                        = nullptr;
     const std::vector<sd::Tensor<float>>* ref_latents = nullptr;
     EditModeParams edit_params                        = {false, false, Rope::RefIndexMode::FIXED, false};
-    Rope::RefIndexMode ref_index_mode                 = Rope::RefIndexMode::FIXED;
     DiffusionExtraParams extra                        = std::monostate{};
 };
 

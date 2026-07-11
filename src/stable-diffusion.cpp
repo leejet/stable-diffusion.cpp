@@ -2459,9 +2459,8 @@ public:
             sd_sample::SampleStepCacheDispatcher step_cache(cache_runtime, step, sigma);
             std::vector<sd::Tensor<float>> controls;
             DiffusionParams diffusion_params;
-            diffusion_params.x              = &noised_input;
-            diffusion_params.timesteps      = &timesteps_tensor;
-            diffusion_params.ref_index_mode = Rope::ref_index_mode_from_bool(increase_ref_index);
+            diffusion_params.x           = &noised_input;
+            diffusion_params.timesteps   = &timesteps_tensor;
             diffusion_params.edit_params = edit_params;
             sd::guidance::GuidanceInput step_guidance_input;
             step_guidance_input.step          = step;
