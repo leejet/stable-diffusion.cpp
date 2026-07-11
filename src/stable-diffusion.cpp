@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <set>
 #include <type_traits>
 #include <unordered_set>
@@ -1478,9 +1479,6 @@ public:
         ignore_tensors.insert("model.diffusion_model.__32x32__");
         ignore_tensors.insert("model.diffusion_model.__index_timestep_zero__");
 
-        if (audio_vae_model) {
-            ignore_tensors.insert("audio_vae.encoder");
-        }
         if (version == VERSION_OVIS_IMAGE) {
             ignore_tensors.insert("text_encoders.llm.vision_model.");
             ignore_tensors.insert("text_encoders.llm.visual_tokenizer.");
@@ -3403,6 +3401,7 @@ void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
     sd_vid_gen_params->seed                                  = -1;
     sd_vid_gen_params->video_frames                          = 6;
     sd_vid_gen_params->fps                                   = 16;
+    sd_vid_gen_params->input_audio                           = nullptr;
     sd_vid_gen_params->moe_boundary                          = 0.875f;
     sd_vid_gen_params->vace_strength                         = 1.f;
     sd_vid_gen_params->vae_tiling_params                     = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
@@ -3502,6 +3501,77 @@ static sd_audio_t* waveform_to_sd_audio(const StableDiffusionGGML* sd,
     std::memcpy(audio->data, wavaform_t.data(), sample_bytes);
 
     return audio;
+}
+
+static sd_audio_t* clone_sd_audio(const sd_audio_t* src) {
+    if (src == nullptr || src->data == nullptr || src->sample_rate == 0 || src->channels == 0 || src->sample_count == 0) {
+        return nullptr;
+    }
+
+    sd_audio_t* audio = (sd_audio_t*)malloc(sizeof(sd_audio_t));
+    if (audio == nullptr) {
+        return nullptr;
+    }
+
+    audio->sample_rate  = src->sample_rate;
+    audio->channels     = src->channels;
+    audio->sample_count = src->sample_count;
+    size_t sample_bytes = static_cast<size_t>(src->sample_count) * static_cast<size_t>(src->channels) * sizeof(float);
+    audio->data         = (float*)malloc(sample_bytes);
+    if (audio->data == nullptr) {
+        free(audio);
+        return nullptr;
+    }
+
+    std::memcpy(audio->data, src->data, sample_bytes);
+    return audio;
+}
+
+static sd::Tensor<float> sd_audio_to_ltx_waveform_tensor(const sd_audio_t* audio,
+                                                         int target_sample_rate,
+                                                         int target_channels) {
+    if (audio == nullptr || audio->data == nullptr || audio->sample_rate == 0 ||
+        audio->channels == 0 || audio->sample_count == 0 || target_sample_rate <= 0 ||
+        target_channels <= 0) {
+        return {};
+    }
+
+    uint64_t out_samples_u64 = (audio->sample_count * static_cast<uint64_t>(target_sample_rate) +
+                                static_cast<uint64_t>(audio->sample_rate) - 1) /
+                               static_cast<uint64_t>(audio->sample_rate);
+    if (out_samples_u64 == 0 || out_samples_u64 > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+        return {};
+    }
+
+    int64_t out_samples = static_cast<int64_t>(out_samples_u64);
+    sd::Tensor<float> waveform({out_samples, target_channels, 1, 1});
+    const double src_rate  = static_cast<double>(audio->sample_rate);
+    const double dst_rate  = static_cast<double>(target_sample_rate);
+    const int src_channels = static_cast<int>(audio->channels);
+
+    auto src_value = [&](uint64_t sample, int channel) -> float {
+        int src_channel = channel;
+        if (src_channels == 1) {
+            src_channel = 0;
+        } else if (channel >= src_channels) {
+            src_channel = src_channels - 1;
+        }
+        return audio->data[static_cast<size_t>(sample) * static_cast<size_t>(src_channels) + static_cast<size_t>(src_channel)];
+    };
+
+    for (int64_t t = 0; t < out_samples; ++t) {
+        double src_pos = static_cast<double>(t) * src_rate / dst_rate;
+        uint64_t i0    = static_cast<uint64_t>(std::floor(src_pos));
+        uint64_t i1    = std::min<uint64_t>(i0 + 1, audio->sample_count - 1);
+        float frac     = static_cast<float>(src_pos - static_cast<double>(i0));
+        for (int ch = 0; ch < target_channels; ++ch) {
+            float v0                    = src_value(i0, ch);
+            float v1                    = src_value(i1, ch);
+            waveform.index(t, ch, 0, 0) = v0 + (v1 - v0) * frac;
+        }
+    }
+
+    return waveform;
 }
 
 void free_sd_audio(sd_audio_t* audio) {
@@ -4103,7 +4173,8 @@ static sd::Tensor<float> pack_ltxav_audio_and_video_latents(const sd::Tensor<flo
 
 static sd::Tensor<float> pack_ltxav_audio_and_video_denoise_mask(const sd::Tensor<float>& video_mask,
                                                                  const sd::Tensor<float>& video_latent,
-                                                                 const sd::Tensor<float>& audio_latent) {
+                                                                 const sd::Tensor<float>& audio_latent,
+                                                                 float audio_mask_value = 1.f) {
     if (video_mask.empty() || audio_latent.empty()) {
         return video_mask;
     }
@@ -4146,7 +4217,7 @@ static sd::Tensor<float> pack_ltxav_audio_and_video_denoise_mask(const sd::Tenso
 
     std::vector<int64_t> audio_mask_shape = video_latent.shape();
     audio_mask_shape[3]                   = extra_ch;
-    auto audio_mask                       = sd::Tensor<float>::ones(audio_mask_shape);
+    auto audio_mask                       = sd::full<float>(audio_mask_shape, audio_mask_value);
     return sd::ops::concat(video_mask_full, audio_mask, 3);
 }
 
@@ -5344,6 +5415,44 @@ static std::optional<ImageGenerationLatents> prepare_video_generation_latents(sd
     if (sd_version_is_ltxav(sd_ctx->sd->version)) {
         latents.audio_length = get_ltxav_num_audio_latents(request->frames, request->fps);
         latents.audio_latent = make_ltxav_empty_audio_latent(latents.audio_length);
+        if (sd_vid_gen_params->input_audio != nullptr &&
+            sd_vid_gen_params->input_audio->data != nullptr &&
+            sd_vid_gen_params->input_audio->sample_count > 0) {
+            if (sd_ctx->sd->audio_vae_model == nullptr || !sd_ctx->sd->audio_vae_model->config.has_encoder) {
+                LOG_ERROR("LTX A2V requires an audio VAE with encoder weights");
+                return std::nullopt;
+            }
+
+            int64_t audio_encode_start = ggml_time_ms();
+            auto waveform              = sd_audio_to_ltx_waveform_tensor(sd_vid_gen_params->input_audio,
+                                                                         sd_ctx->sd->audio_vae_model->config.sample_rate,
+                                                                         sd_ctx->sd->audio_vae_model->config.audio_channels);
+            if (waveform.empty()) {
+                LOG_ERROR("failed to convert source audio for LTX A2V encoding");
+                return std::nullopt;
+            }
+
+            auto encoded_audio_latent = sd_ctx->sd->audio_vae_model->encode(sd_ctx->sd->n_threads, waveform);
+            if (encoded_audio_latent.empty()) {
+                LOG_ERROR("LTX A2V audio latent encoding failed");
+                return std::nullopt;
+            }
+
+            latents.audio_latent = resize_ltxav_audio_latent(encoded_audio_latent, latents.audio_length);
+            if (latents.audio_latent.empty()) {
+                LOG_ERROR("failed to resize encoded LTX A2V audio latent");
+                return std::nullopt;
+            }
+
+            int64_t audio_encode_end = ggml_time_ms();
+            LOG_INFO("encoded LTX A2V source audio latent %dx%dx%dx%d -> length %d, taking %.2fs",
+                     (int)encoded_audio_latent.shape()[0],
+                     (int)encoded_audio_latent.shape()[1],
+                     (int)encoded_audio_latent.shape()[2],
+                     (int)encoded_audio_latent.shape()[3],
+                     latents.audio_length,
+                     (audio_encode_end - audio_encode_start) * 1.0f / 1000);
+        }
     }
 
     if (sd_version_is_ltxav(sd_ctx->sd->version)) {
@@ -5642,10 +5751,17 @@ static std::optional<ImageGenerationLatents> prepare_video_generation_latents(sd
     }
 
     if (sd_version_is_ltxav(sd_ctx->sd->version) && !latents.audio_latent.empty()) {
+        bool has_input_audio = sd_vid_gen_params->input_audio != nullptr &&
+                               sd_vid_gen_params->input_audio->data != nullptr &&
+                               sd_vid_gen_params->input_audio->sample_count > 0;
+        if (has_input_audio && latents.denoise_mask.empty()) {
+            latents.denoise_mask = make_ltxav_video_denoise_mask(latents.init_latent, 1.f);
+        }
         if (!latents.denoise_mask.empty()) {
             latents.denoise_mask = pack_ltxav_audio_and_video_denoise_mask(latents.denoise_mask,
                                                                            latents.init_latent,
-                                                                           latents.audio_latent);
+                                                                           latents.audio_latent,
+                                                                           has_input_audio ? 0.f : 1.f);
         }
         latents.init_latent = pack_ltxav_audio_and_video_latents(latents.init_latent, latents.audio_latent);
     }
@@ -5918,8 +6034,14 @@ static bool apply_ltxv_refine_image_conditioning(sd_ctx_t* sd_ctx,
     }
 
     if (!audio_latent.empty()) {
+        bool has_input_audio = sd_vid_gen_params->input_audio != nullptr &&
+                               sd_vid_gen_params->input_audio->data != nullptr &&
+                               sd_vid_gen_params->input_audio->sample_count > 0;
         *latent       = pack_ltxav_audio_and_video_latents(video_latent, audio_latent);
-        *denoise_mask = pack_ltxav_audio_and_video_denoise_mask(video_mask, video_latent, audio_latent);
+        *denoise_mask = pack_ltxav_audio_and_video_denoise_mask(video_mask,
+                                                                video_latent,
+                                                                audio_latent,
+                                                                has_input_audio ? 0.f : 1.f);
     } else {
         *latent       = std::move(video_latent);
         *denoise_mask = std::move(video_mask);
@@ -5952,6 +6074,9 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
     sd_ctx->sd->vae_tiling_params = sd_vid_gen_params->vae_tiling_params;
     apply_circular_axes_to_diffusion(sd_ctx, sd_vid_gen_params->circular_x, sd_vid_gen_params->circular_y);
     GenerationRequest request(sd_ctx, sd_vid_gen_params);
+    bool has_input_audio = sd_vid_gen_params->input_audio != nullptr &&
+                           sd_vid_gen_params->input_audio->data != nullptr &&
+                           sd_vid_gen_params->input_audio->sample_count > 0;
     bool latent_upscale_enabled     = request.hires.enabled;
     GenerationRequest hires_request = request;
     if (latent_upscale_enabled) {
@@ -6169,6 +6294,17 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                                   &hires_video_positions)) {
             return false;
         }
+        if (has_input_audio && hires_denoise_mask.empty() && x_t.shape()[3] > sd_ctx->sd->get_latent_channel()) {
+            int latent_channels = sd_ctx->sd->get_latent_channel();
+            auto video_latent   = sd::ops::slice(x_t, 3, 0, latent_channels);
+            auto audio_latent   = unpack_ltxav_audio_latent(x_t, latents.audio_length, latent_channels);
+            if (!audio_latent.empty()) {
+                hires_denoise_mask = pack_ltxav_audio_and_video_denoise_mask(make_ltxav_video_denoise_mask(video_latent, 1.f),
+                                                                              video_latent,
+                                                                              audio_latent,
+                                                                              0.f);
+            }
+        }
         noise = sd::Tensor<float>::randn_like(x_t, sd_ctx->sd->rng);
 
         W                                   = hires_request.width / hires_request.vae_scale_factor;
@@ -6237,6 +6373,9 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
 
     sd_audio_t* generated_audio = nullptr;
     if (sd_version_is_ltxav(sd_ctx->sd->version) &&
+        has_input_audio) {
+        generated_audio = clone_sd_audio(sd_vid_gen_params->input_audio);
+    } else if (sd_version_is_ltxav(sd_ctx->sd->version) &&
         latents.audio_length > 0 &&
         sd_ctx->sd->audio_vae_model != nullptr) {
         if (sd_ctx->sd->get_cancel_flag() == SD_CANCEL_ALL) {

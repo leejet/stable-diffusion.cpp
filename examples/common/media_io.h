@@ -110,4 +110,6 @@ bool write_wav_to_file(const std::string& path,
                        uint32_t channels,
                        uint32_t sample_rate);
 
+sd_audio_t load_pcm_wav_from_file(const std::string& path);
+
 #endif  // __MEDIA_IO_H__

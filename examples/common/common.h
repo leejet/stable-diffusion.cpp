@@ -200,6 +200,7 @@ struct SDGenerationParams {
 
     std::string init_image_path;
     std::string end_image_path;
+    std::string init_audio_path;
     std::string mask_image_path;
     std::string control_image_path;
     std::vector<std::string> ref_image_paths;
@@ -268,6 +269,7 @@ struct SDGenerationParams {
     SDImageOwner control_image;
     std::vector<SDImageOwner> pm_id_images;
     std::vector<SDImageOwner> control_frames;
+    const sd_audio_t* input_audio = nullptr;
 
     // Backing storage for sd_img_gen_params_t view fields.
     std::vector<sd_image_t> ref_image_views;

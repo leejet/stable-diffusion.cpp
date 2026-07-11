@@ -3,6 +3,7 @@
 #include <time.h>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <iostream>
@@ -700,6 +701,21 @@ int main(int argc, const char* argv[]) {
         if (!load_image_and_update_size(gen_params.end_image_path, gen_params.end_image)) {
             return 1;
         }
+    }
+
+    SDAudioPtr input_audio;
+    if (gen_params.init_audio_path.size() > 0) {
+        input_audio.reset(static_cast<sd_audio_t*>(malloc(sizeof(sd_audio_t))));
+        if (input_audio == nullptr) {
+            LOG_ERROR("malloc input audio failed");
+            return 1;
+        }
+        *input_audio = load_pcm_wav_from_file(gen_params.init_audio_path);
+        if (input_audio->data == nullptr || input_audio->sample_count == 0) {
+            LOG_ERROR("load audio from '%s' failed", gen_params.init_audio_path.c_str());
+            return 1;
+        }
+        gen_params.input_audio = input_audio.get();
     }
 
     if (gen_params.ref_image_paths.size() > 0) {
