@@ -1642,7 +1642,7 @@ namespace Flux {
                            tensor_or_empty(diffusion_params.c_concat),
                            tensor_or_empty(diffusion_params.y),
                            tensor_or_empty(extra->guidance),
-                           diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
+                           diffusion_params.ref_latents && diffusion_params.edit_params.use_dit_refs ? *diffusion_params.ref_latents : empty_ref_latents,
                            diffusion_params.edit_params.ref_index_mode,
                            extra->skip_layers ? *extra->skip_layers : empty_skip_layers,
                            tensor_or_empty(extra->pulid_id),

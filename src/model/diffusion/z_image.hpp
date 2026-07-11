@@ -648,7 +648,7 @@ namespace ZImage {
                            *diffusion_params.x,
                            *diffusion_params.timesteps,
                            tensor_or_empty(diffusion_params.context),
-                           diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
+                           diffusion_params.ref_latents && diffusion_params.edit_params.use_dit_refs ? *diffusion_params.ref_latents : empty_ref_latents,
                            diffusion_params.edit_params.ref_index_mode);
         }
 

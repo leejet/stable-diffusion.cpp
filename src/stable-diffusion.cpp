@@ -2952,6 +2952,9 @@ public:
                 break;
             }
         }
+        if (params.force_timestep_0 && !sd_version_is_krea2(version)){
+            LOG_WARN("force_timestep_0 is only supported by Krea2 architecture for now");
+        }
     }
 
 };
