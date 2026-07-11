@@ -22,7 +22,7 @@ struct EditModeParams {
     Rope::RefIndexMode ref_index_mode    = Rope::RefIndexMode::FIXED;
     bool force_timestep_0                = false;
     bool resize_vae_refs                 = true;
-    int vae_refs_size                    = -1;
+    int vae_refs_max_size                = -1;
     CondResizeMode cond_refs_resize_mode = CondResizeMode::LONGEST_SIDE;
     int cond_refs_max_size               = -1;
     int cond_refs_min_size               = -1;

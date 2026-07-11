@@ -107,7 +107,7 @@ struct ConditionerParams {
     int height                                       = -1;
     bool zero_out_masked                             = false;
     const std::vector<sd::Tensor<float>>* ref_images = nullptr;  // for qwen image edit
-    EditModeParams edit_mode;
+    EditModeParams edit_params;
 };
 
 struct Conditioner {
@@ -2058,7 +2058,7 @@ struct LLMEmbedder : public Conditioner {
         std::set<int> out_layers;
 
         int64_t t0 = ggml_time_ms();
-        CondResizeMode resize_mode = conditioner_params.edit_mode.cond_refs_resize_mode;
+        CondResizeMode resize_mode = conditioner_params.edit_params.cond_refs_resize_mode;
 
         if (sd_version_is_lingbot_video(version)) {
             const int pad_token = 151643;
@@ -2095,7 +2095,7 @@ struct LLMEmbedder : public Conditioner {
                     int height        = static_cast<int>(image.shape()[1]);
                     int width         = static_cast<int>(image.shape()[0]);
 
-                    int min_pixels = conditioner_params.edit_mode.cond_refs_min_size;
+                    int min_pixels = conditioner_params.edit_params.cond_refs_min_size;
                     if (min_pixels <= 0) {
                         if (resize_mode == CondResizeMode::AREA) {
                             min_pixels = static_cast<int>(4 * factor * factor);
@@ -2103,7 +2103,7 @@ struct LLMEmbedder : public Conditioner {
                             min_pixels = static_cast<int>(2 * factor);
                         }
                     }
-                    int max_pixels = conditioner_params.edit_mode.cond_refs_max_size;
+                    int max_pixels = conditioner_params.edit_params.cond_refs_max_size;
                     if (max_pixels <= 0) {
                         if (resize_mode == CondResizeMode::AREA) {
                             max_pixels = static_cast<int>(16384 * factor * factor);
@@ -2150,14 +2150,14 @@ struct LLMEmbedder : public Conditioner {
                 prompt_template_encode_start_idx = 64;
                 int image_embed_idx              = 64 + 6;
 
-                int min_pixels = conditioner_params.edit_mode.cond_refs_min_size;
+                int min_pixels = conditioner_params.edit_params.cond_refs_min_size;
                 if (min_pixels <= 0) {
                     min_pixels = 384;
                     if (resize_mode == CondResizeMode::AREA) {
                         min_pixels *= min_pixels;
                     }
                 }
-                int max_pixels = conditioner_params.edit_mode.cond_refs_max_size;
+                int max_pixels = conditioner_params.edit_params.cond_refs_max_size;
                 if (max_pixels <= 0) {
                     max_pixels = 560;
                     if (resize_mode == CondResizeMode::AREA) {
@@ -2231,14 +2231,14 @@ struct LLMEmbedder : public Conditioner {
                 std::string img_prompt;
                 const std::string placeholder = "<|image_pad|>";
 
-                int min_pixels = conditioner_params.edit_mode.cond_refs_min_size;
+                int min_pixels = conditioner_params.edit_params.cond_refs_min_size;
                 if (min_pixels <= 0) {
                     min_pixels = 384;
                     if (resize_mode == CondResizeMode::AREA) {
                         min_pixels *= min_pixels;
                     }
                 }
-                int max_pixels = conditioner_params.edit_mode.cond_refs_max_size;
+                int max_pixels = conditioner_params.edit_params.cond_refs_max_size;
                 if (max_pixels <= 0) {
                     max_pixels = 384;
                     if (resize_mode == CondResizeMode::AREA) {
@@ -2299,14 +2299,14 @@ struct LLMEmbedder : public Conditioner {
             if (llm->enable_vision && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
                 std::string img_prompt        = "";
                 const std::string placeholder = "<|image_pad|>";
-                int min_pixels                = conditioner_params.edit_mode.cond_refs_min_size;
+                int min_pixels                = conditioner_params.edit_params.cond_refs_min_size;
                 if (min_pixels <= 0) {
                     min_pixels = 384;
                     if (resize_mode == CondResizeMode::AREA) {
                         min_pixels *= min_pixels;
                     }
                 }
-                int max_pixels = conditioner_params.edit_mode.cond_refs_max_size;
+                int max_pixels = conditioner_params.edit_params.cond_refs_max_size;
                 if (max_pixels <= 0) {
                     max_pixels = 1024;
                     if (resize_mode == CondResizeMode::AREA) {
@@ -2324,6 +2324,7 @@ struct LLMEmbedder : public Conditioner {
                                          static_cast<int>(std::round(height / factor)) * static_cast<int>(factor));
                     int w_bar = std::max(static_cast<int>(factor),
                                          static_cast<int>(std::round(width / factor)) * static_cast<int>(factor));
+
                     resize_image_dims(height, width, h_bar, w_bar, factor, min_pixels, max_pixels, resize_mode);
 
                     LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
@@ -2361,14 +2362,14 @@ struct LLMEmbedder : public Conditioner {
                 min_length                       = 512 + prompt_template_encode_start_idx;
                 int image_embed_idx              = 36 + 6;
 
-                int min_pixels = conditioner_params.edit_mode.cond_refs_min_size;
+                int min_pixels = conditioner_params.edit_params.cond_refs_min_size;
                 if (min_pixels <= 0) {
                     min_pixels = 384;
                     if (resize_mode == CondResizeMode::AREA) {
                         min_pixels *= min_pixels;
                     }
                 }
-                int max_pixels = conditioner_params.edit_mode.cond_refs_max_size;
+                int max_pixels = conditioner_params.edit_params.cond_refs_max_size;
                 if (max_pixels <= 0) {
                     max_pixels = 560;
                     if (resize_mode == CondResizeMode::AREA) {

@@ -2882,6 +2882,7 @@ public:
             }
         }
         if (preset_name != "default") {
+            LOG_INFO("Using '%s' preset for edit mode", preset_name.c_str());
             params = REF_PRESETS.at(preset_name);
         }
 
@@ -2912,8 +2913,8 @@ public:
                 if (!parse_strict_bool(value, params.resize_vae_refs)) {
                     LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
                 }
-            } else if (key == "vae_refs_size") {
-                if (!parse_strict_int(value, params.vae_refs_size)) {
+            } else if (key == "vae_refs_max_size") {
+                if (!parse_strict_int(value, params.vae_refs_max_size)) {
                     LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
                 }
             } else if (key == "cond_refs_resize_mode") {
@@ -2934,12 +2935,27 @@ public:
                 if (!parse_strict_int(value, params.cond_refs_min_size)) {
                     LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
                 }
-            } else if (key != "preset") {
+            } else if (key != "preset" && key!= "cond_refs_size") {
                 // Optional: catch-all for unknown keys
                 LOG_WARN("ignoring unknown edit mode arg '%s'", key.c_str());
             }
         }
+        for (const auto& [key, value] : parse_key_value_args(overrides, "edit mode args")) {
+            if (key == "cond_refs_size") {
+                int cond_refs_size; 
+                if (!parse_strict_int(value, cond_refs_size)) {
+                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+                } else {
+                    // log something idk
+                    LOG_INFO("cond_refs_size override: setting both min and max size to %ld", (long)cond_refs_size);
+                    params.cond_refs_min_size = cond_refs_size;
+                    params.cond_refs_max_size = cond_refs_size;
+                }
+                break;
+            }
+        }
     }
+
 };
 
 /*================================================= SD API ==================================================*/
@@ -4677,7 +4693,7 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
         sd::Tensor<float> ref_latent;
         if (edit_params->resize_vae_refs && !sd_version_is_pid(sd_ctx->sd->version)) {
             LOG_DEBUG("auto resize ref images");
-            int target_pixels = edit_params->vae_refs_size > 0 ? edit_params->vae_refs_size : 1024 * 1024;
+            int target_pixels = edit_params->vae_refs_max_size > 0 ? edit_params->vae_refs_max_size : 1024 * 1024;
             int vae_image_size = std::min(target_pixels, request->width * request->height);
             double vae_width   = sqrt(vae_image_size * ref_images[i].shape()[0] / ref_images[i].shape()[1]);
             double vae_height  = vae_width * ref_images[i].shape()[1] / ref_images[i].shape()[0];
@@ -4817,6 +4833,8 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
     if(edit_params->use_VLM){
         condition_params.ref_images = &latents->ref_images;
     }
+
+    condition_params.edit_params = *edit_params;
 
 
     sd_ctx->sd->prepare_generation_extensions(request->pm_params,
