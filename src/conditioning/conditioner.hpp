@@ -2142,7 +2142,7 @@ struct LLMEmbedder : public Conditioner {
 
             prompt = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n";
             if (llm->enable_vision && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
-                std::string img_prompt = "";
+                std::string img_prompt        = "";
                 const std::string placeholder = "<|image_pad|>";
 
                 for (int i = 0; i < conditioner_params.ref_images->size(); i++) {

@@ -421,9 +421,9 @@ namespace Krea2 {
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* x,
                              ggml_tensor* vec,
-                             ggml_tensor* pe, 
+                             ggml_tensor* pe,
                              ggml_tensor* vec_refs = nullptr,
-                             int64_t ref_start = -1) {
+                             int64_t ref_start     = -1) {
             auto mod      = std::dynamic_pointer_cast<KreaDoubleSharedModulation>(blocks["mod"]);
             auto prenorm  = std::dynamic_pointer_cast<KreaRMSNorm>(blocks["prenorm"]);
             auto postnorm = std::dynamic_pointer_cast<KreaRMSNorm>(blocks["postnorm"]);
@@ -637,7 +637,7 @@ namespace Krea2 {
                 }
             }
             int64_t ref_len = img->ne[1] - img_len;
-            img = first->forward(ctx, img);
+            img             = first->forward(ctx, img);
 
             auto t    = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep, static_cast<int>(config.timestep_dim), 10000, 1000.f);
             t         = tmlp->forward(ctx, t);
@@ -645,21 +645,21 @@ namespace Krea2 {
             auto tvec = tproj->forward(ctx, t);
 
             ggml_tensor* tvec_0 = nullptr;
-            if(ref_latents.size() > 0) {
-                // "index_timestep_zero" mode: use timestep = 0 for ref latents 
+            if (ref_latents.size() > 0) {
+                // "index_timestep_zero" mode: use timestep = 0 for ref latents
                 auto timestep_0 = ggml_scale(ctx->ggml_ctx, timestep, 0.0f);
-                auto t_0 = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep_0, static_cast<int>(config.timestep_dim), 10000, 1000.f);
-                t_0         = tmlp->forward(ctx, t_0);
-                t_0         = ggml_reshape_3d(ctx->ggml_ctx, t_0, t_0->ne[0], 1, t_0->ne[1]);
-                tvec_0 = tproj->forward(ctx, t_0);
+                auto t_0        = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep_0, static_cast<int>(config.timestep_dim), 10000, 1000.f);
+                t_0             = tmlp->forward(ctx, t_0);
+                t_0             = ggml_reshape_3d(ctx->ggml_ctx, t_0, t_0->ne[0], 1, t_0->ne[1]);
+                tvec_0          = tproj->forward(ctx, t_0);
             }
-            
+
             auto txt        = txtfusion->forward(ctx, context);
             txt             = txtmlp->forward(ctx, txt);
             int64_t txt_len = txt->ne[1];
 
             auto hidden_states = ggml_concat(ctx->ggml_ctx, txt, img, 1);
-            int64_t ref_start = hidden_states->ne[1] - ref_len;
+            int64_t ref_start  = hidden_states->ne[1] - ref_len;
             for (int i = 0; i < config.layers; ++i) {
                 auto block    = std::dynamic_pointer_cast<KreaSingleStreamBlock>(blocks["blocks." + std::to_string(i)]);
                 hidden_states = block->forward(ctx, hidden_states, tvec, pe, tvec_0, ref_start);
