@@ -2141,6 +2141,41 @@ struct LLMEmbedder : public Conditioner {
             out_layers                       = {2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35};
 
             prompt = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n";
+            if (llm->enable_vision && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
+                std::string img_prompt        = "";
+                const std::string placeholder = "<|image_pad|>";
+
+                for (int i = 0; i < conditioner_params.ref_images->size(); i++) {
+                    const auto& image = (*conditioner_params.ref_images)[i];
+                    double factor     = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
+                    int height        = static_cast<int>(image.shape()[1]);
+                    int width         = static_cast<int>(image.shape()[0]);
+                    double beta       = std::sqrt((384.0 * 384.0) / (static_cast<double>(height) * static_cast<double>(width)));
+                    int h_bar         = std::max(static_cast<int>(factor),
+                                                 static_cast<int>(std::round(height * beta / factor)) * static_cast<int>(factor));
+                    int w_bar         = std::max(static_cast<int>(factor),
+                                                 static_cast<int>(std::round(width * beta / factor)) * static_cast<int>(factor));
+
+                    LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
+
+                    auto resized_image = clip_preprocess(image, w_bar, h_bar);
+                    auto image_embed   = llm->encode_image(n_threads, resized_image, false, true, true);
+                    GGML_ASSERT(!image_embed.empty());
+
+                    std::string image_prefix = prompt + img_prompt + "Picture " + std::to_string(i + 1) + ": <|vision_start|>";
+                    int image_embed_idx      = static_cast<int>(tokenizer->encode(image_prefix, nullptr).size());
+                    image_embeds.emplace_back(image_embed_idx, image_embed);
+
+                    img_prompt += "Picture " + std::to_string(i + 1) + ": <|vision_start|>";
+                    int64_t num_image_tokens = image_embed.shape()[1];
+                    img_prompt.reserve(img_prompt.size() + static_cast<size_t>(num_image_tokens) * placeholder.size() + 32);
+                    for (int j = 0; j < num_image_tokens; j++) {
+                        img_prompt += placeholder;
+                    }
+                    img_prompt += "<|vision_end|>";
+                }
+                prompt += img_prompt;
+            }
 
             prompt_attn_range.first = static_cast<int>(prompt.size());
             prompt += conditioner_params.text;
