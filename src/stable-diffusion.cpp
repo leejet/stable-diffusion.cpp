@@ -2852,7 +2852,7 @@ public:
             return "qwen_layered";
         } else if (sd_version_is_qwen_image(version)) {
             return "qwen";
-        } else if (sd_version_is_z_image(version)){
+        } else if (sd_version_is_z_image(version) || sd_version_is_boogu_image(version)){
             return "z_image_omni";
         } else if (sd_version_is_krea2(version)){
             // have to make a choice between "krea2_edit" mode (for lbouaraba/krea2edit) 
