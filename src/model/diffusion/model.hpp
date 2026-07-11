@@ -10,6 +10,23 @@
 #include "model/common/rope.hpp"
 #include "model_manager.h"
 
+struct EditModeParams {
+    bool use_VLM                      = false;
+    bool use_dit_refs                 = true;
+    Rope::RefIndexMode ref_index_mode = Rope::RefIndexMode::FIXED;
+    bool force_timestep_0             = false;
+};
+
+const std::unordered_map<std::string, EditModeParams> REF_PRESETS = {
+    // {preset_name,      {VLM,   refs, mode,                         t_0  }},
+    {"flux_kontext",      {false, true, Rope::RefIndexMode::FIXED,    false}}, 
+    {"flux2",             {false, true, Rope::RefIndexMode::INCREASE, false}}, 
+    {"qwen",              {true,  true, Rope::RefIndexMode::INCREASE, false}},
+    {"qwen_layered",      {true,  true, Rope::RefIndexMode::DECREASE, false}},
+    {"z_image_omni",      {true,  true, Rope::RefIndexMode::FIXED,    false}},
+    {"krea2_ostris_edit", {true,  true, Rope::RefIndexMode::INCREASE, true }},
+};
+
 struct UNetDiffusionExtra {
     int num_video_frames                           = -1;
     const std::vector<sd::Tensor<float>>* controls = nullptr;
@@ -74,6 +91,7 @@ struct DiffusionParams {
     const sd::Tensor<float>* c_concat                 = nullptr;
     const sd::Tensor<float>* y                        = nullptr;
     const std::vector<sd::Tensor<float>>* ref_latents = nullptr;
+    EditModeParams edit_params                        = {false, false, Rope::RefIndexMode::FIXED, false};
     Rope::RefIndexMode ref_index_mode                 = Rope::RefIndexMode::FIXED;
     DiffusionExtraParams extra                        = std::monostate{};
 };

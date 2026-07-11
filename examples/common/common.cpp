@@ -975,6 +975,11 @@ ArgOptions SDGenerationParams::get_options() {
          "extra VAE tiling args, key=value list. LTX video VAE supports temporal_tile_frames (default: 4), temporal_tile_overlap (default: 1)",
          (int)',',
          &extra_tiling_args},
+        {"",
+         "--ref-image-mode",
+         "Key-value list to set up the way the reference images are processed (empty = auto-detect from model weigths)",
+         (int)',',
+         &ref_mode},
     };
 
     options.int_options = {
@@ -2428,6 +2433,7 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     params.ref_images_count      = static_cast<int>(ref_image_views.size());
     params.auto_resize_ref_image = auto_resize_ref_image;
     params.increase_ref_index    = increase_ref_index;
+    params.ref_image_mode        = ref_mode.c_str();
     params.mask_image            = mask_image.get();
     params.width                 = get_resolved_width();
     params.height                = get_resolved_height();

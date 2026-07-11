@@ -2298,6 +2298,7 @@ public:
                              const std::vector<float>& sigmas,
                              const std::vector<sd::Tensor<float>>& ref_latents,
                              bool increase_ref_index,
+                             EditModeParams& edit_params,
                              const sd::Tensor<float>& denoise_mask,
                              const sd::Tensor<float>& vace_context,
                              float vace_strength,
@@ -2461,6 +2462,7 @@ public:
             diffusion_params.x              = &noised_input;
             diffusion_params.timesteps      = &timesteps_tensor;
             diffusion_params.ref_index_mode = Rope::ref_index_mode_from_bool(increase_ref_index);
+            diffusion_params.edit_params = edit_params;
             sd::guidance::GuidanceInput step_guidance_input;
             step_guidance_input.step          = step;
             step_guidance_input.schedule_size = sigmas.size();
@@ -2839,6 +2841,73 @@ public:
     bool is_flow_denoiser() {
         auto flow_denoiser = std::dynamic_pointer_cast<DiscreteFlowDenoiser>(denoiser);
         return !!flow_denoiser;
+    }
+
+    std::string get_default_preset_for_version(SDVersion version) {
+        if (sd_version_is_flux(version) || sd_version_is_longcat(version)) {
+            return "flux_kontext";
+        } else if (sd_version_is_flux2(version) || sd_version_is_sefi_image(version)) {
+            return "flux2";
+        } else if (version == VERSION_QWEN_IMAGE_LAYERED){
+            return "qwen_layered";
+        } else if (sd_version_is_qwen_image(version)) {
+            return "qwen";
+        } else if (sd_version_is_z_image(version)){
+            return "z_image_omni";
+        } else if (sd_version_is_krea2(version)){
+            // have to make a choice between "qwen" mode (for lbouaraba/krea2edit) 
+            // and "krea2_ostris_edit" (for ostris edit)
+            // since krea2 ostris edit support predates, it should probably be default
+            return "krea2_ostris_edit";
+        }
+        return "default";
+    }
+
+    void set_edit_mode_params(EditModeParams& params, std::string overrides) {
+        std::string preset_name = get_default_preset_for_version(version);
+
+        for (const auto& [key, value] : parse_key_value_args(overrides, "edit mode args")) {
+            if (key == "preset") {
+                std::string requested_preset_name = value;
+                if (REF_PRESETS.count(requested_preset_name)) {
+                    preset_name = requested_preset_name;
+                } else if (value != "default") {
+                    std::string valid_list;
+                    for (auto const& [name, _] : REF_PRESETS) {
+                        valid_list += (valid_list.empty() ? "" : ", ") + name;
+                    }
+                    LOG_WARN("ignoring invalid edit mode preset '%s'. Valid options: [%s]", value.c_str(), valid_list.c_str());
+                }
+                break;
+            }
+        }
+        if (preset_name != "default") {
+            params = REF_PRESETS.at(preset_name);
+        }
+        
+        for (const auto& [key, value] : parse_key_value_args(overrides, "edit mode args")) {
+            if (key == "use_vlm") {
+                if (!parse_strict_bool(value,  params.use_VLM)) {
+                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            } else if (key == "pass_to_dit") {
+                if (!parse_strict_bool(value,  params.use_dit_refs)) {
+                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            } else if (key == "ref_index_mode") {
+                if (value == "fixed"){
+                    params.ref_index_mode = Rope::RefIndexMode::FIXED;
+                } else if (value == "increase"){
+                    params.ref_index_mode = Rope::RefIndexMode::INCREASE;
+                } else if (value == "decrease"){
+                    params.ref_index_mode = Rope::RefIndexMode::DECREASE;
+                } 
+            } else if (key == "force_timestep_0"){
+                if (!parse_strict_bool(value,  params.force_timestep_0)) {
+                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            }
+        }
     }
 };
 
@@ -4703,7 +4772,8 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
                                                                             const sd_img_gen_params_t* sd_img_gen_params,
                                                                             GenerationRequest* request,
                                                                             SamplePlan* plan,
-                                                                            ImageGenerationLatents* latents) {
+                                                                            ImageGenerationLatents* latents,
+                                                                            EditModeParams* edit_params) {
     ConditionerRunnerDoneOnExit conditioner_runner_done{sd_ctx->sd->cond_stage_model.get()};
 
     ConditionerParams condition_params;
@@ -4711,7 +4781,10 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
     condition_params.clip_skip  = request->clip_skip;
     condition_params.width      = request->width;
     condition_params.height     = request->height;
-    condition_params.ref_images = &latents->ref_images;
+    if(edit_params->use_VLM){
+        condition_params.ref_images = &latents->ref_images;
+    }
+
 
     sd_ctx->sd->prepare_generation_extensions(request->pm_params,
                                               request->pulid_params,
@@ -4721,7 +4794,7 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
     condition_params.zero_out_masked = false;
     auto cond                        = sd_ctx->sd->cond_stage_model->get_learned_condition(sd_ctx->sd->n_threads,
                                                                                            condition_params);
-    if (cond.c_concat.empty()) {
+    if (cond.c_concat.empty() && edit_params->use_dit_refs) {
         cond.c_concat = latents->concat_latent;  // TODO: optimize
     }
 
@@ -4750,7 +4823,7 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
             uncond                           = sd_ctx->sd->cond_stage_model->get_learned_condition(sd_ctx->sd->n_threads,
                                                                                                    condition_params);
         }
-        if (uncond.c_concat.empty()) {
+        if (uncond.c_concat.empty() && edit_params->use_dit_refs) {
             uncond.c_concat = latents->concat_latent;  // TODO: optimize
         }
     }
@@ -4774,7 +4847,7 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
             }
             img_uncond = sd_ctx->sd->cond_stage_model->get_learned_condition(sd_ctx->sd->n_threads,
                                                                              condition_params);
-            if (img_uncond.c_concat.empty()) {
+            if (img_uncond.c_concat.empty() && edit_params->use_dit_refs) {
                 img_uncond.c_concat = latents->img_uncond_concat_latent;  // TODO: optimize
             }
         }
@@ -5091,6 +5164,10 @@ SD_API bool generate_image(sd_ctx_t* sd_ctx,
     sd_ctx->sd->apply_loras(sd_img_gen_params->loras, sd_img_gen_params->lora_count);
     apply_circular_axes_to_diffusion(sd_ctx, sd_img_gen_params->circular_x, sd_img_gen_params->circular_y);
 
+    EditModeParams edit_params;
+    // TODO: parse EditModeParams from sd_img_gen_params->ref_image_mode
+    sd_ctx->sd->set_edit_mode_params(edit_params, sd_img_gen_params->ref_image_mode);
+
     ImageVaeAxesGuard axes_guard(sd_ctx, sd_img_gen_params, request);
 
     SamplePlan plan(sd_ctx, sd_img_gen_params, request);
@@ -5107,7 +5184,8 @@ SD_API bool generate_image(sd_ctx_t* sd_ctx,
                                                       sd_img_gen_params,
                                                       &request,
                                                       &plan,
-                                                      &latents);
+                                                      &latents,
+                                                      &edit_params);
     if (!embeds_opt.has_value()) {
         return false;
     }
@@ -5154,6 +5232,7 @@ SD_API bool generate_image(sd_ctx_t* sd_ctx,
                                                    plan.sigmas,
                                                    latents.ref_latents,
                                                    request.increase_ref_index,
+                                                   edit_params,
                                                    latents.denoise_mask,
                                                    sd::Tensor<float>(),
                                                    1.f,
@@ -5275,6 +5354,7 @@ SD_API bool generate_image(sd_ctx_t* sd_ctx,
                                                             hires_sigma_sched,
                                                             latents.ref_latents,
                                                             request.increase_ref_index,
+                                                            edit_params,
                                                             hires_denoise_mask,
                                                             sd::Tensor<float>(),
                                                             1.f,
@@ -5945,6 +6025,8 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
 
     sd_ctx->sd->reset_cancel_flag();
 
+    EditModeParams edit_params;
+
     if (num_frames_out != nullptr) {
         *num_frames_out = 0;
     }
@@ -6035,6 +6117,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                                            high_noise_sigmas,
                                                            std::vector<sd::Tensor<float>>{},
                                                            false,
+                                                           edit_params,
                                                            latents.denoise_mask,
                                                            latents.vace_context,
                                                            request.vace_strength,
@@ -6077,6 +6160,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                                         plan.sigmas,
                                                         std::vector<sd::Tensor<float>>{},
                                                         false,
+                                                        edit_params,
                                                         latents.denoise_mask,
                                                         latents.vace_context,
                                                         request.vace_strength,
@@ -6202,7 +6286,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                             x_t,
                                             std::move(noise),
                                             embeds.cond,
-                                          hires_request.use_uncond ? embeds.uncond : SDCondition(),
+                                            hires_request.use_uncond ? embeds.uncond : SDCondition(),
                                             embeds.img_uncond,
                                             sd::Tensor<float>(),
                                             0.f,
@@ -6215,6 +6299,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                             hires_sigma_sched,
                                             std::vector<sd::Tensor<float>>{},
                                             false,
+                                            edit_params,
                                             hires_denoise_mask,
                                             sd::Tensor<float>(),
                                             hires_request.vace_strength,
