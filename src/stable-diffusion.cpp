@@ -2855,8 +2855,8 @@ public:
         } else if (sd_version_is_z_image(version)){
             return "z_image_omni";
         } else if (sd_version_is_krea2(version)){
-            // have to make a choice between "qwen" mode (for lbouaraba/krea2edit) 
-            // and "krea2_ostris_edit" (for ostris edit)
+            // have to make a choice between "krea2_edit" mode (for lbouaraba/krea2edit) 
+            // and "krea2_ostris_edit" (for krea2 ostris edit)
             // since krea2 ostris edit support predates, it should probably be default
             return "krea2_ostris_edit";
         }
@@ -2884,28 +2884,59 @@ public:
         if (preset_name != "default") {
             params = REF_PRESETS.at(preset_name);
         }
-        
+
         for (const auto& [key, value] : parse_key_value_args(overrides, "edit mode args")) {
             if (key == "use_vlm") {
-                if (!parse_strict_bool(value,  params.use_VLM)) {
+                if (!parse_strict_bool(value, params.use_VLM)) {
                     LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
                 }
             } else if (key == "pass_to_dit") {
-                if (!parse_strict_bool(value,  params.use_dit_refs)) {
+                if (!parse_strict_bool(value, params.use_dit_refs)) {
                     LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
                 }
             } else if (key == "ref_index_mode") {
-                if (value == "fixed"){
+                if (value == "fixed") {
                     params.ref_index_mode = Rope::RefIndexMode::FIXED;
-                } else if (value == "increase"){
+                } else if (value == "increase") {
                     params.ref_index_mode = Rope::RefIndexMode::INCREASE;
-                } else if (value == "decrease"){
+                } else if (value == "decrease") {
                     params.ref_index_mode = Rope::RefIndexMode::DECREASE;
-                } 
-            } else if (key == "force_timestep_0"){
-                if (!parse_strict_bool(value,  params.force_timestep_0)) {
+                } else {
                     LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
                 }
+            } else if (key == "force_timestep_0") {
+                if (!parse_strict_bool(value, params.force_timestep_0)) {
+                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            } else if (key == "resize_vae_refs") {
+                if (!parse_strict_bool(value, params.resize_vae_refs)) {
+                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            } else if (key == "vae_refs_size") {
+                if (!parse_strict_int(value, params.vae_refs_size)) {
+                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            } else if (key == "cond_refs_resize_mode") {
+                if (value == "longest_side") {
+                    params.cond_refs_resize_mode = CondResizeMode::LONGEST_SIDE;
+                } else if (value == "area") {
+                    params.cond_refs_resize_mode = CondResizeMode::AREA;
+                } else if (value == "none") {
+                    params.cond_refs_resize_mode = CondResizeMode::NONE;
+                } else {
+                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            } else if (key == "cond_refs_max_size") {
+                if (!parse_strict_int(value, params.cond_refs_max_size)) {
+                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            } else if (key == "cond_refs_min_size") {
+                if (!parse_strict_int(value, params.cond_refs_min_size)) {
+                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            } else if (key != "preset") {
+                // Optional: catch-all for unknown keys
+                LOG_WARN("ignoring unknown edit mode arg '%s'", key.c_str());
             }
         }
     }
@@ -4500,7 +4531,8 @@ static sd::Tensor<float> ensure_image_tensor_channels(sd::Tensor<float> image, i
 static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd_ctx_t* sd_ctx,
                                                                               const sd_img_gen_params_t* sd_img_gen_params,
                                                                               GenerationRequest* request,
-                                                                              SamplePlan* plan) {
+                                                                              SamplePlan* plan,
+                                                                              EditModeParams* edit_params) {
     int64_t prepare_start_ms = ggml_time_ms();
 
     sd::Tensor<float> init_image_tensor;
@@ -4643,9 +4675,10 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
             continue;
         }
         sd::Tensor<float> ref_latent;
-        if (request->auto_resize_ref_image && !sd_version_is_pid(sd_ctx->sd->version)) {
+        if (edit_params->resize_vae_refs && !sd_version_is_pid(sd_ctx->sd->version)) {
             LOG_DEBUG("auto resize ref images");
-            int vae_image_size = std::min(1024 * 1024, request->width * request->height);
+            int target_pixels = edit_params->vae_refs_size > 0 ? edit_params->vae_refs_size : 1024 * 1024;
+            int vae_image_size = std::min(target_pixels, request->width * request->height);
             double vae_width   = sqrt(vae_image_size * ref_images[i].shape()[0] / ref_images[i].shape()[1]);
             double vae_height  = vae_width * ref_images[i].shape()[1] / ref_images[i].shape()[0];
 
@@ -5174,7 +5207,8 @@ SD_API bool generate_image(sd_ctx_t* sd_ctx,
     auto latents_opt = prepare_image_generation_latents(sd_ctx,
                                                         sd_img_gen_params,
                                                         &request,
-                                                        &plan);
+                                                        &plan,
+                                                        &edit_params);
     if (!latents_opt.has_value()) {
         return false;
     }

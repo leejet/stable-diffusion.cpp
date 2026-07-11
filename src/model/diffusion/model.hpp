@@ -10,21 +10,32 @@
 #include "model/common/rope.hpp"
 #include "model_manager.h"
 
+enum class CondResizeMode {
+    NONE,
+    LONGEST_SIDE,
+    AREA,
+};
+
 struct EditModeParams {
-    bool use_VLM                      = false;
-    bool use_dit_refs                 = true;
-    Rope::RefIndexMode ref_index_mode = Rope::RefIndexMode::FIXED;
-    bool force_timestep_0             = false;
+    bool use_VLM                         = false;
+    bool use_dit_refs                    = true;
+    Rope::RefIndexMode ref_index_mode    = Rope::RefIndexMode::FIXED;
+    bool force_timestep_0                = false;
+    bool resize_vae_refs                 = true;
+    int vae_refs_size                    = -1;
+    CondResizeMode cond_refs_resize_mode = CondResizeMode::LONGEST_SIDE;
+    int cond_refs_max_size               = -1;
+    int cond_refs_min_size               = -1;
 };
 
 const std::unordered_map<std::string, EditModeParams> REF_PRESETS = {
-    // {preset_name,      {VLM,   refs, mode,                         t_0  }},
-    {"flux_kontext",      {false, true, Rope::RefIndexMode::FIXED,    false}}, 
-    {"flux2",             {false, true, Rope::RefIndexMode::INCREASE, false}}, 
-    {"qwen",              {true,  true, Rope::RefIndexMode::INCREASE, false}},
-    {"qwen_layered",      {true,  true, Rope::RefIndexMode::DECREASE, false}},
-    {"z_image_omni",      {true,  true, Rope::RefIndexMode::FIXED,    false}},
-    {"krea2_ostris_edit", {true,  true, Rope::RefIndexMode::INCREASE, true }},
+    {"flux_kontext", {false, true, Rope::RefIndexMode::FIXED, false, true, -1, CondResizeMode::NONE, -1, -1}},
+    {"flux2", {false, true, Rope::RefIndexMode::INCREASE, false, true, -1, CondResizeMode::NONE, -1, -1}},
+    {"qwen", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, CondResizeMode::AREA, -1, -1}},
+    {"qwen_layered", {true, true, Rope::RefIndexMode::DECREASE, false, true, -1, CondResizeMode::AREA, -1, -1}},
+    {"z_image_omni", {true, true, Rope::RefIndexMode::FIXED, false, true, -1, CondResizeMode::AREA, -1, -1}},
+    {"krea2_ostris_edit", {true, true, Rope::RefIndexMode::INCREASE, true, true, -1, CondResizeMode::AREA, -1, -1}},
+    {"krea2_edit", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, CondResizeMode::LONGEST_SIDE, 768, 768}},
 };
 
 struct UNetDiffusionExtra {
