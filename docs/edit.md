@@ -52,16 +52,34 @@ The `--ref-image-mode` argument accepts a comma-separated list of key-value pair
 
 If presets are insufficient, you can manually configure the following parameters via `--ref-image-mode`:
 
-| Key | Type | Description |
-| :--- | :--- | :--- |
-| `preset` | string | Sets a predefined group of parameters. |
-| `use_vlm` | bool | Whether references are passed to the VLM encoder (if the model supports it). |
-| `pass_to_dit` | bool | Whether VAE-encoded references are passed directly to the DiT. |
-| `ref_index_mode` | enum | Behavior of the RoPE index: `fixed`, `increase`, or `decrease`. |
-| `force_timestep_0` | bool | Forces timestep=0 for reference tokens (Krea2 architecture only). |
-| `resize_vae_refs` | bool | Whether to resize VAE references. |
-| `vae_refs_max_size` | int | Maximum pixel size for VAE references. |
-| `cond_refs_resize_mode` | enum | How to resize condition references: `longest_side`, `area`, or `none`. |
-| `cond_refs_max_size` | int | Maximum pixel size for condition references. |
-| `cond_refs_min_size` | int | Minimum pixel size for condition references. |
-| `cond_refs_size` | int | Shortcut to set both min and max size to the same value. |
+| Key | Type | Description | Allowed Values |
+| :--- | :--- | :--- | :--- |
+| `preset` | string | Overrides the automatic preset. | (See the Presets table above) |
+| `use_vlm` | bool | Whether references are passed to the VLM encoder. | `true`, `false` |
+| `pass_to_dit` | bool | Whether VAE-encoded references are passed directly to the DiT. | `true`, `false` |
+| `ref_index_mode` | string | Behavior of the RoPE index. | `fixed`, `increase`, `decrease` |
+| `force_timestep_0` | bool | Forces timestep=0 for reference tokens. | `true`, `false` (Krea2 only) |
+| `resize_vae_refs` | bool | Whether to resize VAE references. | `true`, `false` |
+| `vae_refs_max_size` | int | Maximum pixel size for VAE references. | Integer |
+| `cond_refs_resize_mode` | string | How to resize condition references. | `longest_side`, `area`, `none` |
+| `cond_refs_max_size` | int | Maximum pixel size for condition references. | Integer |
+| `cond_refs_min_size` | int | Minimum pixel size for condition references. | Integer |
+| `cond_refs_size` | int | Shortcut to set both min and max size to the same value. | Integer |
+
+### Preset Default Values
+
+For a technical overview of how each preset is configured, see the table below.
+
+| Preset | VLM | RoPE Index | Cond Resize | Special Notes |
+| :--- | :---: | :---: | :---: | :--- |
+| `flux_kontext` | No | `fixed` | `none` | |
+| `flux2` | No | `increase` | `none` | |
+| `qwen` | Yes | `increase` | `area` | |
+| `qwen_layered` | Yes | `decrease` | `area` | |
+| `z_image_omni` | Yes | `fixed` | `area` | |
+| `krea2_ostris_edit`| Yes | `increase` | `area` | `force_timestep_0 = true` |
+| `krea2_edit` | Yes | `increase` | `longest` | `cond_refs_size = 768` |
+
+**Additional Default Notes:**
+- **Condition Sizes:** For most presets, `cond_refs_max_size` and `cond_refs_min_size` are set to `-1`, meaning the values are model-dependent and handled automatically.
+- **VAE Reference Size:** `vae_refs_max_size` defaults to $1024 \times 1024$ pixels (`1048576`).
