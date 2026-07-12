@@ -2423,6 +2423,22 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
         pulid_id_weight,
     };
 
+    if (!auto_resize_ref_image) {
+        if (!ref_mode.empty()) {
+            ref_mode += ",";
+        }
+        ref_mode += "resize_vae_refs=0";
+        LOG_WARN("Notice: --disable-auto-resize-ref-image is deprecated. Use --ref-image-mode \"resize_vae_refs=off\" instead.");
+    }
+
+    if (increase_ref_index) {
+        if (!ref_mode.empty()) {
+            ref_mode += ",";
+        }
+        ref_mode += "ref_index_mode=increase";
+        LOG_WARN("Notice: --increase-ref-index is deprecated. Use --ref-image-mode \"ref_index_mode=increase\" instead.");
+    }
+
     params.loras                 = lora_vec.empty() ? nullptr : lora_vec.data();
     params.lora_count            = static_cast<uint32_t>(lora_vec.size());
     params.prompt                = prompt.c_str();
@@ -2431,8 +2447,6 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     params.init_image            = init_image.get();
     params.ref_images            = ref_image_views.empty() ? nullptr : ref_image_views.data();
     params.ref_images_count      = static_cast<int>(ref_image_views.size());
-    params.auto_resize_ref_image = auto_resize_ref_image;
-    params.increase_ref_index    = increase_ref_index;
     params.ref_image_mode        = ref_mode.c_str();
     params.mask_image            = mask_image.get();
     params.width                 = get_resolved_width();

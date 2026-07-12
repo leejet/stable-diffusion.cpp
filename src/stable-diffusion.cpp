@@ -3455,8 +3455,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "batch_count: %d\n"
              "qwen_image_layers: %d\n"
              "ref_images_count: %d\n"
-             "auto_resize_ref_image: %s\n"
-             "increase_ref_index: %s\n"
+             "ref_image_mode: %s\n"
              "control_strength: %.2f\n"
              "photo maker: {style_strength = %.2f, id_images_count = %d, id_embed_path = %s}\n"
              "VAE tiling: %s (temporal=%s, extra_tiling_args=%s)\n"
@@ -3474,8 +3473,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              sd_img_gen_params->batch_count,
              sd_img_gen_params->qwen_image_layers,
              sd_img_gen_params->ref_images_count,
-             BOOL_STR(sd_img_gen_params->auto_resize_ref_image),
-             BOOL_STR(sd_img_gen_params->increase_ref_index),
+             sd_img_gen_params->ref_image_mode,
              sd_img_gen_params->control_strength,
              sd_img_gen_params->pm_params.style_strength,
              sd_img_gen_params->pm_params.id_images_count,
@@ -3772,8 +3770,6 @@ struct GenerationRequest {
     float strength                           = 1.f;
     float control_strength                   = 0.f;
     float eta                                = 0.f;
-    bool increase_ref_index                  = false;
-    bool auto_resize_ref_image               = false;
     sd_guidance_params_t guidance            = {};
     sd_guidance_params_t high_noise_guidance = {};
     sd_pm_params_t pm_params                 = {};
@@ -3799,8 +3795,6 @@ struct GenerationRequest {
         strength                    = sd_img_gen_params->strength;
         control_strength            = sd_img_gen_params->control_strength;
         eta                         = sd_img_gen_params->sample_params.eta;
-        increase_ref_index          = sd_img_gen_params->increase_ref_index;
-        auto_resize_ref_image       = sd_img_gen_params->auto_resize_ref_image;
         has_ref_images              = sd_img_gen_params->ref_images_count > 0;
         guidance                    = sd_img_gen_params->sample_params.guidance;
         pm_params                   = sd_img_gen_params->pm_params;
@@ -5219,10 +5213,6 @@ SD_API bool generate_image(sd_ctx_t* sd_ctx,
     EditModeParams edit_params;
     // TODO: parse EditModeParams from sd_img_gen_params->ref_image_mode
     sd_ctx->sd->set_edit_mode_params(edit_params, sd_img_gen_params->ref_image_mode);
-
-    if (request.increase_ref_index){
-        edit_params.ref_index_mode = Rope::RefIndexMode::INCREASE;
-    }
 
     ImageVaeAxesGuard axes_guard(sd_ctx, sd_img_gen_params, request);
 

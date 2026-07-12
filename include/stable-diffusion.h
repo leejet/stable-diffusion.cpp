@@ -363,8 +363,6 @@ typedef struct {
     sd_image_t init_image;
     sd_image_t* ref_images;
     int ref_images_count;
-    bool auto_resize_ref_image;
-    bool increase_ref_index;
     const char* ref_image_mode;
     sd_image_t mask_image;
     int width;
