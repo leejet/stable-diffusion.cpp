@@ -211,8 +211,8 @@ public:
     std::vector<std::shared_ptr<GenerationExtension>> generation_extensions;
     std::vector<std::shared_ptr<LoraModel>> runtime_lora_models;
     bool apply_lora_immediately = false;
-    bool animatediff_loaded     = false;  // motion module present -> SD 1.5 UNet is video-capable
-    int animatediff_num_frames  = 0;      // transient: >0 during a generate_video AnimateDiff call
+    bool animatediff_loaded    = false;
+    int animatediff_num_frames = 0;
 
     std::string taesd_path;
     sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0, 0, nullptr};
@@ -2404,9 +2404,6 @@ public:
                 if (sd_version_is_unet(version)) {
                     int nvf = -1;
                     if (animatediff_loaded && noised_input.dim() >= 4 && noised_input.shape()[3] > 1) {
-                        // AnimateDiff batches N frames as the UNet's batch axis
-                        // (sd::Tensor shape[3] == ggml ne[3]). Signals the motion
-                        // module to unroll the batch as the temporal sequence.
                         nvf = static_cast<int>(noised_input.shape()[3]);
                     }
                     diffusion_params.extra = UNetDiffusionExtra{nvf, &controls, control_strength};
@@ -4760,9 +4757,6 @@ static sd_image_t* decode_image_outputs(sd_ctx_t* sd_ctx,
         } else if (sd_ctx->sd->animatediff_num_frames > 1 &&
                    final_latents[i].dim() >= 4 &&
                    final_latents[i].shape()[3] == sd_ctx->sd->animatediff_num_frames) {
-            // AnimateDiff: final_latents[i] carries N frames on the batch axis.
-            // VAE-decode each frame independently and emit them as separate
-            // output images so the CLI/API side treats them as a frame stream.
             int n_frames = sd_ctx->sd->animatediff_num_frames;
             for (int f = 0; f < n_frames; ++f) {
                 if (sd_ctx->sd->get_cancel_flag() == SD_CANCEL_ALL) {
@@ -5839,9 +5833,6 @@ static bool apply_ltxv_refine_image_conditioning(sd_ctx_t* sd_ctx,
     return true;
 }
 
-// AnimateDiff wraps the SD 1.5 UNet into a T2V generator without reshaping the
-// spatial pipeline. Route through generate_image with the batch axis carrying
-// the N frames, then peel them apart into a video-shaped output.
 static bool generate_animatediff_video(sd_ctx_t* sd_ctx,
                                        const sd_vid_gen_params_t* sd_vid_gen_params,
                                        sd_image_t** frames_out,

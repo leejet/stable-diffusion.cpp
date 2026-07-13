@@ -1356,12 +1356,6 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
                 break;
             }
         }
-        // LoRA path strips the `lora.` prefix at the top of this function
-        // and re-prepends it at the bottom. Some LoRAs (e.g. AnimateDiff's
-        // v3_sd15_adapter) ship bare diffusers UNet keys with no
-        // `model.diffusion_model.` prefix; route those through the
-        // diffusers -> ldm converter using the canonical prefix so name
-        // matching against the loaded UNet succeeds.
         if (is_lora && !matched && !diffuison_model_prefix_vec.empty()) {
             if (starts_with(name, "down_blocks.") || starts_with(name, "up_blocks.") ||
                 starts_with(name, "mid_block.") || starts_with(name, "conv_in.") ||

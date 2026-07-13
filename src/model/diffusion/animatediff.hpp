@@ -4,11 +4,7 @@
 #include "core/ggml_extend.hpp"
 #include "model/common/block.hpp"
 
-// AnimateDiff (Guo et al., https://arxiv.org/abs/2307.04725) is a UNet add-on:
-// it slots a temporal transformer into 20 places inside an SD 1.5 diffusers
-// UNet (down_blocks.0..3 x 2 slots, up_blocks.0..3 x 3 slots, no mid_block).
-// Each slot runs self-attention over the frame axis. The base UNet, VAE, and
-// text encoder are unchanged.
+// AnimateDiff (https://arxiv.org/abs/2307.04725) SD 1.5 motion modules.
 namespace AnimateDiff {
 
     struct MotionModuleConfig {
@@ -19,8 +15,6 @@ namespace AnimateDiff {
         std::vector<int64_t> up_channels   = {1280, 1280, 640, 320};
         int num_down_motion_per_block      = 2;
         int num_up_motion_per_block        = 3;
-        // mm_sd_v15_v2 injects an extra motion module at the UNet middle block
-        // (channels=1280). v3 dropped this slot; detect it from the checkpoint.
         bool enable_mid_block = false;
         int64_t mid_channels  = 1280;
     };
@@ -46,7 +40,6 @@ namespace AnimateDiff {
             blocks["to_out.0"] = std::shared_ptr<GGMLBlock>(new Linear(channels, channels, true));
         }
 
-        // x: [C, F, N]. Returns [C, F, N].
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             auto to_q   = std::dynamic_pointer_cast<Linear>(blocks["to_q"]);
             auto to_k   = std::dynamic_pointer_cast<Linear>(blocks["to_k"]);
@@ -112,8 +105,6 @@ namespace AnimateDiff {
             blocks["proj_out"]             = std::shared_ptr<GGMLBlock>(new Linear(channels, channels, true));
         }
 
-        // x: [W, H, C, F] (assumes B==1 so N==F). Adds a temporal-attention
-        // residual and returns the same shape.
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, int64_t num_frames) {
             auto norm     = std::dynamic_pointer_cast<GroupNorm>(blocks["norm"]);
             auto proj_in  = std::dynamic_pointer_cast<Linear>(blocks["proj_in"]);
@@ -152,10 +143,6 @@ namespace AnimateDiff {
         }
     };
 
-    // Mirrors the safetensors layout:
-    //   down_blocks.{0..3}.motion_modules.{0..1}
-    //   up_blocks.{0..3}.motion_modules.{0..2}
-    //   mid_block.motion_modules.0  (only when cfg.enable_mid_block is set)
     class AnimateDiffModel : public GGMLBlock {
     public:
         MotionModuleConfig config;
