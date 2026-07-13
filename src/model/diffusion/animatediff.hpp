@@ -21,8 +21,8 @@ namespace AnimateDiff {
         int num_up_motion_per_block        = 3;
         // mm_sd_v15_v2 injects an extra motion module at the UNet middle block
         // (channels=1280). v3 dropped this slot; detect it from the checkpoint.
-        bool enable_mid_block              = false;
-        int64_t mid_channels               = 1280;
+        bool enable_mid_block = false;
+        int64_t mid_channels  = 1280;
     };
 
     class TemporalAttention : public GGMLBlock {
@@ -183,7 +183,8 @@ namespace AnimateDiff {
 
         std::shared_ptr<MotionModule> motion(const std::string& key) {
             auto it = blocks.find(key);
-            if (it == blocks.end()) return nullptr;
+            if (it == blocks.end())
+                return nullptr;
             return std::dynamic_pointer_cast<MotionModule>(it->second);
         }
     };

@@ -603,33 +603,41 @@ public:
         // At F <= 1 the temporal attention degenerates to identity and emits
         // an OOD-magnitude residual; skip so single-frame vid_gen matches
         // plain img_gen.
-        auto motion_root = config.enable_animatediff && num_video_frames > 1
-                               ? std::dynamic_pointer_cast<AnimateDiff::AnimateDiffModel>(blocks["motion_module"])
-                               : nullptr;
+        auto motion_root        = config.enable_animatediff && num_video_frames > 1
+                                      ? std::dynamic_pointer_cast<AnimateDiff::AnimateDiffModel>(blocks["motion_module"])
+                                      : nullptr;
         auto apply_motion_input = [&](int input_block_idx, ggml_tensor* h_in) -> ggml_tensor* {
-            if (!motion_root) return h_in;
+            if (!motion_root)
+                return h_in;
             // ldm `input_blocks.<K>` (K = 1 + di*3 + mj) -> diffusers `down_blocks.<di>.motion_modules.<mj>`.
             int di = (input_block_idx - 1) / 3;
             int mj = (input_block_idx - 1) % 3;
-            if (di < 0 || di >= (int)channel_mult.size() || mj < 0 || mj >= num_res_blocks) return h_in;
+            if (di < 0 || di >= (int)channel_mult.size() || mj < 0 || mj >= num_res_blocks)
+                return h_in;
             auto mm = motion_root->motion("down_blocks." + std::to_string(di) + ".motion_modules." + std::to_string(mj));
-            if (!mm) return h_in;
+            if (!mm)
+                return h_in;
             return mm->forward(ctx, h_in, num_video_frames);
         };
         auto apply_motion_output = [&](int output_block_idx, ggml_tensor* h_in) -> ggml_tensor* {
-            if (!motion_root) return h_in;
+            if (!motion_root)
+                return h_in;
             // ldm `output_blocks.<K>` (K = ui*3 + mj) -> diffusers `up_blocks.<ui>.motion_modules.<mj>`.
             int ui = output_block_idx / 3;
             int mj = output_block_idx % 3;
-            if (ui < 0 || ui >= (int)channel_mult.size() || mj < 0 || mj > num_res_blocks) return h_in;
+            if (ui < 0 || ui >= (int)channel_mult.size() || mj < 0 || mj > num_res_blocks)
+                return h_in;
             auto mm = motion_root->motion("up_blocks." + std::to_string(ui) + ".motion_modules." + std::to_string(mj));
-            if (!mm) return h_in;
+            if (!mm)
+                return h_in;
             return mm->forward(ctx, h_in, num_video_frames);
         };
         auto apply_motion_mid = [&](ggml_tensor* h_in) -> ggml_tensor* {
-            if (!motion_root) return h_in;
+            if (!motion_root)
+                return h_in;
             auto mm = motion_root->motion("mid_block.motion_modules.0");
-            if (!mm) return h_in;
+            if (!mm)
+                return h_in;
             return mm->forward(ctx, h_in, num_video_frames);
         };
         // input block 1-11
