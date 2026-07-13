@@ -2846,17 +2846,19 @@ public:
             return "flux_kontext";
         } else if (sd_version_is_flux2(version) || sd_version_is_sefi_image(version)) {
             return "flux2";
-        } else if (version == VERSION_QWEN_IMAGE_LAYERED){
+        } else if (version == VERSION_QWEN_IMAGE_LAYERED) {
             return "qwen_layered";
         } else if (sd_version_is_qwen_image(version)) {
             return "qwen";
-        } else if (sd_version_is_z_image(version) || sd_version_is_boogu_image(version)){
+        } else if (sd_version_is_z_image(version) || sd_version_is_boogu_image(version)) {
             return "z_image_omni";
-        } else if (sd_version_is_krea2(version)){
+        } else if (sd_version_is_krea2(version)) {
             // have to make a choice between "krea2_edit" mode (for lbouaraba/krea2edit) 
             // and "krea2_ostris_edit" (for krea2 ostris edit)
             // since krea2 ostris edit support predates, it should probably be default
             return "krea2_ostris_edit";
+        } else if (sd_version_is_anima(version)) {
+            return "cosmos_reference";
         }
         return "default";
     }

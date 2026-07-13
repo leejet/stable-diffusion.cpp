@@ -36,6 +36,7 @@ const std::unordered_map<std::string, EditModeParams> REF_PRESETS = {
     {"z_image_omni", {true, true, Rope::RefIndexMode::FIXED, false, true, -1, CondResizeMode::AREA, -1, -1}},
     {"krea2_ostris_edit", {true, true, Rope::RefIndexMode::INCREASE, true, true, -1, CondResizeMode::AREA, -1, -1}},
     {"krea2_edit", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, CondResizeMode::LONGEST_SIDE, 768, 768}},
+    {"cosmos_reference", {false, true, Rope::RefIndexMode::INCREASE, false, false, -1, CondResizeMode::NONE, -1, -1}},
 };
 
 struct UNetDiffusionExtra {
