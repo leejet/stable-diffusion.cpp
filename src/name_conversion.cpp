@@ -304,6 +304,12 @@ std::string convert_diffusers_unet_to_original_sd1(std::string name) {
         }
     }
 
+    static const std::vector<std::pair<std::string, std::string>> name_map{
+        {"to_out.weight", "to_out.0.weight"},
+        {"to_out.bias", "to_out.0.bias"},
+    };
+    replace_with_name_map(result, name_map);
+
     return result;
 }
 
@@ -1341,11 +1347,29 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
 
     // diffusion model
     {
+        bool matched = false;
         for (const auto& prefix : diffuison_model_prefix_vec) {
             if (starts_with(name, prefix)) {
-                name = convert_diffusion_model_name(name.substr(prefix.size()), prefix, version);
-                name = prefix + name;
+                name    = convert_diffusion_model_name(name.substr(prefix.size()), prefix, version);
+                name    = prefix + name;
+                matched = true;
                 break;
+            }
+        }
+        // LoRA path strips the `lora.` prefix at the top of this function
+        // and re-prepends it at the bottom. Some LoRAs (e.g. AnimateDiff's
+        // v3_sd15_adapter) ship bare diffusers UNet keys with no
+        // `model.diffusion_model.` prefix; route those through the
+        // diffusers -> ldm converter using the canonical prefix so name
+        // matching against the loaded UNet succeeds.
+        if (is_lora && !matched && !diffuison_model_prefix_vec.empty()) {
+            if (starts_with(name, "down_blocks.") || starts_with(name, "up_blocks.") ||
+                starts_with(name, "mid_block.") || starts_with(name, "conv_in.") ||
+                starts_with(name, "conv_out.") || starts_with(name, "time_embedding.") ||
+                starts_with(name, "conv_norm_out.")) {
+                const std::string& canonical_prefix = diffuison_model_prefix_vec.front();
+                name                                = convert_diffusion_model_name(name, canonical_prefix, version);
+                name                                = canonical_prefix + name;
             }
         }
     }

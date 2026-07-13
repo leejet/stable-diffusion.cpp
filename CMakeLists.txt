@@ -312,7 +312,10 @@ set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
 if (NOT SD_USE_SYSTEM_GGML)
     # see https://github.com/ggerganov/ggml/pull/682
-    add_definitions(-DGGML_MAX_NAME=128)
+    # 160 (up from 128) fits the longest AnimateDiff motion-module tensor
+    # name: model.diffusion_model.motion_module.up_blocks.3.motion_modules.2.
+    #       temporal_transformer.transformer_blocks.0.attention_blocks.1.to_out.0.weight
+    add_definitions(-DGGML_MAX_NAME=160)
 endif()
 
 # deps

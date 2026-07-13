@@ -24,6 +24,7 @@
 #include "extensions/generation_extension.h"
 #include "model/adapter/lora.hpp"
 #include "model/diffusion/anima.hpp"
+#include "model/diffusion/animatediff.hpp"
 #include "model/diffusion/boogu.hpp"
 #include "model/diffusion/control.hpp"
 #include "model/diffusion/ernie_image.hpp"
@@ -210,6 +211,8 @@ public:
     std::vector<std::shared_ptr<GenerationExtension>> generation_extensions;
     std::vector<std::shared_ptr<LoraModel>> runtime_lora_models;
     bool apply_lora_immediately = false;
+    bool animatediff_loaded     = false;  // motion module present -> SD 1.5 UNet is video-capable
+    int animatediff_num_frames  = 0;      // transient: >0 during a generate_video AnimateDiff call
 
     std::string taesd_path;
     sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0, 0, nullptr};
@@ -729,6 +732,16 @@ public:
                 LOG_WARN("loading LTX audio VAE weights from '%s' failed", sd_ctx_params->audio_vae_path);
             } else {
                 use_audio_vae = true;
+            }
+        }
+
+        if (strlen(SAFE_STR(sd_ctx_params->motion_module_path)) > 0) {
+            LOG_INFO("loading motion module (AnimateDiff) from '%s'", sd_ctx_params->motion_module_path);
+            if (!model_loader.init_from_file(sd_ctx_params->motion_module_path,
+                                             "model.diffusion_model.motion_module.")) {
+                LOG_WARN("loading motion module from '%s' failed", sd_ctx_params->motion_module_path);
+            } else {
+                animatediff_loaded = true;
             }
         }
 
@@ -2389,7 +2402,14 @@ public:
                 diffusion_params.ref_latents = ref_latents_override != nullptr ? ref_latents_override : (condition.c_ref_images.empty() ? &ref_latents : &condition.c_ref_images);
 
                 if (sd_version_is_unet(version)) {
-                    diffusion_params.extra = UNetDiffusionExtra{-1, &controls, control_strength};
+                    int nvf = -1;
+                    if (animatediff_loaded && noised_input.dim() >= 4 && noised_input.shape()[3] > 1) {
+                        // AnimateDiff batches N frames as the UNet's batch axis
+                        // (sd::Tensor shape[3] == ggml ne[3]). Signals the motion
+                        // module to unroll the batch as the temporal sequence.
+                        nvf = static_cast<int>(noised_input.shape()[3]);
+                    }
+                    diffusion_params.extra = UNetDiffusionExtra{nvf, &controls, control_strength};
                 } else if (sd_version_is_sd3(version)) {
                     diffusion_params.extra = SkipLayerDiffusionExtra{local_skip_layers};
                 } else if (sd_version_is_flux(version) || sd_version_is_flux2(version) || sd_version_is_longcat(version) || sd_version_is_sefi_image(version)) {
@@ -3426,6 +3446,9 @@ SD_API bool sd_ctx_supports_video_generation(const sd_ctx_t* sd_ctx) {
     if (sd_ctx == nullptr || sd_ctx->sd == nullptr) {
         return false;
     }
+    if (sd_ctx->sd->animatediff_loaded && sd_version_is_unet(sd_ctx->sd->version)) {
+        return true;
+    }
     return sd_version_supports_video_generation(sd_ctx->sd->version);
 }
 
@@ -4424,6 +4447,14 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
         }
     }
 
+    if (sd_ctx->sd->animatediff_num_frames > 1 &&
+        init_latent.dim() >= 4 && init_latent.shape()[3] == 1) {
+        int n_frames = sd_ctx->sd->animatediff_num_frames;
+        std::vector<int64_t> shape(init_latent.shape().begin(), init_latent.shape().end());
+        shape[3]    = n_frames;
+        init_latent = sd::Tensor<float>(std::move(shape));  // zero-filled batch of N frames; per-frame noise is generated later via randn_like.
+    }
+
     if (!control_image_tensor.empty()) {
         control_latent = sd_ctx->sd->encode_first_stage(control_image_tensor);
         if (control_latent.empty()) {
@@ -4725,6 +4756,27 @@ static sd_image_t* decode_image_outputs(sd_ctx_t* sd_ctx,
             }
             if (cancelled) {
                 break;
+            }
+        } else if (sd_ctx->sd->animatediff_num_frames > 1 &&
+                   final_latents[i].dim() >= 4 &&
+                   final_latents[i].shape()[3] == sd_ctx->sd->animatediff_num_frames) {
+            // AnimateDiff: final_latents[i] carries N frames on the batch axis.
+            // VAE-decode each frame independently and emit them as separate
+            // output images so the CLI/API side treats them as a frame stream.
+            int n_frames = sd_ctx->sd->animatediff_num_frames;
+            for (int f = 0; f < n_frames; ++f) {
+                if (sd_ctx->sd->get_cancel_flag() == SD_CANCEL_ALL) {
+                    LOG_ERROR("cancelling latent decodings");
+                    cancelled = true;
+                    break;
+                }
+                sd::Tensor<float> frame_latent = sd::ops::slice(final_latents[i], 3, f, f + 1);
+                sd::Tensor<float> image        = sd_ctx->sd->decode_first_stage(frame_latent);
+                if (image.empty()) {
+                    LOG_ERROR("decode_first_stage failed for AnimateDiff frame %d/%d", f + 1, n_frames);
+                    return nullptr;
+                }
+                decoded_images.push_back(std::move(image));
             }
         } else {
             sd::Tensor<float> image = sd_ctx->sd->decode_first_stage(final_latents[i]);
@@ -5787,6 +5839,50 @@ static bool apply_ltxv_refine_image_conditioning(sd_ctx_t* sd_ctx,
     return true;
 }
 
+// AnimateDiff wraps the SD 1.5 UNet into a T2V generator without reshaping the
+// spatial pipeline. Route through generate_image with the batch axis carrying
+// the N frames, then peel them apart into a video-shaped output.
+static bool generate_animatediff_video(sd_ctx_t* sd_ctx,
+                                       const sd_vid_gen_params_t* sd_vid_gen_params,
+                                       sd_image_t** frames_out,
+                                       int* num_frames_out) {
+    int n_frames = sd_vid_gen_params->video_frames;
+    if (n_frames < 1) {
+        LOG_ERROR("AnimateDiff: --video-frames must be >= 1");
+        return false;
+    }
+    if (n_frames > 32) {
+        LOG_WARN("AnimateDiff motion modules have a 32-frame positional-encoding context; capping to 32");
+        n_frames = 32;
+    }
+
+    sd_img_gen_params_t img;
+    sd_img_gen_params_init(&img);
+    img.loras             = sd_vid_gen_params->loras;
+    img.lora_count        = sd_vid_gen_params->lora_count;
+    img.prompt            = sd_vid_gen_params->prompt;
+    img.negative_prompt   = sd_vid_gen_params->negative_prompt;
+    img.clip_skip         = sd_vid_gen_params->clip_skip;
+    img.width             = sd_vid_gen_params->width;
+    img.height            = sd_vid_gen_params->height;
+    img.sample_params     = sd_vid_gen_params->sample_params;
+    img.strength          = sd_vid_gen_params->strength;
+    img.seed              = sd_vid_gen_params->seed;
+    img.batch_count       = 1;
+    img.control_strength  = 1.0f;
+    img.vae_tiling_params = sd_vid_gen_params->vae_tiling_params;
+    img.cache             = sd_vid_gen_params->cache;
+    img.hires             = sd_vid_gen_params->hires;
+    img.qwen_image_layers = 0;
+    img.circular_x        = sd_vid_gen_params->circular_x;
+    img.circular_y        = sd_vid_gen_params->circular_y;
+
+    sd_ctx->sd->animatediff_num_frames = n_frames;
+    bool ok                            = generate_image(sd_ctx, &img, frames_out, num_frames_out);
+    sd_ctx->sd->animatediff_num_frames = 0;
+    return ok;
+}
+
 SD_API bool generate_video(sd_ctx_t* sd_ctx,
                            const sd_vid_gen_params_t* sd_vid_gen_params,
                            sd_image_t** frames_out,
@@ -5797,6 +5893,12 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
     }
     if (frames_out != nullptr) {
         *frames_out = nullptr;
+    }
+
+    if (sd_ctx->sd->animatediff_loaded && sd_version_is_unet(sd_ctx->sd->version)) {
+        LOG_INFO("AnimateDiff dispatch: %d frames, %dx%d",
+                 sd_vid_gen_params->video_frames, sd_vid_gen_params->width, sd_vid_gen_params->height);
+        return generate_animatediff_video(sd_ctx, sd_vid_gen_params, frames_out, num_frames_out);
     }
     if (audio_out != nullptr) {
         *audio_out = nullptr;
