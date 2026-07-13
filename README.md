@@ -68,6 +68,7 @@ API and command-line option may change frequently.***
     - [LingBot-Video](./docs/lingbot_video.md)
   - [PhotoMaker](./docs/photo_maker.md) support.
   - Control Net support with SD 1.5
+  - [ADetailer](./docs/adetailer.md)
   - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
   - Latent Consistency Models support (LCM/LCM-LoRA)
   - Faster and memory efficient latent decoding with [TAESD](./docs/taesd.md)

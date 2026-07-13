@@ -153,6 +153,7 @@ still runs out of memory, tiling is enabled and the decode retried once.
 | `controlnet` | ControlNet | `controlnet`, `control` |
 | `photomaker` | PhotoMaker ID encoder and PhotoMaker LoRA | `photomaker`, `photomakerid`, `pmid`, `photo` |
 | `upscaler` | ESRGAN upscaler | `upscaler`, `esrgan`, `hires` |
+| `detector` | ADetailer YOLOv8 detector | `detector`, `adetailer`, `yolo` |
 
 `te` is the preferred module name for text encoders. `clip` is kept as an accepted alias because many existing commands and model names use CLIP terminology.
 

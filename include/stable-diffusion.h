@@ -509,6 +509,27 @@ SD_API bool upscale(upscaler_ctx_t* upscaler_ctx,
 
 SD_API int get_upscale_factor(upscaler_ctx_t* upscaler_ctx);
 
+typedef struct adetailer_ctx_t adetailer_ctx_t;
+
+typedef struct {
+    const char* prompt;
+    const char* negative_prompt;
+    const char* extra_ad_args;
+} sd_adetailer_params_t;
+
+SD_API adetailer_ctx_t* new_adetailer_ctx(const char* detector_path,
+                                          int n_threads,
+                                          const char* backend,
+                                          const char* params_backend);
+SD_API void free_adetailer_ctx(adetailer_ctx_t* adetailer_ctx);
+SD_API bool adetail_image(adetailer_ctx_t* adetailer_ctx,
+                          sd_ctx_t* sd_ctx,
+                          sd_image_t input_image,
+                          const sd_adetailer_params_t* adetailer_params,
+                          const sd_img_gen_params_t* inpaint_params,
+                          sd_image_t** images_out,
+                          int* num_images_out);
+
 SD_API bool convert(const char* input_path,
                     const char* vae_path,
                     const char* output_path,
