@@ -1,6 +1,7 @@
 # Image Editing
 
 Image editing in `stable-diffusion.cpp` allows you to use reference images to guide the generation process, enabling tasks like identity preservation, style transfer, or layout modification.
+  
 
 ## Supported Models
 
@@ -15,6 +16,9 @@ Depending on the architecture, different models handle reference images differen
 | [**Flux.2 [Dev] / Flux.2 [Klein]**](./flux2.md) | `flux2` |
 | [**Boogu Image Edit**](./boogu_image.md) | `z_image_omni` |
 | **Krea2 (Community Edit LoRAs)** | `krea2_ostris_edit` |
+| **Anima (Community Edit LoRAs)** | `cosmos_reference` |
+
+Stable-diffusion.spp also supports basic Unet-based editing models like instruct-pix2pix or CosXL-Edit. This document is not about those.
 
 ---
 
@@ -44,6 +48,7 @@ The `--ref-image-mode` argument accepts a comma-separated list of key-value pair
 | `z_image_omni` | Boogu, Z-Image Omni |
 | `krea2_ostris_edit` | Most Krea2 Community edit LoRAs (trained with Ostris script) |
 | `krea2_edit` | Specifically for [lbouaraba/krea2edit](https://huggingface.co/conradlocke/krea2-identity-edit). (or similar) |
+| `cosmos_reference` | For Anima |
 | `default` | Uses the automatic detection based on model architecture. |
 
 ---
@@ -79,6 +84,7 @@ For a technical overview of how each preset is configured, see the table below.
 | `z_image_omni` | Yes | `fixed` | `area` | |
 | `krea2_ostris_edit`| Yes | `increase` | `area` | `force_timestep_0 = true` |
 | `krea2_edit` | Yes | `increase` | `longest` | `cond_refs_size = 768` |
+| `cosmos_reference` | No | `fixed` | `none` | `resize_vae_refs = false` |
 
 **Additional Default Notes:**
 - **Condition Sizes:** For most presets, `cond_refs_max_size` and `cond_refs_min_size` are set to `-1`, meaning the values are model-dependent and handled automatically.
