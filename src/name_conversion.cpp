@@ -1102,6 +1102,8 @@ std::string convert_sep_to_dot(std::string name) {
         "norm1_context",
         "ff_context",
         "x_embedder",
+        "cross_attn",
+        "output_proj",
     };
 
     // record the positions of underscores that should NOT be replaced
