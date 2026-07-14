@@ -16,10 +16,11 @@
 #define BOOL_STR(b) ((b) ? "true" : "false")
 
 extern const char* const modes_str[];
-#define SD_ALL_MODES_STR "img_gen, vid_gen, convert, upscale, metadata"
+#define SD_ALL_MODES_STR "img_gen, adetailer, vid_gen, convert, upscale, metadata"
 
 enum SDMode {
     IMG_GEN,
+    ADETAILER,
     VID_GEN,
     CONVERT,
     UPSCALE,
@@ -187,6 +188,10 @@ struct SDGenerationParams {
     // User-facing input fields.
     std::string prompt;
     std::string negative_prompt;
+    std::string ad_model_path;
+    std::string ad_prompt;
+    std::string ad_negative_prompt;
+    std::string extra_ad_args;
     int clip_skip              = -1;  // <= 0 represents unspecified
     int width                  = -1;
     int height                 = -1;

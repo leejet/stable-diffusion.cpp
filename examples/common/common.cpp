@@ -30,6 +30,7 @@ namespace fs = std::filesystem;
 
 const char* const modes_str[] = {
     "img_gen",
+    "adetailer",
     "vid_gen",
     "convert",
     "upscale",
@@ -922,6 +923,26 @@ ArgOptions SDGenerationParams::get_options() {
          "the negative prompt (default: \"\")",
          0,
          &negative_prompt},
+        {"",
+         "--ad-model",
+         "path to a converted YOLOv8 detection model for ADetailer",
+         0,
+         &ad_model_path},
+        {"",
+         "--ad-prompt",
+         "ADetailer prompt; empty inherits the main prompt, supports [PROMPT], [SEP], and [SKIP]",
+         0,
+         &ad_prompt},
+        {"",
+         "--ad-negative-prompt",
+         "ADetailer negative prompt; empty inherits the main negative prompt, supports [PROMPT] and [SEP]",
+         0,
+         &ad_negative_prompt},
+        {"",
+         "--extra-ad-args",
+         "extra ADetailer args, key=value list. Supports input_size, confidence, nms, max_detections, mask_k_largest, mask_min_ratio, mask_max_ratio, dilate_erode, x_offset, y_offset, mask_mode, merge_masks, invert_mask, mask_blur, inpaint_padding, inpaint_width, inpaint_height, denoising_strength, steps, cfg_scale, sample_method, scheduler, sort_by",
+         (int)',',
+         &extra_ad_args},
         {"-i",
          "--init-img",
          "path to the init image",
@@ -1842,6 +1863,10 @@ bool SDGenerationParams::from_json_str(
 
     load_if_exists("prompt", prompt);
     load_if_exists("negative_prompt", negative_prompt);
+    load_if_exists("ad_model", ad_model_path);
+    load_if_exists("ad_prompt", ad_prompt);
+    load_if_exists("ad_negative_prompt", ad_negative_prompt);
+    load_if_exists("extra_ad_args", extra_ad_args);
     load_if_exists("cache_mode", cache_mode);
     load_if_exists("cache_option", cache_option);
     load_if_exists("scm_mask", scm_mask);
@@ -2358,11 +2383,17 @@ bool SDGenerationParams::validate(SDMode mode) {
         }
     }
 
-    if (mode == UPSCALE) {
+    if (mode == UPSCALE || mode == ADETAILER) {
         if (init_image_path.length() == 0) {
-            LOG_ERROR("error: upscale mode needs an init image (--init-img)\n");
+            LOG_ERROR("error: %s mode needs an init image (--init-img)\n",
+                      mode == UPSCALE ? "upscale" : "adetailer");
             return false;
         }
+    }
+
+    if (mode == ADETAILER && ad_model_path.empty()) {
+        LOG_ERROR("error: adetailer mode needs a detector model (--ad-model)\n");
+        return false;
     }
 
     return true;
@@ -2587,6 +2618,10 @@ std::string SDGenerationParams::to_string() const {
         << "  high_noise_loras: \"" << high_noise_loras_str << "\",\n"
         << "  prompt: \"" << prompt << "\",\n"
         << "  negative_prompt: \"" << negative_prompt << "\",\n"
+        << "  ad_model_path: \"" << ad_model_path << "\",\n"
+        << "  ad_prompt: \"" << ad_prompt << "\",\n"
+        << "  ad_negative_prompt: \"" << ad_negative_prompt << "\",\n"
+        << "  extra_ad_args: \"" << extra_ad_args << "\",\n"
         << "  clip_skip: " << clip_skip << ",\n"
         << "  width: " << width << ",\n"
         << "  height: " << height << ",\n"
@@ -2701,8 +2736,13 @@ std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
                                             int64_t seed,
                                             SDMode mode) {
     json root;
-    root["schema"]    = "sdcpp.image.params/v1";
-    root["mode"]      = mode == VID_GEN ? "vid_gen" : "img_gen";
+    root["schema"] = "sdcpp.image.params/v1";
+    root["mode"]   = "img_gen";
+    if (mode == VID_GEN) {
+        root["mode"] = "vid_gen";
+    } else if (mode == ADETAILER) {
+        root["mode"] = "adetailer";
+    }
     root["generator"] = {
         {"name", "stable-diffusion.cpp"},
         {"version", safe_json_string(sd_version())},
@@ -2716,6 +2756,14 @@ std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
         {"positive", gen_params.prompt},
         {"negative", gen_params.negative_prompt},
     };
+    if (!gen_params.ad_model_path.empty()) {
+        root["adetailer"] = {
+            {"model", sd_basename(gen_params.ad_model_path)},
+            {"prompt", gen_params.ad_prompt},
+            {"negative_prompt", gen_params.ad_negative_prompt},
+            {"extra_args", gen_params.extra_ad_args},
+        };
+    }
     root["sampling"] = build_sampling_metadata_json(gen_params.sample_params,
                                                     gen_params.skip_layers,
                                                     &gen_params.custom_sigmas);
@@ -2869,6 +2917,18 @@ std::string get_image_params(const SDContextParams& ctx_params,
     parameter_string += "Eta: " + std::to_string(gen_params.sample_params.eta) + ", ";
     if (!gen_params.extra_sample_args.empty()) {
         parameter_string += "Extra sample args: " + gen_params.extra_sample_args + ", ";
+    }
+    if (!gen_params.ad_model_path.empty()) {
+        parameter_string += "ADetailer model: " + sd_basename(gen_params.ad_model_path) + ", ";
+        if (!gen_params.ad_prompt.empty()) {
+            parameter_string += "ADetailer prompt: " + gen_params.ad_prompt + ", ";
+        }
+        if (!gen_params.ad_negative_prompt.empty()) {
+            parameter_string += "ADetailer negative prompt: " + gen_params.ad_negative_prompt + ", ";
+        }
+        if (!gen_params.extra_ad_args.empty()) {
+            parameter_string += "ADetailer args: " + gen_params.extra_ad_args + ", ";
+        }
     }
     parameter_string += "Seed: " + std::to_string(seed) + ", ";
     parameter_string += "Size: " + std::to_string(gen_params.get_resolved_width()) + "x" + std::to_string(gen_params.get_resolved_height()) + ", ";

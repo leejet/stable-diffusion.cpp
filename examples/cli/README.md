@@ -6,6 +6,9 @@ For detailed command-line arguments, run:
 ./bin/sd-cli -h
 ```
 
+For direct image repair or automatic post-generation YOLOv8 detection followed by cropped inpainting, see
+[ADetailer](../../docs/adetailer.md).
+
 Metadata mode inspects PNG/JPEG container metadata without loading any model:
 
 ```bash
