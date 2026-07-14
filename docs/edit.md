@@ -1,16 +1,16 @@
 # Image Editing
 
 Image editing in `stable-diffusion.cpp` allows you to use reference images to guide the generation process, enabling tasks like identity preservation, style transfer, or layout modification.
-  
+
 
 ## Supported Models
 
 Depending on the architecture, different models handle reference images differently.
 
 | Model | Default Preset |
-| :--- | :--- | 
+| :--- | :--- |
 | [**FLUX.1-Kontext-dev**](./kontext.md) | `flux_kontext` |
-| [**LongCat Image Edit**](./longcat_image.md) | `flux_kontext` |
+| [**LongCat Image Edit**](./longcat_image.md) | `longcat` |
 | [**Qwen Image Edit**](./qwen_image_edit.md) | `qwen` |
 | **Qwen Image LAYERED** | `qwen_layered` |
 | [**Flux.2 [Dev] / Flux.2 [Klein]**](./flux2.md) | `flux2` |
@@ -40,8 +40,9 @@ The `--ref-image-mode` argument accepts a comma-separated list of key-value pair
 ### Available Presets
 
 | Preset | Primary Use Case |
-| :--- | :--- | 
-| `flux_kontext` | FLUX.1 Kontext, LongCat Image Edit |
+| :--- | :--- |
+| `flux_kontext` | FLUX.1 Kontext |
+| `longcat` | LongCat Image Edit |
 | `flux2` | FLUX.2 models |
 | `qwen` | Qwen Image Edit |
 | `qwen_layered` | Qwen Image Layered |
@@ -78,6 +79,7 @@ For a technical overview of how each preset is configured, see the table below.
 | Preset | VLM | RoPE Index | Cond Resize | Special Notes |
 | :--- | :---: | :---: | :---: | :--- |
 | `flux_kontext` | No | `fixed` | `none` | |
+| `longcat` | Yes | `fixed` | `area` | |
 | `flux2` | No | `increase` | `none` | |
 | `qwen` | Yes | `increase` | `area` | |
 | `qwen_layered` | Yes | `decrease` | `area` | |

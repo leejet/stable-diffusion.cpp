@@ -2032,9 +2032,9 @@ struct LLMEmbedder : public Conditioner {
             if (max_size > 0 && current_max_side > max_size) {
                 double beta = static_cast<double>(max_size) / current_max_side;
                 h_bar       = std::max(static_cast<int>(factor),
-                                       static_cast<int>(std::floor(height / beta / factor)) * static_cast<int>(factor));
+                                       static_cast<int>(std::floor(height * beta / factor)) * static_cast<int>(factor));
                 w_bar       = std::max(static_cast<int>(factor),
-                                       static_cast<int>(std::floor(width / beta / factor)) * static_cast<int>(factor));
+                                       static_cast<int>(std::floor(width * beta / factor)) * static_cast<int>(factor));
             } else if (min_size > 0 && current_max_side < min_size) {
                 double beta = static_cast<double>(min_size) / current_max_side;
                 h_bar       = static_cast<int>(std::ceil(height * beta / factor)) * static_cast<int>(factor);

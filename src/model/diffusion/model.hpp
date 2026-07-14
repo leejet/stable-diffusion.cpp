@@ -30,6 +30,7 @@ struct EditModeParams {
 
 const std::unordered_map<std::string, EditModeParams> REF_PRESETS = {
     {"flux_kontext", {false, true, Rope::RefIndexMode::FIXED, false, true, -1, CondResizeMode::NONE, -1, -1}},
+    {"longcat", {true, true, Rope::RefIndexMode::FIXED, false, true, -1, CondResizeMode::AREA, -1, -1}},
     {"flux2", {false, true, Rope::RefIndexMode::INCREASE, false, true, -1, CondResizeMode::NONE, -1, -1}},
     {"qwen", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, CondResizeMode::AREA, -1, -1}},
     {"qwen_layered", {true, true, Rope::RefIndexMode::DECREASE, false, true, -1, CondResizeMode::AREA, -1, -1}},

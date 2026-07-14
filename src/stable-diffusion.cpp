@@ -2842,7 +2842,9 @@ public:
     }
 
     std::string get_default_preset_for_version(SDVersion version) {
-        if (sd_version_is_flux(version) || sd_version_is_longcat(version)) {
+        if (sd_version_is_longcat(version)) {
+            return "longcat";
+        } else if (sd_version_is_flux(version)) {
             return "flux_kontext";
         } else if (sd_version_is_flux2(version) || sd_version_is_sefi_image(version)) {
             return "flux2";
@@ -2853,7 +2855,7 @@ public:
         } else if (sd_version_is_z_image(version) || sd_version_is_boogu_image(version)) {
             return "z_image_omni";
         } else if (sd_version_is_krea2(version)) {
-            // have to make a choice between "krea2_edit" mode (for lbouaraba/krea2edit) 
+            // have to make a choice between "krea2_edit" mode (for lbouaraba/krea2edit)
             // and "krea2_ostris_edit" (for krea2 ostris edit)
             // since krea2 ostris edit support predates, it should probably be default
             return "krea2_ostris_edit";
@@ -2863,7 +2865,7 @@ public:
         return "default";
     }
 
-    void set_edit_mode_params(EditModeParams& params, std::string overrides) {
+    void set_edit_mode_params(EditModeParams& params, const char* overrides) {
         std::string preset_name = get_default_preset_for_version(version);
 
         for (const auto& [key, value] : parse_key_value_args(overrides, "edit mode args")) {
@@ -2942,7 +2944,7 @@ public:
         }
         for (const auto& [key, value] : parse_key_value_args(overrides, "edit mode args")) {
             if (key == "cond_refs_size") {
-                int cond_refs_size; 
+                int cond_refs_size;
                 if (!parse_strict_int(value, cond_refs_size)) {
                     LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
                 } else {
@@ -3420,6 +3422,7 @@ void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     sd_sample_params_init(&sd_img_gen_params->sample_params);
     sd_img_gen_params->clip_skip         = -1;
     sd_img_gen_params->ref_images_count  = 0;
+    sd_img_gen_params->ref_image_mode    = "";
     sd_img_gen_params->width             = 512;
     sd_img_gen_params->height            = 512;
     sd_img_gen_params->strength          = 0.75f;
@@ -3475,7 +3478,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              sd_img_gen_params->batch_count,
              sd_img_gen_params->qwen_image_layers,
              sd_img_gen_params->ref_images_count,
-             sd_img_gen_params->ref_image_mode,
+             SAFE_STR(sd_img_gen_params->ref_image_mode),
              sd_img_gen_params->control_strength,
              sd_img_gen_params->pm_params.style_strength,
              sd_img_gen_params->pm_params.id_images_count,
@@ -5213,7 +5216,6 @@ SD_API bool generate_image(sd_ctx_t* sd_ctx,
     apply_circular_axes_to_diffusion(sd_ctx, sd_img_gen_params->circular_x, sd_img_gen_params->circular_y);
 
     EditModeParams edit_params;
-    // TODO: parse EditModeParams from sd_img_gen_params->ref_image_mode
     sd_ctx->sd->set_edit_mode_params(edit_params, sd_img_gen_params->ref_image_mode);
 
     ImageVaeAxesGuard axes_guard(sd_ctx, sd_img_gen_params, request);
@@ -5792,6 +5794,9 @@ static ImageGenerationEmbeds prepare_video_generation_embeds(sd_ctx_t* sd_ctx,
     condition_params.text            = request.prompt;
     condition_params.zero_out_masked = true;
     condition_params.ref_images      = &latents.ref_images;
+    if (sd_version_is_lingbot_video(sd_ctx->sd->version)) {
+        condition_params.edit_params.cond_refs_resize_mode = CondResizeMode::AREA;
+    }
 
     int64_t prepare_start_ms = ggml_time_ms();
     embeds.cond              = sd_ctx->sd->cond_stage_model->get_learned_condition(sd_ctx->sd->n_threads,

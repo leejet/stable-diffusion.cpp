@@ -226,7 +226,7 @@ struct SDGenerationParams {
     float vace_strength                  = 1.f;
     sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
     std::string extra_tiling_args;
-    
+
     std::string ref_mode;
 
     std::string pm_id_images_dir;
