@@ -616,7 +616,7 @@ namespace Krea2 {
                              ggml_tensor* context,
                              ggml_tensor* pe,
                              std::vector<ggml_tensor*> ref_latents = {},
-                             bool zero_timestep_refs = false) {
+                             bool zero_timestep_refs               = false) {
             int64_t W = x->ne[0];
             int64_t H = x->ne[1];
             int64_t N = x->ne[3];
@@ -720,7 +720,7 @@ namespace Krea2 {
                                  const sd::Tensor<float>& timesteps_tensor,
                                  const sd::Tensor<float>& context_tensor,
                                  const std::vector<sd::Tensor<float>>& ref_latents_tensor = {},
-                                 const RefImageParams& ref_image_params     = REF_IMAGE_PRESETS.at("krea2_ostris_edit")) {
+                                 const RefImageParams& ref_image_params                   = REF_IMAGE_PRESETS.at("krea2_ostris_edit")) {
             ggml_cgraph* gf        = new_graph_custom(KREA2_GRAPH_SIZE);
             ggml_tensor* x         = make_input(x_tensor);
             ggml_tensor* timesteps = make_input(timesteps_tensor);
@@ -758,7 +758,7 @@ namespace Krea2 {
                                   const sd::Tensor<float>& timesteps,
                                   const sd::Tensor<float>& context,
                                   const std::vector<sd::Tensor<float>>& ref_latents = {},
-                                  const RefImageParams& ref_image_params     = REF_IMAGE_PRESETS.at("krea2_ostris_edit")) {
+                                  const RefImageParams& ref_image_params            = REF_IMAGE_PRESETS.at("krea2_ostris_edit")) {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(x, timesteps, context, ref_latents, ref_image_params);
             };

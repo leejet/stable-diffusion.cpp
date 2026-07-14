@@ -2458,8 +2458,8 @@ public:
             sd_sample::SampleStepCacheDispatcher step_cache(cache_runtime, step, sigma);
             std::vector<sd::Tensor<float>> controls;
             DiffusionParams diffusion_params;
-            diffusion_params.x           = &noised_input;
-            diffusion_params.timesteps   = &timesteps_tensor;
+            diffusion_params.x                = &noised_input;
+            diffusion_params.timesteps        = &timesteps_tensor;
             diffusion_params.ref_image_params = ref_image_params;
             sd::guidance::GuidanceInput step_guidance_input;
             step_guidance_input.step          = step;
@@ -2960,7 +2960,6 @@ public:
         }
         return params;
     }
-
 };
 
 /*================================================= SD API ==================================================*/
@@ -4693,7 +4692,7 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
         sd::Tensor<float> ref_latent;
         if (ref_image_params.resize_before_vae && !sd_version_is_pid(sd_ctx->sd->version)) {
             LOG_DEBUG("auto resize ref images");
-            int target_pixels = ref_image_params.vae_input_max_pixels > 0 ? ref_image_params.vae_input_max_pixels : 1024 * 1024;
+            int target_pixels  = ref_image_params.vae_input_max_pixels > 0 ? ref_image_params.vae_input_max_pixels : 1024 * 1024;
             int vae_image_size = std::min(target_pixels, request->width * request->height);
             double vae_width   = sqrt(vae_image_size * ref_images[i].shape()[0] / ref_images[i].shape()[1]);
             double vae_height  = vae_width * ref_images[i].shape()[1] / ref_images[i].shape()[0];
@@ -4826,16 +4825,15 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
     ConditionerRunnerDoneOnExit conditioner_runner_done{sd_ctx->sd->cond_stage_model.get()};
 
     ConditionerParams condition_params;
-    condition_params.text       = request->prompt;
-    condition_params.clip_skip  = request->clip_skip;
-    condition_params.width      = request->width;
-    condition_params.height     = request->height;
+    condition_params.text      = request->prompt;
+    condition_params.clip_skip = request->clip_skip;
+    condition_params.width     = request->width;
+    condition_params.height    = request->height;
     if (ref_image_params.pass_to_vlm) {
         condition_params.ref_images = &latents->ref_images;
     }
 
     condition_params.ref_image_params = ref_image_params;
-
 
     sd_ctx->sd->prepare_generation_extensions(request->pm_params,
                                               request->pulid_params,
@@ -6335,7 +6333,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                             x_t,
                                             std::move(noise),
                                             embeds.cond,
-                                            hires_request.use_uncond ? embeds.uncond : SDCondition(),
+                                          hires_request.use_uncond ? embeds.uncond : SDCondition(),
                                             embeds.img_uncond,
                                             sd::Tensor<float>(),
                                             0.f,

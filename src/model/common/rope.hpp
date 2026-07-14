@@ -18,7 +18,6 @@ namespace Rope {
         DECREASE,
     };
 
-
     template <class T>
     __STATIC_INLINE__ std::vector<T> linspace(T start, T end, int num) {
         std::vector<T> result(num);

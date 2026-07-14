@@ -2057,7 +2057,7 @@ struct LLMEmbedder : public Conditioner {
         bool spell_quotes                    = false;
         std::set<int> out_layers;
 
-        int64_t t0 = ggml_time_ms();
+        int64_t t0                     = ggml_time_ms();
         RefImageResizeMode resize_mode = conditioner_params.ref_image_params.vlm_resize_mode;
 
         if (sd_version_is_lingbot_video(version)) {

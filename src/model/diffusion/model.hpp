@@ -17,15 +17,15 @@ enum class RefImageResizeMode {
 };
 
 struct RefImageParams {
-    bool pass_to_vlm                      = false;
-    bool pass_to_dit                      = true;
-    Rope::RefIndexMode ref_index_mode     = Rope::RefIndexMode::FIXED;
-    bool force_ref_timestep_zero          = false;
-    bool resize_before_vae                = true;
-    int vae_input_max_pixels              = -1;
-    RefImageResizeMode vlm_resize_mode    = RefImageResizeMode::AREA;
-    int vlm_min_size                      = -1;
-    int vlm_max_size                      = -1;
+    bool pass_to_vlm                   = false;
+    bool pass_to_dit                   = true;
+    Rope::RefIndexMode ref_index_mode  = Rope::RefIndexMode::FIXED;
+    bool force_ref_timestep_zero       = false;
+    bool resize_before_vae             = true;
+    int vae_input_max_pixels           = -1;
+    RefImageResizeMode vlm_resize_mode = RefImageResizeMode::AREA;
+    int vlm_min_size                   = -1;
+    int vlm_max_size                   = -1;
 };
 
 const std::unordered_map<std::string, RefImageParams> REF_IMAGE_PRESETS = {
