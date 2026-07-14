@@ -235,6 +235,9 @@ bool ModelLoader::init_from_file(const std::string& file_path, const std::string
     } else if (is_gguf_file(file_path)) {
         LOG_INFO("load %s using gguf format", file_path.c_str());
         return init_from_gguf_file(file_path, prefix);
+    } else if (ends_with(file_path, ".json")) {
+        LOG_INFO("load %s using safetensors index format", file_path.c_str());
+        return init_from_safetensors_index_file(file_path, prefix);
     } else if (is_safetensors_file(file_path)) {
         LOG_INFO("load %s using safetensors format", file_path.c_str());
         return init_from_safetensors_file(file_path, prefix);
@@ -334,6 +337,25 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         add_tensor_storage(tensor_storage);
 
         // LOG_DEBUG("%s", tensor_storage.to_string().c_str());
+    }
+
+    return true;
+}
+
+bool ModelLoader::init_from_safetensors_index_file(const std::string& file_path, const std::string& prefix) {
+    LOG_DEBUG("init from safetensors index '%s', prefix = '%s'", file_path.c_str(), prefix.c_str());
+
+    std::vector<std::string> shard_paths;
+    std::string error;
+    if (!read_safetensors_index_file(file_path, shard_paths, &error)) {
+        LOG_ERROR("%s", error.c_str());
+        return false;
+    }
+
+    for (const std::string& shard_path : shard_paths) {
+        if (!init_from_file(shard_path, prefix)) {
+            return false;
+        }
     }
 
     return true;
@@ -510,6 +532,9 @@ SDVersion ModelLoader::get_sd_version() {
         }
         if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
             is_wan = true;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.patch_embedder.weight") != std::string::npos) {
+            return VERSION_LINGBOT_VIDEO;
         }
         if (tensor_storage.name.find("model.diffusion_model.patch_embedding.weight") != std::string::npos) {
             patch_embedding_channels = tensor_storage.ne[3];

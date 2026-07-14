@@ -981,6 +981,11 @@ ArgOptions SDGenerationParams::get_options() {
          "extra VAE tiling args, key=value list. LTX video VAE supports temporal_tile_frames (default: 4), temporal_tile_overlap (default: 1)",
          (int)',',
          &extra_tiling_args},
+        {"",
+         "--ref-image-args",
+         "Key-value list to set up the way the reference images are processed (empty = auto-detect from model weigths)",
+         (int)',',
+         &ref_image_args},
     };
 
     options.int_options = {
@@ -2424,30 +2429,45 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
         pulid_id_weight,
     };
 
-    params.loras                 = lora_vec.empty() ? nullptr : lora_vec.data();
-    params.lora_count            = static_cast<uint32_t>(lora_vec.size());
-    params.prompt                = prompt.c_str();
-    params.negative_prompt       = negative_prompt.c_str();
-    params.clip_skip             = clip_skip;
-    params.init_image            = init_image.get();
-    params.ref_images            = ref_image_views.empty() ? nullptr : ref_image_views.data();
-    params.ref_images_count      = static_cast<int>(ref_image_views.size());
-    params.auto_resize_ref_image = auto_resize_ref_image;
-    params.increase_ref_index    = increase_ref_index;
-    params.mask_image            = mask_image.get();
-    params.width                 = get_resolved_width();
-    params.height                = get_resolved_height();
-    params.sample_params         = sample_params;
-    params.strength              = strength;
-    params.seed                  = seed;
-    params.batch_count           = batch_count;
-    params.qwen_image_layers     = qwen_image_layers;
-    params.control_image         = control_image.get();
-    params.control_strength      = control_strength;
-    params.pm_params             = pm_params;
-    params.pulid_params          = pulid_params;
-    params.vae_tiling_params     = vae_tiling_params;
-    params.cache                 = cache_params;
+    if (!auto_resize_ref_image) {
+        if (!ref_image_args.empty()) {
+            ref_image_args += ",";
+        }
+        ref_image_args += "resize_before_vae=0";
+        LOG_WARN("Notice: --disable-auto-resize-ref-image is deprecated. Use --ref-image-args \"resize_before_vae=off\" instead.");
+    }
+
+    if (increase_ref_index) {
+        if (!ref_image_args.empty()) {
+            ref_image_args += ",";
+        }
+        ref_image_args += "ref_index_mode=increase";
+        LOG_WARN("Notice: --increase-ref-index is deprecated. Use --ref-image-args \"ref_index_mode=increase\" instead.");
+    }
+
+    params.loras             = lora_vec.empty() ? nullptr : lora_vec.data();
+    params.lora_count        = static_cast<uint32_t>(lora_vec.size());
+    params.prompt            = prompt.c_str();
+    params.negative_prompt   = negative_prompt.c_str();
+    params.clip_skip         = clip_skip;
+    params.init_image        = init_image.get();
+    params.ref_images        = ref_image_views.empty() ? nullptr : ref_image_views.data();
+    params.ref_images_count  = static_cast<int>(ref_image_views.size());
+    params.ref_image_args    = ref_image_args.c_str();
+    params.mask_image        = mask_image.get();
+    params.width             = get_resolved_width();
+    params.height            = get_resolved_height();
+    params.sample_params     = sample_params;
+    params.strength          = strength;
+    params.seed              = seed;
+    params.batch_count       = batch_count;
+    params.qwen_image_layers = qwen_image_layers;
+    params.control_image     = control_image.get();
+    params.control_strength  = control_strength;
+    params.pm_params         = pm_params;
+    params.pulid_params      = pulid_params;
+    params.vae_tiling_params = vae_tiling_params;
+    params.cache             = cache_params;
 
     params.hires.enabled             = hires_enabled;
     params.hires.upscaler            = resolved_hires_upscaler;
