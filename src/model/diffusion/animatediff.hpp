@@ -15,8 +15,8 @@ namespace AnimateDiff {
         std::vector<int64_t> up_channels   = {1280, 1280, 640, 320};
         int num_down_motion_per_block      = 2;
         int num_up_motion_per_block        = 3;
-        bool enable_mid_block = false;
-        int64_t mid_channels  = 1280;
+        bool enable_mid_block              = false;
+        int64_t mid_channels               = 1280;
     };
 
     class TemporalAttention : public GGMLBlock {
@@ -147,7 +147,8 @@ namespace AnimateDiff {
     public:
         MotionModuleConfig config;
 
-        AnimateDiffModel(const MotionModuleConfig& cfg) : config(cfg) {
+        AnimateDiffModel(const MotionModuleConfig& cfg)
+            : config(cfg) {
             for (int i = 0; i < static_cast<int>(cfg.down_channels.size()); ++i) {
                 int64_t ch = cfg.down_channels[i];
                 for (int j = 0; j < cfg.num_down_motion_per_block; ++j) {

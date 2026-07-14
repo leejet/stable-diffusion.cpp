@@ -215,8 +215,8 @@ public:
     std::vector<std::shared_ptr<GenerationExtension>> generation_extensions;
     std::vector<std::shared_ptr<LoraModel>> runtime_lora_models;
     bool apply_lora_immediately = false;
-    bool animatediff_loaded    = false;
-    int animatediff_num_frames = 0;
+    bool animatediff_loaded     = false;
+    int animatediff_num_frames  = 0;
 
     std::string taesd_path;
     sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0, 0, nullptr};
