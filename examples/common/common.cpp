@@ -424,6 +424,11 @@ ArgOptions SDContextParams::get_options() {
          0,
          &control_net_path},
         {"",
+         "--motion-module",
+         "path to AnimateDiff motion module (SD 1.5); enables video generation on --video-frames > 1",
+         0,
+         &motion_module_path},
+        {"",
          "--embd-dir",
          "embeddings directory",
          0,
@@ -672,7 +677,7 @@ ArgOptions SDContextParams::get_options() {
 }
 
 void SDContextParams::build_embedding_map() {
-    static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt"};
+    static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt", ".ckpt"};
 
     if (!fs::exists(embedding_dir) || !fs::is_directory(embedding_dir)) {
         return;
@@ -867,6 +872,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.audio_vae_path                  = audio_vae_path.c_str();
     sd_ctx_params.taesd_path                      = taesd_path.c_str();
     sd_ctx_params.control_net_path                = control_net_path.c_str();
+    sd_ctx_params.motion_module_path              = motion_module_path.c_str();
     sd_ctx_params.embeddings                      = embedding_vec.data();
     sd_ctx_params.embedding_count                 = static_cast<uint32_t>(embedding_vec.size());
     sd_ctx_params.photo_maker_path                = photo_maker_path.c_str();
@@ -2032,7 +2038,7 @@ void SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
         return;
     }
     static const std::regex re(R"(<lora:([^:>]+):([^>]+)>)");
-    static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt"};
+    static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt", ".ckpt"};
     std::smatch m;
 
     std::string tmp = prompt;

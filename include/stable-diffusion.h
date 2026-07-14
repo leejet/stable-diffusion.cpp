@@ -199,6 +199,7 @@ typedef struct {
     const char* audio_vae_path;
     const char* taesd_path;
     const char* control_net_path;
+    const char* motion_module_path;
     const sd_embedding_t* embeddings;
     uint32_t embedding_count;
     const char* photo_maker_path;
