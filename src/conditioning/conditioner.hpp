@@ -107,7 +107,7 @@ struct ConditionerParams {
     int height                                       = -1;
     bool zero_out_masked                             = false;
     const std::vector<sd::Tensor<float>>* ref_images = nullptr;  // for qwen image edit
-    EditModeParams edit_params;
+    RefImageParams ref_image_params;
 };
 
 struct Conditioner {
@@ -1995,15 +1995,15 @@ struct LLMEmbedder : public Conditioner {
         return new_hidden_states;
     }
 
-    void resize_image_dims(int height, int width, int& h_bar, int& w_bar, int factor, int min_size, int max_size, CondResizeMode mode) {
+    void resize_image_dims(int height, int width, int& h_bar, int& w_bar, int factor, int min_size, int max_size, RefImageResizeMode mode) {
         if (min_size > 0 && min_size == max_size) {
-            if (mode == CondResizeMode::AREA) {
+            if (mode == RefImageResizeMode::AREA) {
                 double beta = std::sqrt(static_cast<double>(min_size) / (static_cast<double>(height) * width));
                 h_bar       = std::max(static_cast<int>(factor),
                                        static_cast<int>(std::round(height * beta / factor)) * static_cast<int>(factor));
                 w_bar       = std::max(static_cast<int>(factor),
                                        static_cast<int>(std::round(width * beta / factor)) * static_cast<int>(factor));
-            } else if (mode == CondResizeMode::LONGEST_SIDE) {
+            } else if (mode == RefImageResizeMode::LONGEST_SIDE) {
                 int current_max_side = std::max(height, width);
                 double beta          = static_cast<double>(min_size) / current_max_side;
                 h_bar                = std::max(static_cast<int>(factor),
@@ -2014,7 +2014,7 @@ struct LLMEmbedder : public Conditioner {
             return;
         }
 
-        if (mode == CondResizeMode::AREA) {
+        if (mode == RefImageResizeMode::AREA) {
             double current_area = static_cast<double>(h_bar) * w_bar;
             if (max_size > 0 && current_area > max_size) {
                 double beta = std::sqrt((static_cast<double>(height) * width) / static_cast<double>(max_size));
@@ -2027,7 +2027,7 @@ struct LLMEmbedder : public Conditioner {
                 h_bar       = static_cast<int>(std::ceil(height * beta / factor)) * static_cast<int>(factor);
                 w_bar       = static_cast<int>(std::ceil(width * beta / factor)) * static_cast<int>(factor);
             }
-        } else if (mode == CondResizeMode::LONGEST_SIDE) {
+        } else if (mode == RefImageResizeMode::LONGEST_SIDE) {
             int current_max_side = std::max(height, width);
             if (max_size > 0 && current_max_side > max_size) {
                 double beta = static_cast<double>(max_size) / current_max_side;
@@ -2058,7 +2058,7 @@ struct LLMEmbedder : public Conditioner {
         std::set<int> out_layers;
 
         int64_t t0 = ggml_time_ms();
-        CondResizeMode resize_mode = conditioner_params.edit_params.cond_refs_resize_mode;
+        RefImageResizeMode resize_mode = conditioner_params.ref_image_params.vlm_resize_mode;
 
         if (sd_version_is_lingbot_video(version)) {
             const int pad_token = 151643;
@@ -2095,17 +2095,17 @@ struct LLMEmbedder : public Conditioner {
                     int height        = static_cast<int>(image.shape()[1]);
                     int width         = static_cast<int>(image.shape()[0]);
 
-                    int min_pixels = conditioner_params.edit_params.cond_refs_min_size;
+                    int min_pixels = conditioner_params.ref_image_params.vlm_min_size;
                     if (min_pixels <= 0) {
-                        if (resize_mode == CondResizeMode::AREA) {
+                        if (resize_mode == RefImageResizeMode::AREA) {
                             min_pixels = static_cast<int>(4 * factor * factor);
                         } else {
                             min_pixels = static_cast<int>(2 * factor);
                         }
                     }
-                    int max_pixels = conditioner_params.edit_params.cond_refs_max_size;
+                    int max_pixels = conditioner_params.ref_image_params.vlm_max_size;
                     if (max_pixels <= 0) {
-                        if (resize_mode == CondResizeMode::AREA) {
+                        if (resize_mode == RefImageResizeMode::AREA) {
                             max_pixels = static_cast<int>(16384 * factor * factor);
                         } else {
                             max_pixels = static_cast<int>(128 * factor);
@@ -2150,17 +2150,17 @@ struct LLMEmbedder : public Conditioner {
                 prompt_template_encode_start_idx = 64;
                 int image_embed_idx              = 64 + 6;
 
-                int min_pixels = conditioner_params.edit_params.cond_refs_min_size;
+                int min_pixels = conditioner_params.ref_image_params.vlm_min_size;
                 if (min_pixels <= 0) {
                     min_pixels = 384;
-                    if (resize_mode == CondResizeMode::AREA) {
+                    if (resize_mode == RefImageResizeMode::AREA) {
                         min_pixels *= min_pixels;
                     }
                 }
-                int max_pixels = conditioner_params.edit_params.cond_refs_max_size;
+                int max_pixels = conditioner_params.ref_image_params.vlm_max_size;
                 if (max_pixels <= 0) {
                     max_pixels = 560;
-                    if (resize_mode == CondResizeMode::AREA) {
+                    if (resize_mode == RefImageResizeMode::AREA) {
                         max_pixels *= max_pixels;
                     }
                 }
@@ -2231,17 +2231,17 @@ struct LLMEmbedder : public Conditioner {
                 std::string img_prompt;
                 const std::string placeholder = "<|image_pad|>";
 
-                int min_pixels = conditioner_params.edit_params.cond_refs_min_size;
+                int min_pixels = conditioner_params.ref_image_params.vlm_min_size;
                 if (min_pixels <= 0) {
                     min_pixels = 384;
-                    if (resize_mode == CondResizeMode::AREA) {
+                    if (resize_mode == RefImageResizeMode::AREA) {
                         min_pixels *= min_pixels;
                     }
                 }
-                int max_pixels = conditioner_params.edit_params.cond_refs_max_size;
+                int max_pixels = conditioner_params.ref_image_params.vlm_max_size;
                 if (max_pixels <= 0) {
                     max_pixels = 384;
-                    if (resize_mode == CondResizeMode::AREA) {
+                    if (resize_mode == RefImageResizeMode::AREA) {
                         max_pixels *= max_pixels;
                     }
                 }
@@ -2299,17 +2299,17 @@ struct LLMEmbedder : public Conditioner {
             if (llm->enable_vision && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
                 std::string img_prompt        = "";
                 const std::string placeholder = "<|image_pad|>";
-                int min_pixels                = conditioner_params.edit_params.cond_refs_min_size;
+                int min_pixels                = conditioner_params.ref_image_params.vlm_min_size;
                 if (min_pixels <= 0) {
                     min_pixels = 384;
-                    if (resize_mode == CondResizeMode::AREA) {
+                    if (resize_mode == RefImageResizeMode::AREA) {
                         min_pixels *= min_pixels;
                     }
                 }
-                int max_pixels = conditioner_params.edit_params.cond_refs_max_size;
+                int max_pixels = conditioner_params.ref_image_params.vlm_max_size;
                 if (max_pixels <= 0) {
                     max_pixels = 1024;
-                    if (resize_mode == CondResizeMode::AREA) {
+                    if (resize_mode == RefImageResizeMode::AREA) {
                         max_pixels *= max_pixels;
                     }
                 }
@@ -2362,17 +2362,17 @@ struct LLMEmbedder : public Conditioner {
                 min_length                       = 512 + prompt_template_encode_start_idx;
                 int image_embed_idx              = 36 + 6;
 
-                int min_pixels = conditioner_params.edit_params.cond_refs_min_size;
+                int min_pixels = conditioner_params.ref_image_params.vlm_min_size;
                 if (min_pixels <= 0) {
                     min_pixels = 384;
-                    if (resize_mode == CondResizeMode::AREA) {
+                    if (resize_mode == RefImageResizeMode::AREA) {
                         min_pixels *= min_pixels;
                     }
                 }
-                int max_pixels = conditioner_params.edit_params.cond_refs_max_size;
+                int max_pixels = conditioner_params.ref_image_params.vlm_max_size;
                 if (max_pixels <= 0) {
                     max_pixels = 560;
-                    if (resize_mode == CondResizeMode::AREA) {
+                    if (resize_mode == RefImageResizeMode::AREA) {
                         max_pixels *= max_pixels;
                     }
                 }

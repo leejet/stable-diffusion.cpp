@@ -22,20 +22,20 @@ Stable-diffusion.spp also supports basic Unet-based editing models like instruct
 
 ---
 
-## Configuring Reference Modes (`--ref-image-mode`)
+## Configuring Reference Modes (`--ref-image-args`)
 
 Different DiT-based editing models require different configurations to process reference images correctly (e.g., whether to use a Vision Language Model (VLM) encoder or pass VAE-encoded images directly to the DiT).
 
-To simplify this, we provide **Presets**. By default, the system automatically selects the best preset based on the model architecture. However, you can override this using the `--ref-image-mode` argument.
+To simplify this, we provide **Presets**. By default, the system automatically selects the best preset based on the model architecture. However, you can override this using the `--ref-image-args` argument.
 
 ### Usage
-The `--ref-image-mode` argument accepts a comma-separated list of key-value pairs:
+The `--ref-image-args` argument accepts a comma-separated list of key-value pairs:
 
 **Using a preset:**
-`--ref-image-mode "preset=qwen_layered"`
+`--ref-image-args "preset=qwen_layered"`
 
 **Using a preset with a specific override:**
-`--ref-image-mode "preset=krea2_edit,force_timestep_0=true"`
+`--ref-image-args "preset=krea2_edit,force_ref_timestep_zero=true"`
 
 ### Available Presets
 
@@ -56,21 +56,21 @@ The `--ref-image-mode` argument accepts a comma-separated list of key-value pair
 
 ## Advanced Parameter Reference
 
-If presets are insufficient, you can manually configure the following parameters via `--ref-image-mode`:
+If presets are insufficient, you can manually configure the following parameters via `--ref-image-args`:
 
 | Key | Type | Description | Allowed Values |
 | :--- | :--- | :--- | :--- |
 | `preset` | string | Overrides the automatic preset. | (See the Presets table above) |
-| `use_vlm` | bool | Whether references are passed to the VLM encoder. | `true`, `false` |
+| `pass_to_vlm` | bool | Whether reference images are passed to the VLM encoder. | `true`, `false` |
 | `pass_to_dit` | bool | Whether VAE-encoded references are passed directly to the DiT. | `true`, `false` |
 | `ref_index_mode` | string | Behavior of the RoPE index. | `fixed`, `increase`, `decrease` |
-| `force_timestep_0` | bool | Forces timestep=0 for reference tokens. | `true`, `false` (Krea2 only) |
-| `resize_vae_refs` | bool | Whether to resize VAE references. | `true`, `false` |
-| `vae_refs_max_size` | int | Maximum pixel size for VAE references. | Integer |
-| `cond_refs_resize_mode` | string | How to resize condition references. | `longest_side`, `area`, `none` |
-| `cond_refs_max_size` | int | Maximum pixel size for condition references. | Integer |
-| `cond_refs_min_size` | int | Minimum pixel size for condition references. | Integer |
-| `cond_refs_size` | int | Shortcut to set both min and max size to the same value. | Integer |
+| `force_ref_timestep_zero` | bool | Forces timestep=0 for reference tokens. | `true`, `false` (Krea2 only) |
+| `resize_before_vae` | bool | Whether reference images are resized before VAE encoding. | `true`, `false` |
+| `vae_input_max_pixels` | int | Maximum pixel area for VAE reference inputs. | Integer |
+| `vlm_resize_mode` | string | How to resize VLM reference inputs. | `longest_side`, `area`, `none` |
+| `vlm_max_size` | int | Maximum VLM input size; interpreted according to `vlm_resize_mode`. | Integer |
+| `vlm_min_size` | int | Minimum VLM input size; interpreted according to `vlm_resize_mode`. | Integer |
+| `vlm_size` | int | Shortcut to set both VLM min and max size to the same value. | Integer |
 
 ### Preset Default Values
 
@@ -84,10 +84,10 @@ For a technical overview of how each preset is configured, see the table below.
 | `qwen` | Yes | `increase` | `area` | |
 | `qwen_layered` | Yes | `decrease` | `area` | |
 | `z_image_omni` | Yes | `fixed` | `area` | |
-| `krea2_ostris_edit`| Yes | `increase` | `area` | `force_timestep_0 = true` |
-| `krea2_edit` | Yes | `increase` | `longest` | `cond_refs_size = 768` |
-| `cosmos_reference` | No | `fixed` | `none` | `resize_vae_refs = false` |
+| `krea2_ostris_edit`| Yes | `increase` | `area` | `force_ref_timestep_zero = true` |
+| `krea2_edit` | Yes | `increase` | `longest` | `vlm_size = 768` |
+| `cosmos_reference` | No | `fixed` | `none` | `resize_before_vae = false` |
 
 **Additional Default Notes:**
-- **Condition Sizes:** For most presets, `cond_refs_max_size` and `cond_refs_min_size` are set to `-1`, meaning the values are model-dependent and handled automatically.
-- **VAE Reference Size:** `vae_refs_max_size` defaults to $1024 \times 1024$ pixels (`1048576`).
+- **VLM Input Sizes:** For most presets, `vlm_max_size` and `vlm_min_size` are set to `-1`, meaning the values are model-dependent and handled automatically. In `area` mode they represent pixel area; in `longest_side` mode they represent a side length in pixels.
+- **VAE Input Size:** `vae_input_max_pixels` defaults to $1024 \times 1024$ pixels (`1048576`).

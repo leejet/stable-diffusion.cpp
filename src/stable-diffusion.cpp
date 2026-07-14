@@ -2297,7 +2297,7 @@ public:
                              const char* extra_sample_args,
                              const std::vector<float>& sigmas,
                              const std::vector<sd::Tensor<float>>& ref_latents,
-                             EditModeParams& edit_params,
+                             const RefImageParams& ref_image_params,
                              const sd::Tensor<float>& denoise_mask,
                              const sd::Tensor<float>& vace_context,
                              float vace_strength,
@@ -2460,7 +2460,7 @@ public:
             DiffusionParams diffusion_params;
             diffusion_params.x           = &noised_input;
             diffusion_params.timesteps   = &timesteps_tensor;
-            diffusion_params.edit_params = edit_params;
+            diffusion_params.ref_image_params = ref_image_params;
             sd::guidance::GuidanceInput step_guidance_input;
             step_guidance_input.step          = step;
             step_guidance_input.schedule_size = sigmas.size();
@@ -2841,7 +2841,7 @@ public:
         return !!flow_denoiser;
     }
 
-    std::string get_default_preset_for_version(SDVersion version) {
+    std::string get_default_ref_image_preset(SDVersion version) const {
         if (sd_version_is_longcat(version)) {
             return "longcat";
         } else if (sd_version_is_flux(version)) {
@@ -2865,37 +2865,38 @@ public:
         return "default";
     }
 
-    void set_edit_mode_params(EditModeParams& params, const char* overrides) {
-        std::string preset_name = get_default_preset_for_version(version);
+    RefImageParams resolve_ref_image_params(const char* ref_image_args) const {
+        RefImageParams params;
+        std::string preset_name = get_default_ref_image_preset(version);
 
-        for (const auto& [key, value] : parse_key_value_args(overrides, "edit mode args")) {
+        for (const auto& [key, value] : parse_key_value_args(ref_image_args, "reference image args")) {
             if (key == "preset") {
                 std::string requested_preset_name = value;
-                if (REF_PRESETS.count(requested_preset_name)) {
+                if (REF_IMAGE_PRESETS.count(requested_preset_name)) {
                     preset_name = requested_preset_name;
                 } else if (value != "default") {
                     std::string valid_list;
-                    for (auto const& [name, _] : REF_PRESETS) {
+                    for (auto const& [name, _] : REF_IMAGE_PRESETS) {
                         valid_list += (valid_list.empty() ? "" : ", ") + name;
                     }
-                    LOG_WARN("ignoring invalid edit mode preset '%s'. Valid options: [%s]", value.c_str(), valid_list.c_str());
+                    LOG_WARN("ignoring invalid reference image preset '%s'. Valid options: [%s]", value.c_str(), valid_list.c_str());
                 }
                 break;
             }
         }
         if (preset_name != "default") {
-            LOG_INFO("Using '%s' preset for edit mode", preset_name.c_str());
-            params = REF_PRESETS.at(preset_name);
+            LOG_INFO("Using '%s' preset for reference images", preset_name.c_str());
+            params = REF_IMAGE_PRESETS.at(preset_name);
         }
 
-        for (const auto& [key, value] : parse_key_value_args(overrides, "edit mode args")) {
-            if (key == "use_vlm") {
-                if (!parse_strict_bool(value, params.use_VLM)) {
-                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+        for (const auto& [key, value] : parse_key_value_args(ref_image_args, "reference image args")) {
+            if (key == "pass_to_vlm") {
+                if (!parse_strict_bool(value, params.pass_to_vlm)) {
+                    LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
                 }
             } else if (key == "pass_to_dit") {
-                if (!parse_strict_bool(value, params.use_dit_refs)) {
-                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+                if (!parse_strict_bool(value, params.pass_to_dit)) {
+                    LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
                 }
             } else if (key == "ref_index_mode") {
                 if (value == "fixed") {
@@ -2905,60 +2906,59 @@ public:
                 } else if (value == "decrease") {
                     params.ref_index_mode = Rope::RefIndexMode::DECREASE;
                 } else {
-                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+                    LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
                 }
-            } else if (key == "force_timestep_0") {
-                if (!parse_strict_bool(value, params.force_timestep_0)) {
-                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+            } else if (key == "force_ref_timestep_zero") {
+                if (!parse_strict_bool(value, params.force_ref_timestep_zero)) {
+                    LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
                 }
-            } else if (key == "resize_vae_refs") {
-                if (!parse_strict_bool(value, params.resize_vae_refs)) {
-                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+            } else if (key == "resize_before_vae") {
+                if (!parse_strict_bool(value, params.resize_before_vae)) {
+                    LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
                 }
-            } else if (key == "vae_refs_max_size") {
-                if (!parse_strict_int(value, params.vae_refs_max_size)) {
-                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+            } else if (key == "vae_input_max_pixels") {
+                if (!parse_strict_int(value, params.vae_input_max_pixels)) {
+                    LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
                 }
-            } else if (key == "cond_refs_resize_mode") {
+            } else if (key == "vlm_resize_mode") {
                 if (value == "longest_side") {
-                    params.cond_refs_resize_mode = CondResizeMode::LONGEST_SIDE;
+                    params.vlm_resize_mode = RefImageResizeMode::LONGEST_SIDE;
                 } else if (value == "area") {
-                    params.cond_refs_resize_mode = CondResizeMode::AREA;
+                    params.vlm_resize_mode = RefImageResizeMode::AREA;
                 } else if (value == "none") {
-                    params.cond_refs_resize_mode = CondResizeMode::NONE;
+                    params.vlm_resize_mode = RefImageResizeMode::NONE;
                 } else {
-                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+                    LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
                 }
-            } else if (key == "cond_refs_max_size") {
-                if (!parse_strict_int(value, params.cond_refs_max_size)) {
-                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+            } else if (key == "vlm_max_size") {
+                if (!parse_strict_int(value, params.vlm_max_size)) {
+                    LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
                 }
-            } else if (key == "cond_refs_min_size") {
-                if (!parse_strict_int(value, params.cond_refs_min_size)) {
-                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+            } else if (key == "vlm_min_size") {
+                if (!parse_strict_int(value, params.vlm_min_size)) {
+                    LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
                 }
-            } else if (key != "preset" && key!= "cond_refs_size") {
-                // Optional: catch-all for unknown keys
-                LOG_WARN("ignoring unknown edit mode arg '%s'", key.c_str());
+            } else if (key != "preset" && key != "vlm_size") {
+                LOG_WARN("ignoring unknown reference image arg '%s'", key.c_str());
             }
         }
-        for (const auto& [key, value] : parse_key_value_args(overrides, "edit mode args")) {
-            if (key == "cond_refs_size") {
-                int cond_refs_size;
-                if (!parse_strict_int(value, cond_refs_size)) {
-                    LOG_WARN("ignoring invalid edit mode arg '%s=%s'", key.c_str(), value.c_str());
+        for (const auto& [key, value] : parse_key_value_args(ref_image_args, "reference image args")) {
+            if (key == "vlm_size") {
+                int vlm_size;
+                if (!parse_strict_int(value, vlm_size)) {
+                    LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
                 } else {
-                    // log something idk
-                    LOG_INFO("cond_refs_size override: setting both min and max size to %ld", (long)cond_refs_size);
-                    params.cond_refs_min_size = cond_refs_size;
-                    params.cond_refs_max_size = cond_refs_size;
+                    LOG_INFO("vlm_size override: setting both min and max size to %ld", (long)vlm_size);
+                    params.vlm_min_size = vlm_size;
+                    params.vlm_max_size = vlm_size;
                 }
                 break;
             }
         }
-        if (params.force_timestep_0 && !sd_version_is_krea2(version)){
-            LOG_WARN("force_timestep_0 is only supported by Krea2 architecture for now");
+        if (params.force_ref_timestep_zero && !sd_version_is_krea2(version)) {
+            LOG_WARN("force_ref_timestep_zero is only supported by Krea2 architecture for now");
         }
+        return params;
     }
 
 };
@@ -3422,7 +3422,7 @@ void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     sd_sample_params_init(&sd_img_gen_params->sample_params);
     sd_img_gen_params->clip_skip         = -1;
     sd_img_gen_params->ref_images_count  = 0;
-    sd_img_gen_params->ref_image_mode    = "";
+    sd_img_gen_params->ref_image_args    = "";
     sd_img_gen_params->width             = 512;
     sd_img_gen_params->height            = 512;
     sd_img_gen_params->strength          = 0.75f;
@@ -3460,7 +3460,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "batch_count: %d\n"
              "qwen_image_layers: %d\n"
              "ref_images_count: %d\n"
-             "ref_image_mode: %s\n"
+             "ref_image_args: %s\n"
              "control_strength: %.2f\n"
              "photo maker: {style_strength = %.2f, id_images_count = %d, id_embed_path = %s}\n"
              "VAE tiling: %s (temporal=%s, extra_tiling_args=%s)\n"
@@ -3478,7 +3478,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              sd_img_gen_params->batch_count,
              sd_img_gen_params->qwen_image_layers,
              sd_img_gen_params->ref_images_count,
-             SAFE_STR(sd_img_gen_params->ref_image_mode),
+             SAFE_STR(sd_img_gen_params->ref_image_args),
              sd_img_gen_params->control_strength,
              sd_img_gen_params->pm_params.style_strength,
              sd_img_gen_params->pm_params.id_images_count,
@@ -4548,7 +4548,7 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
                                                                               const sd_img_gen_params_t* sd_img_gen_params,
                                                                               GenerationRequest* request,
                                                                               SamplePlan* plan,
-                                                                              EditModeParams* edit_params) {
+                                                                              const RefImageParams& ref_image_params) {
     int64_t prepare_start_ms = ggml_time_ms();
 
     sd::Tensor<float> init_image_tensor;
@@ -4691,9 +4691,9 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
             continue;
         }
         sd::Tensor<float> ref_latent;
-        if (edit_params->resize_vae_refs && !sd_version_is_pid(sd_ctx->sd->version)) {
+        if (ref_image_params.resize_before_vae && !sd_version_is_pid(sd_ctx->sd->version)) {
             LOG_DEBUG("auto resize ref images");
-            int target_pixels = edit_params->vae_refs_max_size > 0 ? edit_params->vae_refs_max_size : 1024 * 1024;
+            int target_pixels = ref_image_params.vae_input_max_pixels > 0 ? ref_image_params.vae_input_max_pixels : 1024 * 1024;
             int vae_image_size = std::min(target_pixels, request->width * request->height);
             double vae_width   = sqrt(vae_image_size * ref_images[i].shape()[0] / ref_images[i].shape()[1]);
             double vae_height  = vae_width * ref_images[i].shape()[1] / ref_images[i].shape()[0];
@@ -4822,7 +4822,7 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
                                                                             GenerationRequest* request,
                                                                             SamplePlan* plan,
                                                                             ImageGenerationLatents* latents,
-                                                                            EditModeParams* edit_params) {
+                                                                            const RefImageParams& ref_image_params) {
     ConditionerRunnerDoneOnExit conditioner_runner_done{sd_ctx->sd->cond_stage_model.get()};
 
     ConditionerParams condition_params;
@@ -4830,11 +4830,11 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
     condition_params.clip_skip  = request->clip_skip;
     condition_params.width      = request->width;
     condition_params.height     = request->height;
-    if(edit_params->use_VLM){
+    if (ref_image_params.pass_to_vlm) {
         condition_params.ref_images = &latents->ref_images;
     }
 
-    condition_params.edit_params = *edit_params;
+    condition_params.ref_image_params = ref_image_params;
 
 
     sd_ctx->sd->prepare_generation_extensions(request->pm_params,
@@ -4845,7 +4845,7 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
     condition_params.zero_out_masked = false;
     auto cond                        = sd_ctx->sd->cond_stage_model->get_learned_condition(sd_ctx->sd->n_threads,
                                                                                            condition_params);
-    if (cond.c_concat.empty() && edit_params->use_dit_refs) {
+    if (cond.c_concat.empty() && ref_image_params.pass_to_dit) {
         cond.c_concat = latents->concat_latent;  // TODO: optimize
     }
 
@@ -4874,7 +4874,7 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
             uncond                           = sd_ctx->sd->cond_stage_model->get_learned_condition(sd_ctx->sd->n_threads,
                                                                                                    condition_params);
         }
-        if (uncond.c_concat.empty() && edit_params->use_dit_refs) {
+        if (uncond.c_concat.empty() && ref_image_params.pass_to_dit) {
             uncond.c_concat = latents->concat_latent;  // TODO: optimize
         }
     }
@@ -4898,7 +4898,7 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
             }
             img_uncond = sd_ctx->sd->cond_stage_model->get_learned_condition(sd_ctx->sd->n_threads,
                                                                              condition_params);
-            if (img_uncond.c_concat.empty() && edit_params->use_dit_refs) {
+            if (img_uncond.c_concat.empty() && ref_image_params.pass_to_dit) {
                 img_uncond.c_concat = latents->img_uncond_concat_latent;  // TODO: optimize
             }
         }
@@ -5215,8 +5215,7 @@ SD_API bool generate_image(sd_ctx_t* sd_ctx,
     sd_ctx->sd->apply_loras(sd_img_gen_params->loras, sd_img_gen_params->lora_count);
     apply_circular_axes_to_diffusion(sd_ctx, sd_img_gen_params->circular_x, sd_img_gen_params->circular_y);
 
-    EditModeParams edit_params;
-    sd_ctx->sd->set_edit_mode_params(edit_params, sd_img_gen_params->ref_image_mode);
+    const RefImageParams ref_image_params = sd_ctx->sd->resolve_ref_image_params(sd_img_gen_params->ref_image_args);
 
     ImageVaeAxesGuard axes_guard(sd_ctx, sd_img_gen_params, request);
 
@@ -5225,7 +5224,7 @@ SD_API bool generate_image(sd_ctx_t* sd_ctx,
                                                         sd_img_gen_params,
                                                         &request,
                                                         &plan,
-                                                        &edit_params);
+                                                        ref_image_params);
     if (!latents_opt.has_value()) {
         return false;
     }
@@ -5236,7 +5235,7 @@ SD_API bool generate_image(sd_ctx_t* sd_ctx,
                                                       &request,
                                                       &plan,
                                                       &latents,
-                                                      &edit_params);
+                                                      ref_image_params);
     if (!embeds_opt.has_value()) {
         return false;
     }
@@ -5282,7 +5281,7 @@ SD_API bool generate_image(sd_ctx_t* sd_ctx,
                                                    plan.extra_sample_args,
                                                    plan.sigmas,
                                                    latents.ref_latents,
-                                                   edit_params,
+                                                   ref_image_params,
                                                    latents.denoise_mask,
                                                    sd::Tensor<float>(),
                                                    1.f,
@@ -5403,7 +5402,7 @@ SD_API bool generate_image(sd_ctx_t* sd_ctx,
                                                             plan.extra_sample_args,
                                                             hires_sigma_sched,
                                                             latents.ref_latents,
-                                                            edit_params,
+                                                            ref_image_params,
                                                             hires_denoise_mask,
                                                             sd::Tensor<float>(),
                                                             1.f,
@@ -5795,7 +5794,7 @@ static ImageGenerationEmbeds prepare_video_generation_embeds(sd_ctx_t* sd_ctx,
     condition_params.zero_out_masked = true;
     condition_params.ref_images      = &latents.ref_images;
     if (sd_version_is_lingbot_video(sd_ctx->sd->version)) {
-        condition_params.edit_params.cond_refs_resize_mode = CondResizeMode::AREA;
+        condition_params.ref_image_params.vlm_resize_mode = RefImageResizeMode::AREA;
     }
 
     int64_t prepare_start_ms = ggml_time_ms();
@@ -6077,7 +6076,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
 
     sd_ctx->sd->reset_cancel_flag();
 
-    EditModeParams edit_params;
+    const RefImageParams ref_image_params;
 
     if (num_frames_out != nullptr) {
         *num_frames_out = 0;
@@ -6168,7 +6167,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                                            plan.high_noise_extra_sample_args,
                                                            high_noise_sigmas,
                                                            std::vector<sd::Tensor<float>>{},
-                                                           edit_params,
+                                                           ref_image_params,
                                                            latents.denoise_mask,
                                                            latents.vace_context,
                                                            request.vace_strength,
@@ -6210,7 +6209,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                                         plan.extra_sample_args,
                                                         plan.sigmas,
                                                         std::vector<sd::Tensor<float>>{},
-                                                        edit_params,
+                                                        ref_image_params,
                                                         latents.denoise_mask,
                                                         latents.vace_context,
                                                         request.vace_strength,
@@ -6348,7 +6347,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                             plan.extra_sample_args,
                                             hires_sigma_sched,
                                             std::vector<sd::Tensor<float>>{},
-                                            edit_params,
+                                            ref_image_params,
                                             hires_denoise_mask,
                                             sd::Tensor<float>(),
                                             hires_request.vace_strength,

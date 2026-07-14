@@ -713,7 +713,7 @@ namespace Anima {
                                   const sd::Tensor<int32_t>& t5_ids                 = {},
                                   const sd::Tensor<float>& t5_weights               = {},
                                   const std::vector<sd::Tensor<float>>& ref_latents = {},
-                                  EditModeParams edit_params                        = REF_PRESETS.at("cosmos_reference")) {
+                                  const RefImageParams& ref_image_params            = REF_IMAGE_PRESETS.at("cosmos_reference")) {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(x, timesteps, context, t5_ids, t5_weights, ref_latents);
             };
@@ -732,8 +732,8 @@ namespace Anima {
                            tensor_or_empty(diffusion_params.context),
                            tensor_or_empty(extra->t5_ids),
                            tensor_or_empty(extra->t5_weights),
-                           diffusion_params.ref_latents && diffusion_params.edit_params.use_dit_refs ? *diffusion_params.ref_latents : empty_ref_latents,
-                           diffusion_params.edit_params);
+                           diffusion_params.ref_latents && diffusion_params.ref_image_params.pass_to_dit ? *diffusion_params.ref_latents : empty_ref_latents,
+                           diffusion_params.ref_image_params);
         }
     };
 }  // namespace Anima

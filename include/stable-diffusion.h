@@ -363,7 +363,7 @@ typedef struct {
     sd_image_t init_image;
     sd_image_t* ref_images;
     int ref_images_count;
-    const char* ref_image_mode;
+    const char* ref_image_args;
     sd_image_t mask_image;
     int width;
     int height;

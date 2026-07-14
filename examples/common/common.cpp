@@ -976,10 +976,10 @@ ArgOptions SDGenerationParams::get_options() {
          (int)',',
          &extra_tiling_args},
         {"",
-         "--ref-image-mode",
+         "--ref-image-args",
          "Key-value list to set up the way the reference images are processed (empty = auto-detect from model weigths)",
          (int)',',
-         &ref_mode},
+         &ref_image_args},
     };
 
     options.int_options = {
@@ -2424,19 +2424,19 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     };
 
     if (!auto_resize_ref_image) {
-        if (!ref_mode.empty()) {
-            ref_mode += ",";
+        if (!ref_image_args.empty()) {
+            ref_image_args += ",";
         }
-        ref_mode += "resize_vae_refs=0";
-        LOG_WARN("Notice: --disable-auto-resize-ref-image is deprecated. Use --ref-image-mode \"resize_vae_refs=off\" instead.");
+        ref_image_args += "resize_before_vae=0";
+        LOG_WARN("Notice: --disable-auto-resize-ref-image is deprecated. Use --ref-image-args \"resize_before_vae=off\" instead.");
     }
 
     if (increase_ref_index) {
-        if (!ref_mode.empty()) {
-            ref_mode += ",";
+        if (!ref_image_args.empty()) {
+            ref_image_args += ",";
         }
-        ref_mode += "ref_index_mode=increase";
-        LOG_WARN("Notice: --increase-ref-index is deprecated. Use --ref-image-mode \"ref_index_mode=increase\" instead.");
+        ref_image_args += "ref_index_mode=increase";
+        LOG_WARN("Notice: --increase-ref-index is deprecated. Use --ref-image-args \"ref_index_mode=increase\" instead.");
     }
 
     params.loras                 = lora_vec.empty() ? nullptr : lora_vec.data();
@@ -2447,7 +2447,7 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     params.init_image            = init_image.get();
     params.ref_images            = ref_image_views.empty() ? nullptr : ref_image_views.data();
     params.ref_images_count      = static_cast<int>(ref_image_views.size());
-    params.ref_image_mode        = ref_mode.c_str();
+    params.ref_image_args        = ref_image_args.c_str();
     params.mask_image            = mask_image.get();
     params.width                 = get_resolved_width();
     params.height                = get_resolved_height();
