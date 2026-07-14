@@ -63,6 +63,10 @@
 const char* sd_vae_format_name(enum sd_vae_format_t format);
 static SDVersion sd_vae_format_to_version(enum sd_vae_format_t format, SDVersion fallback);
 
+static bool sd_version_supports_animatediff(SDVersion version) {
+    return version == VERSION_SD1 || version == VERSION_SD1_INPAINT || version == VERSION_SD1_PIX2PIX;
+}
+
 const char* model_version_to_str[] = {
     "SD 1.x",
     "SD 1.x Inpaint",
@@ -3443,7 +3447,7 @@ SD_API bool sd_ctx_supports_video_generation(const sd_ctx_t* sd_ctx) {
     if (sd_ctx == nullptr || sd_ctx->sd == nullptr) {
         return false;
     }
-    if (sd_ctx->sd->animatediff_loaded && sd_version_is_unet(sd_ctx->sd->version)) {
+    if (sd_ctx->sd->animatediff_loaded && sd_version_supports_animatediff(sd_ctx->sd->version)) {
         return true;
     }
     return sd_version_supports_video_generation(sd_ctx->sd->version);
@@ -5885,21 +5889,21 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
     if (frames_out != nullptr) {
         *frames_out = nullptr;
     }
+    if (audio_out != nullptr) {
+        *audio_out = nullptr;
+    }
+    if (num_frames_out != nullptr) {
+        *num_frames_out = 0;
+    }
 
-    if (sd_ctx->sd->animatediff_loaded && sd_version_is_unet(sd_ctx->sd->version)) {
+    if (sd_ctx->sd->animatediff_loaded && sd_version_supports_animatediff(sd_ctx->sd->version)) {
         LOG_INFO("AnimateDiff dispatch: %d frames, %dx%d",
                  sd_vid_gen_params->video_frames, sd_vid_gen_params->width, sd_vid_gen_params->height);
         return generate_animatediff_video(sd_ctx, sd_vid_gen_params, frames_out, num_frames_out);
     }
-    if (audio_out != nullptr) {
-        *audio_out = nullptr;
-    }
 
     sd_ctx->sd->reset_cancel_flag();
 
-    if (num_frames_out != nullptr) {
-        *num_frames_out = 0;
-    }
     int64_t t0                    = ggml_time_ms();
     sd_ctx->sd->vae_tiling_params = sd_vid_gen_params->vae_tiling_params;
     apply_circular_axes_to_diffusion(sd_ctx, sd_vid_gen_params->circular_x, sd_vid_gen_params->circular_y);

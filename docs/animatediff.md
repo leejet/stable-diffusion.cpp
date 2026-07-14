@@ -11,8 +11,8 @@ Personalized Text-to-Image Diffusion Models without Specific Tuning"
 ## Download weights
 
 - Motion module (v3, recommended)
-    - safetensors: https://huggingface.co/guoyww/animatediff/resolve/main/mm_sd15_v3.safetensors
-    - alternative mirror: https://huggingface.co/conrevo/AnimateDiff-A1111/tree/main/motion_module
+    - fp16 safetensors: https://huggingface.co/conrevo/AnimateDiff-A1111/resolve/main/motion_module/mm_sd15_v3.safetensors
+    - original checkpoint: https://huggingface.co/guoyww/animatediff/resolve/main/v3_sd15_mm.ckpt
 - SD 1.5 base model
     - any SD 1.5 checkpoint works. `realisticVisionV60B1` and `toonyou_beta3`
       are the ones used in guoyww's reference configs.
