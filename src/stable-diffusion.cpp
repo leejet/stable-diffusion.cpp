@@ -5851,29 +5851,29 @@ static bool generate_animatediff_video(sd_ctx_t* sd_ctx,
         n_frames = 32;
     }
 
-    sd_img_gen_params_t img;
-    sd_img_gen_params_init(&img);
-    img.loras             = sd_vid_gen_params->loras;
-    img.lora_count        = sd_vid_gen_params->lora_count;
-    img.prompt            = sd_vid_gen_params->prompt;
-    img.negative_prompt   = sd_vid_gen_params->negative_prompt;
-    img.clip_skip         = sd_vid_gen_params->clip_skip;
-    img.width             = sd_vid_gen_params->width;
-    img.height            = sd_vid_gen_params->height;
-    img.sample_params     = sd_vid_gen_params->sample_params;
-    img.strength          = sd_vid_gen_params->strength;
-    img.seed              = sd_vid_gen_params->seed;
-    img.batch_count       = 1;
-    img.control_strength  = 1.0f;
-    img.vae_tiling_params = sd_vid_gen_params->vae_tiling_params;
-    img.cache             = sd_vid_gen_params->cache;
-    img.hires             = sd_vid_gen_params->hires;
-    img.qwen_image_layers = 0;
-    img.circular_x        = sd_vid_gen_params->circular_x;
-    img.circular_y        = sd_vid_gen_params->circular_y;
+    sd_img_gen_params_t img_gen_params;
+    sd_img_gen_params_init(&img_gen_params);
+    img_gen_params.loras             = sd_vid_gen_params->loras;
+    img_gen_params.lora_count        = sd_vid_gen_params->lora_count;
+    img_gen_params.prompt            = sd_vid_gen_params->prompt;
+    img_gen_params.negative_prompt   = sd_vid_gen_params->negative_prompt;
+    img_gen_params.clip_skip         = sd_vid_gen_params->clip_skip;
+    img_gen_params.width             = sd_vid_gen_params->width;
+    img_gen_params.height            = sd_vid_gen_params->height;
+    img_gen_params.sample_params     = sd_vid_gen_params->sample_params;
+    img_gen_params.strength          = sd_vid_gen_params->strength;
+    img_gen_params.seed              = sd_vid_gen_params->seed;
+    img_gen_params.batch_count       = 1;
+    img_gen_params.control_strength  = 1.0f;
+    img_gen_params.vae_tiling_params = sd_vid_gen_params->vae_tiling_params;
+    img_gen_params.cache             = sd_vid_gen_params->cache;
+    img_gen_params.hires             = sd_vid_gen_params->hires;
+    img_gen_params.qwen_image_layers = 0;
+    img_gen_params.circular_x        = sd_vid_gen_params->circular_x;
+    img_gen_params.circular_y        = sd_vid_gen_params->circular_y;
 
     sd_ctx->sd->animatediff_num_frames = n_frames;
-    bool ok                            = generate_image(sd_ctx, &img, frames_out, num_frames_out);
+    bool ok                            = generate_image(sd_ctx, &img_gen_params, frames_out, num_frames_out);
     sd_ctx->sd->animatediff_num_frames = 0;
     return ok;
 }
