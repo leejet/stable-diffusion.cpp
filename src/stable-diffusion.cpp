@@ -1306,12 +1306,12 @@ public:
                                                          false,
                                                          version,
                                                          model_manager);
-                } else if (sd_version_uses_wan_vae(version)) {
+                } else if (sd_version_uses_wan_vae(vae_version)) {
                     return std::make_shared<WAN::WanVAERunner>(backend_for(SDBackendModule::VAE),
                                                                tensor_storage_map,
                                                                "first_stage_model",
                                                                false,
-                                                               version,
+                                                               vae_version,
                                                                model_manager);
                 } else {
                     auto model = std::make_shared<AutoEncoderKL>(backend_for(SDBackendModule::VAE),

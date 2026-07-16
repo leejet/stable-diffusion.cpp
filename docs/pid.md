@@ -1,7 +1,7 @@
 # How to Use
 
 PiD is NVIDIA's Pixel Diffusion Decoder. It replaces the usual VAE decode or decode-then-upscale path with a pixel-space diffusion decoder conditioned on a
-source latent and text prompt.
+source latent and text prompt. Both the original PiD checkpoints and PiD 1.5 are supported.
 
 In stable-diffusion.cpp, PiD currently runs as an image edit pipeline: provide a reference image with `-r`/`--ref-image`, encode that image with a matching VAE, then let the PiD diffusion model decode/upscale directly to RGB.
 
