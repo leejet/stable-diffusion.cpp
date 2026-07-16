@@ -134,6 +134,25 @@ sd-cli -M vid_gen --model realisticVisionV60B1.safetensors \
        -p "close up photo of a rabbit ...<lora:v3_sd15_adapter:1.0>" ...
 ```
 
+## img2video
+
+Pass a pre-rendered image via `-i / --init-img` to animate FROM it. All N output frames start from the encoded init latent, then per-frame noise is added at `--strength`. Character identity, composition, and quality are anchored by the init image; the motion module adds subtle motion on top.
+
+Left: init image rendered with `-M img_gen`. Right: 8-frame vid_gen output.
+
+<img src="../assets/animatediff/img2video_demo.gif" width="512"/>
+
+```
+sd-cli -M img_gen ... -o init.png                  # any high-quality still
+sd-cli -M vid_gen --motion-module mm_sd15_v3.safetensors \
+    -i init.png --strength 0.75 \
+    --cfg-scale 7.0 --sampling-method euler --scheduler karras \
+    -H 512 -W 512 --video-frames 8 --steps 25 -s 42 \
+    -p "..." -o out.avi
+```
+
+`--strength` controls how far the motion module is allowed to deviate from the init image (higher = more motion, lower = more static).
+
 ## Notes
 
 - The motion module was trained at `video_length=16`. Running with
