@@ -1306,12 +1306,12 @@ public:
                                                          false,
                                                          version,
                                                          model_manager);
-                } else if (sd_version_uses_wan_vae(version)) {
+                } else if (sd_version_uses_wan_vae(vae_version)) {
                     return std::make_shared<WAN::WanVAERunner>(backend_for(SDBackendModule::VAE),
                                                                tensor_storage_map,
                                                                "first_stage_model",
                                                                false,
-                                                               version,
+                                                               vae_version,
                                                                model_manager);
                 } else {
                     auto model = std::make_shared<AutoEncoderKL>(backend_for(SDBackendModule::VAE),
@@ -3213,6 +3213,8 @@ const char* sd_vae_format_name(enum sd_vae_format_t format) {
             return "sd3";
         case SD_VAE_FORMAT_FLUX2:
             return "flux2";
+        case SD_VAE_FORMAT_WAN:
+            return "wan";
         default:
             return NONE_STR;
     }
@@ -3226,6 +3228,8 @@ static SDVersion sd_vae_format_to_version(enum sd_vae_format_t format, SDVersion
             return VERSION_SD3;
         case SD_VAE_FORMAT_FLUX2:
             return VERSION_FLUX2;
+        case SD_VAE_FORMAT_WAN:
+            return VERSION_WAN2;
         case SD_VAE_FORMAT_AUTO:
         default:
             return fallback;

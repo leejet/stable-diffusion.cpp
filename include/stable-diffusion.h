@@ -180,6 +180,7 @@ enum sd_vae_format_t {
     SD_VAE_FORMAT_FLUX,
     SD_VAE_FORMAT_SD3,
     SD_VAE_FORMAT_FLUX2,
+    SD_VAE_FORMAT_WAN,
     SD_VAE_FORMAT_COUNT,
 };
 

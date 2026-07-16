@@ -50,6 +50,9 @@ static sd_vae_format_t str_to_vae_format(const std::string& value) {
     if (value == "flux2") {
         return SD_VAE_FORMAT_FLUX2;
     }
+    if (value == "wan") {
+        return SD_VAE_FORMAT_WAN;
+    }
     return SD_VAE_FORMAT_COUNT;
 }
 
@@ -401,7 +404,7 @@ ArgOptions SDContextParams::get_options() {
          &vae_path},
         {"",
          "--vae-format",
-         "VAE latent format override: auto, flux, sd3, or flux2 (default: auto)",
+         "VAE latent format override: auto, flux, sd3, flux2, or wan (default: auto)",
          0,
          &vae_format},
         {"",
@@ -743,7 +746,7 @@ bool SDContextParams::validate(SDMode mode) {
     }
 
     if (str_to_vae_format(vae_format) == SD_VAE_FORMAT_COUNT) {
-        LOG_ERROR("error: vae_format must be 'auto', 'flux', 'sd3', or 'flux2'");
+        LOG_ERROR("error: vae_format must be 'auto', 'flux', 'sd3', 'flux2', or 'wan'");
         return false;
     }
 
