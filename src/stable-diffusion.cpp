@@ -4687,8 +4687,16 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
         init_latent.dim() >= 4 && init_latent.shape()[3] == 1) {
         int n_frames = sd_ctx->sd->animatediff_num_frames;
         std::vector<int64_t> shape(init_latent.shape().begin(), init_latent.shape().end());
-        shape[3]    = n_frames;
-        init_latent = sd::Tensor<float>(std::move(shape));  // zero-filled batch of N frames; per-frame noise is generated later via randn_like.
+        shape[3] = n_frames;
+        if (!init_image_tensor.empty()) {
+            sd::Tensor<float> replicated(shape);
+            for (int f = 0; f < n_frames; ++f) {
+                sd::ops::slice_assign(&replicated, 3, f, f + 1, init_latent);
+            }
+            init_latent = std::move(replicated);
+        } else {
+            init_latent = sd::Tensor<float>(std::move(shape));
+        }
     }
 
     if (!control_image_tensor.empty()) {
@@ -6132,6 +6140,7 @@ static bool generate_animatediff_video(sd_ctx_t* sd_ctx,
     img_gen_params.height            = sd_vid_gen_params->height;
     img_gen_params.sample_params     = sd_vid_gen_params->sample_params;
     img_gen_params.strength          = sd_vid_gen_params->strength;
+    img_gen_params.init_image        = sd_vid_gen_params->init_image;
     img_gen_params.seed              = sd_vid_gen_params->seed;
     img_gen_params.batch_count       = 1;
     img_gen_params.control_strength  = 1.0f;
