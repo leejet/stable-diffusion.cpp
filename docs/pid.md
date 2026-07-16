@@ -16,6 +16,7 @@ In stable-diffusion.cpp, PiD currently runs as an image edit pipeline: provide a
     - Flux / Z-Image PiD: use the Flux VAE and pass `--vae-format flux`
     - SD3 PiD: use the SD3 VAE and pass `--vae-format sd3`
     - Flux.2 PiD: use the Flux.2 VAE and pass `--vae-format flux2`
+    - Qwen-Image PiD: use the Qwen-Image 2D VAE and pass `--vae-format wan`
 
 The official PiD model card should be checked before use. At the time of the initial PiD release, the official weights are under the NSCLv1 non-commercial license.
 
