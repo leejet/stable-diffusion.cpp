@@ -65,6 +65,7 @@ API and command-line option may change frequently.***
   - Video Models
     - [Wan2.1/Wan2.2](./docs/wan.md)
     - [LTX-2.3](./docs/ltx2.md)
+    - [HunyuanVideo 1.5](./docs/hunyuan_video.md)
     - [LingBot-Video](./docs/lingbot_video.md)
   - [PhotoMaker](./docs/photo_maker.md) support.
   - Control Net support with SD 1.5
