@@ -535,6 +535,33 @@ namespace Rope {
         return vid_ids_repeated;
     }
 
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_hunyuan_video_ids(int t,
+                                                                            int h,
+                                                                            int w,
+                                                                            int patch_t,
+                                                                            int patch_h,
+                                                                            int patch_w,
+                                                                            int bs,
+                                                                            int context_len) {
+        std::vector<std::vector<float>> txt_ids(bs * context_len, std::vector<float>(3, 0.0f));
+        auto img_ids = gen_vid_ids(t, h, w, patch_t, patch_h, patch_w, bs);
+        return concat_ids(txt_ids, img_ids, bs);
+    }
+
+    __STATIC_INLINE__ std::vector<float> gen_hunyuan_video_pe(int t,
+                                                              int h,
+                                                              int w,
+                                                              int patch_t,
+                                                              int patch_h,
+                                                              int patch_w,
+                                                              int bs,
+                                                              int context_len,
+                                                              float theta,
+                                                              const std::vector<int>& axes_dim) {
+        auto ids = gen_hunyuan_video_ids(t, h, w, patch_t, patch_h, patch_w, bs, context_len);
+        return embed_nd(ids, bs, theta, axes_dim);
+    }
+
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen_image_ids(int t,
                                                                          int h,
                                                                          int w,
