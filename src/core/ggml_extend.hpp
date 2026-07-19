@@ -3309,7 +3309,7 @@ public:
 
 class Identity : public UnaryBlock {
 public:
-    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         return x;
     }
 };
@@ -3368,7 +3368,7 @@ public:
         force_prec_f32 = force_prec_f32_;
     }
 
-    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         ggml_tensor* w = params["weight"];
         ggml_tensor* b = nullptr;
         if (bias) {
@@ -3422,7 +3422,7 @@ public:
     }
 
     ggml_tensor* forward(GGMLRunnerContext* ctx,
-                         ggml_tensor* input_ids) {
+                         ggml_tensor* input_ids) override {
         // input_ids: [N, n_token]
         auto weight = params["weight"];
 
@@ -3482,11 +3482,11 @@ public:
         scale = scale_value;
     }
 
-    std::string get_desc() {
+    std::string get_desc() override {
         return "Conv2d";
     }
 
-    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         ggml_tensor* w = params["weight"];
         ggml_tensor* b = nullptr;
         if (bias) {
@@ -3569,11 +3569,11 @@ public:
         scale = scale_value;
     }
 
-    std::string get_desc() {
+    std::string get_desc() override {
         return "Conv2d_grouped";
     }
 
-    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         ggml_tensor* w = params["weight"];
         ggml_tensor* b = nullptr;
         if (bias) {
@@ -3725,7 +3725,7 @@ public:
           bias(bias),
           force_prec_f32(force_prec_f32) {}
 
-    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         ggml_tensor* w = params["weight"];
         ggml_tensor* b = nullptr;
         if (ctx->weight_adapter) {
@@ -3778,7 +3778,7 @@ public:
           elementwise_affine(elementwise_affine),
           bias(bias) {}
 
-    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         ggml_tensor* w = nullptr;
         ggml_tensor* b = nullptr;
 
@@ -3865,7 +3865,7 @@ public:
         : hidden_size(hidden_size),
           eps(eps) {}
 
-    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         ggml_tensor* w = params["weight"];
         if (ctx->weight_adapter) {
             w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
