@@ -449,8 +449,8 @@ jobs:
     runs-on: windows-2022
 
     env:
-      ROCM_VERSION: "7.13.0"
-      GPU_TARGETS: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
+      ROCM_VERSION: "7.14.0"
+      GPU_TARGETS: "gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201"
 
     steps:
       - uses: actions/checkout@v3
@@ -472,34 +472,68 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\TheRock\build
-          key: rocm-${{ env.ROCM_VERSION }}-gfx1151-${{ runner.os }}
+          key: rocm-wheels-${{ env.ROCM_VERSION }}-${{ runner.os }}
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: windows-latest-rocm-${{ env.ROCM_VERSION }}-x64
+          key: windows-rocm-${{ env.ROCM_VERSION }}-x64
           evict-old-files: 1d
 
-      - name: Install ROCm
+      - name: Install ROCm with Wheels
         if: steps.cache-rocm.outputs.cache-hit != 'true'
         run: |
           $ErrorActionPreference = "Stop"
-          write-host "Downloading AMD ROCm ${{ env.ROCM_VERSION }} tarball"
-          Invoke-WebRequest -Uri "https://repo.amd.com/rocm/tarball/therock-dist-windows-gfx1151-${{ env.ROCM_VERSION }}.tar.gz" -OutFile "${env:RUNNER_TEMP}\rocm.tar.gz"
-          write-host "Extracting ROCm tarball"
-          mkdir C:\TheRock\build -Force
-          tar -xzf "${env:RUNNER_TEMP}\rocm.tar.gz" -C C:\TheRock\build --strip-components=1
-          write-host "Completed ROCm extraction"
+          write-host "Setting up Python virtual environment"
+
+          # Create the venv directly at the cache location to avoid relocation issues
+          New-Item -Path "C:\TheRock\build" -ItemType Directory -Force | Out-Null
+          python -m venv C:\TheRock\build\.venv
+          & C:\TheRock\build\.venv\Scripts\Activate.ps1
+
+          write-host "Upgrading pip"
+          python -m pip install --upgrade pip
+
+          write-host "Installing ROCm wheels for multi-arch support"
+          # Install ROCm wheels for multi-arch support (this may take several minutes)
+          python -m pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ "rocm[libraries,devel]==${{env.ROCM_VERSION}}"
+
+          # Pre-expand the devel tree so it is included in the cache
+          write-host "Initializing ROCm devel tree"
+          rocm-sdk init
+          if ($LASTEXITCODE -ne 0) { throw "rocm-sdk init failed with exit code $LASTEXITCODE" }
+          write-host "Completed ROCm wheel installation to C:\TheRock\build"
 
       - name: Setup ROCm Environment
         run: |
-          $rocmPath = "C:\TheRock\build"
+          $ErrorActionPreference = "Stop"
+
+          # Activate venv from cache or fresh install
+          & C:\TheRock\build\.venv\Scripts\Activate.ps1
+
+          # Expand the devel tree (idempotent; no-op if already done during install)
+          rocm-sdk init
+          if ($LASTEXITCODE -ne 0) { throw "rocm-sdk init failed with exit code $LASTEXITCODE" }
+
+          # Get ROCm installation paths using the rocm-sdk CLI tool
+          $rocmPath = (rocm-sdk path --root)
+          if (-not $rocmPath) { throw "rocm-sdk path --root returned empty - devel package may not be installed" }
+          $rocmPath = $rocmPath.Trim()
+          $cmakePath = (rocm-sdk path --cmake).Trim()
+          $binPath = (rocm-sdk path --bin).Trim()
+          write-host "ROCm root: $rocmPath"
+          write-host "CMake path: $cmakePath"
+          write-host "Bin path: $binPath"
+
           echo "HIP_PATH=$rocmPath" >> $env:GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$cmakePath" >> $env:GITHUB_ENV
           echo "HIP_DEVICE_LIB_PATH=$rocmPath\lib\llvm\amdgcn\bitcode" >> $env:GITHUB_ENV
           echo "HIP_PLATFORM=amd" >> $env:GITHUB_ENV
           echo "LLVM_PATH=$rocmPath\lib\llvm" >> $env:GITHUB_ENV
-          echo "$rocmPath\bin" >> $env:GITHUB_PATH
-          echo "$rocmPath\lib\llvm\bin" >> $env:GITHUB_PATH
+          echo "$binPath" >> $env:GITHUB_PATH
+
+          # Keep venv in PATH for subsequent steps
+          echo "C:\TheRock\build\.venv\Scripts" >> $env:GITHUB_PATH
 
       - name: Build
         run: |
@@ -527,139 +561,6 @@ jobs:
       - name: Pack artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         run: |
-          $ErrorActionPreference = "Stop"
-          $dst = "build\bin"
-          $rocmBin = Join-Path "${env:HIP_PATH}" "bin"
-          $requiredRocmPaths = @(
-            (Join-Path $rocmBin "rocblas.dll"),
-            (Join-Path $rocmBin "rocblas\library")
-          )
-          foreach ($path in $requiredRocmPaths) {
-            if (!(Test-Path $path)) {
-              throw "Missing ROCm runtime dependency: $path"
-            }
-          }
-
-          foreach ($pattern in @("rocblas*.dll", "hipblas*.dll", "libhipblas*.dll")) {
-            Copy-Item -Path (Join-Path $rocmBin $pattern) -Destination $dst -Force -ErrorAction SilentlyContinue
-          }
-
-          foreach ($dir in @("rocblas", "hipblaslt")) {
-            $src = Join-Path $rocmBin $dir
-            if (Test-Path $src) {
-              Copy-Item -Path $src -Destination $dst -Recurse -Force
-            }
-          }
-
-          7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip .\build\bin\*
-
-      - name: Upload artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip
-          path: |
-            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip
-
-  windows-latest-cmake-hip:
-    runs-on: windows-2022
-
-    env:
-      HIPSDK_INSTALLER_VERSION: "26.Q1"
-      ROCM_VERSION: "7.1.1"
-      GPU_TARGETS: "gfx1150;gfx1151;gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
-
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          submodules: recursive
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.15.1
-
-      - name: Cache ROCm Installation
-        id: cache-rocm
-        uses: actions/cache@v4
-        with:
-          path: C:\Program Files\AMD\ROCm
-          key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: windows-latest-cmake-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-x64
-          evict-old-files: 1d
-
-      - name: Install ROCm
-        if: steps.cache-rocm.outputs.cache-hit != 'true'
-        run: |
-          $ErrorActionPreference = "Stop"
-          write-host "Downloading AMD HIP SDK Installer"
-          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-${{ env.HIPSDK_INSTALLER_VERSION }}-Win11-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
-          write-host "Installing AMD HIP SDK"
-          $proc = Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -PassThru
-          $completed = $proc.WaitForExit(600000)
-          if (-not $completed) {
-              Write-Error "ROCm installation timed out after 10 minutes. Killing the process"
-              $proc.Kill()
-              exit 1
-          }
-          if ($proc.ExitCode -ne 0) {
-              Write-Error "ROCm installation failed with exit code $($proc.ExitCode)"
-              exit 1
-          }
-          write-host "Completed AMD HIP SDK installation"
-
-      - name: Verify ROCm
-        run: |
-          # Find and test ROCm installation
-          $clangPath = Get-ChildItem 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | Select-Object -First 1
-          if (-not $clangPath) {
-            Write-Error "ROCm installation not found"
-            exit 1
-          }
-          & $clangPath.FullName --version
-          # Set HIP_PATH environment variable for later steps
-          echo "HIP_PATH=$(Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | split-path | split-path)" >> $env:GITHUB_ENV
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          $env:CMAKE_PREFIX_PATH="${env:HIP_PATH}"
-          cmake .. `
-            -G "Unix Makefiles" `
-            -DSD_HIPBLAS=ON `
-            -DSD_BUILD_SHARED_LIBS=ON `
-            -DGGML_NATIVE=OFF `
-            -DCMAKE_C_COMPILER=clang `
-            -DCMAKE_CXX_COMPILER=clang++ `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DGPU_TARGETS="${{ env.GPU_TARGETS }}"
-          cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
-
-      - name: Get commit hash
-        id: commit
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
-
-      - name: Pack artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        run: |
-          md "build\bin\rocblas\library\"
-          md "build\bin\hipblaslt\library"
-          cp "${env:HIP_PATH}\bin\libhipblas.dll" "build\bin\"
-          cp "${env:HIP_PATH}\bin\libhipblaslt.dll" "build\bin\"
-          cp "${env:HIP_PATH}\bin\rocblas.dll" "build\bin\"
-          cp "${env:HIP_PATH}\bin\rocblas\library\*" "build\bin\rocblas\library\"
-          cp "${env:HIP_PATH}\bin\hipblaslt\library\*" "build\bin\hipblaslt\library\"
           7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip .\build\bin\*
 
       - name: Upload artifacts
@@ -679,11 +580,8 @@ jobs:
     strategy:
       matrix:
         include:
-          - ROCM_VERSION: "7.2.1"
-            gpu_targets: "gfx908;gfx90a;gfx942;gfx1030;gfx1031;gfx1032;gfx1100;gfx1101;gfx1102;gfx1151;gfx1150;gfx1200;gfx1201"
-            build: 'x64'
-          - ROCM_VERSION: "7.13.0"
-            gpu_targets: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
+          - ROCM_VERSION: "7.14.0"
+            gpu_targets: "gfx900;gfx906;gfx908;gfx90a;gfx90c;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201"
             build: x64
 
     steps:
@@ -702,7 +600,7 @@ jobs:
       - name: Dependencies
         id: depends
         run: |
-          sudo apt install -y build-essential cmake wget zip ninja-build
+          sudo apt install -y build-essential git cmake wget
 
       - name: Free disk space
         run: |
@@ -723,38 +621,36 @@ jobs:
           sudo apt clean
           df -h
 
-      - name: Setup Legacy ROCm
-        if: matrix.ROCM_VERSION == '7.2.1'
-        id: legacy_env
-        run: |
-          sudo mkdir --parents --mode=0755 /etc/apt/keyrings
-          wget https://repo.radeon.com/rocm/rocm.gpg.key -O - | \
-            gpg --dearmor | sudo tee /etc/apt/keyrings/rocm.gpg > /dev/null
-
-          sudo tee /etc/apt/sources.list.d/rocm.list << EOF
-          deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/${{ matrix.ROCM_VERSION }} noble main
-          EOF
-
-          sudo tee /etc/apt/preferences.d/rocm-pin-600 << EOF
-          Package: *
-          Pin: release o=repo.radeon.com
-          Pin-Priority: 600
-          EOF
-
-          sudo apt update
-          sudo apt-get install -y libssl-dev rocm-hip-sdk
-
-      - name: Setup TheRock
-        if: matrix.ROCM_VERSION != '7.2.1'
+      - name: Setup TheRock with Wheels
         id: therock_env
         run: |
-          wget https://repo.amd.com/rocm/tarball/therock-dist-linux-gfx1151-${{ matrix.ROCM_VERSION }}.tar.gz
-          mkdir install
-          tar -xf *.tar.gz -C install
-          export ROCM_PATH=$(pwd)/install
-          echo ROCM_PATH=$ROCM_PATH >> $GITHUB_ENV
-          echo PATH=$PATH:$ROCM_PATH/bin >> $GITHUB_ENV
-          echo LD_LIBRARY_PATH=$ROCM_PATH/lib:$ROCM_PATH/llvm/lib:$ROCM_PATH/lib/rocprofiler-systems >> $GITHUB_ENV
+          # Create Python virtual environment
+          python3 -m venv .venv
+          source .venv/bin/activate
+
+          # Install ROCm wheels for build
+          # libraries = HIP runtime and CMake configs needed for linking
+          # devel = compilers, headers, static libs
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ "rocm[libraries,devel]==${{matrix.ROCM_VERSION}}"
+
+          # Get ROCm installation paths using the rocm-sdk CLI tool
+          ROCM_PATH=$(rocm-sdk path --root)
+          CMAKE_PATH=$(rocm-sdk path --cmake)
+          BIN_PATH=$(rocm-sdk path --bin)
+          echo "ROCM_PATH=$ROCM_PATH"
+          echo "CMAKE_PATH=$CMAKE_PATH"
+          echo "BIN_PATH=$BIN_PATH"
+
+          # Set environment variables
+          echo "ROCM_PATH=$ROCM_PATH" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$CMAKE_PATH" >> $GITHUB_ENV
+          echo "HIP_PATH=$ROCM_PATH" >> $GITHUB_ENV
+          echo "PATH=$BIN_PATH:${PATH}" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$ROCM_PATH/lib:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+
+          # Keep venv activated for subsequent steps
+          echo "$(pwd)/.venv/bin" >> $GITHUB_PATH
 
       # setup-node installs into /opt/hostedtoolcache, which is removed above.
       # Keep Node/pnpm setup after disk cleanup so the server frontend can be embedded.
@@ -839,7 +735,6 @@ jobs:
       - build-and-push-docker-images
       - macOS-latest-cmake
       - windows-latest-cmake
-      - windows-latest-cmake-hip
       - windows-latest-rocm
 
     steps:
