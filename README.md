@@ -68,6 +68,7 @@ API and command-line option may change frequently.***
     - [HunyuanVideo 1.5](./docs/hunyuan_video.md)
     - [LingBot-Video](./docs/lingbot_video.md)
   - [PhotoMaker](./docs/photo_maker.md) support.
+  - [IP-Adapter](./docs/ip_adapter.md) support (SD 1.5 and SDXL)
   - Control Net support with SD 1.5
   - [ADetailer](./docs/adetailer.md)
   - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
