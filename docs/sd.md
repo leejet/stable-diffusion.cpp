@@ -2,8 +2,8 @@
 
 - download original weights(.ckpt or .safetensors). For example
     - Stable Diffusion v1.4 from https://huggingface.co/CompVis/stable-diffusion-v-1-4-original
-    - Stable Diffusion v1.5 from https://huggingface.co/runwayml/stable-diffusion-v1-5
-    - Stable Diffuison v2.1 from https://huggingface.co/stabilityai/stable-diffusion-2-1
+    - Stable Diffusion v1.5 from https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5
+    - Stable Diffuison v2.1 from https://huggingface.co/Manojb/stable-diffusion-2-1-base
     - Stable Diffusion 3 2B from https://huggingface.co/stabilityai/stable-diffusion-3-medium
 
 ### txt2img example
