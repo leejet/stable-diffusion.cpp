@@ -55,6 +55,7 @@ enum SDVersion {
     VERSION_IDEOGRAM4,
     VERSION_SEFI_IMAGE,
     VERSION_KREA2,
+    VERSION_MAGE_FLOW,
     VERSION_ESRGAN,
     VERSION_COUNT,
 };
@@ -227,6 +228,10 @@ static inline bool sd_version_is_krea2(SDVersion version) {
     return false;
 }
 
+static inline bool sd_version_is_mage_flow(SDVersion version) {
+    return version == VERSION_MAGE_FLOW;
+}
+
 static inline bool sd_version_uses_flux_vae(SDVersion version) {
     if (sd_version_is_flux(version) || sd_version_is_z_image(version) || sd_version_is_boogu_image(version) || sd_version_is_longcat(version)) {
         return true;
@@ -283,7 +288,8 @@ static inline bool sd_version_is_dit(SDVersion version) {
         sd_version_is_pid(version) ||
         sd_version_is_ideogram4(version) ||
         sd_version_is_sefi_image(version) ||
-        sd_version_is_krea2(version)) {
+        sd_version_is_krea2(version) ||
+        sd_version_is_mage_flow(version)) {
         return true;
     }
     return false;

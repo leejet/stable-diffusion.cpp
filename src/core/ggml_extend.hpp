@@ -3609,18 +3609,19 @@ public:
         if (groups == in_channels && groups == out_channels) {
             ggml_tensor* res;
             if (ctx->conv2d_direct_enabled) {
-                res = ggml_conv_2d_dw_direct(ctx->ggml_ctx, x, w,
+                res = ggml_conv_2d_dw_direct(ctx->ggml_ctx, w, x,
                                              stride.second, stride.first,
                                              padding.second, padding.first,
                                              dilation.second, dilation.first);
             } else {
-                res = ggml_conv_2d_dw(ctx->ggml_ctx, x, w,
+                res = ggml_conv_2d_dw(ctx->ggml_ctx, w, x,
                                       stride.second, stride.first,
                                       padding.second, padding.first,
                                       dilation.second, dilation.first);
             }
             if (b) {
-                res = ggml_add(ctx->ggml_ctx, res, b);
+                b   = ggml_reshape_4d(ctx->ggml_ctx, b, 1, 1, b->ne[0], 1);
+                res = ggml_add_inplace(ctx->ggml_ctx, res, b);
             }
             return res;
         }

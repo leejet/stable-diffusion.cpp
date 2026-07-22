@@ -498,6 +498,10 @@ SDVersion ModelLoader::get_sd_version() {
             return VERSION_MINIT2I;
         }
         if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.img_mod.1.weight") != std::string::npos) {
+            auto img_in = tensor_storage_map.find("model.diffusion_model.img_in.weight");
+            if (img_in != tensor_storage_map.end() && img_in->second.ne[0] == 128) {
+                return VERSION_MAGE_FLOW;
+            }
             if (tensor_storage_map.find("model.diffusion_model.time_text_embed.addition_t_embedding.weight") != tensor_storage_map.end()) {
                 return VERSION_QWEN_IMAGE_LAYERED;
             }
