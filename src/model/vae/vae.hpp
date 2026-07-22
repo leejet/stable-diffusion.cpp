@@ -74,7 +74,7 @@ public:
         int scale_factor = 8;
         if (version == VERSION_LTXAV) {
             scale_factor = 32;
-        } else if (version == VERSION_WAN2_2_TI2V || sd_version_is_hunyuan_video(version)) {
+        } else if (version == VERSION_WAN2_2_TI2V || sd_version_is_hunyuan_video(version) || sd_version_is_mage_flow(version)) {
             scale_factor = 16;
         } else if (sd_version_uses_flux2_vae(version)) {
             scale_factor = 16;

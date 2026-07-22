@@ -16,6 +16,7 @@ Depending on the architecture, different models handle reference images differen
 | [**Flux.2 [Dev] / Flux.2 [Klein]**](./flux2.md) | `flux2` |
 | [**Boogu Image Edit**](./boogu_image.md) | `z_image_omni` |
 | **Krea2 (Community Edit LoRAs)** | `krea2_ostris_edit` |
+| [**Mage-Flow-Edit**](./mage_flow.md#image-editing) | `mage_flow` |
 | **Anima (Community Edit LoRAs)** | `cosmos_reference` |
 
 Stable-diffusion.spp also supports basic Unet-based editing models like instruct-pix2pix or CosXL-Edit. This document is not about those.
@@ -48,6 +49,7 @@ The `--ref-image-args` argument accepts a comma-separated list of key-value pair
 | `qwen_layered` | Qwen Image Layered |
 | `z_image_omni` | Boogu, Z-Image Omni |
 | `krea2_ostris_edit` | Most Krea2 Community edit LoRAs (trained with Ostris script) |
+| `mage_flow` | Mage-Flow-Edit |
 | `krea2_edit` | Specifically for [lbouaraba/krea2edit](https://huggingface.co/conradlocke/krea2-identity-edit). (or similar) |
 | `cosmos_reference` | For Anima |
 | `default` | Uses the automatic detection based on model architecture. |
@@ -83,6 +85,7 @@ For a technical overview of how each preset is configured, see the table below.
 | `flux2` | No | `increase` | `none` | |
 | `qwen` | Yes | `increase` | `area` | |
 | `qwen_layered` | Yes | `decrease` | `area` | |
+| `mage_flow` | Yes | `increase` | `longest` | `vlm_max_size = 384`, VAE input resized to target |
 | `z_image_omni` | Yes | `fixed` | `area` | |
 | `krea2_ostris_edit`| Yes | `increase` | `area` | `force_ref_timestep_zero = true` |
 | `krea2_edit` | Yes | `increase` | `longest` | `vlm_size = 768` |

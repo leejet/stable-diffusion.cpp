@@ -1800,7 +1800,12 @@ struct LLMEmbedder : public Conditioner {
             arch = LLM::LLMArch::GPT_OSS_20B;
         } else if (sd_version_is_pid(version)) {
             arch = LLM::LLMArch::GEMMA2_2B;
-        } else if (sd_version_is_lingbot_video(version) || sd_version_is_ideogram4(version) || sd_version_is_boogu_image(version) || sd_version_is_sefi_image(version) || sd_version_is_krea2(version)) {
+        } else if (sd_version_is_lingbot_video(version) ||
+                   sd_version_is_ideogram4(version) ||
+                   sd_version_is_boogu_image(version) ||
+                   sd_version_is_sefi_image(version) ||
+                   sd_version_is_krea2(version) ||
+                   sd_version_is_mage_flow(version)) {
             arch = LLM::LLMArch::QWEN3_VL;
         } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
             arch = LLM::LLMArch::QWEN3;
@@ -2205,22 +2210,22 @@ struct LLMEmbedder : public Conditioner {
             prompt += conditioner_params.text;
             prompt_attn_range = {0, 0};
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
-        } else if (sd_version_is_qwen_image(version)) {
+        } else if (sd_version_is_qwen_image(version) || sd_version_is_mage_flow(version)) {
             if (llm->enable_vision && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
-                LOG_INFO("QwenImageEditPlusPipeline");
+                LOG_INFO("%s", sd_version_is_mage_flow(version) ? "MageFlowEditPipeline" : "QwenImageEditPlusPipeline");
                 prompt_template_encode_start_idx = 64;
                 int image_embed_idx              = 64 + 6;
 
                 int min_pixels = conditioner_params.ref_image_params.vlm_min_size;
                 if (min_pixels <= 0) {
-                    min_pixels = 384;
-                    if (resize_mode == RefImageResizeMode::AREA) {
+                    min_pixels = sd_version_is_mage_flow(version) ? -1 : 384;
+                    if (min_pixels > 0 && resize_mode == RefImageResizeMode::AREA) {
                         min_pixels *= min_pixels;
                     }
                 }
                 int max_pixels = conditioner_params.ref_image_params.vlm_max_size;
                 if (max_pixels <= 0) {
-                    max_pixels = 560;
+                    max_pixels = sd_version_is_mage_flow(version) ? 384 : 560;
                     if (resize_mode == RefImageResizeMode::AREA) {
                         max_pixels *= max_pixels;
                     }
@@ -2248,7 +2253,7 @@ struct LLMEmbedder : public Conditioner {
                     image_embeds.emplace_back(image_embed_idx, image_embed);
                     image_embed_idx += 1 + static_cast<int>(image_embed.shape()[1]) + 6;
 
-                    img_prompt += "Picture " + std::to_string(i + 1) + ": <|vision_start|>";  // [24669, 220, index, 25, 220, 151652]
+                    img_prompt += (sd_version_is_mage_flow(version) ? "Image " : "Picture ") + std::to_string(i + 1) + ": <|vision_start|>";
                     int64_t num_image_tokens = image_embed.shape()[1];
                     img_prompt.reserve(num_image_tokens * placeholder.size());
                     for (int j = 0; j < num_image_tokens; j++) {
@@ -2275,6 +2280,9 @@ struct LLMEmbedder : public Conditioner {
                 prompt_attn_range.second = static_cast<int>(prompt.size());
 
                 prompt += "<|im_end|>\n<|im_start|>assistant\n";
+            }
+            if (sd_version_is_mage_flow(version)) {
+                max_length = 2048 + prompt_template_encode_start_idx;
             }
         } else if (sd_version_is_boogu_image(version)) {
             prompt_template_encode_start_idx = 0;
