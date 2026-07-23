@@ -37,6 +37,7 @@
 #include "model/diffusion/lens.hpp"
 #include "model/diffusion/lingbot_video.hpp"
 #include "model/diffusion/ltxv.hpp"
+#include "model/diffusion/mage_flow.hpp"
 #include "model/diffusion/minit2i.hpp"
 #include "model/diffusion/mmdit.hpp"
 #include "model/diffusion/model.hpp"
@@ -51,6 +52,7 @@
 #include "model/vae/hunyuan_vae.hpp"
 #include "model/vae/ltx_audio_vae.hpp"
 #include "model/vae/ltx_vae.hpp"
+#include "model/vae/mage_vae.hpp"
 #include "model/vae/tae.hpp"
 #include "model/vae/vae.hpp"
 #include "model/vae/wan_vae.hpp"
@@ -116,6 +118,7 @@ const char* model_version_to_str[] = {
     "Ideogram 4",
     "SeFi-Image",
     "Krea2",
+    "Mage Flow",
     "ESRGAN",
 };
 
@@ -146,6 +149,7 @@ static bool sd_version_supports_ref_latent_img_cfg(SDVersion version) {
     return version == VERSION_FLUX ||
            sd_version_is_flux2(version) ||
            sd_version_is_qwen_image(version) ||
+           sd_version_is_mage_flow(version) ||
            sd_version_is_longcat(version) ||
            sd_version_is_z_image(version) ||
            sd_version_is_boogu_image(version);
@@ -1158,6 +1162,17 @@ public:
                                                                           version,
                                                                           model_manager,
                                                                           sd_ctx_params->model_args);
+            } else if (sd_version_is_mage_flow(version)) {
+                cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
+                                                                 tensor_storage_map,
+                                                                 version,
+                                                                 "",
+                                                                 true,
+                                                                 model_manager);
+                diffusion_model  = std::make_shared<MageFlow::MageFlowRunner>(backend_for(SDBackendModule::DIFFUSION),
+                                                                             tensor_storage_map,
+                                                                             "model.diffusion_model",
+                                                                             model_manager);
             } else if (sd_version_is_longcat(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
                                                                  tensor_storage_map,
@@ -1359,6 +1374,11 @@ public:
                                                          false,
                                                          version,
                                                          model_manager);
+                } else if (sd_version_is_mage_flow(vae_version)) {
+                    return std::make_shared<MageVAE::MageVAERunner>(backend_for(SDBackendModule::VAE),
+                                                                    tensor_storage_map,
+                                                                    "first_stage_model",
+                                                                    model_manager);
                 } else if (sd_version_uses_hunyuan_video_vae(vae_version)) {
                     return std::make_shared<Hunyuan::HunyuanVideoVAERunner>(backend_for(SDBackendModule::VAE),
                                                                             tensor_storage_map,
@@ -1680,6 +1700,7 @@ public:
                            sd_version_is_hunyuan_video(version) ||
                            sd_version_is_lingbot_video(version) ||
                            sd_version_is_qwen_image(version) ||
+                           sd_version_is_mage_flow(version) ||
                            version == VERSION_HIDREAM_O1 ||
                            sd_version_is_anima(version) ||
                            sd_version_is_ernie_image(version) ||
@@ -1700,6 +1721,8 @@ public:
                         default_flow_shift = 1.0f;
                     } else if (sd_version_is_boogu_image(version)) {
                         default_flow_shift = 3.16f;
+                    } else if (sd_version_is_mage_flow(version)) {
+                        default_flow_shift = 6.f;
                     } else {
                         default_flow_shift = 3.f;
                     }
@@ -2827,6 +2850,8 @@ public:
                 latent_channel = 144;
             } else if (sd_version_uses_flux2_vae(version)) {
                 latent_channel = 128;
+            } else if (sd_version_is_mage_flow(version)) {
+                latent_channel = 128;
             } else {
                 latent_channel = 16;
             }
@@ -2975,6 +3000,8 @@ public:
             return "qwen_layered";
         } else if (sd_version_is_qwen_image(version)) {
             return "qwen";
+        } else if (sd_version_is_mage_flow(version)) {
+            return "mage_flow";
         } else if (sd_version_is_z_image(version) || sd_version_is_boogu_image(version)) {
             return "z_image_omni";
         } else if (sd_version_is_krea2(version)) {
@@ -4838,10 +4865,17 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
         sd::Tensor<float> ref_latent;
         if (ref_image_params.resize_before_vae && !sd_version_is_pid(sd_ctx->sd->version)) {
             LOG_DEBUG("auto resize ref images");
-            int target_pixels  = ref_image_params.vae_input_max_pixels > 0 ? ref_image_params.vae_input_max_pixels : 1024 * 1024;
-            int vae_image_size = std::min(target_pixels, request->width * request->height);
-            double vae_width   = sqrt(vae_image_size * ref_images[i].shape()[0] / ref_images[i].shape()[1]);
-            double vae_height  = vae_width * ref_images[i].shape()[1] / ref_images[i].shape()[0];
+            double vae_width;
+            double vae_height;
+            if (ref_image_params.resize_vae_to_target) {
+                vae_width  = request->width;
+                vae_height = request->height;
+            } else {
+                int target_pixels  = ref_image_params.vae_input_max_pixels > 0 ? ref_image_params.vae_input_max_pixels : 1024 * 1024;
+                int vae_image_size = std::min(target_pixels, request->width * request->height);
+                vae_width          = sqrt(vae_image_size * ref_images[i].shape()[0] / ref_images[i].shape()[1]);
+                vae_height         = vae_width * ref_images[i].shape()[1] / ref_images[i].shape()[0];
+            }
 
             int factor = sd_version_is_qwen_image(sd_ctx->sd->version) ? 32 : 16;
             vae_height = round(vae_height / factor) * factor;

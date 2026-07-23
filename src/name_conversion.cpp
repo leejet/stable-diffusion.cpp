@@ -1048,7 +1048,7 @@ std::string convert_diffusers_to_original_wan_vae(std::string name) {
 }
 
 std::string convert_first_stage_model_name(std::string name, std::string prefix, SDVersion version) {
-    if (sd_version_is_hunyuan_video(version)) {
+    if (sd_version_is_hunyuan_video(version) || sd_version_is_mage_flow(version)) {
         return name;
     }
     if (sd_version_uses_wan_vae(version)) {
@@ -1457,8 +1457,14 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
 
     replace_with_prefix_map(name, prefix_map);
 
-    if ((sd_version_is_boogu_image(version) || sd_version_is_krea2(version)) && starts_with(name, "text_encoders.llm.visual.")) {
-        name = convert_qwen3_vl_vision_name(std::move(name));
+    if (sd_version_is_boogu_image(version) || sd_version_is_krea2(version) || sd_version_is_mage_flow(version)) {
+        const std::string hf_vision_prefix = "text_encoders.llm.model.visual.";
+        if (starts_with(name, hf_vision_prefix)) {
+            name = "text_encoders.llm.visual." + name.substr(hf_vision_prefix.size());
+        }
+        if (starts_with(name, "text_encoders.llm.visual.")) {
+            name = convert_qwen3_vl_vision_name(std::move(name));
+        }
     }
 
     // diffusion model

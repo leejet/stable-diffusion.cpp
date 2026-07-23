@@ -197,7 +197,9 @@ namespace Hunyuan {
                 }
             }
 
-            for (const auto& [name, storage] : tensor_storage_map) {
+            for (const auto& entry : tensor_storage_map) {
+                const auto& name    = entry.first;
+                const auto& storage = entry.second;
                 if (!starts_with(name, prefix)) {
                     continue;
                 }
