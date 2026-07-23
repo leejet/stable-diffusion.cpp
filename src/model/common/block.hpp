@@ -294,7 +294,7 @@ public:
 
         auto net_0 = std::dynamic_pointer_cast<UnaryBlock>(blocks["net.0"]);
         auto net_2 = std::dynamic_pointer_cast<Linear>(blocks["net.2"]);
-        if (sd_backend_is(ctx->backend, "Vulkan")) {
+        if (sd_backend_is(ctx->backend, "Vulkan") || sd_backend_is(ctx->backend, "ROCm")) {
             net_2->set_force_prec_f32(true);
         }
 
@@ -450,7 +450,7 @@ protected:
     int64_t context_dim = 768;  // hidden_size, 1024 for VERSION_SD2
     bool use_linear     = false;
 
-    void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") {
+    void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
         auto iter = tensor_storage_map.find(prefix + "proj_out.weight");
         if (iter != tensor_storage_map.end()) {
             int64_t inner_dim = n_head * d_head;

@@ -34,6 +34,7 @@ jobs:
 
           stale-issue-label: issue:inactive
           close-issue-label: issue:auto-closed
+          close-issue-reason: completed
           stale-issue-message: ""
           close-issue-message: >
             This issue has had no activity for one year. The latest version of

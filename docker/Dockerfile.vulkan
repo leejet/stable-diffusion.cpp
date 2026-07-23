@@ -33,7 +33,7 @@ RUN cmake --build ./build --config Release -j$(nproc)
 FROM ubuntu:$UBUNTU_VERSION AS runtime
 
 RUN apt-get update && \
-    apt-get install --yes --no-install-recommends libgomp1 libvulkan1 mesa-vulkan-drivers && \
+    apt-get install --yes --no-install-recommends libgomp1 libvulkan1 mesa-vulkan-drivers libglvnd0 libgl1 libglx0 libegl1 libgles2 && \
     apt-get clean
 
 COPY --from=build /sd.cpp/build/bin /sd.cpp/bin

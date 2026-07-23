@@ -706,11 +706,13 @@ namespace Flux {
         LastLayer(int64_t hidden_size,
                   int64_t patch_size,
                   int64_t out_channels,
-                  bool prune_mod = false,
-                  bool bias      = true)
+                  bool prune_mod       = false,
+                  bool bias            = true,
+                  int64_t patch_volume = 0)
             : prune_mod(prune_mod) {
             blocks["norm_final"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-06f, false));
-            blocks["linear"]     = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, patch_size * patch_size * out_channels, bias));
+            int64_t out_dim      = (patch_volume > 0 ? patch_volume : patch_size * patch_size) * out_channels;
+            blocks["linear"]     = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, out_dim, bias));
             if (!prune_mod) {
                 blocks["adaLN_modulation.1"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, 2 * hidden_size, bias));
             }
@@ -1642,8 +1644,8 @@ namespace Flux {
                            tensor_or_empty(diffusion_params.c_concat),
                            tensor_or_empty(diffusion_params.y),
                            tensor_or_empty(extra->guidance),
-                           diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
-                           diffusion_params.ref_index_mode,
+                           diffusion_params.ref_latents && diffusion_params.ref_image_params.pass_to_dit ? *diffusion_params.ref_latents : empty_ref_latents,
+                           diffusion_params.ref_image_params.ref_index_mode,
                            extra->skip_layers ? *extra->skip_layers : empty_skip_layers,
                            tensor_or_empty(extra->pulid_id),
                            extra->pulid_id_weight);

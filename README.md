@@ -54,19 +54,24 @@ API and command-line option may change frequently.***
     - [ERNIE-Image](./docs/ernie_image.md)
     - [Boogu Image](./docs/boogu_image.md)
     - [Krea2](./docs/krea2.md)
+    - [Mage-Flow](./docs/mage_flow.md)
     - [SeFi-Image](./docs/sefi_image.md)
     - [HiDream-O1-Image](./docs/hidream_o1_image.md)
     - [Ideogram4](./docs/ideogram4.md)
-  - Image Edit Models
+  - [Image Edit Models](./docs/edit.md)
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
     - [Qwen Image Edit series](./docs/qwen_image_edit.md)
     - [LongCat Image Edit](./docs/longcat_image.md)
     - [Boogu Image Edit](./docs/boogu_image.md)
+    - [Mage-Flow-Edit](./docs/mage_flow.md#image-editing)
   - Video Models
     - [Wan2.1/Wan2.2](./docs/wan.md)
     - [LTX-2.3](./docs/ltx2.md)
+    - [HunyuanVideo 1.5](./docs/hunyuan_video.md)
+    - [LingBot-Video](./docs/lingbot_video.md)
   - [PhotoMaker](./docs/photo_maker.md) support.
   - Control Net support with SD 1.5
+  - [ADetailer](./docs/adetailer.md)
   - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
   - Latent Consistency Models support (LCM/LCM-LoRA)
   - Faster and memory efficient latent decoding with [TAESD](./docs/taesd.md)
@@ -120,7 +125,7 @@ API and command-line option may change frequently.***
     - Stable Diffusion v1.5 from https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5 
 
     ```sh
-    curl -L -O https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
+    curl -L -O https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
     ```
 
 ### Generate an image with just one command
@@ -176,7 +181,3 @@ These projects use `stable-diffusion.cpp` as a backend for their image generatio
 Thank you to all the people who have already contributed to stable-diffusion.cpp!
 
 [![Contributors](https://contrib.rocks/image?repo=leejet/stable-diffusion.cpp)](https://github.com/leejet/stable-diffusion.cpp/graphs/contributors)
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=leejet/stable-diffusion.cpp&type=Date)](https://star-history.com/#leejet/stable-diffusion.cpp&Date)

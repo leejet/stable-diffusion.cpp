@@ -13,3 +13,7 @@ output*.png
 models*
 *.log
 preview.png
+.claude/
+CLAUDE.local.md
+.agents/
+.codex/
