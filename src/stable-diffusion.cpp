@@ -25,6 +25,28 @@
 #include "latent-preview.h"
 #include "name_conversion.h"
 
+#include <atomic>
+
+// Cooperative cancellation flag. The sampler step loop (denoiser.hpp) polls
+// sd_is_cancelled() and abandons the diffusion cleanly; generate_image_internal also
+// short-circuits between pipeline stages. A single process-wide flag is sufficient for
+// a caller that runs one generation at a time. Clear it with sd_reset_cancel() before
+// starting a generation -- never from inside a running one -- so that a cancel raised
+// during model load, encode, sampling, or decode persists for the whole call.
+static std::atomic<bool> g_sd_cancel{false};
+
+void sd_request_cancel(void) {
+    g_sd_cancel.store(true, std::memory_order_relaxed);
+}
+
+void sd_reset_cancel(void) {
+    g_sd_cancel.store(false, std::memory_order_relaxed);
+}
+
+bool sd_is_cancelled(void) {
+    return g_sd_cancel.load(std::memory_order_relaxed);
+}
+
 const char* model_version_to_str[] = {
     "SD 1.x",
     "SD 1.x Inpaint",
@@ -2348,7 +2370,9 @@ public:
         };
 
         if (!sample_k_diffusion(method, denoise, work_ctx, x, sigmas, sampler_rng, eta)) {
-            LOG_ERROR("Diffusion model sampling failed");
+            if (!sd_is_cancelled()) {  // cancellation is expected control flow, not an error
+                LOG_ERROR("Diffusion model sampling failed");
+            }
             if (control_net) {
                 control_net->free_control_ctx();
                 control_net->free_compute_buffer();
@@ -3145,6 +3169,13 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         (sd_version_is_inpaint_or_unet_edit(sd_ctx->sd->version) && guidance.txt_cfg != guidance.img_cfg)) {
         img_cond = SDCondition(uncond.c_crossattn, uncond.c_vector, cond.c_concat);
     }
+    // A cancel that arrived during text encoding (before the sampler's per-step checks
+    // engage) short-circuits here, before any sampling work. ggml_free(work_ctx) matches
+    // the existing NULL-return cleanup path.
+    if (sd_is_cancelled()) {
+        ggml_free(work_ctx);
+        return NULL;
+    }
     for (int b = 0; b < batch_count; b++) {
         int64_t sampling_start = ggml_time_ms();
         int64_t cur_seed       = seed + b;
@@ -3192,7 +3223,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
             // print_ggml_tensor(x_0);
             LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
             final_latents.push_back(x_0);
-        } else {
+        } else if (!sd_is_cancelled()) {  // cancellation is expected control flow, not an error
             LOG_ERROR("sampling for image %d/%d failed after %.2fs", b + 1, batch_count, (sampling_end - sampling_start) * 1.0f / 1000);
         }
     }
@@ -3202,6 +3233,13 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     }
     int64_t t3 = ggml_time_ms();
     LOG_INFO("generating %" PRId64 " latent images completed, taking %.2fs", final_latents.size(), (t3 - t1) * 1.0f / 1000);
+
+    // A cancel raised during or just after sampling skips the VAE decode entirely.
+    // ggml_free(work_ctx) matches the existing NULL-return cleanup path.
+    if (sd_is_cancelled()) {
+        ggml_free(work_ctx);
+        return NULL;
+    }
 
     // Decode to image
     LOG_INFO("decoding %zu latents", final_latents.size());

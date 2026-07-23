@@ -343,6 +343,15 @@ typedef void (*sd_preview_cb_t)(int step, int frame_count, sd_image_t* frames, b
 
 SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
 SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
+
+// Optional cooperative cancellation of an in-flight generation. Backend-agnostic:
+// the sampler loop polls sd_is_cancelled() once per step and abandons cleanly, so a
+// cancelled generation returns an empty result rather than an error. Call
+// sd_reset_cancel() before starting a generation; sd_request_cancel() is safe to call
+// from another thread while one is running.
+SD_API void sd_request_cancel(void);
+SD_API void sd_reset_cancel(void);
+SD_API bool sd_is_cancelled(void);
 SD_API void sd_set_preview_callback(sd_preview_cb_t cb, enum preview_t mode, int interval, bool denoised, bool noisy, void* data);
 SD_API int32_t sd_get_num_physical_cores();
 SD_API const char* sd_get_system_info();

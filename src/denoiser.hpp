@@ -6,6 +6,8 @@
 #include "ggml_extend.hpp"
 #include "gits_noise.inl"
 
+#include "stable-diffusion.h"
+
 /*================================================= CompVisDenoiser ==================================================*/
 
 // Ref: https://github.com/crowsonkb/k-diffusion/blob/master/k_diffusion/external.py
@@ -777,6 +779,7 @@ static bool sample_k_diffusion(sample_method_t method,
             ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
+                if (sd_is_cancelled()) { return false; }  // cooperative cancel: abandon at the next step
                 float sigma = sigmas[i];
 
                 // denoise
@@ -833,6 +836,7 @@ static bool sample_k_diffusion(sample_method_t method,
             ggml_tensor* d = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
+                if (sd_is_cancelled()) { return false; }  // cooperative cancel: abandon at the next step
                 float sigma = sigmas[i];
 
                 // denoise
@@ -869,6 +873,7 @@ static bool sample_k_diffusion(sample_method_t method,
             ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
+                if (sd_is_cancelled()) { return false; }  // cooperative cancel: abandon at the next step
                 // denoise
                 ggml_tensor* denoised = model(x, sigmas[i], -(i + 1));
                 if (denoised == nullptr) {
@@ -925,6 +930,7 @@ static bool sample_k_diffusion(sample_method_t method,
             ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
+                if (sd_is_cancelled()) { return false; }  // cooperative cancel: abandon at the next step
                 // denoise
                 ggml_tensor* denoised = model(x, sigmas[i], -(i + 1));
                 if (denoised == nullptr) {
@@ -983,6 +989,7 @@ static bool sample_k_diffusion(sample_method_t method,
             ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
+                if (sd_is_cancelled()) { return false; }  // cooperative cancel: abandon at the next step
                 // denoise
                 ggml_tensor* denoised = model(x, sigmas[i], -(i + 1));
                 if (denoised == nullptr) {
@@ -1055,6 +1062,7 @@ static bool sample_k_diffusion(sample_method_t method,
             auto t_fn = [](float sigma) -> float { return -log(sigma); };
 
             for (int i = 0; i < steps; i++) {
+                if (sd_is_cancelled()) { return false; }  // cooperative cancel: abandon at the next step
                 // denoise
                 ggml_tensor* denoised = model(x, sigmas[i], i + 1);
                 if (denoised == nullptr) {
@@ -1097,6 +1105,7 @@ static bool sample_k_diffusion(sample_method_t method,
             auto t_fn = [](float sigma) -> float { return -log(sigma); };
 
             for (int i = 0; i < steps; i++) {
+                if (sd_is_cancelled()) { return false; }  // cooperative cancel: abandon at the next step
                 // denoise
                 ggml_tensor* denoised = model(x, sigmas[i], i + 1);
                 if (denoised == nullptr) {
@@ -1143,6 +1152,7 @@ static bool sample_k_diffusion(sample_method_t method,
             std::vector<ggml_tensor*> buffer_model;
 
             for (int i = 0; i < steps; i++) {
+                if (sd_is_cancelled()) { return false; }  // cooperative cancel: abandon at the next step
                 float sigma      = sigmas[i];
                 float sigma_next = sigmas[i + 1];
 
@@ -1221,6 +1231,7 @@ static bool sample_k_diffusion(sample_method_t method,
             ggml_tensor* x_next = x;
 
             for (int i = 0; i < steps; i++) {
+                if (sd_is_cancelled()) { return false; }  // cooperative cancel: abandon at the next step
                 float sigma  = sigmas[i];
                 float t_next = sigmas[i + 1];
 
@@ -1294,6 +1305,7 @@ static bool sample_k_diffusion(sample_method_t method,
             ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
+                if (sd_is_cancelled()) { return false; }  // cooperative cancel: abandon at the next step
                 float sigma = sigmas[i];
 
                 // denoise
@@ -1364,6 +1376,7 @@ static bool sample_k_diffusion(sample_method_t method,
                 ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
+                if (sd_is_cancelled()) { return false; }  // cooperative cancel: abandon at the next step
                 // The "trailing" DDIM timestep, see S. Lin et al.,
                 // "Common Diffusion Noise Schedulers and Sample Steps
                 // are Flawed", arXiv:2305.08891 [cs], p. 4, Table
@@ -1551,6 +1564,7 @@ static bool sample_k_diffusion(sample_method_t method,
                 ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
+                if (sd_is_cancelled()) { return false; }  // cooperative cancel: abandon at the next step
                 // Analytic form for TCD timesteps
                 int timestep = TIMESTEPS - 1 -
                                (TIMESTEPS / original_steps) *
@@ -1712,6 +1726,7 @@ static bool sample_k_diffusion(sample_method_t method,
             };
 
             for (int i = 0; i < steps; i++) {
+                if (sd_is_cancelled()) { return false; }  // cooperative cancel: abandon at the next step
                 ggml_tensor* denoised = model(x, sigmas[i], i + 1);
                 if (denoised == nullptr) {
                     return false;
@@ -1818,6 +1833,7 @@ static bool sample_k_diffusion(sample_method_t method,
             };
 
             for (int i = 0; i < steps; i++) {
+                if (sd_is_cancelled()) { return false; }  // cooperative cancel: abandon at the next step
                 float sigma_from = sigmas[i];
                 float sigma_to   = sigmas[i + 1];
 
