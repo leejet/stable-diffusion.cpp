@@ -17,3 +17,6 @@ preview.png
 CLAUDE.local.md
 .agents/
 .codex/
+
+# auto-tensor-type experiment artifacts (large: models, imatrices, images)
+test/auto-quant/

@@ -562,6 +562,23 @@ SD_API void save_imatrix(const char* imatrix_path);
 SD_API void enable_imatrix_collection(void);
 SD_API void disable_imatrix_collection(void);
 
+// Automatic per-tensor quant type search ("auto-tensor-type"): during the next
+// generation run, capture activations of representative diffusion-model
+// weights; sd_finish_auto_tensor_type then measures each candidate type's
+// output error on those activations (imatrix-weighted, as -M convert would
+// quantize) and writes a --tensor-type-rules string that minimizes the error
+// within the requested bits-per-weight budget.
+// options: "out=rules.txt,bpw=3.5[,types=q2_K|q3_K|q4_K|q5_K|q6_K|q8_0]
+//           [,buckets=3][,reps=2][,samples=2][,stride=7][,max-tokens=256]
+//           [,min-elements=40000][,threads=4][,tol-high=0.05][,tol-low=0.5]"
+// When collect_imatrix_too is true, imatrix statistics are collected in the
+// same run (equivalent to enable_imatrix_collection); otherwise load an
+// imatrix first for imatrix-weighted candidate quantization.
+SD_API bool sd_enable_auto_tensor_type(const char* diffusion_model_path,
+                                       const char* options,
+                                       bool collect_imatrix_too);
+SD_API bool sd_finish_auto_tensor_type(void);
+
 SD_API const char* sd_commit(void);
 SD_API const char* sd_version(void);
 
