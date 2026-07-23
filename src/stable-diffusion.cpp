@@ -140,6 +140,9 @@ const char* sampling_methods_str[] = {
     "Euler CFG++",
     "Euler A CFG++",
     "Euler GE",
+    "DPM++ (2M) SDE",
+    "DPM++ (2M) SDE (Brownian tree)",
+    "SPEED (Spectral Progressive)",
 };
 
 /*================================================== Helper Functions ================================================*/
@@ -2461,7 +2464,37 @@ public:
                                          : init_latent;
         sd::Tensor<float> denoised = x_t;
 
+        // Lazy resize cache for ref_latents so multi-resolution samplers (SPEED
+        // etc.) that downscale x can still condition on shape-matched refs.
+        std::map<std::pair<int64_t, int64_t>, std::vector<sd::Tensor<float>>> resized_ref_latents_cache;
+        auto ref_latents_for = [&](int64_t target_w, int64_t target_h) -> const std::vector<sd::Tensor<float>>* {
+            if (ref_latents.empty()) {
+                return &ref_latents;
+            }
+            const auto& first_shape = ref_latents[0].shape();
+            if (first_shape[0] == target_w && first_shape[1] == target_h) {
+                return &ref_latents;
+            }
+            auto key = std::make_pair(target_w, target_h);
+            auto it  = resized_ref_latents_cache.find(key);
+            if (it != resized_ref_latents_cache.end()) {
+                return &it->second;
+            }
+            std::vector<sd::Tensor<float>> resized;
+            resized.reserve(ref_latents.size());
+            for (const auto& rl : ref_latents) {
+                std::vector<int64_t> new_shape = rl.shape();
+                new_shape[0]                   = target_w;
+                new_shape[1]                   = target_h;
+                resized.push_back(sd::ops::interpolate<float>(rl, new_shape));
+            }
+            auto ins = resized_ref_latents_cache.emplace(std::move(key), std::move(resized));
+            return &ins.first->second;
+        };
+
         auto denoise = [&](const sd::Tensor<float>& x, float sigma, int step) -> sd::guidance::GuiderOutput {
+            const std::vector<sd::Tensor<float>>* effective_ref_latents =
+                ref_latents_for(x.shape()[0], x.shape()[1]);
             if (get_cancel_flag() == SD_CANCEL_ALL) {
                 LOG_DEBUG("cancelling generation");
                 return {};
@@ -2631,7 +2664,7 @@ public:
                 }
             }
 
-            cond_out = run_condition(*positive_condition, c_concat_override);
+            cond_out = run_condition(*positive_condition, c_concat_override, nullptr, effective_ref_latents);
             if (cond_out.empty()) {
                 return {};
             }
@@ -2651,7 +2684,8 @@ public:
                 }
                 uncond_out = run_condition(uncond,
                                            uncond.c_concat.empty() ? nullptr : &uncond.c_concat,
-                                           uncond_skip_layers);
+                                           uncond_skip_layers,
+                                           effective_ref_latents);
                 if (uncond_out.empty()) {
                     return {};
                 }
@@ -2660,7 +2694,7 @@ public:
                 img_uncond_out = run_condition(img_uncond,
                                                img_uncond.c_concat.empty() ? nullptr : &img_uncond.c_concat,
                                                nullptr,
-                                               uncond_without_ref_latents ? &empty_ref_latents : nullptr);
+                                               uncond_without_ref_latents ? &empty_ref_latents : effective_ref_latents);
                 if (img_uncond_out.empty()) {
                     return {};
                 }
@@ -2683,7 +2717,8 @@ public:
                     guidance_input.predict_skip_layer = [&]() -> sd::Tensor<float> {
                         return run_condition(cond,
                                              cond.c_concat.empty() ? nullptr : &cond.c_concat,
-                                             &skip_layer_guidance.layers());
+                                             &skip_layer_guidance.layers(),
+                                             effective_ref_latents);
                     };
                 }
             }
@@ -2705,7 +2740,7 @@ public:
             if (cache_runtime.spectrum_enabled) {
                 cache_runtime.spectrum.update(denoised);
             }
-            if (!denoise_mask.empty()) {
+            if (!denoise_mask.empty() && denoise_mask.shape() == denoised.shape()) {
                 denoised = denoised * denoise_mask + init_latent * (1.0f - denoise_mask);
             }
             if (sd_should_preview_denoised() && preview.callback != nullptr) {
@@ -2716,7 +2751,10 @@ public:
             return output;
         };
 
-        auto x0_opt = sample_k_diffusion(method, denoise, x_t, sigmas, sampler_rng, eta, is_flow_denoiser, extra_sample_args, denoiser);
+        if (method == SPEED_FLOW_SAMPLE_METHOD && !ref_latents.empty()) {
+            LOG_WARN("SPEED sampler with reference latents (edit / ref-guided model): the low-resolution segments see a downscaled reference so fine detail from the source image (backgrounds, textures, layout beyond broad structure) is likely to drift. Composition will remain plausible but fidelity to the reference is reduced. See docs/speed_sampler.md.");
+        }
+        auto x0_opt = sample_k_diffusion(method, denoise, x_t, sigmas, sampler_rng, eta, is_flow_denoiser, extra_sample_args, denoiser, version);
         if (x0_opt.empty()) {
             LOG_ERROR("Diffusion model sampling failed");
             if (control_net) {
@@ -3111,6 +3149,7 @@ const char* sample_method_to_str[] = {
     "euler_ge",
     "dpm++2m_sde",
     "dpm++2m_sde_bt",
+    "speed_flow",
 };
 
 const char* sd_sample_method_name(enum sample_method_t sample_method) {

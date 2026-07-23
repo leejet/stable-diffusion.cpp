@@ -73,6 +73,10 @@ sd-cli --diffusion-model flux1-dev.safetensors ... \
 
 Ordered from fastest to smallest-VRAM: no flags → `--offload-to-cpu` → `--offload-to-cpu --max-vram <N>` → `--offload-to-cpu --max-vram <N> --stream-layers`. Each step down costs a few percent of throughput to buy more room; combined they can run models roughly 3-4x larger than the raw VRAM would allow.
 
+## Use SPEED to accelerate flow-model sampling.
+
+`--sampling-method speed_flow` runs the early denoising steps at a reduced spatial resolution and progressively expands to full resolution as the trajectory approaches the data manifold. Compatible with `--offload-to-cpu`, `--max-vram`, `--stream-layers`, and the cache-mode flags. Typical sampling-time speedups on flow models: ~1.6× on Flux, ~1.7× on Qwen Image, up to ~3.5× on Z-Image with a tuned transition point. Composition drifts slightly from the euler baseline (different trajectory), quality preserved for txt2img; edit / ref-guided models see reduced source fidelity — see [speed_sampler.md](./speed_sampler.md) for tuning knobs and compatibility notes.
+
 ## Use quantization to reduce memory usage.
 
 [quantization](./quantization_and_gguf.md)
