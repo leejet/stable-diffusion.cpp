@@ -796,9 +796,9 @@ struct UNetModelRunner : public DiffusionModelRunner {
             num_video_frames = static_cast<int>(x->ne[3]);
         }
 
-        auto runner_ctx        = get_context();
-        runner_ctx.ip_context  = ip_context;
-        runner_ctx.ip_scale    = ip_scale;
+        auto runner_ctx       = get_context();
+        runner_ctx.ip_context = ip_context;
+        runner_ctx.ip_scale   = ip_scale;
 
         ggml_tensor* out = unet.forward(&runner_ctx,
                                         x,
