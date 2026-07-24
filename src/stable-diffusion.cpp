@@ -224,6 +224,7 @@ public:
     std::shared_ptr<ControlNet> control_net;
     std::shared_ptr<IPAdapter::IPAdapterRunner> ip_adapter;
     sd::Tensor<float> ip_adapter_tokens;
+    sd::Tensor<float> ip_adapter_uncond_tokens;
     float ip_adapter_strength = 1.0f;
     std::vector<std::shared_ptr<GenerationExtension>> generation_extensions;
     std::vector<std::shared_ptr<LoraModel>> runtime_lora_models;
@@ -2100,8 +2101,9 @@ public:
     }
 
     void compute_ip_adapter_tokens(const sd_image_t& image, float strength) {
-        ip_adapter_tokens   = {};
-        ip_adapter_strength = strength;
+        ip_adapter_tokens        = {};
+        ip_adapter_uncond_tokens = {};
+        ip_adapter_strength      = strength;
         if (ip_adapter == nullptr || clip_vision == nullptr || image.data == nullptr) {
             return;
         }
@@ -2111,10 +2113,19 @@ public:
             return;
         }
         ip_adapter_tokens = ip_adapter->compute(n_threads, embed);
-        if (!ip_adapter_tokens.empty()) {
-            LOG_INFO("IP-Adapter: %lld image tokens, strength %.2f",
-                     (long long)ip_adapter_tokens.shape()[1], strength);
+        if (ip_adapter_tokens.empty()) {
+            LOG_ERROR("IP-Adapter conditional image projection failed");
+            return;
         }
+        auto uncond_embed        = sd::Tensor<float>::zeros_like(embed);
+        ip_adapter_uncond_tokens = ip_adapter->compute(n_threads, uncond_embed);
+        if (ip_adapter_uncond_tokens.empty()) {
+            LOG_ERROR("IP-Adapter unconditional image projection failed");
+            ip_adapter_tokens = {};
+            return;
+        }
+        LOG_INFO("IP-Adapter: %lld image tokens, strength %.2f",
+                 (long long)ip_adapter_tokens.shape()[1], strength);
     }
 
     std::vector<float> process_timesteps(const std::vector<float>& timesteps,
@@ -2606,7 +2617,7 @@ public:
                                      const sd::Tensor<float>* c_concat_override                 = nullptr,
                                      const std::vector<int>* local_skip_layers                  = nullptr,
                                      const std::vector<sd::Tensor<float>>* ref_latents_override = nullptr,
-                                     bool apply_ip                                              = true) -> sd::Tensor<float> {
+                                     bool use_uncond_ip                                         = false) -> sd::Tensor<float> {
                 diffusion_params.context     = condition.c_crossattn.empty() ? nullptr : &condition.c_crossattn;
                 diffusion_params.c_concat    = c_concat_override != nullptr ? c_concat_override : (condition.c_concat.empty() ? nullptr : &condition.c_concat);
                 diffusion_params.y           = condition.c_vector.empty() ? nullptr : &condition.c_vector;
@@ -2618,8 +2629,9 @@ public:
                         nvf = static_cast<int>(noised_input.shape()[3]);
                     }
                     UNetDiffusionExtra unet_extra{nvf, &controls, control_strength};
-                    if (apply_ip && !ip_adapter_tokens.empty()) {
-                        unet_extra.ip_context = &ip_adapter_tokens;
+                    const auto& ip_tokens = use_uncond_ip ? ip_adapter_uncond_tokens : ip_adapter_tokens;
+                    if (!ip_tokens.empty()) {
+                        unet_extra.ip_context = &ip_tokens;
                         unet_extra.ip_scale   = ip_adapter_strength;
                     }
                     diffusion_params.extra = unet_extra;
@@ -2715,7 +2727,7 @@ public:
                                            uncond.c_concat.empty() ? nullptr : &uncond.c_concat,
                                            uncond_skip_layers,
                                            nullptr,
-                                           false);
+                                           true);
                 if (uncond_out.empty()) {
                     return {};
                 }
@@ -2725,7 +2737,7 @@ public:
                                                img_uncond.c_concat.empty() ? nullptr : &img_uncond.c_concat,
                                                nullptr,
                                                uncond_without_ref_latents ? &empty_ref_latents : nullptr,
-                                               false);
+                                               true);
                 if (img_uncond_out.empty()) {
                     return {};
                 }
@@ -3573,21 +3585,22 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
 void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     *sd_img_gen_params = {};
     sd_sample_params_init(&sd_img_gen_params->sample_params);
-    sd_img_gen_params->clip_skip         = -1;
-    sd_img_gen_params->ref_images_count  = 0;
-    sd_img_gen_params->ref_image_args    = "";
-    sd_img_gen_params->width             = 512;
-    sd_img_gen_params->height            = 512;
-    sd_img_gen_params->strength          = 0.75f;
-    sd_img_gen_params->seed              = -1;
-    sd_img_gen_params->batch_count       = 1;
-    sd_img_gen_params->control_strength  = 0.9f;
-    sd_img_gen_params->qwen_image_layers = 3;
-    sd_img_gen_params->circular_x        = false;
-    sd_img_gen_params->circular_y        = false;
-    sd_img_gen_params->pm_params         = {nullptr, 0, nullptr, 20.f};
-    sd_img_gen_params->pulid_params      = {nullptr, 1.0f};
-    sd_img_gen_params->vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
+    sd_img_gen_params->clip_skip           = -1;
+    sd_img_gen_params->ref_images_count    = 0;
+    sd_img_gen_params->ref_image_args      = "";
+    sd_img_gen_params->width               = 512;
+    sd_img_gen_params->height              = 512;
+    sd_img_gen_params->strength            = 0.75f;
+    sd_img_gen_params->seed                = -1;
+    sd_img_gen_params->batch_count         = 1;
+    sd_img_gen_params->control_strength    = 0.9f;
+    sd_img_gen_params->ip_adapter_strength = 1.0f;
+    sd_img_gen_params->qwen_image_layers   = 3;
+    sd_img_gen_params->circular_x          = false;
+    sd_img_gen_params->circular_y          = false;
+    sd_img_gen_params->pm_params           = {nullptr, 0, nullptr, 20.f};
+    sd_img_gen_params->pulid_params        = {nullptr, 1.0f};
+    sd_img_gen_params->vae_tiling_params   = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
     sd_cache_params_init(&sd_img_gen_params->cache);
     sd_hires_params_init(&sd_img_gen_params->hires);
 }
