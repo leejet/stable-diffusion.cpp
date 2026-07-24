@@ -5776,7 +5776,7 @@ static std::optional<ImageGenerationLatents> prepare_video_generation_latents(sd
         auto encode_condition_frame = [&](const sd::Tensor<float>& image,
                                           int64_t latent_frame,
                                           const char* name) -> bool {
-            auto encoded = sd_ctx->sd->encode_first_stage(image);
+            auto encoded = sd_ctx->sd->encode_first_stage(image.unsqueeze(2));
             if (encoded.empty()) {
                 LOG_ERROR("failed to encode Hunyuan Video %s conditioning frame", name);
                 return false;
