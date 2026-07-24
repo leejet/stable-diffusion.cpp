@@ -5071,8 +5071,8 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
             }
             condition_params.text            = request->negative_prompt;
             condition_params.zero_out_masked = zero_out_masked;
+            std::vector<sd::Tensor<float>> empty_ref_images;
             if (use_ref_latent_img_cfg) {
-                std::vector<sd::Tensor<float>> empty_ref_images;
                 condition_params.ref_images = &empty_ref_images;
             }
             img_uncond = sd_ctx->sd->cond_stage_model->get_learned_condition(sd_ctx->sd->n_threads,
