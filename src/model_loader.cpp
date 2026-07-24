@@ -1198,6 +1198,33 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                         }
                         std::string processed_name = convert_tensor_name(tensor_storage.name, imatrix_version);
                         std::vector<float> imatrix = get_imatrix_collector().get_values(processed_name);
+                        if (imatrix.empty()) {
+                            const std::vector<std::string> known_prefixes = {
+                                "model.diffusion_model.",
+                                "model.high_noise_diffusion_model.",
+                                "model.diffusion_model.uncond.",
+
+                                "cond_stage_model.transformer.",
+                                "text_encoders.clip_l.transformer.",
+                                "cond_stage_model.1.transformer.",
+                                "text_encoders.clip_g.transformer.",
+
+                                "text_encoders.t5xxl.transformer.",
+                                "text_encoders.llm.",
+                                "text_encoders.llm.visual.",
+
+                                "vae.",
+                                "tae."};
+                            std::string processed_name_original = processed_name;
+
+                            for (const auto& prefix : known_prefixes) {
+                                processed_name = prefix + processed_name_original;
+                                imatrix        = get_imatrix_collector().get_values(processed_name);
+                                if (!imatrix.empty()) {
+                                    break;  // Exit the loop if a valid prefix is found
+                                }
+                            }
+                        }
                         convert_tensor((void*)target_buf,
                                        tensor_storage.type,
                                        convert_buf,
