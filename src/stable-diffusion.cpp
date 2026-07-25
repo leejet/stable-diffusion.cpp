@@ -141,6 +141,8 @@ const char* sampling_methods_str[] = {
     "Euler CFG++",
     "Euler A CFG++",
     "Euler GE",
+    "DPM++ (2M) SDE",
+    "DPM++ (2M) SDE BT",
 };
 
 /*================================================== Helper Functions ================================================*/
