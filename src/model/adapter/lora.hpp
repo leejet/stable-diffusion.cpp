@@ -342,7 +342,9 @@ struct LoraModel : public GGMLRunner {
             iter = lora_tensors.find(hada_1_mid_name);
             if (iter != lora_tensors.end()) {
                 hada_1_mid = ggml_ext_cast_f32(ctx, backend, iter->second);
-                hada_1_up  = ggml_cont(ctx, ggml_transpose(ctx, hada_1_up));
+                if (hada_1_up != nullptr) {
+                    hada_1_up = ggml_cont(ctx, ggml_transpose(ctx, hada_1_up));
+                }
             }
 
             iter = lora_tensors.find(hada_2_down_name);
@@ -358,7 +360,9 @@ struct LoraModel : public GGMLRunner {
             iter = lora_tensors.find(hada_2_mid_name);
             if (iter != lora_tensors.end()) {
                 hada_2_mid = ggml_ext_cast_f32(ctx, backend, iter->second);
-                hada_2_up  = ggml_cont(ctx, ggml_transpose(ctx, hada_2_up));
+                if (hada_2_up != nullptr) {
+                    hada_2_up = ggml_cont(ctx, ggml_transpose(ctx, hada_2_up));
+                }
             }
 
             if (hada_1_up == nullptr || hada_1_down == nullptr || hada_2_up == nullptr || hada_2_down == nullptr) {
