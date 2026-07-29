@@ -320,7 +320,11 @@ public:
             return true;
         }
         std::map<std::string, ggml_tensor*> group_tensors;
+        std::map<ggml_tensor*, enum ggml_op> tensor_ops;
         model->get_param_tensors(group_tensors);
+        if constexpr (std::is_base_of_v<Conditioner, T>) {
+            model->get_param_tensor_ops(tensor_ops);
+        }
         if (model_manager == nullptr) {
             return true;
         }
@@ -337,6 +341,7 @@ public:
                                                                 module,
                                                                 module_backends,
                                                                 std::move(group_tensors),
+                                                                tensor_ops,
                                                                 residency_mode,
                                                                 params_mem_size);
                     }
@@ -345,6 +350,7 @@ public:
                                                               module,
                                                               module_backends,
                                                               std::move(group_tensors),
+                                                              tensor_ops,
                                                               residency_mode,
                                                               params_mem_size);
                 }
@@ -358,7 +364,10 @@ public:
                                                      residency_mode,
                                                      backend_for(module),
                                                      params_backend_for(module),
-                                                     params_mem_size);
+                                                     params_mem_size,
+                                                     false,
+                                                     false,
+                                                     &tensor_ops);
     }
 
     template <typename T>
@@ -367,6 +376,7 @@ public:
                                           SDBackendModule module,
                                           const std::vector<ggml_backend_t>& module_backends,
                                           std::map<std::string, ggml_tensor*> group_tensors,
+                                          const std::map<ggml_tensor*, enum ggml_op>& tensor_ops,
                                           ModelManager::ResidencyMode residency_mode,
                                           size_t* params_mem_size) {
         ggml_backend_t main_backend = module_backends[0];
@@ -378,6 +388,7 @@ public:
                                                       module,
                                                       module_backends,
                                                       std::move(group_tensors),
+                                                      tensor_ops,
                                                       residency_mode,
                                                       params_mem_size);
         };
@@ -452,7 +463,9 @@ public:
                                                    main_backend,
                                                    params_backend_for(module),
                                                    params_mem_size,
-                                                   /*allow_split_buffer=*/true)) {
+                                                   /*allow_split_buffer=*/true,
+                                                   false,
+                                                   &tensor_ops)) {
             return false;
         }
         return model_manager->register_param_tensors(desc,
@@ -460,7 +473,10 @@ public:
                                                      residency_mode,
                                                      main_backend,
                                                      params_backend_for(module),
-                                                     params_mem_size);
+                                                     params_mem_size,
+                                                     false,
+                                                     false,
+                                                     &tensor_ops);
     }
 
     // Register graph-cut layer-split tensors on the primary backend first.
@@ -472,6 +488,7 @@ public:
                                             SDBackendModule module,
                                             const std::vector<ggml_backend_t>& module_backends,
                                             std::map<std::string, ggml_tensor*> group_tensors,
+                                            const std::map<ggml_tensor*, enum ggml_op>& tensor_ops,
                                             ModelManager::ResidencyMode residency_mode,
                                             size_t* params_mem_size) {
         bool has_cpu_device = false;
@@ -493,7 +510,10 @@ public:
                                                          residency_mode,
                                                          module_backends[0],
                                                          params_backend_for(module),
-                                                         params_mem_size);
+                                                         params_mem_size,
+                                                         false,
+                                                         false,
+                                                         &tensor_ops);
         }
 
         model->set_runtime_backends(module_backends);
@@ -518,7 +538,8 @@ public:
                                                      initial_params_backend,
                                                      params_mem_size,
                                                      false,
-                                                     params_follow_runtime);
+                                                     params_follow_runtime,
+                                                     &tensor_ops);
     }
 
     bool unload_control_net() {
