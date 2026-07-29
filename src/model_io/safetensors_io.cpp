@@ -93,6 +93,12 @@ static ggml_type safetensors_dtype_to_ggml_type(const std::string& dtype) {
         ttype = GGML_TYPE_I32;
     } else if (dtype == "I64") {
         ttype = GGML_TYPE_I32;
+    } else if (dtype == "I8" || dtype == "U8") {
+        // Byte tensors carry externally quantized payloads (packed int4/int8/nf4)
+        // and their sidecars. ModelLoader claims the ones a quantization config
+        // describes and drops the rest, so accepting them here does not leak
+        // metadata blobs into the model.
+        ttype = GGML_TYPE_I8;
     }
     return ttype;
 }
@@ -175,10 +181,6 @@ bool read_safetensors_file(const std::string& file_path,
 
         std::string dtype    = tensor_info["dtype"];
         nlohmann::json shape = tensor_info["shape"];
-
-        if (dtype == "U8") {
-            continue;
-        }
 
         size_t begin = tensor_info["data_offsets"][0].get<size_t>();
         size_t end   = tensor_info["data_offsets"][1].get<size_t>();

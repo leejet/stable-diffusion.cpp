@@ -4,12 +4,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "ggml.h"
+#include "model_io/quant_io.h"
 
 #define SD_MAX_DIMS 5
 
@@ -23,6 +25,12 @@ struct TensorStorage {
     bool is_i64             = false;
     int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1};
     int n_dims              = 0;
+
+    // Externally quantized weights (see quant_io.h). `type` already holds the ggml
+    // type the tensor is repacked into, so ne[]/nbytes() describe the decoded form;
+    // only nbytes_to_read() sees the smaller on-disk footprint. Shared because the
+    // sidecar scales are resolved once, before the unordered multi-threaded load.
+    std::shared_ptr<SDQuantParams> quant;
 
     std::string storage_key;
     size_t file_index = 0;
@@ -38,6 +46,18 @@ struct TensorStorage {
         }
     }
 
+    bool is_packed_quant() const {
+        return quant != nullptr && quant->pack != SD_QUANT_PACK_NONE;
+    }
+
+    SDQuantPack quant_pack() const {
+        return quant != nullptr ? quant->pack : SD_QUANT_PACK_NONE;
+    }
+
+    int convrot_groupsize() const {
+        return quant != nullptr ? quant->convrot_groupsize : 0;
+    }
+
     int64_t nelements() const {
         int64_t n = 1;
         for (int i = 0; i < SD_MAX_DIMS; i++) {
@@ -51,7 +71,9 @@ struct TensorStorage {
     }
 
     int64_t nbytes_to_read() const {
-        if (is_f8_e4m3 || is_f8_e5m2) {
+        if (is_packed_quant()) {
+            return sd_quant_pack_nbytes(quant->pack, nelements());
+        } else if (is_f8_e4m3 || is_f8_e5m2) {
             return nbytes() / 2;
         } else if (is_f64 || is_i64) {
             return nbytes() * 2;
@@ -107,6 +129,8 @@ struct TensorStorage {
             type_name = "f64";
         } else if (is_i64) {
             type_name = "i64";
+        } else if (is_packed_quant()) {
+            type_name = sd_quant_pack_name(quant->pack);
         }
         ss << name << " | " << type_name << " | ";
         ss << n_dims << " [";

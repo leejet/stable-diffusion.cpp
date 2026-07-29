@@ -16,6 +16,7 @@
 
 #include "core/util.h"
 #include "model_io/gguf_io.h"
+#include "model_io/quant_config.h"
 #include "model_io/safetensors_io.h"
 #include "model_io/torch_legacy_io.h"
 #include "model_io/torch_zip_io.h"
@@ -319,6 +320,13 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
     std::string error;
     if (!read_safetensors_file(file_path, tensor_storages, &error, &metadata_)) {
         LOG_ERROR("%s", error.c_str());
+        return false;
+    }
+
+    // Must run before the prefix is applied below: quantization metadata keys are
+    // raw checkpoint names. The resolved SDQuantParams then rides along through
+    // prefixing and name conversion.
+    if (!sd_apply_quant_metadata(file_path, metadata_, tensor_storages)) {
         return false;
     }
 
@@ -929,6 +937,7 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
                 tensor_storage.is_f8_e5m2 ||
                 tensor_storage.is_f64 ||
                 tensor_storage.is_i64 ||
+                tensor_storage.is_packed_quant() ||
                 tensor_storage.type != dst_tensor->type) {
                 continue;
             }
@@ -1077,6 +1086,9 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
 
                 std::vector<uint8_t> read_buffer;
                 std::vector<uint8_t> convert_buffer;
+                // Staging for externally quantized payloads, which decode into a
+                // larger destination and so need a distinct source buffer.
+                std::vector<uint8_t> packed_buffer;
 
                 while (true) {
                     int64_t t0, t1;
@@ -1175,13 +1187,42 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                         }
                     }
 
+                    // Decoding a packed quant grows the payload (int4 -> q4_0 is
+                    // 0.5 -> 0.5625 bytes/weight), so it can never run in place.
+                    if (tensor_storage.is_packed_quant()) {
+                        packed_buffer.resize(tensor_storage.nbytes_to_read());
+                        read_buf = (char*)packed_buffer.data();
+                    }
+
                     t0 = ggml_time_ms();
                     read_data(read_buf, nbytes_to_read);
                     t1 = ggml_time_ms();
                     read_time_ms.fetch_add(t1 - t0);
 
                     t0 = ggml_time_ms();
-                    if (tensor_storage.is_f8_e4m3) {
+                    if (tensor_storage.is_packed_quant()) {
+                        const SDQuantParams& q = *tensor_storage.quant;
+                        const int64_t ne0      = tensor_storage.ne[0];
+                        const int64_t nrows    = tensor_storage.nelements() / ne0;
+                        switch (q.pack) {
+                            case SD_QUANT_PACK_INT4:
+                                sd_quant_int4_to_q4_0(read_buf, q.scales.data(), ne0, nrows, target_buf);
+                                break;
+                            case SD_QUANT_PACK_INT8:
+                                sd_quant_int8_to_q8_0(read_buf, q.scales.data(), ne0, nrows, target_buf);
+                                break;
+                            case SD_QUANT_PACK_NF4:
+                                sd_quant_nf4_to_f32(read_buf,
+                                                    q.scales.empty() ? nullptr : q.scales.data(),
+                                                    q.codebook.empty() ? nullptr : q.codebook.data(),
+                                                    q.block_size,
+                                                    tensor_storage.nelements(),
+                                                    (float*)target_buf);
+                                break;
+                            default:
+                                break;
+                        }
+                    } else if (tensor_storage.is_f8_e4m3) {
                         f8_e4m3_to_f16_vec((uint8_t*)read_buf, (uint16_t*)target_buf, tensor_storage.nelements());
                     } else if (tensor_storage.is_f8_e5m2) {
                         f8_e5m2_to_f16_vec((uint8_t*)read_buf, (uint16_t*)target_buf, tensor_storage.nelements());

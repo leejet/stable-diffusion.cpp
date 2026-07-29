@@ -14,6 +14,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <random>
 #include <regex>
@@ -3316,6 +3317,65 @@ public:
     }
 };
 
+// ConvRot (arXiv 2512.03673) stores W*H rather than W, where H is a block-diagonal
+// rotation over `group` input channels. Recovering y = x*W^T therefore means
+// rotating the activation by the same H before the matmul.
+//
+// H is the regular-Hadamard radix-4 butterfly: the 4x4 core below Kronecker-composed
+// log4(group) times, scaled by 1/sqrt(group). That construction makes H both
+// orthogonal and symmetric, so the mul_mat orientation here needs no transpose.
+// `group` must be a power of four (the butterfly has no other factorization).
+__STATIC_INLINE__ const std::vector<ggml_fp16_t>& sd_convrot_matrix(int group) {
+    static std::map<int, std::vector<ggml_fp16_t>> cache;
+    static std::mutex cache_mutex;
+    std::lock_guard<std::mutex> lock(cache_mutex);
+
+    auto it = cache.find(group);
+    if (it != cache.end()) {
+        return it->second;
+    }
+
+    static const int core[4][4] = {{1, 1, 1, -1}, {1, 1, -1, 1}, {1, -1, 1, 1}, {-1, 1, 1, 1}};
+    const float norm            = 1.0f / std::sqrt((float)group);
+
+    std::vector<ggml_fp16_t> h((size_t)group * group);
+    for (int i = 0; i < group; i++) {
+        for (int j = 0; j < group; j++) {
+            int sign = 1;
+            for (int a = i, b = j; a > 0 || b > 0; a >>= 2, b >>= 2) {
+                sign *= core[a & 3][b & 3];
+            }
+            // Row-major: element (row i, col k) lands at i*group + k, which is the
+            // [k, i] layout ggml_mul_mat contracts over.
+            h[(size_t)i * group + j] = ggml_fp32_to_fp16((float)sign * norm);
+        }
+    }
+    return cache.emplace(group, std::move(h)).first->second;
+}
+
+__STATIC_INLINE__ ggml_tensor* ggml_ext_convrot_rotate(GGMLRunnerContext* ctx, ggml_tensor* x, int group) {
+    const std::string name = "ggml_runner_build_in_tensor:convrot_h" + std::to_string(group);
+
+    ggml_tensor* h = ggml_get_tensor(ctx->ggml_ctx, name.c_str());
+    if (h == nullptr) {
+        h = ggml_new_tensor_2d(ctx->ggml_ctx, GGML_TYPE_F16, group, group);
+        ggml_set_name(h, name.c_str());
+        // The cache entry has static lifetime, so the pointer stays valid until the
+        // runner copies it into the backend buffer after allocation.
+        ctx->bind_backend_tensor_data(h, sd_convrot_matrix(group).data());
+    }
+
+    const int64_t ne0 = x->ne[0], ne1 = x->ne[1], ne2 = x->ne[2], ne3 = x->ne[3];
+    if (!ggml_is_contiguous(x)) {
+        x = ggml_cont(ctx->ggml_ctx, x);
+    }
+    // Rotation is block-diagonal, so folding every group into the row dimension
+    // applies it to all of them with one matmul.
+    x = ggml_reshape_2d(ctx->ggml_ctx, x, group, ggml_nelements(x) / group);
+    x = ggml_mul_mat(ctx->ggml_ctx, h, x);
+    return ggml_reshape_4d(ctx->ggml_ctx, x, ne0, ne1, ne2, ne3);
+}
+
 class Linear : public UnaryBlock {
 protected:
     int64_t in_features;
@@ -3325,12 +3385,21 @@ protected:
     bool force_prec_f32;
     bool allow_weight_scale;
     bool has_weight_scale = false;
+    int convrot_groupsize = 0;
     float scale;
     std::string prefix;
 
     void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
-        this->prefix         = prefix;
-        has_weight_scale     = false;
+        this->prefix        = prefix;
+        has_weight_scale    = false;
+        convrot_groupsize   = 0;
+        auto weight_storage = tensor_storage_map.find(prefix + "weight");
+        if (weight_storage != tensor_storage_map.end()) {
+            const int group = weight_storage->second.convrot_groupsize();
+            if (group > 0 && in_features % group == 0) {
+                convrot_groupsize = group;
+            }
+        }
         enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
         if (in_features % ggml_blck_size(wtype) != 0 || force_f32) {
             wtype = GGML_TYPE_F32;
@@ -3378,7 +3447,20 @@ public:
         }
         ggml_tensor* linear_bias = has_weight_scale ? nullptr : b;
         ggml_tensor* out         = nullptr;
-        if (ctx->weight_adapter) {
+        if (convrot_groupsize > 0) {
+            // The stored weight lives in the rotated basis, so the activation has
+            // to be rotated to match. LoRA deltas are trained against the
+            // unrotated weight and cannot be mixed in here, so the adapter is
+            // deliberately bypassed rather than applied to a rotated input.
+            if (ctx->weight_adapter) {
+                static std::once_flag warned;
+                std::call_once(warned, []() {
+                    LOG_WARN("LoRA is not supported on ConvRot-quantized layers; ignoring it for those layers");
+                });
+            }
+            x   = ggml_ext_convrot_rotate(ctx, x, convrot_groupsize);
+            out = ggml_ext_linear(ctx->ggml_ctx, x, w, linear_bias, force_prec_f32, scale);
+        } else if (ctx->weight_adapter) {
             WeightAdapter::ForwardParams forward_params;
             forward_params.op_type               = WeightAdapter::ForwardParams::op_type_t::OP_LINEAR;
             forward_params.linear.force_prec_f32 = force_prec_f32;

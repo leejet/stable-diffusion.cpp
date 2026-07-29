@@ -10,6 +10,8 @@ Krea2 uses a Krea2 diffusion transformer, the Wan2.1 VAE, and Qwen3-VL 4B as the
 - Download Krea2 Turbo
     - safetensors: https://huggingface.co/krea/Krea-2-Turbo/tree/main
     - gguf: https://huggingface.co/realrebelai/KREA-2_GGUFs/tree/main/TURBO
+- Krea2 also loads ConvRot int4 safetensors directly (roughly a third the size of
+  Q8_0); see [external_quantization.md](external_quantization.md)
 - Download vae
     - safetensors: https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/vae/wan_2.1_vae.safetensors
 - Download Qwen3-VL 4B

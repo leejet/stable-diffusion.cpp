@@ -60,6 +60,17 @@ static bool collect_tensors_for_export(ModelLoader& model_loader,
     tensors.reserve(model_loader.get_tensor_storage_map().size());
     for (const auto& kv : model_loader.get_tensor_storage_map()) {
         const TensorStorage& tensor_storage = kv.second;
+        // A ConvRot weight is stored in a rotated basis and is only correct when
+        // the runtime rotates the activation to match. No output container here
+        // can carry that marker, so exporting would produce a file that loads
+        // cleanly and generates noise.
+        if (tensor_storage.convrot_groupsize() > 0) {
+            LOG_ERROR(
+                "cannot convert '%s': ConvRot-rotated weights would lose their rotation marker "
+                "and the result would be silently wrong. Use the source model directly.",
+                tensor_storage.name.c_str());
+            return false;
+        }
         TensorExportInfo info;
         info.storage = tensor_storage;
         info.type    = get_export_tensor_type(model_loader, tensor_storage, type, tensor_type_rules);
