@@ -513,6 +513,12 @@ ArgOptions SDContextParams::get_options() {
          "number of threads to use during computation (default: -1). "
          "If threads <= 0, then threads will be set to the number of CPU physical cores",
          &n_threads},
+        {"-ngl",
+         "--gpu-layers",
+         "maximum number of diffusion layers to keep resident in VRAM; the remainder stream from RAM "
+         "each step (default: -1, keep everything on the GPU). Also capped by available VRAM, so a "
+         "large value simply fills the device. Implies --offload-to-cpu and --stream-layers",
+         &n_gpu_layers},
     };
 
     options.bool_options = {
@@ -772,8 +778,13 @@ void SDContextParams::prepare_backend_assignments() {
     effective_backend        = backend;
     effective_params_backend = params_backend;
 
-    if (offload_params_to_cpu) {
+    // Streaming reads weights out of host memory, so a layer budget only means
+    // anything once the diffusion params live on the CPU.
+    if (offload_params_to_cpu || n_gpu_layers >= 0) {
         prepend_backend_assignment(effective_params_backend, "*=cpu");
+    }
+    if (n_gpu_layers >= 0) {
+        stream_layers = true;
     }
 
     if (clip_on_cpu) {
@@ -832,6 +843,7 @@ std::string SDContextParams::to_string() const {
         << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
         << "  max_vram: \"" << max_vram << "\",\n"
         << "  stream_layers: " << (stream_layers ? "true" : "false") << ",\n"
+        << "  n_gpu_layers: " << n_gpu_layers << ",\n"
         << "  eager_load: " << (eager_load ? "true" : "false") << ",\n"
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
@@ -904,6 +916,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.vae_format                      = str_to_vae_format(vae_format);
     sd_ctx_params.max_vram                        = max_vram.c_str();
     sd_ctx_params.stream_layers                   = stream_layers;
+    sd_ctx_params.n_gpu_layers                    = n_gpu_layers;
     sd_ctx_params.eager_load                      = eager_load;
     sd_ctx_params.backend                         = effective_backend.c_str();
     sd_ctx_params.params_backend                  = effective_params_backend.c_str();

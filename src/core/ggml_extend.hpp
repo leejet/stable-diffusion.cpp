@@ -1746,8 +1746,11 @@ protected:
     ggml_context* compute_ctx    = nullptr;
     ggml_gallocr* compute_allocr = nullptr;
 
-    size_t max_graph_vram_bytes           = 0;
-    bool stream_layers_enabled            = false;
+    size_t max_graph_vram_bytes = 0;
+    bool stream_layers_enabled  = false;
+    // llama.cpp-style layer count: pin this many leading weight-bearing segments
+    // in VRAM and stream the rest. -1 leaves placement to the byte budget.
+    int n_gpu_layers                      = -1;
     size_t observed_max_effective_budget_ = 0;
     bool graph_cut_layer_split_enabled    = false;
     std::vector<size_t> graph_cut_layer_split_backend_vram_limits_;
@@ -2371,14 +2374,14 @@ protected:
     bool should_use_graph_cut_segmented_compute(const GraphCutPlan& plan) {
         return plan.has_cuts &&
                plan.valid &&
-               max_graph_vram_bytes > 0 &&
+               (max_graph_vram_bytes > 0 || n_gpu_layers >= 0) &&
                plan.segments.size() > 1 &&
                !sd_backend_is_cpu(runtime_backend) &&
                !is_multi_device();
     }
 
     bool can_attempt_graph_cut_segmented_compute() const {
-        return max_graph_vram_bytes > 0 &&
+        return (max_graph_vram_bytes > 0 || n_gpu_layers >= 0) &&
                !sd_backend_is_cpu(runtime_backend) &&
                !is_multi_device();
     }
@@ -2390,6 +2393,17 @@ protected:
         GGML_ASSERT(gf != nullptr);
 
         size_t effective_budget = max_graph_vram_bytes;
+        // -ngl without an explicit --max-vram still needs a byte budget, so that
+        // an over-large layer count is capped by what the device actually has.
+        if (n_gpu_layers >= 0 && max_graph_vram_bytes == 0 && runtime_backend != nullptr) {
+            ggml_backend_dev_t dev = ggml_backend_get_device(runtime_backend);
+            if (dev != nullptr && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                size_t free_vram = 0, total_vram = 0;
+                ggml_backend_dev_memory(dev, &free_vram, &total_vram);
+                constexpr size_t safety_margin = 512ull * 1024 * 1024;
+                effective_budget               = (free_vram > safety_margin) ? (free_vram - safety_margin) : 0;
+            }
+        }
         if (stream_layers_enabled && max_graph_vram_bytes > 0 && runtime_backend != nullptr) {
             ggml_backend_dev_t dev = ggml_backend_get_device(runtime_backend);
             if (dev != nullptr && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
@@ -2425,7 +2439,11 @@ protected:
         // a quarter so it builds smaller merged segments and chunk-K can fit
         // alongside. Without streaming the cap only adds dispatch overhead.
         size_t planner_budget = effective_budget;
-        if (stream_layers_enabled) {
+        if (n_gpu_layers >= 0) {
+            // An explicit layer count needs one segment per layer, so suppress the
+            // budget-driven merging that would otherwise coalesce them.
+            planner_budget = 0;
+        } else if (stream_layers_enabled) {
             size_t total_params_bytes = 0;
             for (const ggml_tensor* t : params_tensor_set_) {
                 if (t != nullptr) {
@@ -2443,8 +2461,8 @@ protected:
                                                      planner_budget,
                                                      params_tensor_set_,
                                                      get_desc().c_str());
-        if (stream_layers_enabled) {
-            sd::ggml_graph_cut::annotate_residency(*plan_out, effective_budget);
+        if (stream_layers_enabled || n_gpu_layers >= 0) {
+            sd::ggml_graph_cut::annotate_residency(*plan_out, effective_budget, n_gpu_layers);
         }
         if (stream_layers_enabled) {
             if (budget_increased) {
@@ -3170,6 +3188,19 @@ public:
             return;
         }
         stream_layers_enabled = enabled;
+    }
+
+    void set_n_gpu_layers(int n_layers) {
+        if (n_layers >= 0 && is_multi_device()) {
+            LOG_WARN("%s: -ngl is not supported with multiple runtime backends; ignoring",
+                     get_desc().c_str());
+            return;
+        }
+        n_gpu_layers = n_layers;
+        if (n_layers >= 0) {
+            // Residency is only honoured on the streaming path.
+            stream_layers_enabled = true;
+        }
     }
 
     void set_graph_cut_layer_split_enabled(bool enabled) {

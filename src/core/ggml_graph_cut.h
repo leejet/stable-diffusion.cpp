@@ -122,7 +122,10 @@ namespace sd::ggml_graph_cut {
                       const char* log_desc);
 
     // Mark leading segments resident when they fit after streamed-segment headroom.
-    void annotate_residency(Plan& plan, size_t max_graph_vram_bytes);
+    // `n_gpu_layers >= 0` pins that many leading weight-bearing segments and
+    // streams the remainder, ignoring `max_graph_vram_bytes`. `-1` keeps the
+    // byte-budget behaviour.
+    void annotate_residency(Plan& plan, size_t max_graph_vram_bytes, int n_gpu_layers = -1);
 }  // namespace sd::ggml_graph_cut
 
 #endif  // __SD_CORE_GGML_GRAPH_CUT_H__

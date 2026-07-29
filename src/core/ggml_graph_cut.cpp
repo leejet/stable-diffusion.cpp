@@ -960,12 +960,15 @@ namespace sd::ggml_graph_cut {
         return resolved_plan;
     }
 
-    void annotate_residency(Plan& plan, size_t max_graph_vram_bytes) {
+    void annotate_residency(Plan& plan, size_t max_graph_vram_bytes, int n_gpu_layers) {
         // Cached plans may be reused with a smaller live budget.
         for (auto& seg : plan.segments) {
             seg.residency = SegmentResidency::STREAMED;
         }
-        if (max_graph_vram_bytes == 0 || plan.segments.size() < 2) {
+        if (plan.segments.size() < 2) {
+            return;
+        }
+        if (n_gpu_layers < 0 && max_graph_vram_bytes == 0) {
             return;
         }
 
@@ -995,18 +998,35 @@ namespace sd::ggml_graph_cut {
         constexpr size_t safety = 512ull * 1024 * 1024;
         const size_t reserved   = safety + worst_streamed_footprint;
 
-        if (max_graph_vram_bytes <= reserved) {
+        const bool has_budget = max_graph_vram_bytes > reserved;
+        if (!has_budget && n_gpu_layers < 0) {
             return;
         }
-        const size_t available = max_graph_vram_bytes - reserved;
+        const size_t available = has_budget ? max_graph_vram_bytes - reserved : 0;
 
+        // An explicit layer count caps how many segments may stay pinned; the
+        // budget independently caps how many actually fit. Whichever runs out
+        // first wins, so an over-large -ngl degrades into "as much as fits"
+        // rather than an allocation failure part-way through a denoise pass.
+        int remaining     = n_gpu_layers;
         size_t cumulative = 0;
         for (auto& seg : plan.segments) {
-            if (cumulative + seg.input_param_bytes > available) {
+            if (n_gpu_layers >= 0 && seg.input_param_bytes == 0) {
+                // Weightless segments cost no VRAM, so they never spend a slot.
+                seg.residency = SegmentResidency::RESIDENT;
+                continue;
+            }
+            if (remaining == 0) {
+                break;
+            }
+            if (has_budget && cumulative + seg.input_param_bytes > available) {
                 break;
             }
             seg.residency = SegmentResidency::RESIDENT;
             cumulative += seg.input_param_bytes;
+            if (remaining > 0) {
+                remaining--;
+            }
         }
     }
 

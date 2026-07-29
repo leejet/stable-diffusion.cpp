@@ -202,6 +202,37 @@ sd-cli -m model.safetensors -p "a cat" --backend diffusion=cuda0,te=cpu,vae=cpu 
 
 This keeps text encoding and VAE execution on CPU while the diffusion model runs on GPU.
 
+## Layer count (`-ngl`)
+
+`-ngl` / `--gpu-layers` caps how many diffusion layers stay resident in VRAM.
+The remainder live in RAM and are copied in for the layer that needs them, then
+released:
+
+```shell
+sd-cli -m model.safetensors -p "a cat" -ngl 20
+```
+
+The default of `-1` keeps everything on the GPU. `-ngl 0` keeps no layer
+resident, which is the slowest but smallest-footprint setting.
+
+The count is an upper bound, not a demand: residency is also capped by what the
+device can actually hold, so asking for more layers than fit fills VRAM and
+streams the remainder instead of failing. `-ngl 999` is therefore a reasonable
+way to say "use as much VRAM as there is". Unlike llama.cpp, the number will not
+push the allocator past what it has.
+
+Because streaming reads weights out of host memory, `-ngl` implies
+`--offload-to-cpu` and `--stream-layers`; setting it is enough on its own.
+
+This is the count-based counterpart of `--max-vram`, which expresses the same
+residency decision as a byte budget. When `-ngl` is given it takes precedence,
+and segment merging is disabled so that one segment corresponds to one layer.
+Like the other single-device mechanisms it does not combine with a multi-device
+layer split.
+
+Use `-v` to see the split; each layer logs as `residency=RESIDENT` or
+`residency=STREAMED`.
+
 ## Backend sharing and lifetime
 
 Backends are managed by `SDBackendManager`.
