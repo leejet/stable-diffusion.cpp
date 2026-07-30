@@ -121,6 +121,7 @@ static json make_img_gen_defaults_json(const SDGenerationParams& defaults, const
         {"prompt", defaults.prompt},
         {"negative_prompt", defaults.negative_prompt},
         {"clip_skip", defaults.clip_skip},
+        {"text_ctx", defaults.text_ctx},
         {"width", defaults.width > 0 ? defaults.width : 512},
         {"height", defaults.height > 0 ? defaults.height : 512},
         {"strength", defaults.strength},

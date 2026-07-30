@@ -1045,6 +1045,10 @@ ArgOptions SDGenerationParams::get_options() {
          "ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1). "
          "<= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x",
          &clip_skip},
+        {"",
+         "--text-ctx",
+         "maximum text/cross-attention context length; 0 disables truncation (default: 0)",
+         &text_ctx},
         {"-b",
          "--batch-count",
          "batch count",
@@ -1890,6 +1894,7 @@ bool SDGenerationParams::from_json_str(
     load_if_exists("scm_mask", scm_mask);
 
     load_if_exists("clip_skip", clip_skip);
+    load_if_exists("text_ctx", text_ctx);
     load_if_exists("width", width);
     load_if_exists("height", height);
     load_if_exists("batch_count", batch_count);
@@ -2343,6 +2348,11 @@ bool SDGenerationParams::validate(SDMode mode) {
         return false;
     }
 
+    if (text_ctx < 0) {
+        LOG_ERROR("error: text_ctx must be non-negative");
+        return false;
+    }
+
     if (!cache_mode.empty()) {
         if (cache_mode == "easycache" || cache_mode == "ucache") {
             if (cache_params.reuse_threshold < 0.0f) {
@@ -2504,6 +2514,7 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     params.prompt              = prompt.c_str();
     params.negative_prompt     = negative_prompt.c_str();
     params.clip_skip           = clip_skip;
+    params.text_ctx            = text_ctx;
     params.init_image          = init_image.get();
     params.ref_images          = ref_image_views.empty() ? nullptr : ref_image_views.data();
     params.ref_images_count    = static_cast<int>(ref_image_views.size());
@@ -2648,6 +2659,7 @@ std::string SDGenerationParams::to_string() const {
         << "  ad_negative_prompt: \"" << ad_negative_prompt << "\",\n"
         << "  extra_ad_args: \"" << extra_ad_args << "\",\n"
         << "  clip_skip: " << clip_skip << ",\n"
+        << "  text_ctx: " << text_ctx << ",\n"
         << "  width: " << width << ",\n"
         << "  height: " << height << ",\n"
         << "  batch_count: " << batch_count << ",\n"
@@ -2810,6 +2822,7 @@ std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
     root["models"] = std::move(models);
 
     root["clip_skip"]             = gen_params.clip_skip;
+    root["text_ctx"]              = gen_params.text_ctx;
     root["strength"]              = gen_params.strength;
     root["control_strength"]      = gen_params.control_strength;
     root["ip_adapter_strength"]   = gen_params.ip_adapter_strength;

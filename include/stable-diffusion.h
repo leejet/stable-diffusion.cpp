@@ -363,6 +363,7 @@ typedef struct {
     const char* prompt;
     const char* negative_prompt;
     int clip_skip;
+    int text_ctx;
     sd_image_t init_image;
     sd_image_t* ref_images;
     int ref_images_count;
