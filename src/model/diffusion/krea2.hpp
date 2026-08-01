@@ -180,12 +180,12 @@ namespace Krea2 {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
             ggml_tensor* scale = params["scale"];
-            if(ctx->weight_adapter){
+            if (ctx->weight_adapter) {
                 scale = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, scale, prefix + "scale.weight");
             }
-            scale              = ggml_add(ctx->ggml_ctx, scale, ggml_ext_ones(ctx->ggml_ctx, scale->ne[0], 1, 1, 1));
-            x                  = ggml_rms_norm(ctx->ggml_ctx, x, eps);
-            x                  = ggml_mul_inplace(ctx->ggml_ctx, x, scale);
+            scale = ggml_add(ctx->ggml_ctx, scale, ggml_ext_ones(ctx->ggml_ctx, scale->ne[0], 1, 1, 1));
+            x     = ggml_rms_norm(ctx->ggml_ctx, x, eps);
+            x     = ggml_mul_inplace(ctx->ggml_ctx, x, scale);
             return x;
         }
     };
@@ -302,7 +302,7 @@ namespace Krea2 {
 
         void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             GGML_UNUSED(tensor_storage_map);
-            this->prefix    = prefix;
+            this->prefix  = prefix;
             params["lin"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, dim * 6);
         }
 
@@ -312,10 +312,10 @@ namespace Krea2 {
 
         std::vector<ggml_tensor*> forward(GGMLRunnerContext* ctx, ggml_tensor* vec) {
             auto lin = params["lin"];
-            if(ctx->weight_adapter){
+            if (ctx->weight_adapter) {
                 lin = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, lin, prefix + "lin.weight");
             }
-            lin = ggml_repeat(ctx->ggml_ctx, lin, vec);
+            lin      = ggml_repeat(ctx->ggml_ctx, lin, vec);
             auto out = ggml_add(ctx->ggml_ctx, vec, lin);
             return ggml_ext_chunk(ctx->ggml_ctx, out, 6, 0);
         }
@@ -328,7 +328,7 @@ namespace Krea2 {
 
         void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             GGML_UNUSED(tensor_storage_map);
-            this->prefix    = prefix;
+            this->prefix  = prefix;
             params["lin"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, dim, 2);
         }
 
@@ -338,7 +338,7 @@ namespace Krea2 {
 
         std::vector<ggml_tensor*> forward(GGMLRunnerContext* ctx, ggml_tensor* vec) {
             auto lin = params["lin"];
-            if(ctx->weight_adapter){
+            if (ctx->weight_adapter) {
                 lin = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, lin, prefix + "lin.weight");
             }
             auto out = ggml_add(ctx->ggml_ctx, lin, vec);
