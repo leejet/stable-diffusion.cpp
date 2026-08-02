@@ -796,7 +796,7 @@ struct LoraModel : public GGMLRunner {
             } else {
                 iter = lora_tensors.find(alpha_name);
                 if (iter != lora_tensors.end()) {
-                    float alpha = ggml_ext_backend_tensor_get_f32(iter->second);
+                    float alpha       = ggml_ext_backend_tensor_get_f32(iter->second);
                     scale_value       = alpha / rank;
                     scale_tensor_name = alpha_name;
                     // LOG_DEBUG("rank %s %ld %.2f %.2f", alpha_name.c_str(), rank, alpha, scale_value);
