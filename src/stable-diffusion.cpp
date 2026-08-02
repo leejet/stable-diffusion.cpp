@@ -143,6 +143,7 @@ const char* sampling_methods_str[] = {
     "Euler GE",
     "DPM++ (2M) SDE",
     "DPM++ (2M) SDE BT",
+    "LMS",
 };
 
 /*================================================== Helper Functions ================================================*/
@@ -3208,6 +3209,7 @@ const char* sample_method_to_str[] = {
     "euler_ge",
     "dpm++2m_sde",
     "dpm++2m_sde_bt",
+    "lms",
 };
 
 const char* sd_sample_method_name(enum sample_method_t sample_method) {
