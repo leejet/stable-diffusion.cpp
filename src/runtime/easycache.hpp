@@ -9,7 +9,7 @@
 #include "core/ggml_extend.hpp"
 #include "core/tensor.hpp"
 #include "runtime/condition_cache_utils.hpp"
-#include "runtime/denoiser.hpp"
+#include "runtime/denoiser.h"
 
 struct EasyCacheConfig {
     bool enabled          = false;

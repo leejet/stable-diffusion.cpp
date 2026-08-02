@@ -1,5 +1,4 @@
-#ifndef __SD_RUNTIME_DENOISER_HPP__
-#define __SD_RUNTIME_DENOISER_HPP__
+#include "denoiser.h"
 
 #include <algorithm>
 #include <cctype>
@@ -12,16 +11,10 @@
 #include <utility>
 
 #include "core/ggml_extend.hpp"
-#include "core/tensor.hpp"
 #include "runtime/gits_noise.h"
-#include "runtime/guidance.h"
 
-/*================================================= CompVisDenoiser ==================================================*/
 
 // Ref: https://github.com/crowsonkb/k-diffusion/blob/master/k_diffusion/external.py
-
-#define TIMESTEPS 1000
-#define FLUX_TIMESTEPS 1000
 
 struct SigmaScheduler {
     typedef std::function<float(float)> t_to_sigma_t;
@@ -1030,98 +1023,120 @@ struct LogitNormalScheduler : SigmaScheduler {
     }
 };
 
-struct Denoiser {
-    virtual float sigma_min()                                                        = 0;
-    virtual float sigma_max()                                                        = 0;
-    virtual float sigma_to_t(float sigma)                                            = 0;
-    virtual float t_to_sigma(float t)                                                = 0;
-    virtual std::vector<float> get_scalings(float sigma)                             = 0;
-    virtual sd::Tensor<float> noise_scaling(float sigma,
-                                            const sd::Tensor<float>& noise,
-                                            const sd::Tensor<float>& latent)         = 0;
-    virtual sd::Tensor<float> inverse_noise_scaling(float sigma,
-                                                    const sd::Tensor<float>& latent) = 0;
-    virtual float noise_level_to_sigma(float noise_level)                            = 0;
-
-    virtual std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler_type, SDVersion version, const char* extra_sample_args = nullptr) {
-        auto bound_t_to_sigma = std::bind(&Denoiser::t_to_sigma, this, std::placeholders::_1);
-        std::shared_ptr<SigmaScheduler> scheduler;
-        switch (scheduler_type) {
-            case DISCRETE_SCHEDULER:
-                LOG_INFO("get_sigmas with discrete scheduler");
-                scheduler = std::make_shared<DiscreteScheduler>();
-                break;
-            case KARRAS_SCHEDULER:
-                LOG_INFO("get_sigmas with Karras scheduler");
-                scheduler = std::make_shared<KarrasScheduler>();
-                break;
-            case BETA_SCHEDULER:
-                LOG_INFO("get_sigmas with Beta scheduler");
-                scheduler = std::make_shared<BetaScheduler>(extra_sample_args);
-                break;
-            case EXPONENTIAL_SCHEDULER:
-                LOG_INFO("get_sigmas exponential scheduler");
-                scheduler = std::make_shared<ExponentialScheduler>();
-                break;
-            case AYS_SCHEDULER:
-                LOG_INFO("get_sigmas with Align-Your-Steps scheduler");
-                scheduler = std::make_shared<AYSScheduler>(version);
-                break;
-            case GITS_SCHEDULER:
-                LOG_INFO("get_sigmas with GITS scheduler");
-                scheduler = std::make_shared<GITSScheduler>();
-                break;
-            case SGM_UNIFORM_SCHEDULER:
-                LOG_INFO("get_sigmas with SGM Uniform scheduler");
-                scheduler = std::make_shared<SGMUniformScheduler>();
-                break;
-            case SIMPLE_SCHEDULER:
-                LOG_INFO("get_sigmas with Simple scheduler");
-                scheduler = std::make_shared<SimpleScheduler>();
-                break;
-            case SMOOTHSTEP_SCHEDULER:
-                LOG_INFO("get_sigmas with SmoothStep scheduler");
-                scheduler = std::make_shared<SmoothStepScheduler>();
-                break;
-            case BONG_TANGENT_SCHEDULER:
-                LOG_INFO("get_sigmas with bong_tangent scheduler");
-                scheduler = std::make_shared<BongTangentScheduler>();
-                break;
-            case KL_OPTIMAL_SCHEDULER:
-                LOG_INFO("get_sigmas with KL Optimal scheduler");
-                scheduler = std::make_shared<KLOptimalScheduler>();
-                break;
-            case LCM_SCHEDULER:
-                LOG_INFO("get_sigmas with LCM scheduler");
-                scheduler = std::make_shared<LCMScheduler>();
-                break;
-            case LTX2_SCHEDULER:
-                LOG_INFO("get_sigmas with LTX2 scheduler");
-                scheduler = std::make_shared<LTX2Scheduler>(image_seq_len, extra_sample_args);
-                break;
-            case LOGIT_NORMAL_SCHEDULER: {
-                LOG_INFO("get_sigmas with Logit-Normal scheduler");
-                scheduler = std::make_shared<LogitNormalScheduler>(image_seq_len, extra_sample_args);
-                break;
-            }
-            case FLUX2_SCHEDULER: {
-                LOG_INFO("get_sigmas with Flux2 scheduler");
-                scheduler = std::make_shared<Flux2Scheduler>(image_seq_len);
-                break;
-            }
-            case FLUX_SCHEDULER: {
-                LOG_INFO("get_sigmas with Flux scheduler");
-                scheduler = std::make_shared<FluxScheduler>(image_seq_len, extra_sample_args);
-                break;
-            }
-            default:
-                LOG_INFO("get_sigmas with discrete scheduler (default)");
-                scheduler = std::make_shared<DiscreteScheduler>();
-                break;
+std::vector<float> Denoiser::get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler_type, SDVersion version, const char* extra_sample_args) {
+    auto bound_t_to_sigma = std::bind(&Denoiser::t_to_sigma, this, std::placeholders::_1);
+    std::shared_ptr<SigmaScheduler> scheduler;
+    switch (scheduler_type) {
+        case DISCRETE_SCHEDULER:
+            LOG_INFO("get_sigmas with discrete scheduler");
+            scheduler = std::make_shared<DiscreteScheduler>();
+            break;
+        case KARRAS_SCHEDULER:
+            LOG_INFO("get_sigmas with Karras scheduler");
+            scheduler = std::make_shared<KarrasScheduler>();
+            break;
+        case BETA_SCHEDULER:
+            LOG_INFO("get_sigmas with Beta scheduler");
+            scheduler = std::make_shared<BetaScheduler>(extra_sample_args);
+            break;
+        case EXPONENTIAL_SCHEDULER:
+            LOG_INFO("get_sigmas exponential scheduler");
+            scheduler = std::make_shared<ExponentialScheduler>();
+            break;
+        case AYS_SCHEDULER:
+            LOG_INFO("get_sigmas with Align-Your-Steps scheduler");
+            scheduler = std::make_shared<AYSScheduler>(version);
+            break;
+        case GITS_SCHEDULER:
+            LOG_INFO("get_sigmas with GITS scheduler");
+            scheduler = std::make_shared<GITSScheduler>();
+            break;
+        case SGM_UNIFORM_SCHEDULER:
+            LOG_INFO("get_sigmas with SGM Uniform scheduler");
+            scheduler = std::make_shared<SGMUniformScheduler>();
+            break;
+        case SIMPLE_SCHEDULER:
+            LOG_INFO("get_sigmas with Simple scheduler");
+            scheduler = std::make_shared<SimpleScheduler>();
+            break;
+        case SMOOTHSTEP_SCHEDULER:
+            LOG_INFO("get_sigmas with SmoothStep scheduler");
+            scheduler = std::make_shared<SmoothStepScheduler>();
+            break;
+        case BONG_TANGENT_SCHEDULER:
+            LOG_INFO("get_sigmas with bong_tangent scheduler");
+            scheduler = std::make_shared<BongTangentScheduler>();
+            break;
+        case KL_OPTIMAL_SCHEDULER:
+            LOG_INFO("get_sigmas with KL Optimal scheduler");
+            scheduler = std::make_shared<KLOptimalScheduler>();
+            break;
+        case LCM_SCHEDULER:
+            LOG_INFO("get_sigmas with LCM scheduler");
+            scheduler = std::make_shared<LCMScheduler>();
+            break;
+        case LTX2_SCHEDULER:
+            LOG_INFO("get_sigmas with LTX2 scheduler");
+            scheduler = std::make_shared<LTX2Scheduler>(image_seq_len, extra_sample_args);
+            break;
+        case LOGIT_NORMAL_SCHEDULER: {
+            LOG_INFO("get_sigmas with Logit-Normal scheduler");
+            scheduler = std::make_shared<LogitNormalScheduler>(image_seq_len, extra_sample_args);
+            break;
         }
-        return scheduler->get_sigmas(n, sigma_min(), sigma_max(), bound_t_to_sigma);
+        case FLUX2_SCHEDULER: {
+            LOG_INFO("get_sigmas with Flux2 scheduler");
+            scheduler = std::make_shared<Flux2Scheduler>(image_seq_len);
+            break;
+        }
+        case FLUX_SCHEDULER: {
+            LOG_INFO("get_sigmas with Flux scheduler");
+            scheduler = std::make_shared<FluxScheduler>(image_seq_len, extra_sample_args);
+            break;
+        }
+        default:
+            LOG_INFO("get_sigmas with discrete scheduler (default)");
+            scheduler = std::make_shared<DiscreteScheduler>();
+            break;
     }
-};
+    return scheduler->get_sigmas(n, sigma_min(), sigma_max(), bound_t_to_sigma);
+}
+
+void Denoiser::refresh_compvis_denoiser(const std::vector<float>& file_alphas_cumprod) {
+    (void)file_alphas_cumprod;
+}
+
+scheduler_t Denoiser::get_default_scheduler() {
+    return SCHEDULER_COUNT;
+}
+
+bool Denoiser::is_flow_denoiser() {
+    return false;
+}
+
+void Denoiser::set_shift(float shift) {
+    (void)shift;
+}
+
+std::vector<float> Denoiser::get_timesteps(int step) {
+    (void)step;
+    return std::vector<float>();
+}
+
+static void calculate_alphas_cumprod(float* alphas_cumprod,
+                                     float linear_start = 0.00085f,
+                                     float linear_end   = 0.0120f,
+                                     int timesteps      = TIMESTEPS) {
+    float ls_sqrt = sqrtf(linear_start);
+    float le_sqrt = sqrtf(linear_end);
+    float amount  = le_sqrt - ls_sqrt;
+    float product = 1.0f;
+    for (int i = 0; i < timesteps; i++) {
+        float beta = ls_sqrt + amount * ((float)i / (timesteps - 1));
+        product *= 1.0f - powf(beta, 2.0f);
+        alphas_cumprod[i] = product;
+    }
+}
 
 struct CompVisDenoiser : public Denoiser {
     float sigmas[TIMESTEPS];
@@ -1193,6 +1208,19 @@ struct CompVisDenoiser : public Denoiser {
     float noise_level_to_sigma(float noise_level) override {
         return noise_level / (1.0f - noise_level);
     }
+
+    void refresh_compvis_denoiser(const std::vector<float>& file_alphas_cumprod) override {
+        std::vector<float> alphas_cumprod(TIMESTEPS);
+        if (file_alphas_cumprod.size() == TIMESTEPS) {
+            alphas_cumprod = file_alphas_cumprod;
+        } else {
+            calculate_alphas_cumprod(alphas_cumprod.data());
+        }
+        for (int i = 0; i < TIMESTEPS; i++) {
+            this->sigmas[i]     = std::sqrt((1 - alphas_cumprod[i]) / alphas_cumprod[i]);
+            this->log_sigmas[i] = std::log(this->sigmas[i]);
+        }
+    }
 };
 
 struct CompVisVDenoiser : public CompVisDenoiser {
@@ -1227,6 +1255,10 @@ struct EDMVDenoiser : public CompVisVDenoiser {
     float sigma_max() override {
         return max_sigma;
     }
+
+    scheduler_t get_default_scheduler() override {
+        return EXPONENTIAL_SCHEDULER;
+    }
 };
 
 inline float time_snr_shift(float alpha, float t) {
@@ -1243,7 +1275,11 @@ struct DiscreteFlowDenoiser : public Denoiser {
         set_shift(shift);
     }
 
-    void set_shift(float shift) {
+    bool is_flow_denoiser() override {
+        return true;
+    }
+
+    void set_shift(float shift) override {
         this->shift = shift;
     }
 
@@ -1298,8 +1334,6 @@ struct FluxFlowDenoiser : public DiscreteFlowDenoiser {
         return flux_time_shift(shift, 1.0f, t / TIMESTEPS);
     }
 };
-
-struct SefiFlowDenoiser;
 
 struct SefiFlowDenoiser : public FluxFlowDenoiser {
     static constexpr int kNumTrainTimesteps = 1000;
@@ -1373,6 +1407,15 @@ struct SefiFlowDenoiser : public FluxFlowDenoiser {
                   n, timestep_shift_alpha, delta_t);
         return tex_sigmas;
     }
+
+    std::vector<float> get_timesteps(int step) override {
+        int sched_idx = step > 0 ? step - 1 : 0;
+        if (sched_idx >= static_cast<int>(tex_timesteps.size())) {
+            sched_idx = static_cast<int>(tex_timesteps.size()) - 1;
+        }
+        return {sem_timesteps[sched_idx],
+                tex_timesteps[sched_idx]};
+    }
 };
 
 // MiniT2I predicts x0 directly and integrates a linear flow ODE:
@@ -1442,7 +1485,26 @@ struct MiniT2IFlowDenoiser : public Denoiser {
     }
 };
 
-typedef std::function<sd::guidance::GuiderOutput(const sd::Tensor<float>&, float, int)> denoise_cb_t;
+std::shared_ptr<Denoiser> make_denoiser(enum prediction_t pred_type) {
+    switch (pred_type) {
+        case EPS_PRED:
+            return std::make_shared<CompVisDenoiser>();
+        case V_PRED:
+            return std::make_shared<CompVisVDenoiser>();
+        case EDM_V_PRED:
+            return std::make_shared<EDMVDenoiser>();
+        case FLOW_PRED:
+            return std::make_shared<DiscreteFlowDenoiser>();
+        case FLUX_FLOW_PRED:
+            return std::make_shared<FluxFlowDenoiser>();
+        case SEFI_FLOW_PRED:
+            return std::make_shared<SefiFlowDenoiser>();
+        case MINIT2I_FLOW_PRED:
+            return std::make_shared<MiniT2IFlowDenoiser>();
+        default:
+            return nullptr;
+    }
+}
 
 static std::pair<float, float> get_ancestral_step(float sigma_from,
                                                   float sigma_to,
@@ -2767,15 +2829,15 @@ static sd::Tensor<float> sample_gradient_estimation(denoise_cb_t model,
 }
 
 // k diffusion reverse ODE: dx = (x - D(x;\sigma)) / \sigma dt; \sigma(t) = t
-static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
-                                            denoise_cb_t model,
-                                            sd::Tensor<float> x,
-                                            std::vector<float> sigmas,
-                                            std::shared_ptr<RNG> rng,
-                                            float eta,
-                                            bool is_flow_denoiser,
-                                            const char* extra_sample_args,
-                                            std::shared_ptr<Denoiser> denoiser_for_dispatch = nullptr) {
+sd::Tensor<float> sample_k_diffusion(sample_method_t method,
+                                     denoise_cb_t model,
+                                     sd::Tensor<float> x,
+                                     const std::vector<float>& sigmas,
+                                     std::shared_ptr<RNG> rng,
+                                     float eta,
+                                     bool is_flow_denoiser,
+                                     const char* extra_sample_args,
+                                     std::shared_ptr<Denoiser> denoiser_for_dispatch) {
     if (denoiser_for_dispatch) {
         if (auto sefi = std::dynamic_pointer_cast<SefiFlowDenoiser>(denoiser_for_dispatch)) {
             return sample_sefi_euler(sefi.get(), model, std::move(x));
@@ -2833,5 +2895,3 @@ static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
             return {};
     }
 }
-
-#endif  // __SD_RUNTIME_DENOISER_HPP__
