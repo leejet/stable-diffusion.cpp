@@ -2582,7 +2582,7 @@ static sd::Tensor<float> sample_lms(denoise_cb_t model,
                                     sd::Tensor<float> x,
                                     const std::vector<float>& sigmas,
                                     const SamplerExtraArgs& extra_sample_args) {
-// Linear Multi-Step from https://github.com/crowsonkb/k-diffusion
+    // Linear Multi-Step from https://github.com/crowsonkb/k-diffusion
 
     int divisions = 1000;
     for (const auto& [key, value] : extra_sample_args) {
@@ -2592,22 +2592,23 @@ static sd::Tensor<float> sample_lms(denoise_cb_t model,
                 LOG_WARN("ignoring invalid lms extra sample arg '%s=%s'", key.c_str(), value.c_str());
                 continue;
             }
-            divisions = parsed; // std::max(1, parsed);
+            divisions = parsed;  // std::max(1, parsed);
             // values above 35M produce noise, can be fixed by double precision
             // values < 1 always produce noise
         }
     }
-    LOG_DEBUG("linear multi-step sampler: integrating using %i division%s", divisions, (divisions == 1)?"":"s");
+    LOG_DEBUG("linear multi-step sampler: integrating using %i division%s", divisions, (divisions == 1) ? "" : "s");
 
     auto linear_multistep_coeff = [=](const int order, const int m, const int j) -> float {
-        if (!divisions) return sigmas[m + 1] - sigmas[m]; // delta / 0 * 0
-#define LMS_PRECISION float // double
-        const LMS_PRECISION a  = sigmas[m], dx = (sigmas[m + 1] - a) / divisions, s = sigmas[m - j];
-        const LMS_PRECISION b0 = a + 0.5f * dx; // using Riemann middle integral
-        LMS_PRECISION sum = 0.0f;
+        if (!divisions)
+            return sigmas[m + 1] - sigmas[m];  // delta / 0 * 0
+#define LMS_PRECISION float                    // double
+        const LMS_PRECISION a = sigmas[m], dx = (sigmas[m + 1] - a) / divisions, s = sigmas[m - j];
+        const LMS_PRECISION b0 = a + 0.5f * dx;  // using Riemann middle integral
+        LMS_PRECISION sum      = 0.0f;
         for (int h = 0; h < divisions; h++) {
             const LMS_PRECISION b = h * dx + b0;
-            LMS_PRECISION prod = 1.0f;
+            LMS_PRECISION prod    = 1.0f;
             for (int k = 0; k < j; k++) {
                 const LMS_PRECISION t = sigmas[m - k];
                 prod *= (b - t) / (s - t);
@@ -2621,13 +2622,13 @@ static sd::Tensor<float> sample_lms(denoise_cb_t model,
         return sum * dx;
     };
 
-    const int max_order                 = 4;
+    const int max_order = 4;
     float lms_coeff[max_order];
     std::vector<sd::Tensor<float>> hist = {};
 
     int steps = static_cast<int>(sigmas.size()) - 1;
     for (int i = 0; i < steps; i++) {
-        const float sigma  = sigmas[i];
+        const float sigma = sigmas[i];
 
         auto denoised_opt = model(x, sigma, i + 1);
         if (denoised_opt.pred.empty()) {
@@ -2636,19 +2637,19 @@ static sd::Tensor<float> sample_lms(denoise_cb_t model,
         sd::Tensor<float> denoised = std::move(denoised_opt.pred);
 
         const int order = std::min(max_order, i + 1);
-        for (int c = 0; c < order; c++) // computing coefficients
+        for (int c = 0; c < order; c++)  // computing coefficients
             lms_coeff[c] = linear_multistep_coeff(order, i, c);
 
         sd::Tensor<float> d_cur = (x - denoised) / sigma;
         switch (order) {
-            case 4: // derivative + 3 history points
+            case 4:  // derivative + 3 history points
                 x += hist[hist.size() - 2] * lms_coeff[3];
             case 3:
                 x += hist[hist.size() - 1] * lms_coeff[2];
             case 2:
-                x += hist.back()           * lms_coeff[1];
+                x += hist.back() * lms_coeff[1];
             case 1:
-                x += d_cur                 * lms_coeff[0];
+                x += d_cur * lms_coeff[0];
         }
 
         if (hist.size() == static_cast<size_t>(max_order - 1)) {
