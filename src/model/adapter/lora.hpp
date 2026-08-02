@@ -746,17 +746,59 @@ struct LoraModel : public GGMLRunner {
                 break;
             }
 
+            if (!is_conv2d) {
+                const int64_t down_in  = lora_down->ne[0];
+                const int64_t down_out = lora_down->ne[1];
+                const int64_t up_in    = lora_up->ne[0];
+
+                bool compatible = down_in == model_weight->ne[0];
+                if (lora_mid != nullptr) {
+                    compatible = compatible &&
+                                 lora_mid->ne[0] == down_out &&
+                                 up_in == lora_mid->ne[1];
+                } else {
+                    compatible = compatible && up_in == down_out;
+                }
+
+                if (!compatible) {
+                    skipped_incompatible_lora_tensors.insert(lora_down_name);
+                    skipped_incompatible_lora_tensors.insert(lora_up_name);
+                    if (lora_mid != nullptr) {
+                        skipped_incompatible_lora_tensors.insert(lora_mid_name);
+                    }
+                    if (lora_tensors.find(scale_name) != lora_tensors.end()) {
+                        skipped_incompatible_lora_tensors.insert(scale_name);
+                    } else if (lora_tensors.find(alpha_name) != lora_tensors.end()) {
+                        skipped_incompatible_lora_tensors.insert(alpha_name);
+                    }
+                    if (warned_incompatible_model_tensors.insert(model_tensor_name).second) {
+                        LOG_WARN("skip incompatible LoRA tensor |%s|: model input dim = %lld, down shape = [%lld, %lld], up shape = [%lld, %lld]",
+                                 model_tensor_name.c_str(),
+                                 static_cast<long long>(model_weight->ne[0]),
+                                 static_cast<long long>(down_in),
+                                 static_cast<long long>(down_out),
+                                 static_cast<long long>(up_in),
+                                 static_cast<long long>(lora_up->ne[1]));
+                    }
+                    index++;
+                    continue;
+                }
+            }
+
             float scale_value = 1.0f;
+            std::string scale_tensor_name;
 
             int64_t rank = lora_down->ne[ggml_n_dims(lora_down) - 1];
             iter         = lora_tensors.find(scale_name);
             if (iter != lora_tensors.end()) {
-                scale_value = ggml_ext_backend_tensor_get_f32(iter->second);
+                scale_value       = ggml_ext_backend_tensor_get_f32(iter->second);
+                scale_tensor_name = scale_name;
             } else {
                 iter = lora_tensors.find(alpha_name);
                 if (iter != lora_tensors.end()) {
                     float alpha = ggml_ext_backend_tensor_get_f32(iter->second);
-                    scale_value = alpha / rank;
+                    scale_value       = alpha / rank;
+                    scale_tensor_name = alpha_name;
                     // LOG_DEBUG("rank %s %ld %.2f %.2f", alpha_name.c_str(), rank, alpha, scale_value);
                 }
             }
@@ -828,11 +870,8 @@ struct LoraModel : public GGMLRunner {
             if (lora_mid) {
                 used_tensors.push_back(lora_mid_name);
             }
-            if (lora_tensors.find(scale_name) != lora_tensors.end()) {
-                used_tensors.push_back(scale_name);
-            }
-            if (lora_tensors.find(alpha_name) != lora_tensors.end()) {
-                used_tensors.push_back(alpha_name);
+            if (!scale_tensor_name.empty()) {
+                used_tensors.push_back(scale_tensor_name);
             }
 
             index++;
