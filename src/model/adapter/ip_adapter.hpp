@@ -48,10 +48,10 @@ namespace IPAdapter {
         Resampler() {}
         Resampler(int64_t dim, int64_t depth, int64_t num_queries, int64_t embed_dim, int64_t output_dim, int64_t ff_inner)
             : dim(dim), depth(depth), num_queries(num_queries), embed_dim(embed_dim), output_dim(output_dim), ff_inner(ff_inner) {
-            heads               = dim / dim_head;
-            blocks["proj_in"]   = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, dim, true));
-            blocks["proj_out"]  = std::shared_ptr<GGMLBlock>(new Linear(dim, output_dim, true));
-            blocks["norm_out"]  = std::shared_ptr<GGMLBlock>(new LayerNorm(output_dim));
+            heads              = dim / dim_head;
+            blocks["proj_in"]  = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, dim, true));
+            blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Linear(dim, output_dim, true));
+            blocks["norm_out"] = std::shared_ptr<GGMLBlock>(new LayerNorm(output_dim));
             for (int64_t i = 0; i < depth; i++) {
                 std::string p           = "layers." + std::to_string(i);
                 blocks[p + ".0.norm1"]  = std::shared_ptr<GGMLBlock>(new LayerNorm(dim));
