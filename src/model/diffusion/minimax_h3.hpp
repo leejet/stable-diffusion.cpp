@@ -397,7 +397,7 @@ namespace MiniMaxH3 {
                                                          config.attention_head_dim,
                                                          config.qk_norm_eps);
             blocks["mlp"]        = std::make_shared<MLP>(config.hidden_size,
-                                                          config.ffn_hidden_size);
+                                                  config.ffn_hidden_size);
             blocks["adaln_proj"] = std::make_shared<AdaLayerNormModulation>(config.time_embed_dim,
                                                                             config.hidden_size,
                                                                             6,
@@ -561,7 +561,7 @@ namespace MiniMaxH3 {
                                                   1);
             ggml_tensor* angles = nullptr;
             for (int axis = 0; axis < 3; ++axis) {
-                auto pos = ggml_ext_slice(ctx->ggml_ctx, position_ids, 0, axis, axis + 1);
+                auto pos          = ggml_ext_slice(ctx->ggml_ctx, position_ids, 0, axis, axis + 1);
                 auto expanded_inv = ggml_repeat_4d(ctx->ggml_ctx,
                                                    inv,
                                                    inv->ne[0],
@@ -569,7 +569,7 @@ namespace MiniMaxH3 {
                                                    1,
                                                    1);
                 auto a            = ggml_mul(ctx->ggml_ctx, expanded_inv, pos);
-                angles   = angles == nullptr ? a : ggml_concat(ctx->ggml_ctx, angles, a, 0);
+                angles            = angles == nullptr ? a : ggml_concat(ctx->ggml_ctx, angles, a, 0);
             }
             auto c  = ggml_reshape_4d(ctx->ggml_ctx, ggml_cos(ctx->ggml_ctx, angles), 1, angles->ne[0], angles->ne[1], 1);
             auto s  = ggml_reshape_4d(ctx->ggml_ctx, ggml_sin(ctx->ggml_ctx, angles), 1, angles->ne[0], angles->ne[1], 1);
@@ -756,17 +756,17 @@ namespace MiniMaxH3 {
     }
 
     static PackedSequenceLayout build_layout(int64_t text_len,
-                               int64_t latent_t,
-                               int64_t latent_h,
-                               int64_t latent_w,
-                               int64_t audio_t,
-                               const std::vector<sd::Tensor<float>>& condition_videos,
-                               const std::vector<sd::Tensor<float>>& condition_audios,
-                               const sd::Tensor<int32_t>& keyframe_indices,
-                               const std::vector<MiniMaxH3ReferenceBlock>& reference_blocks,
-                               const sd::Tensor<int32_t>& text_tags,
-                               float video_t,
-                               float audio_timestep) {
+                                             int64_t latent_t,
+                                             int64_t latent_h,
+                                             int64_t latent_w,
+                                             int64_t audio_t,
+                                             const std::vector<sd::Tensor<float>>& condition_videos,
+                                             const std::vector<sd::Tensor<float>>& condition_audios,
+                                             const sd::Tensor<int32_t>& keyframe_indices,
+                                             const std::vector<MiniMaxH3ReferenceBlock>& reference_blocks,
+                                             const sd::Tensor<int32_t>& text_tags,
+                                             float video_t,
+                                             float audio_timestep) {
         PackedSequenceLayout layout;
         float sqrt_area    = std::sqrt(static_cast<float>(latent_h * latent_w));
         auto h_axis        = spatial_axis(latent_h, sqrt_area);

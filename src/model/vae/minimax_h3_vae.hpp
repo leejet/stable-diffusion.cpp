@@ -86,14 +86,14 @@ namespace MiniMaxH3VAE {
                                                      frame->ne[1],
                                                      num_channels,
                                                      batch_size);
-                frame      = GroupNorm::forward(ctx, frame);
-                frame      = ggml_reshape_4d(ctx->ggml_ctx,
-                                             frame,
-                                             frame->ne[0],
-                                             frame->ne[1],
-                                             1,
-                                             num_channels * batch_size);
-                result     = result == nullptr ? frame : ggml_concat(ctx->ggml_ctx, result, frame, 2);
+                frame              = GroupNorm::forward(ctx, frame);
+                frame              = ggml_reshape_4d(ctx->ggml_ctx,
+                                                     frame,
+                                                     frame->ne[0],
+                                                     frame->ne[1],
+                                                     1,
+                                                     num_channels * batch_size);
+                result             = result == nullptr ? frame : ggml_concat(ctx->ggml_ctx, result, frame, 2);
             }
             return result;
         }
@@ -257,49 +257,49 @@ namespace MiniMaxH3VAE {
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* x,
                              ggml_tensor* pe) {
-            auto to_qkv        = std::dynamic_pointer_cast<Linear>(blocks["to_qkv"]);
-            auto to_out        = std::dynamic_pointer_cast<Linear>(blocks["to_out"]);
+            auto to_qkv         = std::dynamic_pointer_cast<Linear>(blocks["to_qkv"]);
+            auto to_out         = std::dynamic_pointer_cast<Linear>(blocks["to_out"]);
             auto qkv_projection = to_qkv->forward(ctx, x);
-            int64_t sequence   = x->ne[1];
-            int64_t batch_size = x->ne[2] * x->ne[3];
-            qkv_projection     = ggml_reshape_4d(ctx->ggml_ctx,
-                                                qkv_projection,
-                                                3 * head_dim,
-                                                num_head,
-                                                sequence,
-                                                batch_size);
-            auto qkv           = ggml_ext_chunk(ctx->ggml_ctx, qkv_projection, 3, 0);
-            auto q             = ggml_reshape_4d(ctx->ggml_ctx,
-                                                 qkv[0],
-                                                 head_dim,
-                                                 num_head,
-                                                 sequence,
-                                                 batch_size);
-            auto k             = ggml_reshape_4d(ctx->ggml_ctx,
-                                                 qkv[1],
-                                                 head_dim,
-                                                 num_head,
-                                                 sequence,
-                                                 batch_size);
-            auto v             = ggml_reshape_4d(ctx->ggml_ctx,
-                                                 qkv[2],
-                                                 head_dim,
-                                                 num_head,
-                                                 sequence,
-                                                 batch_size);
-            q                  = ggml_rms_norm(ctx->ggml_ctx, q, 1e-5f);
-            k                  = ggml_rms_norm(ctx->ggml_ctx, k, 1e-5f);
-            q                  = apply_partial_rope(ctx->ggml_ctx, q, pe);
-            k                  = apply_partial_rope(ctx->ggml_ctx, k, pe);
-            auto out           = ggml_ext_attention_ext(ctx->ggml_ctx,
-                                                        ctx->backend,
-                                                        q,
-                                                        k,
-                                                        v,
-                                                        num_head,
-                                                        nullptr,
-                                                        true,
-                                                        ctx->flash_attn_enabled);
+            int64_t sequence    = x->ne[1];
+            int64_t batch_size  = x->ne[2] * x->ne[3];
+            qkv_projection      = ggml_reshape_4d(ctx->ggml_ctx,
+                                                  qkv_projection,
+                                                  3 * head_dim,
+                                                  num_head,
+                                                  sequence,
+                                                  batch_size);
+            auto qkv            = ggml_ext_chunk(ctx->ggml_ctx, qkv_projection, 3, 0);
+            auto q              = ggml_reshape_4d(ctx->ggml_ctx,
+                                                  qkv[0],
+                                                  head_dim,
+                                                  num_head,
+                                                  sequence,
+                                                  batch_size);
+            auto k              = ggml_reshape_4d(ctx->ggml_ctx,
+                                                  qkv[1],
+                                                  head_dim,
+                                                  num_head,
+                                                  sequence,
+                                                  batch_size);
+            auto v              = ggml_reshape_4d(ctx->ggml_ctx,
+                                                  qkv[2],
+                                                  head_dim,
+                                                  num_head,
+                                                  sequence,
+                                                  batch_size);
+            q                   = ggml_rms_norm(ctx->ggml_ctx, q, 1e-5f);
+            k                   = ggml_rms_norm(ctx->ggml_ctx, k, 1e-5f);
+            q                   = apply_partial_rope(ctx->ggml_ctx, q, pe);
+            k                   = apply_partial_rope(ctx->ggml_ctx, k, pe);
+            auto out            = ggml_ext_attention_ext(ctx->ggml_ctx,
+                                                         ctx->backend,
+                                                         q,
+                                                         k,
+                                                         v,
+                                                         num_head,
+                                                         nullptr,
+                                                         true,
+                                                         ctx->flash_attn_enabled);
             return to_out->forward(ctx, out);
         }
     };

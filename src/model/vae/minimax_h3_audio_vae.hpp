@@ -397,14 +397,14 @@ namespace MiniMaxH3 {
                                  ggml_mul(ctx->ggml_ctx, latent, std),
                                  mean);
 
-            auto dec_in   = std::dynamic_pointer_cast<LTXV::Conv1D>(blocks["dec_in_proj"]);
-            auto decoder  = std::dynamic_pointer_cast<BigVGAN>(blocks["decoder"]);
-            int64_t streams = latent->ne[2] * latent->ne[3];
-            latent          = ggml_reshape_3d(ctx->ggml_ctx,
-                                              latent,
-                                              latent->ne[0],
-                                              latent->ne[1],
-                                              streams);
+            auto dec_in           = std::dynamic_pointer_cast<LTXV::Conv1D>(blocks["dec_in_proj"]);
+            auto decoder          = std::dynamic_pointer_cast<BigVGAN>(blocks["decoder"]);
+            int64_t streams       = latent->ne[2] * latent->ne[3];
+            latent                = ggml_reshape_3d(ctx->ggml_ctx,
+                                                    latent,
+                                                    latent->ne[0],
+                                                    latent->ne[1],
+                                                    streams);
             ggml_tensor* waveform = nullptr;
             for (int64_t stream = 0; stream < streams; ++stream) {
                 auto stream_latent   = ggml_ext_slice(ctx->ggml_ctx, latent, 2, stream, stream + 1);
