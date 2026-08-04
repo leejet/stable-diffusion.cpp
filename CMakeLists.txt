@@ -11,10 +11,11 @@ endif()
 if (MSVC)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
     add_compile_definitions(_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING)
+    # /MP is MSVC-only: icx rejects it outright once offloading is enabled.
     add_compile_options(
-        $<$<COMPILE_LANGUAGE:C>:/MP>
+        $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:MSVC>>:/MP>
         $<$<COMPILE_LANGUAGE:C>:/utf-8>
-        $<$<COMPILE_LANGUAGE:CXX>:/MP>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/MP>
         $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
     )
 endif()
