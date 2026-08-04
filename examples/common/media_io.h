@@ -110,4 +110,9 @@ bool write_wav_to_file(const std::string& path,
                        uint32_t channels,
                        uint32_t sample_rate);
 
+bool load_wav_from_file(const std::string& path,
+                        std::vector<float>& interleaved_samples,
+                        uint32_t& sample_rate,
+                        uint32_t& channels);
+
 #endif  // __MEDIA_IO_H__
