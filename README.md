@@ -15,6 +15,7 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
+* **2026/08/04** 🚀 stable-diffusion.cpp adds **Day-1 support for MiniMax-H3**
 * **2026/06/25** 🚀 stable-diffusion.cpp now supports **Krea2**
 * **2026/06/04** 🚀 stable-diffusion.cpp now supports **Ideogram4**
 * **2026/05/31** 🚀 stable-diffusion.cpp now supports **PiD**
@@ -66,6 +67,7 @@ API and command-line option may change frequently.***
     - [Mage-Flow-Edit](./docs/mage_flow.md#image-editing)
   - Video Models
     - [Wan2.1/Wan2.2](./docs/wan.md)
+    - [MiniMax-H3](./docs/minimax_h3.md)
     - [LTX-2.3](./docs/ltx2.md)
     - [HunyuanVideo 1.5](./docs/hunyuan_video.md)
     - [LingBot-Video](./docs/lingbot_video.md)
