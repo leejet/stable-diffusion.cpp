@@ -2296,6 +2296,14 @@ public:
                     LOG_WARN("No latent to RGB projection known for this model");
                     return;
                 }
+            } else if (channels == 24) {
+                if(sd_version_is_minimax_h3(version)){
+                    latent_rgb_proj = minimax_latent_rgb_proj;
+                    latent_rgb_bias = minimax_latent_rgb_bias;
+                } else {
+                    LOG_WARN("No latent to RGB projection known for this model");
+                    return;
+                }
             } else if (channels == 16) {
                 if (sd_version_is_sd3(version)) {
                     latent_rgb_proj = sd3_latent_rgb_proj;
