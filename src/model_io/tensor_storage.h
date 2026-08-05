@@ -15,14 +15,17 @@
 
 struct TensorStorage {
     std::string name;
-    ggml_type type          = GGML_TYPE_F32;
-    ggml_type expected_type = GGML_TYPE_COUNT;
-    bool is_f8_e4m3         = false;
-    bool is_f8_e5m2         = false;
-    bool is_f64             = false;
-    bool is_i64             = false;
-    int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1};
-    int n_dims              = 0;
+    ggml_type type              = GGML_TYPE_F32;
+    ggml_type expected_type     = GGML_TYPE_COUNT;
+    bool is_f8_e4m3             = false;
+    bool is_f8_e5m2             = false;
+    bool is_f64                 = false;
+    bool is_i64                 = false;
+    bool is_int8_tensorwise     = false;
+    bool int8_convrot           = false;
+    int int8_convrot_group_size = 0;
+    int64_t ne[SD_MAX_DIMS]     = {1, 1, 1, 1, 1};
+    int n_dims                  = 0;
 
     std::string storage_key;
     size_t file_index = 0;
