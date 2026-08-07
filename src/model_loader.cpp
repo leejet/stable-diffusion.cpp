@@ -1511,6 +1511,18 @@ bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage
     if (type != GGML_TYPE_COUNT) {
         if (ggml_is_quantized(type) && tensor_storage.ne[0] % ggml_blck_size(type) != 0) {
             // Pass, do not convert
+        } else if (ggml_is_quantized(type) && tensor_storage.n_dims <= 1) {
+            // Pass, do not convert. A 1-D weight is a per-channel scale (LayerNorm/RMSNorm gain),
+            // never a matmul weight, so quantizing it buys almost nothing and costs a lot: every
+            // channel of the block shares one scale and one min, and a gain vector has no reason
+            // to be locally smooth. Until now these survived only by accident, when their length
+            // did not divide the block size (FLUX q_norm/k_norm are [128] and 128 % 256 != 0) or
+            // when a name rule above happened to match. A model whose norms DO divide the block
+            // size, such as MiniMax-H3 with [5376] and 5376 % 256 == 0, had 106 norm scales
+            // crushed to 4 bits by a blanket --type. The result still loads and still renders a
+            // plausible image, so a "does it run" check passes it, while measured against a bf16
+            // render of the same prompt and seed it is destroyed: PSNR 9.87 / SSIM 0.074 /
+            // LPIPS 0.981, against 22.22 / 0.841 / 0.292 with this rule in place.
         } else if (ends_with(name, ".bias")) {
             // Pass, do not convert
         } else if (ends_with(name, ".scale")) {
