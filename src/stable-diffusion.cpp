@@ -4222,6 +4222,15 @@ struct GenerationRequest {
             guidance->img_cfg = 1.f;
         }
 
+        // MiniMax-H3 is distilled with guidance baked in and has no negative
+        // prompt semantics; its empty uncond prompt cannot even be encoded
+        // (zero tokens), so any cfg != 1 would abort deep inside ggml.
+        if (sd_version_is_minimax_h3(sd_ctx->sd->version) && guidance->txt_cfg != 1.f) {
+            LOG_WARN("MiniMax-H3 is a distilled, CFG-free model; forcing cfg-scale from %.2f to 1.0",
+                     guidance->txt_cfg);
+            guidance->txt_cfg = 1.f;
+        }
+
         if (guidance->img_cfg != guidance->txt_cfg) {
             *use_uncond = true;
         }

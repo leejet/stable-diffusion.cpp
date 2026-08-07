@@ -182,6 +182,17 @@ namespace LTXV {
         }
     };
 
+    // ggml_conv_1d / ggml_conv_1d_dw build an F16 im2col, and the CPU backend
+    // additionally requires the kernel itself to be F16. F32 kernels (as loaded
+    // from F32 checkpoints) work on GPU backends but abort on CPU, so cast them
+    // in-graph here instead of degrading the weights on every backend.
+    static ggml_tensor* conv1d_kernel_for_backend(GGMLRunnerContext* runner_ctx, ggml_tensor* kernel) {
+        if (kernel->type == GGML_TYPE_F32 && sd_backend_is_cpu(runner_ctx->backend)) {
+            return ggml_cast(runner_ctx->ggml_ctx, kernel, GGML_TYPE_F16);
+        }
+        return kernel;
+    }
+
     static ggml_tensor* compute_log_mel_spectrogram(GGMLRunnerContext* runner_ctx,
                                                     ggml_tensor* waveform,
                                                     ggml_tensor* forward_basis,
@@ -218,7 +229,8 @@ namespace LTXV {
             x = ggml_ext_pad_ext(ctx, runner_ctx->backend, x, static_cast<int>(left_pad), 0, 0, 0, 0, 0, 0, 0);
         }
 
-        auto frames = ggml_conv_1d(ctx, forward_basis, x, hop_length, 0, 1);
+        auto frames = ggml_conv_1d(ctx, conv1d_kernel_for_backend(runner_ctx, forward_basis),
+                                   x, hop_length, 0, 1);
         GGML_ASSERT(frames->ne[0] == frame_count);
         GGML_ASSERT(frames->ne[1] == stft_channels);
         GGML_ASSERT(frames->ne[2] == channels * batch);
@@ -319,7 +331,8 @@ namespace LTXV {
                                          int padding) {
         auto ctx = runner_ctx->ggml_ctx;
         GGML_ASSERT(x->ne[3] == 1);
-        auto tiled = tile_depthwise_filter_1d(runner_ctx, filter, x->ne[1]);
+        auto tiled = conv1d_kernel_for_backend(runner_ctx,
+                                               tile_depthwise_filter_1d(runner_ctx, filter, x->ne[1]));
         auto out   = ggml_conv_1d_dw(ctx, tiled, x, stride, padding, 1);
         return ggml_reshape_4d(ctx, out, out->ne[0], out->ne[1], 1, 1);
     }
@@ -339,10 +352,11 @@ namespace LTXV {
         return reversed;
     }
 
-    static ggml_tensor* depthwise_conv_transpose1d(ggml_context* ctx,
+    static ggml_tensor* depthwise_conv_transpose1d(GGMLRunnerContext* runner_ctx,
                                                    ggml_tensor* x,
                                                    ggml_tensor* filter,
                                                    int stride) {
+        auto ctx = runner_ctx->ggml_ctx;
         GGML_ASSERT(x->ne[2] == 1 && x->ne[3] == 1);
         GGML_ASSERT(filter->ne[1] == 1);
         GGML_ASSERT(filter->ne[2] == 1 && filter->ne[3] == 1);
@@ -364,7 +378,8 @@ namespace LTXV {
         x_flat = ggml_reshape_3d(ctx, x_flat, time * stride, 1, channels);
 
         auto reversed_filter = reverse_1d_filter(ctx, filter);
-        auto out             = ggml_conv_1d(ctx, reversed_filter, x_flat, 1, static_cast<int>(kernel_size - 1), 1);
+        auto out             = ggml_conv_1d(ctx, conv1d_kernel_for_backend(runner_ctx, reversed_filter),
+                                            x_flat, 1, static_cast<int>(kernel_size - 1), 1);
         if (out->ne[0] > out_time) {
             out = ggml_ext_slice(ctx, out, 0, 0, out_time);
         }
@@ -404,7 +419,7 @@ namespace LTXV {
 
         auto x = ggml_reshape_3d(ctx, waveform, time, channels * batch, 1);
         x      = replicate_pad_1d(runner_ctx, x, pad, pad);
-        x      = depthwise_conv_transpose1d(ctx, x, filter, ratio);
+        x      = depthwise_conv_transpose1d(runner_ctx, x, filter, ratio);
         x      = ggml_ext_slice(ctx, x, 0, pad_left, x->ne[0] - pad_right);
         return ggml_reshape_3d(ctx, x, x->ne[0], channels, batch);
     }
@@ -553,7 +568,7 @@ namespace LTXV {
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
-            x = ggml_conv_1d(ctx->ggml_ctx, params["weight"], x, stride, padding, dilation);
+            x = ggml_conv_1d(ctx->ggml_ctx, conv1d_kernel_for_backend(ctx, params["weight"]), x, stride, padding, dilation);
             if (bias) {
                 auto b = ggml_reshape_4d(ctx->ggml_ctx, params["bias"], 1, params["bias"]->ne[0], 1, 1);
                 x      = ggml_add_inplace(ctx->ggml_ctx, x, b);
@@ -670,7 +685,7 @@ namespace LTXV {
             int up_pad_right = up_pad * up_ratio + (up_kernel_size - up_ratio + 1) / 2;
 
             x = replicate_pad_1d(ctx, x, up_pad, up_pad);
-            x = depthwise_conv_transpose1d(ctx->ggml_ctx, x, up_filter, up_ratio);
+            x = depthwise_conv_transpose1d(ctx, x, up_filter, up_ratio);
             x = ggml_ext_slice(ctx->ggml_ctx, x, 0, up_pad_left, x->ne[0] - up_pad_right);
 
             x = act->forward(ctx, x);
