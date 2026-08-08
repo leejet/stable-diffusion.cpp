@@ -1181,6 +1181,7 @@ std::string convert_sep_to_dot(std::string name) {
         "x_embedder",
         "cross_attn",
         "output_proj",
+        "token_refiner",
     };
 
     // record the positions of underscores that should NOT be replaced
