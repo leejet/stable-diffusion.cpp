@@ -1508,6 +1508,9 @@ bool ModelLoader::load_tensors(std::map<std::string, ggml_tensor*>& tensors,
 
 bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type) {
     const std::string& name = tensor_storage.name;
+    if (tensor_storage.is_int8_tensorwise) {
+        return false;
+    }
     if (type != GGML_TYPE_COUNT) {
         if (ggml_is_quantized(type) && tensor_storage.ne[0] % ggml_blck_size(type) != 0) {
             // Pass, do not convert
