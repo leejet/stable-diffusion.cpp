@@ -5584,6 +5584,18 @@ SD_API bool generate_image(sd_ctx_t* sd_ctx,
         return false;
     }
 
+    // MiniMax-H3 is video-only. Its denoiser always splits the packed latent into a video and an
+    // audio half, and only generate_video ever computes the audio length, so reaching this
+    // function with an H3 checkpoint is guaranteed to die on
+    // GGML_ASSERT(!audio_input_cache.empty()) with a core dump, after the several minutes it
+    // takes to load the weights, and with nothing in the output pointing at the missing --mode.
+    // (The AnimateDiff path below routes vid_gen back through here, but that is SD1.5 plus a
+    // motion module, never H3.)
+    if (sd_version_is_minimax_h3(sd_ctx->sd->version)) {
+        LOG_ERROR("MiniMax-H3 is a video model and cannot be run in img_gen mode; use --mode vid_gen");
+        return false;
+    }
+
     sd_ctx->sd->reset_cancel_flag();
 
     int64_t t0                    = ggml_time_ms();
