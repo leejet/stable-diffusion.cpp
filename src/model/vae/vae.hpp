@@ -156,7 +156,7 @@ public:
             output = _compute(n_threads, input, false);
         }
 
-        free_compute_buffer();
+        runner_done();
 
         if (output.empty()) {
             LOG_ERROR("vae encode compute failed");
@@ -207,7 +207,7 @@ public:
             output = _compute(n_threads, input, true);
         }
 
-        free_compute_buffer();
+        runner_done();
 
         if (output.empty()) {
             LOG_ERROR("vae decode compute failed");
