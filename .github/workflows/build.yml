@@ -23,6 +23,7 @@ on:
         "**/*.c",
         "**/*.cpp",
         "**/*.cu",
+        "ggml",
         "examples/server/frontend",
         "examples/server/frontend/**",
       ]
@@ -40,6 +41,7 @@ on:
         "**/*.c",
         "**/*.cpp",
         "**/*.cu",
+        "ggml",
         "examples/server/frontend",
         "examples/server/frontend/**",
       ]
