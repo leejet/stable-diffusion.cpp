@@ -659,14 +659,16 @@ ggml_tensor* encode_h3(GGMLRunnerContext* ctx, ggml_tensor* x) {
     }
 
     ggml_tensor* encode(GGMLRunnerContext* ctx, ggml_tensor* x) {
-        if (sd_version_is_minimax_h3(version)) {
-            return encode_h3(ctx, x);
-        }
-        auto encoder = std::dynamic_pointer_cast<TinyVideoEncoder>(blocks["encoder"]);
-        if (sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version)) {
+        if (sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version) || sd_version_is_minimax_h3(version)) {
             // (W, H, T, C) -> (W, H, C, T)
             x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));
         }
+        if (sd_version_is_minimax_h3(version)) {
+            return encode_h3(ctx, x);
+        }
+        
+        auto encoder = std::dynamic_pointer_cast<TinyVideoEncoder>(blocks["encoder"]);
+
         int64_t num_frames = x->ne[3];
         if (num_frames % encoder->t_downscale) {
             // pad to multiple of encoder->t_downscale at the end
