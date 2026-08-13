@@ -272,10 +272,6 @@ bool read_safetensors_file(const std::string& file_path,
         int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1};
         for (int i = 0; i < n_dims; i++) {
             ne[i] = shape[i].get<int64_t>();
-            // Reject non-positive dimensions. A negative or zero dim is never a
-            // valid tensor shape; zero is handled by the empty-tensor rules
-            // elsewhere and a negative dim would let the int64 shape product
-            // wrap, masking the real (huge) element count.
             if (ne[i] <= 0) {
                 set_error(error, "invalid tensor shape for '" + name + "' (dimension " +
                                      std::to_string(i) + " is " + std::to_string(ne[i]) + ")");
@@ -283,12 +279,6 @@ bool read_safetensors_file(const std::string& file_path,
             }
         }
 
-        // Validate the shape product up front with overflow detection. Without
-        // this, a shape such as [2^32, 2^32] wraps the int64 product to 0,
-        // which then matches an empty in-bounds data range in the size check
-        // below and lets the tensor pass validation with huge ne[] but
-        // nbytes()==0. ggml later allocates a 0-byte (NULL) buffer for those
-        // dims, so the first consumer access is a NULL pointer dereference.
         {
             int64_t product = 1;
             bool overflow   = false;
@@ -305,9 +295,7 @@ bool read_safetensors_file(const std::string& file_path,
 
         if (n_dims == 5) {
             n_dims = 4;
-            // This collapse multiplies ne[0]*ne[1]; the overflow check above
-            // already proved the full product is in range, so the partial
-            // product here cannot overflow.
+            // partial product; full product already overflow-checked above
             ne[0]  = ne[0] * ne[1];
             ne[1]  = ne[2];
             ne[2]  = ne[3];
