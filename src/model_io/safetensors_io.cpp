@@ -272,23 +272,37 @@ bool read_safetensors_file(const std::string& file_path,
         int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1};
         for (int i = 0; i < n_dims; i++) {
             ne[i] = shape[i].get<int64_t>();
-            if (ne[i] <= 0) {
+            if (ne[i] < 0) {
                 set_error(error, "invalid tensor shape for '" + name + "' (dimension " +
-                                     std::to_string(i) + " is " + std::to_string(ne[i]) + ")");
+                                     std::to_string(i) + " is negative)");
                 return false;
             }
         }
 
-        {
-            int64_t product = 1;
-            bool overflow   = false;
-            for (int i = 0; i < n_dims && !overflow; i++) {
-                if (__builtin_mul_overflow(product, ne[i], &product)) {
-                    overflow = true;
-                }
+        // nelements() is the product of the dims; nbytes() is
+        // nelements()*ggml_type_size(type)/ggml_blck_size(type). Both multiply
+        // silently, so a 2^62-element F32 tensor overflows only at the byte size
+        // (x4 -> 0) and reproduces the NULL-buffer deref this reader rejects.
+        // Check both with overflow detection; a zero extent is a valid empty
+        // tensor, so skip it rather than build a zero-byte storage.
+        int64_t nelems = 1;
+        bool overflow  = false;
+        for (int i = 0; i < n_dims && !overflow; i++) {
+            if (__builtin_mul_overflow(nelems, ne[i], &nelems)) {
+                overflow = true;
             }
-            if (overflow || product <= 0) {
-                set_error(error, "tensor '" + name + "' has an overflowed/invalid shape product");
+        }
+        if (overflow) {
+            set_error(error, "tensor '" + name + "' has an overflowed shape product");
+            return false;
+        }
+        if (nelems == 0) {
+            continue;
+        }
+        {
+            int64_t nbytes_num;
+            if (__builtin_mul_overflow(nelems, (int64_t)ggml_type_size(type), &nbytes_num)) {
+                set_error(error, "tensor '" + name + "' byte size overflows");
                 return false;
             }
         }
