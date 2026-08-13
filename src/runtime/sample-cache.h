@@ -7,7 +7,7 @@
 #include "core/util.h"
 #include "model.h"
 #include "runtime/cache_dit.hpp"
-#include "runtime/denoiser.hpp"
+#include "runtime/denoiser.h"
 #include "runtime/easycache.hpp"
 #include "runtime/spectrum.hpp"
 #include "runtime/ucache.hpp"

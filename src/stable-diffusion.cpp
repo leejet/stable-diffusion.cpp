@@ -59,7 +59,7 @@
 #include "model/vae/tae.hpp"
 #include "model/vae/vae.hpp"
 #include "model/vae/wan_vae.hpp"
-#include "runtime/denoiser.hpp"
+#include "runtime/denoiser.h"
 #include "runtime/guidance.h"
 #include "runtime/sample-cache.h"
 #include "upscaler.h"
@@ -167,21 +167,6 @@ static bool sd_version_supports_img_cfg(SDVersion version, bool has_ref_images) 
            (has_ref_images && sd_version_supports_ref_latent_img_cfg(version));
 }
 
-void calculate_alphas_cumprod(float* alphas_cumprod,
-                              float linear_start = 0.00085f,
-                              float linear_end   = 0.0120f,
-                              int timesteps      = TIMESTEPS) {
-    float ls_sqrt = sqrtf(linear_start);
-    float le_sqrt = sqrtf(linear_end);
-    float amount  = le_sqrt - ls_sqrt;
-    float product = 1.0f;
-    for (int i = 0; i < timesteps; i++) {
-        float beta = ls_sqrt + amount * ((float)i / (timesteps - 1));
-        product *= 1.0f - powf(beta, 2.0f);
-        alphas_cumprod[i] = product;
-    }
-}
-
 static float get_cache_reuse_threshold(const sd_cache_params_t& params) {
     float reuse_threshold = params.reuse_threshold;
     if (reuse_threshold == INFINITY) {
@@ -260,7 +245,7 @@ public:
 
     std::shared_ptr<ModelManager> model_manager;
 
-    std::shared_ptr<Denoiser> denoiser = std::make_shared<CompVisDenoiser>();
+    std::shared_ptr<Denoiser> denoiser = make_denoiser(EPS_PRED);
     std::vector<float> file_alphas_cumprod;
 
     StableDiffusionGGML() = default;
@@ -657,23 +642,6 @@ public:
             return std::make_shared<MT19937RNG>();
         } else {  // default: CUDA_RNG
             return std::make_shared<PhiloxRNG>();
-        }
-    }
-
-    void refresh_compvis_denoiser_sigmas() {
-        auto comp_vis_denoiser = std::dynamic_pointer_cast<CompVisDenoiser>(denoiser);
-        if (!comp_vis_denoiser) {
-            return;
-        }
-        std::vector<float> alphas_cumprod(TIMESTEPS);
-        if (file_alphas_cumprod.size() == TIMESTEPS) {
-            alphas_cumprod = file_alphas_cumprod;
-        } else {
-            calculate_alphas_cumprod(alphas_cumprod.data());
-        }
-        for (int i = 0; i < TIMESTEPS; i++) {
-            comp_vis_denoiser->sigmas[i]     = std::sqrt((1 - alphas_cumprod[i]) / alphas_cumprod[i]);
-            comp_vis_denoiser->log_sigmas[i] = std::log(comp_vis_denoiser->sigmas[i]);
         }
     }
 
@@ -1847,35 +1815,35 @@ public:
                     break;
                 case V_PRED:
                     LOG_INFO("running in v-prediction mode");
-                    denoiser = std::make_shared<CompVisVDenoiser>();
+                    denoiser = make_denoiser(pred_type);
                     break;
                 case EDM_V_PRED:
                     LOG_INFO("running in v-prediction EDM mode");
-                    denoiser = std::make_shared<EDMVDenoiser>();
+                    denoiser = make_denoiser(pred_type);
                     break;
                 case FLOW_PRED: {
                     if (sd_version_is_ltxav(version)) {
                         LOG_INFO("running in LTXAV FLOW mode");
-                        denoiser = std::make_shared<FluxFlowDenoiser>();
+                        denoiser = make_denoiser(FLUX_FLOW_PRED);
                     } else {
                         LOG_INFO("running in FLOW mode");
-                        denoiser = std::make_shared<DiscreteFlowDenoiser>();
+                        denoiser = make_denoiser(pred_type);
                     }
                     break;
                 }
                 case FLUX_FLOW_PRED: {
                     LOG_INFO("running in Flux FLOW mode");
-                    denoiser = std::make_shared<FluxFlowDenoiser>();
+                    denoiser = make_denoiser(pred_type);
                     break;
                 }
                 case SEFI_FLOW_PRED: {
                     LOG_INFO("running in SeFi-Image dual-time FLOW mode");
-                    denoiser = std::make_shared<SefiFlowDenoiser>();
+                    denoiser = make_denoiser(pred_type);
                     break;
                 }
                 case MINIT2I_FLOW_PRED: {
                     LOG_INFO("running in MiniT2I FLOW mode");
-                    denoiser = std::make_shared<MiniT2IFlowDenoiser>();
+                    denoiser = make_denoiser(pred_type);
                     break;
                 }
                 default: {
@@ -1884,7 +1852,7 @@ public:
                 }
             }
 
-            refresh_compvis_denoiser_sigmas();
+            denoiser->refresh_compvis_denoiser(file_alphas_cumprod);
         }
 
         return true;
@@ -2215,13 +2183,9 @@ public:
                                          const sd::Tensor<float>& init_latent,
                                          const sd::Tensor<float>& denoise_mask,
                                          int step) {
-        if (auto sefi_denoiser = std::dynamic_pointer_cast<SefiFlowDenoiser>(denoiser)) {
-            int sched_idx = step > 0 ? step - 1 : 0;
-            if (sched_idx >= static_cast<int>(sefi_denoiser->tex_timesteps.size())) {
-                sched_idx = static_cast<int>(sefi_denoiser->tex_timesteps.size()) - 1;
-            }
-            return {sefi_denoiser->sem_timesteps[sched_idx],
-                    sefi_denoiser->tex_timesteps[sched_idx]};
+        auto denoiser_timesteps = denoiser->get_timesteps(step);
+        if (!denoiser_timesteps.empty()) {
+            return denoiser_timesteps;
         }
         if (diffusion_model->get_desc() == "Wan2.2-TI2V-5B") {
             int64_t frame_count = init_latent.shape()[2];
@@ -3101,19 +3065,15 @@ public:
     }
 
     void set_flow_shift(float flow_shift = INFINITY) {
-        auto flow_denoiser = std::dynamic_pointer_cast<DiscreteFlowDenoiser>(denoiser);
-        if (flow_denoiser) {
-            if (flow_shift == INFINITY) {
-                flow_shift = default_flow_shift;
-            }
-            flow_denoiser->set_shift(flow_shift);
-            active_flow_shift = flow_shift;
+        if (flow_shift == INFINITY) {
+            flow_shift = default_flow_shift;
         }
+        denoiser->set_shift(flow_shift);
+            active_flow_shift = flow_shift;
     }
 
     bool is_flow_denoiser() {
-        auto flow_denoiser = std::dynamic_pointer_cast<DiscreteFlowDenoiser>(denoiser);
-        return !!flow_denoiser;
+        return denoiser->is_flow_denoiser();
     }
 
     std::string get_default_ref_image_preset(SDVersion version) const {
@@ -3967,9 +3927,9 @@ enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx) {
 
 enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_method_t sample_method) {
     if (sd_ctx != nullptr && sd_ctx->sd != nullptr) {
-        auto edm_v_denoiser = std::dynamic_pointer_cast<EDMVDenoiser>(sd_ctx->sd->denoiser);
-        if (edm_v_denoiser) {
-            return EXPONENTIAL_SCHEDULER;
+        scheduler_t denoiser_default = sd_ctx->sd->denoiser->get_default_scheduler();
+        if (denoiser_default != SCHEDULER_COUNT) {
+            return denoiser_default;
         }
     }
     if (sample_method == LCM_SAMPLE_METHOD || sample_method == TCD_SAMPLE_METHOD) {
