@@ -183,9 +183,8 @@ public:
 };
 
 class TPool : public UnaryBlock {
-    int stride;
-
 public:
+    int stride;
     TPool(int channels, int stride)
         : stride(stride) {
         blocks["conv"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels * stride, channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, false));
@@ -203,7 +202,7 @@ public:
 };
 
 class TGrow : public UnaryBlock {
-    public:
+public:
     int stride;
     TGrow(int channels, int stride)
         : stride(stride) {
@@ -356,6 +355,20 @@ ggml_tensor* unpatchify(ggml_context* ctx,
     return x;
 }
 
+struct WorkItem {
+    ggml_tensor* xt;
+    int block_idx;
+};
+
+struct SequentialDecoderState {
+    std::map<int, ggml_tensor*> mem_single;
+};
+
+struct SequentialEncoderState {
+    std::map<int, ggml_tensor*> mem_single;
+    std::map<int, std::vector<ggml_tensor*>> mem_pool;
+};
+
 class TinyVideoEncoder : public UnaryBlock {
     int in_channels = 3;
     int hidden      = 64;
@@ -363,6 +376,9 @@ class TinyVideoEncoder : public UnaryBlock {
     int num_blocks  = 3;
     int num_layers  = 3;
     int patch_size  = 1;
+
+    int total_blocks = 0;
+    int relu_idx     = 0;
 
 public:
     int t_downscale = 1;
@@ -376,7 +392,7 @@ public:
         }
         int index                       = 0;
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels * patch_size * patch_size, hidden, {3, 3}, {1, 1}, {1, 1}));
-        index++;  // nn.ReLU()
+        relu_idx                        = index++;  // nn.ReLU()
         for (int i = 0; i < num_layers; i++) {
             int stride                      = time_downscale[i] ? 2 : 1;
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TPool(hidden, stride));
@@ -385,7 +401,8 @@ public:
                 blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new MemBlock(hidden, hidden));
             }
         }
-        blocks[std::to_string(index)] = std::shared_ptr<GGMLBlock>(new Conv2d(hidden, z_channels, {3, 3}, {1, 1}, {1, 1}));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(hidden, z_channels, {3, 3}, {1, 1}, {1, 1}));
+        total_blocks                    = index;
     }
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* z) override {
@@ -414,20 +431,95 @@ public:
         }
         auto last_conv = std::dynamic_pointer_cast<Conv2d>(blocks[std::to_string(index)]);
         h              = last_conv->forward(ctx, h);
+
+        return h;
+    }
+
+    ggml_tensor* forward_seq_single_step(GGMLRunnerContext* ctx,
+                                         SequentialEncoderState& state,
+                                         std::vector<WorkItem>& work_stack) {
+        while (!work_stack.empty()) {
+            WorkItem item = work_stack.back();
+            work_stack.pop_back();
+
+            ggml_tensor* xt = item.xt;
+            int i           = item.block_idx;
+
+            if (i >= total_blocks) {
+                if (patch_size > 1) {
+                    xt = unpatchify(ctx->ggml_ctx, xt, patch_size, 1);
+                }
+                return xt;
+            }
+
+            if (i == relu_idx) {
+                xt = ggml_relu_inplace(ctx->ggml_ctx, xt);
+                work_stack.push_back({xt, i + 1});
+                continue;
+            }
+
+            std::string key = std::to_string(i);
+            auto block      = blocks[key];
+
+            if (auto mem_block = std::dynamic_pointer_cast<MemBlock>(block)) {
+                ggml_tensor* prev_mem = state.mem_single[i];
+                if (prev_mem == nullptr) {
+                    prev_mem = ggml_dup_tensor(ctx->ggml_ctx, xt);
+                    prev_mem = ggml_scale(ctx->ggml_ctx, prev_mem, 0.);
+                }
+                ggml_tensor* xt_next = mem_block->forward(ctx, xt, prev_mem);
+                state.mem_single[i]  = xt;
+
+                work_stack.push_back({xt_next, i + 1});
+            } else if (auto pool = std::dynamic_pointer_cast<TPool>(block)) {
+                state.mem_pool[i].push_back(xt);
+
+                if ((int)state.mem_pool[i].size() == pool->stride) {
+                    ggml_tensor* cat_input = ggml_ext_vec_concat(ctx->ggml_ctx, state.mem_pool[i], 3);
+                    ggml_tensor* xt_next   = pool->forward(ctx, cat_input);
+
+                    state.mem_pool[i].clear();
+                    work_stack.push_back({xt_next, i + 1});
+                }
+            } else if (auto unary_block = std::dynamic_pointer_cast<UnaryBlock>(block)) {
+                ggml_tensor* xt_next = unary_block->forward(ctx, xt);
+                work_stack.push_back({xt_next, i + 1});
+            }
+        }
+
+        return nullptr;  // Work stack exhausted
+    }
+
+    ggml_tensor* forward_seq(GGMLRunnerContext* ctx,
+                             ggml_tensor* z) {
+        SequentialEncoderState state;
+        std::vector<WorkItem> work_stack;
+
+        if (patch_size > 1) {
+            z = patchify(ctx->ggml_ctx, z, patch_size, 1);
+        }
+
+        const std::vector<ggml_tensor*>& latent_frames = ggml_ext_chunk(ctx->ggml_ctx, z, z->ne[3], 3);
+
+        for (auto it = latent_frames.rbegin(); it != latent_frames.rend(); ++it) {
+            work_stack.push_back({*it, 0});
+        }
+
+        std::vector<ggml_tensor*> output_frames;
+
+        while (!work_stack.empty()) {
+            ggml_tensor* out_frame = forward_seq_single_step(ctx, state, work_stack);
+            if (out_frame != nullptr) {
+                output_frames.push_back(out_frame);
+            }
+        }
+
+        auto h = ggml_ext_vec_concat(ctx->ggml_ctx, output_frames, 3);
         return h;
     }
 };
 
 
-struct WorkItem {
-    ggml_tensor* xt;
-    int block_idx;
-};
-
-// Stateful memory cache tracking MemBlock/WideMemBlock frames across steps
-struct TinyVideoDecoderState {
-    std::map<int, ggml_tensor*> mem_single;
-};
 
 class TinyVideoDecoder : public UnaryBlock {
     int z_channels               = 4;
@@ -439,10 +531,9 @@ class TinyVideoDecoder : public UnaryBlock {
     int t_upscale                = 1;
     bool is_wide                 = false;
 
-    // Track total block index count and special unmapped activation indices
-    int total_blocks = 0;
-    int clamp_idx = 0;
-    int relu1_idx = 0;
+    int total_blocks   = 0;
+    int clamp_idx      = 0;
+    int relu1_idx      = 0;
     int relu_final_idx = 0;
     std::set<int> upsample_indices;
 
@@ -474,11 +565,11 @@ public:
                     blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new MemBlock(channels[i], channels[i]));
                 }
             }
-            upsample_indices.insert(index++); // Nearest-neighbor spatial upsample slot
+            upsample_indices.insert(index++);  // Nearest-neighbor spatial upsample slot
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TGrow(channels[i], stride));
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels[i], channels[i + 1], {3, 3}, {1, 1}, {1, 1}, {1, 1}, false));
         }
-        relu_final_idx = index++;  // nn.ReLU()
+        relu_final_idx                  = index++;  // nn.ReLU()
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels[num_layers], out_channels * patch_size * patch_size, {3, 3}, {1, 1}, {1, 1}));
 
         total_blocks = index;
@@ -530,7 +621,7 @@ public:
     }
 
     ggml_tensor* forward_seq_single_step(GGMLRunnerContext* ctx,
-                                         TinyVideoDecoderState& state,
+                                         SequentialDecoderState& state,
                                          std::vector<WorkItem>& work_stack) {
         while (!work_stack.empty()) {
             WorkItem item = work_stack.back();
@@ -615,12 +706,10 @@ public:
 
         return nullptr;  // Work stack exhausted
     }
-    
-    ggml_tensor* forward_seq(
-        GGMLRunnerContext* ctx,
-        ggml_tensor* x
-    ) {
-        TinyVideoDecoderState state;
+
+    ggml_tensor* forward_seq(GGMLRunnerContext* ctx,
+                             ggml_tensor* x) {
+        SequentialDecoderState state;
         std::vector<WorkItem> work_stack;
 
         const std::vector<ggml_tensor*>& latent_frames = ggml_ext_chunk(ctx->ggml_ctx, x, x->ne[3], 3);
@@ -653,9 +742,9 @@ protected:
     bool decode_only;
     SDVersion version;
     bool is_wide;
-    
-    public:
-    bool parallel = false;
+
+public:
+    bool parallel                    = false;
     int z_channels                   = 16;
     std::vector<bool> time_downscale = {true, true, false};
     std::vector<bool> time_upscale   = {false, true, true};
@@ -710,7 +799,7 @@ public:
                 x = ggml_concat(ctx->ggml_ctx, x, last_frame, 3);
             }
         }
-        x = encoder->forward(ctx, x);
+        x = parallel ? encoder->forward(ctx, x) : encoder->forward_seq(ctx, x);
         if (sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version)) {
             // (W, H, C, T) -> (W, H, T, C)
             x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));
@@ -878,12 +967,16 @@ struct TinyVideoAutoEncoder : public VAE {
 
     ggml_cgraph* build_graph(const sd::Tensor<float>& z_tensor, bool decode_graph) {
         ggml_cgraph* gf = nullptr;
-        ggml_tensor* z   = make_input(z_tensor);
+        ggml_tensor* z  = make_input(z_tensor);
         if (decode_graph) {
             int64_t passes = taehv.parallel ? 1 : z->ne[3];
             gf             = ggml_new_graph_custom(compute_ctx, (is_wide ? 4096 : 2048) * passes, false);
         } else {
-            gf = ggml_new_graph(compute_ctx);
+            int64_t frames = z->ne[2];
+            int64_t factor = sd_version_is_minimax_h3(version) ? 20 : sd_version_is_ltxav(version) ? 8
+                                                                                                   : 4;
+            int64_t passes = taehv.parallel ? 1 : (frames + factor - 1) / factor;
+            gf             = ggml_new_graph_custom(compute_ctx, 2048 * passes, false);
         }
         auto runner_ctx  = get_context();
         ggml_tensor* out = decode_graph ? taehv.decode(&runner_ctx, z) : taehv.encode(&runner_ctx, z);
