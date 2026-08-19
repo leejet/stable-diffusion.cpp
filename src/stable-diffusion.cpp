@@ -150,6 +150,9 @@ const char* sampling_methods_str[] = {
     "LMS",
 };
 
+static_assert(SAMPLE_METHOD_COUNT == sizeof(sampling_methods_str) / sizeof(sampling_methods_str[0]),
+              "\nnumber of elements in sampling_methods_str[] != SAMPLE_METHOD_COUNT");
+
 /*================================================== Helper Functions ================================================*/
 
 static bool sd_version_supports_ref_latent_img_cfg(SDVersion version) {
@@ -3306,6 +3309,9 @@ const char* sample_method_to_str[] = {
     "lms",
 };
 
+static_assert(SAMPLE_METHOD_COUNT == sizeof(sample_method_to_str) / sizeof(sample_method_to_str[0]),
+              "\nnumber of elements in sample_method_to_str[] != SAMPLE_METHOD_COUNT");
+
 const char* sd_sample_method_name(enum sample_method_t sample_method) {
     if (sample_method < SAMPLE_METHOD_COUNT) {
         return sample_method_to_str[sample_method];
@@ -3340,6 +3346,9 @@ const char* scheduler_to_str[] = {
     "flux",
     "beta",
 };
+
+static_assert(SCHEDULER_COUNT == sizeof(scheduler_to_str) / sizeof(scheduler_to_str[0]),
+              "\nnumber of elements in scheduler_to_str[] != SCHEDULER_COUNT");
 
 const char* sd_scheduler_name(enum scheduler_t scheduler) {
     if (scheduler < SCHEDULER_COUNT) {
