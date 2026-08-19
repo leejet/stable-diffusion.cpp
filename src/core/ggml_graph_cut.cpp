@@ -603,7 +603,43 @@ namespace sd::ggml_graph_cut {
         GGML_ASSERT(gf != nullptr);
         GGML_ASSERT(graph_ctx_out != nullptr);
 
-        const size_t graph_size = segment.internal_node_indices.size() + segment.input_refs.size() + 8;
+        // Collect leaf inputs and internal nodes, then any tensor they
+        // reference that is not already represented, notably the view_src of a
+        // view-typed input leaf. ggml_gallocr sizes its hash set from
+        // n_nodes + n_leafs (plus a 25% margin that rounds down to zero for a
+        // one-node segment), so every distinct tensor it will hash must be
+        // counted here or a tiny segment overflows the hash set and aborts.
+        std::vector<ggml_tensor*> leaves;
+        std::unordered_set<ggml_tensor*> represented;
+        for (const auto& input : segment.input_refs) {
+            ggml_tensor* current_input = input_tensor(gf, input);
+            if (current_input == nullptr) {
+                continue;
+            }
+            if (represented.insert(current_input).second) {
+                leaves.push_back(current_input);
+            }
+        }
+        for (int node_idx : segment.internal_node_indices) {
+            represented.insert(ggml_graph_node(gf, node_idx));
+        }
+        auto add_reference = [&](ggml_tensor* tensor) {
+            if (tensor != nullptr && represented.insert(tensor).second) {
+                leaves.push_back(tensor);
+            }
+        };
+        for (int node_idx : segment.internal_node_indices) {
+            ggml_tensor* node = ggml_graph_node(gf, node_idx);
+            for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
+                add_reference(node->src[src_idx]);
+            }
+            add_reference(node->view_src);
+        }
+        for (size_t i = 0; i < leaves.size(); ++i) {
+            add_reference(leaves[i]->view_src);
+        }
+
+        const size_t graph_size = segment.internal_node_indices.size() + leaves.size() + 8;
         ggml_init_params params = {
             /*.mem_size   =*/ggml_graph_overhead_custom(graph_size, false) + 1024,
             /*.mem_buffer =*/nullptr,
@@ -614,13 +650,9 @@ namespace sd::ggml_graph_cut {
         ggml_cgraph* segment_graph = ggml_new_graph_custom(graph_ctx, graph_size, false);
         GGML_ASSERT(segment_graph != nullptr);
 
-        for (const auto& input : segment.input_refs) {
-            ggml_tensor* current_input = input_tensor(gf, input);
-            if (current_input == nullptr) {
-                continue;
-            }
+        for (ggml_tensor* leaf : leaves) {
             GGML_ASSERT(segment_graph->n_leafs < segment_graph->size);
-            segment_graph->leafs[segment_graph->n_leafs++] = current_input;
+            segment_graph->leafs[segment_graph->n_leafs++] = leaf;
         }
 
         for (int output_node_index : segment.output_node_indices) {
