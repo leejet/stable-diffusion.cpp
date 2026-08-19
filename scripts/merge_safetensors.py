@@ -23,16 +23,16 @@ from typing import BinaryIO
 # Configuration
 # -----------------------------------------------------------------------------
 
-OUTPUT_PATH = Path(r"..\models\diffusion_models\minimax_h3_ref2va_pruned_bf16.safetensors")
+OUTPUT_PATH = Path(r".minimax_h3_fl2va_pruned_bf16.safetensors")
 
 SOURCE_RULES = [
     {
-        "path": Path(r"..\models\diffusion_models\minimax_h3_ref2va_bf16.safetensors"),
+        "path": Path(r".minimax_h3_fl2va_bf16.safetensors"),
         "include": [r".*"],
         "exclude": [r".*adaln_proj\.linear.*", r"time_embedder.*"],
     },
     {
-        "path": Path(r"..\models\diffusion_models\minimax_h3_ref2va_pruned_int8_convrot.safetensors"),
+        "path": Path(r".minimax_h3_fl2va_pruned_int8_convrot.safetensors"),
         "include": [r"^.*adaln_proj\.linear.*", "adaln_t_table"],
         "exclude": [],
     },

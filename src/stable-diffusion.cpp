@@ -2315,7 +2315,7 @@ public:
                     return;
                 }
             } else if (channels == 24) {
-                if(sd_version_is_minimax_h3(version)){
+                if (sd_version_is_minimax_h3(version)) {
                     latent_rgb_proj = minimax_latent_rgb_proj;
                     latent_rgb_bias = minimax_latent_rgb_bias;
                 } else {

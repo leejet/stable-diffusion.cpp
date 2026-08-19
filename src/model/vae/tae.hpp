@@ -427,9 +427,9 @@ class TinyVideoDecoder : public UnaryBlock {
     int channels[num_layers + 1] = {256, 128, 64, 64};
     int patch_size               = 1;
     bool is_wide                 = false;
-    
+
 public:
-    int t_upscale                = 1;
+    int t_upscale = 1;
     TinyVideoDecoder(int z_channels = 4, int patch_size = 1, std::vector<bool> time_upscale = {false, true, true}, bool is_wide = false)
         : z_channels(z_channels), patch_size(patch_size), is_wide(is_wide) {
         t_upscale = 1;
@@ -663,7 +663,7 @@ public:
         if (sd_version_is_minimax_h3(version)) {
             return encode_h3(ctx, x);
         }
-        
+
         auto encoder = std::dynamic_pointer_cast<TinyVideoEncoder>(blocks["encoder"]);
 
         int64_t num_frames = x->ne[3];

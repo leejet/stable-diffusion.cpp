@@ -1556,14 +1556,12 @@ ArgOptions SDGenerationParams::get_options() {
     };
 
     std::string sample_methods = sample_method_to_str[0];
-    for (int i = 1; i < SAMPLE_METHOD_COUNT; i++)
-    {
+    for (int i = 1; i < SAMPLE_METHOD_COUNT; i++) {
         sample_methods += ", " + std::string(sample_method_to_str[i]);
     }
 
     std::string schedulers = scheduler_to_str[0];
-    for (int i = 1; i < SCHEDULER_COUNT; i++)
-    {
+    for (int i = 1; i < SCHEDULER_COUNT; i++) {
         schedulers += ", " + std::string(scheduler_to_str[i]);
     }
 
@@ -1575,17 +1573,17 @@ ArgOptions SDGenerationParams::get_options() {
         {"",
          "--sampling-method",
          "sampling method, one of [" + sample_methods + "], "
-         "default: euler for Flux/SD3/Wan, euler_a otherwise",
+                                                        "default: euler for Flux/SD3/Wan, euler_a otherwise",
          on_sample_method_arg},
         {"",
          "--high-noise-sampling-method",
          "(high noise) sampling method, one of [" + sample_methods + "], "
-         "default: euler for Flux/SD3/Wan, euler_a otherwise",
+                                                                     "default: euler for Flux/SD3/Wan, euler_a otherwise",
          on_high_noise_sample_method_arg},
         {"",
          "--scheduler",
          "denoiser sigma scheduler, one of [" + schedulers + "], "
-         "alias: normal=discrete, default: model-specific",
+                                                             "alias: normal=discrete, default: model-specific",
          on_scheduler_arg},
         {"",
          "--sigmas",

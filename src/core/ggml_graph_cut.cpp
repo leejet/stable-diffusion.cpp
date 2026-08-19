@@ -454,7 +454,7 @@ namespace sd::ggml_graph_cut {
             return false;
         }
         return starts_with(tensor->name, GGML_RUNNER_CUT_PREFIX) &&
-            ends_with(tensor->name, GGML_RUNNER_CUT_SUFFIX);
+               ends_with(tensor->name, GGML_RUNNER_CUT_SUFFIX);
     }
 
     std::string make_graph_cut_name(const std::string& group, const std::string& output) {

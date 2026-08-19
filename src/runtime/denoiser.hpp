@@ -2586,7 +2586,7 @@ static sd::Tensor<float> sample_lms(denoise_cb_t model,
     // modified with "history shift" value, which seemingly needs less steps
     int divisions = 1000;
     int max_order = 4;
-    int shift = 1;  // 4, 0 - original; 4, 1 - PR #1843; 3, 1 - smoother image
+    int shift     = 1;  // 4, 0 - original; 4, 1 - PR #1843; 3, 1 - smoother image
     for (const auto& [key, value] : extra_sample_args) {
         int parsed = 0;
         if (key == "lms_max_order") {
@@ -2624,7 +2624,7 @@ static sd::Tensor<float> sample_lms(denoise_cb_t model,
     auto linear_multistep_coeff = [=](const int order, const int m, const int j) -> float {
         if (!divisions)
             return sigmas[m + 1] - sigmas[m];  // delta / 0 * 0
-#define LMS_PRECISION float  // when divisions > 30 millions, the double precision fixes noise
+#define LMS_PRECISION float                    // when divisions > 30 millions, the double precision fixes noise
         const LMS_PRECISION a = sigmas[m], dx = (sigmas[m + 1] - a) / divisions, s = sigmas[m - j];
         const LMS_PRECISION b0 = a + 0.5f * dx;  // using Riemann middle integral
         LMS_PRECISION sum      = 0.0f;
@@ -2672,8 +2672,8 @@ static sd::Tensor<float> sample_lms(denoise_cb_t model,
                 int hist_max = hist.size() - 1;
                 for (int c = 2; c <= order; c++)
                     x += hist[std::min(hist_max, hist_size_p1 - c + shift)] * lms_coeff[c - 1];
-                    // max_order == 4  =>  hist[] index = 2, 1, 0
-                    // shift == 1      =>  hist[] index = 2, 2, 1
+                // max_order == 4  =>  hist[] index = 2, 1, 0
+                // shift == 1      =>  hist[] index = 2, 2, 1
             }
             if (hist_size_p1 == max_order) {
                 hist.erase(hist.begin());
