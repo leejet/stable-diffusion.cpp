@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -35,6 +36,12 @@ struct AsyncGenerationJob {
     int64_t created_at    = unix_timestamp_now();
     int64_t started_at    = 0;
     int64_t completed_at  = 0;
+    // Sampling steps finished across the whole job, and the total expected.
+    // Atomic because the progress callback runs on the worker thread outside
+    // the manager mutex, while HTTP handlers read these under it. A total of
+    // zero means the job has not reached sampling, or the total is unknown.
+    std::atomic<int> progress_step{0};
+    std::atomic<int> progress_steps{0};
     ImgGenJobRequest img_gen;
     VidGenJobRequest vid_gen;
     std::vector<std::string> result_images_b64;
