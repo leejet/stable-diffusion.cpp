@@ -453,11 +453,12 @@ namespace sd::ggml_graph_cut {
         if (tensor == nullptr || tensor->name[0] == '\0') {
             return false;
         }
-        return std::strncmp(tensor->name, GGML_RUNNER_CUT_PREFIX, std::strlen(GGML_RUNNER_CUT_PREFIX)) == 0;
+        return starts_with(tensor->name, GGML_RUNNER_CUT_PREFIX) &&
+            ends_with(tensor->name, GGML_RUNNER_CUT_SUFFIX);
     }
 
     std::string make_graph_cut_name(const std::string& group, const std::string& output) {
-        return std::string(GGML_RUNNER_CUT_PREFIX) + group + "|" + output;
+        return std::string(GGML_RUNNER_CUT_PREFIX) + group + "|" + output + GGML_RUNNER_CUT_SUFFIX;
     }
 
     void mark_graph_cut(ggml_tensor* tensor, const std::string& group, const std::string& output) {
@@ -783,7 +784,9 @@ namespace sd::ggml_graph_cut {
 
             plan.has_cuts = true;
             std::string full_name(node->name);
-            std::string payload = full_name.substr(std::strlen(GGML_RUNNER_CUT_PREFIX));
+            size_t prefix_len   = std::strlen(GGML_RUNNER_CUT_PREFIX);
+            size_t suffix_len   = std::strlen(GGML_RUNNER_CUT_SUFFIX);
+            std::string payload = full_name.substr(prefix_len, full_name.size() - prefix_len - suffix_len);
             size_t sep          = payload.find('|');
             std::string group   = sep == std::string::npos ? payload : payload.substr(0, sep);
 
