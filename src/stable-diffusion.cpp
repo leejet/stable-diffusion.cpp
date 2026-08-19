@@ -1023,11 +1023,11 @@ public:
             tae_preview_only = false;
             use_tae          = true;
         }
-        if (sd_version_is_minimax_h3(version) && use_tae) {
-            LOG_WARN("MiniMax-H3 does not have a compatible TAE; ignoring --taesd");
-            tae_preview_only = false;
-            use_tae          = false;
-        }
+        // if (sd_version_is_minimax_h3(version) && use_tae) {
+        //     LOG_WARN("MiniMax-H3 does not have a compatible TAE; ignoring --taesd");
+        //     tae_preview_only = false;
+        //     use_tae          = false;
+        // }
 
         auto& tensor_storage_map = model_loader.get_tensor_storage_map();
 
@@ -1402,7 +1402,7 @@ public:
             }
 
             auto create_tae = [&](bool decode_only) -> std::shared_ptr<VAE> {
-                if (sd_version_uses_wan_vae(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version)) {
+                if (sd_version_uses_wan_vae(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version) || sd_version_is_minimax_h3(version)) {
                     return std::make_shared<TinyVideoAutoEncoder>(backend_for(SDBackendModule::VAE),
                                                                   tensor_storage_map,
                                                                   "decoder",
