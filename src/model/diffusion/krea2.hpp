@@ -161,6 +161,54 @@ namespace Krea2 {
         return ((value + multiple - 1) / multiple) * multiple;
     }
 
+    // Graph inputs for the native MROPE path, replacing the precomputed `pe` matrix.
+    struct Krea2Rope {
+        ggml_tensor* pos                  = nullptr;  // I32, 4 streams x n_token
+        ggml_tensor* freq                 = nullptr;  // F32, head_dim/2
+        float theta                       = 1000.f;
+        int sections[GGML_MROPE_SECTIONS] = {0, 0, 0, 0};
+
+        bool enabled() const { return pos != nullptr && freq != nullptr; }
+    };
+
+    // x: [d_head, n_head, L, N] -> [d_head, L, n_head*N], rotated, ready for attention.
+    //
+    // Two conventions have to be reconciled against ggml's MROPE, and neither is visible
+    // in the op's signature:
+    //
+    // 1. MROPE is NEOX-ordered - it rotates the pair (m, d_head/2 + m) - while Krea2 is
+    //    NORMAL-ordered and rotates (2m, 2m+1). The head dim is therefore de-interleaved
+    //    first. q and k receive the SAME permutation and q.k is invariant under a shared
+    //    permutation of the head dim, so nothing is ever permuted back; v, the gate and
+    //    wo never see it.
+    // 2. MROPE runs ONE geometric frequency sweep across the whole head dim, while Krea2
+    //    restarts the sweep for each axis. `freq` (freq_factors) divides theta_base, which
+    //    is the hook that reinstates the per-axis sweep - see gen_krea2_rope_data.
+    //
+    // MROPE indexes positions by ne[2], so the op must run on the [d_head, n_head, L, N]
+    // layout the projections already produce; attention wants tokens in ne[1], so the
+    // transpose happens afterwards. The old hand-rolled path paid the same transpose up
+    // front, so this is not extra work.
+    __STATIC_INLINE__ ggml_tensor* apply_krea2_rope(ggml_context* ctx,
+                                                    ggml_tensor* x,
+                                                    const Krea2Rope& rope) {
+        const int64_t d_head = x->ne[0];
+        const int64_t n_head = x->ne[1];
+        const int64_t L      = x->ne[2];
+        const int64_t N      = x->ne[3];
+
+        x = ggml_reshape_4d(ctx, x, 2, d_head / 2, n_head, L * N);
+        x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
+        x = ggml_reshape_4d(ctx, x, d_head, n_head, L, N);
+
+        x = ggml_rope_multi(ctx, x, rope.pos, rope.freq, static_cast<int>(d_head),
+                            const_cast<int*>(rope.sections), GGML_ROPE_TYPE_MROPE, 0,
+                            rope.theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+
+        x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));
+        return ggml_reshape_3d(ctx, x, d_head, L, n_head * N);
+    }
+
     class KreaRMSNorm : public UnaryBlock {
     protected:
         int64_t hidden_size;
@@ -183,7 +231,18 @@ namespace Krea2 {
             if (ctx->weight_adapter) {
                 scale = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, scale, prefix + "scale.weight");
             }
-            scale = ggml_add(ctx->ggml_ctx, scale, ggml_ext_ones(ctx->ggml_ctx, scale->ne[0], 1, 1, 1));
+            // The stored weight is an offset from identity, so the effective scale is w+1.
+            // When the loader has already folded the 1 in, the mul's operand is a plain leaf
+            // and rms_norm/mul come out adjacent, which is what lets ggml-vulkan fuse them.
+            // Otherwise build w+1 here and force it into the graph immediately: left to the
+            // final DFS it lands BETWEEN the rms_norm and the mul, and the fusion check is
+            // positional, so the fusion would silently never fire.
+            if (!ctx->param_transform_registered) {
+                scale = ggml_add(ctx->ggml_ctx, scale, ggml_ext_ones(ctx->ggml_ctx, scale->ne[0], 1, 1, 1));
+                if (ctx->gf != nullptr) {
+                    ggml_build_forward_expand(ctx->gf, scale);
+                }
+            }
             x     = ggml_rms_norm(ctx->ggml_ctx, x, eps);
             x     = ggml_mul_inplace(ctx->ggml_ctx, x, scale);
             return x;
@@ -204,9 +263,9 @@ namespace Krea2 {
             auto up   = std::dynamic_pointer_cast<Linear>(blocks["up"]);
             auto down = std::dynamic_pointer_cast<Linear>(blocks["down"]);
 
-            auto gated = ggml_silu(ctx->ggml_ctx, gate->forward(ctx, x));
-            auto up_x  = up->forward(ctx, x);
-            x          = ggml_mul(ctx->ggml_ctx, gated, up_x);
+            auto gate_x = gate->forward(ctx, x);
+            auto up_x   = up->forward(ctx, x);
+            x           = ggml_swiglu_split(ctx->ggml_ctx, gate_x, up_x);
             return down->forward(ctx, x);
         }
     };
@@ -260,8 +319,8 @@ namespace Krea2 {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* x,
-                             ggml_tensor* pe   = nullptr,
-                             ggml_tensor* mask = nullptr) {
+                             const Krea2Rope& rope = {},
+                             ggml_tensor* mask     = nullptr) {
             auto wq    = std::dynamic_pointer_cast<Linear>(blocks["wq"]);
             auto wk    = std::dynamic_pointer_cast<Linear>(blocks["wk"]);
             auto wv    = std::dynamic_pointer_cast<Linear>(blocks["wv"]);
@@ -284,11 +343,24 @@ namespace Krea2 {
             auto v = wv->forward(ctx, x);
             v      = ggml_reshape_4d(ctx->ggml_ctx, v, head_dim_, kv_heads, L, N);
 
+            if (rope.enabled() && sd_backend_is(ctx->backend, "Vulkan")) {
+                // The fused MROPE path writes head/token-transposed output, so its source
+                // cannot share the destination allocation as a row-wise fusion normally can.
+                ggml_set_output(q);
+                ggml_set_output(k);
+            }
+
             q = qnorm->forward(ctx, q);
             k = knorm->forward(ctx, k);
 
-            auto out = pe != nullptr ? Rope::attention(ctx, q, k, v, pe, mask)
-                                     : attention_no_rope(ctx, q, k, v, mask);
+            ggml_tensor* out;
+            if (rope.enabled()) {
+                q   = apply_krea2_rope(ctx->ggml_ctx, q, rope);  // [d_head, L, heads*N]
+                k   = apply_krea2_rope(ctx->ggml_ctx, k, rope);  // [d_head, L, kv_heads*N]
+                out = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, heads, mask, true, ctx->flash_attn_enabled);
+            } else {
+                out = attention_no_rope(ctx, q, k, v, mask);
+            }
             out      = ggml_mul(ctx->ggml_ctx, out, ggml_sigmoid(ctx->ggml_ctx, gate->forward(ctx, x)));
             out      = wo->forward(ctx, out);
             return out;
@@ -317,6 +389,9 @@ namespace Krea2 {
             }
             lin      = ggml_repeat(ctx->ggml_ctx, lin, vec);
             auto out = ggml_add(ctx->ggml_ctx, vec, lin);
+            if (ctx->gf != nullptr) {
+                ggml_build_forward_expand(ctx->gf, out);
+            }
             return ggml_ext_chunk(ctx->ggml_ctx, out, 6, 0);
         }
     };
@@ -434,7 +509,7 @@ namespace Krea2 {
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* x,
                              ggml_tensor* vec,
-                             ggml_tensor* pe,
+                             const Krea2Rope& rope,
                              ggml_tensor* vec_refs = nullptr,
                              int64_t ref_start     = -1) {
             auto mod      = std::dynamic_pointer_cast<KreaDoubleSharedModulation>(blocks["mod"]);
@@ -467,7 +542,7 @@ namespace Krea2 {
 
                 auto attn_input = ggml_concat(ctx->ggml_ctx, attn_in_main, attn_in_refs, 1);
 
-                auto attn_out = attn->forward(ctx, attn_input, pe);
+                auto attn_out = attn->forward(ctx, attn_input, rope);
 
                 auto attn_out_main = ggml_view_3d(ctx->ggml_ctx, attn_out, D, len_main, B, attn_out->nb[1], attn_out->nb[2], 0);
                 auto attn_out_refs = ggml_view_3d(ctx->ggml_ctx, attn_out, D, len_refs, B, attn_out->nb[1], attn_out->nb[2], len_main * attn_out->nb[1]);
@@ -505,7 +580,7 @@ namespace Krea2 {
                                                  mods[1],
                                                  mods[0],
                                                  true);
-                auto attn_out   = attn->forward(ctx, attn_input, pe);
+                auto attn_out   = attn->forward(ctx, attn_input, rope);
                 x               = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, attn_out, mods[2]));
 
                 auto mlp_input = Flux::modulate(ctx->ggml_ctx,
@@ -627,7 +702,7 @@ namespace Krea2 {
                              ggml_tensor* x,
                              ggml_tensor* timestep,
                              ggml_tensor* context,
-                             ggml_tensor* pe,
+                             const Krea2Rope& rope,
                              std::vector<ggml_tensor*> ref_latents = {},
                              bool zero_timestep_refs               = false) {
             int64_t W = x->ne[0];
@@ -676,7 +751,7 @@ namespace Krea2 {
             int64_t ref_start  = hidden_states->ne[1] - ref_len;
             for (int i = 0; i < config.layers; ++i) {
                 auto block    = std::dynamic_pointer_cast<KreaSingleStreamBlock>(blocks["blocks." + std::to_string(i)]);
-                hidden_states = block->forward(ctx, hidden_states, tvec, pe, tvec_0, ref_start);
+                hidden_states = block->forward(ctx, hidden_states, tvec, rope, tvec_0, ref_start);
                 sd::ggml_graph_cut::mark_graph_cut(hidden_states, "krea2.blocks." + std::to_string(i), "hidden_states");
             }
 
@@ -687,15 +762,24 @@ namespace Krea2 {
         }
     };
 
-    __STATIC_INLINE__ std::vector<float> gen_krea2_pe(int h,
-                                                      int w,
-                                                      int patch_size,
-                                                      int bs,
-                                                      int context_len,
-                                                      float theta,
-                                                      const std::vector<int>& axes_dim,
-                                                      const std::vector<ggml_tensor*>& ref_latents,
-                                                      Rope::RefIndexMode ref_index_mode) {
+    struct Krea2RopeData {
+        std::vector<int32_t> pos;  // 4 streams x n_token, stream k at pos[i2 + n_token*k]
+        std::vector<float> freq;   // head_dim/2 freq_factors
+        int sections[GGML_MROPE_SECTIONS] = {0, 0, 0, 0};
+    };
+
+    // Position ids and freq_factors for the MROPE path, in place of the `pe` cos/sin matrix.
+    // The ids are built exactly as the previous gen_krea2_pe built them.
+    __STATIC_INLINE__ Krea2RopeData gen_krea2_rope_data(int h,
+                                                        int w,
+                                                        int patch_size,
+                                                        int bs,
+                                                        int context_len,
+                                                        float theta,
+                                                        const std::vector<int>& axes_dim,
+                                                        int64_t head_dim,
+                                                        const std::vector<ggml_tensor*>& ref_latents,
+                                                        Rope::RefIndexMode ref_index_mode) {
         auto txt_ids = Rope::gen_flux_txt_ids(bs, context_len, 3, {});
         auto img_ids = Rope::gen_flux_img_ids(h, w, patch_size, bs, 3, 0, 0, 0, false);
         auto ids     = Rope::concat_ids(txt_ids, img_ids, bs);
@@ -703,13 +787,45 @@ namespace Krea2 {
             auto refs_ids = Rope::gen_refs_ids(patch_size, bs, 3, 1, ref_latents, ref_index_mode, 1.0f, false, 0);
             ids           = Rope::concat_ids(ids, refs_ids, bs);
         }
-        return Rope::embed_nd(ids, bs, theta, axes_dim);
+
+        Krea2RopeData data;
+        const size_t n_token = ids.size();
+        const int n_axes     = std::min<int>(static_cast<int>(axes_dim.size()), GGML_MROPE_SECTIONS);
+
+        // MROPE `sections` are counted in PAIRS, not channels.
+        for (int axis = 0; axis < n_axes; ++axis) {
+            data.sections[axis] = axes_dim[axis] / 2;
+        }
+
+        data.pos.assign(n_token * 4, 0);
+        for (int axis = 0; axis < n_axes; ++axis) {
+            for (size_t token = 0; token < n_token; ++token) {
+                data.pos[axis * n_token + token] = static_cast<int32_t>(std::lround(ids[token][axis]));
+            }
+        }
+
+        // MROPE computes theta_base = pos * theta^(-2p/head_dim) with p the GLOBAL pair
+        // index, then divides by freq_factors. Krea2 wants pos * theta^(-2j/axes_dim[a])
+        // with j restarting at every axis, so the correction is the ratio of the two.
+        data.freq.resize(head_dim / 2);
+        int axis = 0, base = 0;
+        for (int p = 0; p < head_dim / 2; ++p) {
+            while (axis + 1 < n_axes && p >= base + data.sections[axis]) {
+                base += data.sections[axis];
+                ++axis;
+            }
+            const double j = p - base;
+            data.freq[p]   = static_cast<float>(
+                std::pow(static_cast<double>(theta), 2.0 * j / axes_dim[axis] - 2.0 * p / head_dim));
+        }
+        return data;
     }
 
     struct Krea2Runner : public DiffusionModelRunner {
         Krea2Config config;
         Krea2Model model;
-        std::vector<float> pe_vec;
+        Krea2RopeData rope_data;
+        bool param_transform_registered_ = false;
 
         Krea2Runner(ggml_backend_t backend,
                     const String2TensorStorage& tensor_storage_map      = {},
@@ -723,6 +839,33 @@ namespace Krea2 {
 
         std::string get_desc() override {
             return "krea2";
+        }
+
+        // Fold KreaRMSNorm's +1 into the stored scales once at load. Every norm otherwise
+        // rebuilds w+1 in every graph, which costs three dispatches per norm per step and
+        // blocks the RMS_NORM+MUL fusion. Addition commutes with a LoRA delta, so
+        // this stays correct with adapters active.
+        //
+        // The flag is set HERE, at registration, not when the folds are observed to happen.
+        // build_graph runs BEFORE the loader populates the params - the manager needs the
+        // graph to know which tensors to fetch - so a flag driven by observed progress reads
+        // false for the first graph, which then adds +1 to weights the loader folds a moment
+        // later, applying it twice. The invariant that actually holds is per tensor: the
+        // loader folds each scale before anything can use it.
+        std::function<void(const std::string&, ggml_tensor*, bool)> get_param_transform() override {
+            param_transform_registered_ = true;
+            return [](const std::string& name, ggml_tensor* t, bool) {
+                if (t == nullptr || t->type != GGML_TYPE_F32 || !ends_with(name, ".scale")) {
+                    return;
+                }
+                const int64_t n = ggml_nelements(t);
+                std::vector<float> v(static_cast<size_t>(n));
+                ggml_backend_tensor_get(t, v.data(), 0, v.size() * sizeof(float));
+                for (float& x : v) {
+                    x += 1.0f;
+                }
+                ggml_backend_tensor_set(t, v.data(), 0, v.size() * sizeof(float));
+            };
         }
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
@@ -747,21 +890,29 @@ namespace Krea2 {
                 ref_latents.push_back(make_input(ref_latent_tensor));
             }
 
-            pe_vec      = gen_krea2_pe(static_cast<int>(x->ne[1]),
-                                       static_cast<int>(x->ne[0]),
-                                       config.patch_size,
-                                       static_cast<int>(x->ne[3]),
-                                       static_cast<int>(context->ne[1]),
-                                       config.theta,
-                                       config.axes_dim,
-                                       ref_latents,
-                                       ref_image_params.ref_index_mode);
-            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
-            set_backend_tensor_data(pe, pe_vec.data());
+            rope_data = gen_krea2_rope_data(static_cast<int>(x->ne[1]),
+                                            static_cast<int>(x->ne[0]),
+                                            config.patch_size,
+                                            static_cast<int>(x->ne[3]),
+                                            static_cast<int>(context->ne[1]),
+                                            config.theta,
+                                            config.axes_dim,
+                                            config.head_dim(),
+                                            ref_latents,
+                                            ref_image_params.ref_index_mode);
 
-            auto runner_ctx  = get_context();
-            ggml_tensor* out = model.forward(&runner_ctx, x, timesteps, context, pe, ref_latents, ref_image_params.force_ref_timestep_zero);
+            Krea2Rope rope;
+            rope.theta = config.theta;
+            std::copy(std::begin(rope_data.sections), std::end(rope_data.sections), std::begin(rope.sections));
+            rope.pos  = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_I32, static_cast<int64_t>(rope_data.pos.size()));
+            rope.freq = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, static_cast<int64_t>(rope_data.freq.size()));
+            set_backend_tensor_data(rope.pos, rope_data.pos.data());
+            set_backend_tensor_data(rope.freq, rope_data.freq.data());
+
+            auto runner_ctx                       = get_context();
+            runner_ctx.gf                         = gf;
+            runner_ctx.param_transform_registered = param_transform_registered_;
+            ggml_tensor* out                      = model.forward(&runner_ctx, x, timesteps, context, rope, ref_latents, ref_image_params.force_ref_timestep_zero);
             ggml_build_forward_expand(gf, out);
             return gf;
         }

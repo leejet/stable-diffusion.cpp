@@ -422,7 +422,10 @@ namespace Flux {
             scale = ggml_reshape_3d(ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
             shift = ggml_reshape_3d(ctx, shift, shift->ne[0], 1, shift->ne[1]);  // [N, 1, C]
         }
-        x = ggml_add(ctx, x, ggml_mul(ctx, x, scale));
+        // (1 + scale) * x + shift. Folding the 1 into the (tiny) scale tensor keeps
+        // this to two passes over x instead of three; x + x*scale would materialize
+        // an extra full-size intermediate.
+        x = ggml_mul(ctx, x, ggml_scale_bias(ctx, scale, 1.f, 1.f));
         x = ggml_add(ctx, x, shift);
         return x;
     }

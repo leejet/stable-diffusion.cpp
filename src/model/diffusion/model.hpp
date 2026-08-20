@@ -1,6 +1,7 @@
 #ifndef __SD_MODEL_DIFFUSION_MODEL_HPP__
 #define __SD_MODEL_DIFFUSION_MODEL_HPP__
 
+#include <functional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -177,6 +178,11 @@ public:
 
     virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors,
                                    const std::string& prefix) = 0;
+
+    // Optional in-place transform applied to each parameter once, right after it is loaded.
+    // `loras_active` means a LoRA delta will be added to this weight afterwards, so a
+    // transform the delta cannot commute with must decline. Empty means no transform.
+    virtual std::function<void(const std::string&, ggml_tensor*, bool)> get_param_transform() { return {}; }
 };
 
 #endif  // __SD_MODEL_DIFFUSION_MODEL_HPP__
