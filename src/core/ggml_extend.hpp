@@ -1398,8 +1398,13 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
         }
         k_in = ggml_cast(ctx, k_in, GGML_TYPE_F16);
 
-        v_in = ggml_ext_cont(ctx, ggml_permute(ctx, v_in, 0, 2, 1, 3));
-        v_in = ggml_reshape_3d(ctx, v_in, d_head, L_k, n_kv_head * N);
+        const bool strided_v_cast = N == 1 && v_in->type == GGML_TYPE_F32 &&
+                                    sd_backend_is(backend, "Vulkan");
+        v_in = ggml_permute(ctx, v_in, 0, 2, 1, 3);
+        if (!strided_v_cast) {
+            v_in = ggml_ext_cont(ctx, v_in);
+            v_in = ggml_reshape_3d(ctx, v_in, d_head, L_k, n_kv_head * N);
+        }
         if (kv_scale != 1.0f) {
             v_in = ggml_ext_scale(ctx, v_in, kv_scale);
         }
@@ -1724,6 +1729,15 @@ struct WeightAdapter {
 struct GGMLRunnerContext {
     ggml_backend_t backend                                           = nullptr;
     ggml_context* ggml_ctx                                           = nullptr;
+    // The graph currently being built, for runners that choose to expose it.
+    // cgraph order is post-order DFS from the output, so a subexpression reached only
+    // through a second operand is emitted BETWEEN its consumer and the consumer's first
+    // operand. ggml-vulkan's fusion checks are positional, so that silently defeats them.
+    // A block holding this handle can force such a subexpression into the graph early.
+    ggml_cgraph* gf = nullptr;
+    // True when the runner registered a load-time parameter transform. The model manager
+    // applies it before any loaded parameter can be used by the graph.
+    bool param_transform_registered                                  = false;
     bool flash_attn_enabled                                          = false;
     bool conv2d_direct_enabled                                       = false;
     bool circular_x_enabled                                          = false;
@@ -1820,6 +1834,7 @@ protected:
     bool conv2d_direct_enabled = false;
     bool circular_x_enabled    = false;
     bool circular_y_enabled    = false;
+    bool retain_compute_buffer_between_runs_ = false;
 
     sd::ggml_graph_cut::PlanCache graph_cut_plan_cache_;
     std::unordered_set<const ggml_tensor*> params_tensor_set_;
@@ -2820,7 +2835,7 @@ protected:
             ComputeBufferGuard(const ComputeBufferGuard&)            = delete;
             ComputeBufferGuard& operator=(const ComputeBufferGuard&) = delete;
         };
-        ComputeBufferGuard compute_buffer_guard(this, free_compute_buffer);
+        ComputeBufferGuard compute_buffer_guard(this, free_compute_buffer && !retain_compute_buffer_between_runs_);
 
         if (sched != nullptr) {
             ggml_backend_sched_reset(sched);
@@ -2830,10 +2845,19 @@ protected:
                 return std::nullopt;
             }
         } else if (!ggml_gallocr_alloc_graph(compute_allocr, gf)) {
-            LOG_ERROR("%s alloc compute graph failed", get_desc().c_str());
-            return std::nullopt;
-        }
+            if (!retain_compute_buffer_between_runs_) {
+                LOG_ERROR("%s alloc compute graph failed", get_desc().c_str());
+                return std::nullopt;
+            }
 
+            // A retained allocator may have been reserved for a smaller request. Re-reserve
+            // it on demand; same-shape hot requests continue to reuse the existing buffers.
+            this->free_compute_buffer();
+            if (!alloc_compute_buffer(gf) || !ggml_gallocr_alloc_graph(compute_allocr, gf)) {
+                LOG_ERROR("%s realloc compute graph failed", get_desc().c_str());
+                return std::nullopt;
+            }
+        }
         copy_data_to_backend_tensor(gf, !preserve_backend_tensor_data_map);
         if (sd_backend_is_cpu(runtime_backend)) {
             sd_backend_cpu_set_n_threads(runtime_backend, n_threads);
@@ -3009,8 +3033,14 @@ protected:
     }
 
 public:
+    void release_compute_buffer_after_run() {
+        if (!retain_compute_buffer_between_runs_) {
+            free_compute_buffer();
+        }
+    }
+
     void runner_done() {
-        free_compute_buffer();
+        release_compute_buffer_after_run();
         std::vector<ggml_tensor*> tensors_to_release = std::move(this->runner_param_tensors);
         this->runner_param_tensors.clear();
         runner_param_tensor_set.clear();
@@ -3215,6 +3245,10 @@ public:
 
     void set_conv2d_direct_enabled(bool enabled) {
         conv2d_direct_enabled = enabled;
+    }
+
+    void set_retain_compute_buffer_between_runs(bool enabled) {
+        retain_compute_buffer_between_runs_ = enabled;
     }
 
     void set_circular_axes(bool circular_x, bool circular_y) {

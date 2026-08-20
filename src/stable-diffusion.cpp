@@ -1005,7 +1005,7 @@ public:
             apply_lora_immediately = false;
         }
 
-        bool needs_writable_mmap = enable_mmap && apply_lora_immediately;
+        bool needs_writable_mmap = enable_mmap && (apply_lora_immediately || sd_version_is_krea2(version));
         model_manager->set_writable_mmap(needs_writable_mmap);
         if (enable_mmap && apply_lora_immediately) {
             LOG_WARN("in mode 'immediately', LoRAs will cause extra memory usage with mmap");
@@ -1355,11 +1355,17 @@ public:
 
             diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::DIFFUSION));
             diffusion_model->set_stream_layers_enabled(stream_layers);
+            if (version == VERSION_KREA2 && sd_backend_is(backend_for(SDBackendModule::DIFFUSION), "Vulkan")) {
+                diffusion_model->set_retain_compute_buffer_between_runs(true);
+            }
             if (!register_runner_params("Diffusion model",
                                         diffusion_model,
                                         SDBackendModule::DIFFUSION,
                                         &unet_params_mem_size)) {
                 return false;
+            }
+            if (model_manager) {
+                model_manager->set_param_transform("Diffusion model", diffusion_model->get_param_transform());
             }
 
             if (high_noise_diffusion_model) {
@@ -1557,6 +1563,16 @@ public:
                 if (preview_vae) {
                     preview_vae->set_conv2d_direct_enabled(true);
                 }
+            } else {
+                const bool krea2_vulkan = version == VERSION_KREA2 &&
+                                          sd_backend_is(backend_for(SDBackendModule::VAE), "Vulkan");
+                if (krea2_vulkan) {
+                    LOG_INFO("Using Conv2d direct in the Krea2 Vulkan VAE");
+                    first_stage_model->set_conv2d_direct_enabled(true);
+                }
+            }
+            if (version == VERSION_KREA2 && sd_backend_is(backend_for(SDBackendModule::VAE), "Vulkan")) {
+                first_stage_model->set_retain_compute_buffer_between_runs(true);
             }
 
             if (use_control_net) {
@@ -2917,10 +2933,10 @@ public:
 
         if (control_net) {
             control_net->free_control_ctx();
-            control_net->free_compute_buffer();
+            control_net->release_compute_buffer_after_run();
         }
         if (work_diffusion_model) {
-            work_diffusion_model->free_compute_buffer();
+            work_diffusion_model->release_compute_buffer_after_run();
         }
         return x0;
     }

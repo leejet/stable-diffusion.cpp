@@ -38,6 +38,10 @@
 
 namespace fs = std::filesystem;
 
+void set_png_compression_level(int level) {
+    stbi_write_png_compression_level = std::clamp(level, 0, 9);
+}
+
 #ifdef SD_USE_WEBP
 struct WebPFreeDeleter {
     void operator()(void* ptr) const {

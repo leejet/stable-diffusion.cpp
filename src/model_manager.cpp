@@ -401,6 +401,8 @@ bool ModelManager::load_tensors_to_params_backend(const std::vector<TensorState*
         }
         return false;
     }
+    apply_param_transforms(need_load);
+
     for (ParamsStorageBlock* block : created_storage_blocks) {
         if (block != nullptr && block->buffer != nullptr) {
             LOG_DEBUG("model manager prepared params backend buffer (%6.2f MB, %zu tensors, %s)",
@@ -605,6 +607,34 @@ bool ModelManager::apply_loras_to_params(const std::vector<TensorState*>& states
         }
     }
     return true;
+}
+
+void ModelManager::set_param_transform(const std::string& desc, ParamTransformFn fn) {
+    if (fn) {
+        param_transforms_[desc] = std::move(fn);
+    } else {
+        param_transforms_.erase(desc);
+    }
+}
+
+void ModelManager::apply_param_transforms(const std::vector<TensorState*>& states) {
+    if (param_transforms_.empty()) {
+        return;
+    }
+    const bool loras_active = !loras_.empty();
+    for (TensorState* state : states) {
+        if (state == nullptr || state->tensor == nullptr || state->tensor->data == nullptr) {
+            continue;
+        }
+        if (should_ignore(*state) || is_optional_missing_tensor(state->name)) {
+            continue;
+        }
+        auto it = param_transforms_.find(state->desc);
+        if (it == param_transforms_.end() || !it->second) {
+            continue;
+        }
+        it->second(state->name, state->tensor, loras_active);
+    }
 }
 
 void ModelManager::reset_lora_applied_params() {
