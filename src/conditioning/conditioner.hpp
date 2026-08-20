@@ -425,6 +425,10 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         if (clip_skip <= 0) {
             clip_skip = (sd_version_is_sd2(version) || sd_version_is_sdxl(version)) ? 2 : 1;
         }
+        if (sd_version_is_sdxl(version) && clip_skip < 2) {
+            LOG_WARN("invalid clip_skip=%d for SDXL, using 2", clip_skip);
+            clip_skip = 2;
+        }
 
         size_t chunk_len   = 77;
         size_t chunk_count = tokens.size() / chunk_len;
