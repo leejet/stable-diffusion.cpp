@@ -149,6 +149,7 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix) 
         {"ffn_up.", "mlp.up_proj."},
         {"ffn_post_norm.", "post_ffw_norm."},
         {"ffn_norm.", "post_attention_layernorm."},
+        {"layer_output_scale.weight", "layer_scalar"},
         {"output_norm.", "model.norm."},
     };
 
