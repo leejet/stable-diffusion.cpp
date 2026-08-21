@@ -1528,7 +1528,7 @@ static int stbi_write_jpg_core(stbi__write_context *s, int width, int height, in
 
       // comment block with parameters of generation
       if(parameters != NULL) {
-         stbiw__putc(s, 0xFF /* comnent */ );
+         stbiw__putc(s, 0xFF /* comment */ );
          stbiw__putc(s, 0xFE /* marker  */ );
          int param_length = STBMIN(2 + (int)strlen("parameters") + 1 + (int)strlen(parameters) + 1, 0xFFFF);
          stbiw__putc(s, param_length >> 8); // no need to mask, length < 65536
