@@ -272,10 +272,44 @@ bool read_safetensors_file(const std::string& file_path,
         int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1};
         for (int i = 0; i < n_dims; i++) {
             ne[i] = shape[i].get<int64_t>();
+            if (ne[i] < 0) {
+                set_error(error, "invalid tensor shape for '" + name + "' (dimension " +
+                                     std::to_string(i) + " is negative)");
+                return false;
+            }
+        }
+
+        // nelements() is the product of the dims; nbytes() is
+        // nelements()*ggml_type_size(type)/ggml_blck_size(type). Both multiply
+        // silently, so a 2^62-element F32 tensor overflows only at the byte size
+        // (x4 -> 0) and reproduces the NULL-buffer deref this reader rejects.
+        // Check both with overflow detection; a zero extent is a valid empty
+        // tensor, so skip it rather than build a zero-byte storage.
+        int64_t nelems = 1;
+        bool overflow  = false;
+        for (int i = 0; i < n_dims && !overflow; i++) {
+            if (__builtin_mul_overflow(nelems, ne[i], &nelems)) {
+                overflow = true;
+            }
+        }
+        if (overflow) {
+            set_error(error, "tensor '" + name + "' has an overflowed shape product");
+            return false;
+        }
+        if (nelems == 0) {
+            continue;
+        }
+        {
+            int64_t nbytes_num;
+            if (__builtin_mul_overflow(nelems, (int64_t)ggml_type_size(type), &nbytes_num)) {
+                set_error(error, "tensor '" + name + "' byte size overflows");
+                return false;
+            }
         }
 
         if (n_dims == 5) {
             n_dims = 4;
+            // partial product; full product already overflow-checked above
             ne[0]  = ne[0] * ne[1];
             ne[1]  = ne[2];
             ne[2]  = ne[3];
