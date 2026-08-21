@@ -59,8 +59,7 @@ def numel(shape):
 
 
 def scale_keys_for_weight(name: str):
-    # ".weight_scale" is the diffusers-style spelling, ".scale_weight" the ComfyUI one.
-    # Both ship in the wild, so accept either.
+    # Both spellings ship in the wild.
     keys = []
     if name.endswith(".weight"):
         base = name[:-len(".weight")]
@@ -97,8 +96,7 @@ def build_output_plan(header):
         scale_key = resolve_scale_key(name, entries)
         if info["dtype"] in FP8_DTYPES and scale_key is not None:
             paired_scale_keys.add(scale_key)
-            # ".scale_input" is an activation hint with no meaning once the weight is
-            # materialised as BF16, so drop it alongside the weight scale.
+            # ".scale_input" is meaningless once the weight is materialised as BF16.
             input_key = input_scale_key_for_weight(name)
             if input_key is not None and input_key in entries:
                 paired_scale_keys.add(input_key)

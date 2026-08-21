@@ -234,16 +234,12 @@ bool read_safetensors_file(const std::string& file_path,
         comfy_quant_configs.emplace(module_name, std::move(config));
     }
 
-    // ComfyUI fp8_scaled checkpoints store the dequant factor in a companion
-    // `<module>.scale_weight` F32 scalar instead of `.comfy_quant` metadata. Without it the
-    // fp8 weights load unscaled, which silently produces garbage rather than an error.
     std::unordered_map<std::string, float> fp8_scale_weights;
     std::unordered_set<std::string> fp8_scale_tensor_names;
     for (const auto& item : header_.items()) {
         const std::string& name = item.key();
-        // ".scale_weight" is the ComfyUI spelling, ".weight_scale" the diffusers one; both
-        // ship in the wild. Only F8 weights are paired here, so int8_tensorwise checkpoints
-        // (which also carry ".weight_scale") keep their existing handling.
+        // Both spellings ship in the wild. Only F8 weights are paired, so int8_tensorwise
+        // checkpoints keep the existing ".weight_scale" handling below.
         std::string suffix;
         if (ends_with(name, ".scale_weight")) {
             suffix = ".scale_weight";
