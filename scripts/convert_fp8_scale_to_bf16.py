@@ -58,11 +58,28 @@ def numel(shape):
     return math.prod(shape) if shape else 1
 
 
-def scale_key_for_weight(name: str):
+def scale_keys_for_weight(name: str):
+    # Both spellings ship in the wild.
+    keys = []
     if name.endswith(".weight"):
-        return name[:-len(".weight")] + ".weight_scale"
+        base = name[:-len(".weight")]
+        keys.append(base + ".weight_scale")
+        keys.append(base + ".scale_weight")
     if name.endswith("weight"):
-        return name + "_scale"
+        keys.append(name + "_scale")
+    return keys
+
+
+def resolve_scale_key(name: str, entries):
+    for key in scale_keys_for_weight(name):
+        if key in entries:
+            return key
+    return None
+
+
+def input_scale_key_for_weight(name: str):
+    if name.endswith(".weight"):
+        return name[:-len(".weight")] + ".scale_input"
     return None
 
 
@@ -76,9 +93,13 @@ def build_output_plan(header):
     plan = []
 
     for name, info in entries.items():
-        scale_key = scale_key_for_weight(name)
-        if info["dtype"] in FP8_DTYPES and scale_key in entries:
+        scale_key = resolve_scale_key(name, entries)
+        if info["dtype"] in FP8_DTYPES and scale_key is not None:
             paired_scale_keys.add(scale_key)
+            # ".scale_input" is meaningless once the weight is materialised as BF16.
+            input_key = input_scale_key_for_weight(name)
+            if input_key is not None and input_key in entries:
+                paired_scale_keys.add(input_key)
 
     for name, info in entries.items():
         if name in paired_scale_keys:
@@ -86,9 +107,9 @@ def build_output_plan(header):
 
         dtype = info["dtype"]
         shape = info["shape"]
-        scale_key = scale_key_for_weight(name)
+        scale_key = resolve_scale_key(name, entries)
 
-        if dtype in FP8_DTYPES and scale_key in entries:
+        if dtype in FP8_DTYPES and scale_key is not None:
             scale_info = entries[scale_key]
             plan.append(
                 {

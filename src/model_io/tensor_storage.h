@@ -18,6 +18,7 @@ struct TensorStorage {
     ggml_type type              = GGML_TYPE_F32;
     ggml_type expected_type     = GGML_TYPE_COUNT;
     bool is_f8_e4m3             = false;
+    float fp8_scale             = 1.0f;  // companion scale tensor; 1.0f when absent
     bool is_f8_e5m2             = false;
     bool is_f64                 = false;
     bool is_i64                 = false;
