@@ -465,6 +465,40 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                                                true,
                                                                true);
                 GGML_ASSERT(!chunk_hidden_states.empty());
+                if (sd_version_is_sdxl(version) && clip_skip < 2) {
+                    // Many distributed SDXL checkpoints carry NaN weights in CLIP-L's
+                    // final transformer layer, since SDXL's UNet was only ever trained
+                    // against the penultimate layer and that last layer is otherwise
+                    // unused. Detect it from the actual output rather than assuming
+                    // every checkpoint is affected, so a valid override (e.g. --clip-l)
+                    // still works at clip_skip=1.
+                    bool has_nan = false;
+                    for (float v : chunk_hidden_states.values()) {
+                        if (std::isnan(v)) {
+                            has_nan = true;
+                            break;
+                        }
+                    }
+                    if (has_nan) {
+                        LOG_WARN(
+                            "clip_skip=%d produced invalid output from this checkpoint's CLIP-L "
+                            "text encoder (a common defect in merged SDXL checkpoints' unused "
+                            "final layer); using clip_skip=2 instead",
+                            clip_skip);
+                        clip_skip           = 2;
+                        chunk_hidden_states = text_model->compute(n_threads,
+                                                                  input_ids,
+                                                                  num_custom_embeddings,
+                                                                  token_embed_custom.data(),
+                                                                  max_token_idx,
+                                                                  false,
+                                                                  clip_skip,
+                                                                  false,
+                                                                  true,
+                                                                  true);
+                        GGML_ASSERT(!chunk_hidden_states.empty());
+                    }
+                }
                 if (sd_version_is_sdxl(version)) {
                     auto chunk_hidden_states2 = text_model2->compute(n_threads,
                                                                      input_ids2,
