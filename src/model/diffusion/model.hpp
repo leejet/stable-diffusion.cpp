@@ -137,6 +137,7 @@ struct DiffusionParams {
     const sd::Tensor<float>* x                        = nullptr;
     const sd::Tensor<float>* timesteps                = nullptr;
     const sd::Tensor<float>* context                  = nullptr;
+    const void* condition_identity                    = nullptr;
     const sd::Tensor<float>* c_concat                 = nullptr;
     const sd::Tensor<float>* y                        = nullptr;
     const std::vector<sd::Tensor<float>>* ref_latents = nullptr;
@@ -160,6 +161,7 @@ static inline const sd::Tensor<T>& tensor_or_empty(const sd::Tensor<T>* tensor) 
 struct DiffusionModelRunner : public GGMLRunner {
 protected:
     std::string prefix;
+    virtual void on_sampling_done() {}
 
 public:
     DiffusionModelRunner(ggml_backend_t backend,
@@ -170,6 +172,11 @@ public:
 
     virtual sd::Tensor<float> compute(int n_threads,
                                       const DiffusionParams& diffusion_params) = 0;
+
+    void sampling_done() {
+        runner_done();
+        on_sampling_done();
+    }
 
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {
         get_param_tensors(tensors, prefix);
