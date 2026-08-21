@@ -372,6 +372,25 @@ bool load_images_from_dir(const std::string dir,
     return true;
 }
 
+std::string format_frame_idx(std::string pattern, int frame_idx) {
+    std::smatch match;
+    std::string result = pattern;
+    while (std::regex_search(result, match, format_specifier_regex)) {
+        std::string specifier = match.str(1);
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), specifier.c_str(), frame_idx);
+        result.replace(match.position(1), match.length(1), buffer);
+    }
+
+    // Then replace all '%%' with '%'
+    size_t pos = 0;
+    while ((pos = result.find("%%", pos)) != std::string::npos) {
+        result.replace(pos, 2, "%");
+        pos += 1;
+    }
+    return result;
+}
+
 void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data) {
     (void)step;
     (void)is_noisy;
@@ -391,25 +410,6 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
             LOG_ERROR("save preview video to '%s' failed", cli_params->preview_path.c_str());
         }
     }
-}
-
-std::string format_frame_idx(std::string pattern, int frame_idx) {
-    std::smatch match;
-    std::string result = pattern;
-    while (std::regex_search(result, match, format_specifier_regex)) {
-        std::string specifier = match.str(1);
-        char buffer[32];
-        snprintf(buffer, sizeof(buffer), specifier.c_str(), frame_idx);
-        result.replace(match.position(1), match.length(1), buffer);
-    }
-
-    // Then replace all '%%' with '%'
-    size_t pos = 0;
-    while ((pos = result.find("%%", pos)) != std::string::npos) {
-        result.replace(pos, 2, "%");
-        pos += 1;
-    }
-    return result;
 }
 
 static fs::path get_video_audio_sidecar_path(const SDCliParams& cli_params) {
