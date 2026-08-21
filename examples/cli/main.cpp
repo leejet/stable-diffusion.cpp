@@ -80,7 +80,7 @@ struct SDCliParams {
              &metadata_format},
             {"",
              "--preview-path",
-             "path to write preview image to (default: ./preview.png). Multi-frame previews support .avi, .webm, and animated .webp",
+             "path to write preview image to (default: ./preview.png). For image generation, the filename can have %03d placeholder for sequential numbering. Multi-frame previews support .avi, .webm, and animated .webp",
              0,
              &preview_path},
             {"",
@@ -391,6 +391,8 @@ std::string format_frame_idx(std::string pattern, int frame_idx) {
     return result;
 }
 
+int continuous_preview_counter = 0;
+
 void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data) {
     (void)step;
     (void)is_noisy;
@@ -398,12 +400,20 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
     // is_noisy is set to true if the preview corresponds to noisy latents, false if it's denoised latents
     // unused in this app, it will either be always noisy or always denoised here
     if (frame_count == 1) {
-        if (!write_image_to_file(cli_params->preview_path,
+        std::string name = cli_params->preview_path;
+        size_t name_pos = name.find_last_of('/') + 1;  // skipping %d in path
+#ifdef _WIN32
+        size_t name_pos2 = name.find_last_of('\\') + 1;
+        name_pos = std::max(name_pos, name_pos2);
+#endif
+        name = cli_params->preview_path.substr(0, name_pos) +
+               format_frame_idx(name.substr(name_pos), ++continuous_preview_counter);
+        if (!write_image_to_file(name,
                                  image->data,
                                  image->width,
                                  image->height,
                                  image->channel)) {
-            LOG_ERROR("save preview image to '%s' failed", cli_params->preview_path.c_str());
+            LOG_ERROR("save preview image to '%s' failed", name.c_str());
         }
     } else {
         if (create_video_from_sd_images(cli_params->preview_path.c_str(), image, frame_count, cli_params->preview_fps) != 0) {
