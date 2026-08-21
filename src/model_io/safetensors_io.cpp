@@ -1,6 +1,7 @@
 #include "safetensors_io.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -233,6 +234,56 @@ bool read_safetensors_file(const std::string& file_path,
         comfy_quant_configs.emplace(module_name, std::move(config));
     }
 
+    // ComfyUI fp8_scaled checkpoints store the dequant factor in a companion
+    // `<module>.scale_weight` F32 scalar instead of `.comfy_quant` metadata. Without it the
+    // fp8 weights load unscaled, which silently produces garbage rather than an error.
+    std::unordered_map<std::string, float> fp8_scale_weights;
+    std::unordered_set<std::string> fp8_scale_tensor_names;
+    for (const auto& item : header_.items()) {
+        const std::string& name = item.key();
+        // ".scale_weight" is the ComfyUI spelling, ".weight_scale" the diffusers one; both
+        // ship in the wild. Only F8 weights are paired here, so int8_tensorwise checkpoints
+        // (which also carry ".weight_scale") keep their existing handling.
+        std::string suffix;
+        if (ends_with(name, ".scale_weight")) {
+            suffix = ".scale_weight";
+        } else if (ends_with(name, ".weight_scale")) {
+            suffix = ".weight_scale";
+        } else {
+            continue;
+        }
+        if (name == "__metadata__") {
+            continue;
+        }
+        const std::string module_name = name.substr(0, name.size() - suffix.size());
+        auto weight_it                = header_.find(module_name + ".weight");
+        if (weight_it == header_.end() || weight_it.value().value("dtype", "") != "F8_E4M3") {
+            continue;
+        }
+        const nlohmann::json& scale_info = item.value();
+        if (scale_info.value("dtype", "") != "F32") {
+            continue;
+        }
+        const size_t sbegin = scale_info["data_offsets"][0].get<size_t>();
+        const size_t send   = scale_info["data_offsets"][1].get<size_t>();
+        if (sbegin > send || send - sbegin != sizeof(float) || send > file_size_ - data_start) {
+            continue;
+        }
+        float scale = 1.0f;
+        file.clear();
+        file.seekg((std::streamoff)(data_start + sbegin), std::ios::beg);
+        file.read((char*)&scale, sizeof(float));
+        if (!file || !std::isfinite(scale) || scale == 0.0f) {
+            continue;
+        }
+        fp8_scale_weights[module_name] = scale;
+        fp8_scale_tensor_names.insert(name);
+        fp8_scale_tensor_names.insert(module_name + ".scale_input");
+    }
+    if (!fp8_scale_weights.empty()) {
+        LOG_DEBUG("safetensors: applying %zu fp8 scale_weight factors", fp8_scale_weights.size());
+    }
+
     tensor_storages.clear();
     for (auto& item : header_.items()) {
         std::string name           = item.key();
@@ -247,6 +298,10 @@ bool read_safetensors_file(const std::string& file_path,
         nlohmann::json shape = tensor_info["shape"];
 
         if (dtype == "U8") {
+            continue;
+        }
+
+        if (fp8_scale_tensor_names.count(name) > 0) {
             continue;
         }
 
@@ -328,6 +383,12 @@ bool read_safetensors_file(const std::string& file_path,
         bool tensor_size_ok;
         if (dtype == "F8_E4M3") {
             tensor_storage.is_f8_e4m3 = true;
+            if (ends_with(name, ".weight")) {
+                auto scale_it = fp8_scale_weights.find(name.substr(0, name.size() - std::string(".weight").size()));
+                if (scale_it != fp8_scale_weights.end()) {
+                    tensor_storage.fp8_scale = scale_it->second;
+                }
+            }
             // f8 -> f16
             tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size * 2);
         } else if (dtype == "F8_E5M2") {

@@ -18,6 +18,9 @@ struct TensorStorage {
     ggml_type type              = GGML_TYPE_F32;
     ggml_type expected_type     = GGML_TYPE_COUNT;
     bool is_f8_e4m3             = false;
+    // Per-tensor dequant scale from a companion `.scale_weight` tensor (ComfyUI
+    // fp8_scaled checkpoints). 1.0f when the checkpoint carries no scale.
+    float fp8_scale             = 1.0f;
     bool is_f8_e5m2             = false;
     bool is_f64                 = false;
     bool is_i64                 = false;
