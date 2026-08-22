@@ -1235,6 +1235,21 @@ std::vector<uint8_t> create_webm_from_sd_images_to_vector(sd_image_t* images, in
         segment.GetSegmentInfo()->set_writing_app("stable-diffusion.cpp");
         segment.GetSegmentInfo()->set_muxing_app("stable-diffusion.cpp");
 
+        LOG_DEBUG("Embedding parameters to metadata: %s", parameters.c_str());
+        if (!parameters.empty()) {
+            mkvmuxer::Tag* tag = segment.AddTag();
+
+            if (tag) {
+                if (!tag->add_simple_tag("COMMENT", parameters.c_str())) {
+                    LOG_WARN("Failed to add COMMENT simple tag.");
+                }
+            } else {
+                LOG_WARN("Failed to add tag to segment.");
+            }
+        } else {
+            LOG_INFO("Paramaters is empty, COMMENT tag not embedded.\n");
+        }
+
         const uint64_t frame_duration_ns = std::max<uint64_t>(
             1, static_cast<uint64_t>(std::llround(1000000000.0 / static_cast<double>(fps))));
         uint64_t timestamp_ns = 0;
@@ -1279,21 +1294,6 @@ std::vector<uint8_t> create_webm_from_sd_images_to_vector(sd_image_t* images, in
             }
 
             timestamp_ns += frame_duration_ns;
-        }
-
-        LOG_DEBUG("Embedding parameters to metadata: %s", parameters.c_str());
-        if (!parameters.empty()) {
-            mkvmuxer::Tag* tag = segment.AddTag();
-
-            if (tag) {
-                if (!tag->add_simple_tag("COMMENT", parameters.c_str())) {
-                    LOG_WARN("Failed to add COMMENT simple tag.");
-                }
-            } else {
-                LOG_WARN("Failed to add tag to segment.");
-            }
-        } else {
-            LOG_INFO("Paramaters is empty, COMMENT tag not embedded.\n");
         }
 
         if (!segment.Finalize()) {
