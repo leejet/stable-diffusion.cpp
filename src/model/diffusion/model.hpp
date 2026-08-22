@@ -137,7 +137,7 @@ struct DiffusionParams {
     const sd::Tensor<float>* x                        = nullptr;
     const sd::Tensor<float>* timesteps                = nullptr;
     const sd::Tensor<float>* context                  = nullptr;
-    const void* condition_identity                    = nullptr;
+    const void* context_cache_identity                = nullptr;
     const sd::Tensor<float>* c_concat                 = nullptr;
     const sd::Tensor<float>* y                        = nullptr;
     const std::vector<sd::Tensor<float>>* ref_latents = nullptr;

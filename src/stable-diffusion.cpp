@@ -2720,11 +2720,11 @@ public:
                                      const std::vector<int>* local_skip_layers                  = nullptr,
                                      const std::vector<sd::Tensor<float>>* ref_latents_override = nullptr,
                                      bool use_uncond_ip                                         = false) -> sd::Tensor<float> {
-                diffusion_params.context            = condition.c_crossattn.empty() ? nullptr : &condition.c_crossattn;
-                diffusion_params.condition_identity = &condition;
-                diffusion_params.c_concat           = c_concat_override != nullptr ? c_concat_override : (condition.c_concat.empty() ? nullptr : &condition.c_concat);
-                diffusion_params.y                  = condition.c_vector.empty() ? nullptr : &condition.c_vector;
-                diffusion_params.ref_latents        = ref_latents_override != nullptr ? ref_latents_override : (condition.c_ref_images.empty() ? &ref_latents : &condition.c_ref_images);
+                diffusion_params.context                = condition.c_crossattn.empty() ? nullptr : &condition.c_crossattn;
+                diffusion_params.context_cache_identity = &condition;
+                diffusion_params.c_concat               = c_concat_override != nullptr ? c_concat_override : (condition.c_concat.empty() ? nullptr : &condition.c_concat);
+                diffusion_params.y                      = condition.c_vector.empty() ? nullptr : &condition.c_vector;
+                diffusion_params.ref_latents            = ref_latents_override != nullptr ? ref_latents_override : (condition.c_ref_images.empty() ? &ref_latents : &condition.c_ref_images);
 
                 if (sd_version_is_unet(version)) {
                     int nvf = -1;
