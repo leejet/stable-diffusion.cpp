@@ -12,6 +12,7 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -1788,9 +1789,22 @@ protected:
 
     size_t max_graph_vram_bytes           = 0;
     bool stream_layers_enabled            = false;
+    bool stream_residency_enabled         = false;
+    int resident_segment_limit            = -1;
+    int segment_prefetch_depth            = 0;
+    size_t runtime_resident_segment_cap   = SIZE_MAX;
+    bool stream_next_forward_prefetch     = false;
+    bool stream_policy_logged             = false;
+    bool stream_prefetch_fallback_warned  = false;
+    bool stream_prefetch_runtime_warned   = false;
+    bool stream_prefetch_reduced_warned   = false;
+    bool stream_shared_params_logged      = false;
+    bool stream_limits_unavailable_warned = false;
     size_t observed_max_effective_budget_ = 0;
     bool graph_cut_layer_split_enabled    = false;
     std::vector<size_t> graph_cut_layer_split_backend_vram_limits_;
+    std::vector<std::vector<ggml_tensor*>> stream_prefetch_plan_signature_;
+    size_t stream_prefetch_plan_depth_ = 0;
 
     std::vector<ggml_backend_t> extra_runtime_backends;  // borrowed (SDBackendManager-owned)
     ggml_backend_sched_t sched             = nullptr;    // owned
@@ -1833,6 +1847,10 @@ protected:
             return {};
         }
         return std::move(*tensor);
+    }
+
+    static size_t saturating_size_add(size_t lhs, size_t rhs) {
+        return rhs > SIZE_MAX - lhs ? SIZE_MAX : lhs + rhs;
     }
 
     template <typename T>
@@ -1925,15 +1943,10 @@ protected:
     }
 
     ggml_tensor* canonical_param_tensor(ggml_tensor* tensor) {
-        if (tensor == nullptr) {
-            return nullptr;
-        }
-        if (params_tensor_set_.find(tensor) != params_tensor_set_.end()) {
-            return tensor;
-        }
-        if (tensor->view_src != nullptr &&
-            params_tensor_set_.find(tensor->view_src) != params_tensor_set_.end()) {
-            return tensor->view_src;
+        for (ggml_tensor* current = tensor; current != nullptr; current = current->view_src) {
+            if (params_tensor_set_.find(current) != params_tensor_set_.end()) {
+                return current;
+            }
         }
         return nullptr;
     }
@@ -2000,14 +2013,15 @@ protected:
         return true;
     }
 
-    void free_compute_backend_param_tensors(const std::vector<ggml_tensor*>& tensors) {
+    size_t free_compute_backend_param_tensors(const std::vector<ggml_tensor*>& tensors) {
         if (tensors.empty()) {
-            return;
+            return 0;
         }
         auto manager = weight_manager.lock();
         if (manager != nullptr) {
-            manager->release_compute_backend_params(tensors);
+            return manager->release_compute_backend_params(tensors);
         }
+        return 0;
     }
 
     void free_params_backend_param_tensors(const std::vector<ggml_tensor*>& tensors) {
@@ -2451,7 +2465,8 @@ protected:
 
     bool resolve_graph_cut_plan(ggml_cgraph* gf,
                                 GraphCutPlan* plan_out,
-                                size_t* effective_budget_out = nullptr) {
+                                size_t* effective_budget_out                              = nullptr,
+                                sd::ggml_graph_cut::StreamingPolicy* streaming_policy_out = nullptr) {
         GGML_ASSERT(plan_out != nullptr);
         GGML_ASSERT(gf != nullptr);
 
@@ -2462,13 +2477,31 @@ protected:
             if (dev != nullptr && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
                 size_t free_vram = 0, total_vram = 0;
                 ggml_backend_dev_memory(dev, &free_vram, &total_vram);
+                size_t runner_owned_vram = 0;
+                if (auto manager = weight_manager.lock()) {
+                    runner_owned_vram = manager->streaming_allocation_bytes(
+                        stream_prefetch_owner_id(),
+                        runtime_backend,
+                        kept_compute_param_tensor_set);
+                }
+                // Resident and queued buffers reduce reported free VRAM, but
+                // this runner can reuse or release them. Other allocations
+                // remain charged through free_vram.
                 constexpr size_t safety_margin = 512ull * 1024 * 1024;
-                free_clamp                     = (free_vram > safety_margin) ? (free_vram - safety_margin) : 0;
+                size_t reclaimable_free = saturating_size_add(free_vram, runner_owned_vram);
+                if (total_vram > 0) {
+                    reclaimable_free = std::min(reclaimable_free, total_vram);
+                }
+                free_clamp = reclaimable_free > safety_margin
+                                 ? reclaimable_free - safety_margin
+                                 : 0;
                 if (free_clamp < effective_budget) {
-                    LOG_DEBUG("%s clamping streaming budget: actual free VRAM %.2f MB < user cap %.2f MB",
-                              get_desc().c_str(),
-                              free_clamp / (1024.0 * 1024.0),
-                              effective_budget / (1024.0 * 1024.0));
+                    LOG_DEBUG(
+                        "%s clamping streaming budget: free VRAM %.2f MB + runner-owned %.2f MB < user cap %.2f MB",
+                        get_desc().c_str(),
+                        free_vram / (1024.0 * 1024.0),
+                        runner_owned_vram / (1024.0 * 1024.0),
+                        effective_budget / (1024.0 * 1024.0));
                     effective_budget = free_clamp;
                 }
             }
@@ -2480,8 +2513,6 @@ protected:
                 observed_max_effective_budget_ = effective_budget;
                 budget_increased               = true;
             } else {
-                // Keep the plan cache stable, but never plan above what is free now:
-                // another model or process can take VRAM after the first measurement.
                 effective_budget = std::min(observed_max_effective_budget_, free_clamp);
             }
         }
@@ -2490,18 +2521,28 @@ protected:
             *effective_budget_out = effective_budget;
         }
 
-        // When streaming and the model dwarfs the budget, cap the planner at
-        // a quarter so it builds smaller merged segments and chunk-K can fit
-        // alongside. Without streaming the cap only adds dispatch overhead.
-        size_t planner_budget = effective_budget;
-        if (stream_layers_enabled) {
+        // Explicit residency counts use the unmerged plan so their units do
+        // not change when the VRAM budget merges adjacent graph-cut segments.
+        const bool explicit_resident_limit = stream_layers_enabled &&
+                                             resident_segment_limit >= 0;
+        size_t planner_budget              = explicit_resident_limit ? 0 : effective_budget;
+        // For automatic residency, cap merged segments at a quarter of a tight
+        // budget so chunk-K and the compute workspace can fit alongside them.
+        if (stream_layers_enabled && !explicit_resident_limit) {
             size_t total_params_bytes = 0;
             for (const ggml_tensor* t : params_tensor_set_) {
                 if (t != nullptr) {
-                    total_params_bytes += ggml_nbytes(t);
+                    const size_t tensor_bytes = ggml_nbytes(t);
+                    if (tensor_bytes > SIZE_MAX - total_params_bytes) {
+                        total_params_bytes = SIZE_MAX;
+                        break;
+                    }
+                    total_params_bytes += tensor_bytes;
                 }
             }
-            if (total_params_bytes * 4 > effective_budget * 3) {
+            const size_t quarter_ceil = effective_budget / 4 +
+                                        (effective_budget % 4 != 0 ? 1 : 0);
+            if (total_params_bytes > effective_budget - quarter_ceil) {
                 planner_budget = effective_budget / 4;
             }
         }
@@ -2512,8 +2553,25 @@ protected:
                                                      planner_budget,
                                                      params_tensor_set_,
                                                      get_desc().c_str());
+        sd::ggml_graph_cut::StreamingPolicy streaming_policy;
         if (stream_layers_enabled) {
-            sd::ggml_graph_cut::annotate_residency(*plan_out, effective_budget);
+            int effective_resident_limit = stream_residency_enabled
+                                               ? resident_segment_limit
+                                               : 0;
+            if (runtime_resident_segment_cap != SIZE_MAX &&
+                (effective_resident_limit < 0 ||
+                 static_cast<size_t>(effective_resident_limit) > runtime_resident_segment_cap)) {
+                effective_resident_limit = static_cast<int>(std::min(
+                    runtime_resident_segment_cap,
+                    static_cast<size_t>(std::numeric_limits<int>::max())));
+            }
+            streaming_policy = sd::ggml_graph_cut::annotate_residency(*plan_out,
+                                                                      effective_budget,
+                                                                      effective_resident_limit,
+                                                                      segment_prefetch_depth);
+        }
+        if (streaming_policy_out != nullptr) {
+            *streaming_policy_out = streaming_policy;
         }
         if (stream_layers_enabled) {
             if (budget_increased) {
@@ -2646,6 +2704,315 @@ protected:
         return true;
     }
 
+    uintptr_t stream_prefetch_owner_id() const {
+        return reinterpret_cast<uintptr_t>(this);
+    }
+
+    void clear_stream_prefetch_state() {
+        if (auto manager = weight_manager.lock()) {
+            manager->clear_param_prefetches(stream_prefetch_owner_id());
+        }
+        stream_prefetch_plan_signature_.clear();
+        stream_prefetch_plan_depth_ = 0;
+    }
+
+    void update_stream_prefetch_plan_signature(
+        const std::vector<std::vector<ggml_tensor*>>& segment_params,
+        size_t prefetch_depth) {
+        if (stream_prefetch_plan_signature_ == segment_params &&
+            stream_prefetch_plan_depth_ == prefetch_depth) {
+            return;
+        }
+        if (auto manager = weight_manager.lock()) {
+            manager->clear_param_prefetches(stream_prefetch_owner_id());
+        }
+        stream_prefetch_plan_signature_ = segment_params;
+        stream_prefetch_plan_depth_     = prefetch_depth;
+    }
+
+    static uint64_t segment_prefetch_id(size_t segment_index) {
+        return static_cast<uint64_t>(segment_index + 1);
+    }
+
+    bool collect_prefetch_segment_params(
+        ggml_cgraph* gf,
+        const GraphCutPlan& plan,
+        std::vector<std::vector<ggml_tensor*>>& segment_params,
+        std::vector<size_t>& param_segments,
+        std::vector<size_t>& segment_to_param_position) {
+        segment_params.assign(plan.segments.size(), {});
+        param_segments.clear();
+        segment_to_param_position.assign(plan.segments.size(), SIZE_MAX);
+
+        std::unordered_map<ggml_tensor*, size_t> segment_occurrences;
+        for (size_t segment_index = 0; segment_index < plan.segments.size(); ++segment_index) {
+            std::unordered_set<ggml_tensor*> seen_in_segment;
+            for (ggml_tensor* tensor : sd::ggml_graph_cut::param_tensors(gf,
+                                                                         plan.segments[segment_index])) {
+                ggml_tensor* canonical = canonical_param_tensor(tensor);
+                if (canonical == nullptr) {
+                    if (!stream_prefetch_fallback_warned) {
+                        LOG_WARN("%s cannot canonicalize a streamed parameter; disabling segment prefetch",
+                                 get_desc().c_str());
+                        stream_prefetch_fallback_warned = true;
+                    }
+                    return false;
+                }
+                if (!seen_in_segment.insert(canonical).second) {
+                    continue;
+                }
+                segment_params[segment_index].push_back(canonical);
+                ++segment_occurrences[canonical];
+            }
+        }
+
+        size_t shared_params = 0;
+        for (const auto& occurrence : segment_occurrences) {
+            if (occurrence.second > 1) {
+                ++shared_params;
+            }
+        }
+        if (shared_params > 0) {
+            for (auto& params : segment_params) {
+                params.erase(std::remove_if(params.begin(), params.end(), [&](ggml_tensor* param) {
+                                 return segment_occurrences.at(param) > 1;
+                             }),
+                             params.end());
+            }
+            if (!stream_shared_params_logged) {
+                LOG_INFO("%s segment prefetch excludes %zu cross-segment parameters from asynchronous transfers",
+                         get_desc().c_str(),
+                         shared_params);
+                stream_shared_params_logged = true;
+            }
+        }
+
+        bool any_prefetch_params = false;
+        for (size_t segment_index = 0; segment_index < plan.segments.size(); ++segment_index) {
+            if (plan.segments[segment_index].input_param_bytes > 0) {
+                segment_to_param_position[segment_index] = param_segments.size();
+                param_segments.push_back(segment_index);
+                any_prefetch_params = any_prefetch_params || !segment_params[segment_index].empty();
+            }
+        }
+        return any_prefetch_params;
+    }
+
+    std::unordered_set<const ggml_tensor*> retained_stream_params(
+        const GraphCutPlan& plan,
+        ggml_cgraph* gf,
+        size_t protected_segment_index = SIZE_MAX) {
+        std::unordered_set<const ggml_tensor*> retained_params;
+        auto collect_segment = [&](const GraphCutSegment& segment) {
+            for (ggml_tensor* tensor : sd::ggml_graph_cut::param_tensors(gf, segment)) {
+                if (ggml_tensor* canonical = canonical_param_tensor(tensor)) {
+                    retained_params.insert(canonical);
+                }
+            }
+        };
+
+        for (const GraphCutSegment& segment : plan.segments) {
+            if (segment.residency == sd::ggml_graph_cut::SegmentResidency::RESIDENT) {
+                collect_segment(segment);
+            }
+        }
+        if (protected_segment_index < plan.segments.size()) {
+            collect_segment(plan.segments[protected_segment_index]);
+        }
+        return retained_params;
+    }
+
+    size_t release_unretained_resident_params(const GraphCutPlan& plan,
+                                              ggml_cgraph* gf,
+                                              size_t protected_segment_index = SIZE_MAX) {
+        const std::unordered_set<const ggml_tensor*> retained_params =
+            retained_stream_params(plan, gf, protected_segment_index);
+        std::vector<ggml_tensor*> params_to_release;
+        params_to_release.reserve(kept_compute_param_tensor_set.size());
+        for (const ggml_tensor* tensor : kept_compute_param_tensor_set) {
+            if (retained_params.count(tensor) == 0) {
+                params_to_release.push_back(const_cast<ggml_tensor*>(tensor));
+            }
+        }
+
+        const size_t released_bytes = free_compute_backend_param_tensors(params_to_release);
+        for (ggml_tensor* tensor : params_to_release) {
+            kept_compute_param_tensor_set.erase(tensor);
+        }
+        return released_bytes;
+    }
+
+    size_t evict_resident_segment_for_prefetch(GraphCutPlan& plan,
+                                               ggml_cgraph* gf,
+                                               size_t active_segment_index,
+                                               bool& residency_changed) {
+        bool demoted = false;
+        std::vector<size_t> resident_segments;
+        for (size_t segment_index = 0; segment_index < plan.segments.size(); ++segment_index) {
+            if (plan.segments[segment_index].residency ==
+                sd::ggml_graph_cut::SegmentResidency::RESIDENT) {
+                resident_segments.push_back(segment_index);
+            }
+        }
+
+        for (size_t resident_position = resident_segments.size(); resident_position-- > 0;) {
+            const size_t candidate_index = resident_segments[resident_position];
+            if (candidate_index == active_segment_index) {
+                continue;
+            }
+
+            std::unordered_set<ggml_tensor*> earlier_resident_params;
+            auto collect_earlier_resident_params = [&](size_t segment_index) {
+                for (ggml_tensor* tensor : sd::ggml_graph_cut::param_tensors(
+                         gf, plan.segments[segment_index])) {
+                    if (ggml_tensor* canonical = canonical_param_tensor(tensor)) {
+                        earlier_resident_params.insert(canonical);
+                    }
+                }
+            };
+            for (size_t position = 0; position < resident_position; ++position) {
+                collect_earlier_resident_params(resident_segments[position]);
+            }
+
+            const std::vector<ggml_tensor*> candidate_params =
+                sd::ggml_graph_cut::param_tensors(gf, plan.segments[candidate_index]);
+            const bool has_demotable_params = std::any_of(
+                candidate_params.begin(),
+                candidate_params.end(),
+                [&](ggml_tensor* tensor) {
+                    ggml_tensor* canonical = canonical_param_tensor(tensor);
+                    return canonical != nullptr &&
+                           kept_compute_param_tensor_set.count(canonical) != 0 &&
+                           earlier_resident_params.count(canonical) == 0;
+                });
+            if (!has_demotable_params) {
+                continue;
+            }
+
+            runtime_resident_segment_cap = std::min(runtime_resident_segment_cap,
+                                                    resident_position);
+            stream_policy_logged         = false;
+            for (size_t position = resident_position; position < resident_segments.size(); ++position) {
+                plan.segments[resident_segments[position]].residency =
+                    sd::ggml_graph_cut::SegmentResidency::STREAMED;
+            }
+            residency_changed           = true;
+            demoted                     = true;
+            const size_t released_bytes = release_unretained_resident_params(
+                plan, gf, active_segment_index);
+            if (released_bytes > 0) {
+                LOG_WARN(
+                    "%s evicted resident segment %zu to make room for prefetch; "
+                    "resident cap reduced to %zu, released %.2f MB",
+                    get_desc().c_str(),
+                    candidate_index + 1,
+                    runtime_resident_segment_cap,
+                    released_bytes / (1024.0 * 1024.0));
+                return released_bytes;
+            }
+        }
+        if (demoted) {
+            LOG_WARN(
+                "%s exhausted resident evictions for prefetch without releasing a complete buffer; "
+                "resident cap reduced to %zu",
+                get_desc().c_str(),
+                runtime_resident_segment_cap);
+        }
+        return 0;
+    }
+
+    ParamPrefetchResult enqueue_segment_prefetch(
+        size_t segment_index,
+        const std::vector<std::vector<ggml_tensor*>>& segment_params) {
+        if (segment_index >= segment_params.size()) {
+            return ParamPrefetchResult::FAILURE;
+        }
+        auto manager = weight_manager.lock();
+        if (manager == nullptr) {
+            LOG_ERROR("%s segment prefetch requires a weight manager", get_desc().c_str());
+            return ParamPrefetchResult::FAILURE;
+        }
+        return manager->enqueue_param_prefetch(stream_prefetch_owner_id(),
+                                               segment_prefetch_id(segment_index),
+                                               segment_params[segment_index]);
+    }
+
+    ParamPrefetchResult enqueue_segment_prefetch_with_eviction(
+        size_t segment_index,
+        size_t active_segment_index,
+        const std::vector<std::vector<ggml_tensor*>>& segment_params,
+        GraphCutPlan& plan,
+        ggml_cgraph* gf,
+        bool& residency_changed) {
+        ParamPrefetchResult result = enqueue_segment_prefetch(segment_index, segment_params);
+        while (result == ParamPrefetchResult::ALLOCATION_FAILURE) {
+            const size_t released_bytes = evict_resident_segment_for_prefetch(
+                plan, gf, active_segment_index, residency_changed);
+            if (released_bytes == 0) {
+                break;
+            }
+            result = enqueue_segment_prefetch(segment_index, segment_params);
+        }
+        return result;
+    }
+
+    bool activate_segment_prefetch(size_t segment_index,
+                                   const std::vector<std::vector<ggml_tensor*>>& segment_params) {
+        if (segment_index >= segment_params.size()) {
+            return false;
+        }
+        auto manager = weight_manager.lock();
+        if (manager == nullptr) {
+            LOG_ERROR("%s segment prefetch requires a weight manager", get_desc().c_str());
+            return false;
+        }
+        return manager->activate_param_prefetch(stream_prefetch_owner_id(),
+                                                segment_prefetch_id(segment_index),
+                                                segment_params[segment_index]);
+    }
+
+    struct SegmentPrefetchQueueResult {
+        ParamPrefetchResult result = ParamPrefetchResult::SUCCESS;
+        size_t queued_depth        = 0;
+    };
+
+    SegmentPrefetchQueueResult queue_future_segment_prefetches(
+        size_t active_position,
+        const std::vector<size_t>& param_segments,
+        const std::vector<std::vector<ggml_tensor*>>& segment_params,
+        size_t depth,
+        bool wrap,
+        GraphCutPlan& plan,
+        ggml_cgraph* gf,
+        bool& residency_changed) {
+        SegmentPrefetchQueueResult queue_result;
+        if (param_segments.empty() || active_position >= param_segments.size()) {
+            return queue_result;
+        }
+        depth = std::min(depth, param_segments.size() - 1);
+        for (size_t offset = 1; offset <= depth; ++offset) {
+            size_t position = active_position + offset;
+            if (position >= param_segments.size()) {
+                if (!wrap) {
+                    break;
+                }
+                position %= param_segments.size();
+            }
+            queue_result.result = enqueue_segment_prefetch_with_eviction(
+                param_segments[position],
+                param_segments[active_position],
+                segment_params,
+                plan,
+                gf,
+                residency_changed);
+            if (queue_result.result != ParamPrefetchResult::SUCCESS) {
+                return queue_result;
+            }
+            ++queue_result.queued_depth;
+        }
+        return queue_result;
+    }
+
     struct PersistentExternalBinding {
         ggml_backend_buffer_t buffer = nullptr;
         void* data                   = nullptr;
@@ -2771,7 +3138,8 @@ protected:
                                                bool free_compute_params,
                                                bool preserve_backend_tensor_data_map,
                                                bool no_return                                          = false,
-                                               const std::unordered_set<std::string>* cache_keep_names = nullptr) {
+                                               const std::unordered_set<std::string>* cache_keep_names = nullptr,
+                                               const std::function<void()>& before_compute             = {}) {
         std::vector<ggml_tensor*> graph_param_tensors;
         std::vector<ggml_tensor*> params_to_prepare;
         if (!prepare_execute_graph_weights(gf, graph_param_tensors, params_to_prepare, !free_compute_params)) {
@@ -2835,6 +3203,9 @@ protected:
         }
 
         copy_data_to_backend_tensor(gf, !preserve_backend_tensor_data_map);
+        if (before_compute) {
+            before_compute();
+        }
         if (sd_backend_is_cpu(runtime_backend)) {
             sd_backend_cpu_set_n_threads(runtime_backend, n_threads);
         }
@@ -2931,14 +3302,107 @@ protected:
 
     template <typename T>
     std::optional<sd::Tensor<T>> compute_graph_cut_segments(ggml_cgraph* gf,
-                                                            const GraphCutPlan& plan,
+                                                            GraphCutPlan& plan,
                                                             int n_threads,
                                                             bool log_residency,
-                                                            bool no_return = false) {
+                                                            bool no_return                                             = false,
+                                                            const sd::ggml_graph_cut::StreamingPolicy* prefetch_policy = nullptr) {
         GGML_ASSERT(gf != nullptr);
 
         free_compute_buffer();
         free_cache_ctx_and_buffer();
+
+        auto manager = weight_manager.lock();
+        if (stream_layers_enabled && !kept_compute_param_tensor_set.empty()) {
+            std::unordered_set<const ggml_tensor*> desired_resident_params;
+            for (const auto& segment : plan.segments) {
+                if (segment.residency != sd::ggml_graph_cut::SegmentResidency::RESIDENT) {
+                    continue;
+                }
+                for (ggml_tensor* tensor : sd::ggml_graph_cut::param_tensors(gf, segment)) {
+                    if (ggml_tensor* canonical = canonical_param_tensor(tensor)) {
+                        desired_resident_params.insert(canonical);
+                    }
+                }
+            }
+            const bool same_resident_params =
+                desired_resident_params.size() == kept_compute_param_tensor_set.size() &&
+                std::all_of(desired_resident_params.begin(),
+                            desired_resident_params.end(),
+                            [&](const ggml_tensor* tensor) {
+                                return kept_compute_param_tensor_set.count(tensor) != 0;
+                            });
+            if (!same_resident_params) {
+                if (manager != nullptr) {
+                    manager->clear_param_prefetches(stream_prefetch_owner_id());
+                }
+                std::vector<ggml_tensor*> params_to_release;
+                for (const ggml_tensor* tensor : kept_compute_param_tensor_set) {
+                    if (desired_resident_params.count(tensor) == 0) {
+                        params_to_release.push_back(const_cast<ggml_tensor*>(tensor));
+                    }
+                }
+                free_compute_backend_param_tensors(params_to_release);
+                for (ggml_tensor* tensor : params_to_release) {
+                    kept_compute_param_tensor_set.erase(tensor);
+                }
+            }
+        }
+        std::vector<std::vector<ggml_tensor*>> segment_params;
+        std::vector<size_t> param_segments;
+        std::vector<size_t> segment_to_param_position;
+        bool prefetch_active          = prefetch_policy != nullptr &&
+                                        prefetch_policy->prefetch_depth > 0 &&
+                                        collect_prefetch_segment_params(gf,
+                                                                        plan,
+                                                                        segment_params,
+                                                                        param_segments,
+                                                                        segment_to_param_position);
+        size_t runtime_prefetch_depth = prefetch_active
+                                            ? prefetch_policy->prefetch_depth
+                                            : 0;
+        if (prefetch_active) {
+            update_stream_prefetch_plan_signature(segment_params, runtime_prefetch_depth);
+        } else {
+            clear_stream_prefetch_state();
+        }
+        bool residency_changed = false;
+
+        struct PrefetchCleanupGuard {
+            std::shared_ptr<RunnerWeightManager> manager;
+            uintptr_t owner_id = 0;
+            bool keep          = false;
+
+            ~PrefetchCleanupGuard() {
+                if (!keep && manager != nullptr) {
+                    manager->clear_param_prefetches(owner_id);
+                }
+            }
+        } prefetch_cleanup{manager, stream_prefetch_owner_id()};
+
+        auto disable_prefetch = [&](const char* reason) {
+            if (!stream_prefetch_runtime_warned) {
+                LOG_WARN("%s segment prefetch failed while %s; continuing with synchronous streaming",
+                         get_desc().c_str(),
+                         reason);
+                stream_prefetch_runtime_warned = true;
+            }
+            clear_stream_prefetch_state();
+            prefetch_active = false;
+        };
+
+        if (prefetch_active) {
+            ParamPrefetchResult result = enqueue_segment_prefetch_with_eviction(
+                param_segments.front(),
+                param_segments.front(),
+                segment_params,
+                plan,
+                gf,
+                residency_changed);
+            if (result != ParamPrefetchResult::SUCCESS) {
+                disable_prefetch("queueing the first segment");
+            }
+        }
 
         std::unordered_map<ggml_tensor*, PersistentExternalBinding> persistent_externals;
         snapshot_persistent_externals(plan, gf, persistent_externals);
@@ -2947,14 +3411,46 @@ protected:
         for (size_t seg_idx = 0; seg_idx < plan.segments.size(); ++seg_idx) {
             const auto& segment   = plan.segments[seg_idx];
             const bool is_last    = seg_idx + 1 == plan.segments.size();
-            auto future_cut_names = sd::ggml_graph_cut::collect_future_input_names(gf, plan, seg_idx);
+            size_t param_position = SIZE_MAX;
+            if (!segment_to_param_position.empty()) {
+                param_position = segment_to_param_position[seg_idx];
+            }
+            const bool has_prefetch_params = param_position != SIZE_MAX;
+            auto future_cut_names          = sd::ggml_graph_cut::collect_future_input_names(gf, plan, seg_idx);
+
+            if (has_prefetch_params && prefetch_active) {
+                ParamPrefetchResult result = enqueue_segment_prefetch_with_eviction(
+                    seg_idx,
+                    seg_idx,
+                    segment_params,
+                    plan,
+                    gf,
+                    residency_changed);
+                if (result != ParamPrefetchResult::SUCCESS ||
+                    !activate_segment_prefetch(seg_idx, segment_params)) {
+                    disable_prefetch("activating a segment");
+                }
+            }
+
             if (log_residency) {
-                LOG_DEBUG("%s graph cut executing segment %zu/%zu: %s (residency=%s)",
-                          get_desc().c_str(),
-                          seg_idx + 1,
-                          plan.segments.size(),
-                          segment.group_name.c_str(),
-                          segment.residency == sd::ggml_graph_cut::SegmentResidency::RESIDENT ? "RESIDENT" : "STREAMED");
+                if (prefetch_policy != nullptr) {
+                    LOG_DEBUG("%s graph cut executing segment %zu/%zu: %s (residency=%s, prefetch=%zu)",
+                              get_desc().c_str(),
+                              seg_idx + 1,
+                              plan.segments.size(),
+                              segment.group_name.c_str(),
+                              segment.residency == sd::ggml_graph_cut::SegmentResidency::RESIDENT
+                                  ? "RESIDENT"
+                                  : "STREAMED",
+                              prefetch_active ? runtime_prefetch_depth : 0);
+                } else {
+                    LOG_DEBUG("%s graph cut executing segment %zu/%zu: %s (residency=%s)",
+                              get_desc().c_str(),
+                              seg_idx + 1,
+                              plan.segments.size(),
+                              segment.group_name.c_str(),
+                              segment.residency == sd::ggml_graph_cut::SegmentResidency::RESIDENT ? "RESIDENT" : "STREAMED");
+                }
             } else {
                 LOG_DEBUG("%s graph cut executing segment %zu/%zu: %s",
                           get_desc().c_str(),
@@ -2985,14 +3481,60 @@ protected:
             ggml_context* segment_graph_ctx = nullptr;
             ggml_cgraph* segment_graph      = sd::ggml_graph_cut::build_segment_graph(gf, segment, &segment_graph_ctx);
             const bool keep_segment_params  = segment.residency == sd::ggml_graph_cut::SegmentResidency::RESIDENT;
-            auto segment_output             = execute_graph<T>(segment_graph,
+            std::function<void()> before_compute;
+            if (has_prefetch_params && prefetch_active) {
+                before_compute = [this,
+                                  param_position,
+                                  &param_segments,
+                                  &segment_params,
+                                  &plan,
+                                  gf,
+                                  &runtime_prefetch_depth,
+                                  &prefetch_active,
+                                  &residency_changed,
+                                  &disable_prefetch]() {
+                    if (!prefetch_active) {
+                        return;
+                    }
+                    SegmentPrefetchQueueResult result = queue_future_segment_prefetches(
+                        param_position,
+                        param_segments,
+                        segment_params,
+                        runtime_prefetch_depth,
+                        stream_next_forward_prefetch,
+                        plan,
+                        gf,
+                        residency_changed);
+                    if (result.result == ParamPrefetchResult::SUCCESS) {
+                        return;
+                    }
+                    if (result.result == ParamPrefetchResult::ALLOCATION_FAILURE &&
+                        result.queued_depth > 0) {
+                        runtime_prefetch_depth = result.queued_depth;
+                        if (!stream_prefetch_reduced_warned) {
+                            LOG_WARN("%s reduced segment prefetch depth to %zu after exhausting resident evictions",
+                                     get_desc().c_str(),
+                                     runtime_prefetch_depth);
+                            stream_prefetch_reduced_warned = true;
+                        }
+                        return;
+                    }
+                    disable_prefetch("queueing future segments");
+                };
+            }
+            auto segment_output = execute_graph<T>(segment_graph,
                                                    n_threads,
                                                    true,
                                                    !keep_segment_params,
                                                    true,
                                                    !is_last || no_return,
-                                                   &future_cut_names);
+                                                   &future_cut_names,
+                                                   before_compute);
             ggml_free(segment_graph_ctx);
+            if (residency_changed) {
+                release_unretained_resident_params(plan, gf);
+                residency_changed = false;
+            }
             if (!segment_output.has_value()) {
                 free_cache_ctx_and_buffer();
                 free_compute_buffer();
@@ -3005,12 +3547,19 @@ protected:
         backend_tensor_data_map.clear();
         free_cache_ctx_and_buffer();
         free_compute_ctx();
+        prefetch_cleanup.keep = prefetch_active;
         return output;
     }
 
 public:
     void runner_done() {
+        stream_residency_enabled       = false;
+        runtime_resident_segment_cap   = SIZE_MAX;
+        stream_next_forward_prefetch   = false;
+        stream_policy_logged           = false;
+        stream_prefetch_reduced_warned = false;
         free_compute_buffer();
+        clear_stream_prefetch_state();
         std::vector<ggml_tensor*> tensors_to_release = std::move(this->runner_param_tensors);
         this->runner_param_tensors.clear();
         runner_param_tensor_set.clear();
@@ -3031,6 +3580,7 @@ public:
     }
 
     virtual ~GGMLRunner() {
+        clear_stream_prefetch_state();
         free_compute_buffer();
         free_params_ctx();
         free_compute_ctx();
@@ -3188,17 +3738,55 @@ public:
 
         if (can_attempt_graph_cut_segmented_compute()) {
             GraphCutPlan plan;
-            if (!resolve_graph_cut_plan(gf, &plan)) {
+            sd::ggml_graph_cut::StreamingPolicy streaming_policy;
+            if (!resolve_graph_cut_plan(gf, &plan, nullptr, &streaming_policy)) {
                 free_compute_ctx();
                 return std::nullopt;
             }
             if (should_use_graph_cut_segmented_compute(plan)) {
+                if (stream_layers_enabled && !stream_policy_logged) {
+                    const size_t parameter_segments = static_cast<size_t>(std::count_if(
+                        plan.segments.begin(), plan.segments.end(), [](const GraphCutSegment& segment) {
+                            return segment.input_param_bytes > 0;
+                        }));
+                    LOG_INFO(
+                        "%s layer stream: %zu parameter segments, resident requested=%d selected=%zu, "
+                        "prefetch requested=%d selected=%zu",
+                        get_desc().c_str(),
+                        parameter_segments,
+                        resident_segment_limit,
+                        streaming_policy.resident_segments,
+                        segment_prefetch_depth,
+                        streaming_policy.prefetch_depth);
+                    stream_policy_logged = true;
+                }
+
                 return compute_graph_cut_segments<T>(gf,
                                                      plan,
                                                      n_threads,
                                                      stream_layers_enabled,
-                                                     no_return);
+                                                     no_return,
+                                                     stream_layers_enabled && streaming_policy.prefetch_depth > 0
+                                                         ? &streaming_policy
+                                                         : nullptr);
             }
+            if (stream_layers_enabled &&
+                (resident_segment_limit >= 0 || segment_prefetch_depth > 0) &&
+                !stream_limits_unavailable_warned) {
+                LOG_WARN("%s streaming limits require at least two valid graph-cut segments; using full-graph execution",
+                         get_desc().c_str());
+                stream_limits_unavailable_warned = true;
+            }
+        }
+        clear_stream_prefetch_state();
+        if (!kept_compute_param_tensor_set.empty()) {
+            std::vector<ggml_tensor*> resident_params;
+            resident_params.reserve(kept_compute_param_tensor_set.size());
+            for (const ggml_tensor* tensor : kept_compute_param_tensor_set) {
+                resident_params.push_back(const_cast<ggml_tensor*>(tensor));
+            }
+            free_compute_backend_param_tensors(resident_params);
+            kept_compute_param_tensor_set.clear();
         }
         return execute_graph<T>(gf,
                                 n_threads,
@@ -3227,7 +3815,8 @@ public:
     }
 
     void set_max_graph_vram_bytes(size_t max_vram_bytes) {
-        max_graph_vram_bytes = max_vram_bytes;
+        max_graph_vram_bytes           = max_vram_bytes;
+        observed_max_effective_budget_ = 0;
     }
 
     void set_stream_layers_enabled(bool enabled) {
@@ -3237,6 +3826,27 @@ public:
             return;
         }
         stream_layers_enabled = enabled;
+    }
+
+    void set_stream_segment_limits(int resident_segments, int prefetch_depth) {
+        resident_segment_limit           = std::max(-1, resident_segments);
+        segment_prefetch_depth           = std::max(0, prefetch_depth);
+        runtime_resident_segment_cap     = SIZE_MAX;
+        stream_policy_logged             = false;
+        stream_limits_unavailable_warned = false;
+    }
+
+    void set_stream_residency_enabled(bool enabled) {
+        if (stream_residency_enabled == enabled) {
+            return;
+        }
+        stream_residency_enabled       = enabled;
+        runtime_resident_segment_cap   = SIZE_MAX;
+        stream_policy_logged           = false;
+    }
+
+    void set_stream_next_forward_prefetch(bool enabled) {
+        stream_next_forward_prefetch = enabled;
     }
 
     void set_graph_cut_layer_split_enabled(bool enabled) {

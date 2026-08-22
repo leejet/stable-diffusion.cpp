@@ -21,6 +21,46 @@ namespace sd::ggml_graph_cut {
 
     static constexpr double MAX_VRAM_BYTES_PER_GIB = 1024.0 * 1024.0 * 1024.0;
 
+    static size_t saturating_add(size_t lhs, size_t rhs) {
+        return rhs > SIZE_MAX - lhs ? SIZE_MAX : lhs + rhs;
+    }
+
+    static bool sum_fits(size_t lhs, size_t rhs, size_t limit) {
+        return lhs <= limit && rhs <= limit - lhs;
+    }
+
+    static const ggml_tensor* canonical_params_tensor(
+        const std::unordered_set<const ggml_tensor*>& params_tensor_set,
+        const ggml_tensor* tensor) {
+        for (const ggml_tensor* current = tensor; current != nullptr; current = current->view_src) {
+            if (params_tensor_set.find(current) != params_tensor_set.end()) {
+                return current;
+            }
+        }
+        return nullptr;
+    }
+
+    static size_t tensor_backend_allocation_bytes(ggml_backend_t backend,
+                                                  const ggml_tensor* tensor) {
+        if (tensor == nullptr) {
+            return 0;
+        }
+        ggml_backend_buffer_type_t buft = backend != nullptr
+                                              ? ggml_backend_get_default_buffer_type(backend)
+                                              : nullptr;
+        if (buft == nullptr) {
+            return ggml_nbytes(tensor);
+        }
+        size_t bytes     = ggml_backend_buft_get_alloc_size(buft, tensor);
+        size_t alignment = ggml_backend_buft_get_alignment(buft);
+        if (alignment <= 1) {
+            return bytes;
+        }
+        return bytes > SIZE_MAX - (alignment - 1)
+                   ? SIZE_MAX
+                   : GGML_PAD(bytes, alignment);
+    }
+
     static std::string graph_cut_tensor_display_name(const ggml_tensor* tensor) {
         if (tensor == nullptr) {
             return "<null>";
@@ -44,12 +84,7 @@ namespace sd::ggml_graph_cut {
 
     static bool is_params_tensor(const std::unordered_set<const ggml_tensor*>& params_tensor_set,
                                  const ggml_tensor* tensor) {
-        if (tensor == nullptr) {
-            return false;
-        }
-        return params_tensor_set.find(tensor) != params_tensor_set.end() ||
-               (tensor->view_src != nullptr &&
-                params_tensor_set.find(tensor->view_src) != params_tensor_set.end());
+        return canonical_params_tensor(params_tensor_set, tensor) != nullptr;
     }
 
     static int graph_node_index_by_name(ggml_cgraph* gf, const char* name) {
@@ -79,11 +114,18 @@ namespace sd::ggml_graph_cut {
         return shape;
     }
 
-    static size_t graph_cut_segment_vram_bytes(const Segment& segment) {
-        return segment.compute_buffer_size +
-               segment.input_param_bytes +
-               segment.input_previous_cut_bytes +
-               segment.output_bytes;
+    static bool graph_cut_segment_fits(const Segment& segment, size_t budget) {
+        size_t bytes = 0;
+        for (size_t allocation : {segment.compute_buffer_size,
+                                  segment.input_param_bytes,
+                                  segment.input_previous_cut_bytes,
+                                  segment.output_bytes}) {
+            if (!sum_fits(bytes, allocation, budget)) {
+                return false;
+            }
+            bytes += allocation;
+        }
+        return true;
     }
 
     static std::string lower_ascii_copy(std::string value) {
@@ -350,6 +392,7 @@ namespace sd::ggml_graph_cut {
                               const char* log_desc) {
         std::set<int> internal_nodes;
         std::unordered_set<const ggml_tensor*> input_seen;
+        std::unordered_set<const ggml_tensor*> param_seen;
         std::vector<Segment::InputRef> input_refs;
 
         std::stack<ggml_tensor*> work_stack;
@@ -426,20 +469,33 @@ namespace sd::ggml_graph_cut {
                                                     : ggml_nbytes(current_input));
             switch (input.type) {
                 case Segment::INPUT_PREVIOUS_CUT:
-                    segment.input_previous_cut_bytes += tensor_bytes;
+                    segment.input_previous_cut_bytes = saturating_add(segment.input_previous_cut_bytes,
+                                                                      tensor_bytes);
                     break;
-                case Segment::INPUT_PARAM:
-                    segment.input_param_bytes += tensor_bytes;
+                case Segment::INPUT_PARAM: {
+                    const ggml_tensor* canonical = canonical_params_tensor(params_tensor_set,
+                                                                           current_input);
+                    if (canonical != nullptr && param_seen.insert(canonical).second) {
+                        const size_t allocation_bytes = tensor_backend_allocation_bytes(backend,
+                                                                                        canonical);
+                        segment.input_param_bytes = saturating_add(
+                            segment.input_param_bytes,
+                            allocation_bytes);
+                        segment.input_param_allocations.push_back({canonical, allocation_bytes});
+                    }
                     break;
+                }
                 case Segment::INPUT_EXTERNAL:
                 default:
-                    segment.input_external_bytes += tensor_bytes;
+                    segment.input_external_bytes = saturating_add(segment.input_external_bytes,
+                                                                  tensor_bytes);
                     break;
             }
         }
         for (int output_node_index : segment.output_node_indices) {
-            ggml_tensor* output = ggml_graph_node(gf, output_node_index);
-            segment.output_bytes += cache_tensor_bytes(output);
+            ggml_tensor* output  = ggml_graph_node(gf, output_node_index);
+            segment.output_bytes = saturating_add(segment.output_bytes,
+                                                  cache_tensor_bytes(output));
         }
         segment.compute_buffer_size = measure_segment_compute_buffer(backend, gf, segment, log_desc);
 
@@ -890,7 +946,7 @@ namespace sd::ggml_graph_cut {
             GGML_ASSERT(!single_plan.segments.empty());
 
             size_t best_end_segment_index = start_segment_index;
-            bool can_merge_next_segment   = graph_cut_segment_vram_bytes(single_plan.segments.back()) <= max_graph_vram_bytes;
+            bool can_merge_next_segment   = graph_cut_segment_fits(single_plan.segments.back(), max_graph_vram_bytes);
 
             while (can_merge_next_segment && best_end_segment_index + 1 < base_plan.segments.size()) {
                 const size_t next_end_segment_index = best_end_segment_index + 1;
@@ -910,8 +966,7 @@ namespace sd::ggml_graph_cut {
                 GGML_ASSERT(!candidate_plan.segments.empty());
 
                 const auto& candidate_segment = candidate_plan.segments.back();
-                const size_t candidate_bytes  = graph_cut_segment_vram_bytes(candidate_segment);
-                if (candidate_bytes > max_graph_vram_bytes) {
+                if (!graph_cut_segment_fits(candidate_segment, max_graph_vram_bytes)) {
                     break;
                 }
 
@@ -995,54 +1050,171 @@ namespace sd::ggml_graph_cut {
         return resolved_plan;
     }
 
-    void annotate_residency(Plan& plan, size_t max_graph_vram_bytes) {
+    static void add_segment_param_bytes(
+        const Plan& plan,
+        size_t segment_index,
+        bool prefetch_only,
+        const std::unordered_map<const ggml_tensor*, size_t>& param_occurrences,
+        std::unordered_set<const ggml_tensor*>& seen_params,
+        std::unordered_set<size_t>& seen_fallback_segments,
+        size_t& bytes) {
+        const Segment& segment = plan.segments[segment_index];
+        size_t described_bytes = 0;
+        for (const Segment::ParamAllocation& allocation : segment.input_param_allocations) {
+            described_bytes = saturating_add(described_bytes, allocation.bytes);
+            if (allocation.tensor == nullptr) {
+                continue;
+            }
+            auto occurrence = param_occurrences.find(allocation.tensor);
+            if (prefetch_only && occurrence != param_occurrences.end() && occurrence->second > 1) {
+                continue;
+            }
+            if (seen_params.insert(allocation.tensor).second) {
+                bytes = saturating_add(bytes, allocation.bytes);
+            }
+        }
+
+        if (described_bytes < segment.input_param_bytes &&
+            seen_fallback_segments.insert(segment_index).second) {
+            bytes = saturating_add(bytes, segment.input_param_bytes - described_bytes);
+        }
+    }
+
+    static size_t peak_streaming_param_bytes(
+        const Plan& plan,
+        const std::vector<size_t>& param_segments,
+        const std::unordered_map<const ggml_tensor*, size_t>& param_occurrences,
+        size_t resident_count,
+        size_t prefetch_depth) {
+        size_t peak = 0;
+        prefetch_depth = param_segments.size() < 2
+                             ? 0
+                             : std::min(prefetch_depth, param_segments.size() - 1);
+
+        for (size_t active_position = 0; active_position < param_segments.size(); ++active_position) {
+            std::unordered_set<const ggml_tensor*> seen_params;
+            std::unordered_set<size_t> seen_fallback_segments;
+            size_t bytes = 0;
+
+            for (size_t resident_position = 0;
+                 resident_position < resident_count;
+                 ++resident_position) {
+                add_segment_param_bytes(plan,
+                                        param_segments[resident_position],
+                                        false,
+                                        param_occurrences,
+                                        seen_params,
+                                        seen_fallback_segments,
+                                        bytes);
+            }
+            add_segment_param_bytes(plan,
+                                    param_segments[active_position],
+                                    false,
+                                    param_occurrences,
+                                    seen_params,
+                                    seen_fallback_segments,
+                                    bytes);
+            for (size_t offset = 1; offset <= prefetch_depth; ++offset) {
+                const size_t future_position = (active_position + offset) % param_segments.size();
+                add_segment_param_bytes(plan,
+                                        param_segments[future_position],
+                                        true,
+                                        param_occurrences,
+                                        seen_params,
+                                        seen_fallback_segments,
+                                        bytes);
+            }
+            peak = std::max(peak, bytes);
+        }
+        return peak;
+    }
+
+    StreamingPolicy annotate_residency(Plan& plan,
+                                       size_t max_graph_vram_bytes,
+                                       int resident_segment_limit,
+                                       int segment_prefetch_depth) {
+        StreamingPolicy policy;
         // Cached plans may be reused with a smaller live budget.
         for (auto& seg : plan.segments) {
             seg.residency = SegmentResidency::STREAMED;
         }
-        if (max_graph_vram_bytes == 0 || plan.segments.size() < 2) {
-            return;
+
+        if (max_graph_vram_bytes == 0) {
+            return policy;
         }
 
-        bool any_param_bearing = false;
-        for (const auto& seg : plan.segments) {
-            if (seg.input_param_bytes > 0) {
-                any_param_bearing = true;
-                break;
+        std::vector<size_t> param_segments;
+        std::unordered_map<const ggml_tensor*, size_t> param_occurrences;
+        param_segments.reserve(plan.segments.size());
+        for (size_t i = 0; i < plan.segments.size(); ++i) {
+            if (plan.segments[i].input_param_bytes > 0) {
+                param_segments.push_back(i);
+                std::unordered_set<const ggml_tensor*> seen_in_segment;
+                for (const Segment::ParamAllocation& allocation :
+                     plan.segments[i].input_param_allocations) {
+                    if (allocation.tensor != nullptr &&
+                        seen_in_segment.insert(allocation.tensor).second) {
+                        ++param_occurrences[allocation.tensor];
+                    }
+                }
             }
         }
-        if (!any_param_bearing) {
-            return;
+        if (param_segments.empty()) {
+            return policy;
         }
 
-        // Leave room for the largest active streamed segment.
-        size_t worst_streamed_footprint = 0;
+        const size_t resident_cap = resident_segment_limit < 0
+                                        ? param_segments.size()
+                                        : std::min(static_cast<size_t>(resident_segment_limit),
+                                                   param_segments.size());
+        const size_t prefetch_cap = param_segments.size() < 2
+                                        ? 0
+                                        : std::min(static_cast<size_t>(std::max(0, segment_prefetch_depth)),
+                                                   param_segments.size() - 1);
+
+        size_t worst_non_param_footprint = 0;
         for (const auto& seg : plan.segments) {
-            const size_t seg_footprint = seg.input_param_bytes +
-                                         seg.compute_buffer_size +
-                                         seg.output_bytes +
-                                         seg.input_previous_cut_bytes +
-                                         seg.input_external_bytes;
-            if (seg_footprint > worst_streamed_footprint) {
-                worst_streamed_footprint = seg_footprint;
+            size_t seg_footprint = seg.compute_buffer_size;
+            seg_footprint        = saturating_add(seg_footprint, seg.output_bytes);
+            seg_footprint        = saturating_add(seg_footprint, seg.input_previous_cut_bytes);
+            seg_footprint        = saturating_add(seg_footprint, seg.input_external_bytes);
+            if (seg_footprint > worst_non_param_footprint) {
+                worst_non_param_footprint = seg_footprint;
             }
         }
         constexpr size_t safety = 512ull * 1024 * 1024;
-        const size_t reserved   = safety + worst_streamed_footprint;
-
-        if (max_graph_vram_bytes <= reserved) {
-            return;
+        if (!sum_fits(safety, worst_non_param_footprint, max_graph_vram_bytes)) {
+            return policy;
         }
-        const size_t available = max_graph_vram_bytes - reserved;
+        const size_t base_reserved = safety + worst_non_param_footprint;
 
-        size_t cumulative = 0;
-        for (auto& seg : plan.segments) {
-            if (cumulative + seg.input_param_bytes > available) {
+        for (size_t candidate = 1; candidate <= prefetch_cap; ++candidate) {
+            const size_t peak_param_bytes = peak_streaming_param_bytes(plan,
+                                                                       param_segments,
+                                                                       param_occurrences,
+                                                                       0,
+                                                                       candidate);
+            if (!sum_fits(base_reserved, peak_param_bytes, max_graph_vram_bytes)) {
                 break;
             }
-            seg.residency = SegmentResidency::RESIDENT;
-            cumulative += seg.input_param_bytes;
+            policy.prefetch_depth = candidate;
         }
+
+        for (size_t candidate = 1; candidate <= resident_cap; ++candidate) {
+            const size_t peak_param_bytes = peak_streaming_param_bytes(plan,
+                                                                       param_segments,
+                                                                       param_occurrences,
+                                                                       candidate,
+                                                                       policy.prefetch_depth);
+            if (!sum_fits(base_reserved, peak_param_bytes, max_graph_vram_bytes)) {
+                break;
+            }
+            policy.resident_segments = candidate;
+        }
+        for (size_t i = 0; i < policy.resident_segments; ++i) {
+            plan.segments[param_segments[i]].residency = SegmentResidency::RESIDENT;
+        }
+        return policy;
     }
 
 }  // namespace sd::ggml_graph_cut

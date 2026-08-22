@@ -247,8 +247,10 @@ public:
     sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0, 0, nullptr};
     bool enable_mmap                     = false;
     sd::ggml_graph_cut::MaxVramAssignment max_vram_assignment;
-    bool stream_layers = false;
-    bool eager_load    = false;
+    bool stream_layers       = false;
+    int resident_layers      = -1;
+    int layer_prefetch_depth = 0;
+    bool eager_load          = false;
     std::string backend_spec;
     std::string params_backend_spec;
     std::string split_mode_spec;
@@ -857,10 +859,35 @@ public:
         return true;
     }
 
-    bool init(const sd_ctx_params_t* sd_ctx_params) {
-        n_threads           = sd_ctx_params->n_threads;
-        enable_mmap         = sd_ctx_params->enable_mmap;
-        stream_layers       = sd_ctx_params->stream_layers;
+    bool init(const sd_ctx_params_t* sd_ctx_params,
+              const sd_layer_stream_params_t* layer_stream_params) {
+        n_threads            = sd_ctx_params->n_threads;
+        enable_mmap          = sd_ctx_params->enable_mmap;
+        stream_layers        = sd_ctx_params->stream_layers;
+        resident_layers      = -1;
+        layer_prefetch_depth = 0;
+        if (layer_stream_params != nullptr) {
+            constexpr size_t min_struct_size = offsetof(sd_layer_stream_params_t,
+                                                        layer_prefetch_depth) +
+                                               sizeof(layer_stream_params->layer_prefetch_depth);
+            if (layer_stream_params->struct_size < min_struct_size) {
+                LOG_ERROR("layer stream params struct is too small: %u < %zu",
+                          layer_stream_params->struct_size,
+                          min_struct_size);
+                return false;
+            }
+            resident_layers      = layer_stream_params->resident_layers;
+            layer_prefetch_depth = layer_stream_params->layer_prefetch_depth;
+        }
+        if (resident_layers < -1 || layer_prefetch_depth < 0) {
+            LOG_ERROR("layer stream limits require resident_layers >= -1 and layer_prefetch_depth >= 0");
+            return false;
+        }
+        if (!stream_layers && (resident_layers >= 0 || layer_prefetch_depth > 0)) {
+            LOG_WARN("resident_layers and layer_prefetch_depth require stream_layers; ignoring layer stream limits");
+            resident_layers      = -1;
+            layer_prefetch_depth = 0;
+        }
         eager_load          = sd_ctx_params->eager_load;
         backend_spec        = SAFE_STR(sd_ctx_params->backend);
         params_backend_spec = SAFE_STR(sd_ctx_params->params_backend);
@@ -930,6 +957,17 @@ public:
         }
         if (stream_layers && !backend_manager.params_backend_is_cpu(SDBackendModule::DIFFUSION)) {
             LOG_WARN("--stream-layers has no effect unless diffusion params backend is cpu; ignoring");
+            stream_layers = false;
+        }
+        if (stream_layers &&
+            backend_manager.runtime_backends(SDBackendModule::DIFFUSION).size() > 1) {
+            LOG_WARN("--stream-layers is not supported when the diffusion model uses multiple runtime backends; ignoring");
+            stream_layers = false;
+        }
+        if (stream_layers &&
+            max_graph_vram_bytes_for_module(SDBackendModule::DIFFUSION) == 0) {
+            LOG_WARN("--stream-layers has no effect because diffusion --max-vram is 0; "
+                     "residency and prefetch controls are ignored");
             stream_layers = false;
         }
         if (eager_load && graph_cut_layer_split_active()) {
@@ -1354,23 +1392,25 @@ public:
             }
 
             diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::DIFFUSION));
-            diffusion_model->set_stream_layers_enabled(stream_layers);
             if (!register_runner_params("Diffusion model",
                                         diffusion_model,
                                         SDBackendModule::DIFFUSION,
                                         &unet_params_mem_size)) {
                 return false;
             }
+            diffusion_model->set_stream_segment_limits(resident_layers, layer_prefetch_depth);
+            diffusion_model->set_stream_layers_enabled(stream_layers);
 
             if (high_noise_diffusion_model) {
                 high_noise_diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::DIFFUSION));
-                high_noise_diffusion_model->set_stream_layers_enabled(stream_layers);
                 if (!register_runner_params("High noise diffusion model",
                                             high_noise_diffusion_model,
                                             SDBackendModule::DIFFUSION,
                                             &unet_params_mem_size)) {
                     return false;
                 }
+                high_noise_diffusion_model->set_stream_segment_limits(resident_layers, layer_prefetch_depth);
+                high_noise_diffusion_model->set_stream_layers_enabled(stream_layers);
             }
 
             if (strlen(SAFE_STR(sd_ctx_params->ip_adapter_path)) > 0 && clip_vision == nullptr) {
@@ -2540,6 +2580,8 @@ public:
             }
         };
         RunnerDoneOnExit sample_diffusion_runner_done{work_diffusion_model.get()};
+        // Residency only pays off across the repeated denoising forwards.
+        work_diffusion_model->set_stream_residency_enabled(true);
 
         RunnerDoneOnExit sample_control_runner_done{!control_image.empty() && control_net != nullptr ? control_net.get() : nullptr};
 
@@ -2627,6 +2669,9 @@ public:
                 LOG_DEBUG("cancelling generation");
                 return {};
             }
+
+            work_diffusion_model->set_stream_next_forward_prefetch(
+                static_cast<size_t>(std::abs(step)) < steps);
 
             if (step == 1 || step == -1) {
                 pretty_progress(0, (int)steps, 0);
@@ -3568,6 +3613,13 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->pulid_weights_path   = nullptr;
 }
 
+void sd_layer_stream_params_init(sd_layer_stream_params_t* params) {
+    *params                      = {};
+    params->struct_size          = sizeof(*params);
+    params->resident_layers      = -1;
+    params->layer_prefetch_depth = 0;
+}
+
 char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
     char* buf = (char*)malloc(8192);
     if (!buf)
@@ -3845,6 +3897,11 @@ static bool sd_version_supports_image_generation(SDVersion version) {
 }
 
 sd_ctx_t* new_sd_ctx(const sd_ctx_params_t* sd_ctx_params) {
+    return new_sd_ctx_with_layer_stream(sd_ctx_params, nullptr);
+}
+
+sd_ctx_t* new_sd_ctx_with_layer_stream(const sd_ctx_params_t* sd_ctx_params,
+                                       const sd_layer_stream_params_t* layer_stream_params) {
     sd_ctx_t* sd_ctx = (sd_ctx_t*)malloc(sizeof(sd_ctx_t));
     if (sd_ctx == nullptr) {
         return nullptr;
@@ -3856,7 +3913,7 @@ sd_ctx_t* new_sd_ctx(const sd_ctx_params_t* sd_ctx_params) {
         return nullptr;
     }
 
-    if (!sd_ctx->sd->init(sd_ctx_params)) {
+    if (!sd_ctx->sd->init(sd_ctx_params, layer_stream_params)) {
         delete sd_ctx->sd;
         sd_ctx->sd = nullptr;
         free(sd_ctx);

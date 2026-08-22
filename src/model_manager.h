@@ -61,12 +61,35 @@ private:
         std::vector<std::pair<TensorState*, ggml_tensor*>> staged_tensors;
     };
 
+    struct PrefetchKey {
+        uintptr_t owner_id  = 0;
+        uint64_t segment_id = 0;
+
+        bool operator<(const PrefetchKey& other) const {
+            return owner_id < other.owner_id ||
+                   (owner_id == other.owner_id && segment_id < other.segment_id);
+        }
+    };
+
+    struct PrefetchBlock {
+        PrefetchKey key;
+        std::vector<TensorState*> states;
+        ggml_backend_t compute_backend  = nullptr;
+        ggml_backend_t transfer_backend = nullptr;
+        ggml_backend_event_t event      = nullptr;
+        ggml_context* staging_ctx       = nullptr;
+        ggml_backend_buffer_t buffer    = nullptr;
+        std::vector<std::pair<TensorState*, ggml_tensor*>> staged_tensors;
+    };
+
     ModelLoader model_loader_;
     std::vector<std::unique_ptr<TensorState>> tensor_states_;
     std::map<std::string, TensorState*> tensor_states_by_name_;
     std::vector<std::unique_ptr<ParamsStorageBlock>> params_storage_blocks_;
     std::vector<std::unique_ptr<ComputeStagingBlock>> compute_staging_blocks_;
     std::map<ggml_backend_t, ggml_backend_buffer_type_t> split_buffer_types_;
+    std::map<PrefetchKey, std::unique_ptr<PrefetchBlock>> prefetch_blocks_;
+    std::map<ggml_backend_t, ggml_backend_t> prefetch_backends_;
     bool warned_split_lora_skip_ = false;
     std::set<std::string> common_ignore_tensors_;
     std::vector<LoraSpec> loras_;
@@ -76,8 +99,14 @@ private:
     bool enable_mmap_            = false;
     bool writable_mmap_          = false;
 
-    void finish_compute_backend_usage(const std::vector<TensorState*>& states);
+    size_t finish_compute_backend_usage(const std::vector<TensorState*>& states);
     void release_all();
+
+    ParamPrefetchResult populate_prefetch_block(PrefetchBlock& block);
+    ggml_backend_t prefetch_backend_for(ggml_backend_t compute_backend);
+    void synchronize_prefetch_block(PrefetchBlock& block);
+    void free_prefetch_block(PrefetchBlock& block);
+    void clear_all_param_prefetches();
 
     bool resolve_required_tensor_states(const std::vector<ggml_tensor*>& tensors,
                                         std::vector<TensorState*>& required_states) const;
@@ -97,8 +126,7 @@ private:
 
     ggml_backend_buffer_type_t params_buffer_type_for(const TensorState& state) const;
     ggml_backend_buffer_type_t split_buffer_type_for(const TensorState& state) const;
-    void release_compute_staging_blocks(bool force                                            = false,
-                                        const std::unordered_set<TensorState*>* target_states = nullptr);
+    size_t release_compute_staging_blocks(bool force = false);
     void release_params_storage_blocks(bool force                                            = false,
                                        const std::unordered_set<TensorState*>* target_states = nullptr);
     void free_compute_staging_block(ComputeStagingBlock& block);
@@ -180,8 +208,20 @@ public:
     bool assign_compute_backend(const std::vector<ggml_tensor*>& tensors,
                                 ggml_backend_t compute_backend) override;
     bool prepare_params(const std::vector<ggml_tensor*>& tensors) override;
-    void release_compute_backend_params(const std::vector<ggml_tensor*>& tensors) override;
+    size_t release_compute_backend_params(const std::vector<ggml_tensor*>& tensors) override;
     void release_params_backend_params(const std::vector<ggml_tensor*>& tensors) override;
+    ParamPrefetchResult enqueue_param_prefetch(
+        uintptr_t owner_id,
+        uint64_t segment_id,
+        const std::vector<ggml_tensor*>& tensors) override;
+    bool activate_param_prefetch(uintptr_t owner_id,
+                                 uint64_t segment_id,
+                                 const std::vector<ggml_tensor*>& tensors) override;
+    void clear_param_prefetches(uintptr_t owner_id) override;
+    size_t streaming_allocation_bytes(
+        uintptr_t owner_id,
+        ggml_backend_t compute_backend,
+        const std::unordered_set<const ggml_tensor*>& resident_tensors) const override;
 };
 
 #endif  // __MODEL_MANAGER_H__
