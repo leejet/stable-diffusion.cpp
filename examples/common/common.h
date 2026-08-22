@@ -146,12 +146,15 @@ struct SDContextParams {
     std::map<std::string, std::string> embedding_map;
     std::vector<sd_embedding_t> embedding_vec;
 
-    rng_type_t rng_type         = CUDA_RNG;
-    rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
-    bool offload_params_to_cpu  = false;
-    std::string max_vram        = "0";
-    bool stream_layers          = false;
-    bool eager_load             = false;
+    rng_type_t rng_type              = CUDA_RNG;
+    rng_type_t sampler_rng_type      = RNG_TYPE_COUNT;
+    bool offload_params_to_cpu       = false;
+    std::string max_vram             = "0";
+    bool stream_layers               = false;
+    std::string resident_layers_spec = "-1";
+    int resident_layers              = -1;
+    int layer_prefetch_depth         = 0;
+    bool eager_load                  = false;
     std::string backend;
     std::string params_backend;
     std::string split_mode;
@@ -183,6 +186,7 @@ struct SDContextParams {
     bool resolve_and_validate(SDMode mode);
     std::string to_string() const;
     sd_ctx_params_t to_sd_ctx_params_t(bool taesd_preview);
+    sd_layer_stream_params_t to_sd_layer_stream_params_t() const;
 };
 
 struct SDGenerationParams {

@@ -505,6 +505,11 @@ ArgOptions SDContextParams::get_options() {
          "maximum VRAM budget in GiB for graph-cut segmented execution. Accepts a single value or assignments by backend/device, e.g. 6 or cuda0=6,vulkan0=4. 0 disables graph splitting; a negative value auto-detects free VRAM, sparing the specified value",
          0,
          &max_vram},
+        {"",
+         "--resident-layers",
+         "maximum leading parameter-bearing graph-cut segments kept resident with --stream-layers: -1 selects automatically from the VRAM budget, auto is an alias for -1, 0 keeps none, N keeps up to N (default: -1)",
+         0,
+         &resident_layers_spec},
     };
 
     options.int_options = {
@@ -513,6 +518,10 @@ ArgOptions SDContextParams::get_options() {
          "number of threads to use during computation (default: -1). "
          "If threads <= 0, then threads will be set to the number of CPU physical cores",
          &n_threads},
+        {"",
+         "--layer-prefetch-depth",
+         "number of future parameter-bearing graph-cut segments to prefetch with --stream-layers (default: 0; 0 disables prefetching, 1 overlaps the next segment, 2+ enables deeper lookahead when VRAM permits)",
+         &layer_prefetch_depth},
     };
 
     options.bool_options = {
@@ -721,6 +730,25 @@ bool SDContextParams::resolve(SDMode mode) {
         n_threads = sd_get_num_physical_cores();
     }
 
+    std::string resident_spec = resident_layers_spec;
+    std::transform(resident_spec.begin(), resident_spec.end(), resident_spec.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    if (resident_spec == "auto") {
+        resident_layers = -1;
+    } else {
+        try {
+            size_t parsed   = 0;
+            resident_layers = std::stoi(resident_layers_spec, &parsed);
+            if (parsed != resident_layers_spec.size()) {
+                LOG_ERROR("error: --resident-layers must be auto, -1, 0, or a positive integer");
+                return false;
+            }
+        } catch (const std::exception&) {
+            LOG_ERROR("error: --resident-layers must be auto, -1, 0, or a positive integer");
+            return false;
+        }
+    }
     build_embedding_map();
 
     return true;
@@ -752,6 +780,14 @@ bool SDContextParams::validate(SDMode mode) {
 
     if (str_to_vae_format(vae_format) == SD_VAE_FORMAT_COUNT) {
         LOG_ERROR("error: vae_format must be 'auto', 'flux', 'sd3', 'flux2', or 'wan'");
+        return false;
+    }
+    if (resident_layers < -1) {
+        LOG_ERROR("error: --resident-layers must be auto, -1, 0, or a positive integer");
+        return false;
+    }
+    if (layer_prefetch_depth < 0) {
+        LOG_ERROR("error: --layer-prefetch-depth must be >= 0");
         return false;
     }
 
@@ -832,6 +868,8 @@ std::string SDContextParams::to_string() const {
         << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
         << "  max_vram: \"" << max_vram << "\",\n"
         << "  stream_layers: " << (stream_layers ? "true" : "false") << ",\n"
+        << "  resident_layers: " << resident_layers << ",\n"
+        << "  layer_prefetch_depth: " << layer_prefetch_depth << ",\n"
         << "  eager_load: " << (eager_load ? "true" : "false") << ",\n"
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
@@ -912,6 +950,14 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.rpc_servers                     = rpc_servers.c_str();
     sd_ctx_params.model_args                      = model_args.empty() ? nullptr : model_args.c_str();
     return sd_ctx_params;
+}
+
+sd_layer_stream_params_t SDContextParams::to_sd_layer_stream_params_t() const {
+    sd_layer_stream_params_t params;
+    sd_layer_stream_params_init(&params);
+    params.resident_layers      = resident_layers;
+    params.layer_prefetch_depth = layer_prefetch_depth;
+    return params;
 }
 
 SDGenerationParams::SDGenerationParams() {

@@ -238,6 +238,12 @@ typedef struct {
 } sd_ctx_params_t;
 
 typedef struct {
+    uint32_t struct_size;      // Set by sd_layer_stream_params_init; permits future extension
+    int resident_layers;       // With stream_layers: maximum leading graph-cut segments kept resident (-1 = automatic, 0 = none)
+    int layer_prefetch_depth;  // With stream_layers: future parameter-bearing graph-cut segments prefetched during compute (0 = disabled)
+} sd_layer_stream_params_t;
+
+typedef struct {
     uint32_t sample_rate;
     uint32_t channels;
     uint64_t sample_count;
@@ -477,8 +483,11 @@ SD_API void sd_hires_params_init(sd_hires_params_t* hires_params);
 
 SD_API void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params);
 SD_API char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params);
+SD_API void sd_layer_stream_params_init(sd_layer_stream_params_t* params);
 
 SD_API sd_ctx_t* new_sd_ctx(const sd_ctx_params_t* sd_ctx_params);
+SD_API sd_ctx_t* new_sd_ctx_with_layer_stream(const sd_ctx_params_t* sd_ctx_params,
+                                              const sd_layer_stream_params_t* layer_stream_params);
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 SD_API void free_sd_audio(sd_audio_t* audio);
 

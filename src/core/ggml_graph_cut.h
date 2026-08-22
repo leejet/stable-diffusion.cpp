@@ -33,11 +33,17 @@ namespace sd::ggml_graph_cut {
             int node_index = -1;
         };
 
+        struct ParamAllocation {
+            const ggml_tensor* tensor = nullptr;
+            size_t bytes              = 0;
+        };
+
         size_t compute_buffer_size      = 0;
         size_t output_bytes             = 0;
         size_t input_external_bytes     = 0;
         size_t input_previous_cut_bytes = 0;
         size_t input_param_bytes        = 0;
+        std::vector<ParamAllocation> input_param_allocations;
         std::string group_name;
         std::vector<int> internal_node_indices;
         std::vector<int> output_node_indices;
@@ -65,6 +71,11 @@ namespace sd::ggml_graph_cut {
         Plan graph_cut_plan;
         Plan budgeted_graph_cut_plan;
         size_t budgeted_graph_cut_plan_max_vram_bytes = 0;
+    };
+
+    struct StreamingPolicy {
+        size_t resident_segments = 0;
+        size_t prefetch_depth    = 0;
     };
 
     static constexpr const char* GGML_RUNNER_CUT_PREFIX = "ggml_runner_cut:";
@@ -122,8 +133,12 @@ namespace sd::ggml_graph_cut {
                       const std::unordered_set<const ggml_tensor*>& params_tensor_set,
                       const char* log_desc);
 
-    // Mark leading segments resident when they fit after streamed-segment headroom.
-    void annotate_residency(Plan& plan, size_t max_graph_vram_bytes);
+    // Mark leading parameter-bearing segments resident and select a prefetch
+    // depth that fits after the active segment's headroom.
+    StreamingPolicy annotate_residency(Plan& plan,
+                                       size_t max_graph_vram_bytes,
+                                       int resident_segment_limit,
+                                       int segment_prefetch_depth);
 }  // namespace sd::ggml_graph_cut
 
 #endif  // __SD_CORE_GGML_GRAPH_CUT_H__
