@@ -527,12 +527,16 @@ bool save_results(const SDCliParams& cli_params,
     if (cli_params.mode == VID_GEN && num_results > 1) {
         if (ext_lower != ".avi" && ext_lower != ".webp" && ext_lower != ".webm")
             ext = ".avi";
+        std::string params          = gen_params.embed_image_metadata
+                                          ? get_image_params(ctx_params, gen_params, gen_params.seed, cli_params.mode)
+                                          : "";
+
         fs::path video_path = base_path;
         video_path += ext;
         std::string final_ext_lower = ext.string();
         std::transform(final_ext_lower.begin(), final_ext_lower.end(), final_ext_lower.begin(), ::tolower);
         const bool mux_audio = generated_audio != nullptr && (final_ext_lower == ".avi" || final_ext_lower == ".webm");
-        if (create_video_from_sd_images(video_path.string().c_str(), results, num_results, gen_params.fps, 90, mux_audio ? generated_audio : nullptr) == 0) {
+        if (create_video_from_sd_images(video_path.string().c_str(), results, num_results, gen_params.fps, 90, mux_audio ? generated_audio : nullptr, params) == 0) {
             LOG_INFO("save result video to '%s'", video_path.string().c_str());
             if (generated_audio != nullptr && !mux_audio) {
                 fs::path wav_path = video_path;

@@ -237,6 +237,9 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
                          int& output_fps,
                          std::string& error_message) {
     sd_vid_gen_params_t params = job.vid_gen.to_sd_vid_gen_params_t();
+    std::string str_params          = job.vid_gen.gen_params.embed_image_metadata
+                                          ? get_image_params(*runtime.ctx_params, job.vid_gen.gen_params, job.vid_gen.gen_params.seed)
+                                          : "";
 
     SDImageVec results;
     int num_results             = 0;
@@ -263,7 +266,8 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
                                                                              num_results,
                                                                              job.vid_gen.gen_params.fps,
                                                                              job.vid_gen.output_compression,
-                                                                             generated_audio);
+                                                                             generated_audio,
+                                                                             str_params);
     free_sd_audio(generated_audio);
     if (video_bytes.empty()) {
         error_message = "failed to encode generated video container";
