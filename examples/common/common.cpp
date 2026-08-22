@@ -520,7 +520,7 @@ ArgOptions SDContextParams::get_options() {
          &n_threads},
         {"",
          "--layer-prefetch-depth",
-         "number of future graph-cut segments to prefetch with --stream-layers (default: 0; 0 disables prefetching, 1 overlaps the next segment, 2+ enables deeper lookahead when VRAM permits)",
+         "number of future parameter-bearing graph-cut segments to prefetch with --stream-layers (default: 0; 0 disables prefetching, 1 overlaps the next segment, 2+ enables deeper lookahead when VRAM permits)",
          &layer_prefetch_depth},
     };
 

@@ -240,7 +240,7 @@ typedef struct {
 typedef struct {
     uint32_t struct_size;      // Set by sd_layer_stream_params_init; permits future extension
     int resident_layers;       // With stream_layers: maximum leading graph-cut segments kept resident (-1 = automatic, 0 = none)
-    int layer_prefetch_depth;  // With stream_layers: future graph-cut segments prefetched during compute (0 = disabled)
+    int layer_prefetch_depth;  // With stream_layers: future parameter-bearing graph-cut segments prefetched during compute (0 = disabled)
 } sd_layer_stream_params_t;
 
 typedef struct {

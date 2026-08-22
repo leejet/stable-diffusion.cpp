@@ -1795,7 +1795,6 @@ protected:
     size_t runtime_resident_segment_cap   = SIZE_MAX;
     bool stream_next_forward_prefetch     = false;
     bool stream_policy_logged             = false;
-    bool stream_prefetch_fallback_warned  = false;
     bool stream_prefetch_runtime_warned   = false;
     bool stream_prefetch_reduced_warned   = false;
     bool stream_shared_params_logged      = false;
@@ -2488,7 +2487,7 @@ protected:
                 // this runner can reuse or release them. Other allocations
                 // remain charged through free_vram.
                 constexpr size_t safety_margin = 512ull * 1024 * 1024;
-                size_t reclaimable_free = saturating_size_add(free_vram, runner_owned_vram);
+                size_t reclaimable_free        = saturating_size_add(free_vram, runner_owned_vram);
                 if (total_vram > 0) {
                     reclaimable_free = std::min(reclaimable_free, total_vram);
                 }
@@ -2734,99 +2733,99 @@ protected:
         return static_cast<uint64_t>(segment_index + 1);
     }
 
-    bool collect_prefetch_segment_params(
-        ggml_cgraph* gf,
-        const GraphCutPlan& plan,
-        std::vector<std::vector<ggml_tensor*>>& segment_params,
-        std::vector<size_t>& param_segments,
-        std::vector<size_t>& segment_to_param_position) {
-        segment_params.assign(plan.segments.size(), {});
-        param_segments.clear();
-        segment_to_param_position.assign(plan.segments.size(), SIZE_MAX);
+    struct SegmentStreamParams {
+        std::vector<std::vector<ggml_tensor*>> all_by_segment;
+        std::vector<std::vector<ggml_tensor*>> prefetch_by_segment;
+        std::vector<size_t> param_segments;
+        std::vector<size_t> segment_to_param_position;
+        bool has_prefetch_params = false;
+    };
+
+    SegmentStreamParams collect_stream_segment_params(const GraphCutPlan& plan,
+                                                      bool include_prefetch_params) {
+        SegmentStreamParams stream_params;
+        stream_params.all_by_segment.resize(plan.segments.size());
+        stream_params.prefetch_by_segment.resize(plan.segments.size());
+        stream_params.segment_to_param_position.assign(plan.segments.size(), SIZE_MAX);
 
         std::unordered_map<ggml_tensor*, size_t> segment_occurrences;
         for (size_t segment_index = 0; segment_index < plan.segments.size(); ++segment_index) {
-            std::unordered_set<ggml_tensor*> seen_in_segment;
-            for (ggml_tensor* tensor : sd::ggml_graph_cut::param_tensors(gf,
-                                                                         plan.segments[segment_index])) {
-                ggml_tensor* canonical = canonical_param_tensor(tensor);
-                if (canonical == nullptr) {
-                    if (!stream_prefetch_fallback_warned) {
-                        LOG_WARN("%s cannot canonicalize a streamed parameter; disabling segment prefetch",
-                                 get_desc().c_str());
-                        stream_prefetch_fallback_warned = true;
-                    }
-                    return false;
-                }
-                if (!seen_in_segment.insert(canonical).second) {
+            const GraphCutSegment& segment = plan.segments[segment_index];
+            auto& params                   = stream_params.all_by_segment[segment_index];
+            params.reserve(segment.input_param_allocations.size());
+            for (const GraphCutSegment::ParamAllocation& allocation :
+                 segment.input_param_allocations) {
+                if (allocation.tensor == nullptr) {
                     continue;
                 }
-                segment_params[segment_index].push_back(canonical);
-                ++segment_occurrences[canonical];
+                ggml_tensor* tensor = const_cast<ggml_tensor*>(allocation.tensor);
+                params.push_back(tensor);
+                if (include_prefetch_params) {
+                    ++segment_occurrences[tensor];
+                }
+            }
+            if (segment.input_param_bytes > 0) {
+                stream_params.segment_to_param_position[segment_index] =
+                    stream_params.param_segments.size();
+                stream_params.param_segments.push_back(segment_index);
             }
         }
 
-        size_t shared_params = 0;
-        for (const auto& occurrence : segment_occurrences) {
-            if (occurrence.second > 1) {
-                ++shared_params;
-            }
-        }
-        if (shared_params > 0) {
-            for (auto& params : segment_params) {
-                params.erase(std::remove_if(params.begin(), params.end(), [&](ggml_tensor* param) {
-                                 return segment_occurrences.at(param) > 1;
-                             }),
-                             params.end());
-            }
-            if (!stream_shared_params_logged) {
-                LOG_INFO("%s segment prefetch excludes %zu cross-segment parameters from asynchronous transfers",
-                         get_desc().c_str(),
-                         shared_params);
-                stream_shared_params_logged = true;
-            }
+        if (!include_prefetch_params) {
+            return stream_params;
         }
 
-        bool any_prefetch_params = false;
-        for (size_t segment_index = 0; segment_index < plan.segments.size(); ++segment_index) {
-            if (plan.segments[segment_index].input_param_bytes > 0) {
-                segment_to_param_position[segment_index] = param_segments.size();
-                param_segments.push_back(segment_index);
-                any_prefetch_params = any_prefetch_params || !segment_params[segment_index].empty();
+        const size_t shared_params = static_cast<size_t>(std::count_if(
+            segment_occurrences.begin(),
+            segment_occurrences.end(),
+            [](const auto& occurrence) { return occurrence.second > 1; }));
+        for (size_t segment_index : stream_params.param_segments) {
+            auto& prefetch_params = stream_params.prefetch_by_segment[segment_index];
+            for (ggml_tensor* tensor : stream_params.all_by_segment[segment_index]) {
+                if (segment_occurrences.at(tensor) == 1) {
+                    prefetch_params.push_back(tensor);
+                }
             }
+            stream_params.has_prefetch_params =
+                stream_params.has_prefetch_params || !prefetch_params.empty();
         }
-        return any_prefetch_params;
+        if (shared_params > 0 && !stream_shared_params_logged) {
+            LOG_INFO("%s segment prefetch excludes %zu cross-segment parameters from asynchronous transfers",
+                     get_desc().c_str(),
+                     shared_params);
+            stream_shared_params_logged = true;
+        }
+        return stream_params;
     }
 
     std::unordered_set<const ggml_tensor*> retained_stream_params(
         const GraphCutPlan& plan,
-        ggml_cgraph* gf,
+        const SegmentStreamParams& stream_params,
         size_t protected_segment_index = SIZE_MAX) {
         std::unordered_set<const ggml_tensor*> retained_params;
-        auto collect_segment = [&](const GraphCutSegment& segment) {
-            for (ggml_tensor* tensor : sd::ggml_graph_cut::param_tensors(gf, segment)) {
-                if (ggml_tensor* canonical = canonical_param_tensor(tensor)) {
-                    retained_params.insert(canonical);
-                }
+        auto collect_segment = [&](size_t segment_index) {
+            for (ggml_tensor* tensor : stream_params.all_by_segment[segment_index]) {
+                retained_params.insert(tensor);
             }
         };
 
-        for (const GraphCutSegment& segment : plan.segments) {
-            if (segment.residency == sd::ggml_graph_cut::SegmentResidency::RESIDENT) {
-                collect_segment(segment);
+        for (size_t segment_index = 0; segment_index < plan.segments.size(); ++segment_index) {
+            if (plan.segments[segment_index].residency ==
+                sd::ggml_graph_cut::SegmentResidency::RESIDENT) {
+                collect_segment(segment_index);
             }
         }
         if (protected_segment_index < plan.segments.size()) {
-            collect_segment(plan.segments[protected_segment_index]);
+            collect_segment(protected_segment_index);
         }
         return retained_params;
     }
 
     size_t release_unretained_resident_params(const GraphCutPlan& plan,
-                                              ggml_cgraph* gf,
+                                              const SegmentStreamParams& stream_params,
                                               size_t protected_segment_index = SIZE_MAX) {
         const std::unordered_set<const ggml_tensor*> retained_params =
-            retained_stream_params(plan, gf, protected_segment_index);
+            retained_stream_params(plan, stream_params, protected_segment_index);
         std::vector<ggml_tensor*> params_to_release;
         params_to_release.reserve(kept_compute_param_tensor_set.size());
         for (const ggml_tensor* tensor : kept_compute_param_tensor_set) {
@@ -2843,8 +2842,8 @@ protected:
     }
 
     size_t evict_resident_segment_for_prefetch(GraphCutPlan& plan,
-                                               ggml_cgraph* gf,
                                                size_t active_segment_index,
+                                               const SegmentStreamParams& stream_params,
                                                bool& residency_changed) {
         bool demoted = false;
         std::vector<size_t> resident_segments;
@@ -2863,27 +2862,22 @@ protected:
 
             std::unordered_set<ggml_tensor*> earlier_resident_params;
             auto collect_earlier_resident_params = [&](size_t segment_index) {
-                for (ggml_tensor* tensor : sd::ggml_graph_cut::param_tensors(
-                         gf, plan.segments[segment_index])) {
-                    if (ggml_tensor* canonical = canonical_param_tensor(tensor)) {
-                        earlier_resident_params.insert(canonical);
-                    }
+                for (ggml_tensor* tensor : stream_params.all_by_segment[segment_index]) {
+                    earlier_resident_params.insert(tensor);
                 }
             };
             for (size_t position = 0; position < resident_position; ++position) {
                 collect_earlier_resident_params(resident_segments[position]);
             }
 
-            const std::vector<ggml_tensor*> candidate_params =
-                sd::ggml_graph_cut::param_tensors(gf, plan.segments[candidate_index]);
+            const std::vector<ggml_tensor*>& candidate_params =
+                stream_params.all_by_segment[candidate_index];
             const bool has_demotable_params = std::any_of(
                 candidate_params.begin(),
                 candidate_params.end(),
                 [&](ggml_tensor* tensor) {
-                    ggml_tensor* canonical = canonical_param_tensor(tensor);
-                    return canonical != nullptr &&
-                           kept_compute_param_tensor_set.count(canonical) != 0 &&
-                           earlier_resident_params.count(canonical) == 0;
+                    return kept_compute_param_tensor_set.count(tensor) != 0 &&
+                           earlier_resident_params.count(tensor) == 0;
                 });
             if (!has_demotable_params) {
                 continue;
@@ -2899,7 +2893,7 @@ protected:
             residency_changed           = true;
             demoted                     = true;
             const size_t released_bytes = release_unretained_resident_params(
-                plan, gf, active_segment_index);
+                plan, stream_params, active_segment_index);
             if (released_bytes > 0) {
                 LOG_WARN(
                     "%s evicted resident segment %zu to make room for prefetch; "
@@ -2921,10 +2915,9 @@ protected:
         return 0;
     }
 
-    ParamPrefetchResult enqueue_segment_prefetch(
-        size_t segment_index,
-        const std::vector<std::vector<ggml_tensor*>>& segment_params) {
-        if (segment_index >= segment_params.size()) {
+    ParamPrefetchResult enqueue_segment_prefetch(size_t segment_index,
+                                                 const SegmentStreamParams& stream_params) {
+        if (segment_index >= stream_params.prefetch_by_segment.size()) {
             return ParamPrefetchResult::FAILURE;
         }
         auto manager = weight_manager.lock();
@@ -2934,31 +2927,30 @@ protected:
         }
         return manager->enqueue_param_prefetch(stream_prefetch_owner_id(),
                                                segment_prefetch_id(segment_index),
-                                               segment_params[segment_index]);
+                                               stream_params.prefetch_by_segment[segment_index]);
     }
 
     ParamPrefetchResult enqueue_segment_prefetch_with_eviction(
         size_t segment_index,
         size_t active_segment_index,
-        const std::vector<std::vector<ggml_tensor*>>& segment_params,
+        const SegmentStreamParams& stream_params,
         GraphCutPlan& plan,
-        ggml_cgraph* gf,
         bool& residency_changed) {
-        ParamPrefetchResult result = enqueue_segment_prefetch(segment_index, segment_params);
+        ParamPrefetchResult result = enqueue_segment_prefetch(segment_index, stream_params);
         while (result == ParamPrefetchResult::ALLOCATION_FAILURE) {
             const size_t released_bytes = evict_resident_segment_for_prefetch(
-                plan, gf, active_segment_index, residency_changed);
+                plan, active_segment_index, stream_params, residency_changed);
             if (released_bytes == 0) {
                 break;
             }
-            result = enqueue_segment_prefetch(segment_index, segment_params);
+            result = enqueue_segment_prefetch(segment_index, stream_params);
         }
         return result;
     }
 
     bool activate_segment_prefetch(size_t segment_index,
-                                   const std::vector<std::vector<ggml_tensor*>>& segment_params) {
-        if (segment_index >= segment_params.size()) {
+                                   const SegmentStreamParams& stream_params) {
+        if (segment_index >= stream_params.prefetch_by_segment.size()) {
             return false;
         }
         auto manager = weight_manager.lock();
@@ -2968,7 +2960,7 @@ protected:
         }
         return manager->activate_param_prefetch(stream_prefetch_owner_id(),
                                                 segment_prefetch_id(segment_index),
-                                                segment_params[segment_index]);
+                                                stream_params.prefetch_by_segment[segment_index]);
     }
 
     struct SegmentPrefetchQueueResult {
@@ -2978,32 +2970,30 @@ protected:
 
     SegmentPrefetchQueueResult queue_future_segment_prefetches(
         size_t active_position,
-        const std::vector<size_t>& param_segments,
-        const std::vector<std::vector<ggml_tensor*>>& segment_params,
+        const SegmentStreamParams& stream_params,
         size_t depth,
         bool wrap,
         GraphCutPlan& plan,
-        ggml_cgraph* gf,
         bool& residency_changed) {
         SegmentPrefetchQueueResult queue_result;
-        if (param_segments.empty() || active_position >= param_segments.size()) {
+        if (stream_params.param_segments.empty() ||
+            active_position >= stream_params.param_segments.size()) {
             return queue_result;
         }
-        depth = std::min(depth, param_segments.size() - 1);
+        depth = std::min(depth, stream_params.param_segments.size() - 1);
         for (size_t offset = 1; offset <= depth; ++offset) {
             size_t position = active_position + offset;
-            if (position >= param_segments.size()) {
+            if (position >= stream_params.param_segments.size()) {
                 if (!wrap) {
                     break;
                 }
-                position %= param_segments.size();
+                position %= stream_params.param_segments.size();
             }
             queue_result.result = enqueue_segment_prefetch_with_eviction(
-                param_segments[position],
-                param_segments[active_position],
-                segment_params,
+                stream_params.param_segments[position],
+                stream_params.param_segments[active_position],
+                stream_params,
                 plan,
-                gf,
                 residency_changed);
             if (queue_result.result != ParamPrefetchResult::SUCCESS) {
                 return queue_result;
@@ -3312,17 +3302,22 @@ protected:
         free_compute_buffer();
         free_cache_ctx_and_buffer();
 
-        auto manager = weight_manager.lock();
+        auto manager                  = weight_manager.lock();
+        const bool prefetch_requested = prefetch_policy != nullptr &&
+                                        prefetch_policy->prefetch_depth > 0;
+        SegmentStreamParams stream_params;
+        if (stream_layers_enabled) {
+            stream_params = collect_stream_segment_params(plan, prefetch_requested);
+        }
         if (stream_layers_enabled && !kept_compute_param_tensor_set.empty()) {
             std::unordered_set<const ggml_tensor*> desired_resident_params;
-            for (const auto& segment : plan.segments) {
-                if (segment.residency != sd::ggml_graph_cut::SegmentResidency::RESIDENT) {
+            for (size_t segment_index = 0; segment_index < plan.segments.size(); ++segment_index) {
+                if (plan.segments[segment_index].residency !=
+                    sd::ggml_graph_cut::SegmentResidency::RESIDENT) {
                     continue;
                 }
-                for (ggml_tensor* tensor : sd::ggml_graph_cut::param_tensors(gf, segment)) {
-                    if (ggml_tensor* canonical = canonical_param_tensor(tensor)) {
-                        desired_resident_params.insert(canonical);
-                    }
+                for (ggml_tensor* tensor : stream_params.all_by_segment[segment_index]) {
+                    desired_resident_params.insert(tensor);
                 }
             }
             const bool same_resident_params =
@@ -3348,21 +3343,13 @@ protected:
                 }
             }
         }
-        std::vector<std::vector<ggml_tensor*>> segment_params;
-        std::vector<size_t> param_segments;
-        std::vector<size_t> segment_to_param_position;
-        bool prefetch_active          = prefetch_policy != nullptr &&
-                                        prefetch_policy->prefetch_depth > 0 &&
-                                        collect_prefetch_segment_params(gf,
-                                                                        plan,
-                                                                        segment_params,
-                                                                        param_segments,
-                                                                        segment_to_param_position);
+        bool prefetch_active          = prefetch_requested && stream_params.has_prefetch_params;
         size_t runtime_prefetch_depth = prefetch_active
                                             ? prefetch_policy->prefetch_depth
                                             : 0;
         if (prefetch_active) {
-            update_stream_prefetch_plan_signature(segment_params, runtime_prefetch_depth);
+            update_stream_prefetch_plan_signature(stream_params.prefetch_by_segment,
+                                                  runtime_prefetch_depth);
         } else {
             clear_stream_prefetch_state();
         }
@@ -3393,11 +3380,10 @@ protected:
 
         if (prefetch_active) {
             ParamPrefetchResult result = enqueue_segment_prefetch_with_eviction(
-                param_segments.front(),
-                param_segments.front(),
-                segment_params,
+                stream_params.param_segments.front(),
+                stream_params.param_segments.front(),
+                stream_params,
                 plan,
-                gf,
                 residency_changed);
             if (result != ParamPrefetchResult::SUCCESS) {
                 disable_prefetch("queueing the first segment");
@@ -3412,22 +3398,21 @@ protected:
             const auto& segment   = plan.segments[seg_idx];
             const bool is_last    = seg_idx + 1 == plan.segments.size();
             size_t param_position = SIZE_MAX;
-            if (!segment_to_param_position.empty()) {
-                param_position = segment_to_param_position[seg_idx];
+            if (!stream_params.segment_to_param_position.empty()) {
+                param_position = stream_params.segment_to_param_position[seg_idx];
             }
-            const bool has_prefetch_params = param_position != SIZE_MAX;
-            auto future_cut_names          = sd::ggml_graph_cut::collect_future_input_names(gf, plan, seg_idx);
+            const bool is_param_segment = param_position != SIZE_MAX;
+            auto future_cut_names       = sd::ggml_graph_cut::collect_future_input_names(gf, plan, seg_idx);
 
-            if (has_prefetch_params && prefetch_active) {
+            if (is_param_segment && prefetch_active) {
                 ParamPrefetchResult result = enqueue_segment_prefetch_with_eviction(
                     seg_idx,
                     seg_idx,
-                    segment_params,
+                    stream_params,
                     plan,
-                    gf,
                     residency_changed);
                 if (result != ParamPrefetchResult::SUCCESS ||
-                    !activate_segment_prefetch(seg_idx, segment_params)) {
+                    !activate_segment_prefetch(seg_idx, stream_params)) {
                     disable_prefetch("activating a segment");
                 }
             }
@@ -3482,13 +3467,11 @@ protected:
             ggml_cgraph* segment_graph      = sd::ggml_graph_cut::build_segment_graph(gf, segment, &segment_graph_ctx);
             const bool keep_segment_params  = segment.residency == sd::ggml_graph_cut::SegmentResidency::RESIDENT;
             std::function<void()> before_compute;
-            if (has_prefetch_params && prefetch_active) {
+            if (is_param_segment && prefetch_active) {
                 before_compute = [this,
                                   param_position,
-                                  &param_segments,
-                                  &segment_params,
+                                  &stream_params,
                                   &plan,
-                                  gf,
                                   &runtime_prefetch_depth,
                                   &prefetch_active,
                                   &residency_changed,
@@ -3498,12 +3481,10 @@ protected:
                     }
                     SegmentPrefetchQueueResult result = queue_future_segment_prefetches(
                         param_position,
-                        param_segments,
-                        segment_params,
+                        stream_params,
                         runtime_prefetch_depth,
                         stream_next_forward_prefetch,
                         plan,
-                        gf,
                         residency_changed);
                     if (result.result == ParamPrefetchResult::SUCCESS) {
                         return;
@@ -3532,7 +3513,7 @@ protected:
                                                    before_compute);
             ggml_free(segment_graph_ctx);
             if (residency_changed) {
-                release_unretained_resident_params(plan, gf);
+                release_unretained_resident_params(plan, stream_params);
                 residency_changed = false;
             }
             if (!segment_output.has_value()) {
@@ -3840,9 +3821,9 @@ public:
         if (stream_residency_enabled == enabled) {
             return;
         }
-        stream_residency_enabled       = enabled;
-        runtime_resident_segment_cap   = SIZE_MAX;
-        stream_policy_logged           = false;
+        stream_residency_enabled     = enabled;
+        runtime_resident_segment_cap = SIZE_MAX;
+        stream_policy_logged         = false;
     }
 
     void set_stream_next_forward_prefetch(bool enabled) {

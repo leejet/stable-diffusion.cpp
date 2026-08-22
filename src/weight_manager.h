@@ -17,17 +17,17 @@ enum class ParamPrefetchResult : uint8_t {
 };
 
 struct RunnerWeightManager {
-    virtual ~RunnerWeightManager()                                                        = default;
+    virtual ~RunnerWeightManager()                                                          = default;
     virtual bool assign_compute_backend(const std::vector<ggml_tensor*>& tensors,
-                                        ggml_backend_t compute_backend)                   = 0;
-    virtual bool prepare_params(const std::vector<ggml_tensor*>& tensors)                 = 0;
+                                        ggml_backend_t compute_backend)                     = 0;
+    virtual bool prepare_params(const std::vector<ggml_tensor*>& tensors)                   = 0;
     virtual size_t release_compute_backend_params(const std::vector<ggml_tensor*>& tensors) = 0;
-    virtual void release_params_backend_params(const std::vector<ggml_tensor*>& tensors)  = 0;
+    virtual void release_params_backend_params(const std::vector<ggml_tensor*>& tensors)    = 0;
 
     virtual ParamPrefetchResult enqueue_param_prefetch(
         uintptr_t owner_id,
         uint64_t segment_id,
-        const std::vector<ggml_tensor*>& tensors)                          = 0;
+        const std::vector<ggml_tensor*>& tensors)                                  = 0;
     virtual bool activate_param_prefetch(uintptr_t owner_id,
                                          uint64_t segment_id,
                                          const std::vector<ggml_tensor*>& tensors) = 0;

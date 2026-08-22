@@ -478,7 +478,7 @@ namespace sd::ggml_graph_cut {
                     if (canonical != nullptr && param_seen.insert(canonical).second) {
                         const size_t allocation_bytes = tensor_backend_allocation_bytes(backend,
                                                                                         canonical);
-                        segment.input_param_bytes = saturating_add(
+                        segment.input_param_bytes     = saturating_add(
                             segment.input_param_bytes,
                             allocation_bytes);
                         segment.input_param_allocations.push_back({canonical, allocation_bytes});
@@ -1086,7 +1086,7 @@ namespace sd::ggml_graph_cut {
         const std::unordered_map<const ggml_tensor*, size_t>& param_occurrences,
         size_t resident_count,
         size_t prefetch_depth) {
-        size_t peak = 0;
+        size_t peak    = 0;
         prefetch_depth = param_segments.size() < 2
                              ? 0
                              : std::min(prefetch_depth, param_segments.size() - 1);

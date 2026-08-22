@@ -966,8 +966,9 @@ public:
         }
         if (stream_layers &&
             max_graph_vram_bytes_for_module(SDBackendModule::DIFFUSION) == 0) {
-            LOG_WARN("--stream-layers has no effect because diffusion --max-vram is 0; "
-                     "residency and prefetch controls are ignored");
+            LOG_WARN(
+                "--stream-layers has no effect because diffusion --max-vram is 0; "
+                "residency and prefetch controls are ignored");
             stream_layers = false;
         }
         if (eager_load && graph_cut_layer_split_active()) {
