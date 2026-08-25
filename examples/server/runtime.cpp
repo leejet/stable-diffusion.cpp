@@ -33,6 +33,7 @@ static const std::string k_base64_chars =
 
 std::string base64_encode(const std::vector<uint8_t>& bytes) {
     std::string ret;
+    ret.reserve(((bytes.size() + 2) / 3) * 4);
     int val  = 0;
     int valb = -6;
     for (uint8_t c : bytes) {
@@ -196,6 +197,7 @@ ArgOptions SDSvrParams::get_options() {
 
     options.int_options = {
         {"", "--listen-port", "server listen port (default: 1234)", &listen_port},
+        {"", "--png-compression-level", "PNG compression level, 0-9 (default: 4)", &png_compression_level},
     };
 
     options.bool_options = {
@@ -226,6 +228,11 @@ bool SDSvrParams::validate() {
         return false;
     }
 
+    if (png_compression_level < 0 || png_compression_level > 9) {
+        LOG_ERROR("error: png_compression_level should be in the range [0, 9]");
+        return false;
+    }
+
     if (!serve_html_path.empty() && !fs::exists(serve_html_path)) {
         LOG_ERROR("error: serve_html_path file does not exist: %s", serve_html_path.c_str());
         return false;
@@ -245,6 +252,7 @@ std::string SDSvrParams::to_string() const {
     oss << "SDSvrParams {\n"
         << "  listen_ip: " << listen_ip << ",\n"
         << "  listen_port: \"" << listen_port << "\",\n"
+        << "  png_compression_level: " << png_compression_level << ",\n"
         << "  serve_html_path: \"" << serve_html_path << "\",\n"
         << "}";
     return oss.str();

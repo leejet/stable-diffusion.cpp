@@ -67,6 +67,69 @@ namespace WAN {
             int lp2 = 2 * std::get<0>(padding);
             int rp2 = 0;
 
+            // With causal padding, a single uncached frame only observes the final
+            // temporal kernel slice; the earlier slices multiply zeros.
+            const bool single_frame_2d = cache_x == nullptr && x->ne[2] == 1 &&
+                                         ggml_is_contiguous(x) && ggml_is_contiguous(w) &&
+                                         std::get<0>(stride) == 1 &&
+                                         2 * std::get<0>(padding) ==
+                                             std::get<0>(dilation) * (std::get<0>(kernel_size) - 1);
+            if (single_frame_2d) {
+                const int64_t n = x->ne[3] / in_channels;
+                GGML_ASSERT(n * in_channels == x->ne[3]);
+                GGML_ASSERT(w->ne[2] == std::get<0>(kernel_size));
+
+                const size_t temporal_offset = (w->ne[2] - 1) * w->nb[2];
+                ggml_tensor* w_2d            = ggml_view_4d(ctx->ggml_ctx,
+                                                            w,
+                                                            w->ne[0],
+                                                            w->ne[1],
+                                                            in_channels,
+                                                            out_channels,
+                                                            w->nb[1],
+                                                            w->nb[3],
+                                                            in_channels * w->nb[3],
+                                                            temporal_offset);
+                w_2d                         = ggml_cont(ctx->ggml_ctx, w_2d);
+
+                ggml_tensor* x_2d = ggml_reshape_4d(ctx->ggml_ctx,
+                                                    x,
+                                                    x->ne[0],
+                                                    x->ne[1],
+                                                    in_channels,
+                                                    n);
+                x_2d              = ggml_ext_pad_ext(ctx->ggml_ctx,
+                                                     ctx->backend,
+                                                     x_2d,
+                                                     lp0,
+                                                     rp0,
+                                                     lp1,
+                                                     rp1,
+                                                     0,
+                                                     0,
+                                                     0,
+                                                     0,
+                                                     ctx->circular_x_enabled,
+                                                     ctx->circular_y_enabled);
+                x_2d              = ggml_ext_conv_2d(ctx->ggml_ctx,
+                                                     x_2d,
+                                                     w_2d,
+                                                     b,
+                                                     std::get<2>(stride),
+                                                     std::get<1>(stride),
+                                                     0,
+                                                     0,
+                                                     std::get<2>(dilation),
+                                                     std::get<1>(dilation),
+                                                     ctx->conv2d_direct_enabled);
+                return ggml_reshape_4d(ctx->ggml_ctx,
+                                       x_2d,
+                                       x_2d->ne[0],
+                                       x_2d->ne[1],
+                                       1,
+                                       x_2d->ne[2] * x_2d->ne[3]);
+            }
+
             if (cache_x != nullptr && lp2 > 0) {
                 x = ggml_concat(ctx->ggml_ctx, cache_x, x, 2);
                 lp2 -= (int)cache_x->ne[2];

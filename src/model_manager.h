@@ -2,6 +2,7 @@
 #define __MODEL_MANAGER_H__
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -26,6 +27,15 @@ public:
         std::string tensor_name_prefix_filter;
         bool required = false;
     };
+
+    // Applied in place to each parameter right after it is loaded into the params backend.
+    // Lets a model bake a layout change into its weights once instead of paying for it in
+    // every graph. Scoped by the `desc` used at registration, and re-run on reload: a LoRA
+    // change releases all params storage, so the reload path transforms the fresh copy.
+    // `loras_active` warns the callee that a LoRA delta will be added to this weight, so a
+    // transform that a delta cannot commute with (e.g. a permutation) must decline.
+    using ParamTransformFn = std::function<void(const std::string& name, ggml_tensor* tensor, bool loras_active)>;
+    void set_param_transform(const std::string& desc, ParamTransformFn fn);
 
 private:
     struct TensorState {
@@ -75,6 +85,7 @@ private:
     int n_threads_               = 0;
     bool enable_mmap_            = false;
     bool writable_mmap_          = false;
+    std::map<std::string, ParamTransformFn> param_transforms_;
 
     void finish_compute_backend_usage(const std::vector<TensorState*>& states);
     void release_all();
@@ -105,6 +116,7 @@ private:
     void free_params_storage_block(ParamsStorageBlock& block);
     void erase_params_storage_block(ParamsStorageBlock* block);
     void reset_lora_applied_params();
+    void apply_param_transforms(const std::vector<TensorState*>& states);
 
 public:
     ~ModelManager() override;

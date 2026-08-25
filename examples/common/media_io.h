@@ -16,6 +16,9 @@ enum class EncodedImageFormat {
 
 EncodedImageFormat encoded_image_format_from_path(const std::string& path);
 
+// stb stores this process-wide; configure it before starting encoding threads.
+void set_png_compression_level(int level);
+
 std::vector<uint8_t> encode_image_to_vector(EncodedImageFormat format,
                                             const uint8_t* image,
                                             int width,

@@ -21,6 +21,7 @@ struct SDSvrParams {
     std::string listen_ip = "127.0.0.1";
     int listen_port       = 1234;
     std::string serve_html_path;
+    int png_compression_level = 4;
     bool normal_exit = false;
     bool verbose     = false;
     bool color       = false;
