@@ -269,9 +269,13 @@ namespace LLM {
             if ((arch == LLMArch::QWEN3 || arch == LLMArch::QWEN3_VL) && config.num_layers == 28) {
                 config.num_heads = 16;
             }
-            if (arch == LLMArch::QWEN3_VL && config.num_layers == 50 && config.hidden_size == 5120) {
-                config.num_heads  = 64;
-                config.final_norm = false;
+            if (arch == LLMArch::QWEN3_VL &&
+                (config.num_layers == 50 || config.num_layers == 64) &&
+                config.hidden_size == 5120) {
+                config.num_heads = 64;
+                if (config.num_layers == 50) {
+                    config.final_norm = false;
+                }
             }
             if (detected_vision_layers > 0) {
                 config.vision.num_layers = detected_vision_layers;

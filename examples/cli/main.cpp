@@ -36,6 +36,7 @@ struct SDCliParams {
     SDMode mode             = IMG_GEN;
     std::string output_path = "output.png";
     int output_begin_idx    = -1;
+    int compression_quality = 90;
     std::string image_path;
     std::string metadata_format = "text";
 
@@ -99,6 +100,10 @@ struct SDCliParams {
              "--output-begin-idx",
              "starting index for output image sequence, must be non-negative (default 0 if specified %d in output path, 1 otherwise)",
              &output_begin_idx},
+            {"",
+             "--compression-quality",
+             "compression quality of video and JPEG / WebP images (90 by default)",
+             &compression_quality},
         };
 
         options.bool_options = {
@@ -383,11 +388,13 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
                                  image->data,
                                  image->width,
                                  image->height,
-                                 image->channel)) {
+                                 image->channel,
+                                 "",
+                                 cli_params->compression_quality)) {
             LOG_ERROR("save preview image to '%s' failed", cli_params->preview_path.c_str());
         }
     } else {
-        if (create_video_from_sd_images(cli_params->preview_path.c_str(), image, frame_count, cli_params->preview_fps) != 0) {
+        if (create_video_from_sd_images(cli_params->preview_path.c_str(), image, frame_count, cli_params->preview_fps, cli_params->compression_quality) != 0) {
             LOG_ERROR("save preview video to '%s' failed", cli_params->preview_path.c_str());
         }
     }
@@ -486,7 +493,7 @@ bool save_results(const SDCliParams& cli_params,
         std::string params          = gen_params.embed_image_metadata
                                           ? get_image_params(ctx_params, gen_params, metadata_seed, cli_params.mode)
                                           : "";
-        const bool ok               = write_image_to_file(path.string(), img.data, img.width, img.height, img.channel, params, 90);
+        const bool ok               = write_image_to_file(path.string(), img.data, img.width, img.height, img.channel, params, cli_params.compression_quality);
         LOG_INFO("save result image %d to '%s' (%s)", idx, path.string().c_str(), ok ? "success" : "failure");
         return ok;
     };
@@ -532,7 +539,7 @@ bool save_results(const SDCliParams& cli_params,
         std::string final_ext_lower = ext.string();
         std::transform(final_ext_lower.begin(), final_ext_lower.end(), final_ext_lower.begin(), ::tolower);
         const bool mux_audio = generated_audio != nullptr && (final_ext_lower == ".avi" || final_ext_lower == ".webm");
-        if (create_video_from_sd_images(video_path.string().c_str(), results, num_results, gen_params.fps, 90, mux_audio ? generated_audio : nullptr) == 0) {
+        if (create_video_from_sd_images(video_path.string().c_str(), results, num_results, gen_params.fps, cli_params.compression_quality, mux_audio ? generated_audio : nullptr) == 0) {
             LOG_INFO("save result video to '%s'", video_path.string().c_str());
             if (generated_audio != nullptr && !mux_audio) {
                 fs::path wav_path = video_path;
