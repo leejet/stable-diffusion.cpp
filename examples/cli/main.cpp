@@ -406,6 +406,8 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
     // unused in this app, it will either be always noisy or always denoised here
     if (frame_count == 1) {
         fs::path path = cli_params->preview_path;
+        if (encoded_image_format_from_path(path.string()) == EncodedImageFormat::UNKNOWN)
+            path += ".png";
         std::string new_pathname = path.filename().string();
         if (std::regex_search(new_pathname, format_specifier_regex))
             new_pathname = format_frame_idx(new_pathname, continuous_preview_counter++);
