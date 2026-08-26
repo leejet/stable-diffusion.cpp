@@ -408,18 +408,16 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
         fs::path path = cli_params->preview_path;
         if (encoded_image_format_from_path(path.string()) == EncodedImageFormat::UNKNOWN)
             path += ".png";
-        std::string new_pathname = path.filename().string();
-        if (std::regex_search(new_pathname, format_specifier_regex))
-            new_pathname = format_frame_idx(new_pathname, continuous_preview_counter++);
-        new_pathname = path.remove_filename().string() + new_pathname;
-        if (!write_image_to_file(new_pathname,
+        if (std::regex_search(path.string(), format_specifier_regex))
+            path = fs::path(format_frame_idx(path.string(), continuous_preview_counter++));
+        if (!write_image_to_file(path.string(),
                                  image->data,
                                  image->width,
                                  image->height,
                                  image->channel,
                                  "",
                                  cli_params->compression_quality)) {
-            LOG_ERROR("save preview image to '%s' failed", new_pathname.c_str());
+            LOG_ERROR("save preview image to '%s' failed", path.string().c_str());
         }
     } else {
         if (create_video_from_sd_images(cli_params->preview_path.c_str(), image, frame_count, cli_params->preview_fps, cli_params->compression_quality) != 0) {
