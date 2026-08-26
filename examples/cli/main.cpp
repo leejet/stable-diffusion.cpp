@@ -377,29 +377,6 @@ bool load_images_from_dir(const std::string dir,
     return true;
 }
 
-void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data) {
-    (void)step;
-    (void)is_noisy;
-    SDCliParams* cli_params = (SDCliParams*)data;
-    // is_noisy is set to true if the preview corresponds to noisy latents, false if it's denoised latents
-    // unused in this app, it will either be always noisy or always denoised here
-    if (frame_count == 1) {
-        if (!write_image_to_file(cli_params->preview_path,
-                                 image->data,
-                                 image->width,
-                                 image->height,
-                                 image->channel,
-                                 "",
-                                 cli_params->compression_quality)) {
-            LOG_ERROR("save preview image to '%s' failed", cli_params->preview_path.c_str());
-        }
-    } else {
-        if (create_video_from_sd_images(cli_params->preview_path.c_str(), image, frame_count, cli_params->preview_fps, cli_params->compression_quality) != 0) {
-            LOG_ERROR("save preview video to '%s' failed", cli_params->preview_path.c_str());
-        }
-    }
-}
-
 std::string format_frame_idx(std::string pattern, int frame_idx) {
     std::smatch match;
     std::string result = pattern;
@@ -429,17 +406,21 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
     // unused in this app, it will either be always noisy or always denoised here
     if (frame_count == 1) {
         fs::path path = cli_params->preview_path;
-        std::string new_pathname = fs::path(path).remove_filename().string() + 
-            format_frame_idx(path.filename().string(), ++continuous_preview_counter);
+        std::string new_pathname = path.filename().string();
+        if (std::regex_search(new_pathname, format_specifier_regex))
+            new_pathname = format_frame_idx(new_pathname, continuous_preview_counter++);
+        new_pathname = path.remove_filename().string() + new_pathname;
         if (!write_image_to_file(new_pathname,
                                  image->data,
                                  image->width,
                                  image->height,
-                                 image->channel)) {
+                                 image->channel,
+                                 "",
+                                 cli_params->compression_quality)) {
             LOG_ERROR("save preview image to '%s' failed", new_pathname.c_str());
         }
     } else {
-        if (create_video_from_sd_images(cli_params->preview_path.c_str(), image, frame_count, cli_params->preview_fps) != 0) {
+        if (create_video_from_sd_images(cli_params->preview_path.c_str(), image, frame_count, cli_params->preview_fps, cli_params->compression_quality) != 0) {
             LOG_ERROR("save preview video to '%s' failed", cli_params->preview_path.c_str());
         }
     }
