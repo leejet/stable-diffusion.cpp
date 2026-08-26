@@ -87,9 +87,9 @@ static ggml_type safetensors_dtype_to_ggml_type(const std::string& dtype) {
     } else if (dtype == "F64") {
         ttype = GGML_TYPE_F32;
     } else if (dtype == "F8_E4M3") {
-        ttype = GGML_TYPE_F16;
+        ttype = GGML_TYPE_F8_E4M3;
     } else if (dtype == "F8_E5M2") {
-        ttype = GGML_TYPE_F16;
+        ttype = GGML_TYPE_F8_E5M2;
     } else if (dtype == "I32") {
         ttype = GGML_TYPE_I32;
     } else if (dtype == "I64") {
@@ -328,12 +328,10 @@ bool read_safetensors_file(const std::string& file_path,
         bool tensor_size_ok;
         if (dtype == "F8_E4M3") {
             tensor_storage.is_f8_e4m3 = true;
-            // f8 -> f16
-            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size * 2);
+            tensor_size_ok            = (tensor_storage.nbytes() == tensor_data_size);
         } else if (dtype == "F8_E5M2") {
             tensor_storage.is_f8_e5m2 = true;
-            // f8 -> f16
-            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size * 2);
+            tensor_size_ok            = (tensor_storage.nbytes() == tensor_data_size);
         } else if (dtype == "F64") {
             tensor_storage.is_f64 = true;
             // f64 -> f32

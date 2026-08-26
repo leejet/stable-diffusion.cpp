@@ -11,7 +11,19 @@
 - Download Qwen3-VL-8B-Instruct
     - gguf: https://huggingface.co/unsloth/Qwen3-VL-8B-Instruct-GGUF/tree/main
 
-## Convert weights
+## Use original FP8 weights
+
+The original Ideogram4 FP8 safetensors can be loaded directly. FP8 tensors stay
+at one byte per element in RAM and VRAM. Backends that cannot multiply FP8
+weights directly cast only the active layer to a temporary BF16 tensor during
+execution; the loader does not expand the entire checkpoint to BF16.
+
+Use `ideogram4_fp8.safetensors` and `ideogram4_uncond_fp8.safetensors` directly
+with `--diffusion-model` and `--uncond-diffusion-model`, respectively.
+
+## Optional conversion for quantization
+
+The following conversion is only needed when creating a quantized GGUF model.
 
 fp8 scale -> bf16
 

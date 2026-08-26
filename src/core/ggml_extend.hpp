@@ -3407,7 +3407,6 @@ protected:
     bool bias;
     bool force_f32;
     bool force_prec_f32;
-    bool allow_weight_scale;
     bool has_weight_scale       = false;
     bool int8_convrot           = false;
     int int8_convrot_group_size = 0;
@@ -3430,8 +3429,11 @@ protected:
         }
         auto weight_storage           = tensor_storage_map.find(prefix + "weight");
         const bool is_int8_tensorwise = weight_storage != tensor_storage_map.end() && weight_storage->second.is_int8_tensorwise;
-        if ((allow_weight_scale || is_int8_tensorwise) && tensor_storage_map.find(prefix + "weight_scale") != tensor_storage_map.end()) {
-            params["weight_scale"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_features);
+        auto weight_scale_storage     = tensor_storage_map.find(prefix + "weight_scale");
+        if (weight_scale_storage != tensor_storage_map.end()) {
+            const int64_t scale_nelements = weight_scale_storage->second.nelements();
+            GGML_ASSERT(scale_nelements == 1 || scale_nelements == out_features);
+            params["weight_scale"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, scale_nelements);
             has_weight_scale       = true;
         }
         if (is_int8_tensorwise) {
@@ -3445,17 +3447,15 @@ protected:
 public:
     Linear(int64_t in_features,
            int64_t out_features,
-           bool bias               = true,
-           bool force_f32          = false,
-           bool force_prec_f32     = false,
-           float scale             = 1.f,
-           bool allow_weight_scale = false)
+           bool bias           = true,
+           bool force_f32      = false,
+           bool force_prec_f32 = false,
+           float scale         = 1.f)
         : in_features(in_features),
           out_features(out_features),
           bias(bias),
           force_f32(force_f32),
           force_prec_f32(force_prec_f32),
-          allow_weight_scale(allow_weight_scale),
           scale(scale) {}
 
     void set_scale(float scale_) {
@@ -3467,7 +3467,11 @@ public:
     }
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
-        ggml_tensor* w = params["weight"];
+        ggml_tensor* w            = params["weight"];
+        ggml_tensor* weight_scale = has_weight_scale ? params["weight_scale"] : nullptr;
+        if (w->type == GGML_TYPE_F8_E4M3 || w->type == GGML_TYPE_F8_E5M2) {
+            w = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_BF16);
+        }
         ggml_tensor* b = nullptr;
         if (bias) {
             b = params["bias"];
@@ -3498,7 +3502,7 @@ public:
             out = ggml_ext_linear_i8_tensorwise(ctx->ggml_ctx,
                                                 x,
                                                 w,
-                                                params["weight_scale"],
+                                                weight_scale,
                                                 b,
                                                 int8_convrot ? int8_convrot_group_size : 0,
                                                 scale);
@@ -3517,6 +3521,30 @@ public:
             }
             return out;
         }
+        if (has_weight_scale) {
+            out = ggml_ext_linear(ctx->ggml_ctx, x, w, nullptr, force_prec_f32, scale);
+            out = ggml_mul(ctx->ggml_ctx, out, weight_scale);
+            if (ctx->weight_adapter) {
+                WeightAdapter::ForwardParams forward_params;
+                forward_params.op_type               = WeightAdapter::ForwardParams::op_type_t::OP_LINEAR;
+                forward_params.linear.force_prec_f32 = force_prec_f32;
+                forward_params.linear.scale          = scale;
+                out                                  = ctx->weight_adapter->add_lora_to_output(ctx->ggml_ctx,
+                                                                                               ctx->backend,
+                                                                                               x,
+                                                                                               w,
+                                                                                               out,
+                                                                                               prefix,
+                                                                                               forward_params);
+                if (b != nullptr) {
+                    b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
+                }
+            }
+            if (b != nullptr) {
+                out = ggml_add_inplace(ctx->ggml_ctx, out, b);
+            }
+            return out;
+        }
         if (ctx->weight_adapter) {
             WeightAdapter::ForwardParams forward_params;
             forward_params.op_type               = WeightAdapter::ForwardParams::op_type_t::OP_LINEAR;
@@ -3525,12 +3553,6 @@ public:
             out                                  = ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, ctx->backend, x, w, linear_bias, prefix, forward_params);
         } else {
             out = ggml_ext_linear(ctx->ggml_ctx, x, w, linear_bias, force_prec_f32, scale);
-        }
-        if (has_weight_scale) {
-            out = ggml_mul(ctx->ggml_ctx, out, params["weight_scale"]);
-            if (b != nullptr) {
-                out = ggml_add_inplace(ctx->ggml_ctx, out, b);
-            }
         }
         return out;
     }
