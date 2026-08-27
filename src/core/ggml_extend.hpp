@@ -3470,7 +3470,17 @@ public:
         ggml_tensor* w            = params["weight"];
         ggml_tensor* weight_scale = has_weight_scale ? params["weight_scale"] : nullptr;
         if (w->type == GGML_TYPE_F8_E4M3 || w->type == GGML_TYPE_F8_E5M2) {
-            w = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_BF16);
+            bool supports_fp8_matmul = false;
+            if (ctx->backend != nullptr) {
+                ggml_tensor* fp8_matmul = ggml_mul_mat(ctx->ggml_ctx, w, x);
+                if (force_prec_f32) {
+                    ggml_mul_mat_set_prec(fp8_matmul, GGML_PREC_F32);
+                }
+                supports_fp8_matmul = ggml_backend_supports_op(ctx->backend, fp8_matmul);
+            }
+            if (!supports_fp8_matmul) {
+                w = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_BF16);
+            }
         }
         ggml_tensor* b = nullptr;
         if (bias) {
