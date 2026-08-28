@@ -16,12 +16,13 @@
 #define BOOL_STR(b) ((b) ? "true" : "false")
 
 extern const char* const modes_str[];
-#define SD_ALL_MODES_STR "img_gen, adetailer, vid_gen, convert, upscale, metadata"
+#define SD_ALL_MODES_STR "img_gen, adetailer, vid_gen, ltx_upscale, convert, upscale, metadata"
 
 enum SDMode {
     IMG_GEN,
     ADETAILER,
     VID_GEN,
+    LTX_UPSCALE,
     CONVERT,
     UPSCALE,
     METADATA,
@@ -216,6 +217,9 @@ struct SDGenerationParams {
     std::vector<std::string> ref_video_audio_paths;
     std::vector<std::string> ref_audio_paths;
     std::string control_video_path;
+    std::string input_video_path;
+    std::string ltx_spatial_upscaler_path;
+    std::string ltx_temporal_upscaler_path;
 
     sd_sample_params_t sample_params;
     sd_sample_params_t high_noise_sample_params;

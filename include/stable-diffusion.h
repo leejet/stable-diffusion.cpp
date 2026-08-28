@@ -433,6 +433,16 @@ typedef struct {
     bool circular_y;
 } sd_vid_gen_params_t;
 
+// Standalone LTX video enhancement. The input is a decoded sequence of RGB frames;
+// the caller owns input_frames and must release output_frames with free_sd_images().
+typedef struct {
+    const sd_image_t* input_frames;
+    int input_frame_count;
+    const char* spatial_upscaler_path;
+    const char* temporal_upscaler_path;
+    sd_tiling_params_t vae_tiling_params;
+} sd_ltx_upscale_video_params_t;
+
 typedef struct sd_ctx_t sd_ctx_t;
 struct ggml_tensor;
 
@@ -512,6 +522,11 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                            sd_image_t** frames_out,
                            int* num_frames_out,
                            sd_audio_t** audio_out);
+SD_API void sd_ltx_upscale_video_params_init(sd_ltx_upscale_video_params_t* params);
+SD_API bool ltx_upscale_video(sd_ctx_t* sd_ctx,
+                              const sd_ltx_upscale_video_params_t* params,
+                              sd_image_t** frames_out,
+                              int* num_frames_out);
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 

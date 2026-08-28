@@ -28,6 +28,8 @@ publishes one file per component.
     - safetensors: https://huggingface.co/Lightricks/LTX-2.5/blob/main/vae/ltx-2.5-audio-vae-bf16.safetensors
 - Download the LTX spatial latent upscaler
     - safetensors: https://huggingface.co/Lightricks/LTX-2.5/blob/main/latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors
+- Download the LTX temporal latent upscaler for standalone frame interpolation
+    - safetensors: https://huggingface.co/Lightricks/LTX-2.5/blob/main/latent_upscale_models/ltx-2.5-latent-temporal-upscaler-x2-bf16-1.0.safetensors
 
 To run the text encoder quantized, convert it once with sd-cli:
 
@@ -59,11 +61,28 @@ pass its name without path or extension to `--hires-upscaler`.
 .\bin\Release\sd-cli.exe -M vid_gen --diffusion-model ..\models\diffusion_models\ltx-2.5-22b-dev-transformer-Q8_0.gguf --vae ..\models\vae\ltx-2.5-video-vae-conv-bf16.safetensors --audio-vae ..\models\vae\ltx-2.5-audio-vae-bf16.safetensors --llm ..\models\text_encoders\gemma4-12b-with-proj-ltx-2.5-Q8_0.gguf --hires-upscalers-dir ..\models\latent_upscale_models --hires-upscaler ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0 --hires --hires-steps 6 -p "a lovely cat" --cfg-scale 3.0 --sampling-method euler -v -W 640 -H 360 --diffusion-fa --offload-to-cpu --video-frames 121 -o hires_t2v.webm
 ```
 
+### Standalone video enhancement
+
+`ltx_upscale` runs only the Conv VAE and LTX latent upscalers: it does not load or
+run the LTX transformer, text encoder, prompt conditioning, or sampler. Input video is
+an image-frame directory because sd-cli does not include a general video decoder. Frames
+must be equally sized and lexically ordered (for example `0000.png`, `0001.png`, ...).
+LTX requires dimensions divisible by 32. If the source size is not compatible, pass
+`-W` and `-H` to resize all frames during loading. The command pads the final input
+frame internally for the VAE, then trims output back to the source duration (or `2T-1`
+frames with temporal interpolation).
+
+```
+.\bin\Release\sd-cli.exe -M ltx_upscale --vae ..\models\vae\ltx-2.5-video-vae-conv-bf16.safetensors --input-video ..\frames --ltx-spatial-upscaler ..\models\latent_upscale_models\ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors --ltx-temporal-upscaler ..\models\latent_upscale_models\ltx-2.5-latent-temporal-upscaler-x2-bf16-1.0.safetensors --fps 24 -o enhanced.webm
+```
+
+Either upscaler option may be omitted. Spatial upscaling doubles width and height;
+temporal upscaling produces `2T-1` video frames, so double `--fps` for frame interpolation.
+
 ## Not implemented
 
 - The diffusion video decoder (`ltx-2.5-video-vae-bf16.safetensors`). Use the conv VAE.
-- The temporal latent upscaler and the duration head (`--auto-duration`); pass
-  `--video-frames` explicitly.
+- The duration head (`--auto-duration`); pass `--video-frames` explicitly for generation.
 
 # LTX-2.3
 

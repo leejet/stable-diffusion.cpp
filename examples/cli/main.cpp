@@ -524,7 +524,7 @@ bool save_results(const SDCliParams& cli_params,
         return sucessful_reults != 0;
     }
 
-    if (cli_params.mode == VID_GEN && num_results > 1) {
+    if ((cli_params.mode == VID_GEN || cli_params.mode == LTX_UPSCALE) && num_results > 1) {
         if (ext_lower != ".avi" && ext_lower != ".webp" && ext_lower != ".webm")
             ext = ".avi";
         fs::path video_path = base_path;
@@ -882,6 +882,22 @@ int main(int argc, const char* argv[]) {
         }
     }
 
+    if (cli_params.mode == LTX_UPSCALE) {
+        gen_params.control_frames.clear();
+        if (!load_images_from_dir(gen_params.input_video_path,
+                                  gen_params.control_frames,
+                                  gen_params.width_and_height_are_set() ? gen_params.width : 0,
+                                  gen_params.width_and_height_are_set() ? gen_params.height : 0,
+                                  0,
+                                  cli_params.verbose) || gen_params.control_frames.empty()) {
+            LOG_ERROR("load LTX video upscale input frames from '%s' failed", gen_params.input_video_path.c_str());
+            return 1;
+        }
+        gen_params.video_frames = static_cast<int>(gen_params.control_frames.size());
+        gen_params.set_width_and_height_if_unset(gen_params.control_frames[0].get().width,
+                                                 gen_params.control_frames[0].get().height);
+    }
+
     if (!gen_params.pm_id_images_dir.empty()) {
         gen_params.pm_id_images.clear();
         if (!load_images_from_dir(gen_params.pm_id_images_dir,
@@ -944,6 +960,25 @@ int main(int argc, const char* argv[]) {
             sd_image_t* generated_video        = nullptr;
             if (!generate_video(sd_ctx.get(), &vid_gen_params, &generated_video, &num_results, &generated_audio)) {
                 generated_video = nullptr;
+            }
+            results.adopt(generated_video, num_results);
+        } else if (cli_params.mode == LTX_UPSCALE) {
+            sd_ltx_upscale_video_params_t params;
+            sd_ltx_upscale_video_params_init(&params);
+            gen_params.control_frame_views.clear();
+            gen_params.control_frame_views.reserve(gen_params.control_frames.size());
+            for (auto& frame : gen_params.control_frames) {
+                gen_params.control_frame_views.push_back(frame.get());
+            }
+            params.input_frames           = gen_params.control_frame_views.data();
+            params.input_frame_count      = static_cast<int>(gen_params.control_frame_views.size());
+            params.spatial_upscaler_path  = gen_params.ltx_spatial_upscaler_path.empty() ? nullptr : gen_params.ltx_spatial_upscaler_path.c_str();
+            params.temporal_upscaler_path = gen_params.ltx_temporal_upscaler_path.empty() ? nullptr : gen_params.ltx_temporal_upscaler_path.c_str();
+            params.vae_tiling_params      = gen_params.vae_tiling_params;
+            sd_image_t* generated_video   = nullptr;
+            if (!ltx_upscale_video(sd_ctx.get(), &params, &generated_video, &num_results)) {
+                generated_video = nullptr;
+                num_results     = 0;
             }
             results.adopt(generated_video, num_results);
         }

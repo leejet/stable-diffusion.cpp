@@ -32,6 +32,7 @@ const char* const modes_str[] = {
     "img_gen",
     "adetailer",
     "vid_gen",
+    "ltx_upscale",
     "convert",
     "upscale",
     "metadata",
@@ -738,7 +739,7 @@ bool SDContextParams::validate(SDMode mode) {
             LOG_ERROR("error: convert mode needs at least one model input path\n");
             return false;
         }
-    } else if (mode != UPSCALE && mode != METADATA && model_path.length() == 0 && diffusion_model_path.length() == 0) {
+    } else if (mode != UPSCALE && mode != METADATA && mode != LTX_UPSCALE && model_path.length() == 0 && diffusion_model_path.length() == 0 && vae_path.length() == 0) {
         LOG_ERROR("error: the following arguments are required: model_path/diffusion_model\n");
         return false;
     }
@@ -984,6 +985,21 @@ ArgOptions SDGenerationParams::get_options() {
          "such as 00.png, 01.png, ... etc.",
          0,
          &control_video_path},
+        {"",
+         "--input-video",
+         "path to input video frames for ltx_upscale. It must be a directory of equally sized images in lexicographical order.",
+         0,
+         &input_video_path},
+        {"",
+         "--ltx-spatial-upscaler",
+         "path to an LTX latent spatial upscaler model for ltx_upscale",
+         0,
+         &ltx_spatial_upscaler_path},
+        {"",
+         "--ltx-temporal-upscaler",
+         "path to an LTX latent temporal upscaler model for ltx_upscale",
+         0,
+         &ltx_temporal_upscaler_path},
         {"",
          "--pm-id-images-dir",
          "path to PHOTOMAKER input id images dir",
@@ -2405,11 +2421,11 @@ bool SDGenerationParams::validate(SDMode mode) {
         }
     }
 
-    if (mode == VID_GEN && video_frames <= 0) {
+    if ((mode == VID_GEN || mode == LTX_UPSCALE) && video_frames <= 0) {
         return false;
     }
 
-    if (mode == VID_GEN && fps <= 0) {
+    if ((mode == VID_GEN || mode == LTX_UPSCALE) && fps <= 0) {
         return false;
     }
 
@@ -2421,6 +2437,17 @@ bool SDGenerationParams::validate(SDMode mode) {
     if (mode != VID_GEN && (!ref_video_paths.empty() || !ref_video_audio_paths.empty() || !ref_audio_paths.empty())) {
         LOG_ERROR("error: reference video and audio inputs require vid_gen mode");
         return false;
+    }
+
+    if (mode == LTX_UPSCALE) {
+        if (input_video_path.empty()) {
+            LOG_ERROR("error: ltx_upscale mode requires --input-video");
+            return false;
+        }
+        if (ltx_spatial_upscaler_path.empty() && ltx_temporal_upscaler_path.empty()) {
+            LOG_ERROR("error: ltx_upscale mode requires --ltx-spatial-upscaler and/or --ltx-temporal-upscaler");
+            return false;
+        }
     }
 
     if (sample_params.shifted_timestep < 0 || sample_params.shifted_timestep > 1000) {
