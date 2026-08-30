@@ -130,6 +130,18 @@ namespace MiniMaxH3 {
         return to_shift * a * a / (from_shift * b * b);
     }
 
+    static float time_shift_step_scale(float sigma,
+                                       float next_sigma,
+                                       float from_shift,
+                                       float to_shift) {
+        if (!std::isfinite(next_sigma) || next_sigma < 0.f || next_sigma == sigma) {
+            return time_shift_slope(sigma, from_shift, to_shift);
+        }
+        float shifted_sigma      = time_shift_sigma(sigma, from_shift, to_shift);
+        float shifted_next_sigma = time_shift_sigma(next_sigma, from_shift, to_shift);
+        return (shifted_sigma - shifted_next_sigma) / (sigma - next_sigma);
+    }
+
     struct TimeEmbedder : public GGMLBlock {
         TimeEmbedder(int64_t input_dim, int64_t hidden_dim, int64_t output_dim) {
             blocks["proj_in"]  = std::make_shared<Linear>(input_dim, hidden_dim, true, true);
@@ -1033,7 +1045,8 @@ namespace MiniMaxH3 {
                                  const std::vector<MiniMaxH3ReferenceBlock>& reference_blocks,
                                  int audio_length,
                                  float video_shift,
-                                 float audio_shift) {
+                                 float audio_shift,
+                                 float next_video_sigma) {
             auto split        = split_av_latents(packed, audio_length);
             video_input_cache = std::move(split.first);
             audio_input_cache = std::move(split.second);
@@ -1130,7 +1143,16 @@ namespace MiniMaxH3 {
                                             layout.sequence_segments,
                                             layout.video_segment,
                                             layout.audio_segment,
-                                            time_shift_slope(sigma_v, video_shift, audio_shift));
+                                            // The generic Euler sampler advances the packed tensor by
+                                            // `next_video_sigma - sigma_v`. For that sampler, scale H3's
+                                            // audio velocity by the exact ratio of the independent audio
+                                            // step. The derivative approximation substantially oversteps
+                                            // at low step counts (the Turbo use case). Retain the local
+                                            // slope for samplers that make extra/intermediate evaluations.
+                                            time_shift_step_scale(sigma_v,
+                                                                  next_video_sigma,
+                                                                  video_shift,
+                                                                  audio_shift));
             auto merged     = merge_av_latents(compute_ctx, output.first, output.second);
             auto graph      = new_graph_custom(H3_GRAPH_SIZE);
             ggml_build_forward_expand(graph, merged);
@@ -1162,7 +1184,8 @@ namespace MiniMaxH3 {
                                    reference_blocks,
                                    extra->audio_length,
                                    extra->video_sigma_shift,
-                                   extra->audio_sigma_shift);
+                                   extra->audio_sigma_shift,
+                                   extra->next_video_sigma);
             };
             return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph,
                                                                               n_threads,

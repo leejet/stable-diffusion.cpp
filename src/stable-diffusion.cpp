@@ -2775,7 +2775,11 @@ public:
                         condition.c_reference_blocks.empty() ? nullptr : &condition.c_reference_blocks,
                         audio_length,
                         std::isfinite(active_flow_shift) ? active_flow_shift : 12.f,
-                        3.f};
+                        3.f,
+                        method == EULER_SAMPLE_METHOD && step > 0 &&
+                                static_cast<size_t>(step) < sigmas.size()
+                            ? sigmas[step]
+                            : -1.f};
                 } else if (sd_version_is_ltxav(version)) {
                     diffusion_params.extra = LTXAVDiffusionExtra{
                         nullptr,
@@ -4751,7 +4755,11 @@ static sd::Tensor<float> prepare_minimax_h3_reference_waveform(const sd_audio_t&
         static_cast<long double>(audio.sample_count) * target_sample_rate / audio.sample_rate));
     output_samples          = std::max<uint64_t>(1, output_samples);
     uint64_t padded_samples = (output_samples + 799) / 800 * 800;
-    sd::Tensor<float> waveform({static_cast<int64_t>(padded_samples), 2, 1, 1});
+    // Keep stereo streams planar for the mono-per-stream audio encoder:
+    // [samples, 1, stereo, batch]. This avoids flattening interleaved L/R
+    // storage into alternating samples when the encoder folds streams into
+    // its batch dimension.
+    sd::Tensor<float> waveform({static_cast<int64_t>(padded_samples), 1, 2, 1});
 
     for (uint64_t i = 0; i < output_samples; ++i) {
         long double source_pos = static_cast<long double>(i) * audio.sample_rate / target_sample_rate;
@@ -4762,7 +4770,7 @@ static sd::Tensor<float> prepare_minimax_h3_reference_waveform(const sd_audio_t&
             uint32_t source_channel = audio.channels == 1 ? 0 : std::min<uint32_t>(channel, audio.channels - 1);
             float a                 = audio.data[source0 * audio.channels + source_channel];
             float b                 = audio.data[source1 * audio.channels + source_channel];
-            waveform.index(static_cast<int64_t>(i), channel, 0, 0) =
+            waveform.index(static_cast<int64_t>(i), 0, channel, 0) =
                 std::clamp(a + (b - a) * fraction, -1.f, 1.f);
         }
     }
