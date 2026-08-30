@@ -1860,6 +1860,9 @@ public:
                     if (sd_version_is_ltxav(version)) {
                         LOG_INFO("running in LTXAV FLOW mode");
                         denoiser = std::make_shared<FluxFlowDenoiser>();
+                    } else if (sd_version_is_minimax_h3(version)) {
+                        LOG_INFO("running in MiniMax H3 AV FLOW mode");
+                        denoiser = std::make_shared<H3AVFlowDenoiser>(default_flow_shift, 3.f, get_latent_channel());
                     } else {
                         LOG_INFO("running in FLOW mode");
                         denoiser = std::make_shared<DiscreteFlowDenoiser>();
@@ -2617,10 +2620,14 @@ public:
         int64_t last_progress_us     = ggml_time_us();
         SamplePreviewContext preview = prepare_sample_preview_context();
 
-        sd::Tensor<float> x_t      = !noise.empty()
-                                         ? denoiser->noise_scaling(sigmas[0], noise, init_latent)
-                                         : init_latent;
-        sd::Tensor<float> denoised = x_t;
+        sd::Tensor<float> processed_init_latent       = denoiser->process_latent_in(init_latent);
+        const sd::Tensor<float>& sampling_init_latent = processed_init_latent.empty()
+                                                            ? init_latent
+                                                            : processed_init_latent;
+        sd::Tensor<float> x_t                         = !noise.empty()
+                                                            ? denoiser->noise_scaling(sigmas[0], noise, sampling_init_latent)
+                                                            : sampling_init_latent;
+        sd::Tensor<float> denoised                    = x_t;
 
         auto denoise = [&](const sd::Tensor<float>& x, float sigma, int step) -> sd::guidance::GuiderOutput {
             if (get_cancel_flag() == SD_CANCEL_ALL) {
@@ -2643,10 +2650,10 @@ public:
             std::vector<float> timesteps_vec      = base_timesteps_vec;
             sd::Tensor<float> audio_timesteps_tensor;
             if (sd_version_is_ltxav(version) && !denoise_mask.empty()) {
-                timesteps_vec          = process_ltxav_video_timesteps(base_timesteps_vec, init_latent, denoise_mask);
+                timesteps_vec          = process_ltxav_video_timesteps(base_timesteps_vec, sampling_init_latent, denoise_mask);
                 audio_timesteps_tensor = sd::Tensor<float>({static_cast<int64_t>(base_timesteps_vec.size())}, base_timesteps_vec);
             } else {
-                timesteps_vec = process_timesteps(timesteps_vec, init_latent, denoise_mask, step);
+                timesteps_vec = process_timesteps(timesteps_vec, sampling_init_latent, denoise_mask, step);
             }
             const std::vector<float>& scaling_timesteps_vec = (sd_version_is_ltxav(version) && !denoise_mask.empty())
                                                                   ? base_timesteps_vec
@@ -2661,13 +2668,13 @@ public:
             }
             sd::Tensor<float> noised_input = x * c_in;
             if (!denoise_mask.empty() && (version == VERSION_WAN2_2_TI2V || sd_version_is_ltxav(version) || sd_version_is_lingbot_video(version))) {
-                noised_input = noised_input * denoise_mask + init_latent * (1.0f - denoise_mask);
+                noised_input = noised_input * denoise_mask + sampling_init_latent * (1.0f - denoise_mask);
             }
 
             if (cache_runtime.spectrum_enabled && cache_runtime.spectrum.should_predict()) {
                 cache_runtime.spectrum.predict(&denoised);
                 if (!denoise_mask.empty()) {
-                    denoised = denoised * denoise_mask + init_latent * (1.0f - denoise_mask);
+                    denoised = denoised * denoise_mask + sampling_init_latent * (1.0f - denoise_mask);
                 }
                 if (sd_should_preview_denoised() && preview.callback != nullptr) {
                     if (step % sd_get_preview_interval() == 0) {
@@ -2765,11 +2772,7 @@ public:
                         condition.c_reference_blocks.empty() ? nullptr : &condition.c_reference_blocks,
                         audio_length,
                         std::isfinite(active_flow_shift) ? active_flow_shift : 12.f,
-                        3.f,
-                        method == EULER_SAMPLE_METHOD && step > 0 &&
-                                static_cast<size_t>(step) < sigmas.size()
-                            ? sigmas[step]
-                            : -1.f};
+                        3.f};
                 } else if (sd_version_is_ltxav(version)) {
                     diffusion_params.extra = LTXAVDiffusionExtra{
                         nullptr,
@@ -2894,7 +2897,7 @@ public:
                 cache_runtime.spectrum.update(denoised);
             }
             if (!denoise_mask.empty()) {
-                denoised = denoised * denoise_mask + init_latent * (1.0f - denoise_mask);
+                denoised = denoised * denoise_mask + sampling_init_latent * (1.0f - denoise_mask);
             }
             if (sd_should_preview_denoised() && preview.callback != nullptr) {
                 if (step % sd_get_preview_interval() == 0) {
@@ -2924,6 +2927,7 @@ public:
         if (inverse_noise_scaling) {
             x0 = denoiser->inverse_noise_scaling(sigmas[sigmas.size() - 1], x0);
         }
+        x0 = denoiser->process_latent_out(std::move(x0));
 
         if (control_net) {
             control_net->free_control_ctx();
