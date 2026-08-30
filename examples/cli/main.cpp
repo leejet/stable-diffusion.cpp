@@ -94,7 +94,7 @@ struct SDCliParams {
         options.int_options = {
             {"",
              "--preview-interval",
-             "interval in denoising steps between consecutive updates of the image preview file (default is 1, meaning updating at every step). Set to -N to preview only the Nth single step. Set to 0 to preview the last step of 1st pass (base resolution / high noise) sampling",
+             "preview interval: in each sampling pass, positive N updates every Nth denoiser step and -N previews only completed logical step N; 0 previews the final completed step of the first pass (base-resolution or high-noise). Default: 1",
              &preview_interval},
             {"",
              "--output-begin-idx",
