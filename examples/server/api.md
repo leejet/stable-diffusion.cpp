@@ -518,7 +518,8 @@ Shared default fields used by both `img_gen` and `vid_gen`:
 | `output_format` | `string` |
 | `output_compression` | `integer` |
 
-`vae_tiling_params.extra_tiling_args` accepts a key=value list. For LTX video VAE temporal tiling, `temporal_tile_frames` defaults to `4` and `temporal_tile_overlap` defaults to `1`.
+`vae_tiling_params.extra_tiling_args` accepts a key=value list. Supported video VAEs accept `temporal_tile_frames` (alias `temporal_tile_size`, default `4`) and `temporal_tile_overlap` (default `1`).
+LTX and Wan preserve causal state between temporal tiles. Hunyuan Video and TAEHV use overlap blending. MiniMax H3 keeps its model-specific fixed temporal windows because its latent-to-frame mapping is non-linear.
 
 `img_gen`-specific default fields:
 

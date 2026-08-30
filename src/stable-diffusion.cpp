@@ -2378,11 +2378,9 @@ public:
             sd::Tensor<float> vae_latents;
             sd::Tensor<float> decoded;
             if (preview_vae) {
-                preview_vae->set_temporal_tiling_enabled(vae_tiling_params.temporal_tiling);
                 vae_latents = preview_vae->diffusion_to_vae_latents(_latents);
                 decoded     = preview_vae->decode(n_threads, vae_latents, vae_tiling_params, is_video, circular_x, circular_y, true);
             } else {
-                first_stage_model->set_temporal_tiling_enabled(vae_tiling_params.temporal_tiling);
                 vae_latents = first_stage_model->diffusion_to_vae_latents(_latents);
                 decoded     = first_stage_model->decode(n_threads, vae_latents, vae_tiling_params, is_video, circular_x, circular_y, true);
             }
@@ -3084,16 +3082,14 @@ public:
         if (sd_version_is_pid(version) || sd_version_is_minit2i(version)) {
             return sd::ops::clamp((x + 1.f) * 0.5f, 0.0f, 1.0f);
         }
-        auto latents = first_stage_model->diffusion_to_vae_latents(x);
-        first_stage_model->set_temporal_tiling_enabled(vae_tiling_params.temporal_tiling);
-        auto decoded = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
-        if (decoded.empty() && auto_fit_enabled) {
-            bool prefer_temporal_tiling = decode_video && std::dynamic_pointer_cast<LTXVideoVAE>(first_stage_model) != nullptr;
-            if (sd::backend_fit::prepare_vae_decode_retry_tiling(vae_tiling_params, prefer_temporal_tiling)) {
-                first_stage_model->free_compute_buffer();
-                first_stage_model->set_temporal_tiling_enabled(vae_tiling_params.temporal_tiling);
-                decoded = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
-            }
+        auto latents                      = first_stage_model->diffusion_to_vae_latents(x);
+        auto decoded                      = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
+        const bool prefer_temporal_tiling = decode_video && first_stage_model->can_temporal_tile_decode();
+        while (decoded.empty() &&
+               auto_fit_enabled &&
+               sd::backend_fit::prepare_vae_decode_retry_tiling(vae_tiling_params, prefer_temporal_tiling)) {
+            first_stage_model->free_compute_buffer();
+            decoded = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
         }
         return decoded;
     }
