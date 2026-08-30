@@ -232,12 +232,12 @@ namespace LLM {
                             }
                         }
                     }
-                    if (contains(name, "visual.blocks.0.mlp.linear_fc1.weight") ||
-                        contains(name, "visual.blocks.0.mlp.gate_proj.weight")) {
+                    if (ends_with(name, "visual.blocks.0.mlp.linear_fc1.weight") ||
+                        ends_with(name, "visual.blocks.0.mlp.gate_proj.weight")) {
                         config.vision.intermediate_size = tensor_storage.ne[1];
                     }
-                    if (contains(name, "visual.merger.linear_fc2.weight") ||
-                        contains(name, "visual.merger.mlp.2.weight")) {
+                    if (ends_with(name, "visual.merger.linear_fc2.weight") ||
+                        ends_with(name, "visual.merger.mlp.2.weight")) {
                         config.vision.out_hidden_size = tensor_storage.ne[1];
                     }
                     continue;
@@ -256,13 +256,13 @@ namespace LLM {
                     config.hidden_size = tensor_storage.ne[0];
                     config.vocab_size  = tensor_storage.ne[1];
                 }
-                if (contains(name, "layers.0.mlp.gate_proj.weight")) {
+                if (ends_with(name, "layers.0.mlp.gate_proj.weight")) {
                     config.intermediate_size = tensor_storage.ne[1];
                 }
-                if (contains(name, "layers.0.mlp.experts.gate_up_proj.weight")) {
+                if (ends_with(name, "layers.0.mlp.experts.gate_up_proj.weight")) {
                     config.intermediate_size = tensor_storage.ne[1] / 2;
                 }
-                if (contains(name, "layers.0.mlp.experts.gate_proj.weight")) {
+                if (ends_with(name, "layers.0.mlp.experts.gate_proj.weight")) {
                     config.intermediate_size = tensor_storage.ne[1];
                 }
             }
