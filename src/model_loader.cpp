@@ -404,8 +404,13 @@ SDVersion ModelLoader::get_sd_version() {
     bool has_output_block_311        = false;
     bool has_output_block_71         = false;
     bool has_attn_1024               = false;
+    bool has_ltx_vae                 = false;
 
     for (auto& [name, tensor_storage] : tensor_storage_map) {
+        if (name == "vae.encoder.conv_in.conv.bias" ||
+            name == "first_stage_model.encoder.conv_in.conv.bias") {
+            has_ltx_vae = true;
+        }
         if (tensor_storage.name.find("model.diffusion_model.double_blocks.") != std::string::npos ||
             tensor_storage.name.find("model.diffusion_model.single_transformer_blocks.") != std::string::npos) {
             is_flux = true;
@@ -544,6 +549,9 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name == "model.diffusion_model.txt_in.weight" || tensor_storage.name == "model.diffusion_model.context_embedder.weight") {
             context_ebedding_weight = tensor_storage;
         }
+    }
+    if (has_ltx_vae) {
+        return VERSION_LTXAV;
     }
     if (is_wan) {
         LOG_DEBUG("patch_embedding_channels %d", patch_embedding_channels);

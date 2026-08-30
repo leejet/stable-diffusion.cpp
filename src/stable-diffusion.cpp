@@ -1033,6 +1033,8 @@ public:
         // }
 
         auto& tensor_storage_map = model_loader.get_tensor_storage_map();
+        const bool vae_only_ltx = sd_version_is_ltxav(version) &&
+                                  tensor_storage_map.find("model.diffusion_model.adaln_single.emb.timestep_embedder.linear_1.bias") == tensor_storage_map.end();
 
         {
             if (!ensure_backend_pair(SDBackendModule::TE) ||
@@ -1130,15 +1132,17 @@ public:
                                                                      model_manager,
                                                                      sd_ctx_params->model_args);
             } else if (sd_version_is_ltxav(version)) {
-                cond_stage_model = std::make_shared<LTXAVEmbedder>(backend_for(SDBackendModule::TE),
-                                                                   tensor_storage_map,
-                                                                   "text_encoders.llm",
-                                                                   "text_embedding_projection",
-                                                                   model_manager);
-                diffusion_model  = std::make_shared<LTXV::LTXAVRunner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                      tensor_storage_map,
-                                                                      "model.diffusion_model",
-                                                                      model_manager);
+                if (!vae_only_ltx) {
+                    cond_stage_model = std::make_shared<LTXAVEmbedder>(backend_for(SDBackendModule::TE),
+                                                                       tensor_storage_map,
+                                                                       "text_encoders.llm",
+                                                                       "text_embedding_projection",
+                                                                       model_manager);
+                    diffusion_model  = std::make_shared<LTXV::LTXAVRunner>(backend_for(SDBackendModule::DIFFUSION),
+                                                                          tensor_storage_map,
+                                                                          "model.diffusion_model",
+                                                                          model_manager);
+                }
             } else if (sd_version_is_minimax_h3(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
                                                                  tensor_storage_map,
@@ -1345,21 +1349,25 @@ public:
                 }
             }
 
-            cond_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::TE));
-            if (!register_runner_params("Conditioner model",
-                                        cond_stage_model,
-                                        SDBackendModule::TE,
-                                        &text_encoder_params_mem_size)) {
-                return false;
+            if (cond_stage_model != nullptr) {
+                cond_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::TE));
+                if (!register_runner_params("Conditioner model",
+                                            cond_stage_model,
+                                            SDBackendModule::TE,
+                                            &text_encoder_params_mem_size)) {
+                    return false;
+                }
             }
 
-            diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::DIFFUSION));
-            diffusion_model->set_stream_layers_enabled(stream_layers);
-            if (!register_runner_params("Diffusion model",
-                                        diffusion_model,
-                                        SDBackendModule::DIFFUSION,
-                                        &unet_params_mem_size)) {
-                return false;
+            if (diffusion_model != nullptr) {
+                diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::DIFFUSION));
+                diffusion_model->set_stream_layers_enabled(stream_layers);
+                if (!register_runner_params("Diffusion model",
+                                            diffusion_model,
+                                            SDBackendModule::DIFFUSION,
+                                            &unet_params_mem_size)) {
+                    return false;
+                }
             }
 
             if (high_noise_diffusion_model) {
@@ -1621,7 +1629,9 @@ public:
 
             if (sd_ctx_params->flash_attn) {
                 LOG_INFO("Using flash attention");
-                cond_stage_model->set_flash_attention_enabled(true);
+                if (cond_stage_model) {
+                    cond_stage_model->set_flash_attention_enabled(true);
+                }
                 if (clip_vision) {
                     clip_vision->set_flash_attention_enabled(true);
                 }
@@ -1635,7 +1645,9 @@ public:
 
             if (sd_ctx_params->flash_attn || sd_ctx_params->diffusion_flash_attn) {
                 LOG_INFO("Using flash attention in the diffusion model");
-                diffusion_model->set_flash_attention_enabled(true);
+                if (diffusion_model) {
+                    diffusion_model->set_flash_attention_enabled(true);
+                }
                 if (high_noise_diffusion_model) {
                     high_noise_diffusion_model->set_flash_attention_enabled(true);
                 }
@@ -6701,6 +6713,138 @@ static sd::Tensor<float> upscale_ltx_spatial_video_latent(sd_ctx_t* sd_ctx,
         upscaled = pack_ltxav_audio_and_video_latents(upscaled, audio_latent);
     }
     return upscaled;
+}
+
+void sd_ltx_upscale_video_params_init(sd_ltx_upscale_video_params_t* params) {
+    if (params == nullptr) {
+        return;
+    }
+    *params                         = {};
+    params->vae_tiling_params       = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
+}
+
+SD_API bool ltx_upscale_video(sd_ctx_t* sd_ctx,
+                              const sd_ltx_upscale_video_params_t* params,
+                              sd_image_t** frames_out,
+                              int* num_frames_out) {
+    if (frames_out != nullptr) {
+        *frames_out = nullptr;
+    }
+    if (num_frames_out != nullptr) {
+        *num_frames_out = 0;
+    }
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || params == nullptr ||
+        params->input_frames == nullptr || params->input_frame_count < 1) {
+        LOG_ERROR("LTX video upscale requires at least one input frame");
+        return false;
+    }
+    if (!sd_version_is_ltxav(sd_ctx->sd->version)) {
+        LOG_ERROR("LTX video upscale requires an LTX video VAE");
+        return false;
+    }
+    if (strlen(SAFE_STR(params->spatial_upscaler_path)) == 0 &&
+        strlen(SAFE_STR(params->temporal_upscaler_path)) == 0) {
+        LOG_ERROR("LTX video upscale requires a spatial and/or temporal upscaler model");
+        return false;
+    }
+
+    sd_ctx->sd->reset_cancel_flag();
+    sd_ctx->sd->vae_tiling_params = params->vae_tiling_params;
+
+    auto first = ensure_image_tensor_channels(sd_image_to_tensor(params->input_frames[0]), 3);
+    if (first.empty()) {
+        LOG_ERROR("invalid LTX video upscale input frame 1");
+        return false;
+    }
+    const int64_t width  = first.shape()[0];
+    const int64_t height = first.shape()[1];
+    constexpr int LTX_SPATIAL_MULTIPLE = 32;
+    if (width % LTX_SPATIAL_MULTIPLE != 0 || height % LTX_SPATIAL_MULTIPLE != 0) {
+        LOG_ERROR("LTX video upscale input size %lldx%lld must be divisible by %d; resize frames before calling this API",
+                  (long long)width,
+                  (long long)height,
+                  LTX_SPATIAL_MULTIPLE);
+        return false;
+    }
+    const int input_frames = params->input_frame_count;
+    const int encoded_frames = std::max(1, 1 + ((input_frames - 1 + 7) / 8) * 8);
+    if (encoded_frames != input_frames) {
+        LOG_INFO("LTX video upscale pads input frames from %d to %d for the temporal VAE", input_frames, encoded_frames);
+    }
+    sd::Tensor<float> video({width, height, encoded_frames, 3, 1});
+    for (int frame = 0; frame < encoded_frames; ++frame) {
+        const int source_frame = std::min(frame, input_frames - 1);
+        auto image = ensure_image_tensor_channels(sd_image_to_tensor(params->input_frames[source_frame]), 3);
+        if (image.empty() || image.shape()[0] != width || image.shape()[1] != height) {
+            LOG_ERROR("LTX video upscale input frame %d must be an RGB image of size %lldx%lld",
+                      source_frame + 1, (long long)width, (long long)height);
+            return false;
+        }
+        sd::ops::slice_assign(&video, 2, frame, frame + 1, image.unsqueeze(2));
+    }
+
+    int64_t start = ggml_time_ms();
+    auto latent   = sd_ctx->sd->encode_first_stage(video);
+    if (latent.empty()) {
+        LOG_ERROR("LTX video upscale VAE encode failed");
+        return false;
+    }
+    LOG_INFO("LTX video upscale VAE encode completed, taking %.2fs", (ggml_time_ms() - start) / 1000.f);
+
+    if (strlen(SAFE_STR(params->spatial_upscaler_path)) > 0) {
+        start  = ggml_time_ms();
+        latent = upscale_ltx_spatial_video_latent(sd_ctx, params->spatial_upscaler_path, latent, 0);
+        if (latent.empty()) {
+            return false;
+        }
+        LOG_INFO("LTX latent spatial upscale completed, taking %.2fs", (ggml_time_ms() - start) / 1000.f);
+    }
+    if (strlen(SAFE_STR(params->temporal_upscaler_path)) > 0) {
+        start  = ggml_time_ms();
+        latent = upscale_ltx_spatial_video_latent(sd_ctx, params->temporal_upscaler_path, latent, 0);
+        if (latent.empty()) {
+            return false;
+        }
+        LOG_INFO("LTX latent temporal upscale completed, taking %.2fs", (ggml_time_ms() - start) / 1000.f);
+    }
+    if (sd_ctx->sd->get_cancel_flag() == SD_CANCEL_ALL) {
+        LOG_ERROR("cancelling LTX video upscale before VAE decode");
+        return false;
+    }
+
+    sd::Tensor<float> decoded = sd_ctx->sd->decode_first_stage(latent, true);
+    if (decoded.empty()) {
+        LOG_ERROR("LTX video upscale VAE decode failed");
+        return false;
+    }
+    const int output_frames = strlen(SAFE_STR(params->temporal_upscaler_path)) > 0
+                                  ? input_frames * 2 - 1
+                                  : input_frames;
+    if (decoded.shape()[2] < output_frames) {
+        LOG_ERROR("LTX video upscale produced only %lld frames; expected at least %d",
+                  (long long)decoded.shape()[2], output_frames);
+        return false;
+    }
+    decoded = sd::ops::slice(decoded, 2, 0, output_frames);
+    sd_image_t* results = (sd_image_t*)calloc(output_frames, sizeof(sd_image_t));
+    if (results == nullptr) {
+        return false;
+    }
+    for (int frame = 0; frame < output_frames; ++frame) {
+        results[frame] = tensor_to_sd_image(decoded, static_cast<int>(frame));
+    }
+    if (frames_out != nullptr) {
+        *frames_out = results;
+    } else {
+        free_sd_images(results, output_frames);
+    }
+    if (num_frames_out != nullptr) {
+        *num_frames_out = output_frames;
+    }
+    LOG_INFO("LTX video upscale completed: %lldx%lldx%lld -> %lldx%lldx%lld",
+             (long long)width, (long long)height, (long long)input_frames,
+             (long long)decoded.shape()[0], (long long)decoded.shape()[1], (long long)output_frames);
+    return true;
 }
 
 static bool apply_ltxv_refine_image_conditioning(sd_ctx_t* sd_ctx,
