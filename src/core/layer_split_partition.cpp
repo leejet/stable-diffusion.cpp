@@ -77,7 +77,30 @@ namespace sd {
                                                                          const std::vector<size_t>& backend_vram_limits,
                                                                          size_t primary_backend_vram_limit) {
         std::vector<int64_t> capacities(backends.size(), std::numeric_limits<int64_t>::max() / 4);
-        constexpr int64_t compute_headroom_bytes = 2ll * 1024 * 1024 * 1024;
+        // The headroom held back on every device for the compute buffer.
+        //
+        // It was a hardcoded 2 GiB with no override, and on an asymmetric pair
+        // that is what makes multi-GPU layer split unusable. Measured on an
+        // 8 GB + 12 GB pair with MiniMax-H3 ref2va Q4: the params pass fills the
+        // 8 GB card to 5473 MB, leaving 2719 MB free, and 2 GiB of that is then
+        // reserved — so the smaller card can absorb almost no graph segments and
+        // everything piles onto the larger one, which then refuses the graph by
+        // 165 MB. Note also that the --max-vram limit below is a min(), so no
+        // value of it can ever RAISE this; the free-VRAM term always wins.
+        //
+        // Overridable so the trade (refuse-to-plan vs risk a real OOM) can be
+        // made per host without a rebuild. Default unchanged at 2 GiB.
+        int64_t compute_headroom_bytes = 2ll * 1024 * 1024 * 1024;
+        if (const char* env = getenv("SD_COMPUTE_HEADROOM_MB")) {
+            char* end       = nullptr;
+            long long value = strtoll(env, &end, 10);
+            if (end != env && value >= 0) {
+                compute_headroom_bytes = (int64_t)value * 1024 * 1024;
+                LOG_DEBUG("graph-cut layer split: compute headroom overridden to %lld MB", value);
+            } else {
+                LOG_WARN("SD_COMPUTE_HEADROOM_MB is not a non-negative integer, ignoring: %s", env);
+            }
+        }
         for (size_t i = 0; i < backends.size(); i++) {
             ggml_backend_dev_t dev = ggml_backend_get_device(backends[i]);
             size_t free_bytes = 0, total_bytes = 0;
@@ -158,12 +181,26 @@ namespace sd {
                 current_used = 0;
             }
             if (bytes > 0 && current_used + bytes > backend_capacities[current_backend]) {
-                LOG_ERROR("%s graph-cut layer split: segment %zu needs %.1f MB on %s, but only %.1f MB is available under current VRAM limits",
+                // Report the segment's OWN size and the running total separately.
+                // Printing only `current_used + bytes` as what the segment
+                // "needs" reads as a single huge segment and sends you looking
+                // for a smaller canvas — but this figure is cumulative, so it
+                // does not shrink with resolution and the search goes nowhere.
+                // The actionable numbers are: how big this segment is, how much
+                // was already packed onto this device, and the shortfall.
+                LOG_ERROR("%s graph-cut layer split: segment %zu (%.1f MB) does not fit %s: "
+                          "%.1f MB already packed + %.1f MB > %.1f MB capacity (short by %.1f MB). "
+                          "Capacity is min(free VRAM - compute headroom, --max-vram), so --max-vram "
+                          "cannot raise it; lower SD_COMPUTE_HEADROOM_MB (default 2048) or free VRAM "
+                          "on that device",
                           desc,
                           seg_idx,
-                          (current_used + bytes) / (1024.0 * 1024.0),
+                          bytes / (1024.0 * 1024.0),
                           layer_split_backend_device_display_name(split_backends[current_backend]).c_str(),
-                          backend_capacities[current_backend] / (1024.0 * 1024.0));
+                          current_used / (1024.0 * 1024.0),
+                          bytes / (1024.0 * 1024.0),
+                          backend_capacities[current_backend] / (1024.0 * 1024.0),
+                          (current_used + bytes - backend_capacities[current_backend]) / (1024.0 * 1024.0));
                 return false;
             }
             current_used += bytes;
