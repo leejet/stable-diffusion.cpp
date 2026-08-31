@@ -1,6 +1,7 @@
 #include "model_manager.h"
 
 #include <algorithm>
+#include <cinttypes>
 #include <cstdint>
 #include <iterator>
 #include <mutex>
@@ -14,6 +15,10 @@ static size_t aligned_offset(const void* buffer, size_t offset, size_t alignment
     GGML_ASSERT(alignment != 0 && (alignment & (alignment - 1)) == 0);
     size_t align = (alignment - ((reinterpret_cast<uintptr_t>(buffer) + offset) % alignment)) % alignment;
     return offset + align;
+}
+
+static size_t saturating_add(size_t lhs, size_t rhs) {
+    return rhs > SIZE_MAX - lhs ? SIZE_MAX : lhs + rhs;
 }
 
 static bool lora_specs_equal(const std::vector<ModelManager::LoraSpec>& lhs,
@@ -95,8 +100,648 @@ static bool device_supports_param_op(ggml_backend_dev_t device,
     return supported;
 }
 
+ggml_backend_t ModelManager::prefetch_backend_for(ggml_backend_t compute_backend) {
+    auto existing = prefetch_backends_.find(compute_backend);
+    if (existing != prefetch_backends_.end()) {
+        return existing->second;
+    }
+    if (compute_backend == nullptr) {
+        return nullptr;
+    }
+    ggml_backend_dev_t device = ggml_backend_get_device(compute_backend);
+    if (device == nullptr || ggml_backend_dev_type(device) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+        return nullptr;
+    }
+    ggml_backend_t transfer_backend = ggml_backend_dev_init(device, nullptr);
+    if (transfer_backend == nullptr) {
+        LOG_WARN("model manager failed to create a prefetch backend for %s",
+                 ggml_backend_name(compute_backend));
+        prefetch_backends_[compute_backend] = nullptr;
+        return nullptr;
+    }
+    prefetch_backends_[compute_backend] = transfer_backend;
+    return transfer_backend;
+}
+
+ParamPrefetchResult ModelManager::acquire_streaming_pool_slot(
+    uintptr_t owner_id,
+    ggml_backend_t compute_backend,
+    ggml_backend_buffer_type_t buffer_type,
+    size_t required_bytes,
+    std::shared_ptr<StreamingPoolSlot>& acquired_slot) {
+    acquired_slot.reset();
+    auto config_it = streaming_pool_configs_.find(owner_id);
+    if (config_it == streaming_pool_configs_.end()) {
+        return ParamPrefetchResult::SUCCESS;
+    }
+
+    StreamingPoolConfig& config = config_it->second;
+    if (compute_backend == nullptr || buffer_type == nullptr || required_bytes == 0) {
+        LOG_ERROR("model manager streaming pool received an invalid allocation request");
+        return ParamPrefetchResult::FAILURE;
+    }
+    if (config.compute_backend != compute_backend || config.buffer_type != buffer_type) {
+        LOG_ERROR("model manager streaming pool backend changed after configuration");
+        return ParamPrefetchResult::FAILURE;
+    }
+    if (required_bytes > config.slot_bytes) {
+        LOG_ERROR("model manager streamed segment exceeds the streaming pool slot capacity");
+        return ParamPrefetchResult::FAILURE;
+    }
+
+    for (const auto& slot : config.slots) {
+        if (slot == nullptr || slot->in_use) {
+            continue;
+        }
+        if (slot->pool_buffer == nullptr || slot->pool_buffer->buffer == nullptr ||
+            slot->offset > slot->pool_buffer->capacity ||
+            slot->capacity > slot->pool_buffer->capacity - slot->offset ||
+            slot->capacity < required_bytes) {
+            LOG_ERROR("model manager streaming pool contains an invalid slot");
+            return ParamPrefetchResult::FAILURE;
+        }
+        slot->in_use  = true;
+        acquired_slot = slot;
+        return ParamPrefetchResult::SUCCESS;
+    }
+
+    return ParamPrefetchResult::ALLOCATION_FAILURE;
+}
+
+void ModelManager::return_streaming_pool_slot(std::shared_ptr<StreamingPoolSlot>& slot) {
+    if (slot == nullptr) {
+        return;
+    }
+    if (!slot->in_use) {
+        LOG_ERROR("model manager returned an idle streaming pool slot");
+        slot.reset();
+        return;
+    }
+    slot->in_use = false;
+    slot.reset();
+}
+
+void ModelManager::release_all_streaming_pools() {
+    streaming_pool_configs_.clear();
+}
+
+void ModelManager::synchronize_prefetch_block(PrefetchBlock& block) {
+    if (block.event != nullptr) {
+        ggml_backend_event_synchronize(block.event);
+        ggml_backend_event_free(block.event);
+        block.event = nullptr;
+    } else if (block.transfer_backend != nullptr) {
+        ggml_backend_synchronize(block.transfer_backend);
+    }
+    block.transfer_backend = nullptr;
+}
+
+void ModelManager::free_prefetch_block(PrefetchBlock& block) {
+    synchronize_prefetch_block(block);
+    block.staged_tensors.clear();
+    if (block.pool_slot != nullptr) {
+        block.buffer = nullptr;
+        return_streaming_pool_slot(block.pool_slot);
+    } else if (block.buffer != nullptr) {
+        ggml_backend_buffer_free(block.buffer);
+        block.buffer = nullptr;
+    }
+    if (block.staging_ctx != nullptr) {
+        ggml_free(block.staging_ctx);
+        block.staging_ctx = nullptr;
+    }
+}
+
+ParamPrefetchResult ModelManager::populate_prefetch_block(PrefetchBlock& block) {
+    if (block.states.empty() || block.compute_backend == nullptr) {
+        return ParamPrefetchResult::FAILURE;
+    }
+
+    const bool pool_configured =
+        streaming_pool_configs_.find(block.key.owner_id) != streaming_pool_configs_.end();
+    block.transfer_backend = prefetch_backend_for(block.compute_backend);
+    if (block.transfer_backend == nullptr && pool_configured) {
+        block.transfer_backend = block.compute_backend;
+    }
+    if (block.transfer_backend == nullptr) {
+        return ParamPrefetchResult::FAILURE;
+    }
+
+    ggml_init_params init_params;
+    init_params.mem_size   = std::max<size_t>(1, block.states.size()) * ggml_tensor_overhead();
+    init_params.mem_buffer = nullptr;
+    init_params.no_alloc   = true;
+    block.staging_ctx      = ggml_init(init_params);
+    if (block.staging_ctx == nullptr) {
+        LOG_WARN("model manager failed to create the segment prefetch tensor context");
+        return ParamPrefetchResult::FAILURE;
+    }
+
+    block.staged_tensors.reserve(block.states.size());
+    for (TensorState* state : block.states) {
+        if (state == nullptr || state->tensor == nullptr || state->tensor->buffer == nullptr ||
+            state->tensor->data == nullptr ||
+            state->params_backend == nullptr || state->staged_to_compute_backend ||
+            state->active_prepare_count > 0) {
+            LOG_WARN("model manager segment prefetch source state changed before transfer");
+            return ParamPrefetchResult::FAILURE;
+        }
+        ggml_tensor* staging_tensor = ggml_dup_tensor(block.staging_ctx, state->tensor);
+        ggml_set_name(staging_tensor, state->tensor->name);
+        block.staged_tensors.push_back({state, staging_tensor});
+    }
+
+    ggml_backend_buffer_type_t buffer_type = ggml_backend_get_default_buffer_type(block.compute_backend);
+    if (buffer_type == nullptr) {
+        LOG_WARN("model manager failed to resolve the segment prefetch buffer type");
+        return ParamPrefetchResult::FAILURE;
+    }
+    if (pool_configured) {
+        const size_t required_bytes     = ggml_backend_alloc_ctx_tensors_from_buft_size(block.staging_ctx,
+                                                                                        buffer_type);
+        ParamPrefetchResult pool_result = acquire_streaming_pool_slot(block.key.owner_id,
+                                                                      block.compute_backend,
+                                                                      buffer_type,
+                                                                      required_bytes,
+                                                                      block.pool_slot);
+        if (pool_result != ParamPrefetchResult::SUCCESS) {
+            if (pool_result == ParamPrefetchResult::ALLOCATION_FAILURE) {
+                LOG_DEBUG("model manager streaming pool has no free slot");
+            }
+            return pool_result;
+        }
+    }
+    if (block.pool_slot != nullptr) {
+        block.buffer           = block.pool_slot->pool_buffer->buffer;
+        void* base             = ggml_backend_buffer_get_base(block.buffer);
+        const size_t alignment = ggml_backend_buffer_get_alignment(block.buffer);
+        size_t offset          = aligned_offset(base,
+                                                block.pool_slot->offset,
+                                                alignment);
+        const size_t slot_end  = block.pool_slot->offset + block.pool_slot->capacity;
+        if (offset < block.pool_slot->offset || offset > slot_end) {
+            LOG_WARN("model manager failed to align a streaming pool slot");
+            return ParamPrefetchResult::FAILURE;
+        }
+        for (const auto& pair : block.staged_tensors) {
+            const size_t tensor_bytes =
+                ggml_backend_buffer_get_alloc_size(block.buffer, pair.second);
+            if (tensor_bytes > SIZE_MAX - (alignment - 1)) {
+                LOG_WARN("model manager streamed tensor allocation size overflowed");
+                return ParamPrefetchResult::FAILURE;
+            }
+            const size_t allocation_bytes = GGML_PAD(tensor_bytes, alignment);
+            if (allocation_bytes > slot_end - offset) {
+                LOG_WARN("model manager streamed segment exceeds its streaming pool slot");
+                return ParamPrefetchResult::FAILURE;
+            }
+            if (ggml_backend_tensor_alloc(block.buffer,
+                                          pair.second,
+                                          static_cast<char*>(base) + offset) != GGML_STATUS_SUCCESS) {
+                LOG_WARN("model manager failed to bind prefetched tensors to a streaming pool slot");
+                return ParamPrefetchResult::FAILURE;
+            }
+            offset += allocation_bytes;
+        }
+    } else {
+        block.buffer = ggml_backend_alloc_ctx_tensors_from_buft(block.staging_ctx, buffer_type);
+    }
+    if (block.buffer == nullptr) {
+        LOG_DEBUG("model manager failed to allocate the segment prefetch weight buffer");
+        return ParamPrefetchResult::ALLOCATION_FAILURE;
+    }
+    if (block.pool_slot == nullptr) {
+        ggml_backend_buffer_set_usage(block.buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    }
+
+    for (const auto& pair : block.staged_tensors) {
+        TensorState* state          = pair.first;
+        ggml_tensor* staging_tensor = pair.second;
+        const bool host_source      = state->tensor->buffer != nullptr &&
+                                      ggml_backend_buffer_is_host(state->tensor->buffer);
+        if (host_source &&
+            (!ggml_is_contiguous(state->tensor) || !ggml_is_contiguous(staging_tensor) ||
+             ggml_nbytes(state->tensor) != ggml_nbytes(staging_tensor))) {
+            LOG_WARN("model manager segment prefetch requires contiguous host parameter tensors");
+            return ParamPrefetchResult::FAILURE;
+        }
+    }
+
+    for (const auto& pair : block.staged_tensors) {
+        TensorState* state          = pair.first;
+        ggml_tensor* staging_tensor = pair.second;
+        const bool host_source      = state->tensor->buffer != nullptr &&
+                                      ggml_backend_buffer_is_host(state->tensor->buffer);
+        if (host_source) {
+            ggml_backend_tensor_set_async(block.transfer_backend,
+                                          staging_tensor,
+                                          state->tensor->data,
+                                          0,
+                                          ggml_nbytes(state->tensor));
+        } else {
+            ggml_backend_tensor_copy_async(state->params_backend,
+                                           block.transfer_backend,
+                                           state->tensor,
+                                           staging_tensor);
+        }
+    }
+
+    ggml_backend_dev_t device = ggml_backend_get_device(block.transfer_backend);
+    block.event               = ggml_backend_event_new(device);
+    if (block.event != nullptr) {
+        ggml_backend_event_record(block.event, block.transfer_backend);
+    }
+
+    LOG_DEBUG("model manager queued segment %" PRIu64
+              " prefetch (%6.2f MB, %zu tensors) to %s",
+              block.key.segment_id,
+              (block.pool_slot != nullptr
+                   ? block.pool_slot->capacity
+                   : ggml_backend_buffer_get_size(block.buffer)) /
+                  (1024.f * 1024.f),
+              block.states.size(),
+              ggml_backend_name(block.compute_backend));
+    return ParamPrefetchResult::SUCCESS;
+}
+
+ParamPrefetchResult ModelManager::enqueue_param_prefetch(
+    uintptr_t owner_id,
+    uint64_t segment_id,
+    const std::vector<ggml_tensor*>& tensors,
+    bool require_streaming_pool) {
+    if (require_streaming_pool &&
+        streaming_pool_configs_.find(owner_id) == streaming_pool_configs_.end()) {
+        LOG_ERROR("model manager streaming pool is required but not configured");
+        return ParamPrefetchResult::FAILURE;
+    }
+    if (tensors.empty()) {
+        return ParamPrefetchResult::SUCCESS;
+    }
+
+    std::vector<TensorState*> required_states;
+    if (!resolve_required_tensor_states(tensors, required_states) ||
+        !load_tensors_to_params_backend(required_states)) {
+        return ParamPrefetchResult::FAILURE;
+    }
+
+    std::vector<TensorState*> states;
+    states.reserve(required_states.size());
+    ggml_backend_t compute_backend = nullptr;
+    for (TensorState* state : required_states) {
+        if (state == nullptr || should_ignore(*state) || is_optional_missing_tensor(state->name) ||
+            state->compute_backend == state->params_backend || state->staged_to_compute_backend) {
+            continue;
+        }
+        if (state->active_prepare_count > 0) {
+            LOG_WARN("cannot prefetch active tensor '%s'", state->name.c_str());
+            return ParamPrefetchResult::FAILURE;
+        }
+        if (compute_backend == nullptr) {
+            compute_backend = state->compute_backend;
+        } else if (compute_backend != state->compute_backend) {
+            LOG_WARN("segment prefetch cannot span multiple compute backends");
+            return ParamPrefetchResult::FAILURE;
+        }
+        states.push_back(state);
+    }
+    PrefetchKey key{owner_id, segment_id};
+    if (states.empty()) {
+        auto existing = prefetch_blocks_.find(key);
+        if (existing != prefetch_blocks_.end()) {
+            std::unique_ptr<PrefetchBlock> stale = std::move(existing->second);
+            prefetch_blocks_.erase(existing);
+            free_prefetch_block(*stale);
+        }
+        return ParamPrefetchResult::SUCCESS;
+    }
+    if (compute_backend == nullptr || sd_backend_is_cpu(compute_backend)) {
+        LOG_WARN("segment prefetch requires a non-CPU compute backend");
+        return ParamPrefetchResult::FAILURE;
+    }
+    auto block             = std::make_unique<PrefetchBlock>();
+    block->key             = key;
+    block->states          = std::move(states);
+    block->compute_backend = compute_backend;
+
+    auto existing = prefetch_blocks_.find(key);
+    if (existing != prefetch_blocks_.end()) {
+        const auto& existing_states = existing->second->states;
+        const bool same_states      = existing->second->compute_backend == compute_backend &&
+                                      existing_states.size() == block->states.size() &&
+                                      std::is_permutation(existing_states.begin(),
+                                                          existing_states.end(),
+                                                          block->states.begin());
+        if (same_states) {
+            return ParamPrefetchResult::SUCCESS;
+        }
+        clear_param_prefetches(owner_id);
+    }
+
+    ParamPrefetchResult result = populate_prefetch_block(*block);
+    if (result != ParamPrefetchResult::SUCCESS) {
+        free_prefetch_block(*block);
+        return result;
+    }
+    prefetch_blocks_.emplace(key, std::move(block));
+    return ParamPrefetchResult::SUCCESS;
+}
+
+bool ModelManager::activate_param_prefetch(uintptr_t owner_id,
+                                           uint64_t segment_id,
+                                           const std::vector<ggml_tensor*>& tensors) {
+    std::vector<TensorState*> required_states;
+    if (!resolve_required_tensor_states(tensors, required_states)) {
+        return false;
+    }
+    PrefetchKey key{owner_id, segment_id};
+    const bool already_staged = std::all_of(required_states.begin(), required_states.end(),
+                                            [&](TensorState* state) {
+                                                return state == nullptr || should_ignore(*state) ||
+                                                       is_optional_missing_tensor(state->name) ||
+                                                       state->compute_backend == state->params_backend ||
+                                                       state->staged_to_compute_backend;
+                                            });
+    if (already_staged) {
+        auto existing = prefetch_blocks_.find(key);
+        if (existing != prefetch_blocks_.end()) {
+            std::unique_ptr<PrefetchBlock> stale = std::move(existing->second);
+            prefetch_blocks_.erase(existing);
+            free_prefetch_block(*stale);
+        }
+        return true;
+    }
+
+    auto existing = prefetch_blocks_.find(key);
+    if (existing == prefetch_blocks_.end()) {
+        LOG_WARN("segment %" PRIu64 " was not queued for prefetch", segment_id);
+        return false;
+    }
+    std::unique_ptr<PrefetchBlock> block = std::move(existing->second);
+    prefetch_blocks_.erase(existing);
+    synchronize_prefetch_block(*block);
+
+    LOG_DEBUG("model manager activated prefetched segment %" PRIu64
+              " (%6.2f MB, %zu tensors) on %s",
+              segment_id,
+              (block->pool_slot != nullptr
+                   ? block->pool_slot->capacity
+                   : ggml_backend_buffer_get_size(block->buffer)) /
+                  (1024.f * 1024.f),
+              block->states.size(),
+              ggml_backend_name(block->compute_backend));
+
+    for (const auto& pair : block->staged_tensors) {
+        TensorState* state          = pair.first;
+        ggml_tensor* staging_tensor = pair.second;
+        if (state == nullptr || state->tensor == nullptr || state->staged_to_compute_backend ||
+            state->active_prepare_count > 0 || staging_tensor == nullptr) {
+            LOG_WARN("segment %" PRIu64 " cannot be activated because tensor state changed", segment_id);
+            free_prefetch_block(*block);
+            return false;
+        }
+    }
+    for (auto& pair : block->staged_tensors) {
+        TensorState* state          = pair.first;
+        ggml_tensor* staging_tensor = pair.second;
+        std::swap(state->tensor->buffer, staging_tensor->buffer);
+        std::swap(state->tensor->data, staging_tensor->data);
+        std::swap(state->tensor->extra, staging_tensor->extra);
+        state->staged_to_compute_backend = true;
+    }
+
+    auto staging_block             = std::make_unique<ComputeStagingBlock>();
+    staging_block->compute_backend = block->compute_backend;
+    staging_block->buffer          = block->buffer;
+    staging_block->staging_ctx     = block->staging_ctx;
+    staging_block->staged_tensors  = std::move(block->staged_tensors);
+    staging_block->pool_slot       = std::move(block->pool_slot);
+    block->buffer                  = nullptr;
+    block->staging_ctx             = nullptr;
+    compute_staging_blocks_.push_back(std::move(staging_block));
+    return true;
+}
+
+void ModelManager::clear_param_prefetches(uintptr_t owner_id) {
+    for (auto it = prefetch_blocks_.begin(); it != prefetch_blocks_.end();) {
+        if (it->first.owner_id == owner_id) {
+            free_prefetch_block(*it->second);
+            it = prefetch_blocks_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+StreamingPoolAllocation ModelManager::configure_streaming_pool(
+    uintptr_t owner_id,
+    ggml_backend_t compute_backend,
+    size_t slot_count,
+    size_t slot_bytes) {
+    if (compute_backend == nullptr || slot_count == 0 || slot_bytes == 0) {
+        LOG_ERROR("model manager cannot configure an empty streaming pool");
+        return {};
+    }
+    ggml_backend_buffer_type_t buffer_type = ggml_backend_get_default_buffer_type(compute_backend);
+    if (buffer_type == nullptr) {
+        LOG_ERROR("model manager cannot resolve the streaming pool buffer type");
+        return {};
+    }
+    const size_t alignment = ggml_backend_buft_get_alignment(buffer_type);
+    if (alignment == 0 || (alignment & (alignment - 1)) != 0 ||
+        slot_bytes > SIZE_MAX - (alignment - 1)) {
+        LOG_ERROR("model manager received an invalid streaming pool slot size");
+        return {};
+    }
+    slot_bytes = GGML_PAD(slot_bytes, alignment);
+    slot_count = std::min(slot_count, SIZE_MAX / slot_bytes);
+
+    auto existing = streaming_pool_configs_.find(owner_id);
+    if (existing != streaming_pool_configs_.end()) {
+        StreamingPoolConfig& config = existing->second;
+        size_t configured_bytes     = SIZE_MAX;
+        if (config.slot_bytes > 0 && config.slot_count <= SIZE_MAX / config.slot_bytes) {
+            configured_bytes = config.slot_count * config.slot_bytes;
+        }
+        bool slots_valid = config.pool_buffer != nullptr &&
+                           config.pool_buffer->buffer != nullptr &&
+                           config.pool_buffer->capacity >= configured_bytes &&
+                           config.slot_count > 0 && config.slot_bytes > 0 &&
+                           config.slots.size() == config.slot_count;
+        for (size_t index = 0; slots_valid && index < config.slots.size(); ++index) {
+            const auto& slot = config.slots[index];
+            if (slot == nullptr || slot->pool_buffer != config.pool_buffer ||
+                slot->offset != index * config.slot_bytes ||
+                slot->capacity != config.slot_bytes) {
+                slots_valid = false;
+            }
+        }
+        const bool reusable = slots_valid &&
+                              config.compute_backend == compute_backend &&
+                              config.buffer_type == buffer_type &&
+                              config.slot_bytes >= slot_bytes;
+        if (reusable) {
+            return {config.slot_count, config.slot_bytes};
+        }
+        const bool slot_in_use = std::any_of(config.slots.begin(),
+                                             config.slots.end(),
+                                             [](const std::shared_ptr<StreamingPoolSlot>& slot) {
+                                                 return slot != nullptr && slot->in_use;
+                                             });
+        if (slot_in_use) {
+            LOG_ERROR("model manager cannot reconfigure a streaming pool while a slot is in use");
+            return {};
+        }
+        streaming_pool_configs_.erase(existing);
+    }
+
+    const size_t requested_slot_count = slot_count;
+    for (size_t candidate_slot_count = requested_slot_count;
+         candidate_slot_count > 0;
+         --candidate_slot_count) {
+        const size_t pool_bytes = candidate_slot_count * slot_bytes;
+        auto pool_buffer        = std::make_shared<StreamingPoolBuffer>();
+        pool_buffer->buffer     = ggml_backend_buft_alloc_buffer(buffer_type, pool_bytes);
+        if (pool_buffer->buffer == nullptr) {
+            LOG_DEBUG("model manager failed to allocate a %.2f MB contiguous streaming pool",
+                      pool_bytes / (1024.f * 1024.f));
+            continue;
+        }
+        ggml_backend_buffer_set_usage(pool_buffer->buffer,
+                                      GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        pool_buffer->capacity = ggml_backend_buffer_get_size(pool_buffer->buffer);
+        if (pool_buffer->capacity < pool_bytes) {
+            LOG_ERROR("model manager streaming pool returned an invalid buffer capacity");
+            continue;
+        }
+        void* base = ggml_backend_buffer_get_base(pool_buffer->buffer);
+        if (base == nullptr || aligned_offset(base, 0, alignment) != 0) {
+            LOG_ERROR("model manager streaming pool returned an unaligned buffer base");
+            continue;
+        }
+
+        StreamingPoolConfig config;
+        config.compute_backend = compute_backend;
+        config.buffer_type     = buffer_type;
+        config.slot_count      = candidate_slot_count;
+        config.slot_bytes      = slot_bytes;
+        config.pool_buffer     = std::move(pool_buffer);
+        config.slots.reserve(candidate_slot_count);
+        for (size_t index = 0; index < candidate_slot_count; ++index) {
+            auto slot         = std::make_shared<StreamingPoolSlot>();
+            slot->owner_id    = owner_id;
+            slot->pool_buffer = config.pool_buffer;
+            slot->offset      = index * slot_bytes;
+            slot->capacity    = slot_bytes;
+            config.slots.push_back(std::move(slot));
+        }
+
+        const size_t reserved_bytes = config.pool_buffer->capacity;
+        streaming_pool_configs_.emplace(owner_id, std::move(config));
+        if (candidate_slot_count < requested_slot_count) {
+            LOG_WARN(
+                "model manager reduced the contiguous streaming pool from %zu to %zu slots after allocation failure",
+                requested_slot_count,
+                candidate_slot_count);
+        }
+        LOG_INFO("model manager allocated contiguous streaming pool: slots=%zu slot=%.2f MB total=%.2f MB on %s",
+                 candidate_slot_count,
+                 slot_bytes / (1024.f * 1024.f),
+                 reserved_bytes / (1024.f * 1024.f),
+                 ggml_backend_name(compute_backend));
+        return {candidate_slot_count, slot_bytes};
+    }
+
+    LOG_ERROR("model manager failed to allocate the mandatory one-slot streaming pool (%.2f MB) on %s",
+              slot_bytes / (1024.f * 1024.f),
+              ggml_backend_name(compute_backend));
+    return {};
+}
+
+bool ModelManager::release_streaming_pool(uintptr_t owner_id) {
+    auto config = streaming_pool_configs_.find(owner_id);
+    if (config == streaming_pool_configs_.end()) {
+        return true;
+    }
+    const bool slot_in_use = std::any_of(config->second.slots.begin(),
+                                         config->second.slots.end(),
+                                         [](const std::shared_ptr<StreamingPoolSlot>& slot) {
+                                             return slot != nullptr && slot->in_use;
+                                         });
+    if (slot_in_use) {
+        LOG_ERROR("model manager cannot release a streaming pool while a slot is in use");
+        return false;
+    }
+    streaming_pool_configs_.erase(config);
+    return true;
+}
+
+size_t ModelManager::streaming_allocation_bytes(
+    uintptr_t owner_id,
+    ggml_backend_t compute_backend,
+    const std::unordered_set<const ggml_tensor*>& resident_tensors) const {
+    size_t bytes = 0;
+    std::unordered_set<ggml_backend_buffer_t> counted_buffers;
+    auto add_buffer = [&](ggml_backend_buffer_t buffer) {
+        if (buffer != nullptr && counted_buffers.insert(buffer).second) {
+            bytes = saturating_add(bytes, ggml_backend_buffer_get_size(buffer));
+        }
+    };
+
+    auto pool = streaming_pool_configs_.find(owner_id);
+    if (pool != streaming_pool_configs_.end() &&
+        pool->second.compute_backend == compute_backend) {
+        if (pool->second.pool_buffer != nullptr) {
+            add_buffer(pool->second.pool_buffer->buffer);
+        }
+    }
+    for (const auto& block : compute_staging_blocks_) {
+        if (block == nullptr || block->buffer == nullptr ||
+            block->compute_backend != compute_backend) {
+            continue;
+        }
+        if (block->pool_slot != nullptr && block->pool_slot->owner_id == owner_id) {
+            add_buffer(block->buffer);
+            continue;
+        }
+        const bool contains_resident = std::any_of(
+            block->staged_tensors.begin(),
+            block->staged_tensors.end(),
+            [&](const std::pair<TensorState*, ggml_tensor*>& pair) {
+                return pair.first != nullptr &&
+                       resident_tensors.count(pair.first->tensor) != 0;
+            });
+        if (contains_resident) {
+            add_buffer(block->buffer);
+        }
+    }
+    for (const auto& entry : prefetch_blocks_) {
+        const PrefetchBlock* block = entry.second.get();
+        if (entry.first.owner_id != owner_id || block == nullptr || block->buffer == nullptr ||
+            block->compute_backend != compute_backend) {
+            continue;
+        }
+        add_buffer(block->buffer);
+    }
+    return bytes;
+}
+
+void ModelManager::clear_all_param_prefetches() {
+    for (auto& entry : prefetch_blocks_) {
+        free_prefetch_block(*entry.second);
+    }
+    prefetch_blocks_.clear();
+}
+
 ModelManager::~ModelManager() {
+    clear_all_param_prefetches();
     release_all();
+    release_all_streaming_pools();
+    for (auto& entry : prefetch_backends_) {
+        if (entry.second != nullptr) {
+            ggml_backend_free(entry.second);
+        }
+    }
+    prefetch_backends_.clear();
 }
 
 void ModelManager::set_common_ignore_tensors(std::set<std::string> ignore_tensors) {
@@ -255,6 +900,7 @@ bool ModelManager::unregister_param_tensors(const std::string& desc, size_t* reg
         return true;
     }
 
+    clear_all_param_prefetches();
     release_compute_staging_blocks(false);
 
     std::vector<ParamsStorageBlock*> storage_blocks_to_release;
@@ -608,6 +1254,7 @@ bool ModelManager::apply_loras_to_params(const std::vector<TensorState*>& states
 }
 
 void ModelManager::reset_lora_applied_params() {
+    clear_all_param_prefetches();
     release_compute_staging_blocks(true);
     release_params_storage_blocks(true);
     for (auto& state : tensor_states_) {
@@ -931,7 +1578,10 @@ void ModelManager::free_compute_staging_block(ComputeStagingBlock& block) {
         state->applied_lora_epoch        = UINT64_MAX;
     }
 
-    if (block.buffer != nullptr) {
+    if (block.pool_slot != nullptr) {
+        block.buffer = nullptr;
+        return_streaming_pool_slot(block.pool_slot);
+    } else if (block.buffer != nullptr) {
         LOG_DEBUG("model manager releasing compute params (%6.2f MB, %zu tensors) from %s",
                   ggml_backend_buffer_get_size(block.buffer) / (1024.f * 1024.f),
                   block.staged_tensors.size(),
@@ -946,34 +1596,38 @@ void ModelManager::free_compute_staging_block(ComputeStagingBlock& block) {
     block.staged_tensors.clear();
 }
 
-void ModelManager::release_compute_staging_blocks(bool force,
-                                                  const std::unordered_set<TensorState*>* target_states) {
+size_t ModelManager::release_compute_staging_blocks(bool force) {
+    size_t released_bytes = 0;
     for (auto it = compute_staging_blocks_.begin(); it != compute_staging_blocks_.end();) {
         ComputeStagingBlock* block = it->get();
         bool can_release           = force;
         if (!can_release) {
             can_release = std::all_of(block->staged_tensors.begin(),
                                       block->staged_tensors.end(),
-                                      [target_states](const std::pair<TensorState*, ggml_tensor*>& pair) {
+                                      [](const std::pair<TensorState*, ggml_tensor*>& pair) {
                                           TensorState* state = pair.first;
                                           if (state == nullptr) {
                                               return true;
-                                          }
-                                          if (target_states != nullptr &&
-                                              target_states->find(state) == target_states->end()) {
-                                              return false;
                                           }
                                           return state->active_prepare_count == 0;
                                       });
         }
 
         if (can_release) {
+            if (block->buffer != nullptr) {
+                released_bytes = saturating_add(
+                    released_bytes,
+                    block->pool_slot != nullptr
+                        ? block->pool_slot->capacity
+                        : ggml_backend_buffer_get_size(block->buffer));
+            }
             free_compute_staging_block(*block);
             it = compute_staging_blocks_.erase(it);
         } else {
             ++it;
         }
     }
+    return released_bytes;
 }
 
 void ModelManager::free_params_storage_block(ParamsStorageBlock& block) {
@@ -1097,6 +1751,7 @@ bool ModelManager::assign_compute_backend(const std::vector<ggml_tensor*>& tenso
         return false;
     }
 
+    bool any_change = false;
     for (TensorState* state : required_states) {
         if (state == nullptr || state->tensor == nullptr) {
             continue;
@@ -1121,7 +1776,20 @@ bool ModelManager::assign_compute_backend(const std::vector<ggml_tensor*>& tenso
             return false;
         }
 
-        state->compute_backend = compute_backend;
+        any_change = true;
+    }
+
+    if (any_change) {
+        clear_all_param_prefetches();
+    }
+    for (TensorState* state : required_states) {
+        if (state == nullptr || state->tensor == nullptr) {
+            continue;
+        }
+
+        const bool params_follow_compute = state->params_follow_compute_backend ||
+                                           state->residency_mode == ResidencyMode::Disk;
+        state->compute_backend           = compute_backend;
         if (params_follow_compute) {
             state->params_backend = compute_backend;
         }
@@ -1165,32 +1833,32 @@ bool ModelManager::prepare_params(const std::vector<ggml_tensor*>& tensors) {
     return true;
 }
 
-void ModelManager::finish_compute_backend_usage(const std::vector<TensorState*>& states) {
+size_t ModelManager::finish_compute_backend_usage(const std::vector<TensorState*>& states) {
     if (states.empty()) {
-        return;
+        return 0;
     }
 
-    std::unordered_set<TensorState*> target_states;
+    std::unordered_set<TensorState*> unique_states;
     for (TensorState* state : states) {
-        if (state == nullptr || !target_states.insert(state).second) {
+        if (state == nullptr || !unique_states.insert(state).second) {
             continue;
         }
         if (state->active_prepare_count > 0) {
             state->active_prepare_count--;
         }
     }
-    release_compute_staging_blocks(false, &target_states);
+    return release_compute_staging_blocks(false);
 }
 
-void ModelManager::release_compute_backend_params(const std::vector<ggml_tensor*>& tensors) {
+size_t ModelManager::release_compute_backend_params(const std::vector<ggml_tensor*>& tensors) {
     if (tensors.empty()) {
-        return;
+        return 0;
     }
     std::vector<TensorState*> required_states;
     if (!resolve_required_tensor_states(tensors, required_states)) {
-        return;
+        return 0;
     }
-    finish_compute_backend_usage(required_states);
+    return finish_compute_backend_usage(required_states);
 }
 
 void ModelManager::release_params_backend_params(const std::vector<ggml_tensor*>& tensors) {
