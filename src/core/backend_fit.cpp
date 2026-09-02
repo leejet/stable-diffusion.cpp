@@ -370,6 +370,13 @@ namespace sd::backend_fit {
             retry_mode                    = tiling_params.enabled ? "spatial+temporal" : "temporal";
         } else if (!tiling_params.enabled) {
             tiling_params.enabled = true;
+            // 512px VAE decode memory fix: get_tile_sizes() defaults to
+            // rel_size=1.0 (factor branch wins), which yields a full-size tile
+            // (tiling effectively disabled) and can exceed device buffer limits
+            // (Adreno 740: 512px decode graph ~1.94GB). Half-relative tiles make
+            // tiling effective (~416MB), no quality impact (VAE tiling overlaps).
+            tiling_params.rel_size_x = 0.5f;
+            tiling_params.rel_size_y = 0.5f;
             if (tiling_params.tile_size_x <= 0) {
                 tiling_params.tile_size_x = 256;
             }

@@ -3085,8 +3085,11 @@ public:
         auto latents                      = first_stage_model->diffusion_to_vae_latents(x);
         auto decoded                      = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
         const bool prefer_temporal_tiling = decode_video && first_stage_model->can_temporal_tile_decode();
+        // 512px VAE decode memory fix: retry with tiling unconditionally on
+        // decode failure (OOM) instead of gating on --auto-fit (default off),
+        // so mobile GPUs with small buffers recover automatically. Only fires
+        // when decode actually failed, no side effects on the happy path.
         while (decoded.empty() &&
-               auto_fit_enabled &&
                sd::backend_fit::prepare_vae_decode_retry_tiling(vae_tiling_params, prefer_temporal_tiling)) {
             first_stage_model->free_compute_buffer();
             decoded = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
