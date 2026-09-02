@@ -533,11 +533,7 @@ static void print_progress_line(int step, int steps, const std::string& speed_te
     fflush(stdout);  // for linux
 }
 
-void pretty_progress(int step, int steps, float time) {
-    if (sd_progress_cb) {
-        sd_progress_cb(step, steps, time, sd_progress_cb_data);
-        return;
-    }
+static void render_step_progress(int step, int steps, float time) {
     if (step == 0) {
         return;
     }
@@ -550,13 +546,30 @@ void pretty_progress(int step, int steps, float time) {
     print_progress_line(step, steps, sd_format("%.2f%s", speed, unit));
 }
 
-void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds) {
+void pretty_progress(int step, int steps, float time) {
     if (sd_progress_cb) {
-        float time = elapsed_seconds / (step + 1e-6f);
         sd_progress_cb(step, steps, time, sd_progress_cb_data);
         return;
     }
-    if (step == 0) {
+    render_step_progress(step, steps, time);
+}
+
+// Tiled decoding runs inside a single sampling step, so its tile counter is on
+// a different scale than the step counter sd_progress_cb reports. Keep it out
+// of the callback, and stay silent when one is installed: a consumer that
+// reports progress itself did not ask for a progress bar in its output.
+void pretty_tile_progress(int step, int steps, float time) {
+    if (sd_progress_cb) {
+        return;
+    }
+    render_step_progress(step, steps, time);
+}
+
+void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds) {
+    // Loading weights is not sampling them: reporting tensor counts through
+    // sd_progress_cb would restart the step counter on every model load. Stay
+    // silent when a callback is installed, as this function already did.
+    if (sd_progress_cb || step == 0) {
         return;
     }
 

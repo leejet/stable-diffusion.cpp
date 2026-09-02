@@ -105,6 +105,73 @@ bool cancel_queued_job(AsyncJobManager& manager, AsyncGenerationJob& job) {
     return true;
 }
 
+// sd_set_progress_callback takes a plain function pointer and the worker runs
+// one job at a time, so the job being sampled is tracked in file scope rather
+// than captured.
+struct SamplingProgressState {
+    AsyncGenerationJob* job = nullptr;
+    int finished_passes     = 0;
+    int last_step           = 0;
+    int last_steps          = 0;
+};
+
+static SamplingProgressState sampling_progress_state;
+
+// A generation samples once per batch image, plus once more per image when
+// hires is on, and each pass counts from zero. Folding a finished pass into a
+// running total turns those passes into one counter for the whole job.
+static void on_sampling_progress(int step, int steps, float time, void* data) {
+    (void)time;
+    (void)data;
+    SamplingProgressState& state = sampling_progress_state;
+    if (state.job == nullptr) {
+        return;
+    }
+    if (step <= state.last_step) {
+        state.finished_passes += state.last_steps;
+    }
+    state.last_step  = step;
+    state.last_steps = steps;
+    state.job->progress_step.store(state.finished_passes + step, std::memory_order_relaxed);
+}
+
+// A custom sigma schedule overrides the requested step count: sampling runs
+// custom_sigmas_count - 1 steps and reports that as its own total, so deriving
+// the expectation from sample_steps would under-count it.
+static int expected_sampling_steps(const sd_img_gen_params_t& params) {
+    const int batch_count            = params.batch_count > 0 ? params.batch_count : 1;
+    const sd_sample_params_t& sample = params.sample_params;
+    const int steps                  = sample.custom_sigmas != nullptr && sample.custom_sigmas_count > 1
+                                           ? sample.custom_sigmas_count - 1
+                                           : (sample.sample_steps > 0 ? sample.sample_steps : 0);
+    int total                        = batch_count * steps;
+    if (params.hires.enabled) {
+        const sd_hires_params_t& hires = params.hires;
+        const int hires_steps          = hires.custom_sigmas != nullptr && hires.custom_sigmas_count > 1
+                                             ? hires.custom_sigmas_count - 1
+                                             : (hires.steps > 0 ? hires.steps : steps);
+        total += batch_count * hires_steps;
+    }
+    return total;
+}
+
+// Installs the callback for one generation and always clears it, so a later
+// job is never credited with steps from this one.
+struct SamplingProgressScope {
+    explicit SamplingProgressScope(AsyncGenerationJob& job) {
+        sampling_progress_state = SamplingProgressState{&job, 0, 0, 0};
+        sd_set_progress_callback(on_sampling_progress, nullptr);
+    }
+
+    ~SamplingProgressScope() {
+        sd_set_progress_callback(nullptr, nullptr);
+        sampling_progress_state = SamplingProgressState{};
+    }
+
+    SamplingProgressScope(const SamplingProgressScope&)            = delete;
+    SamplingProgressScope& operator=(const SamplingProgressScope&) = delete;
+};
+
 json make_async_job_json(const AsyncJobManager& manager, const AsyncGenerationJob& job) {
     json result;
     result["id"]             = job.id;
@@ -114,6 +181,8 @@ json make_async_job_json(const AsyncJobManager& manager, const AsyncGenerationJo
     result["started"]        = job.started_at == 0 ? json(nullptr) : json(job.started_at);
     result["completed"]      = job.completed_at == 0 ? json(nullptr) : json(job.completed_at);
     result["queue_position"] = 0;
+    result["progress_step"]  = job.progress_step.load(std::memory_order_relaxed);
+    result["progress_steps"] = job.progress_steps.load(std::memory_order_relaxed);
 
     if (job.status == AsyncJobStatus::Queued) {
         size_t position = 1;
@@ -170,10 +239,14 @@ bool execute_img_gen_job(ServerRuntime& runtime,
                          std::string& error_message) {
     sd_img_gen_params_t params = job.img_gen.to_sd_img_gen_params_t();
 
+    job.progress_steps.store(expected_sampling_steps(params), std::memory_order_relaxed);
+    job.progress_step.store(0, std::memory_order_relaxed);
+
     SDImageVec results;
 
     {
         std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
+        SamplingProgressScope progress_scope(job);
         sd_image_t* raw_results = nullptr;
         int num_results         = 0;
         if (!generate_image(runtime.sd_ctx, &params, &raw_results, &num_results)) {
