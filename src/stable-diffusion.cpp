@@ -1273,6 +1273,12 @@ public:
                                                                            tensor_storage_map,
                                                                            "model.diffusion_model.model.net",
                                                                            model_manager);
+            } else if (sd_version_is_sensenova_u1(version)) {
+                cond_stage_model = std::make_shared<SenseNovaU1Conditioner>();
+                diffusion_model  = std::make_shared<SenseNovaU1::SenseNovaU1Runner>(backend_for(SDBackendModule::DIFFUSION),
+                                                                                    tensor_storage_map,
+                                                                                    "",
+                                                                                    model_manager);
             } else if (sd_version_is_anima(version)) {
                 cond_stage_model = std::make_shared<AnimaConditioner>(backend_for(SDBackendModule::TE),
                                                                       tensor_storage_map,
@@ -1490,7 +1496,7 @@ public:
                 }
             };
 
-            if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version)) {
+            if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version) || sd_version_is_sensenova_u1(version)) {
                 LOG_INFO("using FakeVAE");
                 first_stage_model = std::make_shared<FakeVAE>(version,
                                                               backend_for(SDBackendModule::VAE),
@@ -1842,6 +1848,9 @@ public:
                     pred_type = SEFI_FLOW_PRED;
                 } else if (sd_version_is_minit2i(version)) {
                     pred_type = MINIT2I_FLOW_PRED;
+                } else if (sd_version_is_sensenova_u1(version)) {
+                    pred_type          = SENSENOVA_U1_FLOW_PRED;
+                    default_flow_shift = 3.f;
                 } else {
                     pred_type = EPS_PRED;
                 }
@@ -1885,6 +1894,11 @@ public:
                 case MINIT2I_FLOW_PRED: {
                     LOG_INFO("running in MiniT2I FLOW mode");
                     denoiser = std::make_shared<MiniT2IFlowDenoiser>();
+                    break;
+                }
+                case SENSENOVA_U1_FLOW_PRED: {
+                    LOG_INFO("running in SenseNova U1.5 FLOW mode");
+                    denoiser = std::make_shared<SenseNovaU1FlowDenoiser>(default_flow_shift);
                     break;
                 }
                 default: {
@@ -2792,6 +2806,9 @@ public:
                 } else if (sd_version_is_minit2i(version)) {
                     diffusion_params.extra = MiniT2IDiffusionExtra{
                         condition.c_vector.empty() ? nullptr : &condition.c_vector};
+                } else if (sd_version_is_sensenova_u1(version)) {
+                    diffusion_params.extra = SenseNovaU1DiffusionExtra{
+                        condition.c_input_ids.empty() ? nullptr : &condition.c_input_ids};
                 } else {
                     diffusion_params.extra = std::monostate{};
                 }
@@ -2956,7 +2973,9 @@ public:
     int get_diffusion_model_down_factor() {
         int down_factor = 8;  // unet
         if (sd_version_is_dit(version)) {
-            if (sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_minimax_h3(version)) {
+            if (sd_version_is_sensenova_u1(version)) {
+                down_factor = 32;
+            } else if (sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_minimax_h3(version)) {
                 down_factor = 2;
             } else {
                 down_factor = 1;
@@ -2981,6 +3000,8 @@ public:
             } else if (version == VERSION_CHROMA_RADIANCE) {
                 latent_channel = 3;
             } else if (sd_version_is_minit2i(version)) {
+                latent_channel = 3;
+            } else if (sd_version_is_sensenova_u1(version)) {
                 latent_channel = 3;
             } else if (sd_version_is_pid(version)) {
                 latent_channel = 3;
@@ -3396,6 +3417,7 @@ const char* prediction_to_str[] = {
     "flux_flow",
     "sefi_flow",
     "minit2i_flow",
+    "sensenova_u1_flow",
 };
 
 const char* sd_prediction_name(enum prediction_t prediction) {
@@ -5273,6 +5295,10 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
             // states with a zeroed prompt mask, so no extra text encode is needed.
             uncond.c_crossattn = cond.c_crossattn;
             uncond.c_vector    = sd::Tensor<float>::zeros_like(cond.c_vector);
+        } else if (sd_version_is_sensenova_u1(sd_ctx->sd->version)) {
+            auto* sensenova_conditioner = static_cast<SenseNovaU1Conditioner*>(
+                sd_ctx->sd->cond_stage_model.get());
+            uncond = sensenova_conditioner->get_unconditional_condition(request->negative_prompt);
         } else {
             bool zero_out_masked = false;
             if (sd_version_is_sdxl(sd_ctx->sd->version) &&
