@@ -161,6 +161,10 @@ namespace SenseNovaU1 {
                                           float theta,
                                           int max_position) {
         GGML_ASSERT(x->ne[0] % 2 == 0);
+        // ggml_rope_ext addresses positions through ne[2]. The vision
+        // embeddings arrive as [hidden, tokens, batch], so add the singleton
+        // head axis used by the RoPE kernel: [hidden, 1, tokens, batch].
+        x                  = ggml_reshape_4d(ctx->ggml_ctx, x, x->ne[0], 1, x->ne[1], x->ne[2]);
         const int64_t half = x->ne[0] / 2;
         auto x_part        = ggml_ext_slice(ctx->ggml_ctx, x, 0, 0, half);
         auto y_part        = ggml_ext_slice(ctx->ggml_ctx, x, 0, half, x->ne[0]);
@@ -234,7 +238,7 @@ namespace SenseNovaU1 {
                                                      config.rope_theta_hw,
                                                      static_cast<int>(config.max_position_embeddings_hw));
             x                    = ggml_reshape_4d(ctx->ggml_ctx, x, config.vision_hidden_size, grid_w, grid_h, batch);
-            x                    = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 2, 0, 3));
+            x                    = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 2, 0, 1, 3));
             x                    = dense_embedding->forward(ctx, x);
 
             const int64_t token_w = x->ne[0];
@@ -794,7 +798,7 @@ namespace SenseNovaU1 {
                                                 token_w,
                                                 token_h,
                                                 x->ne[3]);
-            hidden            = ggml_cont(compute_ctx, ggml_permute(compute_ctx, hidden, 1, 2, 0, 3));
+            hidden            = ggml_cont(compute_ctx, ggml_permute(compute_ctx, hidden, 2, 0, 1, 3));
             auto x_prediction = model.pixel_decoder()->forward(&runner_ctx, hidden);
 
             const float timestep = timestep_tensor.values()[0];
