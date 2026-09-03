@@ -67,6 +67,8 @@ const char* unused_tensors[] = {
     // "v_pred", // Used to detect SDXL vpred models
     "text_encoders.llm.output.weight",
     "text_encoders.llm.lm_head.",
+    "language_model.lm_head.",
+    "vision_model.",
 };
 
 bool is_unused_tensor(const std::string& name) {
@@ -170,6 +172,15 @@ void ModelLoader::set_n_threads(int n_threads) {
 
 bool ModelLoader::init_from_file(const std::string& file_path, const std::string& prefix) {
     if (is_directory(file_path)) {
+        const std::string diffusers_index_path = path_join(file_path, "model_index.json");
+        const std::string diffusers_unet_path  = path_join(file_path, "unet/diffusion_pytorch_model.safetensors");
+        const bool has_diffusers_layout        = file_exists(diffusers_index_path) || file_exists(diffusers_unet_path);
+
+        const std::string safetensors_index_path = path_join(file_path, "model.safetensors.index.json");
+        if (!has_diffusers_layout && file_exists(safetensors_index_path)) {
+            LOG_INFO("load %s using root safetensors index", file_path.c_str());
+            return init_from_safetensors_index_file(safetensors_index_path, prefix);
+        }
         LOG_INFO("load %s using diffusers format", file_path.c_str());
         return init_from_diffusers_file(file_path, prefix);
     } else if (is_gguf_file(file_path)) {
@@ -387,7 +398,20 @@ bool ModelLoader::init_from_diffusers_file(const std::string& file_path, const s
     return true;
 }
 
+static bool has_sensenova_u1_signature(const String2TensorStorage& tensors) {
+    // Require independent markers for the generation MoT branch, the vision
+    // input path, and the pixel-flow output head to avoid matching a plain or
+    // partially exported Qwen checkpoint.
+    return tensors.find("language_model.model.layers.0.self_attn.q_proj_mot_gen.weight") != tensors.end() &&
+           tensors.find("fm_modules.vision_model_mot_gen.embeddings.patch_embedding.weight") != tensors.end() &&
+           tensors.find("fm_modules.fm_head.conv1.weight") != tensors.end();
+}
+
 SDVersion ModelLoader::get_sd_version() {
+    if (has_sensenova_u1_signature(tensor_storage_map)) {
+        return VERSION_SENSENOVA_U1_5;
+    }
+
     TensorStorage token_embedding_weight, input_block_weight, context_ebedding_weight;
 
     bool has_multiple_encoders = false;

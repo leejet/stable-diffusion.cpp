@@ -124,6 +124,7 @@ const char* model_version_to_str[] = {
     "SeFi-Image",
     "Krea2",
     "Mage Flow",
+    "SenseNova U1.5",
     "ESRGAN",
 };
 
