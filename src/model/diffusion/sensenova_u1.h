@@ -442,8 +442,16 @@ namespace SenseNovaU1 {
                 k = ggml_concat(ctx->ggml_ctx, prefix_k, k, 2);
                 v = ggml_concat(ctx->ggml_ctx, prefix_v, v, 2);
             } else {
-                ctx->persist_cache_tensor(layer_cache + ".k", k);
-                ctx->persist_cache_tensor(layer_cache + ".v", v);
+                // Keep dedicated graph outputs alive until the runner copies them
+                // into its persistent cache buffer after graph execution.
+                auto cache_k = ggml_dup_tensor(ctx->ggml_ctx, k);
+                cache_k      = ggml_cpy(ctx->ggml_ctx, k, cache_k);
+                ggml_set_output(cache_k);
+                auto cache_v = ggml_dup_tensor(ctx->ggml_ctx, v);
+                cache_v      = ggml_cpy(ctx->ggml_ctx, v, cache_v);
+                ggml_set_output(cache_v);
+                ctx->persist_cache_tensor(layer_cache + ".k", cache_k);
+                ctx->persist_cache_tensor(layer_cache + ".v", cache_v);
             }
 
             q = ggml_cont(ctx->ggml_ctx,
