@@ -51,6 +51,7 @@ API and command-line option may change frequently.***
     - [LongCat Image](./docs/longcat_image.md)
     - [Z-Image](./docs/z_image.md)
     - [MiniT2I](./docs/minit2i.md)
+    - [SenseNova U1.5](./docs/sensenova_u1.md)
     - [Ovis-Image](./docs/ovis_image.md)
     - [Anima](./docs/anima.md)
     - [ERNIE-Image](./docs/ernie_image.md)
