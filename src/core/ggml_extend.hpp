@@ -3569,11 +3569,27 @@ public:
 };
 
 __STATIC_INLINE__ bool support_get_rows(ggml_type wtype) {
-    std::set<ggml_type> allow_types = {GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0};
-    if (allow_types.find(wtype) != allow_types.end()) {
-        return true;
+    // Keep quantized embeddings in their on-disk format.  The CPU backend
+    // (and the CUDA/Vulkan backends when enabled) implement GET_ROWS for the
+    // K-quants.  ModelManager probes the selected backend when it chooses the
+    // parameter buffer and transparently stages the tensor through CPU if a
+    // backend cannot consume a particular type.
+    switch (wtype) {
+        case GGML_TYPE_F16:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+            return true;
+        default:
+            return false;
     }
-    return false;
 }
 
 class Embedding : public UnaryBlock {
