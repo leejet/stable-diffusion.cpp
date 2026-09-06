@@ -568,13 +568,11 @@ struct CLIPTextModelRunner : public GGMLRunner {
                               size_t max_token_idx,
                               bool return_pooled,
                               int clip_skip,
-                              bool auto_free           = true,
-                              bool free_compute_buffer = true,
-                              bool free_compute_params = true) {
+                              bool auto_runner_end = true) {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(input_ids, num_custom_embeddings, custom_embeddings_data, max_token_idx, return_pooled, clip_skip);
         };
-        auto result = GGMLRunner::compute<float>(get_graph, n_threads, auto_free, free_compute_buffer, free_compute_params);
+        auto result = GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end);
         if (return_pooled) {
             return take_or_empty(std::move(result));
         }

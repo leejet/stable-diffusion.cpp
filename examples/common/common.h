@@ -146,13 +146,13 @@ struct SDContextParams {
     std::map<std::string, std::string> embedding_map;
     std::vector<sd_embedding_t> embedding_vec;
 
-    rng_type_t rng_type         = CUDA_RNG;
-    rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
-    bool offload_params_to_cpu  = false;
-    std::string max_vram        = "0";
-    bool stream_layers          = false;
-    bool disable_prefetch       = false;
-    bool eager_load             = false;
+    rng_type_t rng_type            = CUDA_RNG;
+    rng_type_t sampler_rng_type    = RNG_TYPE_COUNT;
+    bool offload_params_to_cpu     = false;
+    std::string max_vram           = "0";
+    bool disable_prefetch          = false;
+    bool disable_segmented_compute = false;
+    bool eager_load                = false;
     std::string backend;
     std::string params_backend;
     std::string split_mode;

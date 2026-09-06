@@ -1334,7 +1334,6 @@ struct LTXVideoVAE : public VAE {
                   (int)plan.tiles.size());
 
         free_cache_ctx_and_buffer();
-        cache_tensor_map.clear();
 
         auto output = process_vae_temporal_tiles(input, plan, [&](const sd::Tensor<float>& z_chunk, const VAETemporalTile& tile) {
             LOG_DEBUG("LTX VAE temporal tile %lld/%d: latent frames [%lld, %lld), overlap=%d",
@@ -1349,12 +1348,11 @@ struct LTXVideoVAE : public VAE {
                                                  static_cast<int>(tile.start),
                                                  tile.overlap);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, true, true, true),
+            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false),
                                                    expected_dim);
         });
 
         free_cache_ctx_and_buffer();
-        cache_tensor_map.clear();
         return output;
     }
 
@@ -1407,7 +1405,7 @@ struct LTXVideoVAE : public VAE {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(input, decode_graph);
         };
-        auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), expected_dim);
+        auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), expected_dim);
         if (result.empty()) {
             return {};
         }
@@ -1420,7 +1418,7 @@ struct LTXVideoVAE : public VAE {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_latent_statistics_graph(z, normalize);
         };
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false),
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false),
                                                static_cast<size_t>(z.dim()));
     }
 

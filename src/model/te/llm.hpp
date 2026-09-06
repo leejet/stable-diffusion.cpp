@@ -2079,9 +2079,7 @@ namespace LLM {
                                   const ImageEmbeds& image_embeds,
                                   std::set<int> out_layers,
                                   bool return_all_hidden_states                      = false,
-                                  bool auto_free                                     = true,
-                                  bool free_compute_buffer                           = true,
-                                  bool free_compute_params                           = true,
+                                  bool auto_runner_end                               = true,
                                   const DeepStackImageEmbeds& deepstack_image_embeds = {},
                                   const std::vector<ImageGrid>& image_grids          = {}) {
             auto get_graph = [&]() -> ggml_cgraph* {
@@ -2093,7 +2091,7 @@ namespace LLM {
                                    out_layers,
                                    return_all_hidden_states);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, auto_free, free_compute_buffer, free_compute_params),
+            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end),
                                                    input_ids.dim() + 1);
         }
 
@@ -2173,13 +2171,11 @@ namespace LLM {
 
         sd::Tensor<float> encode_image(const int n_threads,
                                        const sd::Tensor<float>& image,
-                                       bool auto_free           = false,
-                                       bool free_compute_buffer = false,
-                                       bool free_compute_params = false) {
+                                       bool auto_runner_end = false) {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_encode_image_graph(image);
             };
-            return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, auto_free, free_compute_buffer, free_compute_params));
+            return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end));
         }
 
         ggml_cgraph* build_encode_image_outputs_graph(const sd::Tensor<float>& image_tensor) {
@@ -2287,13 +2283,11 @@ namespace LLM {
 
         std::vector<sd::Tensor<float>> encode_image_outputs(const int n_threads,
                                                             const sd::Tensor<float>& image,
-                                                            bool auto_free           = false,
-                                                            bool free_compute_buffer = false,
-                                                            bool free_compute_params = false) {
+                                                            bool auto_runner_end = false) {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_encode_image_outputs_graph(image);
             };
-            auto combined = take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, auto_free, free_compute_buffer, free_compute_params));
+            auto combined = take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end));
             if (combined.empty()) {
                 return {};
             }
@@ -2312,20 +2306,14 @@ namespace LLM {
 
         std::vector<sd::Tensor<float>> encode_video_block_outputs(const int n_threads,
                                                                   const sd::Tensor<float>& frames,
-                                                                  bool auto_free           = false,
-                                                                  bool free_compute_buffer = false,
-                                                                  bool free_compute_params = false) {
+                                                                  bool auto_runner_end = false) {
             int grid_h        = static_cast<int>(frames.shape()[1] / config.vision.patch_size);
             int grid_w        = static_cast<int>(frames.shape()[0] / config.vision.patch_size);
             auto pixel_values = process_video_block_tensor(frames, config.vision);
             auto get_graph    = [&]() -> ggml_cgraph* {
                 return build_encode_video_block_outputs_graph(pixel_values, grid_h, grid_w);
             };
-            auto combined = take_or_empty(GGMLRunner::compute<float>(get_graph,
-                                                                     n_threads,
-                                                                     auto_free,
-                                                                     free_compute_buffer,
-                                                                     free_compute_params));
+            auto combined = take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end));
             if (combined.empty()) {
                 return {};
             }

@@ -88,6 +88,7 @@ void log_print(enum sd_log_level_t level, const char* log, bool verbose, bool co
     } else {
         fprintf(out_stream, "[%-5s] ", level_str);
     }
+    fflush(out_stream);
     print_utf8(out_stream, log);
     fflush(out_stream);
 }

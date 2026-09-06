@@ -502,7 +502,7 @@ ArgOptions SDContextParams::get_options() {
          &rpc_servers},
         {"",
          "--max-vram",
-         "maximum VRAM budget in GiB for graph-cut segmented execution. Accepts a single value or assignments by backend/device, e.g. 6 or cuda0=6,vulkan0=4. 0 disables graph splitting; a negative value auto-detects free VRAM, sparing the specified value",
+         "optional per-device budget in GiB for managed weights and runner buffers during automatic graph-cut execution. Accepts a single value or assignments by backend/device, e.g. 6 or cuda0=6,vulkan0=4. 0 uses live free VRAM without an explicit budget; a negative value reserves that much free VRAM",
          0,
          &max_vram},
     };
@@ -517,13 +517,13 @@ ArgOptions SDContextParams::get_options() {
 
     options.bool_options = {
         {"",
-         "--stream-layers",
-         "enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram; defaults to false)",
-         true, &stream_layers},
-        {"",
          "--disable-prefetch",
-         "disable asynchronous layer prefetch while keeping synchronous --stream-layers behavior (defaults to false)",
+         "disable asynchronous next-segment weight prefetch (defaults to false)",
          true, &disable_prefetch},
+        {"",
+         "--disable-segmented-compute",
+         "force monolithic graph execution even when automatic graph cutting is needed (defaults to false)",
+         true, &disable_segmented_compute},
         {"",
          "--eager-load",
          "load all params into the params backend at model-load time instead of lazily on first use (defaults to false)",
@@ -835,8 +835,8 @@ std::string SDContextParams::to_string() const {
         << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
         << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
         << "  max_vram: \"" << max_vram << "\",\n"
-        << "  stream_layers: " << (stream_layers ? "true" : "false") << ",\n"
         << "  disable_prefetch: " << (disable_prefetch ? "true" : "false") << ",\n"
+        << "  disable_segmented_compute: " << (disable_segmented_compute ? "true" : "false") << ",\n"
         << "  eager_load: " << (eager_load ? "true" : "false") << ",\n"
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
@@ -908,8 +908,8 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.force_sdxl_vae_conv_scale       = force_sdxl_vae_conv_scale;
     sd_ctx_params.vae_format                      = str_to_vae_format(vae_format);
     sd_ctx_params.max_vram                        = max_vram.c_str();
-    sd_ctx_params.stream_layers                   = stream_layers;
     sd_ctx_params.disable_prefetch                = disable_prefetch;
+    sd_ctx_params.disable_segmented_compute       = disable_segmented_compute;
     sd_ctx_params.eager_load                      = eager_load;
     sd_ctx_params.backend                         = effective_backend.c_str();
     sd_ctx_params.params_backend                  = effective_params_backend.c_str();

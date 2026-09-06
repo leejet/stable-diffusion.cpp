@@ -41,7 +41,11 @@ sd-cli -m model.safetensors -p "a cat" --backend cuda0 --params-backend disk
 sd-cli -m model.safetensors -p "a cat" --backend diffusion=cuda0,vae=vulkan0 --max-vram cuda0=6,vulkan0=2
 ```
 
-The budget applies to every module running on that backend.
+The value is a shared per-device budget for managed weights and registered
+runner compute/cache buffers. Live free memory can lower the effective limit
+for each graph run. Driver contexts and allocations made outside the managed
+model runners are not part of this accounting, so it is not a hard physical
+VRAM cap.
 
 Module names are case-insensitive. Hyphens and underscores in module names are ignored, so `clip_vision`, `clip-vision`, and `clipvision` are equivalent.
 
@@ -79,9 +83,10 @@ with `--params-backend diffusion=disk`, released directly from) its own device;
 an explicit assignment such as `te=cpu` keeps the parameters on that backend
 and stages each range to its device on demand.
 
-Layer split cannot be combined with `--max-vram` graph-cut segmentation or
-`--stream-layers` for the split module; those are single-device mechanisms and
-are disabled for it.
+Layer split uses the fixed graph-cut plan to assign blocks across devices, but
+single-device segmented execution and next-segment prefetch are disabled for
+the split module. `--max-vram` can still provide the per-device limits used by
+layer split and auto-fit.
 
 Use `--list-devices` to see the device names available on the system.
 
@@ -104,11 +109,17 @@ Compared to a layer split this uses all GPUs within every layer (instead of
 sequentially device by device) at the cost of a cross-device reduction per
 matmul - usually the faster option when the devices have fast interconnect.
 
-Row split requires backend support for split buffers and is currently
-available on CUDA only; on other backends (or when the listed devices belong
-to different backend registries) the module falls back to a layer split.
+Row split requires a compatible split-buffer export from the linked GGML
+backend. If it is unavailable (or the listed devices belong to different backend
+registries), the module falls back to a layer split.
 Embeddings, normalization weights, biases and other non-block tensors stay in
 regular buffers on the main device.
+
+Row-split execution can use graph segments, but split weights are loaded
+synchronously instead of using the normal single-device prefetch path. Because
+GGML does not expose exact shard allocation sizes, the managed budget currently
+counts a split buffer's full size on each participating device. This is a
+conservative bound and can reject otherwise feasible layouts.
 
 Direct ("immediately") LoRA application cannot patch row-split tensors; with
 `--split-mode row` the automatic LoRA mode selects runtime application, and an

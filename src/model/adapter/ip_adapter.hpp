@@ -200,7 +200,7 @@ namespace IPAdapter {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(image_embeds);
             };
-            return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, true, true, true));
+            return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, true));
         }
     };
 

@@ -251,7 +251,7 @@ public:
                                                   tiling_params);
         }
 
-        runner_done();
+        runner_end();
 
         if (output.empty()) {
             LOG_ERROR("vae encode compute failed");
@@ -305,7 +305,7 @@ public:
                                                   tiling_params);
         }
 
-        runner_done();
+        runner_end();
 
         if (output.empty()) {
             LOG_ERROR("vae decode compute failed");

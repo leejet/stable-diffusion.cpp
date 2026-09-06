@@ -654,7 +654,7 @@ namespace Hunyuan {
                 return build_graph(x, timesteps, context, c_concat, y, guidance, byt5, vision, timestep_r);
             };
 
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,

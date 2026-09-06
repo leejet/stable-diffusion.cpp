@@ -787,7 +787,7 @@ struct TinyImageAutoEncoder : public VAE {
             return build_graph(z_tensor, decode_graph);
         };
 
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), z_tensor.dim());
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), z_tensor.dim());
     }
 };
 
@@ -872,7 +872,7 @@ struct TinyVideoAutoEncoder : public VAE {
             return build_graph(z_tensor, decode_graph);
         };
 
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), z_tensor.dim());
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), z_tensor.dim());
     }
 };
 

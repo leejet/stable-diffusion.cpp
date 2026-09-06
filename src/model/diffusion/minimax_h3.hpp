@@ -1168,8 +1168,6 @@ namespace MiniMaxH3 {
             };
             return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph,
                                                                               n_threads,
-                                                                              false,
-                                                                              false,
                                                                               false),
                                                    params.x->dim());
         }

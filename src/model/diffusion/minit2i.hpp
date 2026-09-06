@@ -589,7 +589,7 @@ namespace MiniT2I {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(x, timesteps, context, mask);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,

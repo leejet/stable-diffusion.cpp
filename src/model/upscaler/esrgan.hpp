@@ -265,7 +265,7 @@ struct ESRGAN : public GGMLRunner {
     sd::Tensor<float> compute(const int n_threads,
                               const sd::Tensor<float>& x) {
         auto get_graph = [&]() -> ggml_cgraph* { return build_graph(x); };
-        auto result    = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
+        auto result    = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
         return result;
     }
 };

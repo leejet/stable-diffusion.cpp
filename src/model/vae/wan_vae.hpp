@@ -1415,7 +1415,6 @@ namespace WAN {
                       (int)plan.tiles.size());
 
             free_cache_ctx_and_buffer();
-            cache_tensor_map.clear();
             ae.clear_cache();
 
             auto output = process_vae_temporal_tiles(input, plan, [&](const sd::Tensor<float>& input_tile, const VAETemporalTile& tile) {
@@ -1428,12 +1427,11 @@ namespace WAN {
                     return build_temporal_tile_graph(input_tile, static_cast<int>(tile.start));
                 };
                 return restore_trailing_singleton_dims(
-                    GGMLRunner::compute<float>(get_graph, n_threads, true, true, true),
+                    GGMLRunner::compute<float>(get_graph, n_threads, false),
                     static_cast<size_t>(input.dim()));
             });
 
             free_cache_ctx_and_buffer();
-            cache_tensor_map.clear();
             ae.clear_cache();
             return output;
         }
@@ -1448,7 +1446,7 @@ namespace WAN {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(input.empty() ? z : input, decode_graph);
             };
-            auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, true, true, true),
+            auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false),
                                                           input.empty() ? z.dim() : input.dim());
             if (!result.empty() && z.dim() == 4) {
                 result.squeeze_(2);

@@ -248,9 +248,9 @@ public:
     sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0, 0, nullptr};
     bool enable_mmap                     = false;
     sd::ggml_graph_cut::MaxVramAssignment max_vram_assignment;
-    bool stream_layers    = false;
-    bool disable_prefetch = false;
-    bool eager_load       = false;
+    bool disable_prefetch          = false;
+    bool disable_segmented_compute = false;
+    bool eager_load                = false;
     std::string backend_spec;
     std::string params_backend_spec;
     std::string split_mode_spec;
@@ -435,7 +435,11 @@ public:
         if (split_buft == nullptr) {
             return fall_back_to_layer_split("backend has no split buffer type");
         }
-        model_manager->set_split_buffer_type(main_backend, split_buft);
+        std::vector<std::pair<ggml_backend_t, size_t>> split_device_limits;
+        for (auto backend : module_backends) {
+            split_device_limits.emplace_back(backend, max_vram_assignment.bytes_for_backend(backend));
+        }
+        model_manager->set_split_buffer_type(main_backend, split_buft, split_device_limits);
 
         std::map<std::string, ggml_tensor*> split_tensors;
         if constexpr (std::is_base_of_v<Conditioner, T>) {
@@ -599,6 +603,8 @@ public:
                                                    version,
                                                    "",
                                                    model_manager);
+        control_net->set_max_graph_vram_bytes(
+            max_graph_vram_bytes_for_module(SDBackendModule::CONTROL_NET));
         if (diffusion_conv_direct) {
             LOG_INFO("Using Conv2d direct in the control net");
             control_net->set_conv2d_direct_enabled(true);
@@ -860,15 +866,15 @@ public:
     }
 
     bool init(const sd_ctx_params_t* sd_ctx_params) {
-        n_threads           = sd_ctx_params->n_threads;
-        enable_mmap         = sd_ctx_params->enable_mmap;
-        stream_layers       = sd_ctx_params->stream_layers;
-        disable_prefetch    = sd_ctx_params->disable_prefetch;
-        eager_load          = sd_ctx_params->eager_load;
-        backend_spec        = SAFE_STR(sd_ctx_params->backend);
-        params_backend_spec = SAFE_STR(sd_ctx_params->params_backend);
-        split_mode_spec     = SAFE_STR(sd_ctx_params->split_mode);
-        auto_fit_enabled    = sd_ctx_params->auto_fit;
+        n_threads                 = sd_ctx_params->n_threads;
+        enable_mmap               = sd_ctx_params->enable_mmap;
+        disable_prefetch          = sd_ctx_params->disable_prefetch;
+        disable_segmented_compute = sd_ctx_params->disable_segmented_compute;
+        eager_load                = sd_ctx_params->eager_load;
+        backend_spec              = SAFE_STR(sd_ctx_params->backend);
+        params_backend_spec       = SAFE_STR(sd_ctx_params->params_backend);
+        split_mode_spec           = SAFE_STR(sd_ctx_params->split_mode);
+        auto_fit_enabled          = sd_ctx_params->auto_fit;
         max_vram_assignment.reset(0.f);
         {
             std::string error;
@@ -897,6 +903,8 @@ public:
         model_manager = std::make_shared<ModelManager>();
         model_manager->set_n_threads(n_threads);
         model_manager->set_enable_mmap(enable_mmap);
+        model_manager->set_segmented_compute_disabled(disable_segmented_compute);
+        model_manager->set_prefetch_disabled(disable_prefetch);
         ModelLoader& model_loader = model_manager->loader();
 
         if (!init_model_loader(model_loader, sd_ctx_params, use_tae, use_audio_vae, use_control_net)) {
@@ -930,10 +938,6 @@ public:
                 LOG_ERROR("%s", error.c_str());
                 return false;
             }
-        }
-        if (stream_layers && !backend_manager.params_backend_is_cpu(SDBackendModule::DIFFUSION)) {
-            LOG_WARN("--stream-layers has no effect unless diffusion params backend is cpu; ignoring");
-            stream_layers = false;
         }
         if (eager_load && graph_cut_layer_split_active()) {
             LOG_WARN("--eager-load is not supported with graph-cut layer split; weights will be prepared lazily");
@@ -984,7 +988,8 @@ public:
             }
             // Avoid full-model LoRA merge buffers on constrained setups.
             const bool params_offloaded      = params_backend_for(SDBackendModule::DIFFUSION) != backend_for(SDBackendModule::DIFFUSION);
-            const bool streaming_constrained = stream_layers || params_offloaded;
+            const bool streaming_constrained = params_offloaded ||
+                                               backend_manager.params_backend_is_disk(SDBackendModule::DIFFUSION);
             if (have_quantized_weight || streaming_constrained || row_split_active()) {
                 apply_lora_immediately = false;
             } else {
@@ -1357,8 +1362,6 @@ public:
             }
 
             diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::DIFFUSION));
-            diffusion_model->set_stream_layers_enabled(stream_layers);
-            diffusion_model->set_layer_prefetch_enabled(!disable_prefetch);
             if (!register_runner_params("Diffusion model",
                                         diffusion_model,
                                         SDBackendModule::DIFFUSION,
@@ -1368,8 +1371,6 @@ public:
 
             if (high_noise_diffusion_model) {
                 high_noise_diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::DIFFUSION));
-                high_noise_diffusion_model->set_stream_layers_enabled(stream_layers);
-                high_noise_diffusion_model->set_layer_prefetch_enabled(!disable_prefetch);
                 if (!register_runner_params("High noise diffusion model",
                                             high_noise_diffusion_model,
                                             SDBackendModule::DIFFUSION,
@@ -1574,6 +1575,8 @@ public:
                                                            version,
                                                            "",
                                                            model_manager);
+                control_net->set_max_graph_vram_bytes(
+                    max_graph_vram_bytes_for_module(SDBackendModule::CONTROL_NET));
                 if (sd_ctx_params->diffusion_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the control net");
                     control_net->set_conv2d_direct_enabled(true);
@@ -1902,15 +1905,15 @@ public:
     }
 
     bool is_using_v_parameterization_for_sd2(bool is_inpaint = false) {
-        struct RunnerDoneOnExit {
+        struct RunnerEndOnExit {
             GGMLRunner* runner = nullptr;
-            ~RunnerDoneOnExit() {
+            ~RunnerEndOnExit() {
                 if (runner != nullptr) {
-                    runner->runner_done();
+                    runner->runner_end();
                 }
             }
         };
-        RunnerDoneOnExit diffusion_runner_done{diffusion_model.get()};
+        RunnerEndOnExit diffusion_runner_end{diffusion_model.get()};
 
         sd::Tensor<float> x_t   = sd::full<float>({8, 8, 4, 1}, 0.5f);
         sd::Tensor<float> c     = sd::full<float>({1024, 2, 1, 1}, 0.5f);
@@ -2541,17 +2544,17 @@ public:
                              const sd_cache_params_t* cache_params,
                              bool preview_final_step,
                              const sd::Tensor<float>& video_positions = {}) {
-        struct RunnerDoneOnExit {
+        struct RunnerEndOnExit {
             GGMLRunner* runner = nullptr;
-            ~RunnerDoneOnExit() {
+            ~RunnerEndOnExit() {
                 if (runner != nullptr) {
-                    runner->runner_done();
+                    runner->runner_end();
                 }
             }
         };
-        RunnerDoneOnExit sample_diffusion_runner_done{work_diffusion_model.get()};
+        RunnerEndOnExit sample_diffusion_runner_end{work_diffusion_model.get()};
 
-        RunnerDoneOnExit sample_control_runner_done{!control_image.empty() && control_net != nullptr ? control_net.get() : nullptr};
+        RunnerEndOnExit sample_control_runner_end{!control_image.empty() && control_net != nullptr ? control_net.get() : nullptr};
 
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
         float cfg_scale     = guidance.txt_cfg;
@@ -2923,10 +2926,6 @@ public:
             LOG_ERROR("Diffusion model sampling failed");
             if (control_net) {
                 control_net->free_control_ctx();
-                control_net->free_compute_buffer();
-            }
-            if (work_diffusion_model) {
-                work_diffusion_model->free_compute_buffer();
             }
             return {};
         }
@@ -2940,10 +2939,6 @@ public:
 
         if (control_net) {
             control_net->free_control_ctx();
-            control_net->free_compute_buffer();
-        }
-        if (work_diffusion_model) {
-            work_diffusion_model->free_compute_buffer();
         }
         return x0;
     }
@@ -3092,7 +3087,6 @@ public:
         while (decoded.empty() &&
                auto_fit_enabled &&
                sd::backend_fit::prepare_vae_decode_retry_tiling(vae_tiling_params, prefer_temporal_tiling)) {
-            first_stage_model->free_compute_buffer();
             decoded = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
         }
         return decoded;
@@ -3567,27 +3561,27 @@ void sd_hires_params_init(sd_hires_params_t* hires_params) {
 }
 
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
-    *sd_ctx_params                      = {};
-    sd_ctx_params->n_threads            = sd_get_num_physical_cores();
-    sd_ctx_params->wtype                = SD_TYPE_COUNT;
-    sd_ctx_params->rng_type             = CUDA_RNG;
-    sd_ctx_params->sampler_rng_type     = RNG_TYPE_COUNT;
-    sd_ctx_params->prediction           = PREDICTION_COUNT;
-    sd_ctx_params->lora_apply_mode      = LORA_APPLY_AUTO;
-    sd_ctx_params->max_vram             = nullptr;
-    sd_ctx_params->stream_layers        = false;
-    sd_ctx_params->disable_prefetch     = false;
-    sd_ctx_params->eager_load           = false;
-    sd_ctx_params->enable_mmap          = false;
-    sd_ctx_params->diffusion_flash_attn = false;
-    sd_ctx_params->vae_format           = SD_VAE_FORMAT_AUTO;
-    sd_ctx_params->backend              = nullptr;
-    sd_ctx_params->params_backend       = nullptr;
-    sd_ctx_params->split_mode           = nullptr;
-    sd_ctx_params->auto_fit             = false;
-    sd_ctx_params->rpc_servers          = nullptr;
-    sd_ctx_params->model_args           = nullptr;
-    sd_ctx_params->pulid_weights_path   = nullptr;
+    *sd_ctx_params                           = {};
+    sd_ctx_params->n_threads                 = sd_get_num_physical_cores();
+    sd_ctx_params->wtype                     = SD_TYPE_COUNT;
+    sd_ctx_params->rng_type                  = CUDA_RNG;
+    sd_ctx_params->sampler_rng_type          = RNG_TYPE_COUNT;
+    sd_ctx_params->prediction                = PREDICTION_COUNT;
+    sd_ctx_params->lora_apply_mode           = LORA_APPLY_AUTO;
+    sd_ctx_params->max_vram                  = nullptr;
+    sd_ctx_params->disable_prefetch          = false;
+    sd_ctx_params->disable_segmented_compute = false;
+    sd_ctx_params->eager_load                = false;
+    sd_ctx_params->enable_mmap               = false;
+    sd_ctx_params->diffusion_flash_attn      = false;
+    sd_ctx_params->vae_format                = SD_VAE_FORMAT_AUTO;
+    sd_ctx_params->backend                   = nullptr;
+    sd_ctx_params->params_backend            = nullptr;
+    sd_ctx_params->split_mode                = nullptr;
+    sd_ctx_params->auto_fit                  = false;
+    sd_ctx_params->rpc_servers               = nullptr;
+    sd_ctx_params->model_args                = nullptr;
+    sd_ctx_params->pulid_weights_path        = nullptr;
 }
 
 char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
@@ -3621,8 +3615,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "sampler_rng_type: %s\n"
              "prediction: %s\n"
              "max_vram: %s\n"
-             "stream_layers: %s\n"
              "disable_prefetch: %s\n"
+             "disable_segmented_compute: %s\n"
              "eager_load: %s\n"
              "backend: %s\n"
              "params_backend: %s\n"
@@ -3656,8 +3650,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              sd_rng_type_name(sd_ctx_params->sampler_rng_type),
              sd_prediction_name(sd_ctx_params->prediction),
              SAFE_STR(sd_ctx_params->max_vram),
-             BOOL_STR(sd_ctx_params->stream_layers),
              BOOL_STR(sd_ctx_params->disable_prefetch),
+             BOOL_STR(sd_ctx_params->disable_segmented_compute),
              BOOL_STR(sd_ctx_params->eager_load),
              SAFE_STR(sd_ctx_params->backend),
              SAFE_STR(sd_ctx_params->params_backend),
@@ -4809,11 +4803,11 @@ struct ImageGenerationEmbeds {
     SDCondition img_uncond;
 };
 
-struct ConditionerRunnerDoneOnExit {
+struct ConditionerRunnerEndOnExit {
     Conditioner* conditioner = nullptr;
-    ~ConditionerRunnerDoneOnExit() {
+    ~ConditionerRunnerEndOnExit() {
         if (conditioner != nullptr) {
-            conditioner->runner_done();
+            conditioner->runner_end();
         }
     }
 };
@@ -5239,7 +5233,7 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
                                                                             SamplePlan* plan,
                                                                             ImageGenerationLatents* latents,
                                                                             const RefImageParams& ref_image_params) {
-    ConditionerRunnerDoneOnExit conditioner_runner_done{sd_ctx->sd->cond_stage_model.get()};
+    ConditionerRunnerEndOnExit conditioner_runner_end{sd_ctx->sd->cond_stage_model.get()};
 
     ConditionerParams condition_params;
     condition_params.text      = request->prompt;
@@ -6536,7 +6530,7 @@ static ImageGenerationEmbeds prepare_video_generation_embeds(sd_ctx_t* sd_ctx,
                                                              const sd_vid_gen_params_t* sd_vid_gen_params,
                                                              const GenerationRequest& request,
                                                              const ImageGenerationLatents& latents) {
-    ConditionerRunnerDoneOnExit conditioner_runner_done{sd_ctx->sd->cond_stage_model.get()};
+    ConditionerRunnerEndOnExit conditioner_runner_end{sd_ctx->sd->cond_stage_model.get()};
 
     ImageGenerationEmbeds embeds;
     ConditionerParams condition_params;

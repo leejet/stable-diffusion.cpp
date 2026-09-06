@@ -125,13 +125,12 @@ struct LoraModel : public GGMLRunner {
     }
 
     void release_loaded_tensors() {
-        runner_done();
-        free_compute_buffer();
+        runner_end();
         model_manager.reset();
         free_params_ctx();
         alloc_params_ctx();
-        model_manager  = std::make_shared<ModelManager>();
-        weight_manager = model_manager;
+        model_manager     = std::make_shared<ModelManager>();
+        residency_manager = model_manager;
         lora_tensors.clear();
         original_tensor_to_final_tensor.clear();
         applied_lora_tensors.clear();
@@ -952,16 +951,19 @@ struct LoraModel : public GGMLRunner {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_lora_graph(model_tensors, model_tensor_names, version);
         };
-        GGMLRunner::compute<float>(get_graph, n_threads, false, false, false, true);
-        stat(!warn_unused);
-        for (auto item : original_tensor_to_final_tensor) {
-            ggml_tensor* original_tensor = item.first;
-            ggml_tensor* final_tensor    = item.second;
-
-            ggml_backend_tensor_copy(final_tensor, original_tensor);
+        auto read_outputs = [&]() {
+            for (const auto& item : original_tensor_to_final_tensor) {
+                ggml_backend_tensor_copy(item.second, item.first);
+            }
+            return true;
+        };
+        auto result = GGMLRunner::compute<float>(get_graph, n_threads, false, true, read_outputs);
+        if (!result.has_value()) {
+            LOG_ERROR("LoRA graph execution failed");
         }
+        stat(!warn_unused);
         original_tensor_to_final_tensor.clear();
-        GGMLRunner::free_compute_buffer();
+        runner_end();
     }
 
     void apply(std::map<std::string, ggml_tensor*> model_tensors, SDVersion version, int n_threads, bool warn_unused = true) {

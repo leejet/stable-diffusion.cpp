@@ -14,8 +14,12 @@ Run by adding `--diffusion-fa` to the arguments and watch for:
 ```
 and the compute buffer shrink in the debug log:
 ```
-[DEBUG] ggml_extend.hpp:1004 - flux compute buffer size: 650.00 MB(VRAM)
+[DEBUG] ggml_runner.cpp:280 - flux compute buffer size: 650.00 MB(VRAM) on CUDA0 (peak across 1 segment)
 ```
+This reports the actual peak compute workspace capacity per backend, including
+CPU fallback. It excludes weights and cache buffers. Within a runner lifecycle,
+the summary is printed only on the first graph or when backend capacities or the
+segment count change.
 
 ## Offload weights to the CPU to save VRAM without reducing generation speed.
 
@@ -43,7 +47,7 @@ Use disk params to reduce both VRAM and RAM usage:
 --backend cuda0 --params-backend disk
 ```
 
-This reloads parameters from the model file on demand and releases them after use. It has the lowest memory residency, but can be slower because weights must be read again. `disk` is never selected implicitly; set it explicitly when RAM usage matters more than reload cost.
+This reloads parameters from the model file on demand, retains unpinned compute copies while space permits, and releases them under pressure or at module-run completion. It has the lowest source-memory residency, but can be slower because evicted weights must be read again. `disk` is never selected implicitly; set it explicitly when RAM usage matters more than reload cost.
 
 Per-module assignments can target only the largest modules:
 
@@ -53,26 +57,37 @@ Per-module assignments can target only the largest modules:
 
 See [backend selection](./backend.md) for full syntax.
 
-## Run models that don't fit in VRAM (CPU streaming).
+## Run models that don't fit in VRAM (automatic segmented execution).
 
-`--offload-to-cpu` alone keeps every parameter in system RAM and stages it to the runtime backend on first use, then leaves it resident there. If the diffusion model is larger than the runtime backend's free memory (e.g. Flux dev at bf16 on an 8 GiB GPU), that residency stops fitting during the sampling loop and generation fails. Two additional flags make it fit by trading a small amount of speed for room:
+`--offload-to-cpu` keeps the source parameters in system RAM and creates compute-side GPU replicas on demand. Unpinned replicas remain resident for reuse, but automatic graph-cut execution evicts them from the last segment backward when the next weight or compute allocation needs space. Disk-backed parameters follow the same policy without retaining a RAM source copy.
 
-- `--max-vram <GiB>` sets a VRAM budget the graph-cut segmenter respects. It cuts each forward pass into segments sized to fit the budget, running them in sequence and freeing intermediate activations between them. Negative values auto-detect free VRAM and spare the given amount (`--max-vram -1` uses most of the free VRAM and keeps ~1 GiB headroom), a positive value caps the budget, `0` disables segmentation.
-- `--stream-layers` streams the diffusion model's transformer blocks one at a time. While one block computes, the next block's parameters are prefetched automatically from the CPU on a separate transfer queue; parameters are evicted when the residency budget is reached. This flag only takes effect when the diffusion params backend is CPU, so it must be combined with `--offload-to-cpu` (or an explicit `--params-backend diffusion=cpu`); a warning is logged and the flag is ignored otherwise.
-- `--disable-prefetch` disables the asynchronous next-block prefetch while retaining synchronous `--stream-layers` execution. This is mainly useful for debugging or backends where transfer and compute do not overlap effectively.
+When a graph has cut markers and its missing weights plus incremental compute workspace exceed the available device headroom, it runs its fixed segment list in order. A reusable monolithic compute buffer is not counted as a new allocation. An explicit `--max-vram` budget deducts already-resident managed weights and compute/cache buffers registered by every runner sharing the device, so later graph runs remain segmented when the full graph exceeds the budget. The current segment's weights are pinned during compute, and the next parameter-bearing segment is prefetched when the device supports asynchronous transfer. No opt-in streaming flag is required.
 
-The three flags stack. The recommended shape for "biggest model my card can host":
+- `--max-vram <GiB>` optionally lowers the live-memory limit. A positive value is a managed per-device budget, `0` uses the device's current free memory without an explicit budget, and a negative value snapshots free memory at startup while reserving that many GiB (`--max-vram -1` reserves about 1 GiB). Driver contexts and unrelated external allocations remain outside the managed budget.
+- `--disable-prefetch` disables asynchronous next-segment prefetch while retaining synchronous loading, eviction, and segmented execution.
+- `--disable-segmented-compute` forces monolithic graph execution for diagnostics or compatibility, even when the automatic memory check would select segments.
+
+Single-device monolithic execution also reclaims unpinned weight replicas before
+loading weights or allocating compute workspace, including graphs without cut
+markers and runs with `--disable-segmented-compute`. It still respects the managed
+device budget and fails if the graph cannot fit after reclamation.
+
+Segment completion releases active workspace use while retaining the runner's
+allocator/scheduler capacity. Compatible gallocr reservations are reused across
+graphs; idle workspaces can be reclaimed under pressure and are freed at runner
+completion. Cross-graph caches survive individual graphs, but cut buffers do not.
+
+The recommended shape for "biggest model my card can host" is:
 
 ```shell
 sd-cli --diffusion-model flux1-dev.safetensors ... \
-       --offload-to-cpu --max-vram -1 --stream-layers
+       --offload-to-cpu --max-vram -1
 ```
 
 - `--offload-to-cpu`: params in RAM, staged as needed.
-- `--max-vram -1`: use most of the free VRAM as the compute budget, spare 1 GiB headroom, let the graph-cut segmenter split each forward pass to fit.
-- `--stream-layers`: on top of the segmenter, stream individual transformer blocks so their weights don't all need to be resident at once.
+- `--max-vram -1`: reserve about 1 GiB from the startup free-memory snapshot; live free memory can still lower the effective limit for every graph.
 
-Ordered from fastest to smallest-VRAM: no flags → `--offload-to-cpu` → `--offload-to-cpu --max-vram <N>` → `--offload-to-cpu --max-vram <N> --stream-layers`. Each step down costs a few percent of throughput to buy more room; combined they can run models roughly 3-4x larger than the raw VRAM would allow.
+Use `--params-backend diffusion=disk` instead when reducing system RAM residency is more important than avoiding repeated model-file reads.
 
 ## Use quantization to reduce memory usage.
 

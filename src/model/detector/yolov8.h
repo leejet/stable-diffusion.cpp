@@ -355,7 +355,7 @@ struct YOLOv8Runner : public GGMLRunner {
 
     sd::Tensor<float> compute(int n_threads, const sd::Tensor<float>& input) {
         auto get_graph = [&]() { return build_graph(input); };
-        return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false));
+        return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, false));
     }
 };
 

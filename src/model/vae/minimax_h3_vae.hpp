@@ -793,8 +793,6 @@ namespace MiniMaxH3VAE {
             return restore_trailing_singleton_dims(
                 GGMLRunner::compute<float>(get_graph,
                                            n_threads,
-                                           false,
-                                           false,
                                            false),
                 5);
         }
