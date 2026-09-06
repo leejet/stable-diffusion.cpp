@@ -554,7 +554,7 @@ struct T5Embedder {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_DEBUG("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
         }
 
         std::vector<int> tokens;
@@ -612,7 +612,7 @@ struct T5Embedder {
             GGML_ASSERT(!out_opt.empty());
             out = std::move(out_opt);
             print_sd_tensor(out);
-            LOG_DEBUG("t5 test done in %lldms", t1 - t0);
+            LOG_VERBOSE("t5 test done in %lldms", t1 - t0);
         }
     }
 

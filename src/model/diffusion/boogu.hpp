@@ -109,16 +109,16 @@ namespace Boogu {
             }
             config.timestep_embed_dim = std::min<int64_t>(config.hidden_size, 1024);
 
-            LOG_DEBUG("boogu_image: layers=%" PRId64 ", double_stream_layers=%" PRId64 ", refiner_layers=%" PRId64 ", hidden=%" PRId64 ", heads=%" PRId64 ", kv_heads=%" PRId64 ", head_dim=%" PRId64 ", in_channels=%" PRId64 ", out_channels=%" PRId64,
-                      config.num_layers,
-                      config.num_double_stream_layers,
-                      config.num_refiner_layers,
-                      config.hidden_size,
-                      config.num_attention_heads,
-                      config.num_kv_heads,
-                      config.head_dim,
-                      config.in_channels,
-                      config.out_channels);
+            LOG_VERBOSE("boogu_image: layers=%" PRId64 ", double_stream_layers=%" PRId64 ", refiner_layers=%" PRId64 ", hidden=%" PRId64 ", heads=%" PRId64 ", kv_heads=%" PRId64 ", head_dim=%" PRId64 ", in_channels=%" PRId64 ", out_channels=%" PRId64,
+                        config.num_layers,
+                        config.num_double_stream_layers,
+                        config.num_refiner_layers,
+                        config.hidden_size,
+                        config.num_attention_heads,
+                        config.num_kv_heads,
+                        config.head_dim,
+                        config.in_channels,
+                        config.out_channels);
             return config;
         }
     };

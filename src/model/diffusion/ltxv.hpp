@@ -274,12 +274,12 @@ namespace LTXV {
                     config.audio_connector_apply_gated_attention = true;
                 }
             }
-            LOG_DEBUG("ltxav: num_layers = %" PRId64 ", hidden_size = %" PRId64 ", num_attention_heads = %" PRId64 ", audio_hidden_size = %" PRId64 ", audio_num_attention_heads = %" PRId64,
-                      config.num_layers,
-                      config.hidden_size,
-                      config.num_attention_heads,
-                      config.audio_hidden_size,
-                      config.audio_num_attention_heads);
+            LOG_VERBOSE("ltxav: num_layers = %" PRId64 ", hidden_size = %" PRId64 ", num_attention_heads = %" PRId64 ", audio_hidden_size = %" PRId64 ", audio_num_attention_heads = %" PRId64,
+                        config.num_layers,
+                        config.hidden_size,
+                        config.num_attention_heads,
+                        config.audio_hidden_size,
+                        config.audio_num_attention_heads);
             return config;
         }
     };
@@ -2070,7 +2070,7 @@ namespace LTXV {
 
             GGML_ASSERT(!out_opt.empty());
             print_sd_tensor(out_opt, false, "ltxav_out");
-            LOG_DEBUG("ltxav test done in %lldms", t1 - t0);
+            LOG_VERBOSE("ltxav test done in %lldms", t1 - t0);
         }
 
         static void load_from_file_and_test(const std::string& model_path,

@@ -13,8 +13,13 @@ What this example does:
 * `--llm` selects the text encoder / language model used by this pipeline
 * `--diffusion-fa` enables flash attention in the diffusion model
 * `--offload-to-cpu` reduces VRAM pressure by keeping weights in RAM when possible
-* `-v` enables verbose logging
+* `-v` enables verbose logging (equivalent to `--log-level verbose`)
 * `--cfg-scale 1.0` sets the default CFG scale for generation
+
+Logging defaults to `info`. Use `--log-level <level>` to select `debug`, `verbose`,
+`info`, `warn`, or `error` (from most to least detailed). Each level includes
+messages at that level and all less detailed levels. `-v` and `--verbose` are
+equivalent to `--log-level verbose`. If repeated, the last logging option wins.
 
 After the server starts successfully:
 

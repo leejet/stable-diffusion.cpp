@@ -127,17 +127,17 @@ namespace LingBotVideo {
                 config.topk_group            = 2;
                 config.routed_scaling_factor = 2.5f;
             }
-            LOG_DEBUG("lingbot_video: depth = %" PRId64 ", hidden_size = %" PRId64 ", heads = %" PRId64 ", text_dim = %" PRId64 ", experts = %" PRId64 ", experts_per_tok = %" PRId64 ", n_group = %" PRId64 ", topk_group = %" PRId64 ", route_scale = %.2f, sparse_layers = %zu",
-                      config.depth,
-                      config.hidden_size,
-                      config.num_attention_heads,
-                      config.text_dim,
-                      config.num_experts,
-                      config.num_experts_per_tok,
-                      config.n_group,
-                      config.topk_group,
-                      config.routed_scaling_factor,
-                      config.sparse_layers.size());
+            LOG_VERBOSE("lingbot_video: depth = %" PRId64 ", hidden_size = %" PRId64 ", heads = %" PRId64 ", text_dim = %" PRId64 ", experts = %" PRId64 ", experts_per_tok = %" PRId64 ", n_group = %" PRId64 ", topk_group = %" PRId64 ", route_scale = %.2f, sparse_layers = %zu",
+                        config.depth,
+                        config.hidden_size,
+                        config.num_attention_heads,
+                        config.text_dim,
+                        config.num_experts,
+                        config.num_experts_per_tok,
+                        config.n_group,
+                        config.topk_group,
+                        config.routed_scaling_factor,
+                        config.sparse_layers.size());
             return config;
         }
     };

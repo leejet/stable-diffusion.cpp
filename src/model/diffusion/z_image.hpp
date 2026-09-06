@@ -107,14 +107,14 @@ namespace ZImage {
                     config.num_kv_heads = std::max<int64_t>(1, (qkv_heads - config.num_heads) / 2);
                 }
             }
-            LOG_DEBUG("z_image: num_layers = %" PRId64 ", num_refiner_layers = %" PRId64 ", hidden_size = %" PRId64 ", num_heads = %" PRId64 ", num_kv_heads = %" PRId64 ", in_channels = %" PRId64 ", out_channels = %" PRId64,
-                      config.num_layers,
-                      config.num_refiner_layers,
-                      config.hidden_size,
-                      config.num_heads,
-                      config.num_kv_heads,
-                      config.in_channels,
-                      config.out_channels);
+            LOG_VERBOSE("z_image: num_layers = %" PRId64 ", num_refiner_layers = %" PRId64 ", hidden_size = %" PRId64 ", num_heads = %" PRId64 ", num_kv_heads = %" PRId64 ", in_channels = %" PRId64 ", out_channels = %" PRId64,
+                        config.num_layers,
+                        config.num_refiner_layers,
+                        config.hidden_size,
+                        config.num_heads,
+                        config.num_kv_heads,
+                        config.in_channels,
+                        config.out_channels);
             return config;
         }
     };
@@ -603,7 +603,7 @@ namespace ZImage {
                                                circular_x_enabled,
                                                config.axes_dim);
             int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            // LOG_DEBUG("pos_len %d", pos_len);
+            // LOG_VERBOSE("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe, true, "pe");
@@ -689,7 +689,7 @@ namespace ZImage {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("z_image test done in %lldms", t1 - t0);
+                LOG_VERBOSE("z_image test done in %lldms", t1 - t0);
             }
         }
 

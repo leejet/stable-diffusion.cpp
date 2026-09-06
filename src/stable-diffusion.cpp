@@ -709,7 +709,7 @@ public:
         }
 
         file_alphas_cumprod = std::move(loaded_alphas);
-        LOG_DEBUG("loaded alphas_cumprod from model file");
+        LOG_VERBOSE("loaded alphas_cumprod from model file");
     }
 
     bool init_model_loader(ModelLoader& model_loader,
@@ -968,7 +968,7 @@ public:
         LOG_INFO("Diffusion model weight type stat: %s", wtype_stat_to_str(diffusion_model_wtype_stat).c_str());
         LOG_INFO("VAE weight type stat:             %s", wtype_stat_to_str(vae_wtype_stat).c_str());
 
-        LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
+        LOG_VERBOSE("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
 
         bool have_int8_tensorwise = false;
         for (const auto& [_, tensor_storage] : model_loader.get_tensor_storage_map()) {
@@ -1650,7 +1650,7 @@ public:
             }
         }
 
-        LOG_DEBUG("validating model metadata");
+        LOG_VERBOSE("validating model metadata");
 
         std::set<std::string> ignore_tensors;
         if (use_tae && !tae_preview_only) {
@@ -1707,9 +1707,9 @@ public:
                 LOG_ERROR("model params eager load failed");
                 return false;
             }
-            LOG_DEBUG("model metadata validated; weights pre-loaded to params backend");
+            LOG_VERBOSE("model metadata validated; weights pre-loaded to params backend");
         } else {
-            LOG_DEBUG("model metadata validated; weights will be prepared lazily");
+            LOG_VERBOSE("model metadata validated; weights will be prepared lazily");
         }
 
         {
@@ -1939,7 +1939,7 @@ public:
 
         double result = static_cast<double>((out - x_t).mean());
         int64_t t1    = ggml_time_ms();
-        LOG_DEBUG("check is_using_v_parameterization_for_sd2, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+        LOG_VERBOSE("check is_using_v_parameterization_for_sd2, taking %.2fs", (t1 - t0) * 1.0f / 1000);
         return result < -1;
     }
 
@@ -1954,7 +1954,7 @@ public:
             return nullptr;
         }
         if (lora_spec.is_high_noise) {
-            LOG_DEBUG("high noise lora: %s", lora_spec.path.c_str());
+            LOG_VERBOSE("high noise lora: %s", lora_spec.path.c_str());
         }
         auto lora                              = std::make_shared<LoraModel>(lora_log_id(lora_spec),
                                                 backend_for(module),
@@ -2128,7 +2128,7 @@ public:
             if (loras[i].is_high_noise) {
                 lora_id = "|high_noise|" + lora_id;
             }
-            LOG_DEBUG("lora %s:%.2f", lora_id.c_str(), loras[i].multiplier);
+            LOG_VERBOSE("lora %s:%.2f", lora_id.c_str(), loras[i].multiplier);
         }
 
         for (auto& extension : generation_extensions) {
@@ -2424,7 +2424,7 @@ public:
             float shifted_t_float = t * (float(shifted_timestep) / float(TIMESTEPS));
             int64_t shifted_t     = static_cast<int64_t>(roundf(shifted_t_float));
             shifted_t             = std::max((int64_t)0, std::min((int64_t)(TIMESTEPS - 1), shifted_t));
-            LOG_DEBUG("shifting timestep from %.2f to %" PRId64 " (sigma: %.4f)", t, shifted_t, sigma);
+            LOG_VERBOSE("shifting timestep from %.2f to %" PRId64 " (sigma: %.4f)", t, shifted_t, sigma);
             return std::vector<float>{(float)shifted_t};
         }
         if (sd_version_is_anima(version)) {
@@ -2585,7 +2585,7 @@ public:
                 }
             }
             schedule_str += "]";
-            LOG_DEBUG("using guidance schedule: %s", schedule_str.c_str());
+            LOG_VERBOSE("using guidance schedule: %s", schedule_str.c_str());
         }
 
         sd_sample::SampleCacheRuntime cache_runtime = sd_sample::init_sample_cache_runtime(version,
@@ -2642,7 +2642,7 @@ public:
 
         auto denoise = [&](const sd::Tensor<float>& x, float sigma, int step) -> sd::guidance::GuiderOutput {
             if (get_cancel_flag() == SD_CANCEL_ALL) {
-                LOG_DEBUG("cancelling generation");
+                LOG_VERBOSE("cancelling generation");
                 return {};
             }
 
@@ -2848,7 +2848,7 @@ public:
                 }
                 const std::vector<int>* uncond_skip_layers = nullptr;
                 if (is_skiplayer_step && slg_uncond) {
-                    LOG_DEBUG("Skipping layers at uncond step %d\n", step);
+                    LOG_VERBOSE("Skipping layers at uncond step %d\n", step);
                     uncond_skip_layers = &skip_layer_guidance.layers();
                 }
                 uncond_out = run_condition(uncond,
@@ -2883,7 +2883,7 @@ public:
             }
 
             if (is_skiplayer_step && slg_scale != 0.0f) {
-                LOG_DEBUG("Skipping layers at step %d\n", step);
+                LOG_VERBOSE("Skipping layers at step %d\n", step);
                 if (!step_cache.is_step_skipped()) {
                     guidance_input.predict_skip_layer = [&]() -> sd::Tensor<float> {
                         return run_condition(cond,
@@ -4392,7 +4392,7 @@ struct SamplePlan {
                     break;
                 }
             }
-            LOG_DEBUG("switching from high noise model at step %d", high_noise_sample_steps);
+            LOG_VERBOSE("switching from high noise model at step %d", high_noise_sample_steps);
         }
 
         LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
@@ -4969,7 +4969,7 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
                     t_enc--;
                 }
             } else {
-                LOG_DEBUG("Interpreting denoise strength as relative noise level");
+                LOG_VERBOSE("Interpreting denoise strength as relative noise level");
                 // assume x_noised = K * (x * (1-noise_level) + noise * noise_level) = K * lerp(x, noise, noise_level)
                 // K = 1, noise_level = sigma for flow models
                 // K = 1+sigma, noise_level=sigma/(1+sigma) for diffusion models
@@ -4993,7 +4993,7 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
             sigma_sched.assign(plan->sigmas.begin() + plan->sample_steps - t_enc - 1, plan->sigmas.end());
 
             if (target_sigma > 0 && force_first_sigma && strength_as_noise_level) {
-                LOG_DEBUG("force_first_sigma to %.4f (from %.4f)", target_sigma, sigma_sched[0]);
+                LOG_VERBOSE("force_first_sigma to %.4f (from %.4f)", target_sigma, sigma_sched[0]);
                 sigma_sched[0] = target_sigma;
             }
 
@@ -5095,7 +5095,7 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
         }
         sd::Tensor<float> ref_latent;
         if (ref_image_params.resize_before_vae && !sd_version_is_pid(sd_ctx->sd->version)) {
-            LOG_DEBUG("auto resize ref images");
+            LOG_VERBOSE("auto resize ref images");
             double vae_width;
             double vae_height;
             if (ref_image_params.resize_vae_to_target) {
@@ -5118,12 +5118,12 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
                                                          ref_images[i].shape()[2],
                                                          ref_images[i].shape()[3]});
 
-            LOG_DEBUG("resize vae ref image %d from %" PRId64 "x%" PRId64 " to %" PRId64 "x%" PRId64,
-                      static_cast<int>(i),
-                      ref_images[i].shape()[1],
-                      ref_images[i].shape()[0],
-                      resized_ref_img.shape()[1],
-                      resized_ref_img.shape()[0]);
+            LOG_VERBOSE("resize vae ref image %d from %" PRId64 "x%" PRId64 " to %" PRId64 "x%" PRId64,
+                        static_cast<int>(i),
+                        ref_images[i].shape()[1],
+                        ref_images[i].shape()[0],
+                        resized_ref_img.shape()[1],
+                        resized_ref_img.shape()[0]);
 
             ref_latent = sd_ctx->sd->encode_first_stage(resized_ref_img);
         } else {
@@ -6595,11 +6595,11 @@ static sd_image_t* decode_video_outputs(sd_ctx_t* sd_ctx,
         video_latent.shape()[3] > sd_ctx->sd->get_latent_channel()) {
         video_latent = sd::ops::slice(video_latent, 3, 0, sd_ctx->sd->get_latent_channel());
     }
-    LOG_DEBUG("decode_video_outputs latent %dx%dx%dx%d",
-              (int)video_latent.shape()[0],
-              (int)video_latent.shape()[1],
-              (int)video_latent.shape()[2],
-              (int)video_latent.shape()[3]);
+    LOG_VERBOSE("decode_video_outputs latent %dx%dx%dx%d",
+                (int)video_latent.shape()[0],
+                (int)video_latent.shape()[1],
+                (int)video_latent.shape()[2],
+                (int)video_latent.shape()[3]);
     // auto z = sd::load_tensor_from_file_as_tensor<float>("ltx_vae_z.bin");
     int64_t t4            = ggml_time_ms();
     sd::Tensor<float> vid = sd_ctx->sd->decode_first_stage(video_latent, true);
@@ -6609,11 +6609,11 @@ static sd_image_t* decode_video_outputs(sd_ctx_t* sd_ctx,
         LOG_ERROR("decode_first_stage failed for video");
         return nullptr;
     }
-    LOG_DEBUG("decode_video_outputs decoded %dx%dx%dx%d",
-              (int)vid.shape()[0],
-              (int)vid.shape()[1],
-              (int)vid.shape()[2],
-              (int)vid.shape()[3]);
+    LOG_VERBOSE("decode_video_outputs decoded %dx%dx%dx%d",
+                (int)vid.shape()[0],
+                (int)vid.shape()[1],
+                (int)vid.shape()[2],
+                (int)vid.shape()[3]);
     if (request.frames > 0 &&
         vid.shape()[2] > request.frames) {
         vid = sd::ops::slice(vid, 2, 0, request.frames);
@@ -6954,7 +6954,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
             LOG_ERROR("cancelling generation before high-noise sampling");
             return false;
         }
-        LOG_DEBUG("sample(high noise) %dx%dx%d", W, H, T);
+        LOG_VERBOSE("sample(high noise) %dx%dx%d", W, H, T);
 
         int64_t sampling_start = ggml_time_ms();
         std::vector<float> high_noise_sigmas(plan.sigmas.begin(), plan.sigmas.begin() + plan.high_noise_sample_steps + 1);
@@ -7001,7 +7001,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
         LOG_ERROR("cancelling generation before sampling");
         return false;
     }
-    LOG_DEBUG("sample %dx%dx%d", W, H, T);
+    LOG_VERBOSE("sample %dx%dx%d", W, H, T);
     int64_t sampling_start         = ggml_time_ms();
     sd::Tensor<float> final_latent = sd_ctx->sd->sample(sd_ctx->sd->diffusion_model,
                                                         true,
@@ -7133,7 +7133,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                       sd_vid_gen_params->sample_params.eta,
                                       hires_sample_method);
 
-        LOG_DEBUG("sample(latent upscale) %dx%dx%d", W, H, T);
+        LOG_VERBOSE("sample(latent upscale) %dx%dx%d", W, H, T);
         LOG_INFO("LTX latent spatial upscale refine: scheduler_steps=%d, denoising_strength=%.2f, sampler=%s, sigma_sched_size=%zu%s",
                  hires_scheduler_steps,
                  request.hires.denoising_strength,
@@ -7199,11 +7199,11 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                                             latents.audio_length,
                                                             sd_ctx->sd->get_latent_channel());
         if (!audio_latent.empty()) {
-            LOG_DEBUG("decode audio latent %dx%dx%dx%d",
-                      (int)audio_latent.shape()[0],
-                      (int)audio_latent.shape()[1],
-                      (int)audio_latent.shape()[2],
-                      (int)audio_latent.shape()[3]);
+            LOG_VERBOSE("decode audio latent %dx%dx%dx%d",
+                        (int)audio_latent.shape()[0],
+                        (int)audio_latent.shape()[1],
+                        (int)audio_latent.shape()[2],
+                        (int)audio_latent.shape()[3]);
             auto waveform = sd_ctx->sd->decode_ltx_audio_latent(audio_latent);
             if (!waveform.empty()) {
                 generated_audio = waveform_to_sd_audio(sd_ctx->sd, waveform);

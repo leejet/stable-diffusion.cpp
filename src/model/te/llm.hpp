@@ -319,11 +319,11 @@ namespace LLM {
                     config.vision.deepstack_visual_indexes = {8, 16, 24};
                 }
             }
-            LOG_DEBUG("llm: num_layers = %" PRId64 ", vocab_size = %" PRId64 ", hidden_size = %" PRId64 ", intermediate_size = %" PRId64,
-                      config.num_layers,
-                      config.vocab_size,
-                      config.hidden_size,
-                      config.intermediate_size);
+            LOG_VERBOSE("llm: num_layers = %" PRId64 ", vocab_size = %" PRId64 ", hidden_size = %" PRId64 ", intermediate_size = %" PRId64,
+                        config.num_layers,
+                        config.vocab_size,
+                        config.hidden_size,
+                        config.intermediate_size);
             return config;
         }
     };
@@ -1887,9 +1887,9 @@ namespace LLM {
                 enable_vision = false;
             }
             if (enable_vision) {
-                LOG_DEBUG("enable llm vision");
+                LOG_VERBOSE("enable llm vision");
                 if (config.llama_cpp_style) {
-                    LOG_DEBUG("llama.cpp style vision weight");
+                    LOG_VERBOSE("llama.cpp style vision weight");
                 }
             }
             model = LLM(config, enable_vision, config.llama_cpp_style);
@@ -2375,7 +2375,7 @@ namespace LLM {
                     ss << "['" << item.first << "', " << item.second << "], ";
                 }
                 ss << "]";
-                LOG_DEBUG("parse '%s' to %s", text.c_str(), ss.str().c_str());
+                LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
             }
 
             std::vector<int> tokens;
@@ -2426,7 +2426,7 @@ namespace LLM {
                     out = std::move(out_opt);
                     print_sd_tensor(out, false, "image_embed");
                     image_embed = out;
-                    LOG_DEBUG("llm encode_image test done in %lldms", t1 - t0);
+                    LOG_VERBOSE("llm encode_image test done in %lldms", t1 - t0);
                 }
 
                 std::string placeholder  = "<|image_pad|>";
@@ -2466,7 +2466,7 @@ namespace LLM {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("llm test done in %lldms", t1 - t0);
+                LOG_VERBOSE("llm test done in %lldms", t1 - t0);
             } else if (test_vit) {
                 // auto image = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 280, 280, 3);
                 // ggml_set_f32(image, 0.f);
@@ -2485,7 +2485,7 @@ namespace LLM {
                 // auto ref_out = load_tensor_from_file(ctx, "qwen2vl.bin");
                 // ggml_ext_tensor_diff(ref_out, out, 0.01f);
 
-                LOG_DEBUG("llm test done in %lldms", t1 - t0);
+                LOG_VERBOSE("llm test done in %lldms", t1 - t0);
             } else if (test_mistral) {
                 std::pair<int, int> prompt_attn_range;
                 std::string text        = "[SYSTEM_PROMPT]You are an AI that reasons about image descriptions. You give structured responses focusing on object relationships, object\nattribution and actions without speculation.[/SYSTEM_PROMPT][INST]";
@@ -2510,7 +2510,7 @@ namespace LLM {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("llm test done in %lldms", t1 - t0);
+                LOG_VERBOSE("llm test done in %lldms", t1 - t0);
             } else if (test_qwen3) {
                 std::pair<int, int> prompt_attn_range;
                 std::string text        = "<|im_start|>user\n";
@@ -2535,7 +2535,7 @@ namespace LLM {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("llm test done in %lldms", t1 - t0);
+                LOG_VERBOSE("llm test done in %lldms", t1 - t0);
             } else {
                 std::pair<int, int> prompt_attn_range;
                 std::string text        = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n";
@@ -2560,7 +2560,7 @@ namespace LLM {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("llm test done in %lldms", t1 - t0);
+                LOG_VERBOSE("llm test done in %lldms", t1 - t0);
             }
         }
 

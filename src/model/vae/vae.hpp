@@ -54,23 +54,23 @@ protected:
         }
 
         auto plan = make_vae_temporal_tile_plan(input.shape()[2], resolved_config);
-        LOG_DEBUG("%s temporal tiling: tile_frames=%d, overlap=%d, total_frames=%lld, tiles=%d",
-                  get_desc().c_str(),
-                  plan.tile_frames,
-                  plan.overlap,
-                  (long long)input.shape()[2],
-                  (int)plan.tiles.size());
+        LOG_VERBOSE("%s temporal tiling: tile_frames=%d, overlap=%d, total_frames=%lld, tiles=%d",
+                    get_desc().c_str(),
+                    plan.tile_frames,
+                    plan.overlap,
+                    (long long)input.shape()[2],
+                    (int)plan.tiles.size());
         return process_vae_temporal_tiles_blended(
             input,
             plan,
             output_scale,
             [&](const sd::Tensor<float>& input_tile, const VAETemporalTile& tile) {
-                LOG_DEBUG("%s temporal tile %d/%d: input frames [%lld, %lld)",
-                          get_desc().c_str(),
-                          tile.index + 1,
-                          (int)plan.tiles.size(),
-                          (long long)tile.start,
-                          (long long)tile.end);
+                LOG_VERBOSE("%s temporal tile %d/%d: input frames [%lld, %lld)",
+                            get_desc().c_str(),
+                            tile.index + 1,
+                            (int)plan.tiles.size(),
+                            (long long)tile.start,
+                            (long long)tile.end);
                 return _compute(n_threads, input_tile, true);
             });
     }
@@ -230,7 +230,7 @@ public:
             const float encode_tile_factor = sd_version_is_minimax_h3(version) ? 1.f : (sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version)) ? 1.30539f
                                                                                                                                                                                             : 2.0f;
             get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, tiling_params, W, H, encode_tile_factor);
-            LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
+            LOG_VERBOSE("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
             output = tiled_compute(input,
                                    n_threads,
                                    static_cast<int>(W),
@@ -258,7 +258,7 @@ public:
             return {};
         }
         int64_t t1 = ggml_time_ms();
-        LOG_DEBUG("computing vae encode graph completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+        LOG_VERBOSE("computing vae encode graph completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
         return std::move(output);
     }
 
@@ -281,7 +281,7 @@ public:
             int tile_size_x, tile_size_y;
             get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, tiling_params, input.shape()[0], input.shape()[1]);
             if (!silent) {
-                LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
+                LOG_VERBOSE("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
             }
             output = tiled_compute(
                 input,
@@ -315,7 +315,7 @@ public:
             scale_tensor_to_0_1(&output);
         }
         int64_t t1 = ggml_time_ms();
-        LOG_DEBUG("computing vae decode graph completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+        LOG_VERBOSE("computing vae decode graph completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
         return std::move(output);
     }
 

@@ -68,12 +68,12 @@ struct YOLOv8Config {
         }
 
         if (config.valid) {
-            LOG_DEBUG("yolov8: classes=%d, reg_max=%d, p3=%d, p4=%d, p5=%d",
-                      config.num_classes,
-                      config.reg_max,
-                      config.out_channels[15],
-                      config.out_channels[18],
-                      config.out_channels[21]);
+            LOG_VERBOSE("yolov8: classes=%d, reg_max=%d, p3=%d, p4=%d, p5=%d",
+                        config.num_classes,
+                        config.reg_max,
+                        config.out_channels[15],
+                        config.out_channels[18],
+                        config.out_channels[21]);
         }
         return config;
     }

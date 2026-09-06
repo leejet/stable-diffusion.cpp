@@ -639,7 +639,7 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
             return false;
         }
 
-        LOG_DEBUG("finished loading PhotoMaker ID Embeds ");
+        LOG_VERBOSE("finished loading PhotoMaker ID Embeds ");
         return true;
     }
 

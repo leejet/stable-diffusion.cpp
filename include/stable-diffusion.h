@@ -147,6 +147,7 @@ enum sd_type_t {
 
 enum sd_log_level_t {
     SD_LOG_DEBUG,
+    SD_LOG_VERBOSE,
     SD_LOG_INFO,
     SD_LOG_WARN,
     SD_LOG_ERROR

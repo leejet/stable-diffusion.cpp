@@ -172,12 +172,12 @@ namespace LTXV {
             if (config.audio_channels != 2 || config.latent_channels != 8 || config.mel_bins != 64) {
                 return config;
             }
-            LOG_DEBUG("ltx_audio_vae: sample_rate = %d, mel_bins = %d, latent_channels = %d, latent_frequency_bins = %d, has_bwe = %s",
-                      config.sample_rate,
-                      config.mel_bins,
-                      config.latent_channels,
-                      config.latent_frequency_bins,
-                      config.has_bwe ? "true" : "false");
+            LOG_VERBOSE("ltx_audio_vae: sample_rate = %d, mel_bins = %d, latent_channels = %d, latent_frequency_bins = %d, has_bwe = %s",
+                        config.sample_rate,
+                        config.mel_bins,
+                        config.latent_channels,
+                        config.latent_frequency_bins,
+                        config.has_bwe ? "true" : "false");
             return config;
         }
     };
@@ -1063,7 +1063,7 @@ namespace LTXV {
 
             GGML_ASSERT(!out.empty());
             print_sd_tensor(out, false, "ltx_audio_vae_out");
-            LOG_DEBUG("ltx audio vae test done in %lldms", t1 - t0);
+            LOG_VERBOSE("ltx audio vae test done in %lldms", t1 - t0);
         }
 
         static void load_from_file_and_test(const std::string& model_path,

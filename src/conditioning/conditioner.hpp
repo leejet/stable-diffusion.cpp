@@ -251,7 +251,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         }
         auto iter = embedding_pos_map.find(embd_name);
         if (iter != embedding_pos_map.end()) {
-            LOG_DEBUG("embedding already read in: %s", embd_name.c_str());
+            LOG_VERBOSE("embedding already read in: %s", embd_name.c_str());
             for (int i = iter->second.first; i < iter->second.second; i++) {
                 bpe_tokens.push_back(text_model->model.vocab_size + i);
             }
@@ -271,11 +271,11 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                         embd2       = ggml_new_tensor_2d(embd_ctx, tensor_storage.type, text_model2->model.hidden_size, tensor_storage.n_dims > 1 ? tensor_storage.ne[1] : 1);
                         *dst_tensor = embd2;
                     } else {
-                        LOG_DEBUG("embedding wrong hidden size, got %i, expected %i or %i", tensor_storage.ne[0], text_model->model.hidden_size, text_model2->model.hidden_size);
+                        LOG_VERBOSE("embedding wrong hidden size, got %i, expected %i or %i", tensor_storage.ne[0], text_model->model.hidden_size, text_model2->model.hidden_size);
                         return false;
                     }
                 } else {
-                    LOG_DEBUG("embedding wrong hidden size, got %i, expected %i", tensor_storage.ne[0], text_model->model.hidden_size);
+                    LOG_VERBOSE("embedding wrong hidden size, got %i, expected %i", tensor_storage.ne[0], text_model->model.hidden_size);
                     return false;
                 }
             } else {
@@ -295,10 +295,10 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                    ggml_nbytes(embd));
             for (int i = 0; i < embd->ne[1]; i++) {
                 bpe_tokens.push_back(text_model->model.vocab_size + num_custom_embeddings);
-                // LOG_DEBUG("new custom token: %i", text_model.vocab_size + num_custom_embeddings);
+                // LOG_VERBOSE("new custom token: %i", text_model.vocab_size + num_custom_embeddings);
                 num_custom_embeddings++;
             }
-            LOG_DEBUG("embedding '%s' applied, custom embeddings: %i", embd_name.c_str(), num_custom_embeddings);
+            LOG_VERBOSE("embedding '%s' applied, custom embeddings: %i", embd_name.c_str(), num_custom_embeddings);
         }
         if (embd2) {
             int64_t hidden_size = text_model2->model.hidden_size;
@@ -308,10 +308,10 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                    ggml_nbytes(embd2));
             for (int i = 0; i < embd2->ne[1]; i++) {
                 bpe_tokens.push_back(text_model2->model.vocab_size + num_custom_embeddings_2);
-                // LOG_DEBUG("new custom token: %i", text_model.vocab_size + num_custom_embeddings);
+                // LOG_VERBOSE("new custom token: %i", text_model.vocab_size + num_custom_embeddings);
                 num_custom_embeddings_2++;
             }
-            LOG_DEBUG("embedding '%s' applied, custom embeddings: %i (text model 2)", embd_name.c_str(), num_custom_embeddings_2);
+            LOG_VERBOSE("embedding '%s' applied, custom embeddings: %i (text model 2)", embd_name.c_str(), num_custom_embeddings_2);
         }
         int pos_end = num_custom_embeddings;
         if (pos_end == pos_start) {
@@ -360,7 +360,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_DEBUG("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
         }
 
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
@@ -381,7 +381,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                 size_t padding_size = (75 - (current_size % 75)) % 75;  // Ensure no negative padding
 
                 if (padding_size > 0) {
-                    LOG_DEBUG("BREAK token encountered, padding current chunk by %zu tokens.", padding_size);
+                    LOG_VERBOSE("BREAK token encountered, padding current chunk by %zu tokens.", padding_size);
                     tokens.insert(tokens.end(), padding_size, tokenizer.EOS_TOKEN_ID);
                     weights.insert(weights.end(), padding_size, 1.0f);
                 }
@@ -480,7 +480,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                     }
                 }
                 int64_t t1 = ggml_time_ms();
-                LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
+                LOG_VERBOSE("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
 
                 chunk_hidden_states = apply_token_weights(std::move(chunk_hidden_states), chunk_weights);
 
@@ -752,7 +752,7 @@ struct SD3CLIPEmbedder : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_DEBUG("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
         }
 
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
@@ -960,7 +960,7 @@ struct SD3CLIPEmbedder : public Conditioner {
             }
 
             int64_t t1 = ggml_time_ms();
-            LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
+            LOG_VERBOSE("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
             if (zero_out_masked) {
                 chunk_hidden_states.fill_(0.0f);
             }
@@ -1115,7 +1115,7 @@ struct FluxCLIPEmbedder : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_DEBUG("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
         }
 
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
@@ -1232,7 +1232,7 @@ struct FluxCLIPEmbedder : public Conditioner {
             }
 
             int64_t t1 = ggml_time_ms();
-            LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
+            LOG_VERBOSE("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
             if (!hidden_states.empty()) {
                 hidden_states = sd::ops::concat(hidden_states, chunk_hidden_states, 1);
             } else {
@@ -1371,7 +1371,7 @@ struct T5CLIPEmbedder : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_DEBUG("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
         }
 
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
@@ -1412,7 +1412,7 @@ struct T5CLIPEmbedder : public Conditioner {
                 ++num_pad;
             }
         }
-        // LOG_DEBUG("PAD: %d", num_pad);
+        // LOG_VERBOSE("PAD: %d", num_pad);
     }
 
     SDCondition get_learned_condition_common(int n_threads,
@@ -1464,7 +1464,7 @@ struct T5CLIPEmbedder : public Conditioner {
             }
 
             int64_t t1 = ggml_time_ms();
-            LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
+            LOG_VERBOSE("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
 
             if (!hidden_states.empty()) {
                 hidden_states = sd::ops::concat(hidden_states, chunk_hidden_states, 1);
@@ -1669,7 +1669,7 @@ struct AnimaConditioner : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_DEBUG("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
         }
 
         std::vector<int> qwen_tokens;
@@ -1725,7 +1725,7 @@ struct AnimaConditioner : public Conditioner {
         auto t5_weight_tensor = sd::Tensor<float>::from_vector(t5_weights);
 
         int64_t t1 = ggml_time_ms();
-        LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
+        LOG_VERBOSE("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
 
         SDCondition result;
         result.c_crossattn  = std::move(hidden_states);
@@ -1906,7 +1906,7 @@ struct LLMEmbedder : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_DEBUG("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
         }
 
         std::vector<int> tokens;
@@ -2224,7 +2224,7 @@ struct LLMEmbedder : public Conditioner {
                     prompt_template_encode_start_idx++;
                 }
             }
-            LOG_DEBUG("prompt_template_encode_start_idx %d", prompt_template_encode_start_idx);
+            LOG_VERBOSE("prompt_template_encode_start_idx %d", prompt_template_encode_start_idx);
 
             prompt = prompt_prefix;
             if (llm->enable_vision && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
@@ -2264,7 +2264,7 @@ struct LLMEmbedder : public Conditioner {
 
                     resize_image_dims(height, width, h_bar, w_bar, factor, min_pixels, max_pixels, resize_mode);
 
-                    LOG_DEBUG("resize LingBotVideo ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
+                    LOG_VERBOSE("resize LingBotVideo ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
                     auto resized_image = clip_preprocess(image, w_bar, h_bar);
                     auto image_embed   = llm->encode_image(n_threads, resized_image, false);
                     GGML_ASSERT(!image_embed.empty());
@@ -2321,7 +2321,7 @@ struct LLMEmbedder : public Conditioner {
 
                     resize_image_dims(height, width, h_bar, w_bar, factor, min_pixels, max_pixels, resize_mode);
 
-                    LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
+                    LOG_VERBOSE("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
 
                     auto resized_image = clip_preprocess(image, w_bar, h_bar);
 
@@ -2405,7 +2405,7 @@ struct LLMEmbedder : public Conditioner {
 
                     resize_image_dims(height, width, h_bar, w_bar, factor, min_pixels, max_pixels, resize_mode);
 
-                    LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
+                    LOG_VERBOSE("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
 
                     auto resized_image = clip_preprocess(image, w_bar, h_bar);
                     auto image_embed   = llm->encode_image(n_threads, resized_image, false);
@@ -2473,7 +2473,7 @@ struct LLMEmbedder : public Conditioner {
 
                     resize_image_dims(height, width, h_bar, w_bar, factor, min_pixels, max_pixels, resize_mode);
 
-                    LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
+                    LOG_VERBOSE("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
 
                     auto resized_image = clip_preprocess(image, w_bar, h_bar);
                     auto image_embed   = llm->encode_image(n_threads, resized_image, false);
@@ -2536,7 +2536,7 @@ struct LLMEmbedder : public Conditioner {
 
                     resize_image_dims(height, width, h_bar, w_bar, factor, min_pixels, max_pixels, resize_mode);
 
-                    LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
+                    LOG_VERBOSE("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
 
                     auto resized_image = clip_preprocess(image, w_bar, h_bar);
                     auto image_embed   = llm->encode_image(n_threads, resized_image, false);
@@ -2716,7 +2716,7 @@ struct LLMEmbedder : public Conditioner {
             }
 
             int64_t t1 = ggml_time_ms();
-            LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
+            LOG_VERBOSE("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
 
             SDCondition result;
             result.c_crossattn = std::move(hidden_states);
@@ -2791,7 +2791,7 @@ struct LLMEmbedder : public Conditioner {
         }
 
         int64_t t1 = ggml_time_ms();
-        LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
+        LOG_VERBOSE("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
         SDCondition result;
         result.c_crossattn        = std::move(hidden_states);
         result.extra_c_crossattns = std::move(extra_hidden_states_vec);
@@ -3115,7 +3115,7 @@ struct LTXAVEmbedder : public Conditioner {
         GGML_ASSERT(!hidden_states.empty());
 
         int64_t t1 = ggml_time_ms();
-        LOG_DEBUG("computing LTXAV condition graph completed, taking %" PRId64 " ms", t1 - t0);
+        LOG_VERBOSE("computing LTXAV condition graph completed, taking %" PRId64 " ms", t1 - t0);
 
         SDCondition result;
         result.c_crossattn = std::move(hidden_states);

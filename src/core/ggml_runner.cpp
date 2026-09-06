@@ -170,8 +170,8 @@ std::optional<Tensor<float>> GGMLRunner::execute_graph(ggml_cgraph* graph, int n
     }
     const bool segments_changed = plan.segments.size() != logged_segment_count_;
     if (segments_changed && (segmented || logged_segment_count_ > 1)) {
-        LOG_DEBUG("%s using %zu segment%s", get_desc().c_str(),
-                  plan.segments.size(), plan.segments.size() == 1 ? "" : "s");
+        LOG_VERBOSE("%s using %zu segment%s", get_desc().c_str(),
+                    plan.segments.size(), plan.segments.size() == 1 ? "" : "s");
     }
     SegmentGraphBindings bindings(cut_cache_, plan, graph);
     SegmentWeightPipeline weights(manager, runtime_backend, reinterpret_cast<uintptr_t>(this),
@@ -261,6 +261,8 @@ std::optional<Tensor<float>> GGMLRunner::execute_graph(ggml_cgraph* graph, int n
         if (!prefetch_requests.empty()) {
             weights.enqueue_next(index, prefetch_requests.front());
         }
+        LOG_DEBUG("%s executing segment %zu/%zu: %s", get_desc().c_str(),
+                  index + 1, plan.segments.size(), segment.group_name.c_str());
         if (!execute_segment(segment_graph, n_threads) ||
             !cache_.capture(segment_graph) ||
             !cut_cache_.capture(graph, segment, get_desc().c_str())) {
@@ -284,10 +286,10 @@ std::optional<Tensor<float>> GGMLRunner::execute_graph(ggml_cgraph* graph, int n
     }
     if (segments_changed || peak_compute_bytes != logged_compute_bytes_) {
         for (const auto& entry : peak_compute_bytes) {
-            LOG_DEBUG("%s compute buffer size: %.2f MB(%s) on %s (peak across %zu segment%s)",
-                      get_desc().c_str(), entry.second / (1024.0 * 1024.0),
-                      sd_backend_is_cpu(entry.first) ? "RAM" : "VRAM", ggml_backend_name(entry.first),
-                      plan.segments.size(), plan.segments.size() == 1 ? "" : "s");
+            LOG_VERBOSE("%s compute buffer size: %.2f MB(%s) on %s (peak across %zu segment%s)",
+                        get_desc().c_str(), entry.second / (1024.0 * 1024.0),
+                        sd_backend_is_cpu(entry.first) ? "RAM" : "VRAM", ggml_backend_name(entry.first),
+                        plan.segments.size(), plan.segments.size() == 1 ? "" : "s");
         }
         logged_compute_bytes_ = std::move(peak_compute_bytes);
         logged_segment_count_ = plan.segments.size();

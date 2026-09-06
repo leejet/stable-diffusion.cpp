@@ -330,7 +330,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 return;
             }
 
-            LOG_DEBUG("%s\n", request.gen_params.to_string().c_str());
+            LOG_VERBOSE("%s\n", request.gen_params.to_string().c_str());
 
             sd_img_gen_params_t img_gen_params = request.to_sd_img_gen_params_t();
             SDImageVec results;

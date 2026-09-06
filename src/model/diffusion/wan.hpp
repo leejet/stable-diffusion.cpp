@@ -75,13 +75,13 @@ namespace WAN {
                     config.flf_pos_embed_token_number = 514;
                 }
             }
-            LOG_DEBUG("wan: model_type = %s, num_layers = %d, vace_layers = %d, dim = %" PRId64 ", ffn_dim = %" PRId64 ", num_heads = %" PRId64,
-                      config.model_type.c_str(),
-                      config.num_layers,
-                      config.vace_layers,
-                      config.dim,
-                      config.ffn_dim,
-                      config.num_heads);
+            LOG_VERBOSE("wan: model_type = %s, num_layers = %d, vace_layers = %d, dim = %" PRId64 ", ffn_dim = %" PRId64 ", num_heads = %" PRId64,
+                        config.model_type.c_str(),
+                        config.num_layers,
+                        config.vace_layers,
+                        config.dim,
+                        config.ffn_dim,
+                        config.num_heads);
             return config;
         }
     };
@@ -909,7 +909,7 @@ namespace WAN {
                                            config.theta,
                                            config.axes_dim);
             int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            // LOG_DEBUG("pos_len %d", pos_len);
+            // LOG_VERBOSE("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe);
@@ -1007,7 +1007,7 @@ namespace WAN {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("wan test done in %lldms", t1 - t0);
+                LOG_VERBOSE("wan test done in %lldms", t1 - t0);
             }
         }
 

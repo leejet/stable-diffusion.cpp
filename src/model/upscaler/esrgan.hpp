@@ -74,13 +74,13 @@ struct ESRGANConfig {
         }
 
         if (has_model_tensor || has_conv_up1 || has_conv_up2) {
-            LOG_DEBUG("esrgan: scale = %d, num_block = %d, num_in_ch = %d, num_out_ch = %d, num_feat = %d, num_grow_ch = %d",
-                      config.scale,
-                      config.num_block,
-                      config.num_in_ch,
-                      config.num_out_ch,
-                      config.num_feat,
-                      config.num_grow_ch);
+            LOG_VERBOSE("esrgan: scale = %d, num_block = %d, num_in_ch = %d, num_out_ch = %d, num_feat = %d, num_grow_ch = %d",
+                        config.scale,
+                        config.num_block,
+                        config.num_in_ch,
+                        config.num_out_ch,
+                        config.num_feat,
+                        config.num_grow_ch);
         }
         return config;
     }

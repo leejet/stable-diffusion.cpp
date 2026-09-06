@@ -115,13 +115,13 @@ namespace LTXVUpsampler {
             }
 
             if (inferred) {
-                LOG_DEBUG("ltx latent upsampler: in_channels = %" PRId64 ", mid_channels = %" PRId64 ", num_blocks_per_stage = %d, spatial_scale = %.3f, temporal_up_factor = %d, rational_resampler = %d",
-                          config.in_channels,
-                          config.mid_channels,
-                          config.num_blocks_per_stage,
-                          config.spatial_scale,
-                          config.temporal_up_factor,
-                          config.rational_resampler);
+                LOG_VERBOSE("ltx latent upsampler: in_channels = %" PRId64 ", mid_channels = %" PRId64 ", num_blocks_per_stage = %d, spatial_scale = %.3f, temporal_up_factor = %d, rational_resampler = %d",
+                            config.in_channels,
+                            config.mid_channels,
+                            config.num_blocks_per_stage,
+                            config.spatial_scale,
+                            config.temporal_up_factor,
+                            config.rational_resampler);
             }
             return config;
         }

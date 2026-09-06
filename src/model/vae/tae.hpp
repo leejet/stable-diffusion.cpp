@@ -65,7 +65,7 @@ public:
 
         if (n_in != n_out) {
             auto skip = std::dynamic_pointer_cast<Conv2d>(blocks["skip"]);
-            LOG_DEBUG("skip");
+            LOG_VERBOSE("skip");
             x = skip->forward(ctx, x);
         }
 

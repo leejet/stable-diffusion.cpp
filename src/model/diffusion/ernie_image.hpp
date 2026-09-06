@@ -72,13 +72,13 @@ namespace ErnieImage {
             for (int axis_dim : config.axes_dim) {
                 config.axes_dim_sum += axis_dim;
             }
-            LOG_DEBUG("ernie_image: num_layers = %" PRId64 ", hidden_size = %" PRId64 ", num_heads = %" PRId64 ", ffn_hidden_size = %" PRId64 ", in_channels = %" PRId64 ", out_channels = %" PRId64,
-                      config.num_layers,
-                      config.hidden_size,
-                      config.num_heads,
-                      config.ffn_hidden_size,
-                      config.in_channels,
-                      config.out_channels);
+            LOG_VERBOSE("ernie_image: num_layers = %" PRId64 ", hidden_size = %" PRId64 ", num_heads = %" PRId64 ", ffn_hidden_size = %" PRId64 ", in_channels = %" PRId64 ", out_channels = %" PRId64,
+                        config.num_layers,
+                        config.hidden_size,
+                        config.num_heads,
+                        config.ffn_hidden_size,
+                        config.in_channels,
+                        config.out_channels);
             return config;
         }
     };

@@ -66,14 +66,14 @@ namespace Lens {
             for (int axis_dim : config.axes_dim) {
                 config.axes_dim_sum += axis_dim;
             }
-            LOG_DEBUG("lens: num_layers = %d, selected_layer_count = %d, hidden_size = %" PRId64 ", num_attention_heads = %" PRId64 ", attention_head_dim = %" PRId64 ", in_channels = %" PRId64 ", out_channels = %" PRId64,
-                      config.num_layers,
-                      config.selected_layer_count,
-                      config.num_attention_heads * config.attention_head_dim,
-                      config.num_attention_heads,
-                      config.attention_head_dim,
-                      config.in_channels,
-                      config.out_channels);
+            LOG_VERBOSE("lens: num_layers = %d, selected_layer_count = %d, hidden_size = %" PRId64 ", num_attention_heads = %" PRId64 ", attention_head_dim = %" PRId64 ", in_channels = %" PRId64 ", out_channels = %" PRId64,
+                        config.num_layers,
+                        config.selected_layer_count,
+                        config.num_attention_heads * config.attention_head_dim,
+                        config.num_attention_heads,
+                        config.attention_head_dim,
+                        config.in_channels,
+                        config.out_channels);
             return config;
         }
     };

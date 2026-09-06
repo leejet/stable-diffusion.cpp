@@ -239,6 +239,26 @@ void ArgOptions::print() const {
     }
 }
 
+void add_log_options(ArgOptions& options, sd_log_level_t& level) {
+    options.manual_options.push_back({"", "--log-level",
+                                      "minimum log level, one of [debug, verbose, info, warn, error] (default: info)",
+                                      [&level](int argc, const char** argv, int index) {
+                                          if (++index >= argc) {
+                                              return -1;
+                                          }
+                                          if (!parse_log_level(argv[index], level)) {
+                                              LOG_ERROR("invalid log level %s, must be one of [debug, verbose, info, warn, error]", argv[index]);
+                                              return -1;
+                                          }
+                                          return 1;
+                                      }});
+    options.manual_options.push_back({"-v", "--verbose", "equivalent to --log-level verbose",
+                                      [&level](int, const char**, int) {
+                                          level = SD_LOG_VERBOSE;
+                                          return 0;
+                                      }});
+}
+
 bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& options_list) {
     bool invalid_arg = false;
     std::string arg;

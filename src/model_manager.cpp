@@ -421,11 +421,11 @@ bool ModelManager::load_tensors_to_params_backend(const std::vector<TensorState*
         }
     }
     for (const auto& entry : prepared) {
-        LOG_DEBUG("model manager prepared params backend buffers (%6.2f MB, %zu tensors, %zu blocks, %s) on %s",
-                  entry.second.bytes / (1024.f * 1024.f),
-                  entry.second.tensors, entry.second.blocks,
-                  ggml_backend_buft_is_host(entry.first) ? "RAM" : "VRAM",
-                  ggml_backend_buft_name(entry.first));
+        LOG_VERBOSE("model manager prepared params backend buffers (%6.2f MB, %zu tensors, %zu blocks, %s) on %s",
+                    entry.second.bytes / (1024.f * 1024.f),
+                    entry.second.tensors, entry.second.blocks,
+                    ggml_backend_buft_is_host(entry.first) ? "RAM" : "VRAM",
+                    ggml_backend_buft_name(entry.first));
     }
 
     return true;
@@ -547,12 +547,12 @@ bool ModelManager::stage_tensors_to_compute_backend(const std::vector<TensorStat
         if (!stage_chunk(chunk)) {
             return false;
         }
-        LOG_DEBUG("model manager staged compute params (%6.2f MB, %zu tensors, %zu blocks) to %s, taking %.2fs",
-                  staged_bytes / (1024.f * 1024.f),
-                  target_states.size(),
-                  staged_blocks,
-                  ggml_backend_name(compute_backend),
-                  (ggml_time_ms() - t0) / 1000.f);
+        LOG_VERBOSE("model manager staged compute params (%6.2f MB, %zu tensors, %zu blocks) to %s, taking %.2fs",
+                    staged_bytes / (1024.f * 1024.f),
+                    target_states.size(),
+                    staged_blocks,
+                    ggml_backend_name(compute_backend),
+                    (ggml_time_ms() - t0) / 1000.f);
     }
 
     return true;
@@ -809,10 +809,10 @@ bool ModelManager::alloc_params_buffers(const std::vector<TensorState*>& states,
                         initialized->data   = nullptr;
                         initialized->extra  = nullptr;
                     }
-                    LOG_DEBUG("model manager releasing params backend buffer (%6.2f MB, %zu tensors, %s)",
-                              ggml_backend_buffer_get_size(buffer) / (1024.f * 1024.f),
-                              initialized_tensors.size(),
-                              ggml_backend_buffer_is_host(buffer) ? "RAM" : "VRAM");
+                    LOG_VERBOSE("model manager releasing params backend buffer (%6.2f MB, %zu tensors, %s)",
+                                ggml_backend_buffer_get_size(buffer) / (1024.f * 1024.f),
+                                initialized_tensors.size(),
+                                ggml_backend_buffer_is_host(buffer) ? "RAM" : "VRAM");
                     ggml_backend_buffer_free(buffer);
                     return false;
                 }
@@ -1107,11 +1107,11 @@ void ModelManager::release_params_storage_blocks(bool force,
         }
     }
     for (const auto& entry : released) {
-        LOG_DEBUG("model manager released params backend buffers (%6.2f MB, %zu tensors, %zu blocks, %s) from %s",
-                  entry.second.bytes / (1024.f * 1024.f),
-                  entry.second.tensors, entry.second.blocks,
-                  ggml_backend_buft_is_host(entry.first) ? "RAM" : "VRAM",
-                  ggml_backend_buft_name(entry.first));
+        LOG_VERBOSE("model manager released params backend buffers (%6.2f MB, %zu tensors, %zu blocks, %s) from %s",
+                    entry.second.bytes / (1024.f * 1024.f),
+                    entry.second.tensors, entry.second.blocks,
+                    ggml_backend_buft_is_host(entry.first) ? "RAM" : "VRAM",
+                    ggml_backend_buft_name(entry.first));
     }
 }
 

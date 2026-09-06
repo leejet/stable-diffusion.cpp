@@ -34,10 +34,10 @@ namespace SefiImage {
                     config.hidden_size              = tensor_storage.ne[1] * 2;
                 }
             }
-            LOG_DEBUG("sefi_image: semantic_channels = %" PRId64 ", texture_latent_channels = %" PRId64 ", hidden_size = %" PRId64,
-                      config.semantic_channels,
-                      config.texture_latent_channels,
-                      config.hidden_size);
+            LOG_VERBOSE("sefi_image: semantic_channels = %" PRId64 ", texture_latent_channels = %" PRId64 ", hidden_size = %" PRId64,
+                        config.semantic_channels,
+                        config.texture_latent_channels,
+                        config.hidden_size);
             return config;
         }
     };

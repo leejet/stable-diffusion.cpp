@@ -120,16 +120,16 @@ struct MMDiTConfig {
         }
 
         if (has_weight_config) {
-            LOG_DEBUG("mmdit: num_layers = %" PRId64 ", num_mmdit_x_layers = %" PRId64 ", hidden_size = %" PRId64 ", patch_size = %d, in_channels = %" PRId64 ", out_channels = %" PRId64 ", context_size = %" PRId64 ", adm_in_channels = %" PRId64 ", qk_norm = %s",
-                      config.depth,
-                      config.d_self + 1,
-                      config.hidden_size,
-                      config.patch_size,
-                      config.in_channels,
-                      config.out_channels,
-                      config.context_size,
-                      config.adm_in_channels,
-                      config.qk_norm.empty() ? "none" : config.qk_norm.c_str());
+            LOG_VERBOSE("mmdit: num_layers = %" PRId64 ", num_mmdit_x_layers = %" PRId64 ", hidden_size = %" PRId64 ", patch_size = %d, in_channels = %" PRId64 ", out_channels = %" PRId64 ", context_size = %" PRId64 ", adm_in_channels = %" PRId64 ", qk_norm = %s",
+                        config.depth,
+                        config.d_self + 1,
+                        config.hidden_size,
+                        config.patch_size,
+                        config.in_channels,
+                        config.out_channels,
+                        config.context_size,
+                        config.adm_in_channels,
+                        config.qk_norm.empty() ? "none" : config.qk_norm.c_str());
         }
         return config;
     }
@@ -1045,7 +1045,7 @@ struct MMDiTRunner : public DiffusionModelRunner {
             GGML_ASSERT(!out_opt.empty());
             out = std::move(out_opt);
             print_sd_tensor(out);
-            LOG_DEBUG("mmdit test done in %lldms", t1 - t0);
+            LOG_VERBOSE("mmdit test done in %lldms", t1 - t0);
         }
     }
 

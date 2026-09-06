@@ -58,11 +58,11 @@ namespace Ideogram4 {
             }
             if (detected_layers > 0) {
                 config.num_layers = detected_layers;
-                LOG_DEBUG("ideogram4: num_layers = %" PRId64 ", emb_dim = %" PRId64 ", num_heads = %" PRId64 ", intermediate_size = %" PRId64,
-                          config.num_layers,
-                          config.emb_dim,
-                          config.num_heads,
-                          config.intermediate_size);
+                LOG_VERBOSE("ideogram4: num_layers = %" PRId64 ", emb_dim = %" PRId64 ", num_heads = %" PRId64 ", intermediate_size = %" PRId64,
+                            config.num_layers,
+                            config.emb_dim,
+                            config.num_heads,
+                            config.intermediate_size);
             }
             return config;
         }
@@ -465,7 +465,7 @@ namespace Ideogram4 {
                 }
             }
             if (has_uncond_model) {
-                LOG_DEBUG("using uncond model");
+                LOG_VERBOSE("using uncond model");
                 uncond_model = Ideogram4Transformer(config);
                 uncond_model.init(params_ctx, tensor_storage_map, uncond_prefix);
             }

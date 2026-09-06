@@ -864,7 +864,7 @@ struct AutoEncoderKL : public VAE {
             GGML_ASSERT(!out_opt.empty());
             out = std::move(out_opt);
             print_sd_tensor(out);
-            LOG_DEBUG("encode test done in %lldms", t1 - t0);
+            LOG_VERBOSE("encode test done in %lldms", t1 - t0);
         }
 
         if (false) {
@@ -884,7 +884,7 @@ struct AutoEncoderKL : public VAE {
             GGML_ASSERT(!out_opt.empty());
             out = std::move(out_opt);
             print_sd_tensor(out);
-            LOG_DEBUG("decode test done in %lldms", t1 - t0);
+            LOG_VERBOSE("decode test done in %lldms", t1 - t0);
         }
     };
 };

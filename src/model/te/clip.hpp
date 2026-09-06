@@ -100,13 +100,13 @@ public:
                          const std::string& graph_cut_prefix = "") {
         // x: [N, n_token, d_model]
         int layer_idx = n_layer - 1;
-        // LOG_DEBUG("clip_skip %d", clip_skip);
+        // LOG_VERBOSE("clip_skip %d", clip_skip);
         if (clip_skip > 0) {
             layer_idx = n_layer - clip_skip;
         }
 
         for (int i = 0; i < n_layer; i++) {
-            // LOG_DEBUG("layer %d", i);
+            // LOG_VERBOSE("layer %d", i);
             if (i == layer_idx + 1) {
                 break;
             }
@@ -116,7 +116,7 @@ public:
             if (!graph_cut_prefix.empty()) {
                 sd::ggml_graph_cut::mark_graph_cut(x, graph_cut_prefix + ".layers." + std::to_string(i), "x");
             }
-            // LOG_DEBUG("layer %d", i);
+            // LOG_VERBOSE("layer %d", i);
         }
         return x;
     }
@@ -320,7 +320,7 @@ public:
             if (text_projection != nullptr) {
                 pooled = ggml_ext_linear(ctx->ggml_ctx, pooled, text_projection, nullptr);
             } else {
-                LOG_DEBUG("identity projection");
+                LOG_VERBOSE("identity projection");
             }
             return pooled;  // [hidden_size, 1, 1]
         }

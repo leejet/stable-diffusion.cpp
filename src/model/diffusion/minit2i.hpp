@@ -108,15 +108,15 @@ namespace MiniT2I {
                 config.head_dim  = config.hidden_size == 1248 ? 52 : 64;
                 config.num_heads = config.hidden_size / config.head_dim;
             }
-            LOG_DEBUG("minit2i: hidden_size=%" PRId64 ", txt_hidden_size=%" PRId64 ", heads=%" PRId64 ", head_dim=%" PRId64 ", double_blocks=%" PRId64 ", txt_blocks=%" PRId64 ", patch=%" PRId64 ", in_channels=%" PRId64,
-                      config.hidden_size,
-                      config.txt_hidden_size,
-                      config.num_heads,
-                      config.head_dim,
-                      config.depth_double,
-                      config.txt_preamble_depth,
-                      config.patch_size,
-                      config.in_channels);
+            LOG_VERBOSE("minit2i: hidden_size=%" PRId64 ", txt_hidden_size=%" PRId64 ", heads=%" PRId64 ", head_dim=%" PRId64 ", double_blocks=%" PRId64 ", txt_blocks=%" PRId64 ", patch=%" PRId64 ", in_channels=%" PRId64,
+                        config.hidden_size,
+                        config.txt_hidden_size,
+                        config.num_heads,
+                        config.head_dim,
+                        config.depth_double,
+                        config.txt_preamble_depth,
+                        config.patch_size,
+                        config.in_channels);
             return config;
         }
     };

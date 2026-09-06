@@ -120,7 +120,7 @@ struct LoraModel : public GGMLRunner {
             return false;
         }
 
-        LOG_DEBUG("finished loaded lora");
+        LOG_VERBOSE("finished loaded lora");
         return true;
     }
 
@@ -242,7 +242,7 @@ struct LoraModel : public GGMLRunner {
                 if (iter != lora_tensors.end()) {
                     float alpha = ggml_ext_backend_tensor_get_f32(iter->second);
                     scale_value = alpha / rank;
-                    // LOG_DEBUG("rank %s %ld %.2f %.2f", alpha_name.c_str(), rank, alpha, scale_value);
+                    // LOG_VERBOSE("rank %s %ld %.2f %.2f", alpha_name.c_str(), rank, alpha, scale_value);
                     applied_lora_tensors.insert(alpha_name);
                 }
             }
@@ -798,7 +798,7 @@ struct LoraModel : public GGMLRunner {
                     float alpha       = ggml_ext_backend_tensor_get_f32(iter->second);
                     scale_value       = alpha / rank;
                     scale_tensor_name = alpha_name;
-                    // LOG_DEBUG("rank %s %ld %.2f %.2f", alpha_name.c_str(), rank, alpha, scale_value);
+                    // LOG_VERBOSE("rank %s %ld %.2f %.2f", alpha_name.c_str(), rank, alpha, scale_value);
                 }
             }
             scale_value *= multiplier;

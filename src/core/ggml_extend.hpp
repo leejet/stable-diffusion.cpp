@@ -63,7 +63,7 @@ __STATIC_INLINE__ int align_up(int n, int multiple) {
 __STATIC_INLINE__ void ggml_log_callback_default(ggml_log_level level, const char* text, void*) {
     switch (level) {
         case GGML_LOG_LEVEL_DEBUG:
-            LOG_DEBUG(text);
+            LOG_VERBOSE(text);
             break;
         case GGML_LOG_LEVEL_INFO:
             LOG_INFO(text);
@@ -75,7 +75,7 @@ __STATIC_INLINE__ void ggml_log_callback_default(ggml_log_level level, const cha
             LOG_ERROR(text);
             break;
         default:
-            LOG_DEBUG(text);
+            LOG_VERBOSE(text);
     }
 }
 
@@ -346,7 +346,7 @@ __STATIC_INLINE__ ggml_tensor* load_tensor_from_file(ggml_context* ctx, const st
     file.read(reinterpret_cast<char*>(&length), sizeof(length));
     file.read(reinterpret_cast<char*>(&ttype), sizeof(ttype));
 
-    LOG_DEBUG("load_tensor_from_file %d %d %d", n_dims, length, ttype);
+    LOG_VERBOSE("load_tensor_from_file %d %d %d", n_dims, length, ttype);
 
     if (file.eof()) {
         LOG_ERROR("incomplete file '%s'", file_path.c_str());
@@ -884,9 +884,9 @@ __STATIC_INLINE__ sd::Tensor<float> process_tiles_2d(const sd::Tensor<float>& in
     bool last_x     = false;
     float last_time = 0.0f;
     if (!silent) {
-        LOG_DEBUG("num tiles : %d, %d ", num_tiles_x, num_tiles_y);
-        LOG_DEBUG("optimal overlap : %f, %f (targeting %f)", tile_overlap_factor_x, tile_overlap_factor_y, tile_overlap_factor);
-        LOG_DEBUG("processing %i tiles", num_tiles);
+        LOG_VERBOSE("num tiles : %d, %d ", num_tiles_x, num_tiles_y);
+        LOG_VERBOSE("optimal overlap : %f, %f (targeting %f)", tile_overlap_factor_x, tile_overlap_factor_y, tile_overlap_factor);
+        LOG_VERBOSE("processing %i tiles", num_tiles);
         pretty_progress(0, num_tiles, 0.0f);
     }
     for (int y = 0; y < small_height && !last_y; y += non_tile_overlap_y) {
@@ -1436,7 +1436,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
     };
 
     if (flash_attn) {
-        // LOG_DEBUG("attention_ext L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
+        // LOG_VERBOSE("attention_ext L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
         bool can_use_flash_attn = true;
         if (mask != nullptr) {
             // TODO: figure out if we can bend t5 to work too
@@ -1462,7 +1462,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
 
     if (kqv == nullptr) {
         // if (flash_attn) {
-        //     LOG_DEBUG("fallback to default attention, L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
+        //     LOG_VERBOSE("fallback to default attention, L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
         // }
         v = ggml_ext_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));  // [N, n_kv_head, d_head, L_k]
         v = ggml_reshape_3d(ctx, v, L_k, d_head, n_kv_head * N);   // [N * n_kv_head, d_head, L_k]
@@ -2255,10 +2255,10 @@ protected:
                          graph_params.size());
                 graph_cut_layer_split_primary_notice_logged_ = true;
             } else {
-                LOG_DEBUG("%s graph-cut layer split: graph has no mark_graph_cut segments; using primary backend %s for %zu graph params",
-                          get_desc().c_str(),
-                          sd::layer_split_backend_device_display_name(runtime_backend).c_str(),
-                          graph_params.size());
+                LOG_VERBOSE("%s graph-cut layer split: graph has no mark_graph_cut segments; using primary backend %s for %zu graph params",
+                            get_desc().c_str(),
+                            sd::layer_split_backend_device_display_name(runtime_backend).c_str(),
+                            graph_params.size());
             }
             return true;
         }

@@ -1278,7 +1278,7 @@ namespace WAN {
                 }
             }
             if (is_2D) {
-                LOG_DEBUG("USING 2D VAE");
+                LOG_VERBOSE("USING 2D VAE");
             }
             ae = WanVAE(decode_only, version, is_2D);
             ae.init(params_ctx, tensor_storage_map, prefix);
@@ -1409,20 +1409,20 @@ namespace WAN {
             stateful_config.overlap                 = 0;
             auto plan                               = make_vae_temporal_tile_plan(input.shape()[2], stateful_config);
 
-            LOG_DEBUG("Wan VAE stateful temporal tiling: tile_frames=%d, total latent frames=%lld, tiles=%d",
-                      plan.tile_frames,
-                      (long long)input.shape()[2],
-                      (int)plan.tiles.size());
+            LOG_VERBOSE("Wan VAE stateful temporal tiling: tile_frames=%d, total latent frames=%lld, tiles=%d",
+                        plan.tile_frames,
+                        (long long)input.shape()[2],
+                        (int)plan.tiles.size());
 
             free_cache_ctx_and_buffer();
             ae.clear_cache();
 
             auto output = process_vae_temporal_tiles(input, plan, [&](const sd::Tensor<float>& input_tile, const VAETemporalTile& tile) {
-                LOG_DEBUG("Wan VAE temporal tile %d/%d: latent frames [%lld, %lld)",
-                          tile.index + 1,
-                          (int)plan.tiles.size(),
-                          (long long)tile.start,
-                          (long long)tile.end);
+                LOG_VERBOSE("Wan VAE temporal tile %d/%d: latent frames [%lld, %lld)",
+                            tile.index + 1,
+                            (int)plan.tiles.size(),
+                            (long long)tile.start,
+                            (long long)tile.end);
                 auto get_graph = [&]() -> ggml_cgraph* {
                     return build_temporal_tile_graph(input_tile, static_cast<int>(tile.start));
                 };
@@ -1479,7 +1479,7 @@ namespace WAN {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("decode test done in %ldms", t1 - t0);
+                LOG_VERBOSE("decode test done in %ldms", t1 - t0);
             }
         };
 

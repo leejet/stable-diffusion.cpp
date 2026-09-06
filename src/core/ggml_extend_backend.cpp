@@ -392,7 +392,7 @@ static bool backend_name_exists(const std::string& name) {
 
 static ggml_backend_t init_named_backend(const std::string& name) {
     ggml_backend_load_all_once();
-    LOG_DEBUG("Initializing backend: %s", name.c_str());
+    LOG_VERBOSE("Initializing backend: %s", name.c_str());
     if (trim_copy(name).empty()) {
         return ggml_backend_init_best();
     }
@@ -542,10 +542,10 @@ static ggml_backend_t sd_get_default_backend() {
         if (dev_count == 0) {
             LOG_ERROR("No devices found!");
         } else {
-            LOG_DEBUG("Found %zu backend devices:", dev_count);
+            LOG_VERBOSE("Found %zu backend devices:", dev_count);
             for (size_t i = 0; i < dev_count; ++i) {
                 auto dev = ggml_backend_dev_get(i);
-                LOG_DEBUG("#%zu: %s", i, ggml_backend_dev_name(dev));
+                LOG_VERBOSE("#%zu: %s", i, ggml_backend_dev_name(dev));
             }
         }
     });
@@ -587,7 +587,7 @@ static ggml_backend_t sd_get_default_backend() {
     }
 
     if (sd_backend_is_cpu(backend)) {
-        LOG_DEBUG("Using CPU backend");
+        LOG_VERBOSE("Using CPU backend");
     }
 
     return backend;

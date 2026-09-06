@@ -1126,11 +1126,11 @@ namespace LTXVAE {
                          overlap, window);
                 overlap = window - 1;
             }
-            LOG_DEBUG("Using temporal tiling: temporal_tile_frames = %d, temporal_tile_overlap = %d, total frames = %d, resulting in %d tiles",
-                      window,
-                      overlap,
-                      (int)T,
-                      (T + window - overlap - 1) / (window - overlap));
+            LOG_VERBOSE("Using temporal tiling: temporal_tile_frames = %d, temporal_tile_overlap = %d, total frames = %d, resulting in %d tiles",
+                        window,
+                        overlap,
+                        (int)T,
+                        (T + window - overlap - 1) / (window - overlap));
             ggml_tensor* out = nullptr;
             for (int i = 0; i < (int)T - overlap; i += (window - overlap)) {
                 int feat_idx = 0;
@@ -1327,21 +1327,21 @@ struct LTXVideoVAE : public VAE {
         const int64_t total_frames = input.shape()[2];
         auto plan                  = make_vae_temporal_tile_plan(total_frames, config);
 
-        LOG_DEBUG("Using streaming temporal tiling: temporal_tile_frames=%d, temporal_tile_overlap=%d, total latent frames=%lld, resulting in %d tiles",
-                  plan.tile_frames,
-                  plan.overlap,
-                  (long long)total_frames,
-                  (int)plan.tiles.size());
+        LOG_VERBOSE("Using streaming temporal tiling: temporal_tile_frames=%d, temporal_tile_overlap=%d, total latent frames=%lld, resulting in %d tiles",
+                    plan.tile_frames,
+                    plan.overlap,
+                    (long long)total_frames,
+                    (int)plan.tiles.size());
 
         free_cache_ctx_and_buffer();
 
         auto output = process_vae_temporal_tiles(input, plan, [&](const sd::Tensor<float>& z_chunk, const VAETemporalTile& tile) {
-            LOG_DEBUG("LTX VAE temporal tile %lld/%d: latent frames [%lld, %lld), overlap=%d",
-                      (long long)tile.index + 1,
-                      (int)plan.tiles.size(),
-                      (long long)tile.start,
-                      (long long)tile.end,
-                      tile.overlap);
+            LOG_VERBOSE("LTX VAE temporal tile %lld/%d: latent frames [%lld, %lld), overlap=%d",
+                        (long long)tile.index + 1,
+                        (int)plan.tiles.size(),
+                        (long long)tile.start,
+                        (long long)tile.end,
+                        tile.overlap);
 
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_temporal_tile_graph(z_chunk,
@@ -1465,7 +1465,7 @@ struct LTXVideoVAE : public VAE {
 
         GGML_ASSERT(!out.empty());
         print_sd_tensor(out, false, "ltx_vae_out");
-        LOG_DEBUG("ltx vae test done in %lldms", t1 - t0);
+        LOG_VERBOSE("ltx vae test done in %lldms", t1 - t0);
     }
 
     static void load_from_file_and_test(const std::string& model_path,

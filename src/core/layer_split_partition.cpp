@@ -251,13 +251,13 @@ namespace sd {
                          assignment.tensors_by_backend[i].size(),
                          assignment.bytes_by_backend[i] / (1024.0 * 1024.0));
             } else {
-                LOG_DEBUG("%s graph-cut layer split: %s <- segments [%zu, %zu), %zu tensors, %.1f MB",
-                          desc,
-                          layer_split_backend_device_display_name(split_backends[i]).c_str(),
-                          first_segment,
-                          last_segment,
-                          assignment.tensors_by_backend[i].size(),
-                          assignment.bytes_by_backend[i] / (1024.0 * 1024.0));
+                LOG_VERBOSE("%s graph-cut layer split: %s <- segments [%zu, %zu), %zu tensors, %.1f MB",
+                            desc,
+                            layer_split_backend_device_display_name(split_backends[i]).c_str(),
+                            first_segment,
+                            last_segment,
+                            assignment.tensors_by_backend[i].size(),
+                            assignment.bytes_by_backend[i] / (1024.0 * 1024.0));
             }
         }
     }

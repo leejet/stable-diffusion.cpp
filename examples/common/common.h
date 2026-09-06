@@ -107,6 +107,7 @@ struct ArgOptions {
     void print() const;
 };
 
+void add_log_options(ArgOptions& options, sd_log_level_t& level);
 bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& options_list);
 bool decode_base64_image(const std::string& encoded_input,
                          int target_channels,
