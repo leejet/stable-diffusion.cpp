@@ -9,6 +9,7 @@
 #include <type_traits>
 
 #include "core/tensor.hpp"
+#include "ggml-backend.h"
 #include "ggml.h"
 
 namespace sd {
