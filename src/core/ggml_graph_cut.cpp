@@ -537,10 +537,12 @@ namespace sd::ggml_graph_cut {
         return signature;
     }
 
-    bool plan_matches_graph(ggml_cgraph* gf, const Plan& plan) {
+    static bool plan_matches_graph(ggml_cgraph* gf,
+                                   const Plan& plan,
+                                   const std::vector<uint64_t>& layout) {
         GGML_ASSERT(gf != nullptr);
         if (plan.leaf_names.size() != static_cast<size_t>(gf->n_leafs) ||
-            plan.layout != graph_layout(gf, false)) {
+            plan.layout != layout) {
             return false;
         }
         for (int i = 0; i < gf->n_leafs; ++i) {
@@ -556,6 +558,11 @@ namespace sd::ggml_graph_cut {
             }
         }
         return cut_markers == plan.cut_markers;
+    }
+
+    bool plan_matches_graph(ggml_cgraph* gf, const Plan& plan) {
+        GGML_ASSERT(gf != nullptr);
+        return plan_matches_graph(gf, plan, graph_layout(gf, false));
     }
 
     ggml_tensor* output_tensor(ggml_cgraph* gf, const Segment& segment, size_t output_index) {
@@ -938,20 +945,26 @@ namespace sd::ggml_graph_cut {
         GGML_ASSERT(gf != nullptr);
         GGML_ASSERT(cache != nullptr);
 
-        if (cache->graph_cut_plan.available &&
-            plan_matches_graph(gf, cache->graph_cut_plan)) {
-            return cache->graph_cut_plan;
+        const auto layout = graph_layout(gf, false);
+        auto& plans       = cache->graph_cut_plans;
+        for (auto it = plans.begin(); it != plans.end(); ++it) {
+            if (it->available && plan_matches_graph(gf, *it, layout)) {
+                plans.splice(plans.begin(), plans, it);
+                return plans.front();
+            }
         }
 
-        int64_t t_plan_begin  = ggml_time_ms();
-        Plan plan             = build_plan(backend, gf, params_tensor_set, log_desc);
-        cache->graph_cut_plan = plan;
+        int64_t t_plan_begin = ggml_time_ms();
+        plans.push_front(build_plan(backend, gf, params_tensor_set, log_desc));
+        if (plans.size() > PlanCache::MAX_PLANS) {
+            plans.pop_back();
+        }
         if (log_desc != nullptr) {
             LOG_INFO("%s build cached graph cut plan done (taking %lld ms)",
                      log_desc,
                      ggml_time_ms() - t_plan_begin);
         }
-        return plan;
+        return plans.front();
     }
 
 }  // namespace sd::ggml_graph_cut

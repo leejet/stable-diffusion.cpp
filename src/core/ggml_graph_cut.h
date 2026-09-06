@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include <list>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -48,7 +49,8 @@ namespace sd::ggml_graph_cut {
     };
 
     struct PlanCache {
-        Plan graph_cut_plan;
+        static constexpr size_t MAX_PLANS = 4;
+        std::list<Plan> graph_cut_plans;
     };
 
     static constexpr const char* GGML_RUNNER_CUT_PREFIX = "ggml_runner_cut:";
