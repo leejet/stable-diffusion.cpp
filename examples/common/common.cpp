@@ -549,12 +549,6 @@ ArgOptions SDContextParams::get_options() {
          "load all params into the params backend at model-load time instead of lazily on first use (defaults to false)",
          true, &eager_load},
         {"",
-         "--auto-fit",
-         "pick the diffusion/te/vae device placements automatically from the model size and the per-device "
-         "memory budgets (--max-vram; defaults to free memory minus a small margin). Overrides --backend and "
-         "--params-backend; may split modules across GPUs (--split-mode still selects layer or row)",
-         true, &auto_fit},
-        {"",
          "--force-sdxl-vae-conv-scale",
          "force use of conv scale on sdxl vae",
          true, &force_sdxl_vae_conv_scale},
@@ -594,6 +588,23 @@ ArgOptions SDContextParams::get_options() {
          "--vae-conv-direct",
          "use ggml_conv2d_direct in the vae model",
          true, &vae_conv_direct},
+    };
+
+    auto on_auto_fit_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            LOG_ERROR("--auto-fit requires 'on' or 'off'");
+            return -1;
+        }
+        const std::string arg = argv[index];
+        if (arg == "on") {
+            auto_fit = true;
+        } else if (arg == "off") {
+            auto_fit = false;
+        } else {
+            LOG_ERROR("invalid --auto-fit value '%s'; expected 'on' or 'off'", argv[index]);
+            return -1;
+        }
+        return 1;
     };
 
     auto on_type_arg = [&](int argc, const char** argv, int index) {
@@ -667,6 +678,12 @@ ArgOptions SDContextParams::get_options() {
     };
 
     options.manual_options = {
+        {"",
+         "--auto-fit",
+         "on|off (default: on). Use one GPU for diffusion/te/vae computation and place weights on that GPU, "
+         "RAM, another GPU, or disk in that order, according to available memory (--max-vram limits GPU budgets). "
+         "Disabled by explicit --backend or --params-backend; uses automatic graph segmentation when needed",
+         on_auto_fit_arg},
         {"",
          "--type",
          "weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K). "

@@ -158,7 +158,7 @@ struct SDContextParams {
     std::string params_backend;
     std::string split_mode;
     std::string model_args;
-    bool auto_fit = false;
+    bool auto_fit = true;
     std::string rpc_servers;
     std::string effective_backend;
     std::string effective_params_backend;

@@ -874,7 +874,7 @@ public:
         backend_spec              = SAFE_STR(sd_ctx_params->backend);
         params_backend_spec       = SAFE_STR(sd_ctx_params->params_backend);
         split_mode_spec           = SAFE_STR(sd_ctx_params->split_mode);
-        auto_fit_enabled          = sd_ctx_params->auto_fit;
+        auto_fit_enabled          = sd_ctx_params->auto_fit && backend_spec.empty() && params_backend_spec.empty();
         max_vram_assignment.reset(0.f);
         {
             std::string error;
@@ -3578,7 +3578,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->backend                   = nullptr;
     sd_ctx_params->params_backend            = nullptr;
     sd_ctx_params->split_mode                = nullptr;
-    sd_ctx_params->auto_fit                  = false;
+    sd_ctx_params->auto_fit                  = true;
     sd_ctx_params->rpc_servers               = nullptr;
     sd_ctx_params->model_args                = nullptr;
     sd_ctx_params->pulid_weights_path        = nullptr;
