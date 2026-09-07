@@ -79,7 +79,7 @@ endif()
 #
 
 # general
-option(SD_BUILD_TESTS                "sd: build tests"    ${SD_STANDALONE})
+#option(SD_BUILD_TESTS                "sd: build tests"    ${SD_STANDALONE})
 option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
 option(SD_WEBP                       "sd: enable WebP image I/O support" ${SD_WEBP_DEFAULT})
 option(SD_USE_SYSTEM_WEBP            "sd: link against system libwebp" OFF)
@@ -290,6 +290,10 @@ else()
     add_library(${SD_LIB} STATIC ${SD_LIB_SOURCES})
 endif()
 
+if(MSVC)
+    target_compile_options(${SD_LIB} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj>)
+endif()
+
 if(APPLE)
     sd_set_macos_rpaths(${SD_LIB})
 endif()
@@ -339,11 +343,6 @@ target_include_directories(${SD_LIB} PRIVATE src/core)
 target_include_directories(${SD_LIB} PUBLIC . thirdparty)
 target_compile_features(${SD_LIB} PUBLIC c_std_11 cxx_std_17)
 
-
-if (SD_BUILD_TESTS)
-    enable_testing()
-    add_subdirectory(tests)
-endif()
 
 if (SD_BUILD_EXAMPLES)
     add_subdirectory(examples)

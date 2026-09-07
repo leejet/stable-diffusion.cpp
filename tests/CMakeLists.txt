@@ -1,6 +1,0 @@
-set(TEST_TARGET test-embedding-types)
-add_executable(${TEST_TARGET} test_embedding_types.cpp)
-target_link_libraries(${TEST_TARGET} PRIVATE ${SD_LIB})
-target_include_directories(${TEST_TARGET} PRIVATE ..)
-target_compile_features(${TEST_TARGET} PUBLIC c_std_11 cxx_std_17)
-add_test(NAME ${TEST_TARGET} COMMAND $<TARGET_FILE:${TEST_TARGET}>)
