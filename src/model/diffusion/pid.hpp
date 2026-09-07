@@ -1,13 +1,18 @@
 #ifndef __SD_MODEL_DIFFUSION_PID_HPP__
 #define __SD_MODEL_DIFFUSION_PID_HPP__
 
+#include <cinttypes>
 #include <cmath>
 #include <cstdlib>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_runner.h"
+#include "core/ggml_tensor_utils.h"
+#include "core/util.h"
+#include "model/common/ggml_block.hpp"
 #include "model/common/rope.hpp"
 #include "model/diffusion/dit.hpp"
 #include "model/diffusion/mmdit.hpp"
@@ -938,7 +943,7 @@ namespace Pid {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(x, timesteps, context, lq_latent, degrade_sigma);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,

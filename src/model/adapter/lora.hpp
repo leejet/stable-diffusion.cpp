@@ -2,7 +2,13 @@
 #define __SD_MODEL_ADAPTER_LORA_HPP__
 
 #include <mutex>
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
+#include "core/ggml_tensor_utils.h"
+#include "core/util.h"
+#include "model.h"
+#include "model/adapter/lora_ops.h"
 #include "model_loader.h"
 #include "model_manager.h"
 
@@ -957,7 +963,7 @@ struct LoraModel : public GGMLRunner {
             }
             return true;
         };
-        auto result = GGMLRunner::compute<float>(get_graph, n_threads, false, true, read_outputs);
+        auto result = GGMLRunner::compute(get_graph, n_threads, false, true, read_outputs);
         if (!result.has_value()) {
             LOG_ERROR("LoRA graph execution failed");
         }

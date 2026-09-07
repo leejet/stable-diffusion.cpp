@@ -10,7 +10,12 @@
 #include <string>
 #include <unordered_map>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
+#include "core/ggml_tensor_utils.h"
+#include "core/util.h"
+#include "model/common/ggml_block.hpp"
 #include "model_loader.h"
 #include "model_manager.h"
 #include "tokenizers/t5_unigram_tokenizer.h"
@@ -455,7 +460,7 @@ struct T5Runner : public GGMLRunner {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(input_ids, attention_mask);
         };
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end), 3);
+        return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, auto_runner_end), 3);
     }
 
     static std::vector<int> _relative_position_bucket(const std::vector<int>& relative_position,

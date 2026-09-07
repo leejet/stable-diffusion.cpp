@@ -1,8 +1,11 @@
 #ifndef __SD_MODEL_DIFFUSION_FLUX_HPP__
 #define __SD_MODEL_DIFFUSION_FLUX_HPP__
 
+#include <cinttypes>
 #include <memory>
 #include <vector>
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_tensor_utils.h"
 
 #include "core/util.h"
 #include "model/adapter/pulid.hpp"
@@ -1626,7 +1629,7 @@ namespace Flux {
                 return build_graph(x, timesteps, context, c_concat, y, guidance, ref_latents, ref_index_mode, skip_layers, pulid_id, pulid_id_weight);
             };
 
-            auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+            auto result = restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
             return result;
         }
 

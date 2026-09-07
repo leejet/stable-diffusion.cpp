@@ -2,14 +2,18 @@
 #define __SD_MODEL_DIFFUSION_IDEOGRAM4_HPP__
 
 #include <algorithm>
+#include <cinttypes>
 #include <cmath>
 #include <cstdlib>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
 #include "core/ggml_graph_cut.h"
+#include "core/ggml_runner.h"
+#include "core/util.h"
+#include "model/common/ggml_block.hpp"
 #include "model/common/rope.hpp"
 #include "model/diffusion/model.hpp"
 
@@ -537,7 +541,7 @@ namespace Ideogram4 {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(x, timesteps, context, use_uncond_model);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <vector>
+#include "core/ggml_tensor_utils.h"
 
 #include "model.h"
 #include "model/common/block.hpp"
@@ -835,7 +836,7 @@ struct UNetModelRunner : public DiffusionModelRunner {
             return build_graph(x, timesteps, context, c_concat, y, num_video_frames, controls, control_strength, ip_context, ip_scale);
         };
 
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+        return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
     }
 
     sd::Tensor<float> compute(int n_threads,

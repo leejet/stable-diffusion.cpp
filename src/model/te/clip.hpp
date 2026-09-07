@@ -1,8 +1,11 @@
 #ifndef __SD_MODEL_TE_CLIP_HPP__
 #define __SD_MODEL_TE_CLIP_HPP__
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_runner.h"
+#include "core/util.h"
 #include "model.h"
+#include "model/common/ggml_block.hpp"
 #include "tokenizers/clip_tokenizer.h"
 
 /*================================================ FrozenCLIPEmbedder ================================================*/
@@ -572,7 +575,7 @@ struct CLIPTextModelRunner : public GGMLRunner {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(input_ids, num_custom_embeddings, custom_embeddings_data, max_token_idx, return_pooled, clip_skip);
         };
-        auto result = GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end);
+        auto result = GGMLRunner::compute(get_graph, n_threads, auto_runner_end);
         if (return_pooled) {
             return take_or_empty(std::move(result));
         }

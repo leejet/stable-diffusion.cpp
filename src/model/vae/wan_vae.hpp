@@ -4,6 +4,8 @@
 #include <map>
 #include <memory>
 #include <utility>
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_tensor_utils.h"
 
 #include "model/common/block.hpp"
 #include "model/vae/vae.hpp"
@@ -1427,7 +1429,7 @@ namespace WAN {
                     return build_temporal_tile_graph(input_tile, static_cast<int>(tile.start));
                 };
                 return restore_trailing_singleton_dims(
-                    GGMLRunner::compute<float>(get_graph, n_threads, false),
+                    GGMLRunner::compute(get_graph, n_threads, false),
                     static_cast<size_t>(input.dim()));
             });
 
@@ -1446,7 +1448,7 @@ namespace WAN {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(input.empty() ? z : input, decode_graph);
             };
-            auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false),
+            auto result = restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false),
                                                           input.empty() ? z.dim() : input.dim());
             if (!result.empty() && z.dim() == 4) {
                 result.squeeze_(2);

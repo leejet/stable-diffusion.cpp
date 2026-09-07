@@ -1,9 +1,11 @@
 #ifndef __SD_MODEL_COMMON_BLOCK_HPP__
 #define __SD_MODEL_COMMON_BLOCK_HPP__
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_runner.h"
 #include "core/util.h"
 #include "ggml-backend.h"
+#include "model/common/ggml_block.hpp"
 
 class DownSampleBlock : public GGMLBlock {
 protected:

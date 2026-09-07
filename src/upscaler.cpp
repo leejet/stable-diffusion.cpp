@@ -1,7 +1,8 @@
 #include "upscaler.h"
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend_backend.h"
 #include "core/util.h"
 #include "model_loader.h"
+#include "runtime/tiling.h"
 #include "stable-diffusion.h"
 
 #include <cstdlib>
@@ -34,7 +35,7 @@ void UpscalerGGML::set_max_graph_vram_bytes(size_t max_vram_bytes) {
 
 bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
                                   int n_threads) {
-    ggml_log_set(ggml_log_callback_default, nullptr);
+    ggml_log_set(sd_ggml_log_callback, nullptr);
 
     std::string error;
     if (!backend_manager.init(backend_spec.c_str(),

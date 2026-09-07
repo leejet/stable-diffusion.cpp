@@ -1,11 +1,13 @@
 #ifndef __SD_CONDITIONING_CONDITIONER_HPP__
 #define __SD_CONDITIONING_CONDITIONER_HPP__
 
+#include <cinttypes>
 #include <cmath>
 #include <iomanip>
 #include <limits>
 #include <optional>
 #include <sstream>
+#include "core/ggml_tensor_utils.h"
 
 #include "core/tensor_ggml.hpp"
 #include "core/util.h"
@@ -594,7 +596,7 @@ struct FrozenCLIPVisionEmbedder : public GGMLRunner {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(pixel_values, return_pooled, clip_skip);
         };
-        return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, true));
+        return take_or_empty(GGMLRunner::compute(get_graph, n_threads, true));
     }
 };
 
@@ -2876,7 +2878,7 @@ struct LTXAVTextProjectionRunner : public GGMLRunner {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(x);
         };
-        return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end));
+        return take_or_empty(GGMLRunner::compute(get_graph, n_threads, auto_runner_end));
     }
 };
 

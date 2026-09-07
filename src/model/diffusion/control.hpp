@@ -435,7 +435,7 @@ struct ControlNet : public GGMLRunner {
             }
             return true;
         };
-        auto compute_result = GGMLRunner::compute<float>(get_graph, n_threads, false, true, read_outputs);
+        auto compute_result = GGMLRunner::compute(get_graph, n_threads, false, true, read_outputs);
         control_outputs_ggml.clear();
         guided_hint_output_ggml = nullptr;
         if (!compute_result.has_value()) {

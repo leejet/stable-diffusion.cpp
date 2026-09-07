@@ -329,7 +329,7 @@ namespace HiDreamO1 {
             auto get_graph = [&]() {
                 return build_graph(image);
             };
-            auto output = GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end);
+            auto output = GGMLRunner::compute(get_graph, n_threads, auto_runner_end);
             return output.has_value() ? std::move(output.value()) : sd::Tensor<float>();
         }
     };
@@ -457,7 +457,7 @@ namespace HiDreamO1 {
             auto get_graph = [&]() {
                 return build_graph(x, timestep, input_ids, input_pos, token_types, vinput_mask, image_embeds, ref_images);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,

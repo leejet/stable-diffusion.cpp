@@ -2,12 +2,18 @@
 #define __SD_MODEL_DIFFUSION_MMDIT_HPP__
 
 #include <algorithm>
+#include <cinttypes>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
+#include "core/ggml_tensor_utils.h"
+#include "core/util.h"
 #include "model/common/block.hpp"
+#include "model/common/ggml_block.hpp"
 #include "model/diffusion/model.hpp"
 #include "model_loader.h"
 
@@ -987,7 +993,7 @@ struct MMDiTRunner : public DiffusionModelRunner {
             return build_graph(x, timesteps, context, y, skip_layers);
         };
 
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+        return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
     }
 
     sd::Tensor<float> compute(int n_threads,

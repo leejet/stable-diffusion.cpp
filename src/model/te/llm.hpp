@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cinttypes>
 #include <cmath>
 #include <fstream>
 #include <functional>
@@ -18,8 +19,13 @@
 #include <utility>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
+#include "core/ggml_tensor_utils.h"
+#include "core/util.h"
 #include "json.hpp"
+#include "model/common/ggml_block.hpp"
 #include "model/common/rope.hpp"
 #include "model_loader.h"
 #include "model_manager.h"
@@ -2091,7 +2097,7 @@ namespace LLM {
                                    out_layers,
                                    return_all_hidden_states);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end),
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, auto_runner_end),
                                                    input_ids.dim() + 1);
         }
 
@@ -2175,7 +2181,7 @@ namespace LLM {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_encode_image_graph(image);
             };
-            return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end));
+            return take_or_empty(GGMLRunner::compute(get_graph, n_threads, auto_runner_end));
         }
 
         ggml_cgraph* build_encode_image_outputs_graph(const sd::Tensor<float>& image_tensor) {
@@ -2287,7 +2293,7 @@ namespace LLM {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_encode_image_outputs_graph(image);
             };
-            auto combined = take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end));
+            auto combined = take_or_empty(GGMLRunner::compute(get_graph, n_threads, auto_runner_end));
             if (combined.empty()) {
                 return {};
             }
@@ -2313,7 +2319,7 @@ namespace LLM {
             auto get_graph    = [&]() -> ggml_cgraph* {
                 return build_encode_video_block_outputs_graph(pixel_values, grid_h, grid_w);
             };
-            auto combined = take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end));
+            auto combined = take_or_empty(GGMLRunner::compute(get_graph, n_threads, auto_runner_end));
             if (combined.empty()) {
                 return {};
             }

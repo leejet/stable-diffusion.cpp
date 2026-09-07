@@ -5,6 +5,7 @@
 #include "model/common/block.hpp"
 #include "model/vae/vae_tiling.hpp"
 #include "model_manager.h"
+#include "runtime/tiling.h"
 
 struct VAE : public GGMLRunner {
 protected:

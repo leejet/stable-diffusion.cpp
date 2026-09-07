@@ -8,6 +8,8 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_tensor_utils.h"
 
 #include "model/diffusion/ltxv.hpp"
 #include "model/vae/vae.hpp"
@@ -1348,7 +1350,7 @@ struct LTXVideoVAE : public VAE {
                                                  static_cast<int>(tile.start),
                                                  tile.overlap);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false),
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false),
                                                    expected_dim);
         });
 
@@ -1405,7 +1407,7 @@ struct LTXVideoVAE : public VAE {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(input, decode_graph);
         };
-        auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), expected_dim);
+        auto result = restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), expected_dim);
         if (result.empty()) {
             return {};
         }
@@ -1418,7 +1420,7 @@ struct LTXVideoVAE : public VAE {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_latent_statistics_graph(z, normalize);
         };
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false),
+        return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false),
                                                static_cast<size_t>(z.dim()));
     }
 

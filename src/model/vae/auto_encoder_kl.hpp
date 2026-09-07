@@ -1,6 +1,8 @@
 #ifndef __SD_MODEL_VAE_AUTO_ENCODER_KL_HPP__
 #define __SD_MODEL_VAE_AUTO_ENCODER_KL_HPP__
 
+#include <cinttypes>
+#include "core/ggml_tensor_utils.h"
 #include "model/vae/vae.hpp"
 
 /*================================================== AutoEncoderKL ===================================================*/
@@ -744,7 +746,7 @@ struct AutoEncoderKL : public VAE {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(z, decode_graph);
         };
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), z.dim());
+        return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), z.dim());
     }
 
     sd::Tensor<float> gaussian_latent_sample(const sd::Tensor<float>& moments, std::shared_ptr<RNG> rng) {

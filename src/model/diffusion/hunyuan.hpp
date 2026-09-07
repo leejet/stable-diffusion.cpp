@@ -1,6 +1,7 @@
 #ifndef __SD_MODEL_DIFFUSION_HUNYUAN_HPP__
 #define __SD_MODEL_DIFFUSION_HUNYUAN_HPP__
 
+#include <cinttypes>
 #include <memory>
 
 #include "model/common/block.hpp"
@@ -654,7 +655,7 @@ namespace Hunyuan {
                 return build_graph(x, timesteps, context, c_concat, y, guidance, byt5, vision, timestep_r);
             };
 
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,

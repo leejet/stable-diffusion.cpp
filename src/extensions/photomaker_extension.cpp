@@ -1,3 +1,4 @@
+#include <cinttypes>
 #include "extensions/generation_extension.h"
 
 #include <algorithm>

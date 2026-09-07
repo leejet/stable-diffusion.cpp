@@ -2,6 +2,8 @@
 #define __SD_MODEL_DIFFUSION_QWEN_IMAGE_HPP__
 
 #include <memory>
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_tensor_utils.h"
 
 #include "core/util.h"
 #include "model/common/block.hpp"
@@ -707,7 +709,7 @@ namespace Qwen {
                 return build_graph(x, timesteps, context, ref_latents, ref_index_mode);
             };
 
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,

@@ -1,6 +1,7 @@
 #ifndef __SD_MODEL_DIFFUSION_SEFI_IMAGE_HPP__
 #define __SD_MODEL_DIFFUSION_SEFI_IMAGE_HPP__
 
+#include <cinttypes>
 #include <memory>
 
 #include "model/common/block.hpp"

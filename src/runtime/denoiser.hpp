@@ -11,8 +11,10 @@
 #include <string>
 #include <utility>
 
-#include "core/ggml_extend.hpp"
+#include "core/rng.hpp"
 #include "core/tensor.hpp"
+#include "core/util.h"
+#include "model.h"
 #include "runtime/gits_noise.h"
 #include "runtime/guidance.h"
 

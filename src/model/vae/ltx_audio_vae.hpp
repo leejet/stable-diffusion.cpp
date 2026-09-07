@@ -7,7 +7,12 @@
 #include <string>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
+#include "core/ggml_tensor_utils.h"
+#include "core/util.h"
+#include "model/common/ggml_block.hpp"
 #include "model/vae/audio_vae.hpp"
 #include "model_loader.h"
 #include "model_manager.h"
@@ -1042,7 +1047,7 @@ namespace LTXV {
                 ggml_build_forward_expand(gf, waveform);
                 return gf;
             };
-            auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), 4);
+            auto result = restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), 4);
             int64_t t1  = ggml_time_ms();
             LOG_INFO("ltx audio vae decode completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
             return result;

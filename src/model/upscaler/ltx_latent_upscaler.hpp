@@ -11,9 +11,11 @@
 #include <utility>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
 #include "core/ggml_graph_cut.h"
+#include "core/ggml_runner.h"
 #include "core/util.h"
+#include "model/common/ggml_block.hpp"
 #include "model/diffusion/dit.hpp"
 #include "model_loader.h"
 
@@ -499,7 +501,7 @@ namespace LTXVUpsampler {
             }
             size_t expected_dim = static_cast<size_t>(x.dim());
             auto get_graph      = [&]() -> ggml_cgraph* { return build_graph(x); };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), expected_dim);
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), expected_dim);
         }
     };
 
