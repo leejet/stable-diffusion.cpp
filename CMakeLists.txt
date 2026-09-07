@@ -290,6 +290,10 @@ else()
     add_library(${SD_LIB} STATIC ${SD_LIB_SOURCES})
 endif()
 
+if(MSVC)
+    target_compile_options(${SD_LIB} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj>)
+endif()
+
 if(APPLE)
     sd_set_macos_rpaths(${SD_LIB})
 endif()

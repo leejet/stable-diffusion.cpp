@@ -15,6 +15,7 @@
 #include <thread>
 #include <unordered_set>
 #include <vector>
+#include "core/ggml_tensor_utils.h"
 #include "runtime/preprocessing.hpp"
 
 #if defined(__APPLE__) && defined(__MACH__)
@@ -616,6 +617,25 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
     }
 
     va_end(args);
+}
+
+void sd_ggml_log_callback(ggml_log_level level, const char* text, void*) {
+    switch (level) {
+        case GGML_LOG_LEVEL_DEBUG:
+            LOG_VERBOSE(text);
+            break;
+        case GGML_LOG_LEVEL_INFO:
+            LOG_INFO(text);
+            break;
+        case GGML_LOG_LEVEL_WARN:
+            LOG_WARN(text);
+            break;
+        case GGML_LOG_LEVEL_ERROR:
+            LOG_ERROR(text);
+            break;
+        default:
+            LOG_VERBOSE(text);
+    }
 }
 
 void sd_set_log_callback(sd_log_cb_t cb, void* data) {

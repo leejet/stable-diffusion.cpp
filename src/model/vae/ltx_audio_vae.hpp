@@ -7,7 +7,12 @@
 #include <string>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
+#include "core/ggml_tensor_utils.h"
+#include "core/util.h"
+#include "model/common/ggml_block.hpp"
 #include "model/vae/audio_vae.hpp"
 #include "model_loader.h"
 #include "model_manager.h"
@@ -172,12 +177,12 @@ namespace LTXV {
             if (config.audio_channels != 2 || config.latent_channels != 8 || config.mel_bins != 64) {
                 return config;
             }
-            LOG_DEBUG("ltx_audio_vae: sample_rate = %d, mel_bins = %d, latent_channels = %d, latent_frequency_bins = %d, has_bwe = %s",
-                      config.sample_rate,
-                      config.mel_bins,
-                      config.latent_channels,
-                      config.latent_frequency_bins,
-                      config.has_bwe ? "true" : "false");
+            LOG_VERBOSE("ltx_audio_vae: sample_rate = %d, mel_bins = %d, latent_channels = %d, latent_frequency_bins = %d, has_bwe = %s",
+                        config.sample_rate,
+                        config.mel_bins,
+                        config.latent_channels,
+                        config.latent_frequency_bins,
+                        config.has_bwe ? "true" : "false");
             return config;
         }
     };
@@ -1042,7 +1047,7 @@ namespace LTXV {
                 ggml_build_forward_expand(gf, waveform);
                 return gf;
             };
-            auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), 4);
+            auto result = restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), 4);
             int64_t t1  = ggml_time_ms();
             LOG_INFO("ltx audio vae decode completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
             return result;
@@ -1063,7 +1068,7 @@ namespace LTXV {
 
             GGML_ASSERT(!out.empty());
             print_sd_tensor(out, false, "ltx_audio_vae_out");
-            LOG_DEBUG("ltx audio vae test done in %lldms", t1 - t0);
+            LOG_VERBOSE("ltx audio vae test done in %lldms", t1 - t0);
         }
 
         static void load_from_file_and_test(const std::string& model_path,
