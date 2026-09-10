@@ -229,6 +229,8 @@ file(GLOB SD_LIB_SOURCES CONFIGURE_DEPENDS
     "src/model/*/*.h"
     "src/model/*/*.cpp"
     "src/model/*/*.hpp"
+    "src/pipeline/*.h"
+    "src/pipeline/*.cpp"
     "src/runtime/*.h"
     "src/runtime/*.cpp"
     "src/runtime/*.hpp"
@@ -288,6 +290,10 @@ else()
         set(BUILD_SHARED_LIBS OFF)
     endif()
     add_library(${SD_LIB} STATIC ${SD_LIB_SOURCES})
+endif()
+
+if(MSVC)
+    target_compile_options(${SD_LIB} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj>)
 endif()
 
 if(APPLE)

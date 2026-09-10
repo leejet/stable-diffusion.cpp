@@ -79,7 +79,7 @@ Low-VRAM streaming (verified with a 2 GiB cap on RTX 3060):
 .\bin\Release\sd-cli.exe -M vid_gen \
     --model ..\models\checkpoints\realisticVisionV60B1.safetensors \
     --motion-module ..\models\animatediff\mm_sd15_v3.safetensors \
-    --max-vram 2.0 --stream-layers --diffusion-fa \
+    --max-vram 2.0 --diffusion-fa \
     -p "photo of coastline, rocks, storm weather, wind, waves, lightning" \
     --cfg-scale 8.0 --sampling-method euler --scheduler discrete \
     -H 384 -W 384 --video-frames 8 --fps 8 --steps 20 -s 42 \
