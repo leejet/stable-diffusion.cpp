@@ -1,5 +1,5 @@
-#ifndef __SD_MODEL_BUILDERS_H__
-#define __SD_MODEL_BUILDERS_H__
+#ifndef __SD_PIPELINE_MODEL_BUILDERS_H__
+#define __SD_PIPELINE_MODEL_BUILDERS_H__
 
 #include <memory>
 #include <vector>
@@ -60,4 +60,4 @@ namespace sd::model_builders {
 
 }  // namespace sd::model_builders
 
-#endif  // __SD_MODEL_BUILDERS_H__
+#endif  // __SD_PIPELINE_MODEL_BUILDERS_H__

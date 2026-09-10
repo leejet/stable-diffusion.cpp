@@ -229,6 +229,8 @@ file(GLOB SD_LIB_SOURCES CONFIGURE_DEPENDS
     "src/model/*/*.h"
     "src/model/*/*.cpp"
     "src/model/*/*.hpp"
+    "src/pipeline/*.h"
+    "src/pipeline/*.cpp"
     "src/runtime/*.h"
     "src/runtime/*.cpp"
     "src/runtime/*.hpp"
