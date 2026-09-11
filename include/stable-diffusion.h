@@ -148,6 +148,7 @@ enum sd_type_t {
 
 enum sd_log_level_t {
     SD_LOG_DEBUG,
+    SD_LOG_VERBOSE,
     SD_LOG_INFO,
     SD_LOG_WARN,
     SD_LOG_ERROR
@@ -230,8 +231,8 @@ typedef struct {
     bool vae_conv_direct;
     bool force_sdxl_vae_conv_scale;
     enum sd_vae_format_t vae_format;
-    const char* max_vram;  // GiB budget or backend assignment spec for graph-cut segmented param offload (0 = disabled, -1 = auto)
-    bool stream_layers;  // Enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram)
+    const char* max_vram;  // Optional per-device GiB budget for managed weights and runner buffers; 0 uses live free VRAM without an explicit budget
+    bool disable_prefetch;  // Disable asynchronous next-segment weight prefetch
     bool eager_load;  // Load all params into the params backend at model-load time instead of lazily on first use
     const char* backend;
     const char* params_backend;
@@ -239,6 +240,7 @@ typedef struct {
     bool auto_fit;
     const char* rpc_servers;
     const char* model_args;
+    bool disable_segmented_compute;  // Force monolithic graph execution even when automatic graph cutting would fit memory better
 } sd_ctx_params_t;
 
 typedef struct {
@@ -491,6 +493,9 @@ SD_API void free_sd_audio(sd_audio_t* audio);
 
 SD_API void sd_sample_params_init(sd_sample_params_t* sample_params);
 SD_API char* sd_sample_params_to_str(const sd_sample_params_t* sample_params);
+
+// Requires a loaded context; returns a static string owned by the library, or "Unknown".
+SD_API const char* sd_get_model_version_name(const sd_ctx_t* sd_ctx);
 
 SD_API enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx);
 SD_API enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_method_t sample_method);

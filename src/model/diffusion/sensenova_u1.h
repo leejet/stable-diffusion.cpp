@@ -10,7 +10,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
 #include "model/diffusion/dit.hpp"
 #include "model/diffusion/model.hpp"
 #include "model/te/llm.hpp"
@@ -719,12 +719,7 @@ namespace SenseNovaU1 {
             auto get_graph = [&]() {
                 return build_prefix_graph(input_ids, *prefix_cache);
             };
-            auto result = GGMLRunner::compute<float>(get_graph,
-                                                     n_threads,
-                                                     false,
-                                                     true,
-                                                     true,
-                                                     true);
+            auto result = GGMLRunner::compute(get_graph, n_threads, false, true);
             if (!result.has_value()) {
                 LOG_ERROR("SenseNova U1.5 prefix cache computation failed");
                 return false;
@@ -830,7 +825,7 @@ namespace SenseNovaU1 {
                 return build_graph(x, timestep, prefix_cache, input_ids.numel());
             };
             return restore_trailing_singleton_dims(
-                GGMLRunner::compute<float>(get_graph, n_threads, false, false, false),
+                GGMLRunner::compute(get_graph, n_threads, false),
                 x.dim());
         }
 
