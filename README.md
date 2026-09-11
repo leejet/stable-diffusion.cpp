@@ -148,6 +148,7 @@ For runtime and parameter backend placement, see the [backend selection guide](.
 
 ## More Guides
 
+- [Troubleshooting](./docs/troubleshooting.md)
 - [Backend selection](./docs/backend.md)
 - [RPC](./docs/rpc.md)
 - [LoRA](./docs/lora.md)

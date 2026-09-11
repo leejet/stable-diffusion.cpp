@@ -1,0 +1,4 @@
+contact_links:
+  - name: Troubleshooting
+    url: https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/troubleshooting.md
+    about: Read the troubleshooting guide first. If the problem persists, submit a bug report.
