@@ -307,7 +307,7 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                     } catch (const std::invalid_argument&) {
                         invalid_arg = true;
                     }
-                    found_arg      = true;
+                    found_arg = true;
                 }))
                 break;
 
@@ -321,7 +321,7 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                     } catch (const std::invalid_argument&) {
                         invalid_arg = true;
                     }
-                    found_arg      = true;
+                    found_arg = true;
                 }))
                 break;
 
