@@ -99,6 +99,9 @@ const char* model_version_to_str[] = {
     "ESRGAN",
 };
 
+static_assert(VERSION_COUNT == sizeof(model_version_to_str) / sizeof(model_version_to_str[0]),
+              "\nnumber of elements in model_version_to_str[] != VERSION_COUNT");
+
 void calculate_alphas_cumprod(float* alphas_cumprod,
                               float linear_start = 0.00085f,
                               float linear_end   = 0.0120f,
