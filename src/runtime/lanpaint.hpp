@@ -84,17 +84,25 @@ struct LanPaintInnerModel {
 };
 
 // Builds a LanPaintInnerModel from a runtime denoiser: derives the flow/VE
-// mode from the denoiser type and refuses the denoisers whose latent
-// scaling / time conventions are unsupported (MiniT2I: noise*2 start,
-// reversed time; SeFi: dual timesteps). Returns nullopt when refused.
+// mode from the denoiser type and refuses the denoisers whose conventions
+// the cycle cannot reproduce (MiniT2I: replace step starts from noise and
+// ignores sigma; SeFi: dual timesteps; SenseNova U1.5: noise_scaling
+// ignores the latent, so the replace step would overwrite the keep region
+// with noise; MiniMax H3 AV: audio rows follow a shifted noise schedule).
+// Returns nullopt when refused.
 inline std::optional<LanPaintInnerModel> make_lanpaint_inner_model(lanpaint_eval_t eval,
                                                                    const std::shared_ptr<Denoiser>& denoiser) {
     if (!denoiser) {
         LOG_ERROR("LanPaint requires a denoiser");
         return std::nullopt;
     }
-    if (std::dynamic_pointer_cast<MiniT2IFlowDenoiser>(denoiser) || std::dynamic_pointer_cast<SefiFlowDenoiser>(denoiser)) {
+    if (std::dynamic_pointer_cast<MiniT2IFlowDenoiser>(denoiser) || std::dynamic_pointer_cast<SefiFlowDenoiser>(denoiser) ||
+        std::dynamic_pointer_cast<SenseNovaU1FlowDenoiser>(denoiser)) {
         LOG_ERROR("LanPaint does not support this denoiser's latent scaling / time conventions");
+        return std::nullopt;
+    }
+    if (std::dynamic_pointer_cast<H3AVFlowDenoiser>(denoiser)) {
+        LOG_ERROR("LanPaint does not support models with a per-stream audio noise schedule");
         return std::nullopt;
     }
     return LanPaintInnerModel{std::move(eval),
