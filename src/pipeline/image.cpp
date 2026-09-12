@@ -889,7 +889,9 @@ namespace sd::pipeline {
                                                0,
                                                static_cast<float>(request.fps),
                                                request.cache_params,
-                                               true);
+                                               true,
+                                               sd::Tensor<float>(),
+                                               sd_img_gen_params->sample_params.lanpaint);
             int64_t sampling_end  = ggml_time_ms();
             if (!x_0.empty()) {
                 LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
@@ -1011,7 +1013,9 @@ namespace sd::pipeline {
                                                         0,
                                                         static_cast<float>(request.fps),
                                                         request.cache_params,
-                                                        false);
+                                                        false,
+                                                        sd::Tensor<float>(),
+                                                        sd_img_gen_params->sample_params.lanpaint);
                 int64_t hires_sample_end   = ggml_time_ms();
                 if (!x_0.empty()) {
                     LOG_INFO("hires sampling %d/%d completed, taking %.2fs",

@@ -443,6 +443,15 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
 
 void sd_sample_params_init(sd_sample_params_t* sample_params) {
     *sample_params                             = {};
+    sample_params->lanpaint.enabled            = false;
+    sample_params->lanpaint.n_steps            = 5;
+    sample_params->lanpaint.lambda             = 5.0f;
+    sample_params->lanpaint.beta               = 1.0f;
+    sample_params->lanpaint.step_size          = 0.2f;
+    sample_params->lanpaint.early_stop         = 1;
+    sample_params->lanpaint.min_step_frac      = 1.0f;
+    sample_params->lanpaint.prompt_first       = false;
+    sample_params->lanpaint.cfg_big            = INFINITY;
     sample_params->guidance.txt_cfg            = 7.0f;
     sample_params->guidance.img_cfg            = INFINITY;
     sample_params->guidance.distilled_guidance = 3.5f;
@@ -496,7 +505,28 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
              sample_params->eta,
              sample_params->shifted_timestep,
              sample_params->flow_shift,
-             SAFE_STR(sample_params->extra_sample_args));
+             SAFE_STR(sample_params->extra_sample_args),
+             sample_params->lanpaint.enabled ? "on" : "off");
+
+    if (sample_params->lanpaint.enabled) {
+        snprintf(buf + strlen(buf), 4096 - strlen(buf),
+                 " (lanpaint n_steps: %d, "
+                 "lambda: %.2f, "
+                 "beta: %.2f, "
+                 "step_size: %.2f, "
+                 "early_stop: %d, "
+                 "min_step_frac: %.2f, "
+                 "prompt_first: %d, "
+                 "cfg_big: %s)",
+                 sample_params->lanpaint.n_steps,
+                 sample_params->lanpaint.lambda,
+                 sample_params->lanpaint.beta,
+                 sample_params->lanpaint.step_size,
+                 sample_params->lanpaint.early_stop,
+                 sample_params->lanpaint.min_step_frac,
+                 (int)sample_params->lanpaint.prompt_first,
+                 std::isfinite(sample_params->lanpaint.cfg_big) ? "custom" : "auto");
+    }
 
     return buf;
 }

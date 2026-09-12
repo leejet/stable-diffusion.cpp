@@ -290,7 +290,23 @@ typedef struct {
     sd_slg_params_t slg;
 } sd_guidance_params_t;
 
+// LanPaint: Langevin-dynamics inpainting (ComfyUI LanPaint port).
 typedef struct {
+    bool enabled;         // --lanpaint
+    int n_steps;          // inner Langevin steps per outer step (default 5)
+    float lambda;         // keep-region score strength (default 5)
+    float beta;           // time-scale ratio of the y branch (default 1)
+    float step_size;      // Langevin step size (default 0.2)
+    int early_stop;       // drop the inner loop in the last N outer steps (default 1)
+    float min_step_frac;  // pin the step size below this noise fraction (default 1)
+    bool prompt_first;    // Prompt First mode (default false = Image First);
+                          // resolves the BIG-CFG scale to -0.5 instead of txt_cfg
+    float cfg_big;        // explicit BIG-CFG scale override (INFINITY = auto from
+                          // prompt_first / txt_cfg, matching the comfy node)
+} sd_lanpaint_params_t;
+
+typedef struct {
+    sd_lanpaint_params_t lanpaint;
     sd_guidance_params_t guidance;
     enum scheduler_t scheduler;
     enum sample_method_t sample_method;
