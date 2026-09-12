@@ -67,9 +67,12 @@ struct LanPaintEval {
 
 // The underlying network evaluation. `x` is in native latent coordinates,
 // `sigma` in native units (flow t for flow models, VE sigma otherwise) --
-// i.e. exactly the sigma the outer sampler passes at this step. Must be
-// pure (no side effects): the caller owns `x`.
-using lanpaint_eval_t = std::function<LanPaintEval(const sd::Tensor<float>& x, float sigma)>;
+// i.e. exactly the sigma the outer sampler passes at this step. `step` is
+// the outer sampler's step index (1-based, the value the sampler passes its
+// own callback), so per-step evaluation state (guidance schedules, timestep
+// preparation) behaves exactly as in the outer sampler's own callback. Must
+// be pure (no side effects): the caller owns `x`.
+using lanpaint_eval_t = std::function<LanPaintEval(const sd::Tensor<float>& x, float sigma, int step)>;
 
 // The model LanPaint paints with: the unblended network eval plus the
 // Denoiser it belongs to (noise-scaling formulas, flow/VE mode) -- comfy's
@@ -162,7 +165,7 @@ struct LanPaint {
     sd::Tensor<float> run(sd::Tensor<float>& x, float sigma, const std::vector<float>& sigmas, int outer_step) const {
         if (latent_mask_.empty()) {
             // No mask: LanPaint is a no-op -- return the plain denoised x0.
-            LanPaintEval ev = inner_model_.eval(x, sigma);
+            LanPaintEval ev = inner_model_.eval(x, sigma, outer_step + 1);
             return ev.x0.empty() ? sd::Tensor<float>() : std::move(ev.x0);
         }
 
@@ -240,7 +243,7 @@ struct LanPaint {
             } else {
                 x_native = xt * std::sqrt(1.f + ct.ve_sigma * ct.ve_sigma);
             }
-            LanPaintEval ev = inner_model_.eval(x_native, sigma);
+            LanPaintEval ev = inner_model_.eval(x_native, sigma, outer_step + 1);
             if (ev.x0.empty()) {
                 return sd::Tensor<float>();
             }
@@ -287,7 +290,7 @@ struct LanPaint {
 
         // 7. Final model eval at (x, sigma) -> out (blended).
         //    comfy: out = out*(1-m) + latent_image*m
-        LanPaintEval out_ev = inner_model_.eval(x, sigma);
+        LanPaintEval out_ev = inner_model_.eval(x, sigma, outer_step + 1);
         if (out_ev.x0.empty()) {
             return sd::Tensor<float>();
         }
@@ -298,8 +301,7 @@ struct LanPaint {
     // Wraps `run()` into the callback shape the sampler kernels call. The
     // returned function must not outlive the engine, its inner model, or the
     // referenced tensors.
-    std::function<sd::guidance::GuiderOutput(sd::Tensor<float>&, float, int)>
-    make_callback(const std::vector<float>& sigmas) const {
+    denoise_cb_t make_callback(const std::vector<float>& sigmas) const {
         return [this, sigmas](sd::Tensor<float>& x, float sigma, int step) -> sd::guidance::GuiderOutput {
             const int outer_step = std::abs(step) - 1;
             sd::guidance::GuiderOutput result;

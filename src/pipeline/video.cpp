@@ -1646,7 +1646,8 @@ namespace sd::pipeline {
                                                        static_cast<float>(request.fps),
                                                        request.cache_params,
                                                        true,
-                                                       latents.video_positions);
+                                                       latents.video_positions,
+                                                       sd_vid_gen_params->sample_params.lanpaint);
             int64_t sampling_end          = ggml_time_ms();
             if (x_t_sampled.empty()) {
                 LOG_ERROR("sampling(high noise) failed after %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
@@ -1689,7 +1690,8 @@ namespace sd::pipeline {
                                                     static_cast<float>(request.fps),
                                                     request.cache_params,
                                                     plan.high_noise_sample_steps <= 0,
-                                                    latents.video_positions);
+                                                    latents.video_positions,
+                                                    sd_vid_gen_params->sample_params.lanpaint);
 
         int64_t sampling_end = ggml_time_ms();
         if (final_latent.empty()) {
@@ -1828,7 +1830,8 @@ namespace sd::pipeline {
                                         static_cast<float>(hires_request.fps),
                                         hires_request.cache_params,
                                         false,
-                                        hires_video_positions);
+                                        hires_video_positions,
+                                        sd_vid_gen_params->sample_params.lanpaint);
             sampling_end   = ggml_time_ms();
             if (final_latent.empty()) {
                 LOG_ERROR("sampling(latent upscale) failed after %.2fs",
