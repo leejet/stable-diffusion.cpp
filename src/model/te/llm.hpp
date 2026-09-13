@@ -605,21 +605,31 @@ namespace LLM {
             }
             txt_token_end = image_embeds[i].first;
 
-            auto txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
-            if (input_embed == nullptr) {
-                input_embed = txt_embed;
-            } else {
-                input_embed = ggml_concat(ctx->ggml_ctx, input_embed, txt_embed, 1);
+            // An embed can sit flush against the previous one or at the very start/end of the
+            // sequence, leaving no text tokens to splice around it.
+            if (txt_token_end > txt_token_start) {
+                auto txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
+                if (input_embed == nullptr) {
+                    input_embed = txt_embed;
+                } else {
+                    input_embed = ggml_concat(ctx->ggml_ctx, input_embed, txt_embed, 1);
+                }
             }
 
-            input_embed = ggml_concat(ctx->ggml_ctx, input_embed, image_embeds[i].second, 1);
+            if (input_embed == nullptr) {
+                input_embed = image_embeds[i].second;
+            } else {
+                input_embed = ggml_concat(ctx->ggml_ctx, input_embed, image_embeds[i].second, 1);
+            }
         }
 
         txt_token_start = image_embeds[image_embeds.size() - 1].first + image_embeds[image_embeds.size() - 1].second->ne[1];
         txt_token_end   = raw_x->ne[1];
 
-        auto final_txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
-        input_embed          = ggml_concat(ctx->ggml_ctx, input_embed, final_txt_embed, 1);
+        if (txt_token_end > txt_token_start) {
+            auto final_txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
+            input_embed          = ggml_concat(ctx->ggml_ctx, input_embed, final_txt_embed, 1);
+        }
         GGML_ASSERT(raw_x->ne[1] == input_embed->ne[1]);
         return input_embed;
     }
