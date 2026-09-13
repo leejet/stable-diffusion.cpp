@@ -20,22 +20,22 @@ namespace WAN {
     constexpr int WAN_GRAPH_SIZE = 10240;
 
     struct WanConfig {
-        std::string model_type                 = "t2v";
-        std::tuple<int, int, int> patch_size   = {1, 2, 2};
-        int64_t text_len                       = 512;
-        int64_t in_dim                         = 16;
-        int64_t dim                            = 2048;
-        int64_t ffn_dim                        = 8192;
-        int freq_dim                           = 256;
-        int64_t text_dim                       = 4096;
-        int64_t out_dim                        = 16;
-        int64_t num_heads                      = 16;
-        int num_layers                         = 32;
-        int vace_layers                        = 0;
-        int64_t vace_in_dim                    = 96;
-        std::map<int, int> vace_layers_mapping = {};
+        std::string model_type                  = "t2v";
+        std::tuple<int, int, int> patch_size    = {1, 2, 2};
+        int64_t text_len                        = 512;
+        int64_t in_dim                          = 16;
+        int64_t dim                             = 2048;
+        int64_t ffn_dim                         = 8192;
+        int freq_dim                            = 256;
+        int64_t text_dim                        = 4096;
+        int64_t out_dim                         = 16;
+        int64_t num_heads                       = 16;
+        int num_layers                          = 32;
+        int vace_layers                         = 0;
+        int64_t vace_in_dim                     = 96;
+        std::map<int, int> vace_layers_mapping  = {};
         int64_t audio_dim                       = 1024;
-        int num_audio_token                     = 4;     // excludes the learned padding token
+        int num_audio_token                     = 4;  // excludes the learned padding token
         std::vector<int> audio_inject_layers    = {};
         std::map<int, int> audio_inject_mapping = {};  // block index -> injector index
         std::string adain_mode                  = "attn_norm";
