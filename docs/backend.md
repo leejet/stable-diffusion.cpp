@@ -154,6 +154,11 @@ GiB", and with no budget set each device's free memory minus a 512 MiB margin
 is used. These resolved GPU budgets, including the safety margin, also drive
 the runner's graph-cut capacity checks.
 
+Runtime capacity checks also leave 512 MiB of currently free device memory for
+backend scratch buffers and pipelines, including with explicit backend assignments.
+They cap stale free-memory reports by the device's total memory minus tracked
+resident allocations and reject reports that exceed the device's total memory.
+
 Components are considered in `diffusion`, `te`, `vae` order so that repeatedly
 used diffusion weights have priority. Each component's weights use the first
 storage location with enough remaining budget:
