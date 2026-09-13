@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cinttypes>
 #include <cmath>
 #include <fstream>
 #include <functional>
@@ -18,8 +19,13 @@
 #include <utility>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
+#include "core/ggml_tensor_utils.h"
+#include "core/util.h"
 #include "json.hpp"
+#include "model/common/ggml_block.hpp"
 #include "model/common/rope.hpp"
 #include "model_loader.h"
 #include "model_manager.h"
@@ -1369,7 +1375,7 @@ namespace LLM {
                 x        = ggml_ext_cont(ctx->ggml_ctx, kqv);
                 x        = ggml_reshape_3d(ctx->ggml_ctx, x, head_dim * num_heads, n_token, N);
             } else {
-                x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, attention_mask, true, false);  // [N, n_token, hidden_size]
+                x = ggml_ext_attention_ext(ctx, q, k, v, num_heads, attention_mask, true, false);  // [N, n_token, hidden_size]
             }
 
             x = out_proj->forward(ctx, x);  // [N, n_token, hidden_size]
@@ -2103,7 +2109,7 @@ namespace LLM {
                                    out_layers,
                                    return_all_hidden_states);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end),
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, auto_runner_end),
                                                    input_ids.dim() + 1);
         }
 
@@ -2187,7 +2193,7 @@ namespace LLM {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_encode_image_graph(image);
             };
-            return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end));
+            return take_or_empty(GGMLRunner::compute(get_graph, n_threads, auto_runner_end));
         }
 
         ggml_cgraph* build_encode_image_outputs_graph(const sd::Tensor<float>& image_tensor) {
@@ -2299,7 +2305,7 @@ namespace LLM {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_encode_image_outputs_graph(image);
             };
-            auto combined = take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end));
+            auto combined = take_or_empty(GGMLRunner::compute(get_graph, n_threads, auto_runner_end));
             if (combined.empty()) {
                 return {};
             }
@@ -2325,7 +2331,7 @@ namespace LLM {
             auto get_graph    = [&]() -> ggml_cgraph* {
                 return build_encode_video_block_outputs_graph(pixel_values, grid_h, grid_w);
             };
-            auto combined = take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end));
+            auto combined = take_or_empty(GGMLRunner::compute(get_graph, n_threads, auto_runner_end));
             if (combined.empty()) {
                 return {};
             }
@@ -2582,8 +2588,8 @@ namespace LLM {
             ggml_backend_t backend    = sd_backend_cpu_init();
             ggml_type model_data_type = GGML_TYPE_COUNT;
 
-            auto model_manager        = std::make_shared<ModelManager>();
-            ModelLoader& model_loader = model_manager->loader();
+            auto model_manager = std::make_shared<ModelManager>();
+            ModelLoader model_loader;
             if (!model_loader.init_from_file_and_convert_name(file_path, "text_encoders.llm.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
@@ -2607,7 +2613,8 @@ namespace LLM {
                                                                              true,
                                                                              model_manager);
 
-            if (!model_manager->register_runner_params("LLM test",
+            if (!model_manager->set_loader(model_loader) ||
+                !model_manager->register_runner_params(ModelComponent::Conditioner,
                                                        *llm,
                                                        "text_encoders.llm",
                                                        ModelManager::ResidencyMode::ParamBackend,

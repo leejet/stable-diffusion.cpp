@@ -11,6 +11,14 @@
 #include "ggml-backend.h"
 #include "stable-diffusion.h"
 
+#ifndef __STATIC_INLINE__
+#define __STATIC_INLINE__ static inline
+#endif
+
+#ifndef SD_UNUSED
+#define SD_UNUSED(x) (void)(x)
+#endif
+
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")
 
@@ -79,6 +87,7 @@ void pretty_progress(int step, int steps, float time);
 void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds);
 
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...);
+void sd_ggml_log_callback(ggml_log_level level, const char* text, void*);
 
 ggml_type sd_type_to_ggml_type(sd_type_t sdtype);
 

@@ -1,6 +1,7 @@
 #ifndef __SD_MODEL_DIFFUSION_HUNYUAN_HPP__
 #define __SD_MODEL_DIFFUSION_HUNYUAN_HPP__
 
+#include <cinttypes>
 #include <memory>
 
 #include "model/common/block.hpp"
@@ -53,7 +54,7 @@ namespace Hunyuan {
             auto k       = qkv_vec[1];
             auto v       = qkv_vec[2];
 
-            auto attn_out = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, mask, false, ctx->flash_attn_enabled);
+            auto attn_out = ggml_ext_attention_ext(ctx, q, k, v, num_heads, mask, false, ctx->flash_attn_enabled);
             attn_out      = self_attn_proj->forward(ctx, attn_out);
 
             // adaLN_modulation
@@ -654,7 +655,7 @@ namespace Hunyuan {
                 return build_graph(x, timesteps, context, c_concat, y, guidance, byt5, vision, timestep_r);
             };
 
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,

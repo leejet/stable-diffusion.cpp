@@ -1,6 +1,7 @@
 #ifndef __SD_MODEL_DIFFUSION_LENS_HPP__
 #define __SD_MODEL_DIFFUSION_LENS_HPP__
 
+#include <cinttypes>
 #include <memory>
 #include <vector>
 
@@ -408,7 +409,7 @@ namespace Lens {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(x, timesteps, context);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,

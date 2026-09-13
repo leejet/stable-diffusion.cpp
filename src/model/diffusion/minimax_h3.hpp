@@ -2,12 +2,14 @@
 #define __SD_MODEL_DIFFUSION_MINIMAX_H3_HPP__
 
 #include <algorithm>
+#include <cinttypes>
 #include <cmath>
 #include <set>
 #include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
+#include "core/ggml_tensor_utils.h"
 
 #include "core/ggml_graph_cut.h"
 #include "model/diffusion/dit.hpp"
@@ -213,8 +215,7 @@ namespace MiniMaxH3 {
                 q = attention_layout(ctx->ggml_ctx, q);
                 k = attention_layout(ctx->ggml_ctx, k);
             }
-            auto out = ggml_ext_attention_ext(ctx->ggml_ctx,
-                                              ctx->backend,
+            auto out = ggml_ext_attention_ext(ctx,
                                               q,
                                               k,
                                               v,
@@ -1166,9 +1167,9 @@ namespace MiniMaxH3 {
                                    extra->video_sigma_shift,
                                    extra->audio_sigma_shift);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph,
-                                                                              n_threads,
-                                                                              false),
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph,
+                                                                       n_threads,
+                                                                       false),
                                                    params.x->dim());
         }
     };

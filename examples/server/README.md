@@ -129,3 +129,6 @@ For detailed command-line arguments, run:
 ```bash
 ./bin/sd-server -h
 ```
+
+For completely black or white images or videos, NaNs, and the `--linear-scale` /
+`--attn-scale` startup options, see [Troubleshooting](../../docs/troubleshooting.md).

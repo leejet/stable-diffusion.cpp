@@ -4,6 +4,8 @@
 #include <map>
 #include <memory>
 #include <utility>
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_tensor_utils.h"
 
 #include "model/common/block.hpp"
 #include "model/vae/vae.hpp"
@@ -613,8 +615,8 @@ namespace WAN {
             auto v = qkv_vec[2];
             v      = ggml_reshape_3d(ctx->ggml_ctx, v, h * w, c, n);  // [t, c, h * w]
 
-            v = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, v, 1, 0, 2, 3));                            // [t, h * w, c]
-            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, 1, nullptr, false, ctx->flash_attn_enabled);  // [t, h * w, c]
+            v = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, v, 1, 0, 2, 3));    // [t, h * w, c]
+            x = ggml_ext_attention_ext(ctx, q, k, v, 1, nullptr, false, ctx->flash_attn_enabled);  // [t, h * w, c]
 
             x = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [t, c, h * w]
             x = ggml_reshape_4d(ctx->ggml_ctx, x, w, h, c, n);                             // [t, c, h, w]
@@ -1427,7 +1429,7 @@ namespace WAN {
                     return build_temporal_tile_graph(input_tile, static_cast<int>(tile.start));
                 };
                 return restore_trailing_singleton_dims(
-                    GGMLRunner::compute<float>(get_graph, n_threads, false),
+                    GGMLRunner::compute(get_graph, n_threads, false),
                     static_cast<size_t>(input.dim()));
             });
 
@@ -1446,7 +1448,7 @@ namespace WAN {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(input.empty() ? z : input, decode_graph);
             };
-            auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false),
+            auto result = restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false),
                                                           input.empty() ? z.dim() : input.dim());
             if (!result.empty() && z.dim() == 4) {
                 result.squeeze_(2);
@@ -1492,13 +1494,14 @@ namespace WAN {
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
 
-                ModelLoader& model_loader = model_manager->loader();
+                ModelLoader model_loader;
                 if (!model_loader.init_from_file_and_convert_name(file_path, "vae.")) {
                     LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                     return;
                 }
 
-                if (!model_manager->register_runner_params("Wan VAE test",
+                if (!model_manager->set_loader(model_loader) ||
+                    !model_manager->register_runner_params(ModelComponent::VAE,
                                                            *vae,
                                                            ModelManager::ResidencyMode::ParamBackend,
                                                            backend,

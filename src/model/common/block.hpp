@@ -1,9 +1,11 @@
 #ifndef __SD_MODEL_COMMON_BLOCK_HPP__
 #define __SD_MODEL_COMMON_BLOCK_HPP__
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_runner.h"
 #include "core/util.h"
 #include "ggml-backend.h"
+#include "model/common/ggml_block.hpp"
 
 class DownSampleBlock : public GGMLBlock {
 protected:
@@ -378,14 +380,14 @@ public:
         if (xtra_dim) {
             context->ne[0] = 320;  // reset dim to orig
         }
-        x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, n_head, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, inner_dim]
+        x = ggml_ext_attention_ext(ctx, q, k, v, n_head, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, inner_dim]
 
         if (has_ip && ctx->ip_context != nullptr && ctx->ip_scale != 0.0f) {
             auto to_k_ip = std::dynamic_pointer_cast<Linear>(blocks["to_k_ip"]);
             auto to_v_ip = std::dynamic_pointer_cast<Linear>(blocks["to_v_ip"]);
             auto k_ip    = to_k_ip->forward(ctx, ctx->ip_context);
             auto v_ip    = to_v_ip->forward(ctx, ctx->ip_context);
-            auto x_ip    = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k_ip, v_ip, n_head, nullptr, false, ctx->flash_attn_enabled);
+            auto x_ip    = ggml_ext_attention_ext(ctx, q, k_ip, v_ip, n_head, nullptr, false, ctx->flash_attn_enabled);
             x            = ggml_add(ctx->ggml_ctx, x, ggml_scale(ctx->ggml_ctx, x_ip, ctx->ip_scale));
         }
 

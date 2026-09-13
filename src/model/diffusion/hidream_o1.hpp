@@ -329,7 +329,7 @@ namespace HiDreamO1 {
             auto get_graph = [&]() {
                 return build_graph(image);
             };
-            auto output = GGMLRunner::compute<float>(get_graph, n_threads, auto_runner_end);
+            auto output = GGMLRunner::compute(get_graph, n_threads, auto_runner_end);
             return output.has_value() ? std::move(output.value()) : sd::Tensor<float>();
         }
     };
@@ -457,7 +457,7 @@ namespace HiDreamO1 {
             auto get_graph = [&]() {
                 return build_graph(x, timestep, input_ids, input_pos, token_types, vinput_mask, image_embeds, ref_images);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,
@@ -502,6 +502,10 @@ namespace HiDreamO1 {
 
         void set_flash_attention_enabled(bool enabled) override {
             vision_runner->set_flash_attention_enabled(enabled);
+        }
+
+        void set_scale_overrides(float linear_scale, float attn_scale) override {
+            vision_runner->set_scale_overrides(linear_scale, attn_scale);
         }
 
         void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {

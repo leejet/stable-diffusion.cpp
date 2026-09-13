@@ -1,8 +1,11 @@
 #ifndef __SD_MODEL_DIFFUSION_FLUX_HPP__
 #define __SD_MODEL_DIFFUSION_FLUX_HPP__
 
+#include <cinttypes>
 #include <memory>
 #include <vector>
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_tensor_utils.h"
 
 #include "core/util.h"
 #include "model/adapter/pulid.hpp"
@@ -1626,7 +1629,7 @@ namespace Flux {
                 return build_graph(x, timesteps, context, c_concat, y, guidance, ref_latents, ref_index_mode, skip_layers, pulid_id, pulid_id_weight);
             };
 
-            auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+            auto result = restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
             return result;
         }
 
@@ -1711,8 +1714,8 @@ namespace Flux {
             ggml_backend_t backend    = sd_backend_cpu_init();
             ggml_type model_data_type = GGML_TYPE_COUNT;
 
-            auto model_manager        = std::make_shared<ModelManager>();
-            ModelLoader& model_loader = model_manager->loader();
+            auto model_manager = std::make_shared<ModelManager>();
+            ModelLoader model_loader;
             if (!model_loader.init_from_file_and_convert_name(file_path, "model.diffusion_model.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
@@ -1733,7 +1736,8 @@ namespace Flux {
                                                                             VERSION_FLUX2,
                                                                             model_manager);
 
-            if (!model_manager->register_runner_params("Flux test",
+            if (!model_manager->set_loader(model_loader) ||
+                !model_manager->register_runner_params(ModelComponent::Diffusion,
                                                        *flux,
                                                        "model.diffusion_model",
                                                        ModelManager::ResidencyMode::ParamBackend,
