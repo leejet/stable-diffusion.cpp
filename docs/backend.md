@@ -193,8 +193,9 @@ weights, compute buffers and caches must
 still fit the runner's capacity checks. Offloading weights does not guarantee
 that every resolution or frame count will fit, and auto-fit does not change a
 component to CPU computation solely because its full weights exceed VRAM.
-If a VAE decode fails, auto-fit retries with spatial tiling; supported video
-decoders try temporal tiling first and can then add spatial tiling.
+If a VAE decode fails, decoding retries with spatial tiling even when `--auto-fit`
+is off; supported video decoders try temporal tiling first and can then add
+spatial tiling. Spatial retries use half-size tiles along each latent dimension.
 
 ## Modules
 
