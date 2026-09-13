@@ -27,7 +27,9 @@ struct LoraModel;
 struct ConditionerParams;
 struct SDCondition;
 struct RefImageParams;
-class Wav2Vec2ModelRunner;
+namespace Wav2Vec2 {
+    class Wav2Vec2ModelRunner;
+}
 
 extern const char* model_version_to_str[];
 
@@ -64,7 +66,7 @@ public:
     std::shared_ptr<VAE> first_stage_model;
     std::shared_ptr<VAE> preview_vae;
     std::shared_ptr<AudioVAERunner> audio_vae_model;
-    std::shared_ptr<Wav2Vec2ModelRunner> audio_encoder;  // wan2.2 s2v driving audio
+    std::shared_ptr<Wav2Vec2::Wav2Vec2ModelRunner> audio_encoder;  // wan2.2 s2v driving audio
     std::shared_ptr<ControlNet> control_net;
     std::shared_ptr<IPAdapter::IPAdapterRunner> ip_adapter;
     sd::Tensor<float> ip_adapter_tokens;

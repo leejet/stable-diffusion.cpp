@@ -239,10 +239,10 @@ namespace sd::model_builders {
                 if (!ensure_backend_pair(ctx.backends, SDBackendModule::AUDIO_ENCODER)) {
                     return false;
                 }
-                result.audio_encoder = std::make_shared<Wav2Vec2ModelRunner>(ctx.backends.runtime_backend(SDBackendModule::AUDIO_ENCODER),
-                                                                             tensor_storage_map,
-                                                                             "wav2vec2.",
-                                                                             weight_manager);
+                result.audio_encoder = std::make_shared<Wav2Vec2::Wav2Vec2ModelRunner>(ctx.backends.runtime_backend(SDBackendModule::AUDIO_ENCODER),
+                                                                                       tensor_storage_map,
+                                                                                       "wav2vec2.",
+                                                                                       weight_manager);
             }
         } else if (sd_version_is_lingbot_video(version)) {
             bool enable_vision = false;
