@@ -199,7 +199,6 @@ ArgOptions SDSvrParams::get_options() {
     };
 
     options.bool_options = {
-        {"-v", "--verbose", "print extra info", true, &verbose},
         {"", "--color", "colors the logging tags according to level", true, &color},
     };
 
@@ -212,6 +211,7 @@ ArgOptions SDSvrParams::get_options() {
     options.manual_options = {
         {"-h", "--help", "show this help message and exit", on_help_arg},
     };
+    add_log_options(options, log_level);
     return options;
 }
 
@@ -243,6 +243,7 @@ bool SDSvrParams::resolve_and_validate() {
 std::string SDSvrParams::to_string() const {
     std::ostringstream oss;
     oss << "SDSvrParams {\n"
+        << "  log_level: " << log_level_name(log_level) << ",\n"
         << "  listen_ip: " << listen_ip << ",\n"
         << "  listen_port: \"" << listen_port << "\",\n"
         << "  serve_html_path: \"" << serve_html_path << "\",\n"

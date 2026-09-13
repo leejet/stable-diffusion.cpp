@@ -67,21 +67,21 @@ Detection should respect `prefix`. For nested weights, construct full names from
 
 Do not add persistent config fields such as `inferred_from_weights` only to
 record whether detection happened. If the function needs to decide whether to
-print a debug line, keep that as local control flow inside `detect_from_weights`.
+print a verbose line, keep that as local control flow inside `detect_from_weights`.
 
 ## Logging
 
-When config values are inferred from weights, print one `LOG_DEBUG` line at the
+When config values are inferred from weights, print one `LOG_VERBOSE` line at the
 end of `detect_from_weights`.
 
 Example:
 
 ```cpp
-LOG_DEBUG("llm: num_layers = %" PRId64 ", vocab_size = %" PRId64 ", hidden_size = %" PRId64 ", intermediate_size = %" PRId64,
-          config.num_layers,
-          config.vocab_size,
-          config.hidden_size,
-          config.intermediate_size);
+LOG_VERBOSE("llm: num_layers = %" PRId64 ", vocab_size = %" PRId64 ", hidden_size = %" PRId64 ", intermediate_size = %" PRId64,
+            config.num_layers,
+            config.vocab_size,
+            config.hidden_size,
+            config.intermediate_size);
 ```
 
 Only print the config detection log when the function actually inferred values

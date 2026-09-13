@@ -270,7 +270,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 return;
             }
 
-            LOG_DEBUG("%s\n", request.gen_params.to_string().c_str());
+            LOG_VERBOSE("%s\n", request.gen_params.to_string().c_str());
 
             SDImageVec results;
             if (!execute_sync_img_gen_request(*runtime, request, results, error_message)) {
@@ -344,7 +344,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 return;
             }
 
-            LOG_DEBUG("%s\n", request.gen_params.to_string().c_str());
+            LOG_VERBOSE("%s\n", request.gen_params.to_string().c_str());
 
             SDImageVec results;
             if (!execute_sync_img_gen_request(*runtime, request, results, error_message)) {
