@@ -1,5 +1,4 @@
 #include "media_io.h"
-#include "conditioning/audio_processing.hpp"
 #include "log.h"
 #include "resource_owners.hpp"
 
@@ -11,7 +10,6 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <numeric>
 #include <string>
 #include <vector>
 
@@ -1505,38 +1503,6 @@ bool load_wav_from_file(const std::string& path,
             }
             interleaved_samples[static_cast<size_t>(frame * channels + channel)] = sample;
         }
-    }
-    return true;
-}
-
-// DSP core lives in src/conditioning/audio_processing.hpp (shared with
-// stable-diffusion.cpp); these wrappers keep the examples-side API.
-std::vector<float> downmix_to_mono(const float* interleaved_samples,
-                                   uint64_t sample_count,
-                                   uint32_t channels) {
-    return AudioProcessing::downmix_to_mono(interleaved_samples, sample_count, channels);
-}
-
-std::vector<float> resample_audio(const float* samples,
-                                  uint64_t sample_count,
-                                  uint32_t orig_sample_rate,
-                                  uint32_t target_sample_rate) {
-    return AudioProcessing::resample_audio(samples, sample_count, orig_sample_rate, target_sample_rate);
-}
-
-bool load_wav_from_file_mono(const std::string& path,
-                             std::vector<float>& mono_samples,
-                             uint32_t target_sample_rate) {
-    std::vector<float> interleaved;
-    uint32_t sample_rate = 0;
-    uint32_t channels    = 0;
-    if (!load_wav_from_file(path, interleaved, sample_rate, channels)) {
-        return false;
-    }
-    const uint64_t frames = channels > 0 ? interleaved.size() / channels : 0;
-    mono_samples          = downmix_to_mono(interleaved.data(), frames, channels);
-    if (sample_rate != target_sample_rate && !mono_samples.empty()) {
-        mono_samples = resample_audio(mono_samples.data(), mono_samples.size(), sample_rate, target_sample_rate);
     }
     return true;
 }

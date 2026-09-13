@@ -28,7 +28,6 @@
 #include "model_manager.h"
 #include "stable-diffusion.h"
 
-#include "conditioning/audio_processing.hpp"
 #include "conditioning/conditioner.hpp"
 #include "core/backend_fit.h"
 #include "extensions/generation_extension.h"
@@ -41,6 +40,7 @@
 #include "model/vae/audio_vae.hpp"
 #include "model/vae/ltx_vae.hpp"
 #include "model/vae/vae.hpp"
+#include "runtime/audio_processing.h"
 #include "runtime/denoiser.hpp"
 #include "runtime/guidance.h"
 #include "runtime/preview_interval.h"
@@ -1770,12 +1770,12 @@ sd::Tensor<float> StableDiffusionGGML::get_audio_embedding(const sd_audio_t& aud
         LOG_ERROR("invalid driving audio");
         return {};
     }
-    auto mono = AudioProcessing::downmix_to_mono(audio.data, audio.sample_count, audio.channels);
+    auto mono = sd::audio::downmix_to_mono(audio.data, audio.sample_count, audio.channels);
     if (mono.empty()) {
         LOG_ERROR("audio mono downmix failed");
         return {};
     }
-    mono = AudioProcessing::resample_audio(mono.data(), mono.size(), audio.sample_rate, 16000);
+    mono = sd::audio::resample_audio(mono.data(), mono.size(), audio.sample_rate, 16000);
     if (mono.empty()) {
         LOG_ERROR("audio resample to 16 kHz failed");
         return {};

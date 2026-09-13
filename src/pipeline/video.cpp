@@ -5,7 +5,7 @@
 #include <cstdlib>
 #include <optional>
 
-#include "conditioning/audio_processing.hpp"
+#include "conditioning/wan_audio.h"
 #include "core/rng.hpp"
 #include "core/rng_philox.hpp"
 #include "diffusion_engine.h"
@@ -443,13 +443,13 @@ namespace sd::pipeline {
                             layer_first.data() + (static_cast<size_t>(l) * in_frames + f) * embed_dim);
             }
         }
-        AudioProcessing::BucketPlan plan;
-        std::vector<float> buckets = AudioProcessing::build_audio_buckets(layer_first.data(),
-                                                                          static_cast<int>(num_layers),
-                                                                          static_cast<int>(in_frames),
-                                                                          static_cast<int>(embed_dim),
-                                                                          static_cast<int>(batch_frames),
-                                                                          &plan);
+        sd::wan_audio::BucketPlan plan;
+        std::vector<float> buckets = sd::wan_audio::build_audio_buckets(layer_first.data(),
+                                                                        static_cast<int>(num_layers),
+                                                                        static_cast<int>(in_frames),
+                                                                        static_cast<int>(embed_dim),
+                                                                        static_cast<int>(batch_frames),
+                                                                        &plan);
         if (buckets.empty() || plan.bucket_frames < batch_frames) {
             return {};
         }

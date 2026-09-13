@@ -115,22 +115,4 @@ bool load_wav_from_file(const std::string& path,
                         uint32_t& sample_rate,
                         uint32_t& channels);
 
-// Downmix interleaved samples to mono by averaging channels. Returns empty vector on invalid input.
-std::vector<float> downmix_to_mono(const float* interleaved_samples,
-                                   uint64_t sample_count,
-                                   uint32_t channels);
-
-// Band-limited sinc resampler matching torchaudio.functional.resample
-// (sinc_interp_hann, lowpass_filter_width 6, rolloff 0.99). Returns the input unchanged
-// when sample rates are equal, and an empty vector on invalid input.
-std::vector<float> resample_audio(const float* samples,
-                                  uint64_t sample_count,
-                                  uint32_t orig_sample_rate,
-                                  uint32_t target_sample_rate);
-
-// Convenience: load WAV, downmix to mono and resample to the target sample rate.
-bool load_wav_from_file_mono(const std::string& path,
-                             std::vector<float>& mono_samples,
-                             uint32_t target_sample_rate = 16000);
-
 #endif  // __MEDIA_IO_H__
