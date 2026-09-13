@@ -247,10 +247,7 @@ bool read_safetensors_file(const std::string& file_path,
         std::string dtype    = tensor_info["dtype"];
         nlohmann::json shape = tensor_info["shape"];
 
-        // ComfyUI fp8_scaled checkpoints carry a per-module scale_input
-        // (activation scale, which cancels when activations are f16/f32).
-        // Drop it here; .scale_weight -> .weight_scale aliasing happens in
-        // convert_tensor_name.
+        // ComfyUI FP8 activation scales cancel when inference uses F16/F32 activations.
         if (ends_with(name, ".scale_input")) {
             continue;
         }

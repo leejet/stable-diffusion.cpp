@@ -1526,8 +1526,6 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        // S2V driving track shares the ref-audio transport (Wan2.2 S2V reads
-        // sd_vid_gen_params.ref_audios[0]).
         ref_audio_paths.push_back(argv[index]);
         return 1;
     };

@@ -809,8 +809,7 @@ namespace Rope {
         return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims, EmbedNDLayout::ErnieImage);
     }
 
-    // Generate wan positional embeddings; t_offset shifts the temporal ids
-    // (S2V reference latent uses t_start = max(30, t + 9)).
+    // Generate wan positional embeddings
     __STATIC_INLINE__ std::vector<float> gen_wan_pe(int t,
                                                     int h,
                                                     int w,

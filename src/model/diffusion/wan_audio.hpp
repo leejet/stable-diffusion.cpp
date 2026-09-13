@@ -104,7 +104,6 @@ namespace WAN {
             if (!need_global_) {
                 return {local_out, nullptr};
             }
-            // The global branch shares conv2, conv3 and norms with the local branch.
             ggml_tensor* g = conv_norm_silu(ctx, x, "conv1_global", "norm1", true);
             g              = conv_norm_silu(ctx, g, "conv2", "norm2", true);
             g              = conv_norm_silu(ctx, g, "conv3", "norm3", false);
@@ -167,7 +166,7 @@ namespace WAN {
                 blocks["injector_adain_layers." + std::to_string(i) + ".linear"] =
                     std::make_shared<Linear>(dim, dim * 2);
             }
-            // AdaLayerNorm is affine-free and uses eps=1e-5, unlike the attention norms.
+            // S2V AdaLayerNorm uses its own epsilon, independent of attention norms.
             blocks["adain_norm"] = std::make_shared<LayerNorm>(dim, 1e-5f, false);
         }
 

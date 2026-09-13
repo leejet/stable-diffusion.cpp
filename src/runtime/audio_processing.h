@@ -12,8 +12,7 @@ namespace sd::audio {
                                       uint32_t orig_sample_rate,
                                       uint32_t target_sample_rate);
 
-    // Downmix interleaved samples to mono by averaging channels. Returns an empty
-    // vector on invalid input.
+    // Average interleaved channels; return an empty vector on invalid input.
     std::vector<float> downmix_to_mono(const float* interleaved_samples,
                                        uint64_t sample_count,
                                        uint32_t channels);

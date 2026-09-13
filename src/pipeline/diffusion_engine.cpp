@@ -1137,8 +1137,7 @@ bool StableDiffusionGGML::validate_and_load_runners() {
     ignore_tensors.insert("model.diffusion_model.__index_timestep_zero__");
 
     if (audio_encoder != nullptr) {
-        // HF wav2vec2 inference leftovers: lm_head is a pretraining head,
-        // masked_spec_embed only applies to masked pretraining.
+        // These wav2vec2 tensors are unused during feature extraction.
         ignore_tensors.insert("wav2vec2.lm_head.");
         ignore_tensors.insert("wav2vec2.masked_spec_embed");
     }
@@ -1777,8 +1776,7 @@ sd::Tensor<float> StableDiffusionGGML::get_clip_vision_output(const sd::Tensor<f
     return output;
 }
 
-// Driving audio for Wan2.2 S2V: downmix to mono, resample to 16 kHz, then
-// wav2vec2 stacked states [embed_dim, frames, num_layers + 1] at 50 Hz.
+// Returns 50 Hz wav2vec2 states in sd::Tensor layout: [dim, frames, layers].
 sd::Tensor<float> StableDiffusionGGML::get_audio_embedding(const sd_audio_t& audio) {
     if (audio_encoder == nullptr) {
         LOG_ERROR("audio encoder model is not loaded");
@@ -1857,8 +1855,6 @@ std::vector<float> StableDiffusionGGML::process_timesteps(const std::vector<floa
         }
         return new_timesteps;
     }
-    // Wan2.2 S2V runs per-frame timesteps (ComfyUI repeats t across frames);
-    // reference tokens are zeroed in-model.
     if (diffusion_model->get_desc() == "Wan2.2-S2V-14B") {
         int64_t frame_count = init_latent.shape()[2];
         return std::vector<float>(static_cast<size_t>(frame_count), timesteps[0]);

@@ -120,10 +120,6 @@ Notes:
 - Resolutions: width and height must be multiples of 16; the examples use
   multiples of 64. 832x480 is a fast starting point; generation cost scales
   with pixel area.
-- Use `--diffusion-fa` together with `--offload-to-cpu --vae-tiling`. Without
-  flash attention the S2V attention compute buffer alone needs ~40 GB VRAM at
-  480x832; `--offload-to-cpu` keeps the model weights in system RAM, and
-  `--vae-tiling` keeps the video VAE decode (77-81 frames) within VRAM.
 - `--audio` accepts a WAV file; it is downmixed to mono and resampled to 16 kHz
   internally. Audio longer than the video is truncated, video longer than the
   audio is padded with silence. Pick `--video-frames` to match the audio:
@@ -133,19 +129,6 @@ Notes:
   changed to 16 with a warning, including the CLI and server video output.
   `generate_video()` returns the actual frame rate through `fps_out`; C API
   callers should use that value when encoding the output video.
-- The output video carries the driving audio track: it is muxed into `.avi`
-  / `.webm` outputs, truncated to the video duration. Other container types
-  fall back to a `.wav` sidecar file next to the video.
-- Approximate VRAM use at 640x368, 13 frames:
-
-  | checkpoint | VRAM |
-  |------------|------|
-  | wan2.2_s2v_14B_int8_convrot.safetensors | 17.6 GB |
-  | wan2.2_s2v-14B-Q8_0.gguf | 18.4 GB |
-  | wan2.2_s2v-14B-Q4_K_M.gguf | 13.4 GB |
-
-  Q4_K_M is the lowest-memory option; bf16 and fp8_scaled need more than
-  24 GB VRAM.
 - One generation covers the first S2V chunk window (`--video-frames` frames).
   Long-video chunked extend mode is not implemented yet.
 - Speed: the lightx2v lightning LoRA works with S2V at 4 steps and
@@ -159,11 +142,6 @@ Notes:
   ```
 
   Expect some quality/dynamics loss compared to the full 20-step run.
-- fp8_scaled and GGUF checkpoints are supported. The int8_convrot checkpoint
-  is available at
-  https://huggingface.co/noctrex/Wan2.2-S2V-14B-int8_convrot
-  ([int8_convrot](int8_convrot.md)); int8 convrot is supported on the CUDA,
-  Vulkan and ROCm backends.
 
 ### Wan2.2 T2V A14B T2I
 

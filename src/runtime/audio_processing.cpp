@@ -7,9 +7,7 @@
 
 namespace sd::audio {
 
-    // Polyphase FIR from torchaudio.functional.resample: sinc interpolated at output
-    // phases, hann-windowed over lowpass_filter_width zero crossings, anti-aliased by
-    // clamping the sinc argument to +-lowpass_filter_width after scaling by min(rate)*rolloff.
+    // Match torchaudio's Hann-windowed sinc resampler.
     std::vector<float> resample_audio(const float* samples,
                                       uint64_t sample_count,
                                       uint32_t orig_sample_rate,

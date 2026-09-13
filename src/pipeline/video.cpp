@@ -421,11 +421,7 @@ namespace sd::pipeline {
         return audio;
     }
 
-    // Wan2.2 S2V: build the first per-chunk audio window. Input: wav2vec2 stacked
-    // states [embed_dim, in_frames, num_layers]; output: [embed_dim, batch_frames,
-    // num_layers] as expected by WanDiffusionExtra.audio_embed, frames bucketed at
-    // 16 fps with zero padding past the audio end (nodes_wan.py
-    // get_audio_embed_bucket_fps, m=0, frame_offset=0).
+    // Build the first 16 fps audio window, zero-padding past the track end.
     static sd::Tensor<float> build_s2v_audio_window(const sd::Tensor<float>& stacked, int64_t batch_frames) {
         const int64_t embed_dim  = stacked.shape()[0];
         const int64_t in_frames  = stacked.shape()[1];
@@ -433,7 +429,6 @@ namespace sd::pipeline {
         if (embed_dim <= 0 || in_frames <= 0 || num_layers <= 0 || batch_frames <= 0) {
             return {};
         }
-        // [embed_dim, in_frames, num_layers] -> layer-first [num_layers, in_frames, embed_dim]
         std::vector<float> layer_first(static_cast<size_t>(num_layers) * in_frames * embed_dim);
         for (int64_t l = 0; l < num_layers; ++l) {
             for (int64_t f = 0; f < in_frames; ++f) {
@@ -453,7 +448,7 @@ namespace sd::pipeline {
         if (buckets.empty() || plan.bucket_frames < batch_frames) {
             return {};
         }
-        // Window rows [0, batch_frames): [frame, num_layers, dim] -> [dim, batch_frames, num_layers]
+        // Reorder frame-major buckets into sd::Tensor's [dim, frame, layer] layout.
         sd::Tensor<float> window({embed_dim, batch_frames, num_layers});
         for (int64_t f = 0; f < batch_frames; ++f) {
             for (int64_t l = 0; l < num_layers; ++l) {
@@ -1089,20 +1084,17 @@ namespace sd::pipeline {
             }
             int64_t t1 = ggml_time_ms();
             if (!start_image.empty()) {
-                // ComfyUI WanSoundImageToVideo: the ref image is VAE-encoded and
-                // appended as reference_latents; the video latent itself stays
-                // unconstrained (no first-frame conditioning).
                 auto ref_img     = start_image.reshape({start_image.shape()[0],
                                                         start_image.shape()[1],
                                                         1,
                                                         start_image.shape()[2],
                                                         1});
-                auto encoded_ref = sd->encode_first_stage(ref_img);  // [W', H', 1, C, 1]
+                auto encoded_ref = sd->encode_first_stage(ref_img);
                 if (encoded_ref.empty()) {
                     LOG_ERROR("failed to encode S2V reference image");
                     return std::nullopt;
                 }
-                // forward_orig consumes a 4d reference latent [N*C, t_ref, H, W]
+                // Wan consumes reference latents in 4D.
                 latents.ref_latents.push_back(encoded_ref.reshape({encoded_ref.shape()[0],
                                                                    encoded_ref.shape()[1],
                                                                    encoded_ref.shape()[2],
@@ -1180,9 +1172,6 @@ namespace sd::pipeline {
             }
         }
         if (sd->version == VERSION_WAN2_2_S2V) {
-            // ComfyUI: positive gets the real audio window and the ref latent;
-            // negative gets audio * 0 while KEEPING the same ref latent (wan is
-            // excluded from ref-latent img cfg).
             embeds.cond.c_ref_images = latents.ref_latents;
             if (!latents.s2v_audio_embed.empty()) {
                 embeds.cond.c_ref_audios = {latents.s2v_audio_embed};
@@ -1843,9 +1832,7 @@ namespace sd::pipeline {
 
         sd_audio_t* generated_audio = nullptr;
         if (sd->version == VERSION_WAN2_2_S2V && sd_vid_gen_params->ref_audios_count > 0) {
-            // S2V does not generate audio; the driving track is conditioning only.
-            // Hand a copy back so the output container carries the same audio
-            // (the CLI muxes audio_out into avi/webm).
+            // Return the driving track for muxing with the generated video.
             const sd_audio_t& driving = sd_vid_gen_params->ref_audios[0];
             generated_audio           = (sd_audio_t*)malloc(sizeof(sd_audio_t));
             if (generated_audio != nullptr) {
@@ -1934,8 +1921,7 @@ namespace sd::pipeline {
             *frames_out = result;
         }
         if (sd->version == VERSION_WAN2_2_S2V && generated_audio != nullptr) {
-            // The model conditioned on the first chunk window only; keep the muxed
-            // track aligned with the decoded video duration.
+            // Limit the driving track to the generated video's duration.
             int fps               = request.fps;
             uint64_t video_frames = num_frames_out != nullptr ? (uint64_t)*num_frames_out : 0;
             uint64_t want_samples = (uint64_t)((double)video_frames / fps * generated_audio->sample_rate);

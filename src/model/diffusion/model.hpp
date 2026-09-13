@@ -69,7 +69,7 @@ struct AnimaDiffusionExtra {
 struct WanDiffusionExtra {
     const sd::Tensor<float>* vace_context = nullptr;
     float vace_strength                   = 1.f;
-    // S2V: stacked wav2vec2 hidden states, [num_layers=25, frames=T_latent*4, dim=1024]
+    // S2V audio, sd::Tensor layout: [dim, T_latent*4, layers].
     const sd::Tensor<float>* audio_embed = nullptr;
 };
 

@@ -99,7 +99,7 @@ namespace Wav2Vec2 {
             auto conv       = std::dynamic_pointer_cast<Conv1d>(blocks["conv"]);
             auto layer_norm = std::dynamic_pointer_cast<GroupNorm>(blocks["layer_norm"]);
             x               = conv->forward(ctx, x);
-            // ggml GroupNorm expects [N, C, H, W]; insert H = 1 for the temporal input.
+            // ggml GroupNorm needs [N, C, H, W], with H=1 for audio.
             x = ggml_reshape_4d(ctx->ggml_ctx, x, x->ne[0], 1, x->ne[1], x->ne[2]);
             x = layer_norm->forward(ctx, x);
             x = ggml_reshape_3d(ctx->ggml_ctx, x, x->ne[0], x->ne[2], x->ne[3]);
@@ -364,7 +364,6 @@ namespace Wav2Vec2 {
             model.get_param_tensors(tensors, block_prefix);
         }
 
-        // Normalized mono input [L, 1, 1]; returns [embed_dim, L', num_layers + 1].
         ggml_cgraph* build_graph(const sd::Tensor<float>& waveform_tensor) {
             ggml_cgraph* gf         = ggml_new_graph(compute_ctx);
             ggml_tensor* waveform   = make_input(waveform_tensor);
@@ -390,7 +389,6 @@ namespace Wav2Vec2 {
         }
 
     private:
-        // Match waveform normalization with population variance and epsilon 1e-7.
         static void normalize(float* x, int64_t n) {
             double mean = 0.0;
             for (int64_t i = 0; i < n; ++i) {

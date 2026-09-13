@@ -527,7 +527,7 @@ SDVersion ModelLoader::get_sd_version() const {
         }
         if (tensor_storage.name.find("casual_audio_encoder.weights") != std::string::npos ||
             tensor_storage.name.find("audio_injector.injector.0.q.weight") != std::string::npos) {
-            // S2V shares patch_embedding shape with T2V-14B; key presence is the only reliable signal
+            // S2V and T2V-14B share patch_embedding shapes.
             is_s2v = true;
         }
         if (tensor_storage.name.find("model.diffusion_model.patch_embedder.weight") != std::string::npos) {

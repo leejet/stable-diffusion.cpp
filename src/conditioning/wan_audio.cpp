@@ -4,11 +4,6 @@
 #include <cmath>
 #include <cstddef>
 
-// Input is the wav2vec2 hidden states stacked per layer [num_layers, in_frames, dim]
-// at the encoder frame rate (50 Hz). The frames are interpolated to video_rate
-// (30 Hz), bucketed to fps (16) frames with zero padding past the audio end, and
-// split into chunks of batch_frames = latent_t * 4 frames (one per diffusion chunk).
-
 namespace sd::wan_audio {
 
     static BucketPlan plan_buckets(int audio_frames, int batch_frames, int video_rate, int fps) {
@@ -18,29 +13,24 @@ namespace sd::wan_audio {
         plan.video_rate    = video_rate;
         plan.fps           = fps;
         const double scale = static_cast<double>(video_rate) / fps;
-        // min_batch_num = int(audio_frame_num / (batch_frames * scale)) + 1
-        plan.num_chunks    = static_cast<int>(audio_frames / (batch_frames * scale)) + 1;
-        plan.bucket_frames = plan.num_chunks * batch_frames;
-        // padd_audio_num = ceil(bucket_frames / fps * video_rate) - audio_frame_num
+        // Keep a trailing chunk even when audio ends on a chunk boundary.
+        plan.num_chunks          = static_cast<int>(audio_frames / (batch_frames * scale)) + 1;
+        plan.bucket_frames       = plan.num_chunks * batch_frames;
         plan.padded_audio_frames = static_cast<int>(
             std::ceil(plan.bucket_frames / static_cast<double>(fps) * video_rate));
         return plan;
     }
 
-    // Bucket frame index (fps timeline) -> source frame index (video_rate timeline).
-    // get_sample_indices with fixed_start=0 reduces to round-half-even(i * video_rate / fps),
-    // matching numpy's default rounding.
+    // Match NumPy's round-half-even sampling.
     static int bucket_source_frame(int bucket_frame, int video_rate, int fps) {
         return static_cast<int>(std::nearbyint(static_cast<double>(bucket_frame) * video_rate / fps));
     }
 
-    // torch.nn.functional.interpolate size computation: output_len = int(in_len / input_fps * output_fps)
     static int interpolated_frame_count(int in_frames, int input_fps, int output_fps) {
         return static_cast<int>(in_frames / static_cast<double>(input_fps) * output_fps);
     }
 
-    // torch.nn.functional.interpolate(mode='linear', align_corners=True) along the frame
-    // dimension. in: [num_layers, in_frames, dim], out: [num_layers, out_frames, dim].
+    // Match PyTorch linear interpolation with align_corners=True.
     static std::vector<float> linear_interpolate_frames(const std::vector<float>& in,
                                                         int num_layers,
                                                         int in_frames,
@@ -99,7 +89,7 @@ namespace sd::wan_audio {
         for (int frame = 0; frame < plan.bucket_frames; ++frame) {
             const int src = bucket_source_frame(frame, video_rate, fps);
             if (src >= plan.audio_frames) {
-                continue;  // zero padding past the audio end
+                continue;
             }
             for (int layer = 0; layer < num_layers; ++layer) {
                 std::copy_n(interpolated.data() + (static_cast<size_t>(layer) * audio_frames + src) * dim,

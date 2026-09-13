@@ -34,9 +34,8 @@ namespace WAN {
         int vace_layers                        = 0;
         int64_t vace_in_dim                    = 96;
         std::map<int, int> vace_layers_mapping = {};
-        // Wan2.2-S2V audio conditioning
-        int64_t audio_dim                       = 1024;  // wav2vec2-large hidden size
-        int num_audio_token                     = 4;     // motion tokens per frame; 1 learned padding token appended at use site
+        int64_t audio_dim                       = 1024;
+        int num_audio_token                     = 4;     // excludes the learned padding token
         std::vector<int> audio_inject_layers    = {};
         std::map<int, int> audio_inject_mapping = {};  // block index -> injector index
         std::string adain_mode                  = "attn_norm";
@@ -621,7 +620,6 @@ namespace WAN {
                 blocks["vace_patch_embedding"] = std::shared_ptr<GGMLBlock>(new Conv3d(config.vace_in_dim, config.dim, config.patch_size, config.patch_size));
             }
 
-            // s2v audio conditioning (checkpoint-contained modules)
             if (config.model_type == "s2v") {
                 blocks["casual_audio_encoder"] = std::make_shared<WanCausalAudioEncoder>(config.audio_dim, config.dim, config.num_audio_token);
                 blocks["audio_injector"]       = std::make_shared<WanAudioInjector>(config.dim, config.num_heads, (int)config.audio_inject_layers.size(), config.qk_norm, config.eps);
@@ -686,8 +684,8 @@ namespace WAN {
             // vace_context: [N*vace_in_dim, T, H, W]
             // timestep: [N,] or [T]
             // context: [N, L, text_dim]
-            // audio_embed: [audio_dim, T*4, 25] stacked wav2vec2 hidden states (S2V)
-            // reference_latent: [N*C, T_ref, H, W] (S2V)
+            // audio_embed: [layers, T*4, audio_dim]
+            // reference_latent: [N*C, T_ref, H, W]
             // return: [N, (t_len [+ t_ref_len]) * h_len*w_len, out_dim*pt*ph*pw]
 
             GGML_ASSERT(N == 1);
@@ -710,36 +708,35 @@ namespace WAN {
             x = ggml_reshape_3d(ctx->ggml_ctx, x, x->ne[0] * x->ne[1] * x->ne[2], x->ne[3] / N, N);  // [N, dim, t_len*h_len*w_len]
             x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [N, t_len*h_len*w_len, dim]
 
-            // s2v: audio conditioning + reference latent append
             ggml_tensor* audio_local  = nullptr;
             ggml_tensor* audio_global = nullptr;
             int64_t seq_len           = x->ne[1];
             int64_t t_ref_len         = 0;
             if (config.model_type == "s2v") {
                 if (audio_embed != nullptr) {
-                    GGML_ASSERT(audio_embed->ne[1] == T * 4);  // one pixel-frame per latent frame * 4
+                    GGML_ASSERT(audio_embed->ne[1] == T * 4);
                     auto audio_encoder = std::dynamic_pointer_cast<WanCausalAudioEncoder>(blocks["casual_audio_encoder"]);
                     auto audio_emb     = audio_encoder->forward(ctx, audio_embed);
-                    audio_local        = audio_emb.first;   // [dim, num_audio_token+1, T]
-                    audio_global       = audio_emb.second;  // [dim, T]
+                    audio_local        = audio_emb.first;
+                    audio_global       = audio_emb.second;
                     GGML_ASSERT(audio_local->ne[2] == T);
                 }
 
                 // video tokens get cond_mask[0], reference tokens cond_mask[1]
-                auto cond_mask = params["trainable_cond_mask.weight"];  // [dim, 3]
+                auto cond_mask = params["trainable_cond_mask.weight"];
                 auto cm0       = ggml_reshape_3d(ctx->ggml_ctx, ggml_ext_slice(ctx->ggml_ctx, cond_mask, 1, 0, 1), config.dim, 1, 1);
                 x              = ggml_add(ctx->ggml_ctx, x, cm0);
 
                 if (reference_latent != nullptr) {
                     t_ref_len = reference_latent->ne[2];
-                    auto ref  = patch_embedding->forward(ctx, reference_latent);  // [N*dim, t_ref_len, h_len, w_len]
+                    auto ref  = patch_embedding->forward(ctx, reference_latent);
                     ref       = ggml_reshape_3d(ctx->ggml_ctx, ref, ref->ne[0] * ref->ne[1] * ref->ne[2], ref->ne[3] / N, N);
                     ref       = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, ref, 1, 0, 2, 3));  // [N, t_ref*h_len*w_len, dim]
                     auto cm1  = ggml_reshape_3d(ctx->ggml_ctx, ggml_ext_slice(ctx->ggml_ctx, cond_mask, 1, 1, 2), config.dim, 1, 1);
                     ref       = ggml_add(ctx->ggml_ctx, ref, cm1);
                     x         = ggml_concat(ctx->ggml_ctx, x, ref, 1);
 
-                    // reference frames run at timestep 0 (upstream t concat with zeros)
+                    // Reference tokens use timestep 0.
                     GGML_ASSERT(timestep->ne[0] == T);
                     timestep = ggml_ext_pad(ctx->ggml_ctx, timestep, (int)t_ref_len, 0, 0, 0);
                 }
@@ -812,8 +809,6 @@ namespace WAN {
                     x           = ggml_add(ctx->ggml_ctx, x, c_skip);
                 }
 
-                // s2v: AdaIN from the global audio token, then cross-attention
-                // against the per-frame audio tokens; residual on video tokens only
                 if (audio_injector != nullptr) {
                     auto inject_iter = config.audio_inject_mapping.find(i);
                     if (inject_iter != config.audio_inject_mapping.end()) {
@@ -873,7 +868,7 @@ namespace WAN {
             auto out = forward_orig(ctx, x, timestep, context, pe, clip_fea, vace_context, vace_strength, N, audio_embed, reference_latent);  // [N, (t_len [+t_ref]) *h_len*w_len, pt*ph*pw*C]
 
             if (reference_latent != nullptr) {
-                // drop the trailing reference tokens (upstream unpatchify slices to prod(grid_sizes))
+                // Exclude reference tokens from the generated video.
                 out = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, t_len * h_len * w_len);
             }
 
@@ -1015,7 +1010,7 @@ namespace WAN {
                                       config.theta,
                                       config.axes_dim);
             if (ref_latent != nullptr) {
-                // s2v reference latent: temporal offset t_start = max(30, T + 9)
+                // Match S2V's reference-frame temporal offset.
                 int t_start = std::max(30, static_cast<int>(x->ne[2]) + 9);
                 auto ref_pe = Rope::gen_wan_pe(static_cast<int>(ref_latent->ne[2]),
                                                static_cast<int>(ref_latent->ne[1]),
