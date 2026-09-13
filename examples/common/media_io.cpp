@@ -810,7 +810,6 @@ uint8_t* load_image_from_memory(const char* image_bytes,
     return load_image_common(true, image_bytes, len, width, height, expected_width, expected_height, expected_channel);
 }
 
-
 static void append_avi_metadata(std::vector<uint8_t>& data, const std::string& parameters) {
     if (parameters.empty()) {
         return;
@@ -820,10 +819,12 @@ static void append_avi_metadata(std::vector<uint8_t>& data, const std::string& p
 
     write_fourcc(info_content, "INFO");
 
+    const size_t comment_size = parameters.size() + 1;
     write_fourcc(info_content, "ICMT");
-    write_u32_le(info_content, static_cast<uint32_t>(parameters.size()));
+    write_u32_le(info_content, static_cast<uint32_t>(comment_size));
     info_content.insert(info_content.end(), parameters.begin(), parameters.end());
-    if (parameters.size() & 1u) {
+    info_content.push_back(0);
+    if (comment_size & 1u) {
         info_content.push_back(0);
     }
 

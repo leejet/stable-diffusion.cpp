@@ -541,9 +541,9 @@ bool save_results(const SDCliParams& cli_params,
     if (cli_params.mode == VID_GEN && num_results > 1) {
         if (ext_lower != ".avi" && ext_lower != ".webp" && ext_lower != ".webm")
             ext = ".avi";
-        std::string params          = gen_params.embed_image_metadata
-                                          ? get_image_params(ctx_params, gen_params, gen_params.seed, cli_params.mode)
-                                          : "";
+        std::string params = gen_params.embed_image_metadata
+                                 ? get_image_params(ctx_params, gen_params, gen_params.seed, cli_params.mode)
+                                 : "";
 
         fs::path video_path = base_path;
         video_path += ext;
