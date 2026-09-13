@@ -5,7 +5,8 @@
 - `--backend` selects the runtime backend used to execute model graphs.
 - `--params-backend` selects where model parameters are kept.
 
-If `--params-backend` is not set, parameters use the same backend as their module runtime backend.
+If `--params-backend` is not set, auto-fit chooses parameter placement. With
+`--auto-fit off`, parameters use the same backend as their module runtime backend.
 
 ## Syntax
 
@@ -129,17 +130,21 @@ warning.
 ## Automatic placement (`--auto-fit on|off`)
 
 `--auto-fit` requires `on` or `off` and defaults to `on` when omitted.
-Explicit `--backend` or `--params-backend` assignments disable auto-fit,
+Explicit `--params-backend` assignments disable auto-fit,
 regardless of argument order, even with `--auto-fit on`.
 
-When enabled, auto-fit uses one GPU for `diffusion` / `te` / `vae` computation. It chooses
-the GPU with the largest available memory budget (the first device on a tie),
-then derives parameter placements from the model metadata and the remaining
-memory budgets. The chosen backend specifications are printed.
+Auto-fit preserves explicit `--backend` assignments, including per-module
+assignments and device lists. For modules without a runtime assignment, it chooses
+the GPU with the largest available memory budget (the first device on a tie).
+It then derives parameter placements from the model metadata, each module's
+compute devices, and the remaining memory budgets. The chosen backend
+specifications are printed.
 
 ```shell
 sd-cli -m model.safetensors -p "a cat" --auto-fit on
 sd-cli -m model.safetensors -p "a cat" --auto-fit on --max-vram cuda0=8,cuda1=14
+sd-cli -m model.safetensors -p "a cat" --backend cuda0
+sd-cli -m model.safetensors -p "a cat" --backend diffusion=cuda0,te=cpu,vae=cuda1
 sd-cli -m model.safetensors -p "a cat" --auto-fit off
 ```
 
@@ -153,7 +158,7 @@ Components are considered in `diffusion`, `te`, `vae` order so that repeatedly
 used diffusion weights have priority. Each component's weights use the first
 storage location with enough remaining budget:
 
-1. The main GPU, leaving estimated space for computation and weight staging.
+1. The component's compute GPU, leaving estimated space for computation and weight staging.
 2. CPU RAM, reserving the larger of 2 GiB or 10% of available RAM for other work.
 3. Another GPU, choosing the one with the largest remaining budget that fits.
 4. Disk, reloading weights on demand.
@@ -170,10 +175,17 @@ weight to be copied again at every step.
 RAM and GPU budgets are shared across components. Each component uses a single
 parameter backend; several other GPUs' capacities are not combined to store
 one component. If available RAM cannot be queried, RAM residency is skipped.
-Other GPUs store weights only: weights are copied to the main GPU for execution.
-Auto-fit does not select multi-GPU layer/row computation, so `--split-mode` does
-not change its placements. Use explicit backend assignments for multi-GPU
-computation.
+Weights stored on another GPU are copied to the component's compute devices for
+execution. CPU modules use RAM or disk. Compute reserves and cache priority are
+accounted for separately on each device, so a CPU module does not reserve GPU
+space. Storage on another module's GPU also leaves room for that module's work.
+
+Auto-fit does not select multi-GPU layer/row computation itself. Explicit device
+lists and `--split-mode` still control that computation. Before the runners have
+built their split plans, auto-fit conservatively counts the full component size
+on each listed GPU when checking residency and cache space. This can offload
+parameters even when a split layout would fit; use `--auto-fit off` to keep the
+default split-device parameter placement.
 
 For example, a diffusion model whose full weights exceed the main GPU's budget
 can use `--backend diffusion=cuda0 --params-backend diffusion=cpu` when RAM is
@@ -292,6 +304,7 @@ The example CLI/server still accepts these older CPU placement flags as compatib
 Because this default is inserted first, later explicit `--params-backend` entries can still override it, for example `--offload-to-cpu --params-backend te=disk` keeps non-TE parameters on CPU and reloads TE parameters from disk.
 
 Library callers should set `backend` and `params_backend` directly. `sd_ctx_params_init()`
-enables `auto_fit` by default; nonempty `backend` or `params_backend` assignments disable it.
+enables `auto_fit` by default; a nonempty `params_backend` assignment disables it.
+The `backend` assignment constrains auto-fit's compute placement.
 The old CPU/offload fields are no longer part of the C API. Explicit `--backend` and
 `--params-backend` assignments are preferred for new commands.

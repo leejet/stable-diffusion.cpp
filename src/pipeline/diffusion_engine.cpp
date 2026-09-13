@@ -862,7 +862,7 @@ bool StableDiffusionGGML::init(const sd_ctx_params_t* sd_ctx_params) {
     backend_spec              = SAFE_STR(sd_ctx_params->backend);
     params_backend_spec       = SAFE_STR(sd_ctx_params->params_backend);
     split_mode_spec           = SAFE_STR(sd_ctx_params->split_mode);
-    auto_fit_enabled          = sd_ctx_params->auto_fit && backend_spec.empty() && params_backend_spec.empty();
+    auto_fit_enabled          = sd_ctx_params->auto_fit && params_backend_spec.empty();
     max_vram_assignment.reset(0.f);
     {
         std::string error;

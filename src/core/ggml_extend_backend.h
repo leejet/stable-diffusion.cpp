@@ -93,6 +93,7 @@ ggml_status sd_backend_graph_compute_with_eval_callback(ggml_backend_t backend,
                                                         sd_graph_eval_callback_t callback_eval,
                                                         void* callback_eval_user_data);
 std::string sd_backend_resolve_name(const std::string& name);
+bool sd_parse_backend_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error);
 const char* sd_backend_module_name(SDBackendModule module);
 void ggml_ext_im_set_f32_1d(const struct ggml_tensor* tensor, int i, float value);
 bool add_rpc_devices(const std::string& servers);

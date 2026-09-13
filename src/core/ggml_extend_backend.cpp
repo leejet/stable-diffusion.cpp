@@ -593,7 +593,7 @@ static ggml_backend_t sd_get_default_backend() {
     return backend;
 }
 
-static bool sd_parse_backend_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error) {
+bool sd_parse_backend_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error) {
     if (assignment == nullptr) {
         return false;
     }
