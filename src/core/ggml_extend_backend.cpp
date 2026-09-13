@@ -87,6 +87,10 @@ static bool parse_backend_module(const std::string& raw_name, SDBackendModule* m
         *module = SDBackendModule::DETECTOR;
         return true;
     }
+    if (name == "audioencoder" || name == "audio") {
+        *module = SDBackendModule::AUDIO_ENCODER;
+        return true;
+    }
     return false;
 }
 
@@ -968,6 +972,8 @@ const char* sd_backend_module_name(SDBackendModule module) {
             return "upscaler";
         case SDBackendModule::DETECTOR:
             return "detector";
+        case SDBackendModule::AUDIO_ENCODER:
+            return "audio_encoder";
     }
     return "unknown";
 }

@@ -461,6 +461,11 @@ ArgOptions SDContextParams::get_options() {
          0,
          &audio_vae_path},
         {"",
+         "--audio-encoder",
+         "path to wav2vec2 audio encoder model (Wan2.2 S2V)",
+         0,
+         &audio_encoder_path},
+        {"",
          "--taesd",
          "path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)",
          0,
@@ -898,6 +903,7 @@ std::string SDContextParams::to_string() const {
         << "  vae_path: \"" << vae_path << "\",\n"
         << "  vae_format: \"" << vae_format << "\",\n"
         << "  audio_vae_path: \"" << audio_vae_path << "\",\n"
+        << "  audio_encoder_path: \"" << audio_encoder_path << "\",\n"
         << "  taesd_path: \"" << taesd_path << "\",\n"
         << "  esrgan_path: \"" << esrgan_path << "\",\n"
         << "  control_net_path: \"" << control_net_path << "\",\n"
@@ -963,6 +969,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.embeddings_connectors_path      = embeddings_connectors_path.c_str();
     sd_ctx_params.vae_path                        = vae_path.c_str();
     sd_ctx_params.audio_vae_path                  = audio_vae_path.c_str();
+    sd_ctx_params.audio_encoder_path              = audio_encoder_path.c_str();
     sd_ctx_params.taesd_path                      = taesd_path.c_str();
     sd_ctx_params.control_net_path                = control_net_path.c_str();
     sd_ctx_params.ip_adapter_path                 = ip_adapter_path.c_str();
@@ -1515,6 +1522,14 @@ ArgOptions SDGenerationParams::get_options() {
         return 1;
     };
 
+    auto on_audio_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        ref_audio_paths.push_back(argv[index]);
+        return 1;
+    };
+
     auto on_cache_mode_arg = [&](int argc, const char** argv, int index) {
         if (++index >= argc) {
             return -1;
@@ -1704,6 +1719,10 @@ ArgOptions SDGenerationParams::get_options() {
          "--ref-audio",
          "standalone WAV reference for MiniMax-H3 Ref2VA (can be used multiple times)",
          on_ref_audio_arg},
+        {"",
+         "--audio",
+         "driving audio track (Wan2.2 S2V; can be used once)",
+         on_audio_arg},
         {"",
          "--cache-mode",
          "caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level), 'spectrum' (UNET/DiT Chebyshev+Taylor forecasting)",
