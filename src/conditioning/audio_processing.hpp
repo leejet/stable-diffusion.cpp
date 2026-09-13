@@ -216,9 +216,11 @@ namespace AudioProcessing {
             if (src >= plan.audio_frames) {
                 continue;  // zero padding past the audio end
             }
-            std::copy_n(interpolated.data() + static_cast<size_t>(src) * num_layers * dim,
-                        static_cast<size_t>(num_layers) * dim,
-                        buckets.data() + static_cast<size_t>(frame) * num_layers * dim);
+            for (int layer = 0; layer < num_layers; ++layer) {
+                std::copy_n(interpolated.data() + (static_cast<size_t>(layer) * audio_frames + src) * dim,
+                            static_cast<size_t>(dim),
+                            buckets.data() + (static_cast<size_t>(frame) * num_layers + layer) * dim);
+            }
         }
         return buckets;
     }

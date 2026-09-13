@@ -129,6 +129,10 @@ Notes:
   audio is padded with silence. Pick `--video-frames` to match the audio:
   roughly `audio_seconds * 16` frames, capped at one chunk (77-81 frames,
   ~5 s at the model's 16 fps). 33, 77 and 81 map to clean latent frame counts.
+- S2V always uses 16 fps. Other requested frame rates are automatically
+  changed to 16 with a warning, including the CLI and server video output.
+  `generate_video()` returns the actual frame rate through `fps_out`; C API
+  callers should use that value when encoding the output video.
 - The output video carries the driving audio track: it is muxed into `.avi`
   / `.webm` outputs, truncated to the video duration. Other container types
   fall back to a `.wav` sidecar file next to the video.

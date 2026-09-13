@@ -516,11 +516,14 @@ enum sd_cancel_mode_t {
 SD_API void sd_cancel_generation(sd_ctx_t* sd_ctx, enum sd_cancel_mode_t mode);
 
 SD_API void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params);
+// fps_out may be NULL; otherwise it receives the effective frame rate before preview callbacks.
+// Use this frame rate when encoding the returned frames.
 SD_API bool generate_video(sd_ctx_t* sd_ctx,
                            const sd_vid_gen_params_t* sd_vid_gen_params,
                            sd_image_t** frames_out,
                            int* num_frames_out,
-                           sd_audio_t** audio_out);
+                           sd_audio_t** audio_out,
+                           int* fps_out);
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 

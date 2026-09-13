@@ -1532,10 +1532,14 @@ namespace sd::pipeline {
                         const sd_vid_gen_params_t* sd_vid_gen_params,
                         sd_image_t** frames_out,
                         int* num_frames_out,
-                        sd_audio_t** audio_out) {
+                        sd_audio_t** audio_out,
+                        int* fps_out) {
         if (sd->config_->animatediff_loaded && sd_version_supports_animatediff(sd->version)) {
             LOG_INFO("AnimateDiff dispatch: %d frames, %dx%d",
                      sd_vid_gen_params->video_frames, sd_vid_gen_params->width, sd_vid_gen_params->height);
+            if (fps_out != nullptr) {
+                *fps_out = std::max(1, sd_vid_gen_params->fps);
+            }
             return generate_animatediff_video(sd, sd_vid_gen_params, frames_out, num_frames_out);
         }
 
@@ -1547,6 +1551,9 @@ namespace sd::pipeline {
         sd->vae_tiling_params = sd_vid_gen_params->vae_tiling_params;
         sd->apply_circular_axes(sd_vid_gen_params->circular_x, sd_vid_gen_params->circular_y);
         GenerationRequest request(sd, sd_vid_gen_params);
+        if (fps_out != nullptr) {
+            *fps_out = request.fps;
+        }
         bool latent_upscale_enabled     = request.hires.enabled;
         GenerationRequest hires_request = request;
         if (latent_upscale_enabled) {
@@ -1929,7 +1936,7 @@ namespace sd::pipeline {
         if (sd->version == VERSION_WAN2_2_S2V && generated_audio != nullptr) {
             // The model conditioned on the first chunk window only; keep the muxed
             // track aligned with the decoded video duration.
-            int fps               = sd_vid_gen_params->fps > 0 ? sd_vid_gen_params->fps : 16;
+            int fps               = request.fps;
             uint64_t video_frames = num_frames_out != nullptr ? (uint64_t)*num_frames_out : 0;
             uint64_t want_samples = (uint64_t)((double)video_frames / fps * generated_audio->sample_rate);
             LOG_DEBUG("s2v audio truncate: %llu samples -> %llu (video %llu frames @ %d fps)",

@@ -724,8 +724,12 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                            const sd_vid_gen_params_t* sd_vid_gen_params,
                            sd_image_t** frames_out,
                            int* num_frames_out,
-                           sd_audio_t** audio_out) {
+                           sd_audio_t** audio_out,
+                           int* fps_out) {
     if (sd_ctx == nullptr || sd_ctx->sd == nullptr || sd_vid_gen_params == nullptr) {
+        if (fps_out != nullptr) {
+            *fps_out = 0;
+        }
         return false;
     }
 
@@ -741,10 +745,13 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
 
     StableDiffusionGGML::ExecutionScope execution(*sd_ctx->sd);
     if (!execution.ready) {
+        if (fps_out != nullptr) {
+            *fps_out = 0;
+        }
         return false;
     }
 
-    return sd::pipeline::generate_video(sd_ctx->sd, sd_vid_gen_params, frames_out, num_frames_out, audio_out);
+    return sd::pipeline::generate_video(sd_ctx->sd, sd_vid_gen_params, frames_out, num_frames_out, audio_out, fps_out);
 }
 
 SD_API void free_sd_images(sd_image_t* result_images, int num_images) {
