@@ -720,9 +720,9 @@ ArgOptions SDContextParams::get_options() {
          }},
         {"",
          "--auto-fit",
-         "on|off (default: on). Use one GPU for diffusion/te/vae computation and place weights on that GPU, "
+         "on|off (default: on). Preserve --backend (otherwise select one GPU) and place weights on the compute GPU, "
          "RAM, another GPU, or disk in that order, according to available memory (--max-vram limits GPU budgets). "
-         "Disabled by explicit --backend or --params-backend; uses automatic graph segmentation when needed",
+         "Disabled by explicit --params-backend; uses automatic graph segmentation when needed",
          on_auto_fit_arg},
         {"",
          "--type",

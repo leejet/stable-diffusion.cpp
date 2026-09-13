@@ -27,7 +27,7 @@ Using `--offload-to-cpu` allows you to offload weights to the CPU, saving VRAM w
 
 ## Use params backend to reduce VRAM or RAM usage.
 
-`--params-backend` controls where model parameters are kept. If it is not set, parameters use the same backend as `--backend`, so a GPU runtime backend also keeps parameters in VRAM.
+`--params-backend` controls where model parameters are kept. If it is not set, auto-fit chooses parameter placement while preserving `--backend`. With `--auto-fit off`, parameters use the same backend as `--backend`, so a GPU runtime backend also keeps parameters in VRAM.
 
 Use CPU params to reduce VRAM usage:
 
