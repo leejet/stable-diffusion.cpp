@@ -964,6 +964,9 @@ std::optional<Tensor<float>> GGMLRunner::execute_graph(ggml_cgraph* graph, int n
                 }
             }
         }
+        if (!workspace_.segment_end()) {
+            return fail_segment("workspace synchronization");
+        }
         // Final outputs and their callbacks may still be views of consumed cuts.
         cut_cache_.prune(segment.future_cut_names);
     }

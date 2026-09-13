@@ -660,7 +660,13 @@ void SDBackendAssignment::set_module(SDBackendModule module, const std::string& 
 }
 
 void SDBackendHandleDeleter::operator()(ggml_backend_t backend) const {
-    ggml_backend_free(backend);
+    try {
+        ggml_backend_free(backend);
+    } catch (const std::exception& error) {
+        LOG_ERROR("backend cleanup failed: %s", error.what());
+    } catch (...) {
+        LOG_ERROR("backend cleanup failed: unknown exception");
+    }
 }
 
 SDBackendManager::~SDBackendManager() {
