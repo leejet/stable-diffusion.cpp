@@ -22,3 +22,6 @@ Metadata mode inspects PNG/JPEG container metadata without loading any model:
 ./bin/sd-cli -M metadata --image ./output.png --metadata-raw
 ./bin/sd-cli -M metadata --image ./output.png --metadata-all
 ```
+
+For completely black or white images or videos, NaNs, and the `--linear-scale` /
+`--attn-scale` workaround, see [Troubleshooting](../../docs/troubleshooting.md).

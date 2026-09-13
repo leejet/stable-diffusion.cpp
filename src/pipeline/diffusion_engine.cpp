@@ -99,8 +99,12 @@ const char* model_version_to_str[] = {
     "SeFi-Image",
     "Krea2",
     "Mage Flow",
+    "SenseNova U1.5",
     "ESRGAN",
 };
+
+static_assert(VERSION_COUNT == sizeof(model_version_to_str) / sizeof(model_version_to_str[0]),
+              "\nnumber of elements in model_version_to_str[] != VERSION_COUNT");
 
 void calculate_alphas_cumprod(float* alphas_cumprod,
                               float linear_start = 0.00085f,
@@ -853,6 +857,12 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
 }
 
 bool StableDiffusionGGML::init(const sd_ctx_params_t* sd_ctx_params) {
+    for (float scale : {sd_ctx_params->linear_scale, sd_ctx_params->attn_scale}) {
+        if (!std::isfinite(scale) || scale < 0.f || (scale > 0.f && !std::isfinite(1.f / scale))) {
+            LOG_ERROR("scale overrides must be finite positive values, or 0 to keep model defaults");
+            return false;
+        }
+    }
     auto configuration        = std::make_unique<ModelConfig>(*sd_ctx_params);
     n_threads                 = sd_ctx_params->n_threads;
     enable_mmap               = sd_ctx_params->enable_mmap;
@@ -862,7 +872,7 @@ bool StableDiffusionGGML::init(const sd_ctx_params_t* sd_ctx_params) {
     backend_spec              = SAFE_STR(sd_ctx_params->backend);
     params_backend_spec       = SAFE_STR(sd_ctx_params->params_backend);
     split_mode_spec           = SAFE_STR(sd_ctx_params->split_mode);
-    auto_fit_enabled          = sd_ctx_params->auto_fit && backend_spec.empty() && params_backend_spec.empty();
+    auto_fit_enabled          = sd_ctx_params->auto_fit && params_backend_spec.empty();
     max_vram_assignment.reset(0.f);
     {
         std::string error;
@@ -1328,6 +1338,9 @@ bool StableDiffusionGGML::build_denoiser() {
             pred_type = SEFI_FLOW_PRED;
         } else if (sd_version_is_minit2i(version)) {
             pred_type = MINIT2I_FLOW_PRED;
+        } else if (sd_version_is_sensenova_u1(version)) {
+            pred_type          = SENSENOVA_U1_FLOW_PRED;
+            default_flow_shift = 3.f;
         } else {
             pred_type = EPS_PRED;
         }
@@ -1371,6 +1384,11 @@ bool StableDiffusionGGML::build_denoiser() {
         case MINIT2I_FLOW_PRED: {
             LOG_INFO("running in MiniT2I FLOW mode");
             denoiser = std::make_shared<MiniT2IFlowDenoiser>();
+            break;
+        }
+        case SENSENOVA_U1_FLOW_PRED: {
+            LOG_INFO("running in SenseNova U1.5 FLOW mode");
+            denoiser = std::make_shared<SenseNovaU1FlowDenoiser>(default_flow_shift);
             break;
         }
         default: {
@@ -2386,6 +2404,9 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
             } else if (sd_version_is_minit2i(version)) {
                 diffusion_params.extra = MiniT2IDiffusionExtra{
                     condition.c_vector.empty() ? nullptr : &condition.c_vector};
+            } else if (sd_version_is_sensenova_u1(version)) {
+                diffusion_params.extra = SenseNovaU1DiffusionExtra{
+                    condition.c_input_ids.empty() ? nullptr : &condition.c_input_ids};
             } else {
                 diffusion_params.extra = std::monostate{};
             }
@@ -2542,7 +2563,9 @@ int StableDiffusionGGML::get_vae_scale_factor() {
 int StableDiffusionGGML::get_diffusion_model_down_factor() {
     int down_factor = 8;  // unet
     if (sd_version_is_dit(version)) {
-        if (sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_minimax_h3(version)) {
+        if (sd_version_is_sensenova_u1(version)) {
+            down_factor = 32;
+        } else if (sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_minimax_h3(version)) {
             down_factor = 2;
         } else {
             down_factor = 1;
@@ -2567,6 +2590,8 @@ int StableDiffusionGGML::get_latent_channel() {
         } else if (version == VERSION_CHROMA_RADIANCE) {
             latent_channel = 3;
         } else if (sd_version_is_minit2i(version)) {
+            latent_channel = 3;
+        } else if (sd_version_is_sensenova_u1(version)) {
             latent_channel = 3;
         } else if (sd_version_is_pid(version)) {
             latent_channel = 3;

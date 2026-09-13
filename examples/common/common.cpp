@@ -302,8 +302,12 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                         invalid_arg = true;
                         return;
                     }
-                    *option.target = std::stoi(argv[i]);
-                    found_arg      = true;
+                    try {
+                        *option.target = std::stoi(argv[i]);
+                    } catch (const std::invalid_argument&) {
+                        invalid_arg = true;
+                    }
+                    found_arg = true;
                 }))
                 break;
 
@@ -312,8 +316,12 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                         invalid_arg = true;
                         return;
                     }
-                    *option.target = std::stof(argv[i]);
-                    found_arg      = true;
+                    try {
+                        *option.target = std::stof(argv[i]);
+                    } catch (const std::invalid_argument&) {
+                        invalid_arg = true;
+                    }
+                    found_arg = true;
                 }))
                 break;
 
@@ -337,7 +345,8 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
 
         if (invalid_arg) {
             if (!valid) {
-                LOG_ERROR("error: invalid parameter for argument: %s", arg.c_str());
+                LOG_ERROR("error: invalid parameter for argument \"%s\": \"%s\"",
+                          arg.c_str(), (i >= argc) ? "" : argv[i]);
             }
             return false;
         }
@@ -348,6 +357,25 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
     }
 
     return true;
+}
+
+static int parse_scale_override(int argc, const char** argv, int index, float& scale) {
+    if (++index >= argc) {
+        return -1;
+    }
+    try {
+        size_t end              = 0;
+        const std::string value = argv[index];
+        float parsed            = std::stof(value, &end);
+        if (end != value.size() || !std::isfinite(parsed) || parsed < 0.f ||
+            (parsed > 0.f && !std::isfinite(1.f / parsed))) {
+            return -1;
+        }
+        scale = parsed;
+    } catch (const std::exception&) {
+        return -1;
+    }
+    return 1;
 }
 
 ArgOptions SDContextParams::get_options() {
@@ -684,10 +712,22 @@ ArgOptions SDContextParams::get_options() {
 
     options.manual_options = {
         {"",
+         "--linear-scale",
+         "linear input scale override (float, default: 0 = model default, 1 = no scaling)",
+         [this](int argc, const char** argv, int index) {
+             return parse_scale_override(argc, argv, index, linear_scale);
+         }},
+        {"",
+         "--attn-scale",
+         "flash-attention K/V scale override (float, default: 0 = model default, 1 = no scaling); requires --fa or --diffusion-fa",
+         [this](int argc, const char** argv, int index) {
+             return parse_scale_override(argc, argv, index, attn_scale);
+         }},
+        {"",
          "--auto-fit",
-         "on|off (default: on). Use one GPU for diffusion/te/vae computation and place weights on that GPU, "
+         "on|off (default: on). Preserve --backend (otherwise select one GPU) and place weights on the compute GPU, "
          "RAM, another GPU, or disk in that order, according to available memory (--max-vram limits GPU budgets). "
-         "Disabled by explicit --backend or --params-backend; uses automatic graph segmentation when needed",
+         "Disabled by explicit --params-backend; uses automatic graph segmentation when needed",
          on_auto_fit_arg},
         {"",
          "--type",
@@ -892,6 +932,8 @@ std::string SDContextParams::to_string() const {
         << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
         << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
+        << "  linear_scale: " << linear_scale << ",\n"
+        << "  attn_scale: " << attn_scale << ",\n"
         << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
         << "  vae_conv_direct: " << (vae_conv_direct ? "true" : "false") << ",\n"
         << "  prediction: " << sd_prediction_name(prediction) << ",\n"
@@ -946,6 +988,8 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.enable_mmap                     = enable_mmap;
     sd_ctx_params.flash_attn                      = flash_attn;
     sd_ctx_params.diffusion_flash_attn            = diffusion_flash_attn;
+    sd_ctx_params.linear_scale                    = linear_scale;
+    sd_ctx_params.attn_scale                      = attn_scale;
     sd_ctx_params.tae_preview_only                = taesd_preview;
     sd_ctx_params.diffusion_conv_direct           = diffusion_conv_direct;
     sd_ctx_params.vae_conv_direct                 = vae_conv_direct;

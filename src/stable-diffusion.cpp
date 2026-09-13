@@ -156,6 +156,7 @@ const char* prediction_to_str[] = {
     "flux_flow",
     "sefi_flow",
     "minit2i_flow",
+    "sensenova_u1_flow",
 };
 
 const char* sd_prediction_name(enum prediction_t prediction) {
@@ -322,6 +323,8 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->eager_load                = false;
     sd_ctx_params->enable_mmap               = false;
     sd_ctx_params->diffusion_flash_attn      = false;
+    sd_ctx_params->linear_scale              = 0.f;
+    sd_ctx_params->attn_scale                = 0.f;
     sd_ctx_params->vae_format                = SD_VAE_FORMAT_AUTO;
     sd_ctx_params->backend                   = nullptr;
     sd_ctx_params->params_backend            = nullptr;
@@ -374,6 +377,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "auto_fit: %s\n"
              "flash_attn: %s\n"
              "diffusion_flash_attn: %s\n"
+             "linear_scale: %g\n"
+             "attn_scale: %g\n"
              "vae_format: %s\n",
              SAFE_STR(sd_ctx_params->model_path),
              SAFE_STR(sd_ctx_params->clip_l_path),
@@ -410,6 +415,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              BOOL_STR(sd_ctx_params->auto_fit),
              BOOL_STR(sd_ctx_params->flash_attn),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
+             sd_ctx_params->linear_scale,
+             sd_ctx_params->attn_scale,
              sd_vae_format_name(sd_ctx_params->vae_format));
 
     return buf;
@@ -695,6 +702,13 @@ SD_API bool sd_ctx_has_control_net(const sd_ctx_t* sd_ctx) {
         return false;
     }
     return sd_ctx->sd->control_net != nullptr;
+}
+
+const char* sd_get_model_version_name(const sd_ctx_t* sd_ctx) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || sd_ctx->sd->version >= VERSION_COUNT) {
+        return "Unknown";
+    }
+    return model_version_to_str[sd_ctx->sd->version];
 }
 
 enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx) {
