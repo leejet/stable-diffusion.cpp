@@ -340,7 +340,8 @@ namespace LLM {
             // The default would reject valid models, so only compare a detected dim.
             if (enable_vision && out_hidden_size_detected &&
                 config.vision.out_hidden_size != config.hidden_size) {
-                LOG_ERROR("vision projector output size (%" PRId64 ") does not match LLM hidden size (%" PRId64 "), "
+                LOG_ERROR("vision projector output size (%" PRId64 ") does not match LLM hidden size (%" PRId64
+                          "), "
                           "the vision weights (mmproj) likely belong to a different LLM variant, vision disabled",
                           config.vision.out_hidden_size,
                           config.hidden_size);
