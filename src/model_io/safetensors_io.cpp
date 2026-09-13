@@ -87,9 +87,9 @@ static ggml_type safetensors_dtype_to_ggml_type(const std::string& dtype) {
     } else if (dtype == "F64") {
         ttype = GGML_TYPE_F32;
     } else if (dtype == "F8_E4M3") {
-        ttype = GGML_TYPE_F16;
+        ttype = GGML_TYPE_F8_E4M3;
     } else if (dtype == "F8_E5M2") {
-        ttype = GGML_TYPE_F16;
+        ttype = GGML_TYPE_F8_E5M2;
     } else if (dtype == "I32") {
         ttype = GGML_TYPE_I32;
     } else if (dtype == "I64") {
@@ -144,7 +144,8 @@ static bool read_comfy_quant_config(std::ifstream& file,
 bool read_safetensors_file(const std::string& file_path,
                            std::vector<TensorStorage>& tensor_storages,
                            std::string* error,
-                           std::map<std::string, std::string>* metadata) {
+                           std::map<std::string, std::string>* metadata,
+                           std::set<std::string>* tensor_names) {
     std::ifstream file(file_path, std::ios::binary);
     if (!file.is_open()) {
         set_error(error, "failed to open '" + file_path + "'");
@@ -237,7 +238,7 @@ bool read_safetensors_file(const std::string& file_path,
     for (auto& item : header_.items()) {
         std::string name           = item.key();
         nlohmann::json tensor_info = item.value();
-        // LOG_DEBUG("%s %s\n", name.c_str(), tensor_info.dump().c_str());
+        // LOG_VERBOSE("%s %s\n", name.c_str(), tensor_info.dump().c_str());
 
         if (name == "__metadata__") {
             continue;
@@ -246,7 +247,8 @@ bool read_safetensors_file(const std::string& file_path,
         std::string dtype    = tensor_info["dtype"];
         nlohmann::json shape = tensor_info["shape"];
 
-        if (dtype == "U8") {
+        // ComfyUI FP8 activation scales cancel when inference uses F16/F32 activations.
+        if (ends_with(name, ".scale_input")) {
             continue;
         }
 
@@ -255,6 +257,26 @@ bool read_safetensors_file(const std::string& file_path,
         if (begin > end || end > file_size_ - data_start) {
             set_error(error, "data offsets out of bounds for tensor '" + name + "'");
             return false;
+        }
+
+        if (tensor_names != nullptr) {
+            tensor_names->insert(name);
+        }
+        if (dtype == "U8") {
+            uint64_t bytes = 1;
+            for (const auto& dimension : shape) {
+                const int64_t size = dimension.get<int64_t>();
+                if (size < 0 || (bytes != 0 && static_cast<uint64_t>(size) > UINT64_MAX / bytes)) {
+                    set_error(error, "invalid dimensions for tensor '" + name + "'");
+                    return false;
+                }
+                bytes *= size;
+            }
+            if (bytes != end - begin) {
+                set_error(error, "size mismatch for tensor '" + name + "'");
+                return false;
+            }
+            continue;
         }
 
         ggml_type type = safetensors_dtype_to_ggml_type(dtype);
@@ -270,8 +292,20 @@ bool read_safetensors_file(const std::string& file_path,
 
         int n_dims              = (int)shape.size();
         int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1};
+        uint64_t elements       = 1;
         for (int i = 0; i < n_dims; i++) {
             ne[i] = shape[i].get<int64_t>();
+            if (ne[i] < 0 || (elements != 0 && static_cast<uint64_t>(ne[i]) > INT64_MAX / elements)) {
+                set_error(error, "invalid dimensions for tensor '" + name + "'");
+                return false;
+            }
+            elements *= ne[i];
+        }
+        const uint64_t storage_size = ggml_type_size(type) * ((dtype == "F64" || dtype == "I64") ? 2 : 1);
+        if (elements % ggml_blck_size(type) != 0 ||
+            elements / ggml_blck_size(type) > INT64_MAX / storage_size) {
+            set_error(error, "invalid storage size for tensor '" + name + "'");
+            return false;
         }
 
         if (n_dims == 5) {
@@ -328,12 +362,10 @@ bool read_safetensors_file(const std::string& file_path,
         bool tensor_size_ok;
         if (dtype == "F8_E4M3") {
             tensor_storage.is_f8_e4m3 = true;
-            // f8 -> f16
-            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size * 2);
+            tensor_size_ok            = (tensor_storage.nbytes() == tensor_data_size);
         } else if (dtype == "F8_E5M2") {
             tensor_storage.is_f8_e5m2 = true;
-            // f8 -> f16
-            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size * 2);
+            tensor_size_ok            = (tensor_storage.nbytes() == tensor_data_size);
         } else if (dtype == "F64") {
             tensor_storage.is_f64 = true;
             // f64 -> f32
@@ -352,7 +384,7 @@ bool read_safetensors_file(const std::string& file_path,
 
         tensor_storages.push_back(tensor_storage);
 
-        // LOG_DEBUG("%s %s", tensor_storage.to_string().c_str(), dtype.c_str());
+        // LOG_VERBOSE("%s %s", tensor_storage.to_string().c_str(), dtype.c_str());
     }
 
     return true;

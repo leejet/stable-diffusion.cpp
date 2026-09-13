@@ -15,6 +15,7 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
+* **2026/08/20** 🚀 stable-diffusion.cpp now supports **LTX-2.5**
 * **2026/08/04** 🚀 stable-diffusion.cpp adds **Day-1 support for MiniMax-H3**
 * **2026/06/25** 🚀 stable-diffusion.cpp now supports **Krea2**
 * **2026/06/04** 🚀 stable-diffusion.cpp now supports **Ideogram4**
@@ -50,6 +51,7 @@ API and command-line option may change frequently.***
     - [LongCat Image](./docs/longcat_image.md)
     - [Z-Image](./docs/z_image.md)
     - [MiniT2I](./docs/minit2i.md)
+    - [SenseNova U1.5](./docs/sensenova_u1.md)
     - [Ovis-Image](./docs/ovis_image.md)
     - [Anima](./docs/anima.md)
     - [ERNIE-Image](./docs/ernie_image.md)
@@ -68,7 +70,7 @@ API and command-line option may change frequently.***
   - Video Models
     - [Wan2.1/Wan2.2](./docs/wan.md)
     - [MiniMax-H3](./docs/minimax_h3.md)
-    - [LTX-2.3](./docs/ltx2.md)
+    - [LTX-2.3/LTX-2.5](./docs/ltx2.md)
     - [HunyuanVideo 1.5](./docs/hunyuan_video.md)
     - [LingBot-Video](./docs/lingbot_video.md)
   - [PhotoMaker](./docs/photo_maker.md) support.
@@ -146,6 +148,7 @@ For runtime and parameter backend placement, see the [backend selection guide](.
 
 ## More Guides
 
+- [Troubleshooting](./docs/troubleshooting.md)
 - [Backend selection](./docs/backend.md)
 - [RPC](./docs/rpc.md)
 - [LoRA](./docs/lora.md)

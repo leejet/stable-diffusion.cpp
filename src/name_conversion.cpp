@@ -149,6 +149,7 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix) 
         {"ffn_up.", "mlp.up_proj."},
         {"ffn_post_norm.", "post_ffw_norm."},
         {"ffn_norm.", "post_attention_layernorm."},
+        {"layer_output_scale.weight", "layer_scalar"},
         {"output_norm.", "model.norm."},
     };
 
@@ -1447,7 +1448,7 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
             }
         }
 
-        // LOG_DEBUG("name %s %d", name.c_str(), version);
+        // LOG_VERBOSE("name %s %d", name.c_str(), version);
 
         if (sd_version_is_unet(version) || is_underline || is_lycoris_underline) {
             name = convert_sep_to_dot(name);
@@ -1459,6 +1460,7 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
         {"unet.", "model.diffusion_model."},
         {"transformer.", "model.diffusion_model."},  // dit
         {"vae.", "first_stage_model."},
+        {"text_encoders.llm.text_embedding_projection.", "text_embedding_projection."},
         {"text_encoder.", "cond_stage_model.transformer."},
         {"te.", "cond_stage_model.transformer."},
         {"text_encoder.2.", "cond_stage_model.1.transformer."},
@@ -1568,6 +1570,11 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
             name = convert_diffusers_controlnet_to_original_sdxl(name);
         }
     }
+
+    static const std::vector<std::pair<std::string, std::string>> generic_name_map = {
+        {".scale_weight", ".weight_scale"},
+    };
+    replace_with_name_map(name, generic_name_map);
 
     if (is_lora) {
         name = "lora." + name;

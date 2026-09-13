@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cinttypes>
 #include <cmath>
 #include <fstream>
 #include <functional>
@@ -18,8 +19,13 @@
 #include <utility>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
+#include "core/ggml_tensor_utils.h"
+#include "core/util.h"
 #include "json.hpp"
+#include "model/common/ggml_block.hpp"
 #include "model/common/rope.hpp"
 #include "model_loader.h"
 #include "model_manager.h"
@@ -40,6 +46,7 @@ namespace LLM {
         MINISTRAL_3_3B,
         GEMMA3_12B,
         GEMMA2_2B,
+        GEMMA4_12B,
         GPT_OSS_20B,
         ARCH_COUNT,
     };
@@ -52,6 +59,7 @@ namespace LLM {
         "ministral3.3b",
         "gemma3_12b",
         "gemma2_2b",
+        "gemma4_12b",
         "gpt_oss_20b",
     };
 
@@ -120,9 +128,19 @@ namespace LLM {
         bool have_vision_weight = false;
         bool llama_cpp_style    = false;
 
+        // gemma4 config
+        int global_head_dim         = 0;
+        int num_global_kv_heads     = 0;
+        float global_partial_rotary = 1.f;
+        bool global_k_eq_v          = false;
+        bool v_norm                 = false;
+        bool layer_scalar           = false;
+        bool unscaled_attention     = false;
+
         static LLMConfig detect_from_weights(const String2TensorStorage& tensor_storage_map,
                                              const std::string& prefix,
-                                             LLMArch arch) {
+                                             LLMArch arch,
+                                             bool& enable_vision) {
             LLMConfig config;
             config.arch = arch;
             if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
@@ -156,6 +174,27 @@ namespace LLM {
                 config.mlp_activation          = MLPActivation::GELU_TANH;
                 config.rope_thetas             = {1000000.f, 10000.f};
                 config.rope_scales             = {8.f, 1.f};
+                config.sliding_attention       = {1024, 1024, 1024, 1024, 1024, 0};
+            } else if (arch == LLMArch::GEMMA4_12B) {
+                config.head_dim                = 256;
+                config.num_heads               = 16;
+                config.num_kv_heads            = 8;
+                config.global_head_dim         = 512;
+                config.num_global_kv_heads     = 1;
+                config.global_partial_rotary   = 0.25f;
+                config.global_k_eq_v           = true;
+                config.v_norm                  = true;
+                config.layer_scalar            = true;
+                config.unscaled_attention      = true;
+                config.qkv_bias                = false;
+                config.qk_norm                 = true;
+                config.rms_norm_eps            = 1e-6f;
+                config.rms_norm_add            = false;
+                config.normalize_input         = true;
+                config.max_position_embeddings = 262144;
+                config.mlp_activation          = MLPActivation::GELU_TANH;
+                config.rope_thetas             = {1000000.f, 10000.f};
+                config.rope_scales             = {1.f, 1.f};
                 config.sliding_attention       = {1024, 1024, 1024, 1024, 1024, 0};
             } else if (arch == LLMArch::GEMMA2_2B) {
                 config.head_dim                = 256;
@@ -192,8 +231,9 @@ namespace LLM {
                 config.num_experts_per_tok     = 4;
             }
 
-            config.num_layers          = 0;
-            int detected_vision_layers = 0;
+            config.num_layers             = 0;
+            int detected_vision_layers    = 0;
+            bool out_hidden_size_detected = false;
             for (const auto& [name, tensor_storage] : tensor_storage_map) {
                 if (!starts_with(name, prefix)) {
                     continue;
@@ -232,13 +272,14 @@ namespace LLM {
                             }
                         }
                     }
-                    if (contains(name, "visual.blocks.0.mlp.linear_fc1.weight") ||
-                        contains(name, "visual.blocks.0.mlp.gate_proj.weight")) {
+                    if (ends_with(name, "visual.blocks.0.mlp.linear_fc1.weight") ||
+                        ends_with(name, "visual.blocks.0.mlp.gate_proj.weight")) {
                         config.vision.intermediate_size = tensor_storage.ne[1];
                     }
-                    if (contains(name, "visual.merger.linear_fc2.weight") ||
-                        contains(name, "visual.merger.mlp.2.weight")) {
+                    if (ends_with(name, "visual.merger.linear_fc2.weight") ||
+                        ends_with(name, "visual.merger.mlp.2.weight")) {
                         config.vision.out_hidden_size = tensor_storage.ne[1];
+                        out_hidden_size_detected      = true;
                     }
                     continue;
                 }
@@ -256,22 +297,26 @@ namespace LLM {
                     config.hidden_size = tensor_storage.ne[0];
                     config.vocab_size  = tensor_storage.ne[1];
                 }
-                if (contains(name, "layers.0.mlp.gate_proj.weight")) {
+                if (ends_with(name, "layers.0.mlp.gate_proj.weight")) {
                     config.intermediate_size = tensor_storage.ne[1];
                 }
-                if (contains(name, "layers.0.mlp.experts.gate_up_proj.weight")) {
+                if (ends_with(name, "layers.0.mlp.experts.gate_up_proj.weight")) {
                     config.intermediate_size = tensor_storage.ne[1] / 2;
                 }
-                if (contains(name, "layers.0.mlp.experts.gate_proj.weight")) {
+                if (ends_with(name, "layers.0.mlp.experts.gate_proj.weight")) {
                     config.intermediate_size = tensor_storage.ne[1];
                 }
             }
             if ((arch == LLMArch::QWEN3 || arch == LLMArch::QWEN3_VL) && config.num_layers == 28) {
                 config.num_heads = 16;
             }
-            if (arch == LLMArch::QWEN3_VL && config.num_layers == 50 && config.hidden_size == 5120) {
-                config.num_heads  = 64;
-                config.final_norm = false;
+            if (arch == LLMArch::QWEN3_VL &&
+                (config.num_layers == 50 || config.num_layers == 64) &&
+                config.hidden_size == 5120) {
+                config.num_heads = 64;
+                if (config.num_layers == 50) {
+                    config.final_norm = false;
+                }
             }
             if (detected_vision_layers > 0) {
                 config.vision.num_layers = detected_vision_layers;
@@ -283,11 +328,24 @@ namespace LLM {
                     config.vision.deepstack_visual_indexes = {8, 16, 24};
                 }
             }
-            LOG_DEBUG("llm: num_layers = %" PRId64 ", vocab_size = %" PRId64 ", hidden_size = %" PRId64 ", intermediate_size = %" PRId64,
-                      config.num_layers,
-                      config.vocab_size,
-                      config.hidden_size,
-                      config.intermediate_size);
+            LOG_VERBOSE("llm: num_layers = %" PRId64 ", vocab_size = %" PRId64 ", hidden_size = %" PRId64 ", intermediate_size = %" PRId64,
+                        config.num_layers,
+                        config.vocab_size,
+                        config.hidden_size,
+                        config.intermediate_size);
+            if (enable_vision && !config.have_vision_weight) {
+                LOG_WARN("no vision weights detected, vision disabled");
+                enable_vision = false;
+            }
+            // The default would reject valid models, so only compare a detected dim.
+            if (enable_vision && out_hidden_size_detected &&
+                config.vision.out_hidden_size != config.hidden_size) {
+                LOG_ERROR("vision projector output size (%" PRId64 ") does not match LLM hidden size (%" PRId64 "), "
+                          "the vision weights (mmproj) likely belong to a different LLM variant, vision disabled",
+                          config.vision.out_hidden_size,
+                          config.hidden_size);
+                enable_vision = false;
+            }
             return config;
         }
     };
@@ -1059,6 +1117,11 @@ namespace LLM {
         std::vector<float> rope_thetas;
         std::vector<float> rope_scales;
         bool has_attention_sinks;
+        bool k_eq_v;
+        bool v_norm;
+        bool unscaled_attention;
+        float rms_norm_eps;
+        int rope_pairs;
 
         void init_params(ggml_context* ctx,
                          const String2TensorStorage& tensor_storage_map = {},
@@ -1069,24 +1132,48 @@ namespace LLM {
         }
 
     public:
-        Attention(const LLMConfig& config)
+        Attention(const LLMConfig& config, bool global_layer = false)
             : arch(config.arch),
               num_heads(config.num_heads),
-              num_kv_heads(config.num_kv_heads),
-              head_dim(config.head_dim),
+              num_kv_heads(global_layer && config.num_global_kv_heads > 0 ? config.num_global_kv_heads : config.num_kv_heads),
+              head_dim(global_layer && config.global_head_dim > 0 ? config.global_head_dim : config.head_dim),
               qk_norm(config.qk_norm),
               max_position_embeddings(config.max_position_embeddings),
               rope_thetas(config.rope_thetas),
               rope_scales(config.rope_scales),
-              has_attention_sinks(config.arch == LLMArch::GPT_OSS_20B) {
+              has_attention_sinks(config.arch == LLMArch::GPT_OSS_20B),
+              k_eq_v(global_layer && config.global_k_eq_v),
+              v_norm(config.v_norm),
+              unscaled_attention(config.unscaled_attention),
+              rms_norm_eps(config.rms_norm_eps),
+              rope_pairs(0) {
             blocks["q_proj"] = std::make_shared<Linear>(config.hidden_size, num_heads * head_dim, config.qkv_bias);
             blocks["k_proj"] = std::make_shared<Linear>(config.hidden_size, num_kv_heads * head_dim, config.qkv_bias);
-            blocks["v_proj"] = std::make_shared<Linear>(config.hidden_size, num_kv_heads * head_dim, config.qkv_bias);
+            if (!k_eq_v) {
+                blocks["v_proj"] = std::make_shared<Linear>(config.hidden_size, num_kv_heads * head_dim, config.qkv_bias);
+            }
             blocks["o_proj"] = std::make_shared<Linear>(num_heads * head_dim, config.hidden_size, config.attention_out_bias);
             if (config.qk_norm) {
                 blocks["q_norm"] = std::make_shared<LLMRMSNorm>(head_dim, config.rms_norm_eps, config.rms_norm_add);
                 blocks["k_norm"] = std::make_shared<LLMRMSNorm>(head_dim, config.rms_norm_eps, config.rms_norm_add);
             }
+            // Proportional RoPE rotates only the leading `rope_pairs` dimension pairs of the head;
+            // the rest are left unrotated through freq_factors (see rope_freq_factors()).
+            float partial = global_layer ? config.global_partial_rotary : 1.f;
+            rope_pairs    = static_cast<int>(partial * head_dim / 2.f);
+        }
+
+        // ggml applies theta_i / freq_factors[i], so a huge factor collapses the angle to zero and
+        // leaves that pair unrotated. This reproduces transformers' "proportional" RoPE, whose
+        // inv_freq is zero-padded past `rope_pairs`, without reordering the head.
+        ggml_tensor* rope_freq_factors(ggml_context* ctx) const {
+            int pairs = head_dim / 2;
+            if (rope_pairs >= pairs) {
+                return nullptr;
+            }
+            auto rotated   = ggml_ext_ones(ctx, rope_pairs, 1, 1, 1);
+            auto unrotated = ggml_ext_full(ctx, 1e30f, pairs - rope_pairs, 1, 1, 1);
+            return ggml_concat(ctx, rotated, unrotated, 0);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -1099,12 +1186,12 @@ namespace LLM {
             int64_t N       = x->ne[2];
             auto q_proj     = std::dynamic_pointer_cast<Linear>(blocks["q_proj"]);
             auto k_proj     = std::dynamic_pointer_cast<Linear>(blocks["k_proj"]);
-            auto v_proj     = std::dynamic_pointer_cast<Linear>(blocks["v_proj"]);
+            auto v_proj     = k_eq_v ? nullptr : std::dynamic_pointer_cast<Linear>(blocks["v_proj"]);
             auto out_proj   = std::dynamic_pointer_cast<Linear>(blocks["o_proj"]);
 
-            auto q = q_proj->forward(ctx, x);  // [N, n_token, num_heads*head_dim]
-            auto k = k_proj->forward(ctx, x);  // [N, n_token, num_kv_heads*head_dim]
-            auto v = v_proj->forward(ctx, x);  // [N, n_token, num_kv_heads*head_dim]
+            auto q = q_proj->forward(ctx, x);               // [N, n_token, num_heads*head_dim]
+            auto k = k_proj->forward(ctx, x);               // [N, n_token, num_kv_heads*head_dim]
+            auto v = k_eq_v ? k : v_proj->forward(ctx, x);  // [N, n_token, num_kv_heads*head_dim]
 
             q = ggml_reshape_4d(ctx->ggml_ctx, q, head_dim, num_heads, n_token, N);     // [N, n_token, num_heads, head_dim]
             k = ggml_reshape_4d(ctx->ggml_ctx, k, head_dim, num_kv_heads, n_token, N);  // [N, n_token, num_kv_heads, head_dim]
@@ -1116,6 +1203,10 @@ namespace LLM {
 
                 q = q_norm->forward(ctx, q);
                 k = k_norm->forward(ctx, k);
+            }
+            if (v_norm) {
+                // Gemma 4 normalizes V with a weightless RMS norm, and never rotates it.
+                v = ggml_rms_norm(ctx->ggml_ctx, v, rms_norm_eps);
             }
 
             if (arch == LLMArch::MISTRAL_SMALL_3_2) {
@@ -1187,6 +1278,35 @@ namespace LLM {
                                                  1.f,
                                                  32.f,
                                                  1.f);
+            } else if (arch == LLMArch::GEMMA4_12B) {
+                float rope_theta  = (rope_index == 1 ? 10000.0f : 1000000.0f);
+                auto freq_factors = rope_freq_factors(ctx->ggml_ctx);
+                q                 = ggml_rope_ext(ctx->ggml_ctx,
+                                                  q,
+                                                  input_pos,
+                                                  freq_factors,
+                                                  head_dim,
+                                                  GGML_ROPE_TYPE_NEOX,
+                                                  static_cast<int>(max_position_embeddings),
+                                                  rope_theta,
+                                                  1.f,
+                                                  0.f,
+                                                  1.f,
+                                                  32.f,
+                                                  1.f);
+                k                 = ggml_rope_ext(ctx->ggml_ctx,
+                                                  k,
+                                                  input_pos,
+                                                  freq_factors,
+                                                  head_dim,
+                                                  GGML_ROPE_TYPE_NEOX,
+                                                  static_cast<int>(max_position_embeddings),
+                                                  rope_theta,
+                                                  1.f,
+                                                  0.f,
+                                                  1.f,
+                                                  32.f,
+                                                  1.f);
             } else if (arch == LLMArch::GEMMA2_2B) {
                 q = ggml_rope_ext(ctx->ggml_ctx,
                                   q,
@@ -1224,6 +1344,11 @@ namespace LLM {
                 k               = ggml_rope_multi(ctx->ggml_ctx, k, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_MROPE, 128000, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
             }
 
+            if (unscaled_attention) {
+                // Gemma 4 attends with scaling=1.0; undo the helper's own 1/sqrt(head_dim).
+                q = ggml_ext_scale(ctx->ggml_ctx, q, std::sqrt(static_cast<float>(head_dim)));
+            }
+
             q = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, q, 0, 2, 1, 3));  // [N, num_heads, n_token, head_dim]
             q = ggml_reshape_3d(ctx->ggml_ctx, q, q->ne[0], q->ne[1], q->ne[2] * q->ne[3]);      // [N*num_heads, n_token, head_dim]
 
@@ -1250,7 +1375,7 @@ namespace LLM {
                 x        = ggml_ext_cont(ctx->ggml_ctx, kqv);
                 x        = ggml_reshape_3d(ctx->ggml_ctx, x, head_dim * num_heads, n_token, N);
             } else {
-                x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, attention_mask, true, false);  // [N, n_token, hidden_size]
+                x = ggml_ext_attention_ext(ctx, q, k, v, num_heads, attention_mask, true, false);  // [N, n_token, hidden_size]
             }
 
             x = out_proj->forward(ctx, x);  // [N, n_token, hidden_size]
@@ -1262,15 +1387,30 @@ namespace LLM {
     protected:
         LLMArch arch;
         int sliding_attention;
+        bool has_layer_scalar;
         std::string post_attention_norm_name;
         std::string pre_ffw_norm_name;
         std::string post_ffw_norm_name;
 
+        void init_params(ggml_context* ctx,
+                         const String2TensorStorage& tensor_storage_map = {},
+                         std::string prefix                             = "") override {
+            GGMLBlock::init_params(ctx, tensor_storage_map, prefix);
+            if (has_layer_scalar) {
+                params["layer_scalar"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+            }
+        }
+
     public:
         TransformerBlock(const LLMConfig& config, int layer_index)
             : arch(config.arch),
-              sliding_attention(0) {
-            if (config.arch == LLMArch::GEMMA3_12B) {
+              sliding_attention(0),
+              has_layer_scalar(config.layer_scalar) {
+            if (config.arch == LLMArch::GEMMA4_12B) {
+                post_attention_norm_name = "post_attention_layernorm";
+                pre_ffw_norm_name        = "pre_feedforward_layernorm";
+                post_ffw_norm_name       = "post_feedforward_layernorm";
+            } else if (config.arch == LLMArch::GEMMA3_12B || config.arch == LLMArch::GEMMA4_12B) {
                 post_attention_norm_name = "post_attention_norm";       // attn_post_norm
                 pre_ffw_norm_name        = "post_attention_layernorm";  // ffn_norm
                 post_ffw_norm_name       = "post_ffw_norm";             // ffn_post_norm
@@ -1284,7 +1424,10 @@ namespace LLM {
                 pre_ffw_norm_name = "post_attention_layernorm";  // ffn_norm
             }
 
-            blocks["self_attn"] = std::make_shared<Attention>(config);
+            if (!config.sliding_attention.empty()) {
+                sliding_attention = config.sliding_attention[layer_index % config.sliding_attention.size()];
+            }
+            blocks["self_attn"] = std::make_shared<Attention>(config, sliding_attention == 0);
             if (config.arch == LLMArch::GPT_OSS_20B) {
                 blocks["mlp"] = std::make_shared<GPTOSSMLP>(config);
             } else {
@@ -1300,9 +1443,6 @@ namespace LLM {
             }
             if (!post_ffw_norm_name.empty()) {
                 blocks[post_ffw_norm_name] = std::make_shared<LLMRMSNorm>(config.hidden_size, config.rms_norm_eps, config.rms_norm_add);
-            }
-            if (!config.sliding_attention.empty()) {
-                sliding_attention = config.sliding_attention[layer_index % config.sliding_attention.size()];
             }
         }
 
@@ -1325,7 +1465,7 @@ namespace LLM {
             }
             ggml_tensor* block_attention_mask = attention_mask;
             int rope_index                    = 0;
-            if ((arch == LLMArch::GEMMA3_12B || arch == LLMArch::GPT_OSS_20B) && sliding_attention > 0) {
+            if ((arch == LLMArch::GEMMA3_12B || arch == LLMArch::GEMMA4_12B || arch == LLMArch::GPT_OSS_20B) && sliding_attention > 0) {
                 block_attention_mask = sliding_attention_mask;
                 rope_index           = 1;
             }
@@ -1351,6 +1491,10 @@ namespace LLM {
                 x = post_ffw_norm->forward(ctx, x);
             }
             x = ggml_add_inplace(ctx->ggml_ctx, x, residual);
+
+            if (has_layer_scalar) {
+                x = ggml_mul(ctx->ggml_ctx, x, params["layer_scalar"]);
+            }
 
             return x;
         }
@@ -1758,16 +1902,12 @@ namespace LLM {
                   bool enable_vision_                                 = false,
                   std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : GGMLRunner(backend, weight_manager),
-              config(LLMConfig::detect_from_weights(tensor_storage_map, prefix, arch)),
+              config(LLMConfig::detect_from_weights(tensor_storage_map, prefix, arch, enable_vision_)),
               enable_vision(enable_vision_) {
-            if (enable_vision && !config.have_vision_weight) {
-                LOG_WARN("no vision weights detected, vision disabled");
-                enable_vision = false;
-            }
             if (enable_vision) {
-                LOG_DEBUG("enable llm vision");
+                LOG_VERBOSE("enable llm vision");
                 if (config.llama_cpp_style) {
-                    LOG_DEBUG("llama.cpp style vision weight");
+                    LOG_VERBOSE("llama.cpp style vision weight");
                 }
             }
             model = LLM(config, enable_vision, config.llama_cpp_style);
@@ -1846,6 +1986,7 @@ namespace LLM {
                 config.arch == LLMArch::MINISTRAL_3_3B ||
                 config.arch == LLMArch::QWEN3 ||
                 config.arch == LLMArch::GEMMA3_12B ||
+                config.arch == LLMArch::GEMMA4_12B ||
                 config.arch == LLMArch::GEMMA2_2B ||
                 config.arch == LLMArch::GPT_OSS_20B) {
                 input_pos_vec.resize(n_tokens);
@@ -1910,7 +2051,7 @@ namespace LLM {
                 set_backend_tensor_data(attention_mask, attention_mask_vec.data());
             }
 
-            if (config.arch == LLMArch::GEMMA3_12B || config.arch == LLMArch::GPT_OSS_20B) {
+            if (config.arch == LLMArch::GEMMA3_12B || config.arch == LLMArch::GEMMA4_12B || config.arch == LLMArch::GPT_OSS_20B) {
                 int sliding_window = 0;
                 for (int window : config.sliding_attention) {
                     sliding_window = std::max(sliding_window, window);
@@ -1956,9 +2097,7 @@ namespace LLM {
                                   const ImageEmbeds& image_embeds,
                                   std::set<int> out_layers,
                                   bool return_all_hidden_states                      = false,
-                                  bool auto_free                                     = true,
-                                  bool free_compute_buffer                           = true,
-                                  bool free_compute_params                           = true,
+                                  bool auto_runner_end                               = true,
                                   const DeepStackImageEmbeds& deepstack_image_embeds = {},
                                   const std::vector<ImageGrid>& image_grids          = {}) {
             auto get_graph = [&]() -> ggml_cgraph* {
@@ -1970,7 +2109,7 @@ namespace LLM {
                                    out_layers,
                                    return_all_hidden_states);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, auto_free, free_compute_buffer, free_compute_params),
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, auto_runner_end),
                                                    input_ids.dim() + 1);
         }
 
@@ -2050,13 +2189,11 @@ namespace LLM {
 
         sd::Tensor<float> encode_image(const int n_threads,
                                        const sd::Tensor<float>& image,
-                                       bool auto_free           = false,
-                                       bool free_compute_buffer = false,
-                                       bool free_compute_params = false) {
+                                       bool auto_runner_end = false) {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_encode_image_graph(image);
             };
-            return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, auto_free, free_compute_buffer, free_compute_params));
+            return take_or_empty(GGMLRunner::compute(get_graph, n_threads, auto_runner_end));
         }
 
         ggml_cgraph* build_encode_image_outputs_graph(const sd::Tensor<float>& image_tensor) {
@@ -2164,13 +2301,11 @@ namespace LLM {
 
         std::vector<sd::Tensor<float>> encode_image_outputs(const int n_threads,
                                                             const sd::Tensor<float>& image,
-                                                            bool auto_free           = false,
-                                                            bool free_compute_buffer = false,
-                                                            bool free_compute_params = false) {
+                                                            bool auto_runner_end = false) {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_encode_image_outputs_graph(image);
             };
-            auto combined = take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, auto_free, free_compute_buffer, free_compute_params));
+            auto combined = take_or_empty(GGMLRunner::compute(get_graph, n_threads, auto_runner_end));
             if (combined.empty()) {
                 return {};
             }
@@ -2189,20 +2324,14 @@ namespace LLM {
 
         std::vector<sd::Tensor<float>> encode_video_block_outputs(const int n_threads,
                                                                   const sd::Tensor<float>& frames,
-                                                                  bool auto_free           = false,
-                                                                  bool free_compute_buffer = false,
-                                                                  bool free_compute_params = false) {
+                                                                  bool auto_runner_end = false) {
             int grid_h        = static_cast<int>(frames.shape()[1] / config.vision.patch_size);
             int grid_w        = static_cast<int>(frames.shape()[0] / config.vision.patch_size);
             auto pixel_values = process_video_block_tensor(frames, config.vision);
             auto get_graph    = [&]() -> ggml_cgraph* {
                 return build_encode_video_block_outputs_graph(pixel_values, grid_h, grid_w);
             };
-            auto combined = take_or_empty(GGMLRunner::compute<float>(get_graph,
-                                                                     n_threads,
-                                                                     auto_free,
-                                                                     free_compute_buffer,
-                                                                     free_compute_params));
+            auto combined = take_or_empty(GGMLRunner::compute(get_graph, n_threads, auto_runner_end));
             if (combined.empty()) {
                 return {};
             }
@@ -2264,7 +2393,7 @@ namespace LLM {
                     ss << "['" << item.first << "', " << item.second << "], ";
                 }
                 ss << "]";
-                LOG_DEBUG("parse '%s' to %s", text.c_str(), ss.str().c_str());
+                LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
             }
 
             std::vector<int> tokens;
@@ -2315,7 +2444,7 @@ namespace LLM {
                     out = std::move(out_opt);
                     print_sd_tensor(out, false, "image_embed");
                     image_embed = out;
-                    LOG_DEBUG("llm encode_image test done in %lldms", t1 - t0);
+                    LOG_VERBOSE("llm encode_image test done in %lldms", t1 - t0);
                 }
 
                 std::string placeholder  = "<|image_pad|>";
@@ -2355,7 +2484,7 @@ namespace LLM {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("llm test done in %lldms", t1 - t0);
+                LOG_VERBOSE("llm test done in %lldms", t1 - t0);
             } else if (test_vit) {
                 // auto image = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 280, 280, 3);
                 // ggml_set_f32(image, 0.f);
@@ -2374,7 +2503,7 @@ namespace LLM {
                 // auto ref_out = load_tensor_from_file(ctx, "qwen2vl.bin");
                 // ggml_ext_tensor_diff(ref_out, out, 0.01f);
 
-                LOG_DEBUG("llm test done in %lldms", t1 - t0);
+                LOG_VERBOSE("llm test done in %lldms", t1 - t0);
             } else if (test_mistral) {
                 std::pair<int, int> prompt_attn_range;
                 std::string text        = "[SYSTEM_PROMPT]You are an AI that reasons about image descriptions. You give structured responses focusing on object relationships, object\nattribution and actions without speculation.[/SYSTEM_PROMPT][INST]";
@@ -2399,7 +2528,7 @@ namespace LLM {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("llm test done in %lldms", t1 - t0);
+                LOG_VERBOSE("llm test done in %lldms", t1 - t0);
             } else if (test_qwen3) {
                 std::pair<int, int> prompt_attn_range;
                 std::string text        = "<|im_start|>user\n";
@@ -2424,7 +2553,7 @@ namespace LLM {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("llm test done in %lldms", t1 - t0);
+                LOG_VERBOSE("llm test done in %lldms", t1 - t0);
             } else {
                 std::pair<int, int> prompt_attn_range;
                 std::string text        = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n";
@@ -2449,7 +2578,7 @@ namespace LLM {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("llm test done in %lldms", t1 - t0);
+                LOG_VERBOSE("llm test done in %lldms", t1 - t0);
             }
         }
 
@@ -2459,8 +2588,8 @@ namespace LLM {
             ggml_backend_t backend    = sd_backend_cpu_init();
             ggml_type model_data_type = GGML_TYPE_COUNT;
 
-            auto model_manager        = std::make_shared<ModelManager>();
-            ModelLoader& model_loader = model_manager->loader();
+            auto model_manager = std::make_shared<ModelManager>();
+            ModelLoader model_loader;
             if (!model_loader.init_from_file_and_convert_name(file_path, "text_encoders.llm.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
@@ -2484,7 +2613,8 @@ namespace LLM {
                                                                              true,
                                                                              model_manager);
 
-            if (!model_manager->register_runner_params("LLM test",
+            if (!model_manager->set_loader(model_loader) ||
+                !model_manager->register_runner_params(ModelComponent::Conditioner,
                                                        *llm,
                                                        "text_encoders.llm",
                                                        ModelManager::ResidencyMode::ParamBackend,
