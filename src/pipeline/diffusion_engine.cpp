@@ -2267,6 +2267,33 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
         lanpaint_params.early_stop    = lanpaint.early_stop;
         lanpaint_params.min_step_frac = lanpaint.min_step_frac;
         lanpaint_params.cfg_big       = lanpaint_cfg_big;
+        LOG_INFO("LanPaint: n_steps=%d lambda=%.2f beta=%.2f step_size=%.2f early_stop=%d min_step_frac=%.2f cfg_big=%.2f%s",
+                 lanpaint.n_steps,
+                 lanpaint.lambda,
+                 lanpaint.beta,
+                 lanpaint.step_size,
+                 lanpaint.early_stop,
+                 lanpaint.min_step_frac,
+                 lanpaint_cfg_big,
+                 std::isfinite(lanpaint.cfg_big) ? "" : " (auto)");
+        if (denoise_mask.empty()) {
+            LOG_INFO("LanPaint: no noise mask set; the Langevin loop is inactive and sampling proceeds like the plain sampler");
+        }
+        int lanpaint_inner_total = 0;
+        for (size_t i = 0; i + 1 < sigmas.size(); ++i) {
+            const float abt_i = LanPaint::compute_times(is_flow_denoiser, sigmas[i]).abt;
+            lanpaint_inner_total += LanPaint::effective_inner_steps(lanpaint.n_steps,
+                                                                    lanpaint.early_stop,
+                                                                    lanpaint.min_step_frac,
+                                                                    abt_i,
+                                                                    static_cast<int>(sigmas.size()) - 1,
+                                                                    static_cast<int>(i));
+        }
+        LOG_INFO("LanPaint: %d outer steps, up to %d inner steps per outer step, %d model evaluations planned (%d without LanPaint)",
+                 static_cast<int>(sigmas.size()) - 1,
+                 lanpaint.n_steps,
+                 lanpaint_inner_total + static_cast<int>(sigmas.size()) - 1,
+                 static_cast<int>(sigmas.size()) - 1);
     }
 
     if (version == VERSION_HIDREAM_O1 && !noise.empty()) {
