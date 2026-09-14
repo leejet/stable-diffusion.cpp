@@ -1,8 +1,10 @@
 # JSON tokenizers
 
 Use a Hugging Face `tokenizer.json` to supply the tokenizer vocabulary, merges,
-added tokens, and processing stages. Without this option, sd.cpp keeps its
-embedded tokenizer for the selected model.
+added tokens, and processing stages. **PiD (including PiD 1.5) and Lens (including
+Lens Turbo) require an external JSON**; their Gemma 2 and GPT-OSS tokenizers are
+not embedded. Initialization fails if the main tokenizer is missing. Other
+models keep their embedded tokenizer when this option is omitted.
 
 ```shell
 sd-cli --diffusion-model model.gguf --llm text_encoder.gguf \
@@ -13,6 +15,13 @@ Choose the JSON belonging to the text encoder checkpoint. Checking that IDs fit
 the embedding table does not establish that two vocabularies have the same
 meaning. The JSON file is loaded when the text encoder is created; its embedded
 vocabulary is not loaded in this case.
+
+| Model | Required text encoder tokenizer | Example |
+| --- | --- | --- |
+| PiD / PiD 1.5 | Gemma 2 matching the text encoder checkpoint | `--tokenizer tokenizer_gemma2.json` |
+| Lens / Lens Turbo | GPT-OSS matching the text encoder checkpoint | `--tokenizer tokenizer_gpt_oss.json` |
+
+The Gemma 3/4 tokenizer used by LTX-2 remains embedded.
 
 | Option | Encoder |
 | --- | --- |
@@ -44,7 +53,8 @@ sd-cli --diffusion-model sd3.gguf --clip_l clip_l.safetensors \
 ```
 
 The C API accepts the same string in `sd_ctx_params_t::tokenizer`. A null or
-empty value keeps the embedded tokenizers. The CLI passes the string through;
+empty value keeps an embedded tokenizer where available; PiD and Lens require
+a nonempty main tokenizer path. The CLI passes the string through;
 `TokenizerConfig` parses and validates it when text encoders are initialized.
 
 ```c
