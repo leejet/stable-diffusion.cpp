@@ -8,3 +8,9 @@
     - LICENSE: https://github.com/yhirose/cpp-httplib/blob/master/LICENSE
 - stb_image.h/stb_image_resize.h/stb_image_write.h from: https://github.com/nothings/stb
     - LICENSE: https://github.com/nothings/stb/blob/master/LICENSE
+- Oniguruma from: https://github.com/kkos/oniguruma
+    - Version and source details: [README](oniguruma/README.md)
+    - LICENSE: [BSD-2-Clause](oniguruma/COPYING)
+- utf8proc from: https://github.com/JuliaStrings/utf8proc
+    - Version and source details: [README](utf8proc/README.md)
+    - LICENSE: [MIT and Unicode data licenses](utf8proc/LICENSE.md)

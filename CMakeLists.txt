@@ -342,6 +342,7 @@ add_subdirectory(thirdparty)
 
 target_sources(${SD_LIB} PRIVATE $<TARGET_OBJECTS:zip>)
 target_link_libraries(${SD_LIB} PUBLIC ggml)
+target_link_libraries(${SD_LIB} PRIVATE onig sd-utf8proc)
 target_include_directories(${SD_LIB} PUBLIC . src include)
 target_include_directories(${SD_LIB} PRIVATE src/core)
 target_include_directories(${SD_LIB} PUBLIC . thirdparty)
