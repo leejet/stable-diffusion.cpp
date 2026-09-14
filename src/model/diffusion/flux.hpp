@@ -235,6 +235,18 @@ namespace Flux {
             x              = ggml_mul(ctx->ggml_ctx, x, w);
             return x;
         }
+
+        ggml_tensor* forward_rope(GGMLRunnerContext* ctx,
+                                  ggml_tensor* x,
+                                  ggml_tensor* pe) {
+            ggml_tensor* out = ggml_qknorm_rope(
+                ctx->ggml_ctx, x, params["scale"], pe, eps);
+            if (ctx->backend != nullptr &&
+                ggml_backend_supports_op(ctx->backend, out)) {
+                return out;
+            }
+            return Rope::apply_rope(ctx->ggml_ctx, forward(ctx, x), pe);
+        }
     };
 
     struct QKNorm : public GGMLBlock {
@@ -260,6 +272,20 @@ namespace Flux {
 
             x = norm->forward(ctx, x);
             return x;
+        }
+
+        ggml_tensor* query_norm_rope(GGMLRunnerContext* ctx,
+                                     ggml_tensor* x,
+                                     ggml_tensor* pe) {
+            auto norm = std::dynamic_pointer_cast<RMSNorm>(blocks["query_norm"]);
+            return norm->forward_rope(ctx, x, pe);
+        }
+
+        ggml_tensor* key_norm_rope(GGMLRunnerContext* ctx,
+                                   ggml_tensor* x,
+                                   ggml_tensor* pe) {
+            auto norm = std::dynamic_pointer_cast<RMSNorm>(blocks["key_norm"]);
+            return norm->forward_rope(ctx, x, pe);
         }
     };
 
@@ -682,9 +708,17 @@ namespace Flux {
             auto v = ggml_view_4d(ctx->ggml_ctx, qkv_mlp, head_dim, num_heads, qkv_mlp->ne[1], qkv_mlp->ne[2],
                                   qkv_mlp->nb[0] * head_dim, qkv_mlp->nb[1], qkv_mlp->nb[2], (qkv_mlp->nb[0]) * 2 * hidden_size);
 
-            q         = norm->query_norm(ctx, q);
-            k         = norm->key_norm(ctx, k);
-            auto attn = Rope::attention(ctx, q, k, v, pe, mask);  // [N, n_token, hidden_size]
+            q = norm->query_norm_rope(ctx, q, pe);
+            k = norm->key_norm_rope(ctx, k, pe);
+            auto attn = ggml_ext_attention_ext(ctx->ggml_ctx,
+                                               ctx->backend,
+                                               q,
+                                               k,
+                                               v,
+                                               num_heads,
+                                               mask,
+                                               true,
+                                               ctx->flash_attn_enabled);  // [N, n_token, hidden_size]
 
             auto mlp = ggml_view_3d(ctx->ggml_ctx, qkv_mlp, mlp_hidden_dim * mlp_mult_factor, qkv_mlp->ne[1], qkv_mlp->ne[2], qkv_mlp->nb[1], qkv_mlp->nb[2], hidden_size * 3 * qkv_mlp->nb[0]);
             if (use_yak_mlp) {
@@ -694,8 +728,7 @@ namespace Flux {
             } else {
                 mlp = ggml_ext_gelu(ctx->ggml_ctx, mlp, true);
             }
-            auto attn_mlp = ggml_concat(ctx->ggml_ctx, attn, mlp, 0);  // [N, n_token, hidden_size + mlp_hidden_dim]
-            auto output   = linear2->forward(ctx, attn_mlp);           // [N, n_token, hidden_size]
+            auto output = linear2->forward_segmented(ctx, attn, mlp);  // [N, n_token, hidden_size]
 
             output = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, output, mod.gate));
             return output;

@@ -39,25 +39,35 @@ public:
         auto norm2 = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm2"]);
         auto conv2 = std::dynamic_pointer_cast<Conv2d>(blocks["conv2"]);
 
+        const bool inplace_f16 = ctx->conv2d_direct_enabled && x->type == GGML_TYPE_F16;
+        const bool project_residual = out_channels != in_channels;
+        ggml_tensor* residual = x;
+        if (project_residual) {
+            auto nin_shortcut = std::dynamic_pointer_cast<Conv2d>(blocks["nin_shortcut"]);
+            residual = nin_shortcut->forward(ctx, x);
+        }
+
         auto h = x;
-        h      = norm1->forward(ctx, h);
+        h      = norm1->forward(ctx, h, inplace_f16 && project_residual);
         h      = ggml_silu_inplace(ctx->ggml_ctx, h);  // swish
         h      = conv1->forward(ctx, h);
         // return h;
 
-        h = norm2->forward(ctx, h);
+        h = norm2->forward(ctx, h, inplace_f16);
         h = ggml_silu_inplace(ctx->ggml_ctx, h);  // swish
         // dropout, skip for inference
         h = conv2->forward(ctx, h);
 
-        // skip connection
-        if (out_channels != in_channels) {
-            auto nin_shortcut = std::dynamic_pointer_cast<Conv2d>(blocks["nin_shortcut"]);
-
-            x = nin_shortcut->forward(ctx, x);  // [N, out_channels, h, w]
+        if (inplace_f16) {
+            if (project_residual) {
+                // Keep the shortcut ahead of the in-place main branch in graph order.
+                h = ggml_add_inplace(ctx->ggml_ctx, residual, h);
+            } else {
+                h = ggml_add_inplace(ctx->ggml_ctx, h, residual);
+            }
+        } else {
+            h = ggml_add(ctx->ggml_ctx, h, residual);
         }
-
-        h = ggml_add(ctx->ggml_ctx, h, x);
         return h;  // [N, out_channels, h, w]
     }
 };
@@ -124,6 +134,9 @@ public:
         if (use_linear) {
             h_ = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, h_, 1, 2, 0, 3));  // [N, h, w, in_channels]
             h_ = ggml_reshape_3d(ctx->ggml_ctx, h_, c, h * w, n);                        // [N, h * w, in_channels]
+            if (h_->type == GGML_TYPE_F16) {
+                h_ = ggml_cast(ctx->ggml_ctx, h_, GGML_TYPE_F32);
+            }
 
             q = q_proj->forward(ctx, h_);  // [N, h * w, in_channels]
             k = k_proj->forward(ctx, h_);  // [N, h * w, in_channels]
@@ -144,11 +157,18 @@ public:
 
         h_ = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, 1, nullptr, false, ctx->flash_attn_enabled);
 
+        if (!use_linear && x->type == GGML_TYPE_F16 && h_->type != GGML_TYPE_F16) {
+            h_ = ggml_cast(ctx->ggml_ctx, h_, GGML_TYPE_F16);
+        }
+
         if (use_linear) {
             h_ = proj_out->forward(ctx, h_);  // [N, h * w, in_channels]
 
             h_ = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, h_, 1, 0, 2, 3));  // [N, in_channels, h * w]
             h_ = ggml_reshape_4d(ctx->ggml_ctx, h_, w, h, c, n);                         // [N, in_channels, h, w]
+            if (x->type == GGML_TYPE_F16 && h_->type != GGML_TYPE_F16) {
+                h_ = ggml_cast(ctx->ggml_ctx, h_, GGML_TYPE_F16);
+            }
         } else {
             h_ = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, h_, 1, 0, 2, 3));  // [N, in_channels, h * w]
             h_ = ggml_reshape_4d(ctx->ggml_ctx, h_, w, h, c, n);                         // [N, in_channels, h, w]
@@ -156,7 +176,8 @@ public:
             h_ = proj_out->forward(ctx, h_);  // [N, in_channels, h, w]
         }
 
-        h_ = ggml_add(ctx->ggml_ctx, h_, x);
+        h_ = x->type == GGML_TYPE_F16 ? ggml_add_inplace(ctx->ggml_ctx, h_, x)
+                                      : ggml_add(ctx->ggml_ctx, h_, x);
         return h_;
     }
 };
@@ -456,6 +477,8 @@ public:
         auto norm_out    = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm_out"]);
         auto conv_out    = std::dynamic_pointer_cast<Conv2d>(blocks["conv_out"]);
 
+        bool f16_activations = false;
+
         // conv_in
         auto h = conv_in->forward(ctx, z);  // [N, block_in, h, w]
         // sd::ggml_graph_cut::mark_graph_cut(h, "vae.decoder.prelude", "h");
@@ -482,14 +505,24 @@ public:
                 std::string name = "up." + std::to_string(i) + ".upsample";
                 auto up_sample   = std::dynamic_pointer_cast<UpSampleBlock>(blocks[name]);
 
+                if (!f16_activations && h->type == GGML_TYPE_F32) {
+                    ggml_tensor* h_f16 = ggml_cast(ctx->ggml_ctx, h, GGML_TYPE_F16);
+                    if (up_sample->supports_upscale(ctx, h_f16)) {
+                        h = h_f16;
+                        f16_activations = true;
+                    }
+                }
                 h = up_sample->forward(ctx, h);
                 // sd::ggml_graph_cut::mark_graph_cut(h, "vae.decoder.up." + std::to_string(i) + ".upsample", "h");
             }
         }
 
-        h = norm_out->forward(ctx, h);
+        h = norm_out->forward(ctx, h, f16_activations);
         h = ggml_silu_inplace(ctx->ggml_ctx, h);  // nonlinearity/swish
         h = conv_out->forward(ctx, h);            // [N, out_ch, h*8, w*8]
+        if (f16_activations) {
+            h = ggml_cast(ctx->ggml_ctx, h, GGML_TYPE_F32);
+        }
         return h;
     }
 };

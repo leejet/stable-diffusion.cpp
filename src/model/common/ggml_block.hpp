@@ -304,6 +304,30 @@ public:
         }
         return out;
     }
+
+    ggml_tensor* forward_segmented(GGMLRunnerContext* ctx,
+                                   ggml_tensor* x0,
+                                   ggml_tensor* x1) {
+        ggml_tensor* w = params["weight"];
+        if (ctx->weight_adapter == nullptr && scale == 1.f &&
+            (w->type == GGML_TYPE_F8_E4M3 || w->type == GGML_TYPE_F8_E5M2)) {
+            ggml_tensor* out = ggml_mul_mat_segmented(ctx->ggml_ctx, w, x0, x1);
+            if (force_prec_f32) {
+                ggml_mul_mat_set_prec(out, GGML_PREC_F32);
+            }
+            if (ctx->backend != nullptr && ggml_backend_supports_op(ctx->backend, out)) {
+                if (has_weight_scale) {
+                    out = ggml_mul(ctx->ggml_ctx, out, params["weight_scale"]);
+                }
+                if (bias) {
+                    out = ggml_add_inplace(ctx->ggml_ctx, out, params["bias"]);
+                }
+                return out;
+            }
+        }
+
+        return forward(ctx, ggml_concat(ctx->ggml_ctx, x0, x1, 0));
+    }
 };
 
 __STATIC_INLINE__ bool support_get_rows(ggml_type wtype) {
@@ -448,6 +472,46 @@ public:
                                 ctx->circular_x_enabled,
                                 ctx->circular_y_enabled,
                                 scale);
+    }
+
+    ggml_tensor* forward_upscale(GGMLRunnerContext* ctx,
+                                 ggml_tensor* x,
+                                 int upscale_factor) {
+        ggml_tensor* out = try_forward_upscale(ctx, x, upscale_factor);
+        if (out == nullptr) {
+            return forward(ctx, ggml_upscale(ctx->ggml_ctx, x, upscale_factor,
+                                             GGML_SCALE_MODE_NEAREST));
+        }
+
+        if (bias) {
+            ggml_tensor* b = ggml_reshape_4d(ctx->ggml_ctx, params["bias"],
+                                             1, 1, out_channels, 1);
+            out = ggml_add_inplace(ctx->ggml_ctx, out, b);
+        }
+        return out;
+    }
+
+    bool supports_upscale(GGMLRunnerContext* ctx,
+                          ggml_tensor* x,
+                          int upscale_factor) {
+        return try_forward_upscale(ctx, x, upscale_factor) != nullptr;
+    }
+
+private:
+    ggml_tensor* try_forward_upscale(GGMLRunnerContext* ctx,
+                                     ggml_tensor* x,
+                                     int upscale_factor) {
+        if (!ctx->conv2d_direct_enabled || ctx->backend == nullptr ||
+            ctx->weight_adapter || ctx->circular_x_enabled ||
+            ctx->circular_y_enabled || scale != 1.f) {
+            return nullptr;
+        }
+
+        ggml_tensor* out = ggml_conv_2d_direct_upscale(
+            ctx->ggml_ctx, params["weight"], x, upscale_factor,
+            stride.second, stride.first, padding.second, padding.first,
+            dilation.second, dilation.first);
+        return ggml_backend_supports_op(ctx->backend, out) ? out : nullptr;
     }
 };
 
@@ -754,7 +818,8 @@ public:
           eps(eps),
           affine(affine) {}
 
-    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x,
+                         bool inplace = false) {
         ggml_tensor* w = nullptr;
         ggml_tensor* b = nullptr;
         if (affine) {
@@ -765,7 +830,7 @@ public:
                 b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
             }
         }
-        return ggml_ext_group_norm(ctx->ggml_ctx, x, w, b, num_groups);
+        return ggml_ext_group_norm(ctx->ggml_ctx, x, w, b, num_groups, inplace);
     }
 };
 

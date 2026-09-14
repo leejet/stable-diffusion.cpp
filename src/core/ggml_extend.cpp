@@ -135,20 +135,9 @@ ggml_tensor* ggml_ext_silu_act(ggml_context* ctx, ggml_tensor* x, bool gate_firs
     // return: [ne3, ne2, ne1, ne0/2]
 
     auto x_vec = ggml_ext_chunk(ctx, x, 2, 0, false);
-    ggml_tensor* gate;
-    if (gate_first) {
-        gate = x_vec[0];
-        x    = x_vec[1];
-    } else {
-        x    = x_vec[0];
-        gate = x_vec[1];
-    }
-    gate = ggml_cont(ctx, gate);
-    gate = ggml_silu_inplace(ctx, gate);
-
-    x = ggml_mul(ctx, x, gate);  // [ne3, ne2, ne1, ne0/2]
-
-    return x;
+    ggml_tensor* gate = gate_first ? x_vec[0] : x_vec[1];
+    ggml_tensor* up   = gate_first ? x_vec[1] : x_vec[0];
+    return ggml_swiglu_split(ctx, gate, up);
 }
 
 ggml_tensor* ggml_ext_group_norm_32(ggml_context* ctx,
@@ -683,14 +672,16 @@ ggml_tensor* ggml_ext_group_norm(ggml_context* ctx,
                                  ggml_tensor* x,
                                  ggml_tensor* w,
                                  ggml_tensor* b,
-                                 int num_groups) {
+                                 int num_groups,
+                                 bool inplace) {
     if (ggml_n_dims(x) >= 3 && w != nullptr && b != nullptr) {
         w = ggml_reshape_4d(ctx, w, 1, 1, w->ne[0], 1);
         b = ggml_reshape_4d(ctx, b, 1, 1, b->ne[0], 1);
     }
 
     const float eps = 1e-6f;  // default eps parameter
-    x               = ggml_group_norm(ctx, x, num_groups, eps);
+    x               = inplace ? ggml_group_norm_inplace(ctx, x, num_groups, eps)
+                              : ggml_group_norm(ctx, x, num_groups, eps);
     if (w != nullptr && b != nullptr) {
         x = ggml_mul_inplace(ctx, x, w);
         // b = ggml_repeat(ctx, b, x);

@@ -56,12 +56,16 @@ public:
         blocks["conv"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, out_channels, {3, 3}, {1, 1}, {1, 1}));
     }
 
+    bool supports_upscale(GGMLRunnerContext* ctx, ggml_tensor* x) {
+        auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["conv"]);
+        return conv->supports_upscale(ctx, x, 2);
+    }
+
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
         // x: [N, channels, h, w]
         auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["conv"]);
 
-        x = ggml_upscale(ctx->ggml_ctx, x, 2, GGML_SCALE_MODE_NEAREST);  // [N, channels, h*2, w*2]
-        x = conv->forward(ctx, x);                                       // [N, out_channels, h*2, w*2]
+        x = conv->forward_upscale(ctx, x, 2);  // [N, out_channels, h*2, w*2]
         return x;
     }
 };
