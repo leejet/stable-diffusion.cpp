@@ -451,8 +451,8 @@ jobs:
     runs-on: windows-2022
 
     env:
-      ROCM_VERSION: "7.14.0"
-      GPU_TARGETS: "gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201"
+      ROCM_VERSION: "10.0.0"
+      gpu_targets: "gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201"
 
     steps:
       - uses: actions/checkout@v3
@@ -498,7 +498,7 @@ jobs:
 
           write-host "Installing ROCm wheels for multi-arch support"
           # Install ROCm wheels for multi-arch support (this may take several minutes)
-          python -m pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ "rocm[libraries,devel]==${{env.ROCM_VERSION}}"
+          python -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ "rocm[libraries,devel]"
 
           # Pre-expand the devel tree so it is included in the cache
           write-host "Initializing ROCm devel tree"
@@ -582,9 +582,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - ROCM_VERSION: "7.14.0"
-            gpu_targets: "gfx900;gfx906;gfx908;gfx90a;gfx90c;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201"
-            build: x64
+          - ROCM_VERSION: "10.0.0"
+            gpu_targets: "gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
+            build: 'x64'
 
     steps:
       - name: Clone
@@ -598,6 +598,16 @@ jobs:
         with:
           key: ubuntu-rocm-cmake-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
+          max-size: "2G"
+
+      - name: Tune ccache for reinstalled ROCm toolchain
+        run: |
+          # ROCm is pip-installed fresh each run, so the clang binary's mtime
+          # changes every time. With the default compiler_check=mtime that
+          # invalidates the cache; hash compiler contents instead so warm
+          # builds hit.
+          ccache --set-config=compiler_check=content
+          ccache --set-config=sloppiness=time_macros,include_file_mtime,include_file_ctime
 
       - name: Dependencies
         id: depends
@@ -634,7 +644,7 @@ jobs:
           # libraries = HIP runtime and CMake configs needed for linking
           # devel = compilers, headers, static libs
           python -m pip install --upgrade pip
-          python -m pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ "rocm[libraries,devel]==${{matrix.ROCM_VERSION}}"
+          python -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ "rocm[libraries,devel]"
 
           # Get ROCm installation paths using the rocm-sdk CLI tool
           ROCM_PATH=$(rocm-sdk path --root)
