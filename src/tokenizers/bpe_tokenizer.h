@@ -36,7 +36,7 @@ public:
     BPETokenizer()          = default;
     virtual ~BPETokenizer() = default;
 
-    std::vector<int> encode(const std::string& text, on_new_token_cb_t on_new_token_cb = nullptr) override;
+    bool encode(const std::string& text, std::vector<int>& tokens, on_new_token_cb_t on_new_token_cb = nullptr, std::string* error = nullptr) override;
 };
 
 #endif  // __SD_TOKENIZERS_BPE_TOKENIZER_H__

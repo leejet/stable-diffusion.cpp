@@ -130,7 +130,11 @@ std::vector<std::u32string> BPETokenizer::bpe(const std::u32string& token) const
     return word;
 }
 
-std::vector<int> BPETokenizer::encode(const std::string& text, on_new_token_cb_t on_new_token_cb) {
+bool BPETokenizer::encode(const std::string& text, std::vector<int>& result, on_new_token_cb_t on_new_token_cb, std::string* error) {
+    result.clear();
+    if (error) {
+        error->clear();
+    }
     std::vector<int32_t> bpe_tokens;
     std::vector<std::string> token_strs;
 
@@ -206,7 +210,8 @@ std::vector<int> BPETokenizer::encode(const std::string& text, on_new_token_cb_t
     }
     ss << "]";
     LOG_VERBOSE("split prompt \"%s\" to %zu tokens %s", text.c_str(), bpe_tokens.size(), ss.str().c_str());
-    return bpe_tokens;
+    result = std::move(bpe_tokens);
+    return true;
 }
 
 std::string BPETokenizer::decode_token(int token_id) const {

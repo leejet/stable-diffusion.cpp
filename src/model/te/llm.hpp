@@ -2402,7 +2402,10 @@ namespace LLM {
             for (const auto& item : parsed_attention) {
                 const std::string& curr_text = item.first;
                 float curr_weight            = item.second;
-                std::vector<int> curr_tokens = tokenizer->tokenize(curr_text, nullptr);
+                std::vector<int> curr_tokens;
+                if (!tokenizer->tokenize(curr_text, curr_tokens, nullptr)) {
+                    return {};
+                }
                 tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
                 weights.insert(weights.end(), curr_tokens.size(), curr_weight);
             }

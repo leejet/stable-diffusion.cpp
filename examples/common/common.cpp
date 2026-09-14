@@ -411,6 +411,11 @@ ArgOptions SDContextParams::get_options() {
          0,
          &llm_path},
         {"",
+         "--tokenizer",
+         "tokenizer.json path, or comma-separated main=FILE,clip-l=FILE,clip-g=FILE assignments",
+         (int)',',
+         &tokenizer},
+        {"",
          "--llm_vision",
          "path to the llm vit",
          0,
@@ -896,6 +901,7 @@ std::string SDContextParams::to_string() const {
         << "  t5xxl_path: \"" << t5xxl_path << "\",\n"
         << "  llm_path: \"" << llm_path << "\",\n"
         << "  llm_vision_path: \"" << llm_vision_path << "\",\n"
+        << "  tokenizer: \"" << tokenizer << "\",\n"
         << "  diffusion_model_path: \"" << diffusion_model_path << "\",\n"
         << "  high_noise_diffusion_model_path: \"" << high_noise_diffusion_model_path << "\",\n"
         << "  uncond_diffusion_model_path: \"" << uncond_diffusion_model_path << "\",\n"
@@ -963,6 +969,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.t5xxl_path                      = t5xxl_path.c_str();
     sd_ctx_params.llm_path                        = llm_path.c_str();
     sd_ctx_params.llm_vision_path                 = llm_vision_path.c_str();
+    sd_ctx_params.tokenizer                       = tokenizer.c_str();
     sd_ctx_params.diffusion_model_path            = diffusion_model_path.c_str();
     sd_ctx_params.high_noise_diffusion_model_path = high_noise_diffusion_model_path.c_str();
     sd_ctx_params.uncond_diffusion_model_path     = uncond_diffusion_model_path.c_str();
