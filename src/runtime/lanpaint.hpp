@@ -136,6 +136,20 @@ struct LanPaint {
           latent_mask_(latent_mask) {
     }
 
+    // Effective inner-step count for one outer step (comfy EarlyStop gating +
+    // `min_step_frac_effective_steps`): 0 inside the early-stop window, the
+    // linear ramp below MinStepFrac, NSteps otherwise. Shared by run() and
+    // the sampler wiring so the logged schedule matches execution.
+    static int effective_inner_steps(int n_steps, int early_stop, float min_step_frac, float abt, int total_steps, int outer_step) {
+        if (total_steps - outer_step <= early_stop) {
+            return 0;
+        }
+        if (min_step_frac > 0.f && (1.f - abt) < min_step_frac && n_steps > 0) {
+            return std::max(0, static_cast<int>(std::lround((float)n_steps * (1.f - abt) / min_step_frac)));
+        }
+        return n_steps;
+    }
+
     static LanPaintModelTimes compute_times(bool is_flow, float sigma) {
         LanPaintModelTimes t;
         if (is_flow) {
@@ -177,12 +191,7 @@ struct LanPaint {
 
         // 2. Effective inner-step count (comfy `min_step_frac_effective_steps`).
         const int total_steps = static_cast<int>(sigmas.size()) - 1;
-        int n_eff             = params_.n_steps;
-        if (total_steps - outer_step <= params_.early_stop) {
-            n_eff = 0;
-        } else if (params_.min_step_frac > 0.f && (1.f - abt) < params_.min_step_frac && params_.n_steps > 0.f) {
-            n_eff = std::max(0, static_cast<int>(std::lround((float)params_.n_steps * (1.f - abt) / params_.min_step_frac)));
-        }
+        const int n_eff       = effective_inner_steps(params_.n_steps, params_.early_stop, params_.min_step_frac, abt, total_steps, outer_step);
 
         // 3. Replace step: the keep region is re-noised around the current
         //    noise level, at every outer step (even when n_eff == 0):
@@ -257,9 +266,15 @@ struct LanPaint {
         // comfy `run_overdamped`
         sd::Tensor<float> C;
         bool have_C = false;
+        if (inner_ok && n_eff == 0) {
+            LOG_VERBOSE("LanPaint: outer step %d/%d skips the inner loop, sigma %.4f (early stop or ramped-down count)",
+                        outer_step + 1, total_steps, sigma);
+        }
         if (inner_ok) {
             const sd::Tensor<float> dt_half = dt * 0.5f;
             for (int i = 0; i < n_eff; ++i) {
+                LOG_VERBOSE("LanPaint: outer step %d/%d, inner step %d/%d, sigma %.4f, abt %.4f",
+                            outer_step + 1, total_steps, sigma, i + 1, n_eff, abt);
                 if (!have_C) {
                     C = score_and_C(x_t);
                     if (C.empty()) {
