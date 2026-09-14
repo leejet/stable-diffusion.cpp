@@ -17,6 +17,7 @@ Depending on the architecture, different models handle reference images differen
 | [**Boogu Image Edit**](./boogu_image.md) | `z_image_omni` |
 | **Krea2 (Community Edit LoRAs)** | `krea2_ostris_edit` |
 | [**Mage-Flow-Edit**](./mage_flow.md#image-editing) | `mage_flow` |
+| [**LLaDA-Image**](./llada_image.md#image-editing) | `llada_image` |
 | **Anima (Community Edit LoRAs)** | `cosmos_reference` |
 
 Stable-diffusion.spp also supports basic Unet-based editing models like instruct-pix2pix or CosXL-Edit. This document is not about those.
