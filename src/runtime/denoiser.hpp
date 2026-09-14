@@ -12,6 +12,8 @@
 #include <utility>
 
 #include "core/rng.hpp"
+#include "core/rng_mt19937.hpp"
+#include "core/rng_philox.hpp"
 #include "core/tensor.hpp"
 #include "core/util.h"
 #include "model.h"
@@ -1986,9 +1988,6 @@ static sd::Tensor<float> sample_dpmpp_2m_v2(denoise_cb_t model,
 
 // DPM-Solver++(2M) SDE, midpoint variant.
 // Ref: Lu et al. arXiv:2211.01095; k-diffusion sample_dpmpp_2m_sde
-// step-count-stable Brownian-tree noise variant: same trajectory shape at any step count for a given seed.
-// Aliased in k-diffusion / ComfyUI as sample_dpmpp_2m_sde_gpu.
-// Ref: Lu et al. arXiv:2211.01095; torchsde BrownianTree.
 static sd::Tensor<float> sample_dpmpp_2m_sde(denoise_cb_t model,
                                              sd::Tensor<float> x,
                                              const std::vector<float>& sigmas,
@@ -2785,26 +2784,32 @@ private:
     std::vector<int64_t> shape;
 };
 
-// Seeded Brownian tree providing deterministic, step-count-stable Gaussian
-// increments for stochastic samplers. Constructed once per generation; each
-// call returns unit-variance noise for interval [sigma_a, sigma_b].
+// A fixed tree seed, shape and sigma range give consistent increments across
+// interval subdivisions. Each query returns normalized Gaussian noise.
 // Reference: torchsde BrownianTree; k-diffusion BatchedBrownianTree.
 class BrownianTreeNoiseSampler : public NoiseSampler {
 public:
     BrownianTreeNoiseSampler(const sd::Tensor<float>& x_template,
                              double sigma_min,
                              double sigma_max,
-                             uint64_t seed)
+                             std::shared_ptr<RNG> seed_rng,
+                             std::shared_ptr<RNG> node_rng)
         : t_min_(sigma_min),
           t_max_(sigma_max),
           shape_(x_template.shape()),
-          root_seed_(mix64(seed, 0x9E3779B97F4A7C15ULL)) {
-        auto rng = std::make_shared<STDDefaultRNG>();
-        rng->manual_seed(mix64(seed, 0xBF58476D1CE4E5B9ULL));
-        w_at_tmax_ = sd::Tensor<float>::randn(shape_, rng) * std::sqrt(static_cast<float>(t_max_ - t_min_));
-    }
+          seed_rng_(std::move(seed_rng)),
+          node_rng_(std::move(node_rng)) {}
 
     sd::Tensor<float> operator()(double sigma_a, double sigma_b) override {
+        if (!initialized_) {
+            uint64_t seed = 0;
+            auto draw     = seed_rng_->randn(2);
+            std::memcpy(&seed, draw.data(), sizeof(seed));
+            root_seed_ = mix64(seed, 0x9E3779B97F4A7C15ULL);
+            node_rng_->manual_seed(mix64(seed, 0xBF58476D1CE4E5B9ULL));
+            w_at_tmax_   = sd::Tensor<float>::randn(shape_, node_rng_) * std::sqrt(static_cast<float>(t_max_ - t_min_));
+            initialized_ = true;
+        }
         double a   = clamp(std::min(sigma_a, sigma_b));
         double b   = clamp(std::max(sigma_a, sigma_b));
         auto dW    = w(b) - w(a);
@@ -2850,9 +2855,8 @@ private:
         }
         double m       = 0.5 * (a + c);
         double std_dev = std::sqrt((c - m) * (m - a) / (c - a));
-        auto rng       = std::make_shared<STDDefaultRNG>();
-        rng->manual_seed(node_seed);
-        auto z   = sd::Tensor<float>::randn(shape_, rng);
+        node_rng_->manual_seed(node_seed);
+        auto z   = sd::Tensor<float>::randn(shape_, node_rng_);
         auto w_m = 0.5f * (w_a + w_c) + static_cast<float>(std_dev) * z;
         if (t == m) {
             return w_m;
@@ -2866,14 +2870,18 @@ private:
     double t_min_;
     double t_max_;
     std::vector<int64_t> shape_;
-    uint64_t root_seed_;
+    std::shared_ptr<RNG> seed_rng_;
+    std::shared_ptr<RNG> node_rng_;
+    uint64_t root_seed_ = 0;
+    bool initialized_   = false;
     sd::Tensor<float> w_at_tmax_;
     std::map<double, sd::Tensor<float>> cache_;
 };
 
 static std::unique_ptr<NoiseSampler> make_noise_sampler(const sd::Tensor<float>& x, std::shared_ptr<RNG> rng, sample_method_t method, const std::vector<float>& sigmas, const SamplerExtraArgs& extra_args) {
-    bool brownian_tree     = (method == DPMPP2M_SDE_BT_SAMPLE_METHOD);
-    bool def_brownian_tree = brownian_tree;
+    bool brownian_tree            = (method == DPMPP2M_SDE_BT_SAMPLE_METHOD);
+    bool def_brownian_tree        = brownian_tree;
+    std::string brownian_tree_rng = "cpu";
 
     for (const auto& [key, value] : extra_args) {
         if (key == "noise_sampler") {
@@ -2883,6 +2891,12 @@ static std::unique_ptr<NoiseSampler> make_noise_sampler(const sd::Tensor<float>&
                 brownian_tree = true;
             } else {
                 LOG_WARN("unknown noise_sampler value '%s'; using default", value.c_str());
+            }
+        } else if (key == "brownian_tree_rng") {
+            if (value == "cpu" || value == "cuda" || value == "std_default" || value == "sampler_rng") {
+                brownian_tree_rng = value;
+            } else {
+                LOG_WARN("ignoring invalid brownian_tree_rng value '%s'; expected cpu, cuda, std_default or sampler_rng", value.c_str());
             }
         }
     }
@@ -2898,13 +2912,20 @@ static std::unique_ptr<NoiseSampler> make_noise_sampler(const sd::Tensor<float>&
         }
 
         if (sigma_max > sigma_min) {
-            uint64_t tree_seed = 0;
-            auto draw          = rng->randn(2);
-            std::memcpy(&tree_seed, draw.data(), sizeof(tree_seed));
-            if (!def_brownian_tree) {
-                LOG_INFO("setting noise sampler to Brownian tree");
+            std::shared_ptr<RNG> node_rng;
+            if (brownian_tree_rng == "sampler_rng") {
+                node_rng = rng->clone();
+            } else if (brownian_tree_rng == "std_default") {
+                node_rng = std::make_shared<STDDefaultRNG>();
+            } else if (brownian_tree_rng == "cuda") {
+                node_rng = std::make_shared<PhiloxRNG>();
+            } else {
+                node_rng = std::make_shared<MT19937RNG>();
             }
-            return std::make_unique<BrownianTreeNoiseSampler>(x, sigma_min, sigma_max, tree_seed);
+            if (!def_brownian_tree) {
+                LOG_INFO("setting noise sampler to Brownian tree (%s RNG)", brownian_tree_rng.c_str());
+            }
+            return std::make_unique<BrownianTreeNoiseSampler>(x, sigma_min, sigma_max, rng, std::move(node_rng));
         }
     }
 

@@ -93,6 +93,10 @@ public:
         this->offset = 0;
     }
 
+    std::shared_ptr<RNG> clone() const override {
+        return std::make_shared<PhiloxRNG>(*this);
+    }
+
     void manual_seed(uint64_t seed) override {
         this->seed   = seed;
         this->offset = 0;
