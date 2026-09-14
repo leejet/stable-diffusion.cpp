@@ -412,7 +412,7 @@ ArgOptions SDContextParams::get_options() {
          &llm_path},
         {"",
          "--tokenizer",
-         "tokenizer.json path, or comma-separated main=FILE,clip-l=FILE,clip-g=FILE assignments",
+         "tokenizer.json path, or comma-separated main=FILE,clip-l=FILE,clip-g=FILE assignments; required for PiD and Lens",
          (int)',',
          &tokenizer},
         {"",

@@ -7,6 +7,7 @@
 #include <limits>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include "core/ggml_tensor_utils.h"
 
 #include "core/tensor_ggml.hpp"
@@ -1960,6 +1961,14 @@ struct LLMEmbedder : public Conditioner {
                 std::shared_ptr<RunnerWeightManager> weight_manager = nullptr,
                 const TokenizerConfig& tokenizers                   = {})
         : version(version) {
+        if (!tokenizers.has(TokenizerConfig::MAIN)) {
+            if (sd_version_is_lens(version)) {
+                throw std::runtime_error("Lens requires an external GPT-OSS tokenizer.json; pass --tokenizer FILE or set sd_ctx_params_t::tokenizer");
+            }
+            if (sd_version_is_pid(version)) {
+                throw std::runtime_error("PiD requires an external Gemma 2 tokenizer.json; pass --tokenizer FILE or set sd_ctx_params_t::tokenizer");
+            }
+        }
         LLM::LLMArch arch = LLM::LLMArch::QWEN2_5_VL;
         if (version == VERSION_FLUX2) {
             arch = LLM::LLMArch::MISTRAL_SMALL_3_2;
@@ -1998,10 +2007,6 @@ struct LLMEmbedder : public Conditioner {
         if (!tokenizer) {
             if (arch == LLM::LLMArch::MISTRAL_SMALL_3_2 || arch == LLM::LLMArch::MINISTRAL_3_3B) {
                 tokenizer = std::make_shared<MistralTokenizer>();
-            } else if (arch == LLM::LLMArch::GPT_OSS_20B) {
-                tokenizer = std::make_shared<GPTOSSTokenizer>();
-            } else if (arch == LLM::LLMArch::GEMMA2_2B) {
-                tokenizer = std::make_shared<Gemma2Tokenizer>();
             } else {
                 tokenizer = std::make_shared<Qwen2Tokenizer>();
             }
