@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cinttypes>
 #include <cmath>
 #include <fstream>
 #include <functional>
@@ -14,20 +15,26 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
+#include "core/ggml_tensor_utils.h"
+#include "core/util.h"
 #include "json.hpp"
+#include "model/common/ggml_block.hpp"
 #include "model/common/rope.hpp"
 #include "model_loader.h"
 #include "model_manager.h"
 #include "tokenizers/bpe_tokenizer.h"
 #include "tokenizers/gemma_tokenizer.h"
-#include "tokenizers/gpt_oss_tokenizer.h"
 #include "tokenizers/mistral_tokenizer.h"
 #include "tokenizers/qwen2_tokenizer.h"
+#include "tokenizers/tokenizer_config.h"
 
 namespace LLM {
     constexpr int LLM_GRAPH_SIZE = 65536;
@@ -133,7 +140,8 @@ namespace LLM {
 
         static LLMConfig detect_from_weights(const String2TensorStorage& tensor_storage_map,
                                              const std::string& prefix,
-                                             LLMArch arch) {
+                                             LLMArch arch,
+                                             bool& enable_vision) {
             LLMConfig config;
             config.arch = arch;
             if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
@@ -224,8 +232,9 @@ namespace LLM {
                 config.num_experts_per_tok     = 4;
             }
 
-            config.num_layers          = 0;
-            int detected_vision_layers = 0;
+            config.num_layers             = 0;
+            int detected_vision_layers    = 0;
+            bool out_hidden_size_detected = false;
             for (const auto& [name, tensor_storage] : tensor_storage_map) {
                 if (!starts_with(name, prefix)) {
                     continue;
@@ -271,6 +280,7 @@ namespace LLM {
                     if (ends_with(name, "visual.merger.linear_fc2.weight") ||
                         ends_with(name, "visual.merger.mlp.2.weight")) {
                         config.vision.out_hidden_size = tensor_storage.ne[1];
+                        out_hidden_size_detected      = true;
                     }
                     continue;
                 }
@@ -319,11 +329,25 @@ namespace LLM {
                     config.vision.deepstack_visual_indexes = {8, 16, 24};
                 }
             }
-            LOG_DEBUG("llm: num_layers = %" PRId64 ", vocab_size = %" PRId64 ", hidden_size = %" PRId64 ", intermediate_size = %" PRId64,
-                      config.num_layers,
-                      config.vocab_size,
-                      config.hidden_size,
-                      config.intermediate_size);
+            LOG_VERBOSE("llm: num_layers = %" PRId64 ", vocab_size = %" PRId64 ", hidden_size = %" PRId64 ", intermediate_size = %" PRId64,
+                        config.num_layers,
+                        config.vocab_size,
+                        config.hidden_size,
+                        config.intermediate_size);
+            if (enable_vision && !config.have_vision_weight) {
+                LOG_WARN("no vision weights detected, vision disabled");
+                enable_vision = false;
+            }
+            // The default would reject valid models, so only compare a detected dim.
+            if (enable_vision && out_hidden_size_detected &&
+                config.vision.out_hidden_size != config.hidden_size) {
+                LOG_ERROR("vision projector output size (%" PRId64 ") does not match LLM hidden size (%" PRId64
+                          "), "
+                          "the vision weights (mmproj) likely belong to a different LLM variant, vision disabled",
+                          config.vision.out_hidden_size,
+                          config.hidden_size);
+                enable_vision = false;
+            }
             return config;
         }
     };
@@ -1353,7 +1377,7 @@ namespace LLM {
                 x        = ggml_ext_cont(ctx->ggml_ctx, kqv);
                 x        = ggml_reshape_3d(ctx->ggml_ctx, x, head_dim * num_heads, n_token, N);
             } else {
-                x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, attention_mask, true, false);  // [N, n_token, hidden_size]
+                x = ggml_ext_attention_ext(ctx, q, k, v, num_heads, attention_mask, true, false);  // [N, n_token, hidden_size]
             }
 
             x = out_proj->forward(ctx, x);  // [N, n_token, hidden_size]
@@ -1880,16 +1904,12 @@ namespace LLM {
                   bool enable_vision_                                 = false,
                   std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : GGMLRunner(backend, weight_manager),
-              config(LLMConfig::detect_from_weights(tensor_storage_map, prefix, arch)),
+              config(LLMConfig::detect_from_weights(tensor_storage_map, prefix, arch, enable_vision_)),
               enable_vision(enable_vision_) {
-            if (enable_vision && !config.have_vision_weight) {
-                LOG_WARN("no vision weights detected, vision disabled");
-                enable_vision = false;
-            }
             if (enable_vision) {
-                LOG_DEBUG("enable llm vision");
+                LOG_VERBOSE("enable llm vision");
                 if (config.llama_cpp_style) {
-                    LOG_DEBUG("llama.cpp style vision weight");
+                    LOG_VERBOSE("llama.cpp style vision weight");
                 }
             }
             model = LLM(config, enable_vision, config.llama_cpp_style);
@@ -2079,9 +2099,7 @@ namespace LLM {
                                   const ImageEmbeds& image_embeds,
                                   std::set<int> out_layers,
                                   bool return_all_hidden_states                      = false,
-                                  bool auto_free                                     = true,
-                                  bool free_compute_buffer                           = true,
-                                  bool free_compute_params                           = true,
+                                  bool auto_runner_end                               = true,
                                   const DeepStackImageEmbeds& deepstack_image_embeds = {},
                                   const std::vector<ImageGrid>& image_grids          = {}) {
             auto get_graph = [&]() -> ggml_cgraph* {
@@ -2093,7 +2111,7 @@ namespace LLM {
                                    out_layers,
                                    return_all_hidden_states);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, auto_free, free_compute_buffer, free_compute_params),
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, auto_runner_end),
                                                    input_ids.dim() + 1);
         }
 
@@ -2173,13 +2191,11 @@ namespace LLM {
 
         sd::Tensor<float> encode_image(const int n_threads,
                                        const sd::Tensor<float>& image,
-                                       bool auto_free           = false,
-                                       bool free_compute_buffer = false,
-                                       bool free_compute_params = false) {
+                                       bool auto_runner_end = false) {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_encode_image_graph(image);
             };
-            return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, auto_free, free_compute_buffer, free_compute_params));
+            return take_or_empty(GGMLRunner::compute(get_graph, n_threads, auto_runner_end));
         }
 
         ggml_cgraph* build_encode_image_outputs_graph(const sd::Tensor<float>& image_tensor) {
@@ -2287,13 +2303,11 @@ namespace LLM {
 
         std::vector<sd::Tensor<float>> encode_image_outputs(const int n_threads,
                                                             const sd::Tensor<float>& image,
-                                                            bool auto_free           = false,
-                                                            bool free_compute_buffer = false,
-                                                            bool free_compute_params = false) {
+                                                            bool auto_runner_end = false) {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_encode_image_outputs_graph(image);
             };
-            auto combined = take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, auto_free, free_compute_buffer, free_compute_params));
+            auto combined = take_or_empty(GGMLRunner::compute(get_graph, n_threads, auto_runner_end));
             if (combined.empty()) {
                 return {};
             }
@@ -2312,20 +2326,14 @@ namespace LLM {
 
         std::vector<sd::Tensor<float>> encode_video_block_outputs(const int n_threads,
                                                                   const sd::Tensor<float>& frames,
-                                                                  bool auto_free           = false,
-                                                                  bool free_compute_buffer = false,
-                                                                  bool free_compute_params = false) {
+                                                                  bool auto_runner_end = false) {
             int grid_h        = static_cast<int>(frames.shape()[1] / config.vision.patch_size);
             int grid_w        = static_cast<int>(frames.shape()[0] / config.vision.patch_size);
             auto pixel_values = process_video_block_tensor(frames, config.vision);
             auto get_graph    = [&]() -> ggml_cgraph* {
                 return build_encode_video_block_outputs_graph(pixel_values, grid_h, grid_w);
             };
-            auto combined = take_or_empty(GGMLRunner::compute<float>(get_graph,
-                                                                     n_threads,
-                                                                     auto_free,
-                                                                     free_compute_buffer,
-                                                                     free_compute_params));
+            auto combined = take_or_empty(GGMLRunner::compute(get_graph, n_threads, auto_runner_end));
             if (combined.empty()) {
                 return {};
             }
@@ -2344,7 +2352,7 @@ namespace LLM {
     };
 
     struct LLMEmbedder {
-        std::shared_ptr<BPETokenizer> tokenizer;
+        std::shared_ptr<Tokenizer> tokenizer;
         LLMRunner model;
 
         LLMEmbedder(LLMArch arch,
@@ -2352,14 +2360,27 @@ namespace LLM {
                     const String2TensorStorage& tensor_storage_map      = {},
                     const std::string prefix                            = "",
                     bool enable_vision                                  = false,
-                    std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+                    std::shared_ptr<RunnerWeightManager> weight_manager = nullptr,
+                    const TokenizerConfig& tokenizers                   = {})
             : model(arch, backend, tensor_storage_map, prefix, enable_vision, weight_manager) {
+            int pad_id = 151643;
             if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
-                tokenizer = std::make_shared<MistralTokenizer>();
+                pad_id = 11;
             } else if (arch == LLMArch::GPT_OSS_20B) {
-                tokenizer = std::make_shared<GPTOSSTokenizer>();
-            } else {
-                tokenizer = std::make_shared<Qwen2Tokenizer>();
+                pad_id = 199999;
+            } else if (arch == LLMArch::GEMMA2_2B) {
+                pad_id = 0;
+            }
+            tokenizer = tokenizers.create(TokenizerConfig::MAIN, model.config.vocab_size, pad_id);
+            if (!tokenizer) {
+                if (arch == LLMArch::GPT_OSS_20B || arch == LLMArch::GEMMA2_2B) {
+                    throw std::runtime_error("GPT-OSS and Gemma 2 require an external tokenizer.json in the main tokenizer slot");
+                }
+                if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
+                    tokenizer = std::make_shared<MistralTokenizer>();
+                } else {
+                    tokenizer = std::make_shared<Qwen2Tokenizer>();
+                }
             }
         }
 
@@ -2387,7 +2408,7 @@ namespace LLM {
                     ss << "['" << item.first << "', " << item.second << "], ";
                 }
                 ss << "]";
-                LOG_DEBUG("parse '%s' to %s", text.c_str(), ss.str().c_str());
+                LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
             }
 
             std::vector<int> tokens;
@@ -2395,7 +2416,10 @@ namespace LLM {
             for (const auto& item : parsed_attention) {
                 const std::string& curr_text = item.first;
                 float curr_weight            = item.second;
-                std::vector<int> curr_tokens = tokenizer->tokenize(curr_text, nullptr);
+                std::vector<int> curr_tokens;
+                if (!tokenizer->tokenize(curr_text, curr_tokens, nullptr)) {
+                    return {};
+                }
                 tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
                 weights.insert(weights.end(), curr_tokens.size(), curr_weight);
             }
@@ -2438,7 +2462,7 @@ namespace LLM {
                     out = std::move(out_opt);
                     print_sd_tensor(out, false, "image_embed");
                     image_embed = out;
-                    LOG_DEBUG("llm encode_image test done in %lldms", t1 - t0);
+                    LOG_VERBOSE("llm encode_image test done in %lldms", t1 - t0);
                 }
 
                 std::string placeholder  = "<|image_pad|>";
@@ -2478,7 +2502,7 @@ namespace LLM {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("llm test done in %lldms", t1 - t0);
+                LOG_VERBOSE("llm test done in %lldms", t1 - t0);
             } else if (test_vit) {
                 // auto image = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 280, 280, 3);
                 // ggml_set_f32(image, 0.f);
@@ -2497,7 +2521,7 @@ namespace LLM {
                 // auto ref_out = load_tensor_from_file(ctx, "qwen2vl.bin");
                 // ggml_ext_tensor_diff(ref_out, out, 0.01f);
 
-                LOG_DEBUG("llm test done in %lldms", t1 - t0);
+                LOG_VERBOSE("llm test done in %lldms", t1 - t0);
             } else if (test_mistral) {
                 std::pair<int, int> prompt_attn_range;
                 std::string text        = "[SYSTEM_PROMPT]You are an AI that reasons about image descriptions. You give structured responses focusing on object relationships, object\nattribution and actions without speculation.[/SYSTEM_PROMPT][INST]";
@@ -2522,7 +2546,7 @@ namespace LLM {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("llm test done in %lldms", t1 - t0);
+                LOG_VERBOSE("llm test done in %lldms", t1 - t0);
             } else if (test_qwen3) {
                 std::pair<int, int> prompt_attn_range;
                 std::string text        = "<|im_start|>user\n";
@@ -2547,7 +2571,7 @@ namespace LLM {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("llm test done in %lldms", t1 - t0);
+                LOG_VERBOSE("llm test done in %lldms", t1 - t0);
             } else {
                 std::pair<int, int> prompt_attn_range;
                 std::string text        = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n";
@@ -2572,7 +2596,7 @@ namespace LLM {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("llm test done in %lldms", t1 - t0);
+                LOG_VERBOSE("llm test done in %lldms", t1 - t0);
             }
         }
 
@@ -2582,8 +2606,8 @@ namespace LLM {
             ggml_backend_t backend    = sd_backend_cpu_init();
             ggml_type model_data_type = GGML_TYPE_COUNT;
 
-            auto model_manager        = std::make_shared<ModelManager>();
-            ModelLoader& model_loader = model_manager->loader();
+            auto model_manager = std::make_shared<ModelManager>();
+            ModelLoader model_loader;
             if (!model_loader.init_from_file_and_convert_name(file_path, "text_encoders.llm.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
@@ -2607,7 +2631,8 @@ namespace LLM {
                                                                              true,
                                                                              model_manager);
 
-            if (!model_manager->register_runner_params("LLM test",
+            if (!model_manager->set_loader(model_loader) ||
+                !model_manager->register_runner_params(ModelComponent::Conditioner,
                                                        *llm,
                                                        "text_encoders.llm",
                                                        ModelManager::ResidencyMode::ParamBackend,

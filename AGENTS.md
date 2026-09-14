@@ -118,7 +118,8 @@ documentation.
 6. Run the narrowest useful build, test, or inspection command available.
 
 Follow `CONTRIBUTING.md` for formatting, naming, PR expectations, dependency
-update policy, and security rules.
+update policy, and security rules. For tokenizer additions, follow its embedded-data
+allowlist and default to an external `tokenizer.json`.
 
 ---
 

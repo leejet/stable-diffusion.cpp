@@ -6,7 +6,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Please use this template and include as many details as possible to help us reproduce and fix the issue.
+        Before submitting a bug report, please read the [Troubleshooting guide](https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/troubleshooting.md) and try the steps relevant to your problem.
+
+        If the problem persists, complete this form and include what you tried and the results, along with enough details to help us reproduce and fix the issue.
   - type: textarea
     id: commit
     attributes:

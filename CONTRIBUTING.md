@@ -46,6 +46,21 @@ Some older code in the project may not fully follow the current conventions. Ple
 
 When adding or modifying model implementations, follow the model config and weight detection conventions in [docs/model_config.md](docs/model_config.md).
 
+## Tokenizer Data
+
+New model integrations must use an external `tokenizer.json` by default. Do not
+embed new vocabularies or merge tables solely for less widely used models;
+these tables increase the binary size for every user.
+
+The embedded-data allowlist is CLIP, T5/UMT5, Qwen 2/3, Mistral, and Gemma 3/4.
+Models may reuse an existing embedded tokenizer when its vocabulary and behavior
+match their text encoder. Gemma 2 and GPT-OSS require external JSON files.
+
+Adding to this allowlist requires maintainer approval, supported by the model's
+usage, reuse across models, and measured binary-size cost. Document the matching
+JSON and CLI option for models that require an external tokenizer, and fail
+initialization clearly when it is missing.
+
 ## AI-Assisted Contributions
 
 AI tools may be used to assist development, but contributors are responsible for the quality and correctness of the submitted code.

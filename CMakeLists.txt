@@ -229,6 +229,8 @@ file(GLOB SD_LIB_SOURCES CONFIGURE_DEPENDS
     "src/model/*/*.h"
     "src/model/*/*.cpp"
     "src/model/*/*.hpp"
+    "src/pipeline/*.h"
+    "src/pipeline/*.cpp"
     "src/runtime/*.h"
     "src/runtime/*.cpp"
     "src/runtime/*.hpp"
@@ -290,6 +292,12 @@ else()
     add_library(${SD_LIB} STATIC ${SD_LIB_SOURCES})
 endif()
 
+if(MSVC)
+    target_compile_options(${SD_LIB} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj>)
+    # ggml backends can throw C++ exceptions through their C API.
+    target_compile_options(${SD_LIB} PRIVATE $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/EHsc->)
+endif()
+
 if(APPLE)
     sd_set_macos_rpaths(${SD_LIB})
 endif()
@@ -334,6 +342,7 @@ add_subdirectory(thirdparty)
 
 target_sources(${SD_LIB} PRIVATE $<TARGET_OBJECTS:zip>)
 target_link_libraries(${SD_LIB} PUBLIC ggml)
+target_link_libraries(${SD_LIB} PRIVATE onig sd-utf8proc)
 target_include_directories(${SD_LIB} PUBLIC . src include)
 target_include_directories(${SD_LIB} PRIVATE src/core)
 target_include_directories(${SD_LIB} PUBLIC . thirdparty)

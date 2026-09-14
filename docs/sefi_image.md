@@ -44,7 +44,7 @@ The dispatcher picks `alpha` from the filename (`turbo` substring => 1.0, otherw
 ### 5B (needs streaming on 12 GiB VRAM)
 
 ```
-./build/bin/sd-cli --diffusion-model /path/to/sefi_5b_turbo.safetensors --vae /path/to/flux2_ae.safetensors --llm /path/to/qwen3_vl_4b.safetensors -p "a photograph of an orange tabby cat sitting on a couch" --cfg-scale 1.0 --steps 4 -W 1024 -H 1024 -s 42 --diffusion-fa --max-vram 8 --stream-layers --offload-to-cpu -o out.png
+./build/bin/sd-cli --diffusion-model /path/to/sefi_5b_turbo.safetensors --vae /path/to/flux2_ae.safetensors --llm /path/to/qwen3_vl_4b.safetensors -p "a photograph of an orange tabby cat sitting on a couch" --cfg-scale 1.0 --steps 4 -W 1024 -H 1024 -s 42 --diffusion-fa --max-vram 8 --offload-to-cpu -o out.png
 ```
 
 <img alt="SeFi-Image 5B turbo example" src="../assets/sefi_image/example.png" />

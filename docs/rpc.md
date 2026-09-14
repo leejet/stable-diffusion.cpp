@@ -57,7 +57,7 @@ The RPC server acts as the worker. You must explicitly enable the **backend** (t
 
 To find the correct flags for your system, refer to the official documentation for the [`llama.cpp`](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md) repository.
 
-> **Crucial:** You must include the compiler flags required to satisfy the API compatibility with `stable-diffusion.cpp` (`-DGGML_MAX_NAME=128`). Without this flag, `GGML_MAX_NAME` will default to `64` for the server, and data transfers between the client and server will fail. Of course, `-DGGML_RPC` must also be enabled.
+> **Crucial:** You must include the compiler flags required to satisfy the API compatibility with `stable-diffusion.cpp` (`-DGGML_MAX_NAME=160`). Without this flag, `GGML_MAX_NAME` will default to `64` for the server, and data transfers between the client and server will fail. Of course, `-DGGML_RPC` must also be enabled.
 >
 > I recommend disabling the `LLAMA_CURL` flag to avoid unnecessary dependencies, and disabling shared library builds to avoid potential conflicts.
 
@@ -72,8 +72,8 @@ cmake .. -DGGML_RPC=ON \
     -DGGML_VULKAN=ON \        # Ensure backend is enabled
     -DGGML_BUILD_SHARED_LIBS=OFF \
     -DLLAMA_CURL=OFF \
-    -DCMAKE_C_FLAGS=-DGGML_MAX_NAME=128 \
-    -DCMAKE_CXX_FLAGS=-DGGML_MAX_NAME=128
+    -DCMAKE_C_FLAGS=-DGGML_MAX_NAME=160 \
+    -DCMAKE_CXX_FLAGS=-DGGML_MAX_NAME=160
 cmake --build . --config Release --target rpc-server -j $(nproc)
 ```
 
@@ -86,8 +86,8 @@ cmake .. -DGGML_RPC=ON \
     -DGGML_METAL=ON \
     -DGGML_BUILD_SHARED_LIBS=OFF \
     -DLLAMA_CURL=OFF \
-    -DCMAKE_C_FLAGS=-DGGML_MAX_NAME=128 \
-    -DCMAKE_CXX_FLAGS=-DGGML_MAX_NAME=128
+    -DCMAKE_C_FLAGS=-DGGML_MAX_NAME=160 \
+    -DCMAKE_CXX_FLAGS=-DGGML_MAX_NAME=160
 cmake --build . --config Release --target rpc-server
 ```
 
@@ -101,8 +101,8 @@ cmake .. -G "Visual Studio 17 2022" -A x64 `
     -DGGML_VULKAN=ON `
     -DGGML_BUILD_SHARED_LIBS=OFF `
     -DLLAMA_CURL=OFF `
-    -DCMAKE_C_FLAGS=-DGGML_MAX_NAME=128 `
-    -DCMAKE_CXX_FLAGS=-DGGML_MAX_NAME=128
+    -DCMAKE_C_FLAGS=-DGGML_MAX_NAME=160 `
+    -DCMAKE_CXX_FLAGS=-DGGML_MAX_NAME=160
 cmake --build . --config Release --target rpc-server
 ```
 
