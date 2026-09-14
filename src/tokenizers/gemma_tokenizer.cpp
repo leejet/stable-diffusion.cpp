@@ -46,7 +46,9 @@ void GemmaTokenizer::load_from_merges(const std::string& merges_utf8_str, const 
     bpe_len = rank;
 }
 
-GemmaTokenizer::GemmaTokenizer(const std::string& merges_utf8_str, const std::string& vocab_utf8_str) {
+GemmaTokenizer::GemmaTokenizer(const std::string& merges_utf8_str, const std::string& vocab_utf8_str)
+    : BPETokenizer("") {
+    // Gemma replaces spaces with metaspace before its literal-space Split, so no regex boundaries apply.
     byte_level_bpe = false;
     byte_fallback  = true;
     add_bos_token  = true;
