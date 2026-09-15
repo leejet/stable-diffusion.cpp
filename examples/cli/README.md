@@ -20,6 +20,9 @@ rule for edge detection. See
 [Image preprocessing](../../docs/image_preprocessing.md) for input selectors,
 input defaults, downstream model processing, mask alignment, and examples.
 
+For high-quality inpainting with the Langevin-based LanPaint sampler (`--lanpaint`), see
+[LanPaint](../../docs/lanpaint.md).
+
 Metadata mode inspects PNG/JPEG container metadata without loading any model:
 
 ```bash
