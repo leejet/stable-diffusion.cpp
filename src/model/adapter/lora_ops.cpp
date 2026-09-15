@@ -65,7 +65,11 @@ ggml_tensor* ggml_ext_lokr_forward(
     ggml_tensor* hb;
 
     if (!is_conv) {
-        int batch          = (int)h->ne[1];
+        // The activation may carry more than one trailing dim (e.g.
+        // [features, L, N] in batched attention); fold them all into
+        // the batch and restore the original layout on the way out —
+        // ne[1] alone under-counts and the split reshape below asserts.
+        int batch          = (int)(ggml_nelements(h) / q_actual);
         int merge_batch_uq = batch;
         int merge_batch_vp = batch;
 
@@ -117,8 +121,12 @@ ggml_tensor* ggml_ext_lokr_forward(
             hc_t = ggml_reshape_3d(ctx, hc_t, up, vp, batch);
         }
 
-        ggml_tensor* hc  = ggml_transpose(ctx, hc_t);
-        ggml_tensor* out = ggml_reshape_2d(ctx, ggml_cont(ctx, hc), up * vp, batch);
+        ggml_tensor* hc = ggml_transpose(ctx, hc_t);
+        // Restore the activation's trailing dims so the diff adds
+        // element-wise onto the linear output instead of broadcasting
+        // a flattened batch across it.
+        ggml_tensor* out = ggml_reshape_4d(ctx, ggml_cont(ctx, hc), up * vp,
+                                           h->ne[1], h->ne[2], h->ne[3]);
         return ggml_ext_scale(ctx, out, scale);
     } else {
         int batch = (int)h->ne[3];
