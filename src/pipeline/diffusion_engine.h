@@ -442,7 +442,8 @@ public:
                              float frame_rate,
                              const sd_cache_params_t* cache_params,
                              bool preview_final_step,
-                             const sd::Tensor<float>& video_positions = {});
+                             const sd::Tensor<float>& video_positions = {},
+                             const sd_lanpaint_params_t& lanpaint     = {});
 
     int get_vae_scale_factor();
 

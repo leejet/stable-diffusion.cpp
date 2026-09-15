@@ -14,6 +14,9 @@ equivalent to `--log-level verbose`. If repeated, the last logging option wins.
 For direct image repair or automatic post-generation YOLOv8 detection followed by cropped inpainting, see
 [ADetailer](../../docs/adetailer.md).
 
+For high-quality inpainting with the Langevin-based LanPaint sampler (`--lanpaint`), see
+[LanPaint](../../docs/lanpaint.md).
+
 Metadata mode inspects PNG/JPEG container metadata without loading any model:
 
 ```bash
