@@ -2611,15 +2611,15 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
     };
 
     denoise_cb_t effective_denoise = denoise;
-    // Declared at function scope: the callback below captures the engine by
-    // address, so it must outlive the sampling call.
+    // Function scope: the engine's callback captures it by address, so it
+    // must outlive the sampling call; the engine in turn borrows `noise` and
+    // `sampling_init_latent` (both sample()-scope) and owns the keep mask it
+    // derives from `denoise_mask`.
     std::optional<LanPaint> lanpaint_engine;
     if (lanpaint_active) {
         // The LanPaint engine wraps the denoise evaluation into the callback
         // shape the sampler kernels call: each kernel model() call runs one
         // full Langevin cycle and evolves `x` in place.
-        const sd::Tensor<float> lanpaint_keep_mask =
-            denoise_mask.empty() ? sd::Tensor<float>() : 1.f - denoise_mask;
         lanpaint_eval_t lanpaint_eval = [&denoise](const sd::Tensor<float>& x, float sigma, int step) -> LanPaintEval {
             sd::guidance::GuiderOutput g = denoise(x, sigma, step);
             return LanPaintEval{std::move(g.pred), std::move(g.pred_big)};
@@ -2633,7 +2633,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                                 sampler_rng,
                                 noise,
                                 sampling_init_latent,
-                                lanpaint_keep_mask);
+                                denoise_mask);
         denoise_cb_t lanpaint_cb        = lanpaint_engine->make_callback(sigmas);
         const SDVersion lanpaint_version = version;
         effective_denoise = [this,

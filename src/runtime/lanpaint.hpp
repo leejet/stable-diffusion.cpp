@@ -11,11 +11,12 @@
  * `denoiser.hpp` must not include this header.
  *
  * Mask convention (comfy `latent_mask = 1 - denoise_mask`):
- *   `latent_mask` is a float tensor, 1 = KEEP the original image, 0 = EDIT.
- * sd.cpp's `denoise_mask` is a latent-space tensor of shape {W,H,1,1}
- * (images) / {W,H,T,1,1} (video) against latents {W,H,C,1} / {W,H,T,C,1},
- * so the caller passes `latent_mask = 1 - denoise_mask` and broadcasting
- * is automatic.
+ *   The engine takes the user-facing sd.cpp `denoise_mask` -- a latent-space
+ *   float tensor of shape {W,H,1,1} (images) / {W,H,T,1,1} (video) against
+ *   latents {W,H,C,1} / {W,H,T,C,1}, 1 = EDIT (repaint), empty = no mask --
+ *   and derives its internal keep mask `latent_mask_ = 1 - denoise_mask`
+ *   (1 = KEEP the original image, 0 = EDIT) used throughout the cycle;
+ *   broadcasting against the latents is automatic.
  *
  * Sigma convention: `sigma` is the native denoiser sigma -- flow time t in
  * [0,1] for the DiscreteFlowDenoiser family, the VE sigma (e.g.
@@ -113,8 +114,9 @@ inline std::optional<LanPaintInnerModel> make_lanpaint_inner_model(lanpaint_eval
                               (bool)std::dynamic_pointer_cast<DiscreteFlowDenoiser>(denoiser)};
 }
 
-// One LanPaint engine. Holds the per-sample context (the inner model, the
-// replace-step noise, the target latent, the keep mask and the RNG); `run()`
+// One LanPaint engine. Owns the derived keep mask and borrows the
+// replace-step noise, the target latent, the RNG and the inner model;
+// `run()`
 // executes one full outer-step cycle on the sampler's latent in place and
 // returns the blended denoised x0 (comfy's `KSamplerX0Inpaint.__call__` +
 // `LanPaint.LanPaint` for one step). `make_callback()` wraps `run()` into
@@ -122,18 +124,22 @@ inline std::optional<LanPaintInnerModel> make_lanpaint_inner_model(lanpaint_eval
 // by non-const reference so the evolved latent is written back to the
 // sampler's local state, comfy's `input_x.copy_(x)`).
 struct LanPaint {
+    // `noise` and `latent_image` are borrowed views and must outlive the
+    // engine (the sampler wiring binds them to caller-scope tensors);
+    // `denoise_mask` is the user-facing mask (1 = repaint, empty = no mask),
+    // from which the engine derives its owned keep mask.
     LanPaint(const LanPaintParams& params,
              LanPaintInnerModel inner_model,
              const std::shared_ptr<RNG>& rng,
              const sd::Tensor<float>& noise,
              const sd::Tensor<float>& latent_image,
-             const sd::Tensor<float>& latent_mask)
+             const sd::Tensor<float>& denoise_mask)
         : params_(params),
           inner_model_(std::move(inner_model)),
           rng_(rng),
           noise_(noise),
           latent_image_(latent_image),
-          latent_mask_(latent_mask) {
+          latent_mask_(1.f - denoise_mask) {
     }
 
     // Effective inner-step count for one outer step (comfy EarlyStop gating +
@@ -314,8 +320,9 @@ struct LanPaint {
     }
 
     // Wraps `run()` into the callback shape the sampler kernels call. The
-    // returned function must not outlive the engine, its inner model, or the
-    // referenced tensors.
+    // returned function must not outlive the engine, its inner model, the
+    // Denoiser, the evaluation closure's captures, or the tensors the engine
+    // borrows (noise, latent image).
     denoise_cb_t make_callback(const std::vector<float>& sigmas) const {
         return [this, sigmas](sd::Tensor<float>& x, float sigma, int step) -> sd::guidance::GuiderOutput {
             const int outer_step = std::abs(step) - 1;
@@ -358,9 +365,12 @@ private:
     LanPaintParams params_;
     LanPaintInnerModel inner_model_;
     std::shared_ptr<RNG> rng_;
+    // Borrowed views of the caller's tensors; they must outlive the engine.
     const sd::Tensor<float>& noise_;
     const sd::Tensor<float>& latent_image_;
-    const sd::Tensor<float>& latent_mask_;
+    // Owned keep mask derived from the caller's denoise mask (see the
+    // constructor): 1 = keep, 0 = repaint, empty = no-mask passthrough.
+    sd::Tensor<float> latent_mask_;
 };
 
 #endif  // __SD_RUNTIME_LANPAINT_HPP__
