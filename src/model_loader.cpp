@@ -82,6 +82,14 @@ bool is_unused_tensor(const std::string& name) {
     return false;
 }
 
+// The U1.5 vision filter also matches raw tensor names in standalone CLIP-Vision files.
+bool should_skip_tensor(const std::string& name, const std::string& prefix) {
+    if (prefix == "clip_vision." && starts_with(name, "vision_model.")) {
+        return false;
+    }
+    return is_unused_tensor(name);
+}
+
 void f64_to_f32_vec(double* src, float* dst, int64_t n) {
     // support inplace op
     for (int64_t i = 0; i < n; i++) {
@@ -285,7 +293,7 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
     size_t file_index = add_file_path(file_path);
 
     for (auto& tensor_storage : tensor_storages) {
-        if (is_unused_tensor(tensor_storage.name)) {
+        if (should_skip_tensor(tensor_storage.name, prefix)) {
             continue;
         }
 
@@ -357,7 +365,7 @@ bool ModelLoader::init_from_torch_legacy_file(const std::string& file_path, cons
     size_t file_index = add_file_path(file_path);
 
     for (auto& tensor_storage : tensor_storages) {
-        if (is_unused_tensor(tensor_storage.name)) {
+        if (should_skip_tensor(tensor_storage.name, prefix)) {
             continue;
         }
 
