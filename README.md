@@ -1,189 +1,158 @@
 <p align="center">
-  <img src="./assets/logo.png" width="360x">
+  <img src="./assets/logo.png" width="360" alt="stable-diffusion.cpp">
 </p>
 
-# stable-diffusion.cpp
+# stable-diffusion.cpp for Qualcomm devices
 
-<div align="center">
-<a href="https://trendshift.io/repositories/9714" target="_blank"><img src="https://trendshift.io/api/badge/repositories/9714" alt="leejet%2Fstable-diffusion.cpp | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-</div>
+This branch provides optimized stable-diffusion.cpp and GGML paths for Qualcomm Hexagon NPUs and Adreno GPUs. It is used by [Local Dream](https://github.com/xororz/local-dream) for on-device DiT inference.
 
-Diffusion model(SD,Flux,Wan,...) inference in pure C/C++
+- GGML tracking: [llama.cpp issue #28904](https://github.com/ggml-org/llama.cpp/issues/28904) and [PR #28952](https://github.com/ggml-org/llama.cpp/pull/28952)
+- SD.cpp integration: [stable-diffusion.cpp PR #1970](https://github.com/leejet/stable-diffusion.cpp/pull/1970)
+- Upstream project: [leejet/stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)
 
-***Note that this project is under active development. \
-API and command-line option may change frequently.***
+## Hexagon NPU
 
-## 🔥Important News
+### Weights
 
-* **2026/08/20** 🚀 stable-diffusion.cpp now supports **LTX-2.5**
-* **2026/08/04** 🚀 stable-diffusion.cpp adds **Day-1 support for MiniMax-H3**
-* **2026/06/25** 🚀 stable-diffusion.cpp now supports **Krea2**
-* **2026/06/04** 🚀 stable-diffusion.cpp now supports **Ideogram4**
-* **2026/05/31** 🚀 stable-diffusion.cpp now supports **PiD**
-* **2026/05/27** 🚀 stable-diffusion.cpp now supports **Lens**
-* **2026/05/17** 🚀 stable-diffusion.cpp now supports **LTX-2.3**
-* **2026/04/11** 🚀 stable-diffusion.cpp now uses a brand-new embedded web UI.  
-* **2026/01/18** 🚀 stable-diffusion.cpp now supports **FLUX.2-klein**  
-* **2025/12/01** 🚀 stable-diffusion.cpp now supports **Z-Image**  
-* **2025/11/30** 🚀 stable-diffusion.cpp now supports **FLUX.2-dev**  
-* **2025/10/13** 🚀 stable-diffusion.cpp now supports **Qwen-Image-Edit / Qwen-Image-Edit 2509**  
-* **2025/10/12** 🚀 stable-diffusion.cpp now supports **Qwen-Image**  
-* **2025/09/14** 🚀 stable-diffusion.cpp now supports **Wan2.1 Vace**  
-* **2025/09/06** 🚀 stable-diffusion.cpp now supports **Wan2.1 / Wan2.2**  
+- Text encoder: export Qwen3-4B as Q4_0 with stable-diffusion.cpp, or use [`llm.gguf`](https://huggingface.co/zhiyuanasad/z_image_turbo_adreno/blob/main/llm.gguf) from [zhiyuanasad/z_image_turbo_adreno](https://huggingface.co/zhiyuanasad/z_image_turbo_adreno).
+- Z-Image Turbo FP8: [`z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors`](https://huggingface.co/Kijai/Z-Image_comfy_fp8_scaled/blob/main/z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors).
+- FLUX.2/Klein 4B FP8: [`flux-2-klein-4b-fp8.safetensors`](https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-fp8/blob/main/flux-2-klein-4b-fp8.safetensors).
 
-## Features
+### Performance
 
-- Plain C/C++ implementation based on [ggml](https://github.com/ggml-org/ggml), working in the same way as [llama.cpp](https://github.com/ggml-org/llama.cpp)
-- Super lightweight and without external dependencies
-- Supported models
-  - Image Models
-    - [SD1.x, SD2.x, SD-Turbo](./docs/sd.md)
-    - [SDXL, SDXL-Turbo](./docs/sd.md)
-    - [Some SD1.x and SDXL distilled models](./docs/distilled_sd.md)
-    - [SD3/SD3.5](./docs/sd3.md)
-    - [FLUX.1-dev/FLUX.1-schnell](./docs/flux.md)
-    - [FLUX.2-dev/FLUX.2-klein](./docs/flux2.md)
-    - [Lens](./docs/lens.md)
-    - [Chroma](./docs/chroma.md)
-    - [Chroma1-Radiance](./docs/chroma_radiance.md)
-    - [Qwen Image](./docs/qwen_image.md)
-    - [PiD](./docs/pid.md)
-    - [LongCat Image](./docs/longcat_image.md)
-    - [Z-Image](./docs/z_image.md)
-    - [MiniT2I](./docs/minit2i.md)
-    - [Ovis-Image](./docs/ovis_image.md)
-    - [Anima](./docs/anima.md)
-    - [ERNIE-Image](./docs/ernie_image.md)
-    - [Boogu Image](./docs/boogu_image.md)
-    - [Krea2](./docs/krea2.md)
-    - [Mage-Flow](./docs/mage_flow.md)
-    - [SeFi-Image](./docs/sefi_image.md)
-    - [HiDream-O1-Image](./docs/hidream_o1_image.md)
-    - [Ideogram4](./docs/ideogram4.md)
-  - [Image Edit Models](./docs/edit.md)
-    - [FLUX.1-Kontext-dev](./docs/kontext.md)
-    - [Qwen Image Edit series](./docs/qwen_image_edit.md)
-    - [LongCat Image Edit](./docs/longcat_image.md)
-    - [Boogu Image Edit](./docs/boogu_image.md)
-    - [Mage-Flow-Edit](./docs/mage_flow.md#image-editing)
-  - Video Models
-    - [Wan2.1/Wan2.2](./docs/wan.md)
-    - [MiniMax-H3](./docs/minimax_h3.md)
-    - [LTX-2.3/LTX-2.5](./docs/ltx2.md)
-    - [HunyuanVideo 1.5](./docs/hunyuan_video.md)
-    - [LingBot-Video](./docs/lingbot_video.md)
-  - [PhotoMaker](./docs/photo_maker.md) support.
-  - [IP-Adapter](./docs/ip_adapter.md) support (SD 1.5 and SDXL, including Plus)
-  - Control Net support with SD 1.5
-  - [ADetailer](./docs/adetailer.md)
-  - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
-  - Latent Consistency Models support (LCM/LCM-LoRA)
-  - Faster and memory efficient latent decoding with [TAESD](./docs/taesd.md)
-  - Upscale images generated with [ESRGAN](./docs/esrgan.md)
-- Supported backends
-  - CPU (AVX, AVX2 and AVX512 support for x86 architectures)
-  - CUDA
-  - Vulkan
-  - Metal
-  - OpenCL
-  - SYCL
-- Supported weight formats
-  - Pytorch checkpoint (`.ckpt` or `.pth` or `.pt`)
-  - Safetensors (`.safetensors`)
-  - GGUF (`.gguf`)
-- Convert mode supports converting model weights to `.gguf` or `.safetensors`
-- Supported platforms
-    - Linux
-    - Mac OS
-    - Windows
-    - Android (via Termux, [Local Diffusion](https://github.com/rmatif/Local-Diffusion))
-- Flash Attention for memory usage optimization
-- Negative prompt
-- [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (not all the features, only token weighting for now)
-- VAE tiling processing for reduce memory usage
-- Sampling method
-    - `Euler A`
-    - `Euler`
-    - `Heun`
-    - `DPM2`
-    - `DPM++ 2M`
-    - [`DPM++ 2M v2`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457)
-    - `DPM++ 2S a`
-    - `ER-SDE`
-    - [`LCM`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/issues/13952)
-- Cross-platform reproducibility
-    - `--rng cuda`, default, consistent with the `stable-diffusion-webui GPU RNG`
-    - `--rng cpu`, consistent with the `comfyui RNG`
-- Embedds generation parameters into png output as webui-compatible text string
+Device: Snapdragon 8 Elite, SM8750, HTP v79. Text encoder, DiT, and VAE run on HTP. Prompt: `a lovely cat`. Sampler: Euler. CFG: 1. Seed: 42. E2E includes text encoding, all sampling steps, and VAE decoding.
 
-## Quick Start
+| Model | Resolution | Steps | Upstream Q4_0 DiT | FP8 DiT | VAE | E2E |
+|---|---:|---:|---:|---:|---:|---:|
+| Z-Image Turbo | 1024x1024 | 8 | **91.03 s/it** | **10.26 s/it** | 2.47 s | 100.54 s |
+| FLUX.2/Klein 4B | 1024x1024 | 4 | **79.42 s/it** | **8.54 s/it** | 2.14 s | 49.89 s |
+| Z-Image Turbo | 1536x1536 | 8 | **OOM** | **32.91 s/it** | 9.08 s | 306.03 s |
+| FLUX.2/Klein 4B | 1536x1536 | 4 | **OOM** | **22.42 s/it** | 5.44 s | 111.68 s |
+| Z-Image Turbo | 2048x2048 | 4 | **OOM** | **72.51 s/it** | 14.24 s | 307.07 s |
+| FLUX.2/Klein 4B | 2048x2048 | 4 | **OOM** | **46.24 s/it** | 19.28 s | 210.77 s |
 
-### Get the sd executable
+The 1024 and 1536 runs use direct VAE decode. The 2048 runs use 64x64 VAE tiles. At 1K, FP8 is 8.87x faster for Z-Image and 9.30x faster for FLUX.2/Klein than the current upstream Hexagon Q4_0/Q8_0 path.
 
-- Download pre-built binaries from the [releases page](https://github.com/leejet/stable-diffusion.cpp/releases)
-- Or build from source by following the [build guide](./docs/build.md)
+### Images
 
-### Download model weights
+| Z-Image Turbo | FLUX.2/Klein 4B |
+|---|---|
+| **1024x1024, 8 steps**<br><img src="https://github.com/user-attachments/assets/439610a3-35f9-439e-9f26-7107f11fd9bc" width="480" alt="Z-Image 1024x1024, 8 steps"> | **1024x1024, 4 steps**<br><img src="https://github.com/user-attachments/assets/18178355-8da6-426e-a3e5-8275a712b3aa" width="480" alt="FLUX.2 Klein 1024x1024, 4 steps"> |
+| **1536x1536, 8 steps**<br><img src="https://github.com/user-attachments/assets/26ac18e8-5c47-421f-9216-d24eec0d8cb1" width="480" alt="Z-Image 1536x1536, 8 steps"> | **1536x1536, 4 steps**<br><img src="https://github.com/user-attachments/assets/7275c232-3327-4518-a9d1-4865ff798a80" width="480" alt="FLUX.2 Klein 1536x1536, 4 steps"> |
+| **2048x2048, 4 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/zimage_2048_s4.png" width="480" alt="Z-Image 2048x2048, 4 steps"> | **2048x2048, 4 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/klein_2048_s4.png" width="480" alt="FLUX.2 Klein 2048x2048, 4 steps"> |
 
-- download weights(.ckpt or .safetensors or .gguf). For example
-    - Stable Diffusion v1.5 from https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5 
+### Commands
 
-    ```sh
-    curl -L -O https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
-    ```
-
-### Generate an image with just one command
+Place `sd-cli`, `libggml-htp-v79.so`, the model files, and the VAE files in the current directory, then run:
 
 ```sh
-./bin/sd-cli -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
+export LD_LIBRARY_PATH="$PWD" ADSP_LIBRARY_PATH="$PWD"
 ```
 
-***For detailed command-line arguments, check out [cli doc](./examples/cli/README.md).***
+#### Z-Image Turbo, 1024x1024, 8 steps
 
-## Performance
+```sh
+./sd-cli \
+  --diffusion-model z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors \
+  --llm llm.gguf \
+  --vae ae.safetensors \
+  --backend diffusion=HTP0,te=HTP0,vae=HTP0 \
+  --fa --vae-conv-direct \
+  -t 4 -p "a lovely cat" --cfg-scale 1 \
+  --steps 8 --sampling-method euler \
+  -W 1024 -H 1024 --seed 42 \
+  -o zimage_1024_s8.png
+```
 
-If you want to improve performance or reduce VRAM/RAM usage, please refer to [performance guide](./docs/performance.md).
-For runtime and parameter backend placement, see the [backend selection guide](./docs/backend.md).
+#### FLUX.2/Klein 4B, 1024x1024, 4 steps
 
-## More Guides
+```sh
+./sd-cli \
+  --diffusion-model flux-2-klein-4b-fp8.safetensors \
+  --llm llm.gguf \
+  --vae flux2-vae.safetensors \
+  --backend diffusion=HTP0,te=HTP0,vae=HTP0 \
+  --fa --vae-conv-direct \
+  -t 8 -p "a lovely cat" --cfg-scale 1 \
+  --steps 4 --sampling-method euler \
+  -W 1024 -H 1024 --seed 42 \
+  -o klein_1024_s4.png
+```
 
-- [Backend selection](./docs/backend.md)
-- [RPC](./docs/rpc.md)
-- [LoRA](./docs/lora.md)
-- [LCM/LCM-LoRA](./docs/lcm.md)
-- [Docker](./docs/docker.md)
-- [Quantization and GGUF](./docs/quantization_and_gguf.md)
-- [INT8 convrot safetensors](./docs/int8_convrot.md)
-- [Inference acceleration via caching](./docs/caching.md)
+#### Z-Image Turbo, 1536x1536, 8 steps
 
-## Bindings
+```sh
+./sd-cli \
+  --diffusion-model z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors \
+  --llm llm.gguf \
+  --vae ae.safetensors \
+  --backend diffusion=HTP0,te=HTP0,vae=HTP0 \
+  --fa --vae-conv-direct \
+  -t 8 -p "a lovely cat" --cfg-scale 1 \
+  --steps 8 --sampling-method euler \
+  -W 1536 -H 1536 --seed 42 \
+  -o zimage_1536_s8.png
+```
 
-These projects wrap `stable-diffusion.cpp` for easier use in other languages/frameworks.
+#### FLUX.2/Klein 4B, 1536x1536, 4 steps
 
-* Golang (non-cgo): [seasonjs/stable-diffusion](https://github.com/seasonjs/stable-diffusion)
-* Golang (cgo): [Binozo/GoStableDiffusion](https://github.com/Binozo/GoStableDiffusion)
-* Golang (non-cgo): [l8bloom/gosd](https://github.com/l8bloom/gosd)
-* C#: [DarthAffe/StableDiffusion.NET](https://github.com/DarthAffe/StableDiffusion.NET)
-* Python: [william-murray1204/stable-diffusion-cpp-python](https://github.com/william-murray1204/stable-diffusion-cpp-python)
-* Rust: [newfla/diffusion-rs](https://github.com/newfla/diffusion-rs)
-* Flutter/Dart: [rmatif/Local-Diffusion](https://github.com/rmatif/Local-Diffusion)
+```sh
+./sd-cli \
+  --diffusion-model flux-2-klein-4b-fp8.safetensors \
+  --llm llm.gguf \
+  --vae flux2-vae.safetensors \
+  --backend diffusion=HTP0,te=HTP0,vae=HTP0 \
+  --fa --vae-conv-direct \
+  -t 8 -p "a lovely cat" --cfg-scale 1 \
+  --steps 4 --sampling-method euler \
+  -W 1536 -H 1536 --seed 42 \
+  -o klein_1536_s4.png
+```
 
-## UIs
+#### Z-Image Turbo, 2048x2048, 4 steps
 
-These projects use `stable-diffusion.cpp` as a backend for their image generation.
+```sh
+./sd-cli \
+  --diffusion-model z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors \
+  --llm llm.gguf \
+  --vae ae.safetensors \
+  --backend diffusion=HTP0,te=HTP0,vae=HTP0 \
+  --params-backend te=disk \
+  --fa --vae-conv-direct \
+  --vae-tiling --vae-tile-size 64x64 --vae-tile-overlap 0.25 \
+  -t 4 -p "a lovely cat" --cfg-scale 1 \
+  --steps 4 --sampling-method euler \
+  -W 2048 -H 2048 --seed 42 \
+  -o zimage_2048_s4.png
+```
 
-- [GIMP Plugins](https://github.com/themanyone/gimp-plugins)
-- [Jellybox](https://jellybox.com)
-- [Stable Diffusion GUI](https://github.com/fszontagh/sd.cpp.gui.wx)
-- [Stable Diffusion CLI-GUI](https://github.com/piallai/stable-diffusion.cpp)
-- [Local Diffusion](https://github.com/rmatif/Local-Diffusion)
-- [sd.cpp-webui](https://github.com/daniandtheweb/sd.cpp-webui)
-- [LocalAI](https://github.com/mudler/LocalAI)
-- [Neural-Pixel](https://github.com/Luiz-Alcantara/Neural-Pixel)
-- [KoboldCpp](https://github.com/LostRuins/koboldcpp)
+#### FLUX.2/Klein 4B, 2048x2048, 4 steps
 
-## Contributors
+```sh
+./sd-cli \
+  --diffusion-model flux-2-klein-4b-fp8.safetensors \
+  --llm llm.gguf \
+  --vae flux2-vae.safetensors \
+  --backend diffusion=HTP0,te=HTP0,vae=HTP0 \
+  --params-backend te=disk \
+  --fa --vae-conv-direct \
+  --vae-tiling --vae-tile-size 64x64 --vae-tile-overlap 0.25 \
+  -t 4 -p "a lovely cat" --cfg-scale 1 \
+  --steps 4 --sampling-method euler \
+  -W 2048 -H 2048 --seed 42 \
+  -o klein_2048_s4.png
+```
 
-Thank you to all the people who have already contributed to stable-diffusion.cpp!
+### FP8 versus upstream Q4_0/Q8_0
 
-[![Contributors](https://contrib.rocks/image?repo=leejet/stable-diffusion.cpp)](https://github.com/leejet/stable-diffusion.cpp/graphs/contributors)
+Resolution: 1024x1024. Sampling steps: 8.
+
+> 雨夜的未来上海外滩，镜头前是一辆旧式有轨电车穿过积水街道，街边霓虹牌同时写着“欢迎光临”“火锅”“Open 24 Hours”，远处玻璃摩天楼与石库门老建筑并列，空中漂浮无人机广告屏，屏幕上有清晰汉字“春风得意”，画面里有穿风衣的人群、红色雨伞、湿漉漉的柏油路反射青蓝与橙红灯光，构图复杂、层次深、电影感、超细节
+
+| Upstream Q4_0 + Q8_0 | F8_E4M3 |
+|---|---|
+| <img src="https://github.com/user-attachments/assets/4a4bace9-1745-4d62-a295-253df1e202a6" width="480" alt="Z-Image Q4_0 plus Q8_0"> | <img src="https://github.com/user-attachments/assets/bb2dc13b-e161-464b-8f35-2cb9a88486ba" width="480" alt="Z-Image F8_E4M3"> |
+
+## Adreno GPU
+
+Adreno OpenCL benchmarks, images, and commands will be added here.
