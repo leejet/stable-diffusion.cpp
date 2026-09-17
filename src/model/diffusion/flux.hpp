@@ -235,6 +235,18 @@ namespace Flux {
             x              = ggml_mul(ctx->ggml_ctx, x, w);
             return x;
         }
+
+        ggml_tensor* forward_rope(GGMLRunnerContext* ctx,
+                                  ggml_tensor* x,
+                                  ggml_tensor* pe) {
+            ggml_tensor* out = ggml_qknorm_rope(
+                ctx->ggml_ctx, x, params["scale"], pe, eps);
+            if (ctx->backend != nullptr &&
+                ggml_backend_supports_op(ctx->backend, out)) {
+                return out;
+            }
+            return Rope::apply_rope(ctx->ggml_ctx, forward(ctx, x), pe);
+        }
     };
 
     struct QKNorm : public GGMLBlock {
@@ -261,6 +273,20 @@ namespace Flux {
             x = norm->forward(ctx, x);
             return x;
         }
+
+        ggml_tensor* query_norm_rope(GGMLRunnerContext* ctx,
+                                     ggml_tensor* x,
+                                     ggml_tensor* pe) {
+            auto norm = std::dynamic_pointer_cast<RMSNorm>(blocks["query_norm"]);
+            return norm->forward_rope(ctx, x, pe);
+        }
+
+        ggml_tensor* key_norm_rope(GGMLRunnerContext* ctx,
+                                   ggml_tensor* x,
+                                   ggml_tensor* pe) {
+            auto norm = std::dynamic_pointer_cast<RMSNorm>(blocks["key_norm"]);
+            return norm->forward_rope(ctx, x, pe);
+        }
     };
 
     struct SelfAttention : public GGMLBlock {
@@ -279,7 +305,9 @@ namespace Flux {
             blocks["proj"]   = std::shared_ptr<GGMLBlock>(new Linear(dim, dim, proj_bias));
         }
 
-        std::vector<ggml_tensor*> pre_attention(GGMLRunnerContext* ctx, ggml_tensor* x) {
+        std::vector<ggml_tensor*> pre_attention(GGMLRunnerContext* ctx,
+                                                ggml_tensor* x,
+                                                ggml_tensor* pe = nullptr) {
             auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
             auto norm     = std::dynamic_pointer_cast<QKNorm>(blocks["norm"]);
 
@@ -291,8 +319,13 @@ namespace Flux {
                                             qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], (qkv->nb[0]) * qkv->ne[0] / 3);
             auto v           = ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, num_heads, qkv->ne[1], qkv->ne[2],
                                             qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], (qkv->nb[0]) * 2 * qkv->ne[0] / 3);
-            q                = norm->query_norm(ctx, q);
-            k                = norm->key_norm(ctx, k);
+            if (pe != nullptr) {
+                q = norm->query_norm_rope(ctx, q, pe);
+                k = norm->key_norm_rope(ctx, k, pe);
+            } else {
+                q = norm->query_norm(ctx, q);
+                k = norm->key_norm(ctx, k);
+            }
             return {q, k, v};
         }
 
@@ -310,9 +343,17 @@ namespace Flux {
             // x: [N, n_token, dim]
             // pe: [n_token, d_head/2, 2, 2]
             // return [N, n_token, dim]
-            auto qkv = pre_attention(ctx, x);                                   // q,k,v: [N, n_token, n_head, d_head]
-            x        = Rope::attention(ctx, qkv[0], qkv[1], qkv[2], pe, mask);  // [N, n_token, dim]
-            x        = post_attention(ctx, x);                                  // [N, n_token, dim]
+            auto qkv = pre_attention(ctx, x, pe);
+            x = ggml_ext_attention_ext(ctx->ggml_ctx,
+                                        ctx->backend,
+                                        qkv[0],
+                                        qkv[1],
+                                        qkv[2],
+                                        num_heads,
+                                        mask,
+                                        true,
+                                        ctx->flash_attn_enabled);
+            x = post_attention(ctx, x);
             return x;
         }
     };
@@ -538,10 +579,20 @@ namespace Flux {
             ModulationOut txt_mod1 = txt_mods[0];
             ModulationOut txt_mod2 = txt_mods[1];
 
+            GGML_ASSERT(pe->ne[3] >= txt->ne[1] + img->ne[1]);
+            auto txt_pe = ggml_view_4d(ctx->ggml_ctx,
+                                       pe,
+                                       pe->ne[0], pe->ne[1], pe->ne[2], txt->ne[1],
+                                       pe->nb[1], pe->nb[2], pe->nb[3], 0);
+            auto img_pe = ggml_view_4d(ctx->ggml_ctx,
+                                       pe,
+                                       pe->ne[0], pe->ne[1], pe->ne[2], img->ne[1],
+                                       pe->nb[1], pe->nb[2], pe->nb[3], txt->ne[1] * pe->nb[3]);
+
             // prepare image for attention
             auto img_modulated = img_norm1->forward(ctx, img);
             img_modulated      = Flux::modulate(ctx->ggml_ctx, img_modulated, img_mod1.shift, img_mod1.scale);
-            auto img_qkv       = img_attn->pre_attention(ctx, img_modulated);  // q,k,v: [N, n_img_token, n_head, d_head]
+            auto img_qkv       = img_attn->pre_attention(ctx, img_modulated, img_pe);
             auto img_q         = img_qkv[0];
             auto img_k         = img_qkv[1];
             auto img_v         = img_qkv[2];
@@ -549,17 +600,25 @@ namespace Flux {
             // prepare txt for attention
             auto txt_modulated = txt_norm1->forward(ctx, txt);
             txt_modulated      = Flux::modulate(ctx->ggml_ctx, txt_modulated, txt_mod1.shift, txt_mod1.scale);
-            auto txt_qkv       = txt_attn->pre_attention(ctx, txt_modulated);  // q,k,v: [N, n_txt_token, n_head, d_head]
+            auto txt_qkv       = txt_attn->pre_attention(ctx, txt_modulated, txt_pe);
             auto txt_q         = txt_qkv[0];
             auto txt_k         = txt_qkv[1];
             auto txt_v         = txt_qkv[2];
 
             // run actual attention
-            auto q = ggml_concat(ctx->ggml_ctx, txt_q, img_q, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
-            auto k = ggml_concat(ctx->ggml_ctx, txt_k, img_k, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
+            auto q = ggml_concat(ctx->ggml_ctx, txt_q, img_q, 1);  // [N*n_head, n_txt_token + n_img_token, d_head]
+            auto k = ggml_concat(ctx->ggml_ctx, txt_k, img_k, 1);  // [N*n_head, n_txt_token + n_img_token, d_head]
             auto v = ggml_concat(ctx->ggml_ctx, txt_v, img_v, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
 
-            auto attn         = Rope::attention(ctx, q, k, v, pe, mask);  // [N, n_txt_token + n_img_token, n_head*d_head]
+            auto attn = ggml_ext_attention_ext(ctx->ggml_ctx,
+                                               ctx->backend,
+                                               q,
+                                               k,
+                                               v,
+                                               img_attn->num_heads,
+                                               mask,
+                                               true,
+                                               ctx->flash_attn_enabled);
             auto txt_attn_out = ggml_view_3d(ctx->ggml_ctx,
                                              attn,
                                              attn->ne[0],
@@ -682,9 +741,17 @@ namespace Flux {
             auto v = ggml_view_4d(ctx->ggml_ctx, qkv_mlp, head_dim, num_heads, qkv_mlp->ne[1], qkv_mlp->ne[2],
                                   qkv_mlp->nb[0] * head_dim, qkv_mlp->nb[1], qkv_mlp->nb[2], (qkv_mlp->nb[0]) * 2 * hidden_size);
 
-            q         = norm->query_norm(ctx, q);
-            k         = norm->key_norm(ctx, k);
-            auto attn = Rope::attention(ctx, q, k, v, pe, mask);  // [N, n_token, hidden_size]
+            q = norm->query_norm_rope(ctx, q, pe);
+            k = norm->key_norm_rope(ctx, k, pe);
+            auto attn = ggml_ext_attention_ext(ctx->ggml_ctx,
+                                               ctx->backend,
+                                               q,
+                                               k,
+                                               v,
+                                               num_heads,
+                                               mask,
+                                               true,
+                                               ctx->flash_attn_enabled);  // [N, n_token, hidden_size]
 
             auto mlp = ggml_view_3d(ctx->ggml_ctx, qkv_mlp, mlp_hidden_dim * mlp_mult_factor, qkv_mlp->ne[1], qkv_mlp->ne[2], qkv_mlp->nb[1], qkv_mlp->nb[2], hidden_size * 3 * qkv_mlp->nb[0]);
             if (use_yak_mlp) {
@@ -694,8 +761,7 @@ namespace Flux {
             } else {
                 mlp = ggml_ext_gelu(ctx->ggml_ctx, mlp, true);
             }
-            auto attn_mlp = ggml_concat(ctx->ggml_ctx, attn, mlp, 0);  // [N, n_token, hidden_size + mlp_hidden_dim]
-            auto output   = linear2->forward(ctx, attn_mlp);           // [N, n_token, hidden_size]
+            auto output = linear2->forward_segmented(ctx, attn, mlp);  // [N, n_token, hidden_size]
 
             output = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, output, mod.gate));
             return output;

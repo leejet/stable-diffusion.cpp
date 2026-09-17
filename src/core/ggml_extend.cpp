@@ -135,20 +135,9 @@ ggml_tensor* ggml_ext_silu_act(ggml_context* ctx, ggml_tensor* x, bool gate_firs
     // return: [ne3, ne2, ne1, ne0/2]
 
     auto x_vec = ggml_ext_chunk(ctx, x, 2, 0, false);
-    ggml_tensor* gate;
-    if (gate_first) {
-        gate = x_vec[0];
-        x    = x_vec[1];
-    } else {
-        x    = x_vec[0];
-        gate = x_vec[1];
-    }
-    gate = ggml_cont(ctx, gate);
-    gate = ggml_silu_inplace(ctx, gate);
-
-    x = ggml_mul(ctx, x, gate);  // [ne3, ne2, ne1, ne0/2]
-
-    return x;
+    ggml_tensor* gate = gate_first ? x_vec[0] : x_vec[1];
+    ggml_tensor* up   = gate_first ? x_vec[1] : x_vec[0];
+    return ggml_swiglu_split(ctx, gate, up);
 }
 
 ggml_tensor* ggml_ext_group_norm_32(ggml_context* ctx,
@@ -247,29 +236,14 @@ ggml_tensor* ggml_ext_linear_i8_tensorwise(ggml_context* ctx,
                                            ggml_tensor* b,
                                            int convrot_group_size,
                                            float scale) {
-    GGML_ASSERT(x->type == GGML_TYPE_F32 || (x->type == GGML_TYPE_I8 && scale == 1.f));
-    if (scale != 1.f) {
-        x = ggml_ext_scale(ctx, x, scale);
-    }
-
-    ggml_tensor* fused_bias = scale == 1.f ? b : nullptr;
-    if (x->ne[2] * x->ne[3] > 1024) {
-        int64_t ne2 = x->ne[2];
-        int64_t ne3 = x->ne[3];
-        x           = ggml_reshape_2d(ctx, x, x->ne[0], x->ne[1] * x->ne[2] * x->ne[3]);
-        x           = ggml_mul_mat_i8_tensorwise(ctx, w, x, weight_scale, fused_bias, convrot_group_size);
-        x           = ggml_reshape_4d(ctx, x, x->ne[0], x->ne[1] / ne2 / ne3, ne2, ne3);
-    } else {
-        x = ggml_mul_mat_i8_tensorwise(ctx, w, x, weight_scale, fused_bias, convrot_group_size);
-    }
-
-    if (scale != 1.f) {
-        x = ggml_ext_scale(ctx, x, 1.f / scale);
-        if (b != nullptr) {
-            x = ggml_add_inplace(ctx, x, b);
-        }
-    }
-    return x;
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(x);
+    GGML_UNUSED(w);
+    GGML_UNUSED(weight_scale);
+    GGML_UNUSED(b);
+    GGML_UNUSED(convrot_group_size);
+    GGML_UNUSED(scale);
+    GGML_ABORT("I8 tensorwise matmul is not available in this ggml revision");
 }
 
 ggml_tensor* ggml_ext_pad_ext(ggml_context* ctx,
@@ -683,14 +657,16 @@ ggml_tensor* ggml_ext_group_norm(ggml_context* ctx,
                                  ggml_tensor* x,
                                  ggml_tensor* w,
                                  ggml_tensor* b,
-                                 int num_groups) {
+                                 int num_groups,
+                                 bool inplace) {
     if (ggml_n_dims(x) >= 3 && w != nullptr && b != nullptr) {
         w = ggml_reshape_4d(ctx, w, 1, 1, w->ne[0], 1);
         b = ggml_reshape_4d(ctx, b, 1, 1, b->ne[0], 1);
     }
 
     const float eps = 1e-6f;  // default eps parameter
-    x               = ggml_group_norm(ctx, x, num_groups, eps);
+    x               = inplace ? ggml_group_norm_inplace(ctx, x, num_groups, eps)
+                              : ggml_group_norm(ctx, x, num_groups, eps);
     if (w != nullptr && b != nullptr) {
         x = ggml_mul_inplace(ctx, x, w);
         // b = ggml_repeat(ctx, b, x);

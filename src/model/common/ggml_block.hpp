@@ -207,7 +207,7 @@ public:
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         ggml_tensor* w            = params["weight"];
         ggml_tensor* weight_scale = has_weight_scale ? params["weight_scale"] : nullptr;
-        if (w->type == GGML_TYPE_F8_E4M3 || w->type == GGML_TYPE_F8_E5M2) {
+        if (w->type == GGML_TYPE_F8_E4M3) {
             bool supports_fp8_matmul = false;
             if (ctx->backend != nullptr) {
                 ggml_tensor* fp8_matmul = ggml_mul_mat(ctx->ggml_ctx, w, x);
@@ -241,7 +241,7 @@ public:
                 const auto cache_key = std::make_pair(x, int8_convrot_group_size);
                 auto cached          = ctx->int8_convrot_cache.find(cache_key);
                 if (cached == ctx->int8_convrot_cache.end()) {
-                    x = ggml_quantize_i8_convrot(ctx->ggml_ctx, x, int8_convrot_group_size);
+                    GGML_ABORT("I8 convrot is not available in this ggml revision");
                     ctx->int8_convrot_cache.emplace(cache_key, x);
                 } else {
                     x = cached->second;
@@ -303,6 +303,30 @@ public:
             out = ggml_ext_linear(ctx->ggml_ctx, x, w, linear_bias, force_prec_f32, scale);
         }
         return out;
+    }
+
+    ggml_tensor* forward_segmented(GGMLRunnerContext* ctx,
+                                   ggml_tensor* x0,
+                                   ggml_tensor* x1) {
+        ggml_tensor* w = params["weight"];
+        if (ctx->weight_adapter == nullptr && scale == 1.f &&
+            w->type == GGML_TYPE_F8_E4M3) {
+            ggml_tensor* out = ggml_mul_mat_segmented(ctx->ggml_ctx, w, x0, x1);
+            if (force_prec_f32) {
+                ggml_mul_mat_set_prec(out, GGML_PREC_F32);
+            }
+            if (ctx->backend != nullptr && ggml_backend_supports_op(ctx->backend, out)) {
+                if (has_weight_scale) {
+                    out = ggml_mul(ctx->ggml_ctx, out, params["weight_scale"]);
+                }
+                if (bias) {
+                    out = ggml_add_inplace(ctx->ggml_ctx, out, params["bias"]);
+                }
+                return out;
+            }
+        }
+
+        return forward(ctx, ggml_concat(ctx->ggml_ctx, x0, x1, 0));
     }
 };
 
@@ -434,6 +458,16 @@ public:
             forward_params.conv2d.scale      = scale;
             return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, ctx->backend, x, w, b, prefix, forward_params);
         }
+        if (b != nullptr && ctx->conv2d_direct_enabled && ctx->backend != nullptr &&
+            !ctx->circular_x_enabled && !ctx->circular_y_enabled && scale == 1.f) {
+            ggml_tensor* out = ggml_conv_2d_direct_bias(
+                ctx->ggml_ctx, w, x, b,
+                stride.second, stride.first, padding.second, padding.first,
+                dilation.second, dilation.first);
+            if (ggml_backend_supports_op(ctx->backend, out)) {
+                return out;
+            }
+        }
         return ggml_ext_conv_2d(ctx->ggml_ctx,
                                 x,
                                 w,
@@ -448,6 +482,42 @@ public:
                                 ctx->circular_x_enabled,
                                 ctx->circular_y_enabled,
                                 scale);
+    }
+
+    ggml_tensor* forward_upscale(GGMLRunnerContext* ctx,
+                                 ggml_tensor* x,
+                                 int upscale_factor) {
+        ggml_tensor* out = try_forward_upscale(ctx, x, upscale_factor);
+        if (out == nullptr) {
+            return forward(ctx, ggml_upscale(ctx->ggml_ctx, x, upscale_factor,
+                                             GGML_SCALE_MODE_NEAREST));
+        }
+
+        return out;
+    }
+
+    bool supports_upscale(GGMLRunnerContext* ctx,
+                          ggml_tensor* x,
+                          int upscale_factor) {
+        return try_forward_upscale(ctx, x, upscale_factor) != nullptr;
+    }
+
+private:
+    ggml_tensor* try_forward_upscale(GGMLRunnerContext* ctx,
+                                     ggml_tensor* x,
+                                     int upscale_factor) {
+        if (!ctx->conv2d_direct_enabled || ctx->backend == nullptr ||
+            ctx->weight_adapter || ctx->circular_x_enabled ||
+            ctx->circular_y_enabled || scale != 1.f) {
+            return nullptr;
+        }
+
+        ggml_tensor* out = ggml_conv_2d_direct_upscale(
+            ctx->ggml_ctx, params["weight"], x,
+            bias ? params["bias"] : nullptr, upscale_factor,
+            stride.second, stride.first, padding.second, padding.first,
+            dilation.second, dilation.first);
+        return ggml_backend_supports_op(ctx->backend, out) ? out : nullptr;
     }
 };
 
@@ -734,6 +804,23 @@ protected:
     bool affine;
     std::string prefix;
 
+    void get_affine_params(GGMLRunnerContext* ctx,
+                           ggml_tensor** weight,
+                           ggml_tensor** bias) {
+        *weight = nullptr;
+        *bias   = nullptr;
+        if (!affine) {
+            return;
+        }
+
+        *weight = params["weight"];
+        *bias   = params["bias"];
+        if (ctx->weight_adapter) {
+            *weight = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, *weight, prefix + "weight");
+            *bias   = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, *bias, prefix + "bias");
+        }
+    }
+
     void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
         this->prefix = prefix;
         if (affine) {
@@ -754,18 +841,30 @@ public:
           eps(eps),
           affine(affine) {}
 
-    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x,
+                         bool inplace = false) {
         ggml_tensor* w = nullptr;
         ggml_tensor* b = nullptr;
-        if (affine) {
-            w = params["weight"];
-            b = params["bias"];
-            if (ctx->weight_adapter) {
-                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
-                b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
+        get_affine_params(ctx, &w, &b);
+        return ggml_ext_group_norm(ctx->ggml_ctx, x, w, b, num_groups, inplace);
+    }
+
+    ggml_tensor* forward_silu(GGMLRunnerContext* ctx, ggml_tensor* x,
+                              bool inplace = false) {
+        ggml_tensor* w = nullptr;
+        ggml_tensor* b = nullptr;
+        get_affine_params(ctx, &w, &b);
+        if (ctx->backend != nullptr && w != nullptr && b != nullptr) {
+            ggml_tensor* out = inplace
+                                   ? ggml_group_norm_affine_silu_inplace(ctx->ggml_ctx, x, w, b, num_groups, eps)
+                                   : ggml_group_norm_affine_silu(ctx->ggml_ctx, x, w, b, num_groups, eps);
+            if (ggml_backend_supports_op(ctx->backend, out)) {
+                return out;
             }
         }
-        return ggml_ext_group_norm(ctx->ggml_ctx, x, w, b, num_groups);
+
+        x = ggml_ext_group_norm(ctx->ggml_ctx, x, w, b, num_groups, inplace);
+        return ggml_silu_inplace(ctx->ggml_ctx, x);
     }
 };
 
