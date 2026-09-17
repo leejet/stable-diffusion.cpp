@@ -643,6 +643,14 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
     ggml_tensor* kqv = nullptr;
 
     auto build_kqv = [&](ggml_tensor* q_in, ggml_tensor* k_in, ggml_tensor* v_in, ggml_tensor* mask_in) -> ggml_tensor* {
+        const bool pad_head = d_head > 0 && d_head < 64 && q_in->ne[0] == d_head && k_in->ne[0] == d_head &&
+                              q_in->type == GGML_TYPE_F32 && k_in->type == GGML_TYPE_F32 &&
+                              v_in->type == GGML_TYPE_F32 && sd_backend_supports_cuda_mma(backend);
+        if (pad_head) {
+            // CUDA FA MMA starts at 64 channels; keep the original head's attention scale.
+            q_in = ggml_pad(ctx, q_in, 64 - d_head, 0, 0, 0);
+            k_in = ggml_pad(ctx, k_in, 64 - d_head, 0, 0, 0);
+        }
         if (kv_scale != 1.0f) {
             k_in = ggml_ext_scale(ctx, k_in, kv_scale);
         }
@@ -650,6 +658,9 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
 
         v_in = ggml_ext_cont(ctx, ggml_permute(ctx, v_in, 0, 2, 1, 3));
         v_in = ggml_reshape_3d(ctx, v_in, d_head, L_k, n_kv_head * N);
+        if (pad_head) {
+            v_in = ggml_pad(ctx, v_in, 64 - d_head, 0, 0, 0);
+        }
         if (kv_scale != 1.0f) {
             v_in = ggml_ext_scale(ctx, v_in, kv_scale);
         }
@@ -678,6 +689,9 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
         ggml_flash_attn_ext_set_prec(out, GGML_PREC_F32);
         if (kv_scale != 1.0f) {
             out = ggml_ext_scale(ctx, out, 1.0f / kv_scale);
+        }
+        if (pad_head) {
+            out = ggml_ext_slice(ctx, out, 0, 0, d_head);
         }
         return out;
     };
