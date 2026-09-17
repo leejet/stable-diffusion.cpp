@@ -155,4 +155,55 @@ Resolution: 1024x1024. Sampling steps: 8.
 
 ## Adreno GPU
 
-Adreno OpenCL benchmarks, images, and commands will be added here.
+| Model | Size / steps | Before s/it | After s/it | Before sampling (s) | After sampling (s) |
+|---|---|---:|---:|---:|---:|
+| Klein 4B | 512 / 4 | 11.81 | 5.45 | 52.76 | 25.54 |
+| Klein 4B | 1024 / 4 | 37.65 | 21.15 | 154.09 | 90.84 |
+| Z-Image Turbo | 512 / 8 | 12.65 | 6.88 | 107.48 | 60.59 |
+| Z-Image Turbo | 1024 / 8 | 65.03 | 36.27 | 505.22 | 292.91 |
+
+### Images
+
+| Case | Before | After |
+|---|---|---|
+| Klein 512, 4 steps | ![Klein 512 before](https://raw.githubusercontent.com/happyyzy/ggml/a12c1c4bef30676c421626b23b27e1ffafb98698/adreno-qkv-preprocess-20260905/klein-before-512.png) | ![Klein 512 after](https://raw.githubusercontent.com/happyyzy/ggml/a12c1c4bef30676c421626b23b27e1ffafb98698/adreno-qkv-preprocess-20260905/klein-after-512.png) |
+| Klein 1024, 4 steps | ![Klein 1024 before](https://raw.githubusercontent.com/happyyzy/ggml/a12c1c4bef30676c421626b23b27e1ffafb98698/adreno-qkv-preprocess-20260905/klein-before-1024.png) | ![Klein 1024 after](https://raw.githubusercontent.com/happyyzy/ggml/a12c1c4bef30676c421626b23b27e1ffafb98698/adreno-qkv-preprocess-20260905/klein-after-1024.png) |
+| Z-Image 512, 8 steps | ![Z-Image 512 before](https://raw.githubusercontent.com/happyyzy/ggml/a12c1c4bef30676c421626b23b27e1ffafb98698/adreno-qkv-preprocess-20260905/zimage-before-512.png) | ![Z-Image 512 after](https://raw.githubusercontent.com/happyyzy/ggml/a12c1c4bef30676c421626b23b27e1ffafb98698/adreno-qkv-preprocess-20260905/zimage-after-512.png) |
+| Z-Image 1024, 8 steps | ![Z-Image 1024 before](https://raw.githubusercontent.com/happyyzy/ggml/a12c1c4bef30676c421626b23b27e1ffafb98698/adreno-qkv-preprocess-20260905/zimage-before-1024.png) | ![Z-Image 1024 after](https://raw.githubusercontent.com/happyyzy/ggml/a12c1c4bef30676c421626b23b27e1ffafb98698/adreno-qkv-preprocess-20260905/zimage-after-1024.png) |
+
+### Model weights
+
+The GGUF weights can be converted with stable-diffusion.cpp or downloaded directly from [Flux.2 Klein Adreno](https://huggingface.co/zhiyuanasad/flux2_klein_adreno) and [Z-Image Turbo Adreno](https://huggingface.co/zhiyuanasad/z_image_turbo_adreno).
+
+### Commands
+
+Build with `GGML_OPENCL_USE_ADRENO_KERNELS=ON`.
+
+```sh
+export GGML_OPENCL_Q4_0_DENSE_DP4A=1
+export GGML_OPENCL_XMEM_SDPA=1
+```
+
+#### Klein 512
+
+```sh
+./sd-cli --diffusion-model models/flux-2-klein-4b-Q4_0.gguf --llm models/qwen_3_4b-Q4_0.gguf --vae models/flux2-vae.safetensors -p 'a lovely cat' --cfg-scale 1 --guidance 3.5 --steps 4 --seed 42 -W 512 -H 512 --diffusion-fa --vae-conv-direct -t 4 -v -o klein_512.png
+```
+
+#### Klein 1024
+
+```sh
+./sd-cli --diffusion-model models/flux-2-klein-4b-Q4_0.gguf --llm models/qwen_3_4b-Q4_0.gguf --vae models/flux2-vae.safetensors -p 'a lovely cat' --cfg-scale 1 --guidance 3.5 --steps 4 --seed 42 -W 1024 -H 1024 --diffusion-fa --vae-conv-direct -t 4 -v -o klein_1024.png
+```
+
+#### Z-Image 512
+
+```sh
+./sd-cli --diffusion-model models/z_image_turbo-Q4_0-nobf16.gguf --llm models/qwen_3_4b-Q4_0.gguf --vae models/ae_old.safetensors -p 'a lovely cat wearing black sunglasses, studio photo' --cfg-scale 1 --guidance 3.5 --steps 8 --seed 42 -W 512 -H 512 --diffusion-fa --vae-conv-direct -t 4 -v -o zimage_512.png
+```
+
+#### Z-Image 1024
+
+```sh
+./sd-cli --diffusion-model models/z_image_turbo-Q4_0-nobf16.gguf --llm models/qwen_3_4b-Q4_0.gguf --vae models/ae_old.safetensors -p 'a lovely cat wearing black sunglasses, studio photo' --cfg-scale 1 --guidance 3.5 --steps 8 --seed 42 -W 1024 -H 1024 --diffusion-fa --vae-conv-direct -t 4 -v -o zimage_1024.png
+```

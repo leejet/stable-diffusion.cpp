@@ -901,6 +901,18 @@ public:
         x = ggml_mul_inplace(ctx->ggml_ctx, x, w);
         return x;
     }
+
+    ggml_tensor* try_forward_rope(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* theta) {
+        if (ctx->backend == nullptr) {
+            return nullptr;
+        }
+        ggml_tensor* w = params["weight"];
+        if (ctx->weight_adapter) {
+            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
+        }
+        ggml_tensor* out = ggml_qknorm_rope(ctx->ggml_ctx, x, w, theta, eps);
+        return ggml_backend_supports_op(ctx->backend, out) ? out : nullptr;
+    }
 };
 
 class MultiheadAttention : public GGMLBlock {

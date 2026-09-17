@@ -194,15 +194,33 @@ namespace ZImage {
                                   qkv->nb[3],
                                   (num_heads + num_kv_heads) * qkv->nb[1]);  // [N, n_token, num_kv_heads, head_dim]
 
+            bool qk_norm_rope = false;
             if (qk_norm) {
                 auto q_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["q_norm"]);
                 auto k_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["k_norm"]);
-
-                q = q_norm->forward(ctx, q);
-                k = k_norm->forward(ctx, k);
+                ggml_tensor* q_rope = q_norm->try_forward_rope(ctx, q, pe);
+                ggml_tensor* k_rope = k_norm->try_forward_rope(ctx, k, pe);
+                if (q_rope != nullptr && k_rope != nullptr) {
+                    x = ggml_ext_attention_ext(ctx->ggml_ctx,
+                                               ctx->backend,
+                                               q_rope,
+                                               k_rope,
+                                               v,
+                                               num_heads,
+                                               mask,
+                                               true,
+                                               ctx->flash_attn_enabled,
+                                               1.f / 128.f);
+                    qk_norm_rope = true;
+                } else {
+                    q = q_norm->forward(ctx, q);
+                    k = k_norm->forward(ctx, k);
+                }
             }
 
-            x = Rope::attention(ctx, q, k, v, pe, mask, 1.f / 128.f);  // [N, n_token, num_heads * head_dim]
+            if (!qk_norm_rope) {
+                x = Rope::attention(ctx, q, k, v, pe, mask, 1.f / 128.f);  // [N, n_token, num_heads * head_dim]
+            }
 
             x = out_proj->forward(ctx, x);  // [N, n_token, hidden_size]
             return x;
