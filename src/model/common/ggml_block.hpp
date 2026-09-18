@@ -728,7 +728,7 @@ public:
                                 std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
                                 std::get<2>(padding), std::get<1>(padding), std::get<0>(padding),
                                 std::get<2>(dilation), std::get<1>(dilation), std::get<0>(dilation),
-                                force_prec_f32);
+                                force_prec_f32, ctx->conv3d_direct_enabled);
     }
 };
 
