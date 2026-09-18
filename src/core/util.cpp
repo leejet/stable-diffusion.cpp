@@ -752,12 +752,13 @@ sd::Tensor<float> clip_preprocess(const sd::Tensor<float>& image, int target_wid
     float height_scale = static_cast<float>(target_height) / static_cast<float>(image.shape()[1]);
     float scale        = std::fmax(width_scale, height_scale);
 
-    int64_t resized_width  = static_cast<int64_t>(std::ceil(scale * static_cast<float>(image.shape()[0])));
-    int64_t resized_height = static_cast<int64_t>(std::ceil(scale * static_cast<float>(image.shape()[1])));
+    int64_t resized_width  = static_cast<int64_t>(scale * static_cast<float>(image.shape()[0]));
+    int64_t resized_height = static_cast<int64_t>(scale * static_cast<float>(image.shape()[1]));
 
-    // The resized image must cover the crop window. Rounding the scale could
-    // otherwise leave a side one pixel short (e.g. 730 -> 736.0 -> 735 after
-    // truncation) and the center crop would index past the tensor.
+    // The resized image must cover the crop window. Floating-point rounding can
+    // leave a side one pixel short of the crop target (e.g. 730 -> 735.999...
+    // -> 735 after truncation), so clamp to keep the center crop in bounds.
+    // Truncation is otherwise preserved to avoid changing existing results.
     resized_width  = std::max<int64_t>(resized_width, target_width);
     resized_height = std::max<int64_t>(resized_height, target_height);
 
