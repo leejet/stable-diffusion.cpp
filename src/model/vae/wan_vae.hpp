@@ -78,7 +78,8 @@ namespace WAN {
             return ggml_ext_conv_3d(ctx->ggml_ctx, ctx->backend, x, w, b, in_channels,
                                     std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
                                     0, 0, 0,
-                                    std::get<2>(dilation), std::get<1>(dilation), std::get<0>(dilation));
+                                    std::get<2>(dilation), std::get<1>(dilation), std::get<0>(dilation),
+                                    false, ctx->conv3d_direct_enabled);
         }
     };
 

@@ -584,10 +584,12 @@ namespace sd::model_builders {
         }
 
         if (sd_ctx_params->vae_conv_direct) {
-            LOG_INFO("Using Conv2d direct in the vae model");
+            LOG_INFO("Using Conv2d/Conv3d direct in the vae model");
             result.vae->set_conv2d_direct_enabled(true);
+            result.vae->set_conv3d_direct_enabled(true);
             if (result.preview) {
                 result.preview->set_conv2d_direct_enabled(true);
+                result.preview->set_conv3d_direct_enabled(true);
             }
         }
         if (result.vae) {

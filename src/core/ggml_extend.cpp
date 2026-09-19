@@ -452,8 +452,13 @@ ggml_tensor* ggml_ext_conv_3d(ggml_context* ctx,
                               int d0,
                               int d1,
                               int d2,
-                              bool force_prec_f32) {
-    if (force_prec_f32) {
+                              bool force_prec_f32,
+                              bool direct) {
+    if (direct) {
+        int64_t OC = w->ne[3] / IC;
+        int64_t N  = x->ne[3] / IC;
+        x          = ggml_conv_3d_direct(ctx, w, x, s0, s1, s2, p0, p1, p2, d0, d1, d2, (int)IC, (int)N, (int)OC);
+    } else if (force_prec_f32) {
         ggml_tensor* im2col = ggml_im2col_3d(ctx, w, x, IC, s0, s1, s2, p0, p1, p2, d0, d1, d2, w->type);
 
         int64_t OC = w->ne[3] / IC;
