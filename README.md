@@ -79,6 +79,7 @@ API and command-line option may change frequently.***
   - [ADetailer](./docs/adetailer.md)
   - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
   - Latent Consistency Models support (LCM/LCM-LoRA)
+  - [LanPaint](./docs/lanpaint.md) training-free inpainting sampler with inner Langevin iterations ("think mode") for all supported models
   - Faster and memory efficient latent decoding with [TAESD](./docs/taesd.md)
   - Upscale images generated with [ESRGAN](./docs/esrgan.md)
 - Supported backends
@@ -157,6 +158,7 @@ For runtime and parameter backend placement, see the [backend selection guide](.
 - [Quantization and GGUF](./docs/quantization_and_gguf.md)
 - [INT8 convrot safetensors](./docs/int8_convrot.md)
 - [Inference acceleration via caching](./docs/caching.md)
+- [LanPaint inpainting](./docs/lanpaint.md)
 
 ## Bindings
 

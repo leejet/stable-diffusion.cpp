@@ -43,6 +43,7 @@
 #include "runtime/audio_processing.h"
 #include "runtime/denoiser.hpp"
 #include "runtime/guidance.h"
+#include "runtime/lanpaint.hpp"
 #include "runtime/preview_interval.h"
 #include "runtime/sample-cache.h"
 
@@ -2145,7 +2146,8 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                                               float frame_rate,
                                               const sd_cache_params_t* cache_params,
                                               bool preview_final_step,
-                                              const sd::Tensor<float>& video_positions) {
+                                              const sd::Tensor<float>& video_positions,
+                                              const sd_lanpaint_params_t& lanpaint) {
     struct RunnerEndOnExit {
         GGMLRunner* runner = nullptr;
         ~RunnerEndOnExit() {
@@ -2198,6 +2200,12 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                                                                                        cache_params,
                                                                                        denoiser.get(),
                                                                                        sigmas);
+    if (lanpaint.enabled && (cache_runtime.spectrum_enabled || cache_runtime.easycache_enabled() ||
+                             cache_runtime.ucache_enabled() || cache_runtime.cachedit_enabled())) {
+        LOG_WARN("sampling caches are not supported with LanPaint sampling and are disabled");
+        cache_runtime.mode             = sd_sample::SampleCacheMode::NONE;
+        cache_runtime.spectrum_enabled = false;
+    }
 
     bool needs_uncond_denoised = method == EULER_CFG_PP_SAMPLE_METHOD || method == EULER_A_CFG_PP_SAMPLE_METHOD;
     // Spectrum cache is not supported for CFG++ samplers
@@ -2230,6 +2238,68 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                                                         guidance.slg.layer_start,
                                                         guidance.slg.layer_end);
 
+    // LanPaint: resolve the BIG-CFG scale (comfy's cfg_BIG: explicit override,
+    // else -0.5 for Prompt First, else the text CFG scale for Image First)
+    // and refuse the configurations the cycle cannot reproduce.
+    bool lanpaint_active   = false;
+    float lanpaint_cfg_big = 0.f;
+    LanPaintParams lanpaint_params;
+    if (lanpaint.enabled) {
+        if (sd_version_is_ltxav(version)) {
+            LOG_ERROR("LanPaint does not support models with a per-stream audio noise schedule");
+            return sd::Tensor<float>();
+        }
+        switch (method) {
+            case EULER_SAMPLE_METHOD:
+            case EULER_A_SAMPLE_METHOD:
+            case HEUN_SAMPLE_METHOD:
+            case DPM2_SAMPLE_METHOD:
+            case DPMPP2M_SAMPLE_METHOD:
+            case DPMPP2Mv2_SAMPLE_METHOD:
+                break;
+            default:
+                LOG_ERROR("LanPaint supports the euler, euler_a, heun, dpm2, dpmpp_2m and dpmpp_2m_v2 samplers");
+                return sd::Tensor<float>();
+        }
+        lanpaint_active               = true;
+        lanpaint_cfg_big              = std::isfinite(lanpaint.cfg_big) ? lanpaint.cfg_big : (lanpaint.prompt_first ? -0.5f : cfg_scale);
+        lanpaint_params.n_steps       = lanpaint.n_steps;
+        lanpaint_params.friction      = 15.f;
+        lanpaint_params.lambda        = lanpaint.lambda;
+        lanpaint_params.beta          = lanpaint.beta;
+        lanpaint_params.step_size     = lanpaint.step_size;
+        lanpaint_params.early_stop    = lanpaint.early_stop;
+        lanpaint_params.min_step_frac = lanpaint.min_step_frac;
+        lanpaint_params.cfg_big       = lanpaint_cfg_big;
+        LOG_INFO("LanPaint: n_steps=%d lambda=%.2f beta=%.2f step_size=%.2f early_stop=%d min_step_frac=%.2f cfg_big=%.2f%s",
+                 lanpaint.n_steps,
+                 lanpaint.lambda,
+                 lanpaint.beta,
+                 lanpaint.step_size,
+                 lanpaint.early_stop,
+                 lanpaint.min_step_frac,
+                 lanpaint_cfg_big,
+                 std::isfinite(lanpaint.cfg_big) ? "" : " (auto)");
+        if (denoise_mask.empty()) {
+            LOG_INFO("LanPaint: no noise mask set; the Langevin loop is inactive and sampling proceeds like the plain sampler");
+        }
+        int lanpaint_inner_total = 0;
+        for (size_t i = 0; i + 1 < sigmas.size(); ++i) {
+            const float abt_i = LanPaint::compute_times(is_flow_denoiser, sigmas[i]).abt;
+            lanpaint_inner_total += LanPaint::effective_inner_steps(lanpaint.n_steps,
+                                                                    lanpaint.early_stop,
+                                                                    lanpaint.min_step_frac,
+                                                                    abt_i,
+                                                                    static_cast<int>(sigmas.size()) - 1,
+                                                                    static_cast<int>(i));
+        }
+        LOG_INFO("LanPaint: %d outer steps, up to %d inner steps per outer step, %d model evaluations planned (%d without LanPaint)",
+                 static_cast<int>(sigmas.size()) - 1,
+                 lanpaint.n_steps,
+                 lanpaint_inner_total + static_cast<int>(sigmas.size()) - 1,
+                 static_cast<int>(sigmas.size()) - 1);
+    }
+
     if (version == VERSION_HIDREAM_O1 && !noise.empty()) {
         noise *= eta;
     }
@@ -2252,7 +2322,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
             return {};
         }
 
-        if (step == 1 || step == -1) {
+        if ((step == 1 || step == -1) && !lanpaint_active) {
             pretty_progress(0, (int)steps, 0);
             last_progress_us = ggml_time_us();
         }
@@ -2517,6 +2587,19 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                                                        : (!uncond_out.empty() ? uncond_out : cond_out);
             output.pred_uncond                   = base_uncond * c_out + x * c_skip;
         }
+        if (lanpaint_active) {
+            // LanPaint evaluation: the unblended (x0, x0_BIG) pair -- the
+            // LanPaint cycle applies its own mask blending. The BIG variant
+            // combines the same cond/uncond outputs at the BIG-CFG scale
+            // (comfy's second cfg_function call); the text-cfg schedule
+            // applies to `pred` only.
+            sd::guidance::GuiderOutput guided_big = primary_guidance.forward(guidance_input, {}, lanpaint_cfg_big);
+            if (guided_big.pred.empty()) {
+                return {};
+            }
+            output.pred_big = guided_big.pred * c_out + x * c_skip;
+            return output;
+        }
         if (cache_runtime.spectrum_enabled) {
             cache_runtime.spectrum.update(denoised);
         }
@@ -2531,7 +2614,58 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
         return output;
     };
 
-    auto x0_opt = sample_k_diffusion(method, denoise, x_t, sigmas, sampler_rng, eta, is_flow_denoiser, extra_sample_args, denoiser);
+    denoise_cb_t effective_denoise = denoise;
+    // Function scope: the engine's callback captures it by address, so it
+    // must outlive the sampling call; the engine in turn borrows `noise` and
+    // `sampling_init_latent` (both sample()-scope) and owns the keep mask it
+    // derives from `denoise_mask`.
+    std::optional<LanPaint> lanpaint_engine;
+    if (lanpaint_active) {
+        // The LanPaint engine wraps the denoise evaluation into the callback
+        // shape the sampler kernels call: each kernel model() call runs one
+        // full Langevin cycle and evolves `x` in place.
+        lanpaint_eval_t lanpaint_eval = [&denoise](const sd::Tensor<float>& x, float sigma, int step) -> LanPaintEval {
+            sd::guidance::GuiderOutput g = denoise(x, sigma, step);
+            return LanPaintEval{std::move(g.pred), std::move(g.pred_big)};
+        };
+        auto lanpaint_inner = make_lanpaint_inner_model(std::move(lanpaint_eval), denoiser);
+        if (!lanpaint_inner.has_value()) {
+            return sd::Tensor<float>();
+        }
+        lanpaint_engine.emplace(lanpaint_params,
+                                std::move(*lanpaint_inner),
+                                sampler_rng,
+                                noise,
+                                sampling_init_latent,
+                                denoise_mask);
+        denoise_cb_t lanpaint_cb        = lanpaint_engine->make_callback(sigmas);
+        const SDVersion lanpaint_version = version;
+        effective_denoise = [this,
+                             lanpaint_cb = std::move(lanpaint_cb),
+                             &preview,
+                             steps,
+                             terminal_sigma_is_zero,
+                             &last_progress_us,
+                             lanpaint_version,
+                             preview_final_step](sd::Tensor<float>& x,
+                                                 float sigma,
+                                                 int step) -> sd::guidance::GuiderOutput {
+            sd::guidance::GuiderOutput out = lanpaint_cb(x, sigma, step);
+            if (out.pred.empty()) {
+                return out;
+            }
+            // One progress/preview update per outer step (the eval calls of
+            // the inner loop stay silent).
+            report_sample_progress(step, steps, terminal_sigma_is_zero, &last_progress_us);
+            if (preview.callback != nullptr && sd_should_preview_denoised() &&
+                sd::preview::should_preview_sample_step(step, steps, terminal_sigma_is_zero, sd_get_preview_interval(), preview_final_step)) {
+                preview_image(step, out.pred, lanpaint_version, preview.mode, preview.callback, preview.data, false);
+            }
+            return out;
+        };
+    }
+
+    auto x0_opt = sample_k_diffusion(method, effective_denoise, x_t, sigmas, sampler_rng, eta, is_flow_denoiser, extra_sample_args, denoiser);
     if (x0_opt.empty()) {
         LOG_ERROR("Diffusion model sampling failed");
         if (control_net) {
