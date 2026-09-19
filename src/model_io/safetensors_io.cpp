@@ -86,10 +86,12 @@ static ggml_type safetensors_dtype_to_ggml_type(const std::string& dtype) {
         ttype = GGML_TYPE_F32;
     } else if (dtype == "F64") {
         ttype = GGML_TYPE_F32;
+#ifndef SD_USE_UPSTREAM_GGML
     } else if (dtype == "F8_E4M3") {
         ttype = GGML_TYPE_F8_E4M3;
     } else if (dtype == "F8_E5M2") {
         ttype = GGML_TYPE_F8_E5M2;
+#endif
     } else if (dtype == "I32") {
         ttype = GGML_TYPE_I32;
     } else if (dtype == "I64") {
@@ -230,6 +232,12 @@ bool read_safetensors_file(const std::string& file_path,
         if (!read_comfy_quant_config(file, file_path, name, data_start + begin, end - begin, config, error)) {
             return false;
         }
+#ifdef SD_USE_UPSTREAM_GGML
+        if (config.format == "int8_tensorwise") {
+            set_error(error, "INT8 tensorwise/convrot is not supported by this ggml build (tensor '" + name + "')");
+            return false;
+        }
+#endif
         const std::string module_name = name.substr(0, name.size() - std::string(".comfy_quant").size());
         comfy_quant_configs.emplace(module_name, std::move(config));
     }
@@ -279,6 +287,12 @@ bool read_safetensors_file(const std::string& file_path,
             continue;
         }
 
+#ifdef SD_USE_UPSTREAM_GGML
+        if (dtype == "F8_E4M3" || dtype == "F8_E5M2") {
+            set_error(error, "FP8 is not supported by this ggml build (tensor '" + name + "')");
+            return false;
+        }
+#endif
         ggml_type type = safetensors_dtype_to_ggml_type(dtype);
         if (type == GGML_TYPE_COUNT) {
             set_error(error, "unsupported dtype '" + dtype + "' (tensor '" + name + "')");

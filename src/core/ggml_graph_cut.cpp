@@ -16,7 +16,7 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 
-#include "ggml/src/ggml-impl.h"
+#include "ggml-impl.h"
 
 namespace sd::ggml_graph_cut {
 

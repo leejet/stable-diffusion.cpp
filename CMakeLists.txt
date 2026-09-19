@@ -95,6 +95,8 @@ option(SD_MUSA                       "sd: musa backend" OFF)
 option(SD_BUILD_SHARED_LIBS          "sd: build shared libs" OFF)
 option(SD_BUILD_SHARED_GGML_LIB      "sd: build ggml as a separate shared lib" OFF)
 option(SD_USE_SYSTEM_GGML            "sd: use system-installed GGML library" OFF)
+option(SD_USE_UPSTREAM_GGML          "sd: build with upstream GGML instead of the patched GGML extensions" OFF)
+set(SD_GGML_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ggml" CACHE PATH "sd: ggml source directory (also supplies private headers for system ggml)")
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
 set(CMAKE_C_STANDARD 11)
@@ -325,18 +327,7 @@ if (NOT SD_USE_SYSTEM_GGML)
 endif()
 
 # deps
-# Only add ggml if it hasn't been added yet
-if (NOT TARGET ggml)
-    if (SD_USE_SYSTEM_GGML)
-        find_package(ggml REQUIRED)
-        if (NOT ggml_FOUND)
-            message(FATAL_ERROR "System-installed GGML library not found.")
-        endif()
-        add_library(ggml ALIAS ggml::ggml)
-    else()
-        add_subdirectory(ggml)
-    endif()
-endif()
+include(cmake/ggml.cmake)
 
 add_subdirectory(thirdparty)
 
