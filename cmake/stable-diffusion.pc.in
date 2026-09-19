@@ -7,5 +7,5 @@ Name: stable-diffusion
 Description: Diffusion model(SD,Flux,Wan,Qwen Image,Z-Image,...) inference in pure C/C++
 Version: @SDCPP_BUILD_VERSION@
 Libs: -L${libdir} -lstable-diffusion
-Libs.private: -lggml -lggml-base
+Libs.private: -lggml -lggml-base @CMAKE_THREAD_LIBS_INIT@
 Cflags: -I${includedir}

@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -56,8 +57,9 @@ public:
     std::shared_ptr<RNG> rng;
     std::shared_ptr<RNG> sampler_rng = nullptr;
     int n_threads                    = -1;
-    float default_flow_shift         = INFINITY;
-    float active_flow_shift          = INFINITY;
+    std::unique_ptr<sd::ParallelExecutor> tensor_executor;
+    float default_flow_shift = INFINITY;
+    float active_flow_shift  = INFINITY;
 
     std::shared_ptr<Conditioner> cond_stage_model;
     std::shared_ptr<FrozenCLIPVisionEmbedder> clip_vision;  // for svd or wan2.1 i2v
@@ -206,6 +208,7 @@ public:
         StableDiffusionGGML& sd;
         std::unique_lock<std::recursive_mutex> lock;
         bool acquired = false;
+        std::optional<sd::ParallelScope> tensor_scope;
 
         explicit ContextOperation(StableDiffusionGGML& sd)
             : sd(sd), lock(sd.execution_mutex, std::try_to_lock) {
@@ -215,6 +218,7 @@ public:
             }
             sd.executing_ = true;
             acquired      = true;
+            tensor_scope.emplace(sd.tensor_executor.get());
         }
 
         ~ContextOperation() {
