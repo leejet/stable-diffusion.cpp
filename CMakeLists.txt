@@ -342,6 +342,8 @@ add_subdirectory(thirdparty)
 
 target_sources(${SD_LIB} PRIVATE $<TARGET_OBJECTS:zip>)
 target_link_libraries(${SD_LIB} PUBLIC ggml)
+find_package(Threads REQUIRED)
+target_link_libraries(${SD_LIB} PRIVATE Threads::Threads)
 target_link_libraries(${SD_LIB} PRIVATE onig sd-utf8proc)
 if (SD_CUDA)
     find_package(CUDAToolkit REQUIRED)

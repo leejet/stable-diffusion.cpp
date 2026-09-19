@@ -863,8 +863,10 @@ bool StableDiffusionGGML::init(const sd_ctx_params_t* sd_ctx_params) {
             return false;
         }
     }
-    auto configuration        = std::make_unique<ModelConfig>(*sd_ctx_params);
-    n_threads                 = sd_ctx_params->n_threads;
+    auto configuration = std::make_unique<ModelConfig>(*sd_ctx_params);
+    n_threads          = sd_ctx_params->n_threads;
+    tensor_executor    = std::make_unique<sd::ParallelExecutor>(n_threads > 0 ? n_threads : sd_get_num_physical_cores());
+    sd::ParallelScope tensor_scope(tensor_executor.get());
     enable_mmap               = sd_ctx_params->enable_mmap;
     disable_prefetch          = sd_ctx_params->disable_prefetch;
     disable_segmented_compute = sd_ctx_params->disable_segmented_compute;
