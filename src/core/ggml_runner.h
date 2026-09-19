@@ -265,11 +265,9 @@ protected:
 
     void copy_data_to_backend_tensor(ggml_cgraph* gf, bool clear_after_copy = true);
 
-    bool resolve_graph_cut_plan(ggml_cgraph* gf,
-                                GraphCutPlan* plan_out);
+    const GraphCutPlan& resolve_graph_cut_plan(ggml_cgraph* gf);
 
-    bool resolve_graph_cut_layer_split_plan(ggml_cgraph* gf,
-                                            GraphCutPlan* plan_out);
+    const GraphCutPlan& resolve_graph_cut_layer_split_plan(ggml_cgraph* gf);
 
     bool assign_graph_cut_layer_split_backends(ggml_cgraph* gf);
 
