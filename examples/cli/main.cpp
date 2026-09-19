@@ -923,6 +923,18 @@ int main(int argc, const char* argv[]) {
             return 1;
         }
 
+        if (cli_params.mode == VID_GEN &&
+            std::string(sd_get_model_version_name(sd_ctx.get())) == "MiniMax-H3") {
+            if (!gen_params.init_image_path.empty() &&
+                !load_image_and_update_size(gen_params.init_image_path, gen_params.init_image, false)) {
+                return 1;
+            }
+            if (!gen_params.end_image_path.empty() &&
+                !load_image_and_update_size(gen_params.end_image_path, gen_params.end_image, false)) {
+                return 1;
+            }
+        }
+
         if (gen_params.sample_params.sample_method == SAMPLE_METHOD_COUNT) {
             gen_params.sample_params.sample_method = sd_get_default_sample_method(sd_ctx.get());
         }

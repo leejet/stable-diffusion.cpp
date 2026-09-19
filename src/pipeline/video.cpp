@@ -460,6 +460,57 @@ namespace sd::pipeline {
         return window;
     }
 
+    static int64_t minimax_h3_round_half_to_even(double value) {
+        GGML_ASSERT(value >= 0.0);
+        double base_d = std::floor(value);
+        double frac   = value - base_d;
+        int64_t base  = static_cast<int64_t>(base_d);
+
+        if (frac < 0.5) {
+            return base;
+        }
+        if (frac > 0.5) {
+            return base + 1;
+        }
+        return (base % 2 == 0) ? base : base + 1;
+    }
+
+    static sd::Tensor<float> minimax_h3_cover_crop(const sd::Tensor<float>& image,
+                                                   int target_width,
+                                                   int target_height) {
+        GGML_ASSERT(!image.empty());
+        GGML_ASSERT(image.dim() == 4);
+        GGML_ASSERT(target_width > 0 && target_height > 0);
+
+        if (image.shape()[0] == target_width && image.shape()[1] == target_height) {
+            return image;
+        }
+
+        double scale = std::max(static_cast<double>(target_width) / image.shape()[0],
+                                static_cast<double>(target_height) / image.shape()[1]);
+
+        int64_t resized_width = std::max<int64_t>(
+            target_width,
+            minimax_h3_round_half_to_even(static_cast<double>(image.shape()[0]) * scale));
+        int64_t resized_height = std::max<int64_t>(
+            target_height,
+            minimax_h3_round_half_to_even(static_cast<double>(image.shape()[1]) * scale));
+
+        auto resized = sd::ops::interpolate(
+            image,
+            {resized_width, resized_height, image.shape()[2], image.shape()[3]},
+            sd::ops::InterpolateMode::Lanczos,
+            false,
+            true);
+
+        int64_t left = std::max<int64_t>((resized_width - target_width) / 2, 0);
+        int64_t top  = std::max<int64_t>((resized_height - target_height) / 2, 0);
+
+        resized = sd::ops::slice(resized, 0, left, left + target_width);
+        resized = sd::ops::slice(resized, 1, top, top + target_height);
+        return resized;
+    }
+
     static std::optional<ImageGenerationLatents> prepare_video_generation_latents(StableDiffusionGGML* sd,
                                                                                   const sd_vid_gen_params_t* sd_vid_gen_params,
                                                                                   GenerationRequest* request) {
@@ -706,6 +757,11 @@ namespace sd::pipeline {
                                                                 -1,
                                                                 encoded_index});
                 }
+            }
+
+            if (!has_references && !start_image.empty() && !end_image.empty()) {
+                auto follower_image = sd_image_to_tensor(sd_vid_gen_params->end_image);
+                end_image = minimax_h3_cover_crop(follower_image, request->width, request->height);
             }
 
             if (!has_references && (!start_image.empty() || !end_image.empty())) {
