@@ -3,7 +3,10 @@ ARG UBUNTU_VERSION=24.04
 
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu${UBUNTU_VERSION} AS build
 
-# sd-server embeds the web UI at build time, so the build image needs Node/pnpm.
+# sd-server inlines the built frontend (a single self-contained index.html)
+# into a generated header and compiles it straight into the binary, so the
+# build image needs Node/pnpm but the runtime image needs no separate
+# frontend assets on disk.
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential git ccache cmake ca-certificates curl gnupg && \
     mkdir -p /etc/apt/keyrings && \
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource-repo.gpg.key && \
@@ -43,18 +46,83 @@ RUN set -- \
     if [ -n "${GGML_CUDA_FA_ALL_QUANTS}" ]; then \
         set -- "$@" "-DGGML_CUDA_FA_ALL_QUANTS=${GGML_CUDA_FA_ALL_QUANTS}"; \
     fi; \
-    cmake . -B ./build "$@"
+    cmake . -B ./build "$@" -DGGML_CUDA_NCCL=OFF
 RUN cmake --build ./build --config Release -j$(nproc)
 
-FROM nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu${UBUNTU_VERSION} AS runtime
+############################################################################
+# rootfs: assemble a FROM-scratch root with the binaries and the exact
+# shared libraries reported by ldd, plus any GGML_BACKEND_DL=ON plugin .so's
+# (ggml dlopen's those at run time, so ldd on the executables can't see
+# them). The CUDA driver (libcuda.so*) is not bundled; it is injected at run
+# time by the NVIDIA Container Toolkit.
+############################################################################
+FROM build AS rootfs
 
-RUN apt-get update && \
-    apt-get install --yes --no-install-recommends libgomp1 && \
-    apt-get clean
+RUN set -eux; \
+    root=/opt/sd-cpp-scratch-rootfs; \
+    mkdir -p \
+        "$root/etc" \
+        "$root/home/sdcpp" \
+        "$root/models" \
+        "$root/opt/sd-cpp/bin" \
+        "$root/opt/sd-cpp/lib"; \
+    printf 'sdcpp:x:1000:1000:stable-diffusion.cpp:/home/sdcpp:/sbin/nologin\n' > "$root/etc/passwd"; \
+    printf 'sdcpp:x:1000:\n' > "$root/etc/group"; \
+    printf 'hosts: files dns\npasswd: files\ngroup: files\n' > "$root/etc/nsswitch.conf"; \
+    cp -a /sd.cpp/build/bin/sd-cli /sd.cpp/build/bin/sd-server "$root/opt/sd-cpp/bin/"; \
+    for so in /sd.cpp/build/bin/libggml*.so* /sd.cpp/build/bin/libstable-diffusion*.so*; do \
+        if [ -e "$so" ]; then cp -a "$so" "$root/opt/sd-cpp/lib/"; fi; \
+    done; \
+    apt-get update -qq && apt-get install -y --no-install-recommends patchelf >/dev/null; \
+    rm -rf /var/lib/apt/lists/*; \
+    for f in "$root"/opt/sd-cpp/bin/* "$root"/opt/sd-cpp/lib/*.so*; do \
+        if [ -f "$f" ] && [ ! -L "$f" ]; then patchelf --remove-rpath "$f" || true; fi; \
+    done; \
+    copy_dep() { \
+        dep="$1"; \
+        case "$dep" in \
+            */libcuda.so*|"$root"/*) return 0;; \
+        esac; \
+        dest="$root${dep}"; \
+        mkdir -p "$(dirname "$dest")"; \
+        [ -e "$dest" ] || cp -L "$dep" "$dest"; \
+    }; \
+    copy_ldd_deps() { \
+        LD_LIBRARY_PATH="$root/opt/sd-cpp/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            ldd "$1" 2>/dev/null \
+            | awk '$1 ~ /^\// { print $1 } $2 == "=>" && $3 ~ /^\// { print $3 }' \
+            | sort -u \
+            | while read -r dep; do copy_dep "$dep"; done; \
+    }; \
+    for b in "$root"/opt/sd-cpp/bin/*; do if [ -f "$b" ]; then copy_ldd_deps "$b"; fi; done; \
+    for so in "$root"/opt/sd-cpp/lib/*.so*; do if [ -f "$so" ]; then copy_ldd_deps "$so"; fi; done; \
+    for f in "$root"/opt/sd-cpp/bin/*; do [ -f "$f" ] && strip --strip-unneeded "$f" || true; done; \
+    chmod 0755 "$root"/opt/sd-cpp/bin/*; \
+    chown -R 1000:1000 "$root/home/sdcpp" "$root/opt/sd-cpp" "$root/models"
 
-COPY --from=build /sd.cpp/build/bin /sd.cpp/bin
-RUN printf '#!/bin/sh\nexec /sd.cpp/bin/sd-cli "$@"\n' > /sd-cli && \
-    printf '#!/bin/sh\nexec /sd.cpp/bin/sd-server "$@"\n' > /sd-server && \
-    chmod +x /sd-cli /sd-server
+############################################################################
+# runtime: FROM scratch
+############################################################################
+FROM scratch AS runtime
 
-ENTRYPOINT [ "/sd-cli" ]
+COPY --from=rootfs /opt/sd-cpp-scratch-rootfs/ /
+
+ENV HOME=/home/sdcpp
+# GGML_BACKEND_DL=ON dlopen's backend plugins at run time (ggml_backend_load_all);
+# point it at the lib dir explicitly so plugin discovery doesn't depend on the
+# executable and its plugins living in the same directory.
+ENV GGML_BACKEND_PATH=/opt/sd-cpp/lib
+# Driver (libcuda.so*) and other NVIDIA libs are mounted at run time by the
+# NVIDIA Container Toolkit. The aarch64 Tegra/NVIDIA subdirs are needed for
+# Jetson/L4T FROM-scratch images because there is no ldconfig-generated cache.
+ENV LD_LIBRARY_PATH=/opt/sd-cpp/lib:/usr/local/cuda/lib64:/usr/local/cuda/targets/x86_64-linux/lib:/usr/local/cuda/targets/aarch64-linux/lib:/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/lib/aarch64-linux-gnu/nvidia:/usr/lib/aarch64-linux-gnu/tegra:/usr/lib/aarch64-linux-gnu/tegra-egl:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+ENV PATH=/opt/sd-cpp/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin
+
+# Avoid the default cwd "/": --lora-model-dir/--hires-upscalers-dir default to
+# "." and are scanned recursively, which would otherwise walk the whole root.
+WORKDIR /home/sdcpp
+USER 1000:1000
+EXPOSE 1234
+ENTRYPOINT [ "/opt/sd-cpp/bin/sd-cli" ]
