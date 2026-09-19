@@ -153,6 +153,48 @@ Resolution: 1024x1024. Sampling steps: 8.
 |---|---|
 | <img src="https://github.com/user-attachments/assets/4a4bace9-1745-4d62-a295-253df1e202a6" width="480" alt="Z-Image Q4_0 plus Q8_0"> | <img src="https://github.com/user-attachments/assets/bb2dc13b-e161-464b-8f35-2cb9a88486ba" width="480" alt="Z-Image F8_E4M3"> |
 
+### Image editing
+
+Z-Image Turbo generates the reference image, then FLUX.2/Klein removes the Einstein field equation while preserving the rest of the scene.
+
+| Z-Image Turbo reference | FLUX.2/Klein edit |
+|---|---|
+| **1024x1024, 8 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/zimage_einstein_1024_s8.png" width="480" alt="Einstein teaching in front of a blackboard"> | **1024x1024, 4 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/klein_edit_remove_equation_1024_s4.png" width="480" alt="Einstein field equation removed from the blackboard"> |
+
+#### Generate the reference with Z-Image Turbo
+
+```sh
+./sd-cli \
+  --diffusion-model z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors \
+  --llm llm.gguf \
+  --vae ae.safetensors \
+  --backend diffusion=HTP0,te=HTP0,vae=HTP0 \
+  --fa --vae-conv-direct \
+  -t 4 \
+  -p "爱因斯坦站在黑板前教学，身前是有SJTU标志的讲台桌，手持粉笔。黑板上清晰写着爱因斯坦场方程：G_μν + Λg_μν = 8πG T_μν；以及麦克斯韦方程微分形式：dF = 0，d*F = *J。写实风格，大学课堂，学术氛围。" \
+  --cfg-scale 1 --steps 8 --sampling-method euler \
+  -W 1024 -H 1024 --seed 42 \
+  -o zimage_einstein_1024_s8.png
+```
+
+#### Edit with FLUX.2/Klein
+
+```sh
+./sd-cli \
+  --diffusion-model flux-2-klein-4b-fp8.safetensors \
+  --llm llm.gguf \
+  --vae flux2-vae.safetensors \
+  --backend diffusion=HTP0,te=HTP0,vae=HTP0 \
+  --params-backend te=disk \
+  --fa --vae-conv-direct \
+  -t 4 \
+  -p "删除黑板上的爱因斯坦场方程‘G_μν + Λg_μν = 8πG T_μν’，将该公式擦除干净并自然补全黑板背景。保留麦克斯韦方程‘dF = 0，d*F = *J’、爱因斯坦、带SJTU标志的讲台桌、粉笔、大学课堂和其他画面内容不变，保持写实风格。" \
+  --ref-image zimage_einstein_1024_s8.png \
+  --cfg-scale 1 --steps 4 --sampling-method euler \
+  -W 1024 -H 1024 --seed 42 \
+  -o klein_edit_remove_equation_1024_s4.png
+```
+
 ## Adreno GPU
 
 | Model | Size / steps | Before s/it | After s/it | Before sampling (s) | After sampling (s) |
