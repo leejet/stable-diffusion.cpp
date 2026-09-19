@@ -10,7 +10,7 @@ set(SD_BIN_DIR "@PACKAGE_SD_BIN_INSTALL_DIR@")
 
 include(CMakeFindDependencyMacro)
 find_dependency(ggml REQUIRED HINTS "${SD_LIB_DIR}/cmake")
-if(@SD_CUDA@ AND NOT SD_SHARED_LIB)
+if(@SD_CUDA@)
     find_dependency(CUDAToolkit REQUIRED)
 endif()
 
@@ -31,7 +31,7 @@ if(NOT TARGET stable-diffusion)
             INTERFACE_COMPILE_FEATURES "c_std_11;cxx_std_17"
             POSITION_INDEPENDENT_CODE ON)
 
-    if(@SD_CUDA@ AND NOT SD_SHARED_LIB)
+    if(@SD_CUDA@)
         set_property(TARGET stable-diffusion APPEND PROPERTY INTERFACE_LINK_LIBRARIES CUDA::cuda_driver)
     endif()
 
