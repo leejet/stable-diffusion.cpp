@@ -140,7 +140,7 @@ namespace WAN {
         std::string mode;
 
     public:
-        Resample(int64_t dim, const std::string& mode, bool wan2_2 = false)
+        Resample(int64_t dim, const std::string& mode, bool wan2_2 = false, bool is_2D = false)
             : dim(dim), mode(mode) {
             if (mode == "upsample2d") {
                 if (wan2_2) {
@@ -154,12 +154,20 @@ namespace WAN {
                 } else {
                     blocks["resample.1"] = std::shared_ptr<GGMLBlock>(new Conv2d(dim, dim / 2, {3, 3}, {1, 1}, {1, 1}));
                 }
-                blocks["time_conv"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(dim, dim * 2, {3, 1, 1}, {1, 1, 1}, {1, 0, 0}));
+                if (is_2D) {
+                    blocks["time_conv"] = std::make_shared<Conv2dBut3d>(dim, dim * 2, std::pair<int, int>{1, 1});
+                } else {
+                    blocks["time_conv"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(dim, dim * 2, {3, 1, 1}, {1, 1, 1}, {1, 0, 0}));
+                }
             } else if (mode == "downsample2d") {
                 blocks["resample.1"] = std::shared_ptr<GGMLBlock>(new Conv2d(dim, dim, {3, 3}, {2, 2}));
             } else if (mode == "downsample3d") {
                 blocks["resample.1"] = std::shared_ptr<GGMLBlock>(new Conv2d(dim, dim, {3, 3}, {2, 2}));
-                blocks["time_conv"]  = std::shared_ptr<GGMLBlock>(new CausalConv3d(dim, dim, {3, 1, 1}, {2, 1, 1}, {0, 0, 0}));
+                if (is_2D) {
+                    blocks["time_conv"] = std::make_shared<Conv2dBut3d>(dim, dim, std::pair<int, int>{1, 1});
+                } else {
+                    blocks["time_conv"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(dim, dim, {3, 1, 1}, {2, 1, 1}, {0, 0, 0}));
+                }
             } else if (mode == "none") {
                 // nn.Identity()
             } else {
@@ -469,7 +477,7 @@ namespace WAN {
             }
             if (down_flag) {
                 std::string mode                           = temperal_downsample ? "downsample3d" : "downsample2d";
-                blocks["downsamples." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new Resample(out_dim, mode, true));
+                blocks["downsamples." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new Resample(out_dim, mode, true, is_2D));
                 i++;
             }
         }
@@ -532,7 +540,7 @@ namespace WAN {
             }
             if (up_flag) {
                 std::string mode                         = temperal_upsample ? "upsample3d" : "upsample2d";
-                blocks["upsamples." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new Resample(out_dim, mode, true));
+                blocks["upsamples." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new Resample(out_dim, mode, true, is_2D));
                 i++;
             }
         }
@@ -1054,9 +1062,23 @@ namespace WAN {
                 input_channels = 4;
             }
 
+            if (version == VERSION_QWEN_IMAGE_2_1) {
+                wan2_2      = true;
+                this->is_2D = is_2D = true;
+                dec_dim             = 144;
+                z_dim               = 64;
+                input_channels      = 4;
+                dim_mult            = {1, 2, 4, 8, 8};
+            }
+
             if (is_2D) {
-                temperal_upsample   = {false, false, false};
-                temperal_downsample = {false, false, false};
+                temperal_upsample.assign(dim_mult.size() - 1, false);
+                temperal_downsample.assign(dim_mult.size() - 1, false);
+            }
+            if (version == VERSION_QWEN_IMAGE_2_1) {
+                // Temporal shortcut factors still affect single-frame channel grouping.
+                temperal_upsample   = {true, true, true, false};
+                temperal_downsample = {false, true, true, true};
             }
 
             if (!decode_only) {
@@ -1339,6 +1361,28 @@ namespace WAN {
                                                                   0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
                                                                   0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
                                                                   0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f});
+                std_tensor.reshape_(stats_shape);
+                return {std::move(mean_tensor), std::move(std_tensor)};
+            }
+            if (version == VERSION_QWEN_IMAGE_2_1 && latents.shape()[channel_dim] == 64) {
+                stats_shape[static_cast<size_t>(channel_dim)] = 64;
+                auto mean_tensor                              = sd::Tensor<float>::from_vector({0.5126f, 0.7721f, -0.0631f, 1.3506f, -0.7855f, -2.1025f, -0.3458f, 1.3722f,
+                                                                                                1.8873f, -1.7177f, -0.6510f, 0.2732f, 0.7562f, -0.6163f, -1.0277f, 3.8363f,
+                                                                                                2.0210f, 0.0472f, 0.9320f, 2.0087f, 2.4954f, -0.1391f, -1.4249f, 1.8464f,
+                                                                                                -0.5236f, 1.2826f, 3.7046f, -1.3035f, 2.7286f, -1.4518f, -1.9036f, -1.9955f,
+                                                                                                -0.0342f, -1.0265f, -0.7636f, 3.0555f, 0.0746f, -3.0751f, -0.1076f, 1.7376f,
+                                                                                                -1.0914f, -1.9435f, -0.2784f, -1.3680f, 0.4809f, -0.4433f, 0.3764f, 0.5729f,
+                                                                                                -2.0595f, 1.0960f, -1.3260f, -2.0211f, -5.0179f, 0.5275f, 4.0162f, 1.8505f,
+                                                                                                0.3026f, 1.9373f, 1.4937f, 0.2632f, 0.5547f, -1.7121f, -0.1562f, 0.0304f});
+                auto std_tensor                               = sd::Tensor<float>::from_vector({3.2001f, 3.2936f, 3.4321f, 3.0091f, 3.1061f, 4.0379f, 4.0705f, 3.7910f,
+                                                                                                3.0785f, 3.6500f, 3.9308f, 3.0904f, 2.8778f, 3.7675f, 3.7320f, 5.0756f,
+                                                                                                3.2864f, 4.0397f, 3.1317f, 4.0443f, 2.9249f, 3.9454f, 3.0988f, 4.2489f,
+                                                                                                3.4896f, 3.8513f, 3.9323f, 3.4719f, 3.7498f, 4.2830f, 3.5694f, 4.2467f,
+                                                                                                3.9037f, 3.2947f, 5.0770f, 3.5075f, 3.2700f, 3.4767f, 2.8063f, 5.1125f,
+                                                                                                3.5327f, 4.7833f, 3.1286f, 4.1819f, 3.8527f, 3.8312f, 3.5605f, 4.3875f,
+                                                                                                3.9624f, 4.0168f, 3.5643f, 4.0550f, 5.5614f, 4.2963f, 4.4080f, 3.4959f,
+                                                                                                3.8747f, 3.7608f, 3.5735f, 3.1490f, 3.7662f, 3.6746f, 3.4563f, 3.8161f});
+                mean_tensor.reshape_(stats_shape);
                 std_tensor.reshape_(stats_shape);
                 return {std::move(mean_tensor), std::move(std_tensor)};
             }
