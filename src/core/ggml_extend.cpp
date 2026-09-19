@@ -1,6 +1,7 @@
 #include "core/ggml_extend.h"
 
 #include <cmath>
+#include <stdexcept>
 #include <utility>
 
 #include "core/ggml_extend_backend.h"
@@ -247,6 +248,7 @@ ggml_tensor* ggml_ext_linear_i8_tensorwise(ggml_context* ctx,
                                            ggml_tensor* b,
                                            int convrot_group_size,
                                            float scale) {
+#ifndef SD_USE_UPSTREAM_GGML
     GGML_ASSERT(x->type == GGML_TYPE_F32 || (x->type == GGML_TYPE_I8 && scale == 1.f));
     if (scale != 1.f) {
         x = ggml_ext_scale(ctx, x, scale);
@@ -270,6 +272,16 @@ ggml_tensor* ggml_ext_linear_i8_tensorwise(ggml_context* ctx,
         }
     }
     return x;
+#else
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(x);
+    GGML_UNUSED(w);
+    GGML_UNUSED(weight_scale);
+    GGML_UNUSED(b);
+    GGML_UNUSED(convrot_group_size);
+    GGML_UNUSED(scale);
+    throw std::runtime_error("INT8 tensorwise/convrot is not supported by this ggml build");
+#endif
 }
 
 ggml_tensor* ggml_ext_pad_ext(ggml_context* ctx,

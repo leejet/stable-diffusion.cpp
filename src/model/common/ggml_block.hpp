@@ -208,6 +208,7 @@ public:
         ggml_tensor* w            = params["weight"];
         const float scale         = ctx->linear_scale > 0.f ? ctx->linear_scale : this->scale;
         ggml_tensor* weight_scale = has_weight_scale ? params["weight_scale"] : nullptr;
+#ifndef SD_USE_UPSTREAM_GGML
         if (w->type == GGML_TYPE_F8_E4M3 || w->type == GGML_TYPE_F8_E5M2) {
             bool supports_fp8_matmul = false;
             if (ctx->backend != nullptr) {
@@ -221,6 +222,7 @@ public:
                 w = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_BF16);
             }
         }
+#endif
         ggml_tensor* b = nullptr;
         if (bias) {
             b = params["bias"];
@@ -238,6 +240,7 @@ public:
             if (ctx->weight_adapter && b != nullptr) {
                 b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
             }
+#ifndef SD_USE_UPSTREAM_GGML
             if (int8_convrot && scale == 1.f) {
                 const auto cache_key = std::make_pair(x, int8_convrot_group_size);
                 auto cached          = ctx->int8_convrot_cache.find(cache_key);
@@ -248,6 +251,7 @@ public:
                     x = cached->second;
                 }
             }
+#endif
             out = ggml_ext_linear_i8_tensorwise(ctx->ggml_ctx,
                                                 x,
                                                 w,

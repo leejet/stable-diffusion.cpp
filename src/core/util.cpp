@@ -414,12 +414,41 @@ std::vector<std::string> split_string(const std::string& str, char delimiter) {
 }
 
 ggml_type sd_type_to_ggml_type(sd_type_t sdtype) {
+    if (sdtype == SD_TYPE_F8_E4M3 || sdtype == SD_TYPE_F8_E5M2) {
+#ifndef SD_USE_UPSTREAM_GGML
+        return sdtype == SD_TYPE_F8_E4M3 ? GGML_TYPE_F8_E4M3 : GGML_TYPE_F8_E5M2;
+#else
+        return GGML_TYPE_COUNT;
+#endif
+    }
     const int type_value = static_cast<int>(sdtype);
-    if (type_value < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)) {
+    if (type_value >= 0 && type_value < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)) {
         return static_cast<ggml_type>(type_value);
     } else {
         return GGML_TYPE_COUNT;
     }
+}
+
+bool validate_tensor_types(sd_type_t type, const char* tensor_type_rules) {
+    if (type != SD_TYPE_COUNT && sd_type_to_ggml_type(type) == GGML_TYPE_COUNT) {
+        LOG_ERROR("weight type %s is not supported by this ggml build", sd_type_name(type));
+        return false;
+    }
+#ifdef SD_USE_UPSTREAM_GGML
+    for (const auto& rule : split_string(SAFE_STR(tensor_type_rules), ',')) {
+        const auto pos = rule.find('=');
+        if (pos != std::string::npos) {
+            const auto name = rule.substr(pos + 1);
+            if (name == "f8_e4m3" || name == "f8_e5m2") {
+                LOG_ERROR("FP8 is not supported by this ggml build (tensor type rule '%s')", rule.c_str());
+                return false;
+            }
+        }
+    }
+#else
+    GGML_UNUSED(tensor_type_rules);
+#endif
+    return true;
 }
 
 KeyValueArgs parse_key_value_args(const char* args, const char* context) {

@@ -857,6 +857,14 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
 }
 
 bool StableDiffusionGGML::init(const sd_ctx_params_t* sd_ctx_params) {
+#ifdef SD_USE_UPSTREAM_GGML
+    LOG_WARN(
+        "Using upstream GGML: FP8 and INT8 tensorwise/convrot are disabled. "
+        "Some operators may be unsupported and performance may be lower than with patched GGML.");
+#endif
+    if (!validate_tensor_types(sd_ctx_params->wtype, sd_ctx_params->tensor_type_rules)) {
+        return false;
+    }
     for (float scale : {sd_ctx_params->linear_scale, sd_ctx_params->attn_scale}) {
         if (!std::isfinite(scale) || scale < 0.f || (scale > 0.f && !std::isfinite(1.f / scale))) {
             LOG_ERROR("scale overrides must be finite positive values, or 0 to keep model defaults");

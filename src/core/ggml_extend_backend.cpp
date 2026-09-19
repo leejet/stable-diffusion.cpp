@@ -13,7 +13,7 @@
 #endif
 
 #include "core/util.h"
-#include "ggml/src/ggml-impl.h"
+#include "ggml-impl.h"
 #include "stable-diffusion.h"
 
 static std::string trim_copy(const std::string& value) {
