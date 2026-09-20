@@ -265,7 +265,7 @@ namespace LLaDAImageTE {
 
     struct SigVQConfig {
         int64_t image_size         = 2048;
-        int64_t patch_size         = 16;
+        int patch_size             = 16;
         int64_t in_channels        = 3;
         int64_t hidden_size        = 1536;
         int64_t intermediate_size  = 6144;
