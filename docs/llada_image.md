@@ -129,7 +129,10 @@ save_file(merged, "llada_connectors.safetensors")
 <img width="256" alt="LLaDA-Image edit example" src="../assets/llada_image/edit_example.png" />
 
 See [edit.md](./edit.md) for the shared reference-image options. LLaDA-Image uses the
-`llada_image` preset by default.
+`llada_image` preset by default, resizing the reference image to the output width and height
+before VAE encoding. SigVQ uses bilinear resizing to half the output resolution and inputs
+normalized to `[-1, 1]`. CFG keeps the source latent in both branches and uses SigVQ features
+only in the positive branch. Editing requires connectors that include the SigVQ weights.
 
 ## Notes
 

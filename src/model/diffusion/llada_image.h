@@ -297,15 +297,18 @@ namespace LLaDAImage {
             int64_t img_len     = tgt->ne[1];
             auto img            = ggml_concat(gctx, src, tgt, 1);
 
-            auto sig        = sigvq_embed_1->forward(ctx, sigvq_embed_0->forward(ctx, semantic));
-            sig             = pad_stream(ctx, sig, params["sigvq_pad_token"]);
-            int64_t sig_len = sig->ne[1];
+            ggml_tensor* sig = nullptr;
+            int64_t sig_len  = 0;
+            if (semantic != nullptr) {
+                sig     = sigvq_embed_1->forward(ctx, sigvq_embed_0->forward(ctx, semantic));
+                sig     = pad_stream(ctx, sig, params["sigvq_pad_token"]);
+                sig_len = sig->ne[1];
+            }
 
             GGML_ASSERT(cap_len * 2 + img_len * 2 + sig_len == pe->ne[3]);
 
             auto cap_pe = ggml_ext_slice(gctx, pe, 3, 0, cap_len * 2);
             auto img_pe = ggml_ext_slice(gctx, pe, 3, cap_len * 2, cap_len * 2 + img_len * 2);
-            auto sig_pe = ggml_ext_slice(gctx, pe, 3, cap_len * 2 + img_len * 2, pe->ne[3]);
 
             auto img_adaln = ggml_concat(gctx, per_token(t_clean, img_len), per_token(t_noisy, img_len), 1);
 
@@ -317,18 +320,22 @@ namespace LLaDAImage {
                 auto block = std::dynamic_pointer_cast<ZImage::JointTransformerBlock>(blocks["noise_refiner." + std::to_string(i)]);
                 img        = block->forward(ctx, img, img_pe, nullptr, img_adaln);
             }
-            for (int i = 0; i < config.num_refiner_layers; i++) {
-                auto block = std::dynamic_pointer_cast<ZImage::JointTransformerBlock>(blocks["sigvq_refiner." + std::to_string(i)]);
-                sig        = block->forward(ctx, sig, sig_pe, nullptr, nullptr);
+            if (sig != nullptr) {
+                auto sig_pe = ggml_ext_slice(gctx, pe, 3, cap_len * 2 + img_len * 2, pe->ne[3]);
+                for (int i = 0; i < config.num_refiner_layers; i++) {
+                    auto block = std::dynamic_pointer_cast<ZImage::JointTransformerBlock>(blocks["sigvq_refiner." + std::to_string(i)]);
+                    sig        = block->forward(ctx, sig, sig_pe, nullptr, nullptr);
+                }
             }
 
-            auto seq = ggml_concat(gctx, ggml_concat(gctx, cap, img, 1), sig, 1);
+            auto seq = ggml_concat(gctx, cap, img, 1);
 
             auto cap_adaln = ggml_concat(gctx, per_token(t_clean, cap_len), per_token(t_noisy, cap_len), 1);
-            auto seq_adaln = ggml_concat(gctx,
-                                         ggml_concat(gctx, cap_adaln, img_adaln, 1),
-                                         per_token(t_clean, sig_len),
-                                         1);
+            auto seq_adaln = ggml_concat(gctx, cap_adaln, img_adaln, 1);
+            if (sig != nullptr) {
+                seq       = ggml_concat(gctx, seq, sig, 1);
+                seq_adaln = ggml_concat(gctx, seq_adaln, per_token(t_clean, sig_len), 1);
+            }
 
             for (int i = 0; i < config.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<ZImage::JointTransformerBlock>(blocks["layers." + std::to_string(i)]);
@@ -450,7 +457,7 @@ namespace LLaDAImage {
             ggml_tensor* x         = make_input(x_tensor);
             ggml_tensor* timesteps = make_input(timesteps_tensor);
             ggml_tensor* context   = make_input(context_tensor);
-            ggml_tensor* semantic  = make_input(semantic_tensor);
+            ggml_tensor* semantic  = make_optional_input(semantic_tensor);
             ggml_tensor* source    = make_input(source_tensor);
             GGML_ASSERT(x->ne[3] == 1);
 
@@ -458,7 +465,7 @@ namespace LLaDAImage {
                                                         static_cast<int>(x->ne[0]),
                                                         config.patch_size,
                                                         static_cast<int>(context->ne[1]),
-                                                        static_cast<int>(semantic->ne[1]),
+                                                   semantic != nullptr ? static_cast<int>(semantic->ne[1]) : 0,
                                                         ZImage::SEQ_MULTI_OF,
                                                         config.theta,
                                                         config.axes_dim);
@@ -488,20 +495,21 @@ namespace LLaDAImage {
             const auto* extra   = std::get_if<LLaDAImageDiffusionExtra>(&diffusion_params.extra);
             bool has_semantic   = extra != nullptr && extra->semantic != nullptr && !extra->semantic->empty();
             bool has_ref_latent = diffusion_params.ref_latents != nullptr && !diffusion_params.ref_latents->empty();
-            if (has_semantic != has_ref_latent) {
-                LOG_WARN(
-                    "llada_image: editing needs both the SigVQ features and the reference latent "
-                    "(have semantic: %d, reference latent: %d); falling back to text to image",
-                    static_cast<int>(has_semantic),
-                    static_cast<int>(has_ref_latent));
+            if (has_semantic && !has_ref_latent) {
+                LOG_WARN("llada_image: SigVQ features without a reference latent are not supported; falling back to text to image");
             }
-            if (has_semantic && has_ref_latent) {
+            if (has_ref_latent) {
+                const auto& source = diffusion_params.ref_latents->front();
+                if (source.shape() != diffusion_params.x->shape()) {
+                    LOG_ERROR("llada_image: reference latent must match the target shape; use resize_vae_to_target=1");
+                    return {};
+                }
                 auto get_graph = [&]() -> ggml_cgraph* {
                     return build_edit_graph(*diffusion_params.x,
                                             *diffusion_params.timesteps,
                                             tensor_or_empty(diffusion_params.context),
-                                            *extra->semantic,
-                                            diffusion_params.ref_latents->front());
+                                            tensor_or_empty(extra != nullptr ? extra->semantic : nullptr),
+                                            source);
                 };
                 return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false),
                                                        diffusion_params.x->dim());

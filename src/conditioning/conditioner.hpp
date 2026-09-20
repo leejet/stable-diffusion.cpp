@@ -3365,6 +3365,11 @@ struct LLaDAImageEmbedder : public Conditioner {
     SDCondition get_learned_condition(int n_threads,
                                       const ConditionerParams& conditioner_params) override {
         const int64_t num_queries = 256;
+        const bool has_ref_images = conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty();
+        if (has_ref_images && sigvq == nullptr) {
+            LOG_ERROR("LLaDA-Image editing requires connectors with SigVQ weights");
+            return {};
+        }
 
         std::string text = conditioner_params.text;
         while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front()))) {
@@ -3421,14 +3426,20 @@ struct LLaDAImageEmbedder : public Conditioner {
 
         // Editing: SigVQ sees the reference at half the output resolution, as in
         // LLaDAImagePipeline._encode_source_image.
-        if (sigvq != nullptr && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
+        if (has_ref_images) {
             const auto& ref = conditioner_params.ref_images->front();
             auto resized    = sd::ops::interpolate(ref,
                                                    {conditioner_params.width / 2,
                                                     conditioner_params.height / 2,
                                                     ref.shape()[2],
-                                                    ref.shape()[3]});
-            result.extra_c_crossattns.push_back(sigvq->compute(n_threads, resized));
+                                                    ref.shape()[3]},
+                                                   sd::ops::InterpolateMode::Bilinear);
+            resized         = resized * 2.f - 1.f;
+            auto semantic   = sigvq->compute(n_threads, resized);
+            if (semantic.empty()) {
+                return {};
+            }
+            result.extra_c_crossattns.push_back(std::move(semantic));
         }
         return result;
     }

@@ -475,8 +475,12 @@ namespace sd::pipeline {
                 }
                 condition_params.text            = request->negative_prompt;
                 condition_params.zero_out_masked = zero_out_masked;
-                uncond                           = sd->cond_stage_model->get_learned_condition(sd->n_threads,
-                                                                                               condition_params);
+                if (sd_version_is_llada_image(sd->version)) {
+                    // LLaDA-Image CFG keeps the source latent but drops its SigVQ features.
+                    condition_params.ref_images = nullptr;
+                }
+                uncond = sd->cond_stage_model->get_learned_condition(sd->n_threads,
+                                                                     condition_params);
                 if (uncond.empty()) {
                     LOG_ERROR("failed to encode negative prompt");
                     return std::nullopt;
