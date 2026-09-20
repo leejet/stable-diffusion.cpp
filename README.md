@@ -10,6 +10,13 @@ This branch provides optimized stable-diffusion.cpp and GGML paths for Qualcomm 
 - SD.cpp integration: [stable-diffusion.cpp PR #1970](https://github.com/leejet/stable-diffusion.cpp/pull/1970)
 - Upstream project: [leejet/stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)
 
+## Important News
+
+| Date | Update |
+|---|---|
+| 2026-09-17 | Added Hexagon NPU support for Z-Image Turbo and FLUX.2/Klein 4B. |
+| 2026-09-20 | Added Hexagon NPU support for FLUX.2/Klein 9B Q4_0. |
+
 ## Hexagon NPU
 
 ### Weights
@@ -40,6 +47,35 @@ The 1024 and 1536 runs use direct VAE decode. The 2048 runs use 64x64 VAE tiles.
 | **1024x1024, 8 steps**<br><img src="https://github.com/user-attachments/assets/439610a3-35f9-439e-9f26-7107f11fd9bc" width="480" alt="Z-Image 1024x1024, 8 steps"> | **1024x1024, 4 steps**<br><img src="https://github.com/user-attachments/assets/18178355-8da6-426e-a3e5-8275a712b3aa" width="480" alt="FLUX.2 Klein 1024x1024, 4 steps"> |
 | **1536x1536, 8 steps**<br><img src="https://github.com/user-attachments/assets/26ac18e8-5c47-421f-9216-d24eec0d8cb1" width="480" alt="Z-Image 1536x1536, 8 steps"> | **1536x1536, 4 steps**<br><img src="https://github.com/user-attachments/assets/7275c232-3327-4518-a9d1-4865ff798a80" width="480" alt="FLUX.2 Klein 1536x1536, 4 steps"> |
 | **2048x2048, 4 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/zimage_2048_s4.png" width="480" alt="Z-Image 2048x2048, 4 steps"> | **2048x2048, 4 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/klein_2048_s4.png" width="480" alt="FLUX.2 Klein 2048x2048, 4 steps"> |
+
+### FLUX.2/Klein 9B
+
+Klein 9B uses Q4_0 DiT and Q4_0 Qwen3-8B weights. Text encoder parameters are released after conditioning with `te=disk`; DiT, text encoding, and VAE execution all run on HTP.
+
+- DiT: [`flux-2-klein-9b-Q4_0.gguf`](https://huggingface.co/leejet/FLUX.2-klein-9B-GGUF/blob/main/flux-2-klein-9b-Q4_0.gguf)
+- Text encoder: [`Qwen_Qwen3-8B-Q4_0.gguf`](https://huggingface.co/bartowski/Qwen_Qwen3-8B-GGUF/blob/main/Qwen_Qwen3-8B-Q4_0.gguf)
+- VAE: [`flux2-vae.safetensors`](https://huggingface.co/unsloth/FLUX.2-VAE/blob/main/split_files/vae/flux2-vae.safetensors)
+
+| Resolution | Steps | Warm DiT | VAE decode | E2E |
+|---|---:|---:|---:|---:|
+| 1024x1024 | 4 | **15.52 s/it** | 2.25 s | **77.76 s** |
+
+<img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/klein9b_q40_segmented_1024_s4.png" width="640" alt="FLUX.2 Klein 9B Q4_0, 1024x1024, 4 steps">
+
+```sh
+./sd-cli \
+  --diffusion-model flux-2-klein-9b-Q4_0.gguf \
+  --llm Qwen3-8B-Q4_0.gguf \
+  --vae flux2-vae.safetensors \
+  --backend diffusion=HTP0,te=HTP0,vae=HTP0 \
+  --params-backend te=disk \
+  --fa --vae-conv-direct \
+  -t 4 \
+  -p 'A cinematic photograph of a red fox standing on a moss-covered stone bridge in an autumn forest, golden morning light, mist between the trees, highly detailed fur, natural colors' \
+  --cfg-scale 1 --steps 4 --sampling-method euler \
+  -W 1024 -H 1024 --seed 42 \
+  -o klein9b_q40_segmented_1024_s4.png
+```
 
 ### Commands
 
@@ -184,7 +220,6 @@ Z-Image Turbo generates the reference image, then FLUX.2/Klein removes the Einst
   --llm llm.gguf \
   --vae flux2-vae.safetensors \
   --backend diffusion=HTP0,te=HTP0,vae=HTP0 \
-  --params-backend te=disk \
   --fa --vae-conv-direct \
   -t 4 \
   -p "删除黑板上的爱因斯坦场方程‘G_μν + Λg_μν = 8πG T_μν’，将该公式擦除干净并自然补全黑板背景。保留麦克斯韦方程‘dF = 0，d*F = *J’、爱因斯坦、带SJTU标志的讲台桌、粉笔、大学课堂和其他画面内容不变，保持写实风格。" \

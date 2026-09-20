@@ -309,8 +309,11 @@ public:
                                    ggml_tensor* x0,
                                    ggml_tensor* x1) {
         ggml_tensor* w = params["weight"];
+        const bool segmented_weight = w->type == GGML_TYPE_F8_E4M3 ||
+                                      w->type == GGML_TYPE_Q4_0 ||
+                                      w->type == GGML_TYPE_MXFP4;
         if (ctx->weight_adapter == nullptr && scale == 1.f &&
-            w->type == GGML_TYPE_F8_E4M3) {
+            segmented_weight) {
             ggml_tensor* out = ggml_mul_mat_segmented(ctx->ggml_ctx, w, x0, x1);
             if (force_prec_f32) {
                 ggml_mul_mat_set_prec(out, GGML_PREC_F32);
