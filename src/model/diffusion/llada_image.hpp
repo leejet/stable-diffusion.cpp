@@ -1,5 +1,5 @@
-#ifndef __SD_MODEL_DIFFUSION_LLADA_IMAGE_H__
-#define __SD_MODEL_DIFFUSION_LLADA_IMAGE_H__
+#ifndef __SD_MODEL_DIFFUSION_LLADA_IMAGE_HPP__
+#define __SD_MODEL_DIFFUSION_LLADA_IMAGE_HPP__
 
 #include <algorithm>
 #include <cinttypes>
@@ -524,4 +524,4 @@ namespace LLaDAImage {
 
 }  // namespace LLaDAImage
 
-#endif  // __SD_MODEL_DIFFUSION_LLADA_IMAGE_H__
+#endif  // __SD_MODEL_DIFFUSION_LLADA_IMAGE_HPP__

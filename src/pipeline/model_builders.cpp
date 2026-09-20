@@ -20,7 +20,7 @@
 #include "model/diffusion/krea2.hpp"
 #include "model/diffusion/lens.hpp"
 #include "model/diffusion/lingbot_video.hpp"
-#include "model/diffusion/llada_image.h"
+#include "model/diffusion/llada_image.hpp"
 #include "model/diffusion/ltxv.hpp"
 #include "model/diffusion/mage_flow.hpp"
 #include "model/diffusion/minimax_h3.hpp"
