@@ -68,6 +68,7 @@ struct GGMLRunnerContext {
     ggml_backend_t backend                                           = nullptr;
     ggml_context* ggml_ctx                                           = nullptr;
     bool flash_attn_enabled                                          = false;
+    bool sage_attn_enabled                                           = false;
     float linear_scale                                               = 0.f;
     float attn_scale                                                 = 0.f;
     bool conv2d_direct_enabled                                       = false;
@@ -176,6 +177,7 @@ protected:
     const std::string final_result_name = "ggml_runner_final_result_tensor";
 
     bool flash_attn_enabled    = false;
+    bool sage_attn_enabled     = false;
     float linear_scale         = 0.f;
     float attn_scale           = 0.f;
     bool conv2d_direct_enabled = false;
@@ -335,6 +337,14 @@ public:
 
     void set_flash_attention_enabled(bool enabled) {
         flash_attn_enabled = enabled;
+    }
+
+    void set_sage_attention_enabled(bool enabled) {
+        if (sage_attn_enabled != enabled) {
+            free_cache_ctx_and_buffer();
+            graph_cut_plan_cache_.graph_cut_plans.clear();
+            sage_attn_enabled = enabled;
+        }
     }
 
     void set_scale_overrides(float linear_scale, float attn_scale) {

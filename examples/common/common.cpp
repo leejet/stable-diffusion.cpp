@@ -619,6 +619,10 @@ ArgOptions SDContextParams::get_options() {
          "use flash attention in the diffusion model only",
          true, &diffusion_flash_attn},
         {"",
+         "--sage-attn",
+         "use native CUDA SageAttention in the diffusion model, with flash/default attention fallback",
+         true, &sage_attn},
+        {"",
          "--diffusion-conv-direct",
          "use ggml_conv2d_direct in the diffusion model",
          true, &diffusion_conv_direct},
@@ -938,6 +942,7 @@ std::string SDContextParams::to_string() const {
         << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
         << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
+        << "  sage_attn: " << (sage_attn ? "true" : "false") << ",\n"
         << "  linear_scale: " << linear_scale << ",\n"
         << "  attn_scale: " << attn_scale << ",\n"
         << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
@@ -995,6 +1000,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.enable_mmap                     = enable_mmap;
     sd_ctx_params.flash_attn                      = flash_attn;
     sd_ctx_params.diffusion_flash_attn            = diffusion_flash_attn;
+    sd_ctx_params.sage_attn                       = sage_attn;
     sd_ctx_params.linear_scale                    = linear_scale;
     sd_ctx_params.attn_scale                      = attn_scale;
     sd_ctx_params.tae_preview_only                = taesd_preview;

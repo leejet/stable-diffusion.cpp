@@ -337,6 +337,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->eager_load                = false;
     sd_ctx_params->enable_mmap               = false;
     sd_ctx_params->diffusion_flash_attn      = false;
+    sd_ctx_params->sage_attn                 = false;
     sd_ctx_params->linear_scale              = 0.f;
     sd_ctx_params->attn_scale                = 0.f;
     sd_ctx_params->vae_format                = SD_VAE_FORMAT_AUTO;
@@ -392,6 +393,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "auto_fit: %s\n"
              "flash_attn: %s\n"
              "diffusion_flash_attn: %s\n"
+             "sage_attn: %s\n"
              "linear_scale: %g\n"
              "attn_scale: %g\n"
              "vae_format: %s\n",
@@ -431,6 +433,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              BOOL_STR(sd_ctx_params->auto_fit),
              BOOL_STR(sd_ctx_params->flash_attn),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
+             BOOL_STR(sd_ctx_params->sage_attn),
              sd_ctx_params->linear_scale,
              sd_ctx_params->attn_scale,
              sd_vae_format_name(sd_ctx_params->vae_format));

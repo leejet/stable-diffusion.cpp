@@ -90,6 +90,10 @@ cmake --build . --config Release
 
 ## Build with CUDA
 
+Native SageAttention is included when using CUDA with patched GGML
+(`SD_USE_UPSTREAM_GGML=OFF`).
+See [SageAttention](sage_attention.md) for GPU requirements and `--sage-attn` usage.
+
 This provides GPU acceleration using NVIDIA GPU. Make sure to have the CUDA toolkit installed. You can download it from your Linux distro's package manager (e.g. `apt install nvidia-cuda-toolkit`) or from here: [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads). Recommended to have at least 4 GB of VRAM.
 
 ```shell
