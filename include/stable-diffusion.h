@@ -245,6 +245,7 @@ typedef struct {
     float linear_scale;              // Override linear input scaling; 0 keeps the model default
     float attn_scale;                // Override flash-attention K/V scaling; 0 keeps the model default
     const char* tokenizer;           // tokenizer.json path or main=FILE,clip-l=FILE,clip-g=FILE assignments; required for PiD and Lens
+    bool sage_attn;
 } sd_ctx_params_t;
 
 typedef struct {

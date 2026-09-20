@@ -856,6 +856,47 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
     return true;
 }
 
+bool StableDiffusionGGML::set_sage_attention_enabled(bool enabled) {
+    if (!diffusion_model) {
+        return false;
+    }
+    if (enabled) {
+#ifndef SD_USE_UPSTREAM_GGML
+        auto* ctx = ggml_init({4 * ggml_tensor_overhead(), nullptr, true});
+        if (ctx == nullptr) {
+            return false;
+        }
+        auto* q        = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 128, 128, 1, 1);
+        auto* k        = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 128, 128, 1, 1);
+        auto* v        = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 128, 128, 1, 1);
+        auto* op       = ggml_sage_attn(ctx, q, k, v, 1.f / sqrtf(128.f), GGML_SAGE_ATTN_AUTO);
+        bool supported = true;
+        for (auto backend : backend_manager.runtime_backends(SDBackendModule::DIFFUSION)) {
+            if (!ggml_backend_supports_op(backend, op)) {
+                LOG_ERROR("SageAttention is unavailable on %s; it requires patched GGML, CUDA Toolkit 12.0 or newer, and SM80 or newer kernels",
+                          ggml_backend_name(backend));
+                supported = false;
+            }
+        }
+        ggml_free(ctx);
+        if (!supported) {
+            return false;
+        }
+#else
+        LOG_ERROR("SageAttention requires -DSD_USE_UPSTREAM_GGML=OFF and a CUDA backend");
+        return false;
+#endif
+    }
+    diffusion_model->set_sage_attention_enabled(enabled);
+    if (high_noise_diffusion_model) {
+        high_noise_diffusion_model->set_sage_attention_enabled(enabled);
+    }
+    if (enabled) {
+        LOG_INFO("Using SageAttention in the diffusion model; CUDA selects the supported kernel, unsupported layers use flash/default attention");
+    }
+    return true;
+}
+
 bool StableDiffusionGGML::init(const sd_ctx_params_t* sd_ctx_params) {
 #ifdef SD_USE_UPSTREAM_GGML
     LOG_WARN(
@@ -1132,6 +1173,9 @@ bool StableDiffusionGGML::validate_and_load_runners() {
         if (high_noise_diffusion_model) {
             high_noise_diffusion_model->set_flash_attention_enabled(true);
         }
+    }
+    if (sd_ctx_params->sage_attn && !set_sage_attention_enabled(true)) {
+        return false;
     }
     LOG_VERBOSE("validating model metadata");
 
