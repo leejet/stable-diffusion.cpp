@@ -80,6 +80,20 @@ ggml_tensor* ggml_ext_linear_i8_tensorwise(ggml_context* ctx,
                                            int convrot_group_size,
                                            float scale = 1.f);
 
+// packed-w4 convrot linear; weight_scales is [N] F32 row scales for W4A4, or
+// the [16] F32 codebook for W4A8 (with s_channel [N] and s_rel F8_E4M3
+// [K/16, N] supplied; both null for W4A4)
+ggml_tensor* ggml_ext_linear_w4_convrot(ggml_context* ctx,
+                                        ggml_tensor* x,
+                                        ggml_tensor* w,
+                                        ggml_tensor* weight_scales,
+                                        ggml_tensor* s_channel,
+                                        ggml_tensor* s_rel,
+                                        ggml_tensor* b,
+                                        int w4_convrot_kind,
+                                        int convrot_group_size,
+                                        float scale = 1.f);
+
 ggml_tensor* ggml_ext_pad_ext(ggml_context* ctx,
                               ggml_backend_t backend,
                               ggml_tensor* x,

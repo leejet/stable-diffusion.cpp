@@ -791,6 +791,10 @@ void ModelLoader::set_wtype_override(ggml_type wtype, std::string tensor_type_ru
     tensor_type_rules_ = tensor_type_rules;
     auto map_rules     = parse_tensor_type_rules(tensor_type_rules);
     for (auto& [name, tensor_storage] : tensor_storage_map) {
+        if (tensor_storage.w4_convrot_kind != W4_CONVROT_NONE) {
+            // target type is intrinsic to the packed format, not subject to overrides
+            continue;
+        }
         tensor_storage.expected_type = GGML_TYPE_COUNT;
         ggml_type dst_type           = wtype;
         for (const auto& tensor_type_rule : map_rules) {
@@ -1513,7 +1517,15 @@ bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage
     if (tensor_storage.is_int8_tensorwise) {
         return false;
     }
-    if (type != GGML_TYPE_COUNT) {
+    // Packed ComfyUI w4 convrot weights are consumed raw by the w4 kernels;
+    // never route them through the generic conversion machinery.
+    if (tensor_storage.w4_convrot_kind != W4_CONVROT_NONE) {
+        return false;
+    }
+    if (ends_with(name, ".weight_codebook") || ends_with(name, ".weight_s_rel") ||
+        ends_with(name, ".weight_s_channel")) {
+        // Pass, do not convert (w4 convrot companions)
+    } else if (type != GGML_TYPE_COUNT) {
         if (ggml_is_quantized(type) && tensor_storage.ne[0] % ggml_blck_size(type) != 0) {
             // Pass, do not convert
         } else if (ends_with(name, ".bias")) {
