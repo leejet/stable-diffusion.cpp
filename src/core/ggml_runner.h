@@ -83,6 +83,7 @@ struct GGMLRunnerContext {
     std::function<void(const std::string&, ggml_tensor*)> cache_tensor;
     std::function<void(ggml_tensor*, const void*)> set_backend_tensor_data;
     std::map<std::pair<ggml_tensor*, int>, ggml_tensor*> int8_convrot_cache;
+    std::map<std::pair<ggml_tensor*, int>, ggml_tensor*> convrot_f32_cache;
 
     void capture_tensor(const std::string& name, ggml_tensor* tensor) {
         if (debug_tensors == nullptr || tensor == nullptr) {

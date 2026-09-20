@@ -144,6 +144,9 @@ public:
 
     bool tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type) const;
     int64_t get_params_mem_size(ggml_backend_t backend, ggml_type type = GGML_TYPE_COUNT) const;
+
+private:
+public:
     ~ModelLoader() = default;
 };
 

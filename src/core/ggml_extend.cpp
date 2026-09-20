@@ -284,6 +284,41 @@ ggml_tensor* ggml_ext_linear_i8_tensorwise(ggml_context* ctx,
 #endif
 }
 
+ggml_tensor* ggml_ext_linear_w4_convrot(ggml_context* ctx,
+                                        ggml_tensor* x,
+                                        ggml_tensor* w,
+                                        ggml_tensor* weight_scales,
+                                        ggml_tensor* s_channel,
+                                        ggml_tensor* s_rel,
+                                        ggml_tensor* b,
+                                        int w4_convrot_kind,
+                                        int convrot_group_size,
+                                        float scale) {
+    GGML_ASSERT(x->type == GGML_TYPE_F32 || (x->type == GGML_TYPE_I8 && scale == 1.f));
+    if (scale != 1.f) {
+        x = ggml_ext_scale(ctx, x, scale);
+    }
+
+    ggml_tensor* fused_bias = scale == 1.f ? b : nullptr;
+    if (x->ne[2] * x->ne[3] > 1024) {
+        int64_t ne2 = x->ne[2];
+        int64_t ne3 = x->ne[3];
+        x           = ggml_reshape_2d(ctx, x, x->ne[0], x->ne[1] * x->ne[2] * x->ne[3]);
+        x           = ggml_mul_mat_w4_convrot(ctx, w, x, weight_scales, s_channel, s_rel, fused_bias, w4_convrot_kind, convrot_group_size);
+        x           = ggml_reshape_4d(ctx, x, x->ne[0], x->ne[1] / ne2 / ne3, ne2, ne3);
+    } else {
+        x = ggml_mul_mat_w4_convrot(ctx, w, x, weight_scales, s_channel, s_rel, fused_bias, w4_convrot_kind, convrot_group_size);
+    }
+
+    if (scale != 1.f) {
+        x = ggml_ext_scale(ctx, x, 1.f / scale);
+        if (b != nullptr) {
+            x = ggml_add_inplace(ctx, x, b);
+        }
+    }
+    return x;
+}
+
 ggml_tensor* ggml_ext_pad_ext(ggml_context* ctx,
                               ggml_backend_t backend,
                               ggml_tensor* x,

@@ -13,6 +13,15 @@
 
 #define SD_MAX_DIMS 5
 
+// ComfyUI packed 4-bit convrot weight formats. The storage is rewritten at read
+// time to its converted representation (de-packed ne + target ggml type), the
+// reblocked bytes are produced by ModelLoader before tensor loading.
+enum W4ConvRotKind {
+    W4_CONVROT_NONE = 0,
+    W4_CONVROT_W4A4 = 1,  // convrot_w4a4: signed nibbles + per-row F32 scale -> GGML_TYPE_Q4_0
+    W4_CONVROT_W4A8 = 2,  // asym_w4a8_int8: codebook + s_channel + s_rel (F8) -> GGML_TYPE_IQ4_NL
+};
+
 struct TensorStorage {
     std::string name;
     ggml_type type              = GGML_TYPE_F32;
@@ -24,6 +33,9 @@ struct TensorStorage {
     bool is_int8_tensorwise     = false;
     bool int8_convrot           = false;
     int int8_convrot_group_size = 0;
+    int w4_convrot_kind         = W4_CONVROT_NONE;
+    int w4_convrot_group_size   = 0;
+    int w4a8_group_size         = 0;
     int64_t ne[SD_MAX_DIMS]     = {1, 1, 1, 1, 1};
     int n_dims                  = 0;
 

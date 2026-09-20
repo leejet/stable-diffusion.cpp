@@ -1010,7 +1010,7 @@ void StableDiffusionGGML::configure_weight_loading() {
     const auto wtype_stat     = model_loader.get_wtype_stat();
     bool have_int8_tensorwise = false;
     for (const auto& [_, tensor_storage] : model_loader.get_tensor_storage_map()) {
-        if (tensor_storage.is_int8_tensorwise) {
+        if (tensor_storage.is_int8_tensorwise || tensor_storage.w4_convrot_kind != W4_CONVROT_NONE) {
             have_int8_tensorwise = true;
             break;
         }
