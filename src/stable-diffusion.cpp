@@ -137,6 +137,7 @@ const char* scheduler_to_str[] = {
     "flux2",
     "flux",
     "beta",
+    "llada_image",
 };
 
 static_assert(SCHEDULER_COUNT == sizeof(scheduler_to_str) / sizeof(scheduler_to_str[0]),

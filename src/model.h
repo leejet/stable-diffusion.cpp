@@ -60,6 +60,7 @@ enum SDVersion {
     VERSION_KREA2,
     VERSION_MAGE_FLOW,
     VERSION_SENSENOVA_U1_5,
+    VERSION_LLADA_IMAGE,
     VERSION_ESRGAN,
     VERSION_COUNT,
 };
@@ -173,6 +174,13 @@ static inline bool sd_version_is_z_image(SDVersion version) {
     return false;
 }
 
+static inline bool sd_version_is_llada_image(SDVersion version) {
+    if (version == VERSION_LLADA_IMAGE) {
+        return true;
+    }
+    return false;
+}
+
 static inline bool sd_version_is_boogu_image(SDVersion version) {
     if (version == VERSION_BOOGU_IMAGE) {
         return true;
@@ -252,7 +260,7 @@ static inline bool sd_version_uses_flux_vae(SDVersion version) {
 }
 
 static inline bool sd_version_uses_flux2_vae(SDVersion version) {
-    if (sd_version_is_flux2(version) || sd_version_is_ernie_image(version) || sd_version_is_lens(version) || sd_version_is_ideogram4(version) || sd_version_is_sefi_image(version)) {
+    if (sd_version_is_flux2(version) || sd_version_is_ernie_image(version) || sd_version_is_lens(version) || sd_version_is_ideogram4(version) || sd_version_is_sefi_image(version) || sd_version_is_llada_image(version)) {
         return true;
     }
     return false;
@@ -293,6 +301,7 @@ static inline bool sd_version_is_dit(SDVersion version) {
         version == VERSION_HIDREAM_O1 ||
         sd_version_is_anima(version) ||
         sd_version_is_z_image(version) ||
+        sd_version_is_llada_image(version) ||
         sd_version_is_boogu_image(version) ||
         sd_version_is_ernie_image(version) ||
         sd_version_is_lens(version) ||
