@@ -26,6 +26,13 @@ namespace WAN {
         bool bias;
 
         void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+            auto weight = tensor_storage_map.find(prefix + "weight");
+            if (weight != tensor_storage_map.end() && weight->second.ne[2] == 1 &&
+                weight->second.ne[3] == in_channels * out_channels) {
+                // Image VAE exports may retain Conv3d weights with a singleton temporal kernel.
+                std::get<0>(kernel_size) = 1;
+                std::get<0>(padding)     = 0;
+            }
             params["weight"] = ggml_new_tensor_4d(ctx,
                                                   GGML_TYPE_F16,
                                                   std::get<2>(kernel_size),
@@ -1062,8 +1069,7 @@ namespace WAN {
             }
 
             if (version == VERSION_QWEN_IMAGE_2_1) {
-                wan2_2      = true;
-                this->is_2D = is_2D = true;
+                wan2_2              = true;
                 dec_dim             = 144;
                 z_dim               = 64;
                 input_channels      = 4;
@@ -1078,6 +1084,8 @@ namespace WAN {
                 // Temporal shortcut factors still affect single-frame channel grouping.
                 temperal_upsample   = {true, true, true, false};
                 temperal_downsample = {false, true, true, true};
+                _conv_num           = 2 * (2 + static_cast<int>(dim_mult.size()) * (num_res_blocks + 1)) + 3 + (is_2D ? 0 : 2);
+                _enc_conv_num       = 2 * (2 + static_cast<int>(dim_mult.size()) * num_res_blocks) + 3 + (is_2D ? 0 : 2);
             }
 
             if (!decode_only) {
@@ -1292,18 +1300,9 @@ namespace WAN {
                      SDVersion version                                   = VERSION_WAN2,
                      std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : VAE(version, backend, prefix, weight_manager), decode_only(decode_only) {
-            bool is_2D = false;
-            for (const auto& [name, tensor_storage] : tensor_storage_map) {
-                if (ends_with(name, "decoder.conv1.weight")) {
-                    if (tensor_storage.ne[2] > 3) {
-                        is_2D = true;
-                    }
-                    break;
-                }
-            }
-            if (is_2D) {
-                LOG_VERBOSE("USING 2D VAE");
-            }
+            const auto conv_in = tensor_storage_map.find((prefix.empty() ? "" : prefix + ".") + "decoder.conv1.weight");
+            const bool is_2D   = conv_in != tensor_storage_map.end() && conv_in->second.ne[2] > 3;
+            LOG_VERBOSE("Wan VAE convolution type: %s", is_2D ? "2D" : "3D");
             ae = WanVAE(decode_only, version, is_2D);
             ae.init(params_ctx, tensor_storage_map, prefix);
         }
