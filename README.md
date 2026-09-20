@@ -15,6 +15,7 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
+* **2026/09/20** 🚀 stable-diffusion.cpp adds **Day-0 support for Qwen-Image-2.1**
 * **2026/08/20** 🚀 stable-diffusion.cpp now supports **LTX-2.5**
 * **2026/08/04** 🚀 stable-diffusion.cpp adds **Day-1 support for MiniMax-H3**
 * **2026/06/25** 🚀 stable-diffusion.cpp now supports **Krea2**
@@ -47,6 +48,7 @@ API and command-line option may change frequently.***
     - [Chroma](./docs/chroma.md)
     - [Chroma1-Radiance](./docs/chroma_radiance.md)
     - [Qwen Image](./docs/qwen_image.md)
+    - [Qwen Image 2.1](./docs/qwen_image_2.1.md)
     - [PiD](./docs/pid.md)
     - [LongCat Image](./docs/longcat_image.md)
     - [Z-Image](./docs/z_image.md)
