@@ -134,7 +134,6 @@ export LD_LIBRARY_PATH="$PWD" ADSP_LIBRARY_PATH="$PWD"
   --llm llm.gguf \
   --vae flux2-vae.safetensors \
   --backend diffusion=HTP0,te=HTP0,vae=HTP0 \
-  --params-backend te=disk \
   --fa --vae-conv-direct \
   --vae-tiling --vae-tile-size 64x64 --vae-tile-overlap 0.25 \
   -t 4 -p "a lovely cat" --cfg-scale 1 \
