@@ -32,10 +32,12 @@ Backend options such as `-DSD_CUDA=ON` apply to the selected tree as usual.
 
 `SD_USE_UPSTREAM_GGML` defaults to `OFF`, which enables the patched GGML
 extensions. Set it to `ON` when using upstream GGML; it selects the compatibility
-mode and does not download or replace the GGML source tree. Upstream mode
-disables FP8 and INT8 tensorwise/convrot and rejects their model files with an
-explicit error. FP8 weight type requests, tensor type rules and conversion
-outputs are also rejected; no automatic conversion is performed.
+mode and does not download or replace the GGML source tree. Upstream mode keeps
+the original FP8 safetensors handling: FP8 tensors are converted to F16 at load
+time (one byte per element in the file, two in RAM and VRAM). INT8
+tensorwise/convrot is disabled and its model files are rejected with an explicit
+error. FP8 GGUF files, FP8 weight type requests and tensor type rules are also
+rejected; no automatic conversion is performed.
 
 Upstream GGML may lack some operators and performance optimizations provided by
 the patched version. A warning is emitted during CMake configuration and when
