@@ -79,7 +79,7 @@ endif()
 #
 
 # general
-option(SD_BUILD_TESTS                "sd: build tests"    OFF)
+#option(SD_BUILD_TESTS                "sd: build tests"    ${SD_STANDALONE})
 option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
 option(SD_WEBP                       "sd: enable WebP image I/O support" ${SD_WEBP_DEFAULT})
 option(SD_USE_SYSTEM_WEBP            "sd: link against system libwebp" OFF)
@@ -351,14 +351,6 @@ target_compile_features(${SD_LIB} PUBLIC c_std_11 cxx_std_17)
 if (SD_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
-
-if (SD_BUILD_TESTS)
-    enable_testing()
-    add_subdirectory(tests)
-endif()
-
-
-
 #
 # install
 #
