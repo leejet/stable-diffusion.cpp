@@ -37,7 +37,7 @@ extern const char* model_version_to_str[];
 static inline bool sd_version_supports_ref_latent_img_cfg(SDVersion version) {
     return version == VERSION_FLUX ||
            sd_version_is_flux2(version) ||
-           sd_version_is_qwen_image(version) ||
+           (sd_version_is_qwen_image(version) && version != VERSION_QWEN_IMAGE_2_1) ||
            sd_version_is_mage_flow(version) ||
            sd_version_is_longcat(version) ||
            sd_version_is_z_image(version) ||
