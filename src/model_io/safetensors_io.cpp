@@ -86,7 +86,12 @@ static ggml_type safetensors_dtype_to_ggml_type(const std::string& dtype) {
         ttype = GGML_TYPE_F32;
     } else if (dtype == "F64") {
         ttype = GGML_TYPE_F32;
-#ifndef SD_USE_UPSTREAM_GGML
+#ifdef SD_USE_UPSTREAM_GGML
+    } else if (dtype == "F8_E4M3") {
+        ttype = GGML_TYPE_F16;
+    } else if (dtype == "F8_E5M2") {
+        ttype = GGML_TYPE_F16;
+#else
     } else if (dtype == "F8_E4M3") {
         ttype = GGML_TYPE_F8_E4M3;
     } else if (dtype == "F8_E5M2") {
@@ -287,12 +292,6 @@ bool read_safetensors_file(const std::string& file_path,
             continue;
         }
 
-#ifdef SD_USE_UPSTREAM_GGML
-        if (dtype == "F8_E4M3" || dtype == "F8_E5M2") {
-            set_error(error, "FP8 is not supported by this ggml build (tensor '" + name + "')");
-            return false;
-        }
-#endif
         ggml_type type = safetensors_dtype_to_ggml_type(dtype);
         if (type == GGML_TYPE_COUNT) {
             set_error(error, "unsupported dtype '" + dtype + "' (tensor '" + name + "')");
@@ -376,10 +375,20 @@ bool read_safetensors_file(const std::string& file_path,
         bool tensor_size_ok;
         if (dtype == "F8_E4M3") {
             tensor_storage.is_f8_e4m3 = true;
-            tensor_size_ok            = (tensor_storage.nbytes() == tensor_data_size);
+#ifdef SD_USE_UPSTREAM_GGML
+            // f8 -> f16
+            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size * 2);
+#else
+            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size);
+#endif
         } else if (dtype == "F8_E5M2") {
             tensor_storage.is_f8_e5m2 = true;
-            tensor_size_ok            = (tensor_storage.nbytes() == tensor_data_size);
+#ifdef SD_USE_UPSTREAM_GGML
+            // f8 -> f16
+            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size * 2);
+#else
+            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size);
+#endif
         } else if (dtype == "F64") {
             tensor_storage.is_f64 = true;
             // f64 -> f32

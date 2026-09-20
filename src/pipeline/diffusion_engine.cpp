@@ -859,8 +859,9 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
 bool StableDiffusionGGML::init(const sd_ctx_params_t* sd_ctx_params) {
 #ifdef SD_USE_UPSTREAM_GGML
     LOG_WARN(
-        "Using upstream GGML: FP8 and INT8 tensorwise/convrot are disabled. "
-        "Some operators may be unsupported and performance may be lower than with patched GGML.");
+        "Using upstream GGML: INT8 tensorwise/convrot is disabled and FP8 weights are "
+        "converted to F16 at load time. Some operators may be unsupported and performance "
+        "may be lower than with patched GGML.");
 #endif
     if (!validate_tensor_types(sd_ctx_params->wtype, sd_ctx_params->tensor_type_rules)) {
         return false;

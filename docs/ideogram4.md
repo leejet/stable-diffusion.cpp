@@ -18,6 +18,9 @@ at one byte per element in RAM and VRAM. Backends that cannot multiply FP8
 weights directly cast only the active layer to a temporary BF16 tensor during
 execution; the loader does not expand the entire checkpoint to BF16.
 
+With `SD_USE_UPSTREAM_GGML=ON`, FP8 tensors are converted to F16 at load time
+instead (two bytes per element in RAM and VRAM).
+
 Use `ideogram4_fp8.safetensors` and `ideogram4_uncond_fp8.safetensors` directly
 with `--diffusion-model` and `--uncond-diffusion-model`, respectively.
 

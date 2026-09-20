@@ -23,5 +23,5 @@ set_property(TARGET ${SD_LIB} PROPERTY SD_GGML_PRIVATE_INCLUDE_DIR "${sd_ggml_pr
 
 if(SD_USE_UPSTREAM_GGML)
     target_compile_definitions(${SD_LIB} PUBLIC SD_USE_UPSTREAM_GGML)
-    message(WARNING "Using upstream GGML: FP8 and INT8 tensorwise/convrot are disabled. Some operators may be unsupported and performance may be lower than with patched GGML.")
+    message(WARNING "Using upstream GGML: INT8 tensorwise/convrot is disabled and FP8 weights are converted to F16 at load time. Some operators may be unsupported and performance may be lower than with patched GGML.")
 endif()
