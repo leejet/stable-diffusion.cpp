@@ -14,7 +14,7 @@
 #include "core/util.h"
 #include "model/diffusion/model.hpp"
 #include "model/te/clip.hpp"
-#include "model/te/llada_image_te.h"
+#include "model/te/llada_image_te.hpp"
 #include "model/te/llm.hpp"
 #include "model/te/t5.hpp"
 #include "model_loader.h"
@@ -3277,9 +3277,9 @@ struct LLaDAImageEmbedder : public Conditioner {
         // <|endoftext|> doubles as the pad token in LLaDA2's tokenizer.json.
         tokenizer       = tokenizers.create(TokenizerConfig::MAIN, llm->config.vocab_size, 156892);
         query_former    = std::make_shared<LLaDAImageTE::QueryFormerRunner>(backend,
-                                                                            tensor_storage_map,
-                                                                            query_former_prefix,
-                                                                            weight_manager);
+                                                                         tensor_storage_map,
+                                                                         query_former_prefix,
+                                                                         weight_manager);
         text_projection = std::make_shared<LLaDAImageTE::TextProjectionRunner>(backend,
                                                                                tensor_storage_map,
                                                                                text_projection_prefix,

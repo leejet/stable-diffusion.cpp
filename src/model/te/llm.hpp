@@ -1607,14 +1607,14 @@ namespace LLM {
                                                input_pos,
                                                nullptr,
                                                rotary_dim,
-                                                  GGML_ROPE_TYPE_NEOX,
-                                                  static_cast<int>(max_position_embeddings),
-                                                  rope_thetas[0],
-                                                  1.f,
-                                                  0.f,
-                                                  1.f,
-                                                  32.f,
-                                                  1.f);
+                                               GGML_ROPE_TYPE_NEOX,
+                                               static_cast<int>(max_position_embeddings),
+                                               rope_thetas[0],
+                                               1.f,
+                                               0.f,
+                                               1.f,
+                                               32.f,
+                                               1.f);
                 k              = ggml_rope_ext(ctx->ggml_ctx,
                                                k,
                                                input_pos,
@@ -1623,11 +1623,11 @@ namespace LLM {
                                                GGML_ROPE_TYPE_NEOX,
                                                static_cast<int>(max_position_embeddings),
                                                rope_thetas[0],
-                                                  1.f,
-                                                  0.f,
-                                                  1.f,
-                                                  32.f,
-                                                  1.f);
+                                               1.f,
+                                               0.f,
+                                               1.f,
+                                               32.f,
+                                               1.f);
             } else if (arch == LLMArch::QWEN3_VL) {
                 int sections[4] = {24, 20, 20, 0};
                 q               = ggml_rope_multi(ctx->ggml_ctx, q, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_IMROPE, 262144, 5000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
