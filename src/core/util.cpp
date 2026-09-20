@@ -651,19 +651,19 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
 void sd_ggml_log_callback(ggml_log_level level, const char* text, void*) {
     switch (level) {
         case GGML_LOG_LEVEL_DEBUG:
-            LOG_VERBOSE(text);
+            LOG_VERBOSE("%s", text);
             break;
         case GGML_LOG_LEVEL_INFO:
-            LOG_INFO(text);
+            LOG_INFO("%s", text);
             break;
         case GGML_LOG_LEVEL_WARN:
-            LOG_WARN(text);
+            LOG_WARN("%s", text);
             break;
         case GGML_LOG_LEVEL_ERROR:
-            LOG_ERROR(text);
+            LOG_ERROR("%s", text);
             break;
         default:
-            LOG_VERBOSE(text);
+            LOG_VERBOSE("%s", text);
     }
 }
 
