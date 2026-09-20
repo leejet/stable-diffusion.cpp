@@ -164,7 +164,7 @@ static bool build_openai_edit_request(const httplib::Request& req,
             reinterpret_cast<const char*>(bytes.data()),
             static_cast<int>(bytes.size()),
             img_w, img_h,
-            width, height, 3);
+            0, 0, 3);
         if (raw_pixels == nullptr) {
             continue;
         }
