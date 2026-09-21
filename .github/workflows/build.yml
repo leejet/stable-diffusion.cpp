@@ -182,7 +182,7 @@ jobs:
 
   build-and-push-docker-images:
     name: Build and push container images
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && github.repository == 'leejet/stable-diffusion.cpp' }}
     runs-on: ${{ matrix.runner }}
 
     permissions:
