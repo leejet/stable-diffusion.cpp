@@ -171,6 +171,8 @@ struct SDContextParams {
     bool flash_attn            = false;
     bool diffusion_flash_attn  = false;
     bool sage_attn             = false;
+    bool sol_attn              = false;
+    float sol_attn_tau         = 1.f;
     bool diffusion_conv_direct = false;
     bool vae_conv_direct       = false;
 

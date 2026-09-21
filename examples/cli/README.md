@@ -25,3 +25,7 @@ Metadata mode inspects PNG/JPEG container metadata without loading any model:
 
 For completely black or white images or videos, NaNs, and the `--linear-scale` /
 `--attn-scale` workaround, see [Troubleshooting](../../docs/troubleshooting.md).
+
+For native CUDA sparse attention in the diffusion model, use `--sol-attn`.
+See [Sol-Attn](../../docs/sol_attention.md) for requirements, supported shapes,
+and the `--sol-attn-tau` threshold coefficient.

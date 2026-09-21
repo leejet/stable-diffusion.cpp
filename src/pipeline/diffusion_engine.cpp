@@ -899,7 +899,60 @@ bool StableDiffusionGGML::set_sage_attention_enabled(bool enabled) {
     return true;
 }
 
+bool StableDiffusionGGML::set_sol_attention_enabled(bool enabled, float tau) {
+    if (!diffusion_model || !std::isfinite(tau)) {
+        LOG_ERROR("Sol-Attn requires a diffusion model and finite tau");
+        return false;
+    }
+    if (enabled) {
+        if (config_->params.sage_attn) {
+            LOG_ERROR("Sol-Attn and SageAttention cannot be enabled together");
+            return false;
+        }
+#ifndef SD_USE_UPSTREAM_GGML
+        auto* ctx = ggml_init({4 * ggml_tensor_overhead(), nullptr, true});
+        if (!ctx) {
+            return false;
+        }
+        auto* q        = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 128, 128, 1, 1);
+        auto* k        = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 128, 128, 1, 1);
+        auto* v        = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 128, 128, 1, 1);
+        auto* op       = ggml_sol_attn(ctx, q, k, v, 1.f / sqrtf(128.f), tau);
+        bool supported = true;
+        for (auto backend : backend_manager.runtime_backends(SDBackendModule::DIFFUSION)) {
+            if (!ggml_backend_supports_op(backend, op)) {
+                LOG_ERROR("Sol-Attn is unavailable on %s; it requires patched GGML, CUDA 12.0 or newer, and SM80 or newer kernels", ggml_backend_name(backend));
+                supported = false;
+            }
+        }
+        ggml_free(ctx);
+        if (!supported) {
+            return false;
+        }
+#else
+        LOG_ERROR("Sol-Attn requires -DSD_USE_UPSTREAM_GGML=OFF and a CUDA backend");
+        return false;
+#endif
+    }
+    diffusion_model->set_sol_attention_enabled(enabled, tau);
+    if (high_noise_diffusion_model) {
+        high_noise_diffusion_model->set_sol_attention_enabled(enabled, tau);
+    }
+    if (enabled) {
+        LOG_INFO("Using Sol-Attn (tau=%g, diagonal threshold) in diffusion; unsupported attention uses flash/default attention", tau);
+    }
+    return true;
+}
+
 bool StableDiffusionGGML::init(const sd_ctx_params_t* sd_ctx_params) {
+    if (sd_ctx_params->sol_attn && sd_ctx_params->sage_attn) {
+        LOG_ERROR("Sol-Attn and SageAttention cannot be enabled together");
+        return false;
+    }
+    if (!std::isfinite(sd_ctx_params->sol_attn_tau)) {
+        LOG_ERROR("Sol-Attn tau must be finite");
+        return false;
+    }
 #ifdef SD_USE_UPSTREAM_GGML
     LOG_WARN(
         "Using upstream GGML: INT8 tensorwise/convrot is disabled and FP8 weights are "
@@ -1178,6 +1231,9 @@ bool StableDiffusionGGML::validate_and_load_runners() {
         }
     }
     if (sd_ctx_params->sage_attn && !set_sage_attention_enabled(true)) {
+        return false;
+    }
+    if (sd_ctx_params->sol_attn && !set_sol_attention_enabled(true, sd_ctx_params->sol_attn_tau)) {
         return false;
     }
     LOG_VERBOSE("validating model metadata");

@@ -313,6 +313,7 @@ public:
 
     bool init(const sd_ctx_params_t* sd_ctx_params);
     bool set_sage_attention_enabled(bool enabled);
+    bool set_sol_attention_enabled(bool enabled, float tau);
 
     bool uses_tae() const;
 

@@ -247,6 +247,8 @@ typedef struct {
     float attn_scale;                // Override flash-attention K/V scaling; 0 keeps the model default
     const char* tokenizer;           // tokenizer.json path or main=FILE,clip-l=FILE,clip-g=FILE assignments; required for PiD and Lens
     bool sage_attn;
+    bool sol_attn;
+    float sol_attn_tau;
 } sd_ctx_params_t;
 
 typedef struct {

@@ -623,7 +623,9 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
                                     bool skip_reshape,
                                     bool flash_attn,
                                     float kv_scale,
-                                    bool sage_attn) {  // avoid overflow
+                                    bool sage_attn,
+                                    bool sol_attn,
+                                    float sol_attn_tau) {  // avoid overflow
     int64_t L_q;
     int64_t L_k;
     int64_t C;
@@ -715,7 +717,23 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
     };
 
 #ifndef SD_USE_UPSTREAM_GGML
-    if (sage_attn && mask == nullptr && d_head > 0 && d_head <= 128) {
+    if (sol_attn && mask == nullptr && d_head == 128 && L_q == L_k && n_head == n_kv_head) {
+        auto q_in = ggml_reshape_4d(ctx, ggml_ext_cont(ctx, q->type == GGML_TYPE_F32 ? q : ggml_cast(ctx, q, GGML_TYPE_F32)), d_head, L_q, n_head, N);
+        auto k_in = ggml_reshape_4d(ctx, ggml_ext_cont(ctx, k->type == GGML_TYPE_F32 ? k : ggml_cast(ctx, k, GGML_TYPE_F32)), d_head, L_k, n_kv_head, N);
+        auto v_in = ggml_ext_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));
+        if (v_in->type != GGML_TYPE_F32) {
+            v_in = ggml_cast(ctx, v_in, GGML_TYPE_F32);
+        }
+        if (kv_scale != 1.0f) {
+            k_in = ggml_ext_scale(ctx, k_in, kv_scale);
+            v_in = ggml_ext_scale(ctx, v_in, kv_scale);
+        }
+        auto out = ggml_sol_attn(ctx, q_in, k_in, v_in, scale / kv_scale, sol_attn_tau);
+        if (ggml_backend_supports_op(backend, out)) {
+            kqv = kv_scale != 1.0f ? ggml_ext_scale(ctx, out, 1.0f / kv_scale) : out;
+        }
+    }
+    if (kqv == nullptr && sage_attn && mask == nullptr && d_head > 0 && d_head <= 128) {
         auto q_in                 = ggml_reshape_4d(ctx, ggml_ext_cont(ctx, q->type == GGML_TYPE_F32 ? q : ggml_cast(ctx, q, GGML_TYPE_F32)), d_head, L_q, n_head, N);
         auto k_in                 = ggml_reshape_4d(ctx, ggml_ext_cont(ctx, k->type == GGML_TYPE_F32 ? k : ggml_cast(ctx, k, GGML_TYPE_F32)), d_head, L_k, n_kv_head, N);
         auto v_in                 = ggml_ext_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));
@@ -744,7 +762,7 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
     }
 #endif
 
-    if (kqv == nullptr && (flash_attn || sage_attn)) {
+    if (kqv == nullptr && (flash_attn || sage_attn || sol_attn)) {
         // LOG_VERBOSE("attention_ext L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
         bool can_use_flash_attn = true;
         if (mask != nullptr) {
