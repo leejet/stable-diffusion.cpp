@@ -2223,7 +2223,12 @@ bool SDGenerationParams::from_json_str(
         LOG_ERROR("invalid end_image");
         return false;
     }
-    if (!parse_image_array_json_field(j, "ref_images", 3, width, height, ref_images)) {
+    if (!parse_image_array_json_field(j,
+                                      "ref_images",
+                                      3,
+                                      auto_resize_ref_image ? width : 0,
+                                      auto_resize_ref_image ? height : 0,
+                                      ref_images)) {
         LOG_ERROR("invalid ref_images");
         return false;
     }
