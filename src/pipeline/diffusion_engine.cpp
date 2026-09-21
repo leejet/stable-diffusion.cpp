@@ -77,6 +77,7 @@ const char* model_version_to_str[] = {
     "LingBot Video",
     "Qwen Image",
     "Qwen Image Layered",
+    "Qwen Image 2.1",
     "Hunyuan Video",
     "Anima",
     "Flux.2",
@@ -2298,6 +2299,8 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
             } else if (sd_version_is_flux(version) || sd_version_is_flux2(version) || sd_version_is_longcat(version) || sd_version_is_sefi_image(version)) {
                 diffusion_params.extra = FluxDiffusionExtra{&guidance_tensor,
                                                             local_skip_layers};
+            } else if (version == VERSION_QWEN_IMAGE_2_1) {
+                diffusion_params.extra = QwenImage21DiffusionExtra{&condition.c_token_types};
             } else if (sd_version_is_anima(version)) {
                 diffusion_params.extra = AnimaDiffusionExtra{condition.c_t5_ids.empty() ? nullptr : &condition.c_t5_ids,
                                                              condition.c_t5_weights.empty() ? nullptr : &condition.c_t5_weights};
@@ -2492,7 +2495,7 @@ int StableDiffusionGGML::get_vae_scale_factor() {
 int StableDiffusionGGML::get_diffusion_model_down_factor() {
     int down_factor = 8;  // unet
     if (sd_version_is_dit(version)) {
-        if (sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_minimax_h3(version)) {
+        if (version == VERSION_QWEN_IMAGE_2_1 || sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_minimax_h3(version)) {
             down_factor = 2;
         } else {
             down_factor = 1;
@@ -2508,6 +2511,8 @@ int StableDiffusionGGML::get_latent_channel() {
             latent_channel = 128;
         } else if (sd_version_is_minimax_h3(version)) {
             latent_channel = 24;
+        } else if (version == VERSION_QWEN_IMAGE_2_1) {
+            latent_channel = 64;
         } else if (version == VERSION_WAN2_2_TI2V) {
             latent_channel = 48;
         } else if (sd_version_is_hunyuan_video(version)) {
@@ -2534,7 +2539,7 @@ int StableDiffusionGGML::get_latent_channel() {
 }
 
 int StableDiffusionGGML::get_image_channels() const {
-    return version == VERSION_QWEN_IMAGE_LAYERED ? 4 : 3;
+    return version == VERSION_QWEN_IMAGE_LAYERED || version == VERSION_QWEN_IMAGE_2_1 ? 4 : 3;
 }
 
 int StableDiffusionGGML::get_image_seq_len(int h, int w) {

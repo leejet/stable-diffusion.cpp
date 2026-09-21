@@ -461,7 +461,7 @@ public:
             forward_params.conv2d.scale      = scale;
             return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, ctx->backend, x, w, b, prefix, forward_params);
         }
-        if (b != nullptr && ctx->conv2d_direct_enabled && ctx->backend != nullptr &&
+        if (b != nullptr && ctx->backend != nullptr &&
             !ctx->circular_x_enabled && !ctx->circular_y_enabled && scale == 1.f) {
             ggml_tensor* out = ggml_conv_2d_direct_bias(
                 ctx->ggml_ctx, w, x, b,
@@ -505,21 +505,39 @@ public:
         return try_forward_upscale(ctx, x, upscale_factor) != nullptr;
     }
 
+    ggml_tensor* try_forward_upscale_add(GGMLRunnerContext* ctx,
+                                         ggml_tensor* x,
+                                         ggml_tensor* residual,
+                                         int residual_factor_t,
+                                         int upscale_factor) {
+        return try_forward_upscale(ctx, x, upscale_factor,
+                                   residual, residual_factor_t);
+    }
+
 private:
     ggml_tensor* try_forward_upscale(GGMLRunnerContext* ctx,
                                      ggml_tensor* x,
-                                     int upscale_factor) {
-        if (!ctx->conv2d_direct_enabled || ctx->backend == nullptr ||
+                                     int upscale_factor,
+                                     ggml_tensor* residual = nullptr,
+                                     int residual_factor_t = 0) {
+        if (ctx->backend == nullptr ||
             ctx->weight_adapter || ctx->circular_x_enabled ||
             ctx->circular_y_enabled || scale != 1.f) {
             return nullptr;
         }
 
-        ggml_tensor* out = ggml_conv_2d_direct_upscale(
-            ctx->ggml_ctx, params["weight"], x,
-            bias ? params["bias"] : nullptr, upscale_factor,
-            stride.second, stride.first, padding.second, padding.first,
-            dilation.second, dilation.first);
+        ggml_tensor* out = residual == nullptr
+                               ? ggml_conv_2d_direct_upscale(
+                                     ctx->ggml_ctx, params["weight"], x,
+                                     bias ? params["bias"] : nullptr, upscale_factor,
+                                     stride.second, stride.first, padding.second, padding.first,
+                                     dilation.second, dilation.first)
+                               : ggml_conv_2d_direct_upscale_add(
+                                     ctx->ggml_ctx, params["weight"], x,
+                                     bias ? params["bias"] : nullptr,
+                                     residual, residual_factor_t, upscale_factor,
+                                     stride.second, stride.first, padding.second, padding.first,
+                                     dilation.second, dilation.first);
         return ggml_backend_supports_op(ctx->backend, out) ? out : nullptr;
     }
 };

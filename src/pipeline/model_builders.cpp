@@ -27,6 +27,7 @@
 #include "model/diffusion/model.hpp"
 #include "model/diffusion/pid.hpp"
 #include "model/diffusion/qwen_image.hpp"
+#include "model/diffusion/qwen_image_2_1.hpp"
 #include "model/diffusion/unet.hpp"
 #include "model/diffusion/wan.hpp"
 #include "model/diffusion/z_image.hpp"
@@ -260,12 +261,19 @@ namespace sd::model_builders {
                                                                "",
                                                                enable_vision,
                                                                weight_manager);
-            result.diffusion   = std::make_shared<Qwen::QwenImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
-                                                                       tensor_storage_map,
-                                                                       "model.diffusion_model",
-                                                                       version,
-                                                                       weight_manager,
-                                                                       sd_ctx_params->model_args);
+            if (version == VERSION_QWEN_IMAGE_2_1) {
+                result.diffusion = std::make_shared<Qwen::QwenImage21Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                             tensor_storage_map,
+                                                                             "model.diffusion_model",
+                                                                             weight_manager);
+            } else {
+                result.diffusion = std::make_shared<Qwen::QwenImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                           tensor_storage_map,
+                                                                           "model.diffusion_model",
+                                                                           version,
+                                                                           weight_manager,
+                                                                           sd_ctx_params->model_args);
+            }
         } else if (sd_version_is_mage_flow(version)) {
             result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                tensor_storage_map,

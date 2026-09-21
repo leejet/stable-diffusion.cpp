@@ -16,9 +16,9 @@ In principle, it can run any standard GGUF supported by stable-diffusion.cpp. He
 
 | Date | Update |
 |---|---|
-| 2026-09-17 | Added Hexagon NPU support for Z-Image Turbo and FLUX.2/Klein 4B. |
-| 2026-09-20 | Added Hexagon NPU support for FLUX.2/Klein 9B. |
-| 2026-09-21 | Added end-to-end Hexagon NPU support for Krea 2 Turbo. |
+| 2026-09-17 | Added support for Z-Image Turbo and FLUX.2 Klein 4B. |
+| 2026-09-20 | Added Hexagon NPU support for FLUX.2 Klein 9B. |
+| 2026-09-21 | Added Hexagon NPU support for Krea 2 Turbo and Qwen Image 2.1. |
 
 ## Hexagon NPU
 
@@ -26,7 +26,7 @@ In principle, it can run any standard GGUF supported by stable-diffusion.cpp. He
 
 - Text encoder: export Qwen3-4B as Q4_0 with stable-diffusion.cpp, or use [`llm.gguf`](https://huggingface.co/zhiyuanasad/z_image_turbo_adreno/blob/main/llm.gguf) from [zhiyuanasad/z_image_turbo_adreno](https://huggingface.co/zhiyuanasad/z_image_turbo_adreno).
 - Z-Image Turbo FP8: [`z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors`](https://huggingface.co/Kijai/Z-Image_comfy_fp8_scaled/blob/main/z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors).
-- FLUX.2/Klein 4B FP8: [`flux-2-klein-4b-fp8.safetensors`](https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-fp8/blob/main/flux-2-klein-4b-fp8.safetensors).
+- FLUX.2 Klein 4B FP8: [`flux-2-klein-4b-fp8.safetensors`](https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-fp8/blob/main/flux-2-klein-4b-fp8.safetensors).
 
 ### Performance
 
@@ -35,23 +35,23 @@ Device: Snapdragon 8 Elite, SM8750, HTP v79. Text encoder, DiT, and VAE run on H
 | Model | Resolution | Steps | Upstream Q4_0 DiT | FP8 DiT | VAE | E2E |
 |---|---:|---:|---:|---:|---:|---:|
 | Z-Image Turbo | 1024x1024 | 8 | **91.03 s/it** | **10.26 s/it** | 2.47 s | 100.54 s |
-| FLUX.2/Klein 4B | 1024x1024 | 4 | **79.42 s/it** | **8.54 s/it** | 2.14 s | 49.89 s |
+| FLUX.2 Klein 4B | 1024x1024 | 4 | **79.42 s/it** | **8.54 s/it** | 2.14 s | 49.89 s |
 | Z-Image Turbo | 1536x1536 | 8 | **OOM** | **32.91 s/it** | 9.08 s | 306.03 s |
-| FLUX.2/Klein 4B | 1536x1536 | 4 | **OOM** | **22.42 s/it** | 5.44 s | 111.68 s |
+| FLUX.2 Klein 4B | 1536x1536 | 4 | **OOM** | **22.42 s/it** | 5.44 s | 111.68 s |
 | Z-Image Turbo | 2048x2048 | 4 | **OOM** | **72.51 s/it** | 14.24 s | 307.07 s |
-| FLUX.2/Klein 4B | 2048x2048 | 4 | **OOM** | **46.24 s/it** | 19.28 s | 210.77 s |
+| FLUX.2 Klein 4B | 2048x2048 | 4 | **OOM** | **46.24 s/it** | 19.28 s | 210.77 s |
 
-The 1024 and 1536 runs use direct VAE decode. The 2048 runs use 64x64 VAE tiles. At 1K, FP8 is 8.87x faster for Z-Image and 9.30x faster for FLUX.2/Klein than the current upstream Hexagon Q4_0/Q8_0 path.
+The 1024 and 1536 runs use direct VAE decode. The 2048 runs use 64x64 VAE tiles. At 1K, FP8 is 8.87x faster for Z-Image and 9.30x faster for FLUX.2 Klein than the current upstream Hexagon Q4_0/Q8_0 path.
 
 ### Images
 
-| Z-Image Turbo | FLUX.2/Klein 4B |
+| Z-Image Turbo | FLUX.2 Klein 4B |
 |---|---|
 | **1024x1024, 8 steps**<br><img src="https://github.com/user-attachments/assets/439610a3-35f9-439e-9f26-7107f11fd9bc" width="480" alt="Z-Image 1024x1024, 8 steps"> | **1024x1024, 4 steps**<br><img src="https://github.com/user-attachments/assets/18178355-8da6-426e-a3e5-8275a712b3aa" width="480" alt="FLUX.2 Klein 1024x1024, 4 steps"> |
 | **1536x1536, 8 steps**<br><img src="https://github.com/user-attachments/assets/26ac18e8-5c47-421f-9216-d24eec0d8cb1" width="480" alt="Z-Image 1536x1536, 8 steps"> | **1536x1536, 4 steps**<br><img src="https://github.com/user-attachments/assets/7275c232-3327-4518-a9d1-4865ff798a80" width="480" alt="FLUX.2 Klein 1536x1536, 4 steps"> |
 | **2048x2048, 4 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/zimage_2048_s4.png" width="480" alt="Z-Image 2048x2048, 4 steps"> | **2048x2048, 4 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/klein_2048_s4.png" width="480" alt="FLUX.2 Klein 2048x2048, 4 steps"> |
 
-### FLUX.2/Klein 9B
+### FLUX.2 Klein 9B
 
 Klein 9B uses Q4_0 DiT and Q4_0 Qwen3-8B weights. Text encoder parameters are released after conditioning with `te=disk`; DiT, text encoding, and VAE execution all run on HTP.
 
@@ -131,7 +131,7 @@ export LD_LIBRARY_PATH="$PWD" ADSP_LIBRARY_PATH="$PWD"
   -o zimage_1024_s8.png
 ```
 
-#### FLUX.2/Klein 4B, 1024x1024, 4 steps
+#### FLUX.2 Klein 4B, 1024x1024, 4 steps
 
 ```sh
 ./sd-cli \
@@ -161,7 +161,7 @@ export LD_LIBRARY_PATH="$PWD" ADSP_LIBRARY_PATH="$PWD"
   -o zimage_1536_s8.png
 ```
 
-#### FLUX.2/Klein 4B, 1536x1536, 4 steps
+#### FLUX.2 Klein 4B, 1536x1536, 4 steps
 
 ```sh
 ./sd-cli \
@@ -193,7 +193,7 @@ export LD_LIBRARY_PATH="$PWD" ADSP_LIBRARY_PATH="$PWD"
   -o zimage_2048_s4.png
 ```
 
-#### FLUX.2/Klein 4B, 2048x2048, 4 steps
+#### FLUX.2 Klein 4B, 2048x2048, 4 steps
 
 ```sh
 ./sd-cli \
@@ -221,11 +221,19 @@ Resolution: 1024x1024. Sampling steps: 8.
 
 ### Image editing
 
-Z-Image Turbo generates the reference image, then FLUX.2/Klein removes the Einstein field equation while preserving the rest of the scene.
+Z-Image Turbo generates the reference image, then FLUX.2 Klein removes the Einstein field equation while preserving the rest of the scene.
 
-| Z-Image Turbo reference | FLUX.2/Klein edit |
+| Z-Image Turbo reference | FLUX.2 Klein edit |
 |---|---|
 | **1024x1024, 8 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/zimage_einstein_1024_s8.png" width="480" alt="Einstein teaching in front of a blackboard"> | **1024x1024, 4 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/klein_edit_remove_equation_1024_s4.png" width="480" alt="Einstein field equation removed from the blackboard"> |
+
+Qwen Image 2.1 preserves the requested content significantly better in this edit, even with Q4_0 DiT and text-encoder weights.
+
+| FLUX.2 Klein 9B Q4_0 | Qwen Image 2.1 Q4_0 |
+|---|---|
+| **1024x1024, 4 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/klein9b_edit_remove_equation_1024_s4.png" width="480" alt="FLUX.2 Klein 9B edit"> | **1024x1024, 20 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/qwen21_edit_remove_equation_1024_s20.png" width="480" alt="Qwen Image 2.1 edit"> |
+
+Qwen Image 2.1 weights: [DiT Q4_0](https://huggingface.co/leejet/Qwen-Image-2.1-GGUF/blob/main/qwen_image_2.1-Q4_0.gguf), [Qwen3-VL-8B Q4_0](https://huggingface.co/bartowski/Qwen_Qwen3-VL-8B-Instruct-GGUF/blob/main/Qwen_Qwen3-VL-8B-Instruct-Q4_0.gguf), [vision projector F16](https://huggingface.co/bartowski/Qwen_Qwen3-VL-8B-Instruct-GGUF/blob/main/mmproj-Qwen_Qwen3-VL-8B-Instruct-f16.gguf), and [VAE BF16](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/vae/qwen_image_2.1_vae_bf16.safetensors).
 
 #### Generate the reference with Z-Image Turbo
 
@@ -243,7 +251,7 @@ Z-Image Turbo generates the reference image, then FLUX.2/Klein removes the Einst
   -o zimage_einstein_1024_s8.png
 ```
 
-#### Edit with FLUX.2/Klein
+#### Edit with FLUX.2 Klein
 
 ```sh
 ./sd-cli \
@@ -258,6 +266,43 @@ Z-Image Turbo generates the reference image, then FLUX.2/Klein removes the Einst
   --cfg-scale 1 --steps 4 --sampling-method euler \
   -W 1024 -H 1024 --seed 42 \
   -o klein_edit_remove_equation_1024_s4.png
+```
+
+#### Edit with FLUX.2 Klein 9B Q4_0
+
+```sh
+./sd-cli \
+  --diffusion-model flux-2-klein-9b-Q4_0.gguf \
+  --llm Qwen3-8B-Q4_0.gguf \
+  --vae flux2-vae.safetensors \
+  --backend diffusion=HTP0,te=HTP0,vae=HTP0 \
+  --params-backend te=disk \
+  --fa --vae-conv-direct \
+  -t 4 \
+  -p "删除黑板上的爱因斯坦场方程‘G_μν + Λg_μν = 8πG T_μν’，将该公式擦除干净并自然补全黑板背景。保留麦克斯韦方程‘dF = 0，d*F = *J’、爱因斯坦、带SJTU标志的讲台桌、粉笔、大学课堂和其他画面内容不变，保持写实风格。" \
+  --ref-image zimage_einstein_1024_s8.png \
+  --cfg-scale 1 --steps 4 --sampling-method euler \
+  -W 1024 -H 1024 --seed 42 \
+  -o klein9b_edit_remove_equation_1024_s4.png
+```
+
+#### Edit with Qwen Image 2.1 Q4_0
+
+```sh
+./sd-cli \
+  --diffusion-model qwen_image_2.1-Q4_0.gguf \
+  --llm Qwen_Qwen3-VL-8B-Instruct-Q4_0.gguf \
+  --llm_vision mmproj-Qwen_Qwen3-VL-8B-Instruct-f16.gguf \
+  --vae qwen_image_2.1_vae_bf16.safetensors \
+  --backend diffusion=HTP0,te=HTP0,vae=HTP0 \
+  --params-backend te=disk \
+  --fa --vae-conv-direct \
+  -t 4 \
+  -p "删除黑板上的爱因斯坦场方程‘G_μν + Λg_μν = 8πG T_μν’，将该公式擦除干净并自然补全黑板背景。保留麦克斯韦方程‘dF = 0，d*F = *J’、爱因斯坦、带SJTU标志的讲台桌、粉笔、大学课堂和其他画面内容不变，保持写实风格。" \
+  --ref-image zimage_einstein_1024_s8.png \
+  --cfg-scale 1 --steps 20 --sampling-method euler \
+  -W 1024 -H 1024 --seed 42 \
+  -o qwen21_edit_remove_equation_1024_s20.png
 ```
 
 ## Adreno GPU

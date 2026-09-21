@@ -463,6 +463,9 @@ SDVersion ModelLoader::get_sd_version() const {
         if (tensor_storage.name.find("net.img_embedder.proj1.weight") != std::string::npos) {
             return VERSION_MINIT2I;
         }
+        if (tensor_storage.name == "model.diffusion_model.txt_in.text_norm.weight") {
+            return VERSION_QWEN_IMAGE_2_1;
+        }
         if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.img_mod.1.weight") != std::string::npos) {
             auto img_in = tensor_storage_map.find("model.diffusion_model.img_in.weight");
             if (img_in != tensor_storage_map.end() && img_in->second.ne[0] == 128) {
