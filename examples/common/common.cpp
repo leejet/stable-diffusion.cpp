@@ -623,6 +623,10 @@ ArgOptions SDContextParams::get_options() {
          "use native CUDA SageAttention in the diffusion model, with flash/default attention fallback",
          true, &sage_attn},
         {"",
+         "--sol-attn",
+         "use native CUDA Sol-Attn in the diffusion model, with flash/default attention fallback",
+         true, &sol_attn},
+        {"",
          "--diffusion-conv-direct",
          "use ggml_conv2d_direct in the diffusion model",
          true, &diffusion_conv_direct},
@@ -718,6 +722,8 @@ ArgOptions SDContextParams::get_options() {
         }
         return 1;
     };
+
+    options.float_options.push_back({"", "--sol-attn-tau", "Sol-Attn routing threshold coefficient (default: 1; higher selects fewer exact blocks)", &sol_attn_tau});
 
     options.manual_options = {
         {"",
@@ -822,6 +828,14 @@ bool SDContextParams::resolve(SDMode mode) {
 }
 
 bool SDContextParams::validate(SDMode mode) {
+    if (sol_attn && sage_attn) {
+        LOG_ERROR("--sol-attn and --sage-attn cannot be enabled together");
+        return false;
+    }
+    if (!std::isfinite(sol_attn_tau)) {
+        LOG_ERROR("--sol-attn-tau must be finite");
+        return false;
+    }
     if (mode == CONVERT) {
         const bool has_convert_input = model_path.length() != 0 ||
                                        clip_l_path.length() != 0 ||
@@ -943,6 +957,8 @@ std::string SDContextParams::to_string() const {
         << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
         << "  sage_attn: " << (sage_attn ? "true" : "false") << ",\n"
+        << "  sol_attn: " << (sol_attn ? "true" : "false") << ",\n"
+        << "  sol_attn_tau: " << sol_attn_tau << ",\n"
         << "  linear_scale: " << linear_scale << ",\n"
         << "  attn_scale: " << attn_scale << ",\n"
         << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
@@ -1001,6 +1017,8 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.flash_attn                      = flash_attn;
     sd_ctx_params.diffusion_flash_attn            = diffusion_flash_attn;
     sd_ctx_params.sage_attn                       = sage_attn;
+    sd_ctx_params.sol_attn                        = sol_attn;
+    sd_ctx_params.sol_attn_tau                    = sol_attn_tau;
     sd_ctx_params.linear_scale                    = linear_scale;
     sd_ctx_params.attn_scale                      = attn_scale;
     sd_ctx_params.tae_preview_only                = taesd_preview;

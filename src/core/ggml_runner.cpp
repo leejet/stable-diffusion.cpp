@@ -25,7 +25,7 @@ ggml_tensor* ggml_ext_attention_ext(GGMLRunnerContext* ctx,
     if (ctx->attn_scale > 0.f) {
         kv_scale = ctx->attn_scale;
     }
-    return ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, n_head, mask, skip_reshape, flash_attn, kv_scale, ctx->sage_attn_enabled);
+    return ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, n_head, mask, skip_reshape, flash_attn, kv_scale, ctx->sage_attn_enabled, ctx->sol_attn_enabled, ctx->sol_attn_tau);
 }
 
 void GGMLRunner::alloc_params_ctx() {
@@ -164,6 +164,22 @@ ggml_cgraph* GGMLRunner::get_compute_graph(get_graph_cb_t get_graph) {
         }
     }
     prepare_build_in_tensor_after(gf);
+#ifndef SD_USE_UPSTREAM_GGML
+    if (sol_attn_enabled && !sol_attn_graph_logged) {
+        int sol_nodes   = 0;
+        int flash_nodes = 0;
+        for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
+            const auto op = ggml_graph_node(gf, i)->op;
+            sol_nodes += op == GGML_OP_SOL_ATTN;
+            flash_nodes += op == GGML_OP_FLASH_ATTN_EXT;
+        }
+        LOG_INFO("Sol-Attn graph: %d Sol-Attn nodes, %d FlashAttention nodes", sol_nodes, flash_nodes);
+        if (sol_nodes == 0) {
+            LOG_WARN("This graph has no attention operations supported by Sol-Attn");
+        }
+        sol_attn_graph_logged = true;
+    }
+#endif
     return gf;
 }
 
@@ -521,6 +537,8 @@ GGMLRunnerContext GGMLRunner::get_context() {
     runner_ctx.backend               = runtime_backend;
     runner_ctx.flash_attn_enabled    = flash_attn_enabled;
     runner_ctx.sage_attn_enabled     = sage_attn_enabled;
+    runner_ctx.sol_attn_enabled      = sol_attn_enabled;
+    runner_ctx.sol_attn_tau          = sol_attn_tau;
     runner_ctx.linear_scale          = linear_scale;
     runner_ctx.attn_scale            = attn_scale;
     runner_ctx.conv2d_direct_enabled = conv2d_direct_enabled;

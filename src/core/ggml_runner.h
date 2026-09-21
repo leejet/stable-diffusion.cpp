@@ -69,6 +69,8 @@ struct GGMLRunnerContext {
     ggml_context* ggml_ctx                                           = nullptr;
     bool flash_attn_enabled                                          = false;
     bool sage_attn_enabled                                           = false;
+    bool sol_attn_enabled                                            = false;
+    float sol_attn_tau                                               = 1.f;
     float linear_scale                                               = 0.f;
     float attn_scale                                                 = 0.f;
     bool conv2d_direct_enabled                                       = false;
@@ -178,6 +180,9 @@ protected:
 
     bool flash_attn_enabled    = false;
     bool sage_attn_enabled     = false;
+    bool sol_attn_enabled      = false;
+    float sol_attn_tau         = 1.f;
+    bool sol_attn_graph_logged = false;
     float linear_scale         = 0.f;
     float attn_scale           = 0.f;
     bool conv2d_direct_enabled = false;
@@ -344,6 +349,16 @@ public:
             free_cache_ctx_and_buffer();
             graph_cut_plan_cache_.graph_cut_plans.clear();
             sage_attn_enabled = enabled;
+        }
+    }
+
+    void set_sol_attention_enabled(bool enabled, float tau) {
+        if (sol_attn_enabled != enabled || sol_attn_tau != tau) {
+            free_cache_ctx_and_buffer();
+            graph_cut_plan_cache_.graph_cut_plans.clear();
+            sol_attn_enabled      = enabled;
+            sol_attn_tau          = tau;
+            sol_attn_graph_logged = false;
         }
     }
 
