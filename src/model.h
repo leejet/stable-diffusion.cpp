@@ -252,6 +252,14 @@ static inline bool sd_version_is_sensenova_u1(SDVersion version) {
     return version == VERSION_SENSENOVA_U1_5;
 }
 
+static inline bool sd_version_supports_video_generation(SDVersion version) {
+    return version == VERSION_SVD || sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_lingbot_video(version) || sd_version_is_ltxav(version) || sd_version_is_minimax_h3(version);
+}
+
+static inline bool sd_version_supports_image_generation(SDVersion version) {
+    return !sd_version_supports_video_generation(version);
+}
+
 static inline bool sd_version_uses_flux_vae(SDVersion version) {
     if (sd_version_is_flux(version) || sd_version_is_z_image(version) || sd_version_is_boogu_image(version) || sd_version_is_longcat(version)) {
         return true;
