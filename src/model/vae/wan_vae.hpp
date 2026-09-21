@@ -69,6 +69,21 @@ namespace WAN {
             int lp2 = 2 * std::get<0>(padding);
             int rp2 = 0;
 
+            const int64_t kd = std::get<0>(kernel_size);
+            if (ctx->backend != nullptr && cache_x == nullptr && x->ne[2] == 1 &&
+                x->ne[3] == in_channels && std::get<0>(stride) == 1 &&
+                std::get<0>(dilation) == 1 && lp2 == kd - 1 &&
+                !ctx->circular_x_enabled && !ctx->circular_y_enabled) {
+                ggml_tensor* out = ggml_conv_3d_causal(
+                    ctx->ggml_ctx, w, x, b, (int) in_channels,
+                    std::get<2>(stride), std::get<1>(stride),
+                    std::get<2>(padding), std::get<1>(padding),
+                    std::get<2>(dilation), std::get<1>(dilation));
+                if (ggml_backend_supports_op(ctx->backend, out)) {
+                    return out;
+                }
+            }
+
             if (cache_x != nullptr && lp2 > 0) {
                 x = ggml_concat(ctx->ggml_ctx, cache_x, x, 2);
                 lp2 -= (int)cache_x->ne[2];
@@ -112,6 +127,17 @@ namespace WAN {
             h              = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, h, 1, 2, 3, 0));
 
             return h;
+        }
+
+        ggml_tensor* forward_silu(GGMLRunnerContext* ctx, ggml_tensor* x) {
+            ggml_tensor* w = params["gamma"];
+            if (ctx->backend != nullptr) {
+                ggml_tensor* out = ggml_rms_norm_mul_silu(ctx->ggml_ctx, x, w, 3, 1e-12f);
+                if (ggml_backend_supports_op(ctx->backend, out)) {
+                    return out;
+                }
+            }
+            return ggml_silu(ctx->ggml_ctx, forward(ctx, x));
         }
     };
 
@@ -218,16 +244,15 @@ namespace WAN {
                 auto resample_1 = std::dynamic_pointer_cast<Conv2d>(blocks["resample.1"]);
 
                 x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));  // (t, c, h, w)
-                if (mode == "upsample2d") {
-                    x = ggml_upscale(ctx->ggml_ctx, x, 2, GGML_SCALE_MODE_NEAREST);
-                } else if (mode == "upsample3d") {
-                    x = ggml_upscale(ctx->ggml_ctx, x, 2, GGML_SCALE_MODE_NEAREST);
+                if (mode == "upsample2d" || mode == "upsample3d") {
+                    x = resample_1->forward_upscale(ctx, x, 2);
                 } else if (mode == "downsample2d") {
                     x = ggml_ext_pad(ctx->ggml_ctx, x, 1, 1, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
+                    x = resample_1->forward(ctx, x);
                 } else if (mode == "downsample3d") {
                     x = ggml_ext_pad(ctx->ggml_ctx, x, 1, 1, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
+                    x = resample_1->forward(ctx, x);
                 }
-                x = resample_1->forward(ctx, x);
                 x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));  // (c, t, h, w)
             }
 
@@ -410,7 +435,7 @@ namespace WAN {
             for (int i = 0; i < 7; i++) {
                 if (i == 0 || i == 3) {  // RMS_norm
                     auto layer = std::dynamic_pointer_cast<RMS_norm>(blocks["residual." + std::to_string(i)]);
-                    x          = layer->forward(ctx, x);
+                    x          = layer->forward_silu(ctx, x);
                 } else if (i == 2 || i == 6) {  // CausalConv3d
                     auto layer = std::dynamic_pointer_cast<CausalConv3d>(blocks["residual." + std::to_string(i)]);
 
@@ -435,7 +460,7 @@ namespace WAN {
                         feat_idx += 1;
                     }
                 } else if (i == 1 || i == 4) {
-                    x = ggml_silu(ctx->ggml_ctx, x);
+                    continue;
                 } else {  // i == 5
                     // nn.Dropout(), ignore
                 }
@@ -786,8 +811,7 @@ namespace WAN {
             // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.encoder.mid", "x");
 
             // head
-            x = head_0->forward(ctx, x);
-            x = ggml_silu(ctx->ggml_ctx, x);
+            x = head_0->forward_silu(ctx, x);
             if (is_2D) {
                 auto head_2 = std::dynamic_pointer_cast<Conv2dBut3d>(blocks["head.2"]);
                 x           = head_2->forward(ctx, x);
@@ -978,8 +1002,7 @@ namespace WAN {
             }
 
             // head
-            x = head_0->forward(ctx, x);
-            x = ggml_silu(ctx->ggml_ctx, x);
+            x = head_0->forward_silu(ctx, x);
             if (is_2D) {
                 auto head_2 = std::dynamic_pointer_cast<Conv2dBut3d>(blocks["head.2"]);
                 x           = head_2->forward(ctx, x);

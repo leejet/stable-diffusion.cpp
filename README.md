@@ -6,6 +6,8 @@
 
 This branch provides optimized stable-diffusion.cpp and GGML paths for Qualcomm Hexagon NPUs and Adreno GPUs. It is used by [Local Dream](https://github.com/xororz/local-dream) for on-device DiT inference.
 
+In principle, it can run any standard GGUF supported by stable-diffusion.cpp. Hexagon v79 and newer additionally accept standard F8_E4M3 safetensors directly. No custom or private weight format is required. Validation currently focuses on Q4_0 GGUF on Adreno GPUs, and Q4_0, MXFP4, and Q8_0 GGUF plus F8_E4M3 safetensors on Hexagon NPUs.
+
 - GGML tracking: [llama.cpp issue #28904](https://github.com/ggml-org/llama.cpp/issues/28904) and [PR #28952](https://github.com/ggml-org/llama.cpp/pull/28952)
 - SD.cpp integration: [stable-diffusion.cpp PR #1970](https://github.com/leejet/stable-diffusion.cpp/pull/1970)
 - Upstream project: [leejet/stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)
@@ -15,7 +17,8 @@ This branch provides optimized stable-diffusion.cpp and GGML paths for Qualcomm 
 | Date | Update |
 |---|---|
 | 2026-09-17 | Added Hexagon NPU support for Z-Image Turbo and FLUX.2/Klein 4B. |
-| 2026-09-20 | Added Hexagon NPU support for FLUX.2/Klein 9B Q4_0. |
+| 2026-09-20 | Added Hexagon NPU support for FLUX.2/Klein 9B. |
+| 2026-09-21 | Added end-to-end Hexagon NPU support for Krea 2 Turbo. |
 
 ## Hexagon NPU
 
@@ -75,6 +78,34 @@ Klein 9B uses Q4_0 DiT and Q4_0 Qwen3-8B weights. Text encoder parameters are re
   --cfg-scale 1 --steps 4 --sampling-method euler \
   -W 1024 -H 1024 --seed 42 \
   -o klein9b_q40_segmented_1024_s4.png
+```
+
+### Krea 2 Turbo
+
+Krea 2 Turbo uses an MXFP4 MoE DiT, a Q4_0 Qwen3-VL-4B text encoder, and the standard Wan 2.1 VAE. Text encoding, DiT sampling, and direct VAE decoding run on HTP. The 1K run does not use tiled VAE decoding or parameter offload.
+
+- DiT: [`krea2_turbo-mxfp4_moe.gguf`](https://huggingface.co/gguf-org/krea-2-gguf/blob/main/krea2_turbo-mxfp4_moe.gguf)
+- Text encoder: [`Qwen_Qwen3-VL-4B-Instruct-Q4_0.gguf`](https://huggingface.co/bartowski/Qwen_Qwen3-VL-4B-Instruct-GGUF/blob/main/Qwen_Qwen3-VL-4B-Instruct-Q4_0.gguf)
+- VAE: [`wan_2.1_vae.safetensors`](https://huggingface.co/Osrivers/wan_2.1_vae.safetensors/blob/main/wan_2.1_vae.safetensors)
+
+| Resolution | Steps | Warm DiT | VAE decode | E2E |
+|---|---:|---:|---:|---:|
+| 1024x1024 | 8 | **19.58 s/it** | 2.84 s | **165.35 s** |
+
+<img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/krea2_turbo_mxfp4_1024_s8.png" width="640" alt="Krea 2 Turbo MXFP4, 1024x1024, 8 steps">
+
+```sh
+./sd-cli \
+  --diffusion-model krea2_turbo-mxfp4_moe.gguf \
+  --llm Qwen_Qwen3-VL-4B-Instruct-Q4_0.gguf \
+  --vae wan_2.1_vae.safetensors \
+  --backend diffusion=HTP0,te=HTP0,vae=HTP0 \
+  --fa --vae-conv-direct \
+  -t 4 \
+  -p 'A cinematic photograph of a red fox standing on a moss-covered stone bridge in an autumn forest, golden morning light, mist between the trees, highly detailed fur, natural colors' \
+  --cfg-scale 1 --steps 8 --sampling-method euler \
+  -W 1024 -H 1024 --seed 42 \
+  -o krea2_turbo_mxfp4_1024_s8.png
 ```
 
 ### Commands

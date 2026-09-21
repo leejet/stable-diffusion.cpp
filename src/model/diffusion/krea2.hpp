@@ -170,6 +170,14 @@ namespace Krea2 {
         float eps;
         std::string prefix;
 
+        ggml_tensor* get_scale(GGMLRunnerContext* ctx) {
+            ggml_tensor* scale = params["scale"];
+            if (ctx->weight_adapter) {
+                scale = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, scale, prefix + "scale.weight");
+            }
+            return ggml_add(ctx->ggml_ctx, scale, ggml_ext_ones(ctx->ggml_ctx, scale->ne[0], 1, 1, 1));
+        }
+
         void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             GGML_UNUSED(tensor_storage_map);
             this->prefix    = prefix;
@@ -182,14 +190,17 @@ namespace Krea2 {
               eps(eps) {}
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
-            ggml_tensor* scale = params["scale"];
-            if (ctx->weight_adapter) {
-                scale = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, scale, prefix + "scale.weight");
-            }
-            scale = ggml_add(ctx->ggml_ctx, scale, ggml_ext_ones(ctx->ggml_ctx, scale->ne[0], 1, 1, 1));
-            x     = ggml_rms_norm(ctx->ggml_ctx, x, eps);
-            x     = ggml_mul_inplace(ctx->ggml_ctx, x, scale);
+            x = ggml_rms_norm(ctx->ggml_ctx, x, eps);
+            x = ggml_mul_inplace(ctx->ggml_ctx, x, get_scale(ctx));
             return x;
+        }
+
+        ggml_tensor* try_forward_rope(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* theta) {
+            if (ctx->backend == nullptr) {
+                return nullptr;
+            }
+            ggml_tensor* out = ggml_qknorm_rope(ctx->ggml_ctx, x, get_scale(ctx), theta, eps);
+            return ggml_backend_supports_op(ctx->backend, out) ? out : nullptr;
         }
     };
 
@@ -287,11 +298,26 @@ namespace Krea2 {
             auto v = wv->forward(ctx, x);
             v      = ggml_reshape_4d(ctx->ggml_ctx, v, head_dim_, kv_heads, L, N);
 
-            q = qnorm->forward(ctx, q);
-            k = knorm->forward(ctx, k);
-
-            auto out = pe != nullptr ? Rope::attention(ctx, q, k, v, pe, mask)
-                                     : attention_no_rope(ctx, q, k, v, mask);
+            ggml_tensor* out = nullptr;
+            if (pe != nullptr) {
+                ggml_tensor* q_rope = qnorm->try_forward_rope(ctx, q, pe);
+                ggml_tensor* k_rope = knorm->try_forward_rope(ctx, k, pe);
+                if (q_rope != nullptr && k_rope != nullptr) {
+                    out = ggml_ext_attention_ext(ctx->ggml_ctx,
+                                                 ctx->backend,
+                                                 q_rope,
+                                                 k_rope,
+                                                 v,
+                                                 heads,
+                                                 mask,
+                                                 true,
+                                                 ctx->flash_attn_enabled);
+                } else {
+                    out = Rope::attention(ctx, qnorm->forward(ctx, q), knorm->forward(ctx, k), v, pe, mask);
+                }
+            } else {
+                out = attention_no_rope(ctx, qnorm->forward(ctx, q), knorm->forward(ctx, k), v, mask);
+            }
             out      = ggml_mul(ctx->ggml_ctx, out, ggml_sigmoid(ctx->ggml_ctx, gate->forward(ctx, x)));
             out      = wo->forward(ctx, out);
             return out;
