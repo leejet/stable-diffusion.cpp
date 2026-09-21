@@ -2219,7 +2219,10 @@ struct LLMEmbedder : public Conditioner {
                                           false,
                                           deepstack_image_embeds,
                                           image_grids);
-        GGML_ASSERT(!hidden_states.empty());
+        if (hidden_states.empty()) {
+            LOG_ERROR("LLM prompt encoding failed");
+            return {};
+        }
         hidden_states = apply_token_weights(std::move(hidden_states), weights);
         GGML_ASSERT(hidden_states.shape()[1] > prompt_template_encode_start_idx);
 
