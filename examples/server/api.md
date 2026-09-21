@@ -735,11 +735,14 @@ Any image field accepts:
 
 Channel expectations:
 
-- `init_image`: 3 channels
-- `ref_images[]`: 3 channels
+- `init_image`: native channels (3 or 4); alpha is preserved and applied per model
+- `ref_images[]`: native channels (3 or 4); alpha is preserved and applied per model
 - `control_image`: 3 channels
 - `ip_adapter_image`: 3 channels
 - `mask_image`: 1 channel
+
+Models that support RGBA (e.g. Qwen-Image 2.1) use the alpha channel of `init_image`
+and `ref_images[]`. RGB-only models drop it, so sending RGBA is safe for every model.
 
 If omitted or null:
 
