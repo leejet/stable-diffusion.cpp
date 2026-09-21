@@ -130,7 +130,8 @@ ggml_tensor* ggml_ext_attention_ext(GGMLRunnerContext* ctx,
 struct GGMLRunner {
 private:
     std::map<ggml_backend_t, size_t> logged_compute_bytes_;
-    size_t logged_segment_count_ = 0;
+    size_t logged_segment_count_     = 0;
+    ggml_status last_compute_status_ = GGML_STATUS_SUCCESS;
 
     sd::ComputeWorkspace::Measurement measure(ggml_cgraph* graph, size_t direct_bytes);
     std::vector<DeviceMemoryRequest> memory_requests(const std::vector<sd::BackendBufferSize>& sizes,
@@ -334,6 +335,8 @@ public:
                                              bool auto_runner_end                      = true,
                                              bool no_return                            = false,
                                              const std::function<bool()>& read_outputs = {});
+
+    ggml_status last_compute_status() const { return last_compute_status_; }
 
     void set_flash_attention_enabled(bool enabled) {
         flash_attn_enabled = enabled;
