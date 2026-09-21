@@ -1754,7 +1754,7 @@ ArgOptions SDGenerationParams::get_options() {
          on_scm_policy_arg},
         {"",
          "--vae-tile-size",
-         "tile size for vae tiling, format [X]x[Y] (default: 32x32)",
+         "tile size for vae tiling in latent units, not image pixels, format [X]x[Y] (default: 32x32)",
          on_tile_size_arg},
         {"",
          "--vae-relative-tile-size",
