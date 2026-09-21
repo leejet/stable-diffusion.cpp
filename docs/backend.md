@@ -156,8 +156,11 @@ the runner's graph-cut capacity checks.
 
 Runtime capacity checks also leave 512 MiB of currently free device memory for
 backend scratch buffers and pipelines, including with explicit backend assignments.
-They cap stale free-memory reports by the device's total memory minus tracked
-resident allocations and reject reports that exceed the device's total memory.
+They cap free-memory reports by the device's total memory minus tracked
+resident allocations. Vulkan reports exceeding total memory are rejected because
+its heap-budget subtraction can underflow. Other backends use the cap instead of
+treating such reports as zero free memory. Failed checks log the reported free and
+total memory alongside tracked weight and runtime allocations.
 
 Components are considered in `diffusion`, `te`, `vae` order so that repeatedly
 used diffusion weights have priority. Each component's weights use the first

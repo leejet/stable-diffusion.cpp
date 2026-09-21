@@ -1754,7 +1754,7 @@ ArgOptions SDGenerationParams::get_options() {
          on_scm_policy_arg},
         {"",
          "--vae-tile-size",
-         "tile size for vae tiling, format [X]x[Y] (default: 32x32)",
+         "tile size for vae tiling in latent units, not image pixels, format [X]x[Y] (default: 32x32)",
          on_tile_size_arg},
         {"",
          "--vae-relative-tile-size",
@@ -2225,7 +2225,12 @@ bool SDGenerationParams::from_json_str(
         LOG_ERROR("invalid end_image");
         return false;
     }
-    if (!parse_image_array_json_field(j, "ref_images", 0, width, height, ref_images)) {
+    if (!parse_image_array_json_field(j,
+                                      "ref_images",
+                                      0,
+                                      auto_resize_ref_image ? width : 0,
+                                      auto_resize_ref_image ? height : 0,
+                                      ref_images)) {
         LOG_ERROR("invalid ref_images");
         return false;
     }

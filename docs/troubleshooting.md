@@ -1,5 +1,14 @@
 # Troubleshooting
 
+## Video model used in image generation mode
+
+If generation reports that a model cannot be run with `generate_image()`, add
+`--mode vid_gen` to the CLI command. `--video-frames` alone does not select video
+mode. Video models require this mode even when generating a single frame.
+Library callers must use `generate_video()` for these models; use
+`sd_ctx_supports_image_generation()` and `sd_ctx_supports_video_generation()` to
+check the available generation modes.
+
 ## Completely black or white images or videos / NaNs
 
 Some ggml backends can encounter numerical overflow during inference, producing

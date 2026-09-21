@@ -244,8 +244,12 @@ static bool build_sdapi_img_gen_request(const json& j,
             SDImageOwner image_owner;
             if (decode_base64_image(extra_image.get<std::string>(),
                                     0,
-                                    request.gen_params.width_and_height_are_set() ? request.gen_params.width : 0,
-                                    request.gen_params.width_and_height_are_set() ? request.gen_params.height : 0,
+                                    request.gen_params.auto_resize_ref_image && request.gen_params.width_and_height_are_set()
+                                        ? request.gen_params.width
+                                        : 0,
+                                    request.gen_params.auto_resize_ref_image && request.gen_params.width_and_height_are_set()
+                                        ? request.gen_params.height
+                                        : 0,
                                     image_owner)) {
                 const sd_image_t& image = image_owner.get();
                 request.gen_params.set_width_and_height_if_unset(image.width, image.height);
