@@ -1,5 +1,7 @@
 # How to Use
 
+Wan models require `-M vid_gen`, including single-frame generation. `--video-frames` alone does not select video mode. Library callers must use `generate_video()` instead of `generate_image()`.
+
 ## Download weights
 
 - Download Wan
