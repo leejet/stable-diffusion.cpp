@@ -162,10 +162,10 @@ static bool build_openai_edit_request(const httplib::Request& req,
         int img_h            = 0;
         int resolved_channel = 0;
         uint8_t* raw_pixels  = load_image_from_memory(
-            reinterpret_cast<const char*>(bytes.data()),
-            static_cast<int>(bytes.size()),
-            img_w, img_h, resolved_channel,
-            width, height, 0);
+             reinterpret_cast<const char*>(bytes.data()),
+             static_cast<int>(bytes.size()),
+             img_w, img_h, resolved_channel,
+             width, height, 0);
         if (raw_pixels == nullptr) {
             continue;
         }
@@ -186,8 +186,8 @@ static bool build_openai_edit_request(const httplib::Request& req,
             expected_width  = request.gen_params.width;
             expected_height = request.gen_params.height;
         }
-        int mask_w = 0;
-        int mask_h = 0;
+        int mask_w       = 0;
+        int mask_h       = 0;
         int mask_channel = 0;
 
         uint8_t* mask_raw = load_image_from_memory(

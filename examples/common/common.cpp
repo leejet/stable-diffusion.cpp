@@ -1852,13 +1852,13 @@ bool decode_base64_image(const std::string& encoded_input,
     int decoded_height   = 0;
     int resolved_channel = target_channels;
     uint8_t* raw_data    = load_image_from_memory(reinterpret_cast<const char*>(image_bytes.data()),
-                                                 static_cast<int>(image_bytes.size()),
-                                                 decoded_width,
-                                                 decoded_height,
-                                                 resolved_channel,
-                                                 expected_width,
-                                                 expected_height,
-                                                 target_channels);
+                                                  static_cast<int>(image_bytes.size()),
+                                                  decoded_width,
+                                                  decoded_height,
+                                                  resolved_channel,
+                                                  expected_width,
+                                                  expected_height,
+                                                  target_channels);
     if (raw_data == nullptr) {
         return false;
     }

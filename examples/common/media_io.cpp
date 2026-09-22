@@ -637,7 +637,7 @@ uint8_t* load_image_common(bool from_memory,
         }
         stbir_resize(image_buffer.get(), width, height, 0,
                      resized_image_buffer.get(), expected_width, expected_height, 0, STBIR_TYPE_UINT8,
-                     expected_channel, STBIR_ALPHA_CHANNEL_NONE, 0,
+                     expected_channel, expected_channel == 4 ? 3 : STBIR_ALPHA_CHANNEL_NONE, 0,
                      STBIR_EDGE_CLAMP, STBIR_EDGE_CLAMP,
                      STBIR_FILTER_BOX, STBIR_FILTER_BOX,
                      STBIR_COLORSPACE_SRGB, nullptr);
