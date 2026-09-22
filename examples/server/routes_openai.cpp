@@ -164,18 +164,36 @@ static bool build_openai_edit_request(const httplib::Request& req,
             reinterpret_cast<const char*>(bytes.data()),
             static_cast<int>(bytes.size()),
             img_w, img_h,
-            width, height, 3);
+            0, 0, 3);
         if (raw_pixels == nullptr) {
             continue;
         }
 
+        const bool is_first_ref_image = request.gen_params.ref_images.empty();
         SDImageOwner image_owner({(uint32_t)img_w, (uint32_t)img_h, 3, raw_pixels});
         request.gen_params.set_width_and_height_if_unset(image_owner.get().width, image_owner.get().height);
-        request.gen_params.ref_images.push_back(std::move(image_owner));
-    }
 
-    if (!request.gen_params.ref_images.empty()) {
-        request.gen_params.init_image = request.gen_params.ref_images.front();
+        if (is_first_ref_image) {
+            int init_w = 0;
+            int init_h = 0;
+            if (request.gen_params.width_and_height_are_set()) {
+                init_w = request.gen_params.width;
+                init_h = request.gen_params.height;
+            }
+
+            int init_img_w       = 0;
+            int init_img_h       = 0;
+            uint8_t* init_pixels = load_image_from_memory(
+                reinterpret_cast<const char*>(bytes.data()),
+                static_cast<int>(bytes.size()),
+                init_img_w, init_img_h,
+                init_w, init_h, 3);
+            if (init_pixels != nullptr) {
+                request.gen_params.init_image.reset({(uint32_t)init_img_w, (uint32_t)init_img_h, 3, init_pixels});
+            }
+        }
+
+        request.gen_params.ref_images.push_back(std::move(image_owner));
     }
 
     if (!mask_bytes.empty()) {
