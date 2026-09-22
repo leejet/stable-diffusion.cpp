@@ -782,9 +782,6 @@ int main(int argc, const char* argv[]) {
     };
 
     if (gen_params.init_image_path.size() > 0) {
-        // The IMG_GEN/ADETAILER pipelines normalize image channels per model, so
-        // load natively there to keep any alpha. UPSCALE feeds ESRGAN (RGB only)
-        // and the video pipeline does not normalize channels.
         const bool native_init = cli_params.mode == IMG_GEN || cli_params.mode == ADETAILER;
         if (!load_image_and_update_size(gen_params.init_image_path, gen_params.init_image, true, native_init ? 0 : 3)) {
             return 1;

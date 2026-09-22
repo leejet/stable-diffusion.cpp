@@ -32,9 +32,8 @@ bool write_image_to_file(const std::string& path,
                          const std::string& parameters = "",
                          int quality                   = 90);
 
-// expected_channel == 0 selects the file's native channel count (grayscale is
-// promoted to 3, gray+alpha to 4). out_channel receives the resolved count so
-// callers can set sd_image_t::channel correctly.
+// expected_channel == 0 preserves native channels (grayscale -> RGB, gray+alpha -> RGBA).
+// out_channel receives the output channel count.
 uint8_t* load_image_from_file(const char* image_path,
                               int& width,
                               int& height,

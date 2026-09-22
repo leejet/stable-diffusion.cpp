@@ -544,10 +544,6 @@ uint8_t* load_image_common(bool from_memory,
         return nullptr;
     }
     if (expected_channel == 0) {
-        // Native mode: keep the file's own channel count so an alpha channel
-        // survives to the pipeline, which reduces it per model via
-        // ensure_image_tensor_channels. Grayscale inputs are promoted because
-        // no pipeline consumer accepts 1- or 2-channel image tensors.
         expected_channel = source_channel_count == 2 ? 4 : (source_channel_count == 1 ? 3 : source_channel_count);
         if (expected_channel != source_channel_count) {
             FreeUniquePtr<uint8_t> promoted((uint8_t*)malloc((size_t)width * height * expected_channel));
@@ -561,7 +557,7 @@ uint8_t* load_image_common(bool from_memory,
                     promoted.get()[i * 3 + 0] = image_buffer.get()[i];
                     promoted.get()[i * 3 + 1] = image_buffer.get()[i];
                     promoted.get()[i * 3 + 2] = image_buffer.get()[i];
-                } else {  // 2 -> 4 (LA to RGBA)
+                } else {
                     promoted.get()[i * 4 + 0] = image_buffer.get()[i * 2];
                     promoted.get()[i * 4 + 1] = image_buffer.get()[i * 2];
                     promoted.get()[i * 4 + 2] = image_buffer.get()[i * 2];
@@ -572,12 +568,7 @@ uint8_t* load_image_common(bool from_memory,
             source_channel_count = expected_channel;
         }
     }
-    // stb reports the *source* channel count in *comp (e.g. "report original
-    // components, not output" in stb_image.h), not the req_comp it converted to,
-    // so this guards whether the file actually has enough channels rather than
-    // validating stb's output. In native mode (expected_channel == 0) the block
-    // above already promotes grayscale/LA, so this only rejects fixed-channel
-    // requests like an RGBA-only consumer given an RGB source.
+    // stb reports the source channel count even when it converts the output.
     if (source_channel_count < expected_channel) {
         fprintf(stderr,
                 "the number of channels for the input image must be >= %d,"
