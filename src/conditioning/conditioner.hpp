@@ -137,6 +137,7 @@ struct ConditionerParams {
     const std::vector<sd::Tensor<float>>* ref_images                    = nullptr;  // for qwen image edit
     const std::vector<MiniMaxH3PresentationItem>* minimax_h3_references = nullptr;
     RefImageParams ref_image_params;
+    bool allow_cache = false;
 };
 
 struct Conditioner {
@@ -1954,6 +1955,10 @@ struct LLMEmbedder : public Conditioner {
     std::shared_ptr<LLM::LLMRunner> llm;
     std::shared_ptr<T5Runner> byt5;
 
+    bool h3_text_cache_valid = false;
+    std::string h3_text_cache_text;
+    SDCondition h3_text_cache;
+
     LLMEmbedder(ggml_backend_t backend,
                 const String2TensorStorage& tensor_storage_map      = {},
                 SDVersion version                                   = VERSION_QWEN_IMAGE,
@@ -2298,6 +2303,25 @@ struct LLMEmbedder : public Conditioner {
 
     SDCondition get_learned_condition(int n_threads,
                                       const ConditionerParams& conditioner_params) override {
+        const bool h3_text_cacheable =
+            sd_version_is_minimax_h3(version) &&
+            conditioner_params.allow_cache &&
+            (conditioner_params.minimax_h3_references == nullptr ||
+             conditioner_params.minimax_h3_references->empty()) &&
+            (conditioner_params.ref_images == nullptr ||
+             conditioner_params.ref_images->empty());
+
+        if (sd_version_is_minimax_h3(version) && !h3_text_cacheable) {
+            h3_text_cache_valid = false;
+        }
+
+        if (h3_text_cacheable &&
+            h3_text_cache_valid &&
+            h3_text_cache_text == conditioner_params.text) {
+            LOG_INFO("H3 conditioning cache hit");
+            return h3_text_cache;
+        }
+
         std::string prompt;
         std::pair<int, int> prompt_attn_range;
         std::vector<std::string> extra_prompts;
@@ -3166,6 +3190,14 @@ struct LLMEmbedder : public Conditioner {
             int64_t tag_count    = static_cast<int64_t>(tags.size());
             result.c_token_types = sd::Tensor<int32_t>({tag_count}, std::move(tags));
         }
+
+        if (h3_text_cacheable) {
+            h3_text_cache_text  = conditioner_params.text;
+            h3_text_cache       = result;
+            h3_text_cache_valid = true;
+            LOG_INFO("H3 conditioning cache stored");
+        }
+
         return result;
     }
 };

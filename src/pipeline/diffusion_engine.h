@@ -178,6 +178,7 @@ public:
     std::recursive_mutex execution_mutex;
     std::unique_ptr<ModelConfig> config_;
     RunnerState runner_state_;
+    bool conditioning_cache_allowed_ = false;
     bool executing_ = false;
 
     std::shared_ptr<Denoiser> denoiser;

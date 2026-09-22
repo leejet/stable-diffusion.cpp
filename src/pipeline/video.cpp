@@ -1156,6 +1156,10 @@ namespace sd::pipeline {
         condition_params.zero_out_masked       = true;
         condition_params.ref_images            = &latents.ref_images;
         condition_params.minimax_h3_references = &latents.minimax_presentation_refs;
+        condition_params.allow_cache =
+            sd_version_is_minimax_h3(sd->version) &&
+            sd->conditioning_cache_allowed_ &&
+            !request.use_uncond;
         if (sd_version_is_lingbot_video(sd->version) || sd_version_is_minimax_h3(sd->version)) {
             condition_params.ref_image_params.vlm_resize_mode = RefImageResizeMode::AREA;
         }

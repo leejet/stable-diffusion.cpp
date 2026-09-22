@@ -1762,6 +1762,8 @@ bool StableDiffusionGGML::apply_loras(const sd_lora_t* loras, uint32_t lora_coun
         extension->collect_loras(all_loras);
     }
 
+    conditioning_cache_allowed_ = all_loras.empty();
+
     int64_t t0 = ggml_time_ms();
     end_runners();
     clear_lora_adapters();
