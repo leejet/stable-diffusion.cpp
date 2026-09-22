@@ -80,17 +80,6 @@ static enum sample_method_t get_sdapi_sample_method(std::string name) {
     return it != hardcoded.end() ? it->second : SAMPLE_METHOD_COUNT;
 }
 
-static void assign_solid_mask(SDImageOwner& mask_owner, int width, int height) {
-    const size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height);
-    uint8_t* raw_mask        = static_cast<uint8_t*>(malloc(pixel_count));
-    if (raw_mask == nullptr) {
-        mask_owner.reset({0, 0, 1, nullptr});
-        return;
-    }
-    std::memset(raw_mask, 255, pixel_count);
-    mask_owner.reset({(uint32_t)width, (uint32_t)height, 1, raw_mask});
-}
-
 static bool build_sdapi_img_gen_request(const json& j,
                                         ServerRuntime& runtime,
                                         bool img2img,
@@ -193,15 +182,25 @@ static bool build_sdapi_img_gen_request(const json& j,
         }
     }
 
-    if (img2img) {
-        const int expected_width  = request.gen_params.width_and_height_are_set() ? request.gen_params.width : 0;
-        const int expected_height = request.gen_params.width_and_height_are_set() ? request.gen_params.height : 0;
+    if (j.contains("ref_image_args")) {
+        if (!j["ref_image_args"].is_string()) {
+            error_message = "ref_image_args must be a string";
+            return false;
+        }
+        request.gen_params.ref_image_args = j["ref_image_args"].get<std::string>();
+    }
 
+    if (j.contains("image_preprocess") && !request.gen_params.parse_image_preprocess_json(j["image_preprocess"].dump())) {
+        error_message = "invalid image_preprocess";
+        return false;
+    }
+
+    if (img2img) {
         if (j.contains("init_images") && j["init_images"].is_array() && !j["init_images"].empty()) {
             if (decode_base64_image(j["init_images"][0].get<std::string>(),
                                     0,
-                                    expected_width,
-                                    expected_height,
+                                    0,
+                                    0,
                                     request.gen_params.init_image)) {
                 const sd_image_t& image = request.gen_params.init_image.get();
                 request.gen_params.set_width_and_height_if_unset(image.width, image.height);
@@ -211,8 +210,8 @@ static bool build_sdapi_img_gen_request(const json& j,
         if (j.contains("mask") && j["mask"].is_string()) {
             if (decode_base64_image(j["mask"].get<std::string>(),
                                     1,
-                                    expected_width,
-                                    expected_height,
+                                    0,
+                                    0,
                                     request.gen_params.mask_image)) {
                 const sd_image_t& image = request.gen_params.mask_image.get();
                 request.gen_params.set_width_and_height_if_unset(image.width, image.height);
@@ -225,9 +224,7 @@ static bool build_sdapi_img_gen_request(const json& j,
                 }
             }
         } else {
-            const int resolved_width  = request.gen_params.get_resolved_width();
-            const int resolved_height = request.gen_params.get_resolved_height();
-            assign_solid_mask(request.gen_params.mask_image, resolved_width, resolved_height);
+            request.gen_params.mask_image.reset({0, 0, 1, nullptr});
         }
 
         float denoising_strength = j.value("denoising_strength", -1.f);
@@ -244,12 +241,7 @@ static bool build_sdapi_img_gen_request(const json& j,
             SDImageOwner image_owner;
             if (decode_base64_image(extra_image.get<std::string>(),
                                     0,
-                                    request.gen_params.auto_resize_ref_image && request.gen_params.width_and_height_are_set()
-                                        ? request.gen_params.width
-                                        : 0,
-                                    request.gen_params.auto_resize_ref_image && request.gen_params.width_and_height_are_set()
-                                        ? request.gen_params.height
-                                        : 0,
+                                    0, 0,
                                     image_owner)) {
                 const sd_image_t& image = image_owner.get();
                 request.gen_params.set_width_and_height_if_unset(image.width, image.height);

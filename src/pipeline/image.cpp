@@ -10,6 +10,7 @@
 #include "model/vae/vae.hpp"
 #include "request.h"
 #include "runtime/denoiser.hpp"
+#include "runtime/image_preprocess.h"
 #include "upscaler.h"
 
 namespace sd::pipeline {
@@ -800,6 +801,12 @@ namespace sd::pipeline {
         int64_t t0            = ggml_time_ms();
         sd->vae_tiling_params = sd_img_gen_params->vae_tiling_params;
         GenerationRequest request(sd, sd_img_gen_params);
+        sd::ImagePreprocessor preprocessing(sd_img_gen_params->image_preprocess.rules);
+        sd_img_gen_params_t processed_params = *sd_img_gen_params;
+        if (!preprocessing.prepare_inputs(processed_params, request.width, request.height))
+            return false;
+        sd_img_gen_params = &processed_params;
+        request.pm_params = processed_params.pm_params;
         LOG_INFO("generate_image %dx%d", request.width, request.height);
 
         sd->rng->manual_seed(request.seed);

@@ -15,6 +15,7 @@
 #include "model/vae/vae.hpp"
 #include "request.h"
 #include "runtime/denoiser.hpp"
+#include "runtime/image_preprocess.h"
 
 namespace sd::pipeline {
 
@@ -1530,6 +1531,7 @@ namespace sd::pipeline {
         img_gen_params.qwen_image_layers = 0;
         img_gen_params.circular_x        = sd_vid_gen_params->circular_x;
         img_gen_params.circular_y        = sd_vid_gen_params->circular_y;
+        img_gen_params.image_preprocess  = sd_vid_gen_params->image_preprocess;
 
         sd->animatediff_num_frames = n_frames;
         bool ok                    = generate_image(sd, &img_gen_params, frames_out, num_frames_out);
@@ -1560,6 +1562,11 @@ namespace sd::pipeline {
         sd->vae_tiling_params = sd_vid_gen_params->vae_tiling_params;
         sd->apply_circular_axes(sd_vid_gen_params->circular_x, sd_vid_gen_params->circular_y);
         GenerationRequest request(sd, sd_vid_gen_params);
+        sd::ImagePreprocessor preprocessing(sd_vid_gen_params->image_preprocess.rules);
+        sd_vid_gen_params_t processed_params = *sd_vid_gen_params;
+        if (!preprocessing.prepare_inputs(processed_params, request.width, request.height))
+            return false;
+        sd_vid_gen_params = &processed_params;
         if (fps_out != nullptr) {
             *fps_out = request.fps;
         }
