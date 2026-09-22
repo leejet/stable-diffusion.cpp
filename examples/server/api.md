@@ -148,6 +148,19 @@ Native extension fields:
 
 - any `sdcpp API` fields embedded through `sd_cpp_extra_args` inside `prompt`
 
+Reference image sizing follows `auto_resize_ref_image`, as in the native and SDAPI APIs.
+The server default is `true`; `--disable-auto-resize-ref-image` sets it to `false`.
+When enabled, uploaded references are center-cropped and resized to the request dimensions.
+If `size` is omitted, the first decoded image establishes those dimensions.
+When disabled, each reference retains its original dimensions.
+The init image and mask still use the request dimensions, independently of this option.
+
+To override the server default for one request, include this in `prompt`:
+
+```text
+edit this image <sd_cpp_extra_args>{"auto_resize_ref_image":false}</sd_cpp_extra_args>
+```
+
 Response fields:
 
 | Field | Type | Notes |
