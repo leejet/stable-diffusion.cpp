@@ -751,28 +751,20 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                            int* num_frames_out,
                            sd_audio_t** audio_out,
                            int* fps_out) {
-    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || sd_vid_gen_params == nullptr) {
-        if (fps_out != nullptr) {
-            *fps_out = 0;
-        }
-        return false;
-    }
-
-    if (frames_out != nullptr) {
+    if (frames_out != nullptr)
         *frames_out = nullptr;
-    }
-    if (audio_out != nullptr) {
+    if (audio_out != nullptr)
         *audio_out = nullptr;
-    }
-    if (num_frames_out != nullptr) {
+    if (num_frames_out != nullptr)
         *num_frames_out = 0;
+    if (fps_out != nullptr)
+        *fps_out = 0;
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || sd_vid_gen_params == nullptr) {
+        return false;
     }
 
     StableDiffusionGGML::ExecutionScope execution(*sd_ctx->sd);
     if (!execution.ready) {
-        if (fps_out != nullptr) {
-            *fps_out = 0;
-        }
         return false;
     }
 

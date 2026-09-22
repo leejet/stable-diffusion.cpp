@@ -26,6 +26,9 @@ Stable-diffusion.spp also supports basic Unet-based editing models like instruct
 
 ## Configuring Reference Modes (`--ref-image-args`)
 
+For a one-time input transform before reference presets and model processing,
+including cropping, padding, and resizing algorithms, see [Image preprocessing](./image_preprocessing.md).
+
 Different DiT-based editing models require different configurations to process reference images correctly (e.g., whether to use a Vision Language Model (VLM) encoder or pass VAE-encoded images directly to the DiT).
 
 To simplify this, we provide **Presets**. By default, the system automatically selects the best preset based on the model architecture. However, you can override this using the `--ref-image-args` argument.

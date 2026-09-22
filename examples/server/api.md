@@ -148,17 +148,17 @@ Native extension fields:
 
 - any `sdcpp API` fields embedded through `sd_cpp_extra_args` inside `prompt`
 
-Reference image sizing follows `auto_resize_ref_image`, as in the native and SDAPI APIs.
-The server default is `true`; `--disable-auto-resize-ref-image` sets it to `false`.
-When enabled, uploaded references are center-cropped and resized to the request dimensions.
-If `size` is omitted, the first decoded image establishes those dimensions.
-When disabled, each reference retains its original dimensions.
-The init image and mask still use the request dimensions, independently of this option.
+Uploaded images are decoded at their original dimensions. The first decoded
+image establishes the generation dimensions if `size` is omitted. Input
+geometry follows `image_preprocess`: references preserve their dimensions by
+default, while init and mask use the generation canvas preset.
 
-To override the server default for one request, include this in `prompt`:
+Reference encoding then follows model presets and `ref_image_args`. To skip
+input geometry for references and disable resizing before VAE encoding, include
+this in `prompt`:
 
 ```text
-edit this image <sd_cpp_extra_args>{"auto_resize_ref_image":false}</sd_cpp_extra_args>
+edit this image <sd_cpp_extra_args>{"image_preprocess":"target=ref,mode=none","ref_image_args":"resize_before_vae=false"}</sd_cpp_extra_args>
 ```
 
 Response fields:
@@ -539,7 +539,7 @@ LTX and Wan preserve causal state between temporal tiles. Hunyuan Video and TAEH
 | Field | Type |
 | --- | --- |
 | `batch_count` | `integer` |
-| `auto_resize_ref_image` | `boolean` |
+| `ref_image_args` | `string` |
 | `increase_ref_index` | `boolean` |
 | `control_strength` | `number` |
 | `ip_adapter_strength` | `number` |
@@ -666,7 +666,7 @@ Example:
   "strength": 0.75,
   "seed": -1,
   "batch_count": 1,
-  "auto_resize_ref_image": true,
+  "ref_image_args": "",
   "increase_ref_index": false,
   "control_strength": 0.9,
   "ip_adapter_strength": 1.0,
@@ -741,6 +741,17 @@ Example:
 
 ### Image Encoding Rules
 
+Native image/video requests and SDAPI accept `image_preprocess` as a rule string
+or array of rule strings. OpenAI-compatible requests can supply it in
+`sd_cpp_extra_args`. See [Image preprocessing](../../docs/image_preprocessing.md)
+for one-time input geometry, native-resolution decoding, mask alignment, and
+`canny=true` for edge detection on any supported image input.
+
+Image generation also accepts `ref_image_args` as a string (for example,
+`"resize_before_vae=false"`) in native and SDAPI requests, or through
+`sd_cpp_extra_args` in OpenAI-compatible requests. It controls downstream
+reference encoding and is independent of input geometry rules.
+
 Any image field accepts:
 
 - a raw base64 string, or
@@ -776,7 +787,8 @@ Top-level scalar fields:
 | `strength` | `number` |
 | `seed` | `integer` |
 | `batch_count` | `integer` |
-| `auto_resize_ref_image` | `boolean` |
+| `ref_image_args` | `string` |
+| `image_preprocess` | `string \| array<string>` |
 | `increase_ref_index` | `boolean` |
 | `control_strength` | `number` |
 | `ip_adapter_strength` | `number` |
