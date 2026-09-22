@@ -56,6 +56,7 @@ Current endpoints include:
 - `GET /sdcpp/v1/jobs/{id}`
 - `POST /sdcpp/v1/jobs/{id}/cancel`
 - `POST /sdcpp/v1/vid_gen`
+- `POST /sdcpp/v1/upscale`
 
 ## `sd_cpp_extra_args`
 
@@ -421,7 +422,8 @@ Top-level fields:
 | `samplers` | `array<string>` | Available sampling methods |
 | `schedulers` | `array<string>` | Available schedulers |
 | `loras` | `array<object>` | Available LoRA entries |
-| `upscalers` | `array<object>` | Available model-backed highres upscalers |
+| `upscalers` | `array<object>` | Available highres upscalers, built-in and model-backed |
+| `upscale` | `boolean` | Whether `POST /sdcpp/v1/upscale` can do anything here |
 | `limits` | `object` | Shared queue and size limits |
 
 `model`
@@ -463,6 +465,7 @@ Shared nested fields:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `upscalers[].name` | `string` | Built-in name or model stem; use this value in `hires.upscaler` |
+| `upscalers[].model` | `boolean` | True for a model-backed upscaler, false for a built-in scaling filter |
 
 Built-in entries include `None`, `Lanczos`, `Nearest`, `Latent`, `Latent (nearest)`, `Latent (nearest-exact)`, `Latent (antialiased)`, `Latent (bicubic)`, and `Latent (bicubic antialiased)`. Model-backed entries are scanned from the top level of `--hires-upscalers-dir`; subdirectories are not scanned.
 
@@ -627,6 +630,51 @@ Typical status codes:
 - `200 OK`
 - `404 Not Found`
 - `410 Gone`
+
+#### `POST /sdcpp/v1/upscale`
+
+Runs one model-backed upscaler over an image, with no generation involved.
+
+This is the HTTP equivalent of `sd-cli -M upscale`: no diffusion model, text
+encoder or sampling is used, so it is fast enough to answer synchronously and
+does not create a job.
+
+Request fields:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `image` | `string` | Required. Base64 or data URL image |
+| `upscaler` | `string` | A model-backed name from `upscalers`; the first one when omitted |
+| `repeats` | `integer` | Run the upscaler this many times, 1 to 4 (default `1`) |
+| `tile_size` | `integer` | Tile size, defaulting to the server's `--upscale-tile-size` |
+| `output_format` | `string` | `png`, `jpeg`, or `webp` (default `png`) |
+| `output_compression` | `integer` | Range is clamped to `0..100` |
+
+Response fields:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `images` | `array<object>` | One image |
+| `images[].index` | `integer` | |
+| `images[].b64_json` | `string` | Base64-encoded image bytes |
+| `upscaler` | `string` | The upscaler actually used |
+| `scale` | `integer` | The model's scale factor |
+| `repeats` | `integer` | How many times it was run |
+| `width` | `integer` | Result width |
+| `height` | `integer` | Result height |
+| `output_format` | `string` | Final encoded image format |
+
+Typical status codes:
+
+- `200 OK`
+- `400 Bad Request` (no image, unreadable image, or no such upscaler)
+- `500 Internal Server Error`
+
+Notes:
+
+- The upscaler models are three-channel; alpha is not preserved.
+- The request holds the generation context lock, so an upscale and a
+  generation never run on the device at the same time.
 
 #### `POST /sdcpp/v1/jobs/{id}/cancel`
 

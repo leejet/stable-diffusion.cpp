@@ -6,6 +6,8 @@
 
 #include "async_jobs.h"
 #include "common/common.h"
+#include "common/media_io.h"
+#include "common/resource_owners.hpp"
 
 namespace fs = std::filesystem;
 
@@ -239,37 +241,49 @@ static json make_capabilities_json(ServerRuntime& runtime) {
 
     available_upscalers.push_back({
         {"name", "None"},
+        {"model", false},
     });
     available_upscalers.push_back({
         {"name", "Lanczos"},
+        {"model", false},
     });
     available_upscalers.push_back({
         {"name", "Nearest"},
+        {"model", false},
     });
     available_upscalers.push_back({
         {"name", "Latent"},
+        {"model", false},
     });
     available_upscalers.push_back({
         {"name", "Latent (nearest)"},
+        {"model", false},
     });
     available_upscalers.push_back({
         {"name", "Latent (nearest-exact)"},
+        {"model", false},
     });
     available_upscalers.push_back({
         {"name", "Latent (antialiased)"},
+        {"model", false},
     });
     available_upscalers.push_back({
         {"name", "Latent (bicubic)"},
+        {"model", false},
     });
     available_upscalers.push_back({
         {"name", "Latent (bicubic antialiased)"},
+        {"model", false},
     });
+    bool have_upscaler_models = false;
     {
         std::lock_guard<std::mutex> lock(*runtime.upscaler_mutex);
         for (const auto& entry : *runtime.upscaler_cache) {
             available_upscalers.push_back({
                 {"name", entry.name},
+                {"model", true},
             });
+            have_upscaler_models = true;
         }
     }
 
@@ -348,6 +362,10 @@ static json make_capabilities_json(ServerRuntime& runtime) {
     result["features_by_mode"]       = features_by_mode;
     result["loras"]                  = available_loras;
     result["upscalers"]              = available_upscalers;
+    // Whether POST /sdcpp/v1/upscale will do anything here, so a client can
+    // offer upscaling only when it is actually available rather than finding
+    // out by being refused.
+    result["upscale"]                = have_upscaler_models;
     return result;
 }
 
@@ -411,6 +429,134 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
     svr.Get("/sdcpp/v1/capabilities", [runtime](const httplib::Request&, httplib::Response& res) {
         res.status = 200;
         res.set_content(make_capabilities_json(*runtime).dump(), "application/json");
+    });
+
+    // Upscaling on its own, without a generation wrapped around it.
+    //
+    // The library has had this all along -- `sd-cli -M upscale` runs an
+    // ESRGAN model with no diffusion model, no text encoder and no sampling,
+    // in a couple of seconds -- but the only way to reach it over HTTP was
+    // the hires stage of an image generation, which means paying for a
+    // generation you did not want and, on some models, does not survive the
+    // latent shapes involved.
+    svr.Post("/sdcpp/v1/upscale", [runtime](const httplib::Request& req, httplib::Response& res) {
+        try {
+            if (req.body.empty()) {
+                res.status = 400;
+                res.set_content(R"({"error":"empty body"})", "application/json");
+                return;
+            }
+            json body = json::parse(req.body);
+
+            const std::string encoded = body.value("image", std::string());
+            if (encoded.empty()) {
+                res.status = 400;
+                res.set_content(R"({"error":"image is required"})", "application/json");
+                return;
+            }
+            SDImageOwner input;
+            if (!decode_base64_image(encoded, 3, 0, 0, input) || input.get().data == nullptr) {
+                res.status = 400;
+                res.set_content(R"({"error":"image could not be read"})", "application/json");
+                return;
+            }
+
+            // Named as `upscalers` in capabilities reports them; the first
+            // model-backed one when the request does not say.
+            refresh_upscaler_cache(*runtime);
+            const std::string wanted = body.value("upscaler", std::string());
+            std::string model_path;
+            std::string used_name;
+            {
+                std::lock_guard<std::mutex> lock(*runtime->upscaler_mutex);
+                for (const auto& entry : *runtime->upscaler_cache) {
+                    if (wanted.empty() || entry.name == wanted) {
+                        model_path = entry.fullpath;
+                        used_name  = entry.name;
+                        break;
+                    }
+                }
+            }
+            if (model_path.empty()) {
+                res.status = 400;
+                res.set_content(json({{"error", wanted.empty()
+                                                    ? std::string("no upscaler models are available; "
+                                                                  "start the server with --hires-upscalers-dir")
+                                                    : "no upscaler called " + wanted}})
+                                    .dump(),
+                                "application/json");
+                return;
+            }
+
+            const int tile_size = std::max(32, body.value("tile_size", runtime->default_gen_params->upscale_tile_size));
+            const int repeats   = std::clamp(body.value("repeats", 1), 1, 4);
+
+            // One GPU: an upscale must not run while a generation is using it.
+            std::lock_guard<std::mutex> ctx_lock(*runtime->sd_ctx_mutex);
+            UpscalerCtxPtr upscaler_ctx(new_upscaler_ctx(model_path.c_str(),
+                                                         runtime->ctx_params->diffusion_conv_direct,
+                                                         runtime->ctx_params->n_threads,
+                                                         tile_size,
+                                                         runtime->ctx_params->backend.c_str(),
+                                                         runtime->ctx_params->params_backend.c_str()));
+            if (upscaler_ctx == nullptr) {
+                res.status = 500;
+                res.set_content(R"({"error":"the upscaler model could not be loaded"})", "application/json");
+                return;
+            }
+            const int factor = get_upscale_factor(upscaler_ctx.get());
+
+            SDImageOwner current(input.release());
+            for (int i = 0; i < repeats; ++i) {
+                sd_image_t* out_images = nullptr;
+                int out_count          = 0;
+                if (!upscale(upscaler_ctx.get(), current.get(), (uint32_t)factor, &out_images, &out_count) ||
+                    out_count <= 0 || out_images[0].data == nullptr) {
+                    free_sd_images(out_images, out_count);
+                    res.status = 500;
+                    res.set_content(R"({"error":"upscale failed"})", "application/json");
+                    return;
+                }
+                sd_image_t produced = out_images[0];
+                out_images[0]       = {0, 0, 0, nullptr};
+                free_sd_images(out_images, out_count);
+                current.reset(produced);
+            }
+
+            const std::string format = body.value("output_format", std::string("png"));
+            const int compression    = std::clamp(body.value("output_compression", 100), 0, 100);
+            const sd_image_t result  = current.get();
+            auto image_bytes         = encode_image_to_vector(format == "jpeg"   ? EncodedImageFormat::JPEG
+                                                              : format == "webp" ? EncodedImageFormat::WEBP
+                                                                                 : EncodedImageFormat::PNG,
+                                                      result.data,
+                                                      result.width,
+                                                      result.height,
+                                                      result.channel,
+                                                      "",
+                                                      compression);
+            if (image_bytes.empty()) {
+                res.status = 500;
+                res.set_content(R"({"error":"the result could not be encoded"})", "application/json");
+                return;
+            }
+
+            json out;
+            out["upscaler"]      = used_name;
+            out["scale"]         = factor;
+            out["repeats"]       = repeats;
+            out["width"]         = result.width;
+            out["height"]        = result.height;
+            out["output_format"] = format == "jpeg" ? "jpeg" : format == "webp" ? "webp" : "png";
+            json images = json::array();
+            images.push_back({{"index", 0}, {"b64_json", base64_encode(image_bytes)}});
+            out["images"]        = std::move(images);
+            res.set_content(out.dump(), "application/json");
+            res.status = 200;
+        } catch (const std::exception& e) {
+            res.status = 500;
+            res.set_content(json({{"error", std::string("server_error: ") + e.what()}}).dump(), "application/json");
+        }
     });
 
     svr.Post("/sdcpp/v1/img_gen", [runtime](const httplib::Request& req, httplib::Response& res) {
