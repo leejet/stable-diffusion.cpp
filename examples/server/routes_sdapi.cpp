@@ -199,7 +199,7 @@ static bool build_sdapi_img_gen_request(const json& j,
 
         if (j.contains("init_images") && j["init_images"].is_array() && !j["init_images"].empty()) {
             if (decode_base64_image(j["init_images"][0].get<std::string>(),
-                                    3,
+                                    0,
                                     expected_width,
                                     expected_height,
                                     request.gen_params.init_image)) {
@@ -243,7 +243,7 @@ static bool build_sdapi_img_gen_request(const json& j,
             }
             SDImageOwner image_owner;
             if (decode_base64_image(extra_image.get<std::string>(),
-                                    3,
+                                    0,
                                     request.gen_params.auto_resize_ref_image && request.gen_params.width_and_height_are_set()
                                         ? request.gen_params.width
                                         : 0,
