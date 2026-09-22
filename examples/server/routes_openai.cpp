@@ -157,6 +157,19 @@ static bool build_openai_edit_request(const httplib::Request& req,
     request.gen_params.height      = height;
     request.gen_params.batch_count = n;
 
+    std::string sd_cpp_extra_args_str = extract_and_remove_sd_cpp_extra_args(request.gen_params.prompt);
+    if (!sd_cpp_extra_args_str.empty()) {
+        const json extra_args = json::parse(sd_cpp_extra_args_str, nullptr, false);
+        if (extra_args.is_discarded()) {
+            error_message = "invalid sd_cpp_extra_args";
+            return false;
+        }
+        // Resolve resizing before decoding while keeping embedded image overrides last.
+        if (extra_args.contains("auto_resize_ref_image") && extra_args["auto_resize_ref_image"].is_boolean()) {
+            request.gen_params.auto_resize_ref_image = extra_args["auto_resize_ref_image"].get<bool>();
+        }
+    }
+
     for (auto& bytes : images_bytes) {
         int img_w            = 0;
         int img_h            = 0;
@@ -165,7 +178,13 @@ static bool build_openai_edit_request(const httplib::Request& req,
              reinterpret_cast<const char*>(bytes.data()),
              static_cast<int>(bytes.size()),
              img_w, img_h, resolved_channel,
-             0, 0, 0);
+            request.gen_params.auto_resize_ref_image && request.gen_params.width_and_height_are_set()
+                 ? request.gen_params.width
+                 : 0,
+            request.gen_params.auto_resize_ref_image && request.gen_params.width_and_height_are_set()
+                 ? request.gen_params.height
+                 : 0,
+             0);
         if (raw_pixels == nullptr) {
             continue;
         }
@@ -185,11 +204,11 @@ static bool build_openai_edit_request(const httplib::Request& req,
             int init_img_w            = 0;
             int init_img_h            = 0;
             int init_resolved_channel = 0;
-            uint8_t* init_pixels     = load_image_from_memory(
-                 reinterpret_cast<const char*>(bytes.data()),
-                 static_cast<int>(bytes.size()),
-                 init_img_w, init_img_h, init_resolved_channel,
-                 init_w, init_h, 0);
+            uint8_t* init_pixels      = load_image_from_memory(
+                     reinterpret_cast<const char*>(bytes.data()),
+                     static_cast<int>(bytes.size()),
+                     init_img_w, init_img_h, init_resolved_channel,
+                     init_w, init_h, 0);
             if (init_pixels != nullptr) {
                 request.gen_params.init_image.reset({(uint32_t)init_img_w, (uint32_t)init_img_h, (uint32_t)init_resolved_channel, init_pixels});
             }
@@ -226,7 +245,6 @@ static bool build_openai_edit_request(const httplib::Request& req,
         });
     }
 
-    std::string sd_cpp_extra_args_str = extract_and_remove_sd_cpp_extra_args(request.gen_params.prompt);
     if (!sd_cpp_extra_args_str.empty() && !request.gen_params.from_json_str(sd_cpp_extra_args_str)) {
         error_message = "invalid sd_cpp_extra_args";
         return false;
