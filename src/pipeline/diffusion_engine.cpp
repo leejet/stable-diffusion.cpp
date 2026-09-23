@@ -7,6 +7,7 @@
 #include <list>
 #include <mutex>
 #include <set>
+#include <tuple>
 #include <type_traits>
 #include <unordered_set>
 #include <utility>
@@ -2255,6 +2256,15 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
     };
     RunnerEndOnExit sample_diffusion_runner_end{work_diffusion_model.get()};
 
+    // These inputs are immutable for this sampling run. Extensions may replace or
+    // modify them per step, so those paths need an explicit stability contract first.
+    const bool cache_qwen_prefix = version == VERSION_QWEN_IMAGE_2_1 &&
+                                   std::none_of(generation_extensions.begin(), generation_extensions.end(),
+                                                [](const auto& extension) { return extension->is_enabled(); });
+    using QwenPrefixInputs = std::tuple<const sd::Tensor<float>*, const sd::Tensor<int32_t>*,
+                                        const std::vector<sd::Tensor<float>>*>;
+    std::vector<QwenPrefixInputs> qwen_prefix_inputs;
+
     RunnerEndOnExit sample_control_runner_end{!control_image.empty() && control_net != nullptr ? control_net.get() : nullptr};
 
     const bool apply_denoise_mask = !denoise_mask.empty() &&
@@ -2524,6 +2534,18 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                 extension->before_diffusion(diffusion_params, step);
             }
 
+            if (cache_qwen_prefix) {
+                auto* extra = std::get_if<QwenImage21DiffusionExtra>(&diffusion_params.extra);
+                if (extra != nullptr) {
+                    auto key         = std::make_tuple(diffusion_params.context, extra->image_slots,
+                                               diffusion_params.ref_image_params.pass_to_dit ? diffusion_params.ref_latents : nullptr);
+                    auto entry       = std::find(qwen_prefix_inputs.begin(), qwen_prefix_inputs.end(), key);
+                    extra->prefix_id = static_cast<uint64_t>(entry - qwen_prefix_inputs.begin()) + 1;
+                    if (entry == qwen_prefix_inputs.end()) {
+                        qwen_prefix_inputs.push_back(key);
+                    }
+                }
+            }
             auto output_opt = work_diffusion_model->compute(n_threads, diffusion_params);
             if (output_opt.empty()) {
                 LOG_ERROR("diffusion model compute failed");
