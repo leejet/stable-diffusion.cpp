@@ -119,6 +119,8 @@ struct MiniMaxH3DiffusionExtra {
     int audio_length                                              = 0;
     float video_sigma_shift                                       = 12.f;
     float audio_sigma_shift                                       = 3.f;
+    // Nonzero IDs identify immutable text conditioning and weights within one sampling run.
+    uint64_t context_id = 0;
 };
 
 struct MiniT2IDiffusionExtra {
@@ -160,7 +162,6 @@ struct DiffusionParams {
     const sd::Tensor<float>* x                        = nullptr;
     const sd::Tensor<float>* timesteps                = nullptr;
     const sd::Tensor<float>* context                  = nullptr;
-    const void* context_cache_identity                = nullptr;
     const sd::Tensor<float>* c_concat                 = nullptr;
     const sd::Tensor<float>* y                        = nullptr;
     const std::vector<sd::Tensor<float>>* ref_latents = nullptr;
@@ -184,7 +185,6 @@ static inline const sd::Tensor<T>& tensor_or_empty(const sd::Tensor<T>* tensor) 
 struct DiffusionModelRunner : public GGMLRunner {
 protected:
     std::string prefix;
-    virtual void on_sampling_done() {}
 
 public:
     DiffusionModelRunner(ggml_backend_t backend,
@@ -195,11 +195,6 @@ public:
 
     virtual sd::Tensor<float> compute(int n_threads,
                                       const DiffusionParams& diffusion_params) = 0;
-
-    void sampling_done() {
-        runner_end();
-        on_sampling_done();
-    }
 
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {
         get_param_tensors(tensors, prefix);

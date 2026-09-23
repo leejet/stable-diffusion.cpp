@@ -262,8 +262,7 @@ namespace MiniMaxH3 {
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
-                             ggml_tensor* x,
-                             bool cut_after_last = true) {
+                             ggml_tensor* x) {
             auto final_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["final_norm"]);
             for (int64_t i = 0; i < num_layers; ++i) {
                 auto block         = std::dynamic_pointer_cast<TokenRefinerBlock>(blocks["blocks." + std::to_string(i)]);
@@ -272,11 +271,9 @@ namespace MiniMaxH3 {
                 if (is_last) {
                     x = final_norm->forward(ctx, x);
                 }
-                if (!is_last || cut_after_last) {
-                    sd::ggml_graph_cut::mark_graph_cut(x,
-                                                       "minimax_h3.token_refiner.blocks." + std::to_string(i),
-                                                       "hidden_states");
-                }
+                sd::ggml_graph_cut::mark_graph_cut(x,
+                                                   "minimax_h3.token_refiner.blocks." + std::to_string(i),
+                                                   "hidden_states");
             }
             return num_layers == 0 ? final_norm->forward(ctx, x) : x;
         }
@@ -534,8 +531,7 @@ namespace MiniMaxH3 {
         }
 
         ggml_tensor* refine_context(GGMLRunnerContext* ctx,
-                                    ggml_tensor* context,
-                                    bool cut_after_last_refiner = true) {
+                                    ggml_tensor* context) {
             if (context->ne[0] == config.hidden_size) {
                 return context;
             }
@@ -546,7 +542,7 @@ namespace MiniMaxH3 {
             sd::ggml_graph_cut::mark_graph_cut(projected,
                                                "minimax_h3.condition_proj",
                                                "hidden_states");
-            return token_refiner->forward(ctx, projected, cut_after_last_refiner);
+            return token_refiner->forward(ctx, projected);
         }
 
         ggml_tensor* time_embedding(GGMLRunnerContext* ctx,
@@ -964,42 +960,6 @@ namespace MiniMaxH3 {
     }
 
     struct MiniMaxH3Runner : public DiffusionModelRunner {
-        struct RefinedContextCacheEntry {
-            const void* context_cache_identity      = nullptr;
-            const sd::Tensor<float>* source_context = nullptr;
-            const float* source_data                = nullptr;
-            std::vector<int64_t> source_shape;
-            std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
-            ggml_context* refined_ctx                     = nullptr;
-            ggml_backend_buffer_t refined_buffer          = nullptr;
-            ggml_tensor* refined                          = nullptr;
-
-            ~RefinedContextCacheEntry() {
-                if (refined_buffer != nullptr) {
-                    ggml_backend_buffer_free(refined_buffer);
-                }
-                if (refined_ctx != nullptr) {
-                    ggml_free(refined_ctx);
-                }
-            }
-
-            RefinedContextCacheEntry()                                           = default;
-            RefinedContextCacheEntry(const RefinedContextCacheEntry&)            = delete;
-            RefinedContextCacheEntry& operator=(const RefinedContextCacheEntry&) = delete;
-
-            bool matches(const void* identity,
-                         const sd::Tensor<float>& context,
-                         const std::shared_ptr<WeightAdapter>& adapter) const {
-                return context_cache_identity == identity &&
-                       weight_adapter == adapter &&
-                       source_context == &context &&
-                       source_data == context.data() &&
-                       source_shape == context.shape();
-            }
-        };
-
-        static constexpr size_t REFINED_CONTEXT_CACHE_CAPACITY = 4;
-
         Config config;
         MiniMaxH3Transformer3DModel model;
         sd::Tensor<float> video_input_cache;
@@ -1009,15 +969,22 @@ namespace MiniMaxH3 {
         sd::Tensor<int32_t> curve_index_input_cache;
         sd::Tensor<int32_t> curve_upper_index_input_cache;
         sd::Tensor<float> curve_fraction_input_cache;
-        std::vector<std::unique_ptr<RefinedContextCacheEntry>> refined_context_cache;
+        bool context_cache_enabled  = true;
+        bool context_cache_disabled = false;
 
         MiniMaxH3Runner(ggml_backend_t backend,
                         const String2TensorStorage& tensors,
                         const std::string& prefix                           = "model.diffusion_model",
-                        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+                        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr,
+                        const char* model_args                              = nullptr)
             : DiffusionModelRunner(backend, prefix, weight_manager),
               config(Config::detect_from_weights(tensors, prefix)),
               model(config) {
+            for (const auto& [key, value] : parse_key_value_args(model_args, "model arg")) {
+                if (key == "minimax_h3_context_cache" && !parse_strict_bool(value, context_cache_enabled)) {
+                    LOG_WARN("ignoring invalid MiniMax-H3 model arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            }
             model.init(params_ctx, tensors, prefix);
         }
 
@@ -1028,93 +995,6 @@ namespace MiniMaxH3 {
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors,
                                const std::string& prefix) override {
             model.get_param_tensors(tensors, prefix);
-        }
-
-        std::unique_ptr<RefinedContextCacheEntry> create_refined_context_cache_entry(
-            const sd::Tensor<float>& context,
-            const void* context_cache_identity) {
-            auto entry                    = std::make_unique<RefinedContextCacheEntry>();
-            entry->context_cache_identity = context_cache_identity;
-            entry->source_context         = &context;
-            entry->source_data            = context.data();
-            entry->source_shape           = context.shape();
-            entry->weight_adapter         = weight_adapter;
-
-            auto refined_shape = context.shape();
-            refined_shape[0]   = config.hidden_size;
-            ggml_init_params params;
-            params.mem_size    = ggml_tensor_overhead();
-            params.mem_buffer  = nullptr;
-            params.no_alloc    = true;
-            entry->refined_ctx = ggml_init(params);
-            GGML_ASSERT(entry->refined_ctx != nullptr);
-            entry->refined = ggml_new_tensor(entry->refined_ctx,
-                                             GGML_TYPE_F32,
-                                             static_cast<int>(refined_shape.size()),
-                                             refined_shape.data());
-            ggml_set_name(entry->refined, "minimax_h3.refined_context");
-            entry->refined_buffer = ggml_backend_alloc_ctx_tensors(entry->refined_ctx,
-                                                                   runtime_backend);
-            GGML_ASSERT(entry->refined_buffer != nullptr);
-            ggml_backend_buffer_set_usage(entry->refined_buffer,
-                                          GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-            return entry;
-        }
-
-        ggml_cgraph* build_context_refinement_graph(const sd::Tensor<float>& context,
-                                                    ggml_tensor* refined_output) {
-            GGML_ASSERT(!context.empty() && context.shape()[0] == config.text_dim);
-            GGML_ASSERT(refined_output != nullptr && refined_output->ne[0] == config.hidden_size);
-            auto context_input = make_input(context);
-            auto runner_ctx    = get_context();
-            auto refined       = model.refine_context(&runner_ctx, context_input, false);
-            // Refinement graph buffers are transient; persist only their final output.
-            auto output = ggml_cpy(runner_ctx.ggml_ctx, refined, refined_output);
-            auto graph  = new_graph_custom(H3_GRAPH_SIZE);
-            ggml_build_forward_expand(graph, output);
-            return graph;
-        }
-
-        ggml_tensor* get_refined_context(const sd::Tensor<float>& context,
-                                         const void* context_cache_identity,
-                                         int n_threads) {
-            GGML_ASSERT(!context.empty());
-            GGML_ASSERT(context_cache_identity != nullptr);
-            GGML_ASSERT(context.shape()[0] == config.text_dim ||
-                        context.shape()[0] == config.hidden_size);
-
-            for (const auto& entry : refined_context_cache) {
-                if (entry->matches(context_cache_identity, context, weight_adapter)) {
-                    return entry->refined;
-                }
-            }
-
-            auto entry = create_refined_context_cache_entry(context, context_cache_identity);
-            if (context.shape()[0] == config.hidden_size) {
-                ggml_backend_tensor_set(entry->refined,
-                                        context.data(),
-                                        0,
-                                        ggml_nbytes(entry->refined));
-                ggml_backend_synchronize(runtime_backend);
-            } else {
-                auto get_graph = [&]() {
-                    return build_context_refinement_graph(context, entry->refined);
-                };
-                auto result = GGMLRunner::compute(get_graph,
-                                                  n_threads,
-                                                  false,
-                                                  true);
-                if (!result.has_value()) {
-                    return nullptr;
-                }
-            }
-
-            auto refined = entry->refined;
-            if (refined_context_cache.size() == REFINED_CONTEXT_CACHE_CAPACITY) {
-                refined_context_cache.erase(refined_context_cache.begin());
-            }
-            refined_context_cache.push_back(std::move(entry));
-            return refined;
         }
 
         std::pair<sd::Tensor<float>, sd::Tensor<float>> split_av_latents(const sd::Tensor<float>& packed,
@@ -1162,7 +1042,7 @@ namespace MiniMaxH3 {
         ggml_cgraph* build_graph(const sd::Tensor<float>& packed,
                                  const sd::Tensor<float>& timestep,
                                  const sd::Tensor<float>& context_tensor,
-                                 ggml_tensor* refined_context,
+                                 const std::string& context_cache_name,
                                  const std::vector<sd::Tensor<float>>& condition_videos,
                                  const std::vector<sd::Tensor<float>>& condition_audios,
                                  const sd::Tensor<int32_t>& text_tags,
@@ -1176,12 +1056,17 @@ namespace MiniMaxH3 {
             audio_input_cache = std::move(split.second);
             GGML_ASSERT(!audio_input_cache.empty());
             GGML_ASSERT(!context_tensor.empty());
-            GGML_ASSERT(refined_context != nullptr &&
-                        refined_context->ne[0] == config.hidden_size);
 
             auto video         = make_input(video_input_cache);
             auto audio_carrier = make_input(audio_input_cache);
-            auto context       = refined_context;
+            auto context       = context_cache_name.empty() ? nullptr : get_cache_tensor_by_name(context_cache_name);
+            if (context == nullptr) {
+                auto ctx = get_context();
+                context  = model.refine_context(&ctx, make_input(context_tensor));
+                if (!context_cache_name.empty()) {
+                    cache(context_cache_name, context);
+                }
+            }
             std::vector<ggml_tensor*> condition_inputs;
             condition_inputs.reserve(condition_videos.size());
             for (const auto& condition : condition_videos) {
@@ -1289,6 +1174,7 @@ namespace MiniMaxH3 {
         sd::Tensor<float> compute(int n_threads,
                                   const DiffusionParams& params) override {
             GGML_ASSERT(params.x != nullptr && params.timesteps != nullptr && params.context != nullptr);
+            GGML_ASSERT(!params.context->empty());
             const auto* extra = diffusion_extra_as<MiniMaxH3DiffusionExtra>(params);
             static const std::vector<sd::Tensor<float>> empty_conditions;
             static const std::vector<MiniMaxH3ReferenceBlock> empty_reference_blocks;
@@ -1300,38 +1186,47 @@ namespace MiniMaxH3 {
                                                ? empty_reference_blocks
                                                : *extra->reference_blocks;
             const sd::Tensor<int32_t> empty_int;
-            const void* context_cache_identity = params.context_cache_identity != nullptr
-                                                     ? params.context_cache_identity
-                                                     : params.context;
-            auto context                       = get_refined_context(*params.context,
-                                                                     context_cache_identity,
-                                                                     n_threads);
-            if (context == nullptr) {
-                return {};
+            if (!runner_started()) {
+                context_cache_disabled = false;
             }
-            auto get_graph = [&]() {
-                return build_graph(*params.x,
-                                   *params.timesteps,
-                                   *params.context,
-                                   context,
-                                   conditions,
-                                   audio_conditions,
-                                   extra->text_token_tags == nullptr ? empty_int : *extra->text_token_tags,
-                                   extra->keyframe_indices == nullptr ? empty_int : *extra->keyframe_indices,
-                                   reference_blocks,
-                                   extra->audio_length,
-                                   extra->video_sigma_shift,
-                                   extra->audio_sigma_shift);
+            std::string cache_name;
+            if (context_cache_enabled && !context_cache_disabled && extra->context_id != 0 &&
+                params.context->shape()[0] != config.hidden_size) {
+                cache_name = "minimax_h3.context." + std::to_string(extra->context_id);
+            }
+            auto run = [&](const std::string& active_cache_name) {
+                auto get_graph = [&]() {
+                    return build_graph(*params.x,
+                                       *params.timesteps,
+                                       *params.context,
+                                       active_cache_name,
+                                       conditions,
+                                       audio_conditions,
+                                       extra->text_token_tags == nullptr ? empty_int : *extra->text_token_tags,
+                                       extra->keyframe_indices == nullptr ? empty_int : *extra->keyframe_indices,
+                                       reference_blocks,
+                                       extra->audio_length,
+                                       extra->video_sigma_shift,
+                                       extra->audio_sigma_shift);
+                };
+                return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false),
+                                                       params.x->dim());
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph,
-                                                                       n_threads,
-                                                                       false),
-                                                   params.x->dim());
-        }
-
-    protected:
-        void on_sampling_done() override {
-            refined_context_cache.clear();
+            auto result = run(cache_name);
+            if (result.empty() && last_compute_status() == GGML_STATUS_ALLOC_FAILED &&
+                (!cache_name.empty() || !cache_.empty())) {
+                // The failed graph has ended before persistent inputs are released.
+                free_cache_ctx_and_buffer();
+                context_cache_disabled = true;
+                LOG_WARN("MiniMax-H3: insufficient memory for context caching; retrying without it for this sampling run");
+                return run("");
+            }
+            if (!result.empty() && !cache_name.empty() && get_cache_tensor_by_name(cache_name) == nullptr) {
+                free_cache_ctx_and_buffer();
+                context_cache_disabled = true;
+                LOG_WARN("MiniMax-H3: missing refined context cache; disabling it for this sampling run");
+            }
+            return result;
         }
     };
 

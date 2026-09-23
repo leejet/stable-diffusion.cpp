@@ -94,3 +94,17 @@ frame rate and optional soundtrack; non-24-fps inputs are resampled internally.
 - MiniMax-H3 runs at 24 fps; another requested value is overridden.
 - The default video flow shift is 12. The audio stream is mapped internally to
   its shift of 3, so the regular samplers can operate on the packed AV latent.
+
+## Text conditioning cache
+
+The first denoising call for each fixed condition caches the output of
+`condition_proj` and `token_refiner`. Later calls reuse it; positive and negative
+conditions have separate entries. The cache uses the runner's memory budget and
+is released when sampling ends. If cached execution runs out of memory, it clears
+the caches, disables caching for the rest of that sampling run, and retries once
+without caching. Per-step conditioning extensions use the uncached path.
+
+Disable this optimization with `--model-args minimax_h3_context_cache=false`.
+Only preprocessing of the text conditioning is cached. Reference projections,
+RoPE, and the timestep-dependent transformer backbone are recomputed on every
+call, including its bidirectional attention keys and values.
