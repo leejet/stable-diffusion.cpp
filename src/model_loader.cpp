@@ -914,10 +914,10 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
             for (const auto& ts : fdata.tensors) {
                 max_tensor_size = std::max(max_tensor_size, static_cast<size_t>(ts.nbytes()));
             }
-            ggml_backend_buffer_t buf = ggml_backend_dev_buffer_from_host_ptr(device,
-                                                                              fdata.mmapped->writable_data(),
-                                                                              fdata.mmapped->size(),
-                                                                              max_tensor_size);
+            ggml_backend_buffer_t buf = sd_backend_dev_buffer_from_host_ptr(device,
+                                                                            fdata.mmapped->writable_data(),
+                                                                            fdata.mmapped->size(),
+                                                                            max_tensor_size);
             if (buf == nullptr) {
                 LOG_WARN("mmap: %s cannot map '%s', loading it instead",
                          ggml_backend_dev_name(device), fdata.path.c_str());
@@ -982,9 +982,9 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
             if (buf_mmap == nullptr) {
                 break;
             }
-            uint8_t* mmap_data             = static_cast<uint8_t*>(ggml_backend_buffer_get_base(buf_mmap));
-            dst_tensor->buffer             = buf_mmap;
-            dst_tensor->data               = mmap_data + tensor_offset;
+            uint8_t* mmap_data = static_cast<uint8_t*>(ggml_backend_buffer_get_base(buf_mmap));
+            dst_tensor->buffer = buf_mmap;
+            dst_tensor->data   = mmap_data + tensor_offset;
 
             file_mapped_bytes += tensor_size;
             file_mapped_tensors++;
@@ -1007,6 +1007,16 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
              duration_ms / 1000.0);
 
     return result;
+}
+
+std::vector<ggml_backend_buffer_t> ModelLoader::get_device_mmap_buffers() const {
+    std::vector<ggml_backend_buffer_t> buffers;
+    for (const auto& fdata : file_data) {
+        for (const auto& entry : fdata.device_mmbuffers) {
+            buffers.push_back(entry.second.get());
+        }
+    }
+    return buffers;
 }
 
 bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,

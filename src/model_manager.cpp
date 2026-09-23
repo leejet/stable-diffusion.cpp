@@ -1367,15 +1367,16 @@ size_t ModelManager::compute_backend_resident_bytes(ggml_backend_t compute_backe
     }
 
     size_t total_size = 0;
-    auto add_buffer   = [&](ggml_backend_buffer_t buffer) {
-        if (buffer == nullptr || ggml_backend_buffer_is_host(buffer)) {
+    std::unordered_set<ggml_backend_buffer_t> seen;
+    auto add_buffer = [&](ggml_backend_buffer_t buffer) {
+        if (buffer == nullptr || ggml_backend_buffer_is_host(buffer) || !seen.insert(buffer).second) {
             return;
         }
         ggml_backend_buffer_type_t buffer_type = ggml_backend_buffer_get_type(buffer);
         auto split_devices                     = split_buffer_devices_.find(buffer_type);
         const bool on_device                   = split_devices == split_buffer_devices_.end()
-                                                       ? buffer_type != nullptr && ggml_backend_buft_get_device(buffer_type) == compute_device
-                                                       : std::any_of(split_devices->second.begin(), split_devices->second.end(), [&](const auto& entry) {
+                                                     ? buffer_type != nullptr && ggml_backend_buft_get_device(buffer_type) == compute_device
+                                                     : std::any_of(split_devices->second.begin(), split_devices->second.end(), [&](const auto& entry) {
                                          return ggml_backend_get_device(entry.first) == compute_device;
                                      });
         if (!on_device) {
@@ -1385,9 +1386,16 @@ size_t ModelManager::compute_backend_resident_bytes(ggml_backend_t compute_backe
         total_size               = buffer_size > SIZE_MAX - total_size ? SIZE_MAX : total_size + buffer_size;
     };
 
+    // The loader may retain device mappings after their parameter blocks are released.
+    for (ggml_backend_buffer_t buffer : model_loader_.get_device_mmap_buffers()) {
+        add_buffer(buffer);
+    }
     for (const auto& block : params_storage_blocks_) {
         if (block != nullptr) {
             add_buffer(block->buffer);
+            for (const auto& store : block->mmap_tensor_stores) {
+                add_buffer(store.mmbuffer.get());
+            }
         }
     }
     for (const auto& block : compute_staging_blocks_) {

@@ -124,6 +124,7 @@ public:
                                               std::set<std::string> ignore_tensors = {},
                                               bool writable                        = true,
                                               ggml_backend_dev_t device            = nullptr);
+    std::vector<ggml_backend_buffer_t> get_device_mmap_buffers() const;
     bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                       bool use_mmap                                    = false,
                       const std::set<std::string>* target_tensor_names = nullptr,
