@@ -1972,7 +1972,7 @@ void StableDiffusionGGML::preview_image(int step,
                                     : latents;
     if (preview_mode == PREVIEW_PROJ) {
         int patch_sz                     = 1;
-        const float(*latent_rgb_proj)[3] = nullptr;
+        const float(*latent_rgb_proj)[4] = nullptr;
         float* latent_rgb_bias           = nullptr;
 
         if (channels == 128) {
@@ -2045,13 +2045,13 @@ void StableDiffusionGGML::preview_image(int step,
         uint32_t img_width  = static_cast<uint32_t>(_latents.shape()[0]) * patch_sz;
         uint32_t img_height = static_cast<uint32_t>(_latents.shape()[1]) * patch_sz;
 
-        uint8_t* data = (uint8_t*)malloc(frames * img_width * img_height * 3 * sizeof(uint8_t));
+        uint8_t* data = (uint8_t*)malloc(frames * img_width * img_height * 4 * sizeof(uint8_t));
         GGML_ASSERT(data != nullptr);
         preview_latent_video(data, _latents, latent_rgb_proj, latent_rgb_bias, patch_sz);
         sd_image_t* images = (sd_image_t*)malloc(frames * sizeof(sd_image_t));
         GGML_ASSERT(images != nullptr);
         for (uint32_t i = 0; i < frames; i++) {
-            images[i] = {img_width, img_height, 3, data + i * img_width * img_height * 3};
+            images[i] = {img_width, img_height, 4, data + i * img_width * img_height * 4};
         }
         step_callback(step, frames, images, is_noisy, step_callback_data);
         free(data);
