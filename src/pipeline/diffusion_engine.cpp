@@ -2569,12 +2569,38 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
             }
         }
 
+        float effective_guidance_scale = guidance_schedule.empty() 
+            ? cfg_scale
+            : guidance_schedule[guidance_schedule.size() - 1 - step];
+
+        float image_guidance_scale = img_cfg_scale; 
+
+        constexpr float kEpsilon = 1e-5f;
+
+        bool skip_uncond = false;
+        if (!uncond.empty() && !needs_uncond_denoised) {
+            if (!img_uncond.empty()) {
+                skip_uncond = std::abs(image_guidance_scale - effective_guidance_scale) < kEpsilon;
+            } else {
+                skip_uncond = std::abs(effective_guidance_scale - 1.0f) < kEpsilon;
+            }
+        }
+
+        bool skip_img_uncond = false;
+        if (!img_uncond.empty() && !needs_uncond_denoised) {
+            if (!uncond.empty()) {
+                skip_img_uncond = std::abs(image_guidance_scale - 1.0f) < kEpsilon;
+            } else {
+                skip_img_uncond = std::abs(effective_guidance_scale - 1.0f) < kEpsilon;
+            }
+        }
+
         cond_out = run_condition(*positive_condition, c_concat_override);
         if (cond_out.empty()) {
             return {};
         }
 
-        if (!uncond.empty()) {
+        if (!uncond.empty() && !skip_uncond) {
             if (!step_cache.is_step_skipped()) {
                 compute_sample_controls(control_image,
                                         noised_input,
@@ -2596,7 +2622,8 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                 return {};
             }
         }
-        if (!img_uncond.empty()) {
+
+        if (!img_uncond.empty() && !skip_img_uncond) {
             img_uncond_out = run_condition(img_uncond,
                                            img_uncond.c_concat.empty() ? nullptr : &img_uncond.c_concat,
                                            nullptr,
@@ -2613,7 +2640,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
         guidance_input.pred_uncond     = uncond_out.empty() ? nullptr : &uncond_out;
         guidance_input.pred_img_uncond = img_uncond_out.empty() ? nullptr : &img_uncond_out;
 
-        sd::guidance::GuiderOutput guided = guidance_schedule.empty() ? primary_guidance.forward(guidance_input, {}) : primary_guidance.forward(guidance_input, {}, guidance_schedule[guidance_schedule.size() - 1 - step]);
+        sd::guidance::GuiderOutput guided = primary_guidance.forward(guidance_input, {}, effective_guidance_scale);
         if (guided.pred.empty()) {
             return {};
         }
