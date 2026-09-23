@@ -871,7 +871,7 @@ namespace LLM {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* x,
-                             ggml_tensor* pe,
+                             ggml_tensor* positions,
                              ggml_tensor* mask = nullptr) {
             // x: [N, n_token, hidden_size]
             int64_t n_token = x->ne[1];
@@ -899,7 +899,24 @@ namespace LLM {
             auto k = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[1], head_dim, num_heads, qkv_vec[1]->ne[1], qkv_vec[1]->ne[2]);  // [N, n_token, n_head, d_head]
             auto v = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[2], head_dim, num_heads, qkv_vec[2]->ne[1], qkv_vec[2]->ne[2]);  // [N, n_token, n_head, d_head]
 
-            x = Rope::attention(ctx, q, k, v, pe, mask, 1.f, false);  // [N, n_token, hidden_size]
+            GGML_ASSERT(positions->type == GGML_TYPE_I32 && head_dim % 4 == 0);
+            int sections[GGML_MROPE_SECTIONS] = {
+                head_dim / 4, head_dim / 4, head_dim / 4, head_dim / 4,
+            };
+            q = ggml_rope_multi(ctx->ggml_ctx, q, positions, nullptr,
+                                head_dim / 2, sections, GGML_ROPE_TYPE_VISION,
+                                32768, 10000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+            k = ggml_rope_multi(ctx->ggml_ctx, k, positions, nullptr,
+                                head_dim / 2, sections, GGML_ROPE_TYPE_VISION,
+                                32768, 10000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+            q = ggml_reshape_3d(ctx->ggml_ctx,
+                                ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, q, 0, 2, 1, 3)),
+                                head_dim, n_token, num_heads * N);
+            k = ggml_reshape_3d(ctx->ggml_ctx,
+                                ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, k, 0, 2, 1, 3)),
+                                head_dim, n_token, num_heads * N);
+            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads,
+                                       mask, true, ctx->flash_attn_enabled);
 
             x = proj->forward(ctx, x);  // [N, n_token, hidden_size]
             return x;
@@ -940,7 +957,7 @@ namespace LLM {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* x,
-                             ggml_tensor* pe,
+                             ggml_tensor* positions,
                              ggml_tensor* mask = nullptr) {
             // x: [N, n_token, hidden_size]
             auto attn = std::dynamic_pointer_cast<VisionAttention>(blocks["attn"]);
@@ -948,7 +965,7 @@ namespace LLM {
 
             auto residual = x;
             x             = forward_norm(ctx, "norm1", x);
-            x             = attn->forward(ctx, x, pe, mask);
+            x             = attn->forward(ctx, x, positions, mask);
             x             = ggml_add_inplace(ctx->ggml_ctx, x, residual);
 
             residual = x;
@@ -1025,7 +1042,7 @@ namespace LLM {
 
         std::vector<ggml_tensor*> forward_outputs(GGMLRunnerContext* ctx,
                                                   ggml_tensor* pixel_values,
-                                                  ggml_tensor* pe,
+                                                  ggml_tensor* positions,
                                                   ggml_tensor* window_index,
                                                   ggml_tensor* window_inverse_index,
                                                   ggml_tensor* window_mask,
@@ -1057,7 +1074,7 @@ namespace LLM {
                 if (fullatt_block_indexes.find(i) != fullatt_block_indexes.end()) {
                     mask = nullptr;
                 }
-                x                 = block->forward(ctx, x, pe, mask);
+                x                 = block->forward(ctx, x, positions, mask);
                 auto deepstack_it = std::find(deepstack_visual_indexes.begin(), deepstack_visual_indexes.end(), i);
                 if (deepstack_it != deepstack_visual_indexes.end()) {
                     size_t deepstack_index = static_cast<size_t>(std::distance(deepstack_visual_indexes.begin(), deepstack_it));
@@ -1081,12 +1098,12 @@ namespace LLM {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* pixel_values,
-                             ggml_tensor* pe,
+                             ggml_tensor* positions,
                              ggml_tensor* window_index,
                              ggml_tensor* window_inverse_index,
                              ggml_tensor* window_mask,
                              ggml_tensor* pos_embeds = nullptr) {
-            return forward_outputs(ctx, pixel_values, pe, window_index, window_inverse_index, window_mask, pos_embeds)[0];
+            return forward_outputs(ctx, pixel_values, positions, window_index, window_inverse_index, window_mask, pos_embeds)[0];
         }
     };
 
@@ -1359,7 +1376,7 @@ namespace LLM {
                 x        = ggml_ext_cont(ctx->ggml_ctx, kqv);
                 x        = ggml_reshape_3d(ctx->ggml_ctx, x, head_dim * num_heads, n_token, N);
             } else {
-                x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, attention_mask, true, false);  // [N, n_token, hidden_size]
+                x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, attention_mask, true, ctx->flash_attn_enabled);  // [N, n_token, hidden_size]
             }
 
             x = out_proj->forward(ctx, x);  // [N, n_token, hidden_size]
@@ -1639,13 +1656,13 @@ namespace LLM {
 
         ggml_tensor* vision_forward(GGMLRunnerContext* ctx,
                                     ggml_tensor* pixel_values,
-                                    ggml_tensor* pe,
+                                    ggml_tensor* positions,
                                     ggml_tensor* window_index,
                                     ggml_tensor* window_inverse_index,
                                     ggml_tensor* window_mask,
                                     ggml_tensor* pos_embeds = nullptr) {
             GGML_ASSERT(enable_vision);
-            return vision_model()->forward(ctx, pixel_values, pe, window_index, window_inverse_index, window_mask, pos_embeds);
+            return vision_model()->forward(ctx, pixel_values, positions, window_index, window_inverse_index, window_mask, pos_embeds);
         }
     };
 
@@ -1660,7 +1677,7 @@ namespace LLM {
         std::vector<float> window_mask_vec;
         std::vector<int> window_index_vec;
         std::vector<int> window_inverse_index_vec;
-        std::vector<float> pe_vec;
+        std::vector<int32_t> vision_rope_positions_vec;
         std::array<std::vector<int32_t>, 4> pos_embed_idx_data_;
         std::array<std::vector<float>, 4> pos_embed_weight_data_;
 
@@ -1757,6 +1774,42 @@ namespace LLM {
             return patch_pos_embeds;
         }
 
+        static ggml_tensor* build_vision_rope_positions(GGMLRunner* runner,
+                                                        ggml_context* compute_ctx,
+                                                        int grid_h,
+                                                        int grid_w,
+                                                        int merge_size,
+                                                        const std::vector<int>& window_index,
+                                                        std::vector<int32_t>& positions) {
+            const int n_tokens = grid_h * grid_w;
+            const int merge_area = merge_size * merge_size;
+            positions.assign(static_cast<size_t>(n_tokens) * 4, 0);
+
+            int index = 0;
+            for (int ih = 0; ih < grid_h; ih += merge_size) {
+                for (int iw = 0; iw < grid_w; iw += merge_size) {
+                    for (int iy = 0; iy < merge_size; ++iy) {
+                        for (int ix = 0; ix < merge_size; ++ix) {
+                            const int block = window_index[static_cast<size_t>(index / merge_area)];
+                            const int token = block * merge_area + index % merge_area;
+                            GGML_ASSERT(token >= 0 && token < n_tokens);
+                            const int y = ih + iy;
+                            const int x = iw + ix;
+                            positions[static_cast<size_t>(token)] = y;
+                            positions[static_cast<size_t>(n_tokens + token)] = x;
+                            positions[static_cast<size_t>(2 * n_tokens + token)] = y;
+                            positions[static_cast<size_t>(3 * n_tokens + token)] = x;
+                            ++index;
+                        }
+                    }
+                }
+            }
+
+            auto result = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_I32, positions.size());
+            runner->set_backend_tensor_data(result, positions.data());
+            return result;
+        }
+
         static ggml_tensor* encode_image_common(GGMLRunner* runner,
                                                 ggml_context* compute_ctx,
                                                 GGMLRunnerContext* runner_ctx,
@@ -1766,7 +1819,7 @@ namespace LLM {
                                                 std::vector<int>& window_index_vec,
                                                 std::vector<int>& window_inverse_index_vec,
                                                 std::vector<float>& window_mask_vec,
-                                                std::vector<float>& pe_vec,
+                                                std::vector<int32_t>& vision_rope_positions_vec,
                                                 std::array<std::vector<int32_t>, 4>& pos_embed_idx_data,
                                                 std::array<std::vector<float>, 4>& pos_embed_weight_data,
                                                 std::vector<ggml_tensor*>* output_tensors = nullptr) {
@@ -1777,8 +1830,6 @@ namespace LLM {
             int grid_w = static_cast<int>(image->ne[0]) / vision_params.patch_size;
 
             auto pixel_values = process_image_common(compute_ctx, image, vision_params);
-            int head_dim      = static_cast<int>(vision_params.hidden_size / vision_params.num_heads);
-
             if (vision_params.arch == LLMVisionArch::QWEN3_VL) {
                 auto pos_embeds = build_patch_pos_embeds_common(runner,
                                                                 compute_ctx,
@@ -1792,16 +1843,14 @@ namespace LLM {
                 for (int i = 0; i < static_cast<int>(window_index_vec.size()); ++i) {
                     window_index_vec[static_cast<size_t>(i)] = i;
                 }
-                pe_vec      = Rope::gen_qwen2vl_pe(grid_h,
-                                                   grid_w,
-                                                   vision_params.spatial_merge_size,
-                                                   window_index_vec,
-                                                   10000,
-                                                   {head_dim / 2, head_dim / 2});
-                int pos_len = static_cast<int>(pe_vec.size() / head_dim / 2);
-                auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, head_dim / 2, pos_len);
-                runner->set_backend_tensor_data(pe, pe_vec.data());
-                auto outputs = vision_model->forward_outputs(runner_ctx, pixel_values, pe, nullptr, nullptr, nullptr, pos_embeds);
+                auto positions = build_vision_rope_positions(runner,
+                                                             compute_ctx,
+                                                             grid_h,
+                                                             grid_w,
+                                                             vision_params.spatial_merge_size,
+                                                             window_index_vec,
+                                                             vision_rope_positions_vec);
+                auto outputs = vision_model->forward_outputs(runner_ctx, pixel_values, positions, nullptr, nullptr, nullptr, pos_embeds);
                 if (output_tensors != nullptr) {
                     *output_tensors = outputs;
                 }
@@ -1860,18 +1909,14 @@ namespace LLM {
                                                   grid_h * grid_w);
             runner->set_backend_tensor_data(window_mask, window_mask_vec.data());
 
-            pe_vec      = Rope::gen_qwen2vl_pe(grid_h,
-                                               grid_w,
-                                               vision_params.spatial_merge_size,
-                                               window_inverse_index_vec,
-                                               10000,
-                                               {head_dim / 2, head_dim / 2});
-            int pos_len = static_cast<int>(pe_vec.size() / head_dim / 2);
-
-            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, head_dim / 2, pos_len);
-            runner->set_backend_tensor_data(pe, pe_vec.data());
-
-            auto output = vision_model->forward(runner_ctx, pixel_values, pe, window_index, window_inverse_index, window_mask);
+            auto positions = build_vision_rope_positions(runner,
+                                                         compute_ctx,
+                                                         grid_h,
+                                                         grid_w,
+                                                         vision_params.spatial_merge_size,
+                                                         window_inverse_index_vec,
+                                                         vision_rope_positions_vec);
+            auto output = vision_model->forward(runner_ctx, pixel_values, positions, window_index, window_inverse_index, window_mask);
             if (output_tensors != nullptr) {
                 *output_tensors = {output};
             }
@@ -2138,7 +2183,7 @@ namespace LLM {
                                        window_index_vec,
                                        window_inverse_index_vec,
                                        window_mask_vec,
-                                       pe_vec,
+                                       vision_rope_positions_vec,
                                        pos_embed_idx_data_,
                                        pos_embed_weight_data_);
         }
@@ -2154,7 +2199,7 @@ namespace LLM {
                                 window_index_vec,
                                 window_inverse_index_vec,
                                 window_mask_vec,
-                                pe_vec,
+                                vision_rope_positions_vec,
                                 pos_embed_idx_data_,
                                 pos_embed_weight_data_,
                                 &outputs);
@@ -2255,25 +2300,22 @@ namespace LLM {
             auto pixel_values = make_input(pixel_values_tensor);
             auto runner_ctx   = get_context();
             auto vision       = model.vision_model();
-            int head_dim      = static_cast<int>(config.vision.hidden_size / config.vision.num_heads);
             auto pos_embeds   = build_patch_pos_embeds(&runner_ctx, vision, grid_h, grid_w);
             window_index_vec.resize(static_cast<size_t>((grid_h / config.vision.spatial_merge_size) *
                                                         (grid_w / config.vision.spatial_merge_size)));
             for (int i = 0; i < static_cast<int>(window_index_vec.size()); ++i) {
                 window_index_vec[static_cast<size_t>(i)] = i;
             }
-            pe_vec      = Rope::gen_qwen2vl_pe(grid_h,
-                                               grid_w,
-                                               config.vision.spatial_merge_size,
-                                               window_index_vec,
-                                               10000,
-                                               {head_dim / 2, head_dim / 2});
-            int pos_len = static_cast<int>(pe_vec.size() / head_dim / 2);
-            auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, head_dim / 2, pos_len);
-            set_backend_tensor_data(pe, pe_vec.data());
+            auto positions = build_vision_rope_positions(this,
+                                                         compute_ctx,
+                                                         grid_h,
+                                                         grid_w,
+                                                         config.vision.spatial_merge_size,
+                                                         window_index_vec,
+                                                         vision_rope_positions_vec);
             auto outputs = vision->forward_outputs(&runner_ctx,
                                                    pixel_values,
-                                                   pe,
+                                                   positions,
                                                    nullptr,
                                                    nullptr,
                                                    nullptr,

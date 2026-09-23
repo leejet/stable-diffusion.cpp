@@ -6,7 +6,12 @@
 
 This branch provides optimized stable-diffusion.cpp and GGML paths for Qualcomm Hexagon NPUs and Adreno GPUs. It is used by [Local Dream](https://github.com/xororz/local-dream) for on-device DiT inference.
 
-In principle, it can run any standard GGUF supported by stable-diffusion.cpp. Hexagon v79 and newer additionally accept standard F8_E4M3 safetensors directly. No custom or private weight format is required. Validation currently focuses on Q4_0 GGUF on Adreno GPUs, and Q4_0, MXFP4, and Q8_0 GGUF plus F8_E4M3 safetensors on Hexagon NPUs.
+Models use standard formats supported by stable-diffusion.cpp: GGUF on Adreno and Hexagon, with direct F8_E4M3 safetensor loading on Hexagon v79+.
+
+| Backend | Validated weights |
+|---|---|
+| Adreno GPU | Q4_0 GGUF |
+| Hexagon NPU | Q4_0, MXFP4, Q8_0 (GGUF); F8_E4M3 (safetensors) |
 
 - GGML tracking: [llama.cpp issue #28904](https://github.com/ggml-org/llama.cpp/issues/28904) and [PR #28952](https://github.com/ggml-org/llama.cpp/pull/28952)
 - SD.cpp integration: [stable-diffusion.cpp PR #1970](https://github.com/leejet/stable-diffusion.cpp/pull/1970)
@@ -234,6 +239,14 @@ Qwen Image 2.1 preserves the requested content significantly better in this edit
 | **1024x1024, 4 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/klein9b_edit_remove_equation_1024_s4.png" width="480" alt="FLUX.2 Klein 9B edit"> | **1024x1024, 20 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/qwen21_edit_remove_equation_1024_s20.png" width="480" alt="Qwen Image 2.1 edit"> |
 
 Qwen Image 2.1 weights: [DiT Q4_0](https://huggingface.co/leejet/Qwen-Image-2.1-GGUF/blob/main/qwen_image_2.1-Q4_0.gguf), [Qwen3-VL-8B Q4_0](https://huggingface.co/bartowski/Qwen_Qwen3-VL-8B-Instruct-GGUF/blob/main/Qwen_Qwen3-VL-8B-Instruct-Q4_0.gguf), [vision projector F16](https://huggingface.co/bartowski/Qwen_Qwen3-VL-8B-Instruct-GGUF/blob/main/mmproj-Qwen_Qwen3-VL-8B-Instruct-f16.gguf), and [VAE BF16](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/vae/qwen_image_2.1_vae_bf16.safetensors).
+
+With the F8_E4M3 DiT, Qwen Image 2.1 appears to produce a good edit with only one sampling step.
+
+| Qwen Image 2.1 FP8, 1 step | Qwen Image 2.1 FP8, 20 steps |
+|---|---|
+| **1024x1024, 1 step**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/qwen21_fp8_edit_remove_equation_1024_s1.png" width="480" alt="Qwen Image 2.1 FP8 edit, 1 step"> | **1024x1024, 20 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/qwen21_fp8_edit_remove_equation_1024_s20.png" width="480" alt="Qwen Image 2.1 FP8 edit, 20 steps"> |
+
+FP8 edit weights: [DiT F8_E4M3](https://huggingface.co/unsloth/Qwen-Image-2.1-FP8/blob/main/Qwen-Image-2.1-FP8.safetensors), [Qwen3-VL-8B Q4_0](https://huggingface.co/bartowski/Qwen_Qwen3-VL-8B-Instruct-GGUF/blob/main/Qwen_Qwen3-VL-8B-Instruct-Q4_0.gguf), [vision projector F16](https://huggingface.co/bartowski/Qwen_Qwen3-VL-8B-Instruct-GGUF/blob/main/mmproj-Qwen_Qwen3-VL-8B-Instruct-f16.gguf), and [VAE BF16](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/vae/qwen_image_2.1_vae_bf16.safetensors).
 
 #### Generate the reference with Z-Image Turbo
 

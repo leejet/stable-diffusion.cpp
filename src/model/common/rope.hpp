@@ -857,42 +857,6 @@ namespace Rope {
         return embed_nd(ids, bs, static_cast<float>(theta), axes_dim);
     }
 
-    __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen2vl_ids(int grid_h,
-                                                                      int grid_w,
-                                                                      int merge_size,
-                                                                      const std::vector<int>& window_index) {
-        std::vector<std::vector<float>> ids(grid_h * grid_w, std::vector<float>(2, 0.0));
-        int index = 0;
-        for (int ih = 0; ih < grid_h; ih += merge_size) {
-            for (int iw = 0; iw < grid_w; iw += merge_size) {
-                for (int iy = 0; iy < merge_size; iy++) {
-                    for (int ix = 0; ix < merge_size; ix++) {
-                        int inverse_index = window_index[index / (merge_size * merge_size)];
-                        int i             = inverse_index * (merge_size * merge_size) + index % (merge_size * merge_size);
-
-                        GGML_ASSERT(i < grid_h * grid_w);
-
-                        ids[i][0] = static_cast<float>(ih + iy);
-                        ids[i][1] = static_cast<float>(iw + ix);
-                        index++;
-                    }
-                }
-            }
-        }
-        return ids;
-    }
-
-    // Generate qwen2vl positional embeddings
-    __STATIC_INLINE__ std::vector<float> gen_qwen2vl_pe(int grid_h,
-                                                        int grid_w,
-                                                        int merge_size,
-                                                        const std::vector<int>& window_index,
-                                                        int theta,
-                                                        const std::vector<int>& axes_dim) {
-        std::vector<std::vector<float>> ids = gen_qwen2vl_ids(grid_h, grid_w, merge_size, window_index);
-        return embed_nd(ids, 1, static_cast<float>(theta), axes_dim);
-    }
-
     __STATIC_INLINE__ int bound_mod(int a, int m) {
         return (m - (a % m)) % m;
     }
