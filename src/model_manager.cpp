@@ -780,38 +780,52 @@ bool ModelManager::validate_tensor(const TensorState& state) const {
 
 bool ModelManager::mmap_params(const std::vector<TensorState*>& states,
                                std::vector<ParamsStorageBlock*>& created_storage_blocks) {
-    std::map<std::string, ggml_tensor*> mmap_candidates;
-    std::map<std::string, TensorState*> mmap_states;
+    // A GPU that computes on mmapped params in place cannot address a CPU buffer, and nothing
+    // stages them for it, so they are mapped through a buffer of that GPU's device.
+    struct MmapGroup {
+        std::map<std::string, ggml_tensor*> candidates;
+        std::map<std::string, TensorState*> states;
+    };
+    std::map<ggml_backend_dev_t, MmapGroup> groups;
     for (TensorState* state : states) {
         if (state == nullptr || !can_mmap_storage(*state) || state->tensor == nullptr ||
             state->tensor->data != nullptr || state->tensor->view_src != nullptr) {
             continue;
         }
-        mmap_candidates[state->name] = state->tensor;
-        mmap_states[state->name]     = state;
-    }
-    if (mmap_candidates.empty()) {
-        return true;
-    }
-
-    auto mmap_store = model_loader_.mmap_tensors(mmap_candidates, {}, writable_mmap_);
-    if (mmap_store.empty()) {
-        return true;
-    }
-
-    auto block                = std::make_unique<ParamsStorageBlock>();
-    block->mmap_tensor_stores = std::move(mmap_store);
-    ParamsStorageBlock* raw   = block.get();
-    for (const auto& pair : mmap_states) {
-        TensorState* state = pair.second;
-        if (state != nullptr && state->tensor != nullptr && state->tensor->data != nullptr) {
-            block->states.push_back(state);
+        ggml_backend_dev_t device = nullptr;
+        if (!sd_backend_is_cpu(state->compute_backend) && !sd_backend_is_cpu(state->params_backend)) {
+            device = ggml_backend_get_device(state->compute_backend);
         }
+        MmapGroup& group              = groups[device];
+        group.candidates[state->name] = state->tensor;
+        group.states[state->name]     = state;
     }
 
-    if (!block->states.empty()) {
-        params_storage_blocks_.push_back(std::move(block));
-        created_storage_blocks.push_back(raw);
+    for (auto& [device, group] : groups) {
+        // Device buffers wrap read-only mappings only; params that LoRAs are merged into in place
+        // are loaded instead.
+        if (device != nullptr && writable_mmap_) {
+            continue;
+        }
+        auto mmap_store = model_loader_.mmap_tensors(group.candidates, {}, writable_mmap_, device);
+        if (mmap_store.empty()) {
+            continue;
+        }
+
+        auto block                = std::make_unique<ParamsStorageBlock>();
+        block->mmap_tensor_stores = std::move(mmap_store);
+        ParamsStorageBlock* raw   = block.get();
+        for (const auto& pair : group.states) {
+            TensorState* state = pair.second;
+            if (state != nullptr && state->tensor != nullptr && state->tensor->data != nullptr) {
+                block->states.push_back(state);
+            }
+        }
+
+        if (!block->states.empty()) {
+            params_storage_blocks_.push_back(std::move(block));
+            created_storage_blocks.push_back(raw);
+        }
     }
     return true;
 }
