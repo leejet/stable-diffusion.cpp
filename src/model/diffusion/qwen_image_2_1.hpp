@@ -178,13 +178,13 @@ namespace Qwen {
                 auto h = std::dynamic_pointer_cast<Linear>(blocks[name])->forward(ctx, x);
                 return ggml_reshape_4d(ctx->ggml_ctx, h, dim_head, heads, x->ne[1], x->ne[2]);
             };
-            auto q              = project("to_q");
-            auto k              = project("to_k");
-            auto v              = project("to_v");
-            q                   = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_q"])->forward(ctx, q);
-            k                   = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_k"])->forward(ctx, k);
-            q                   = Rope::apply_rope(ctx->ggml_ctx, q, pe);
-            k                   = Rope::apply_rope(ctx->ggml_ctx, k, pe);
+            auto q = project("to_q");
+            auto k = project("to_k");
+            auto v = project("to_v");
+            q      = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_q"])->forward(ctx, q);
+            k      = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_k"])->forward(ctx, k);
+            q      = Rope::apply_rope(ctx->ggml_ctx, q, pe);
+            k      = Rope::apply_rope(ctx->ggml_ctx, k, pe);
             if (cache.mode == QwenImage21PrefixCache::Mode::STORE) {
                 auto persist = [&](ggml_tensor* tensor, int axis, const char* name) {
                     auto part = ggml_ext_slice(ctx->ggml_ctx, tensor, axis, 0, cache.prefix_length);

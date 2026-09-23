@@ -119,8 +119,6 @@ struct MiniMaxH3DiffusionExtra {
     int audio_length                                              = 0;
     float video_sigma_shift                                       = 12.f;
     float audio_sigma_shift                                       = 3.f;
-    // Nonzero IDs identify immutable text conditioning and weights within one sampling run.
-    uint64_t context_id = 0;
 };
 
 struct MiniT2IDiffusionExtra {

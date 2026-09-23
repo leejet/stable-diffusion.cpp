@@ -2258,13 +2258,12 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
 
     // These inputs are immutable for this sampling run. Extensions may replace or
     // modify them per step, so those paths need an explicit stability contract first.
-    const bool cache_condition_inputs = (version == VERSION_QWEN_IMAGE_2_1 || sd_version_is_minimax_h3(version)) &&
-                                        std::none_of(generation_extensions.begin(), generation_extensions.end(),
-                                                     [](const auto& extension) { return extension->is_enabled(); });
+    const bool cache_qwen_prefix = version == VERSION_QWEN_IMAGE_2_1 &&
+                                   std::none_of(generation_extensions.begin(), generation_extensions.end(),
+                                                [](const auto& extension) { return extension->is_enabled(); });
     using QwenPrefixInputs = std::tuple<const sd::Tensor<float>*, const sd::Tensor<int32_t>*,
                                         const std::vector<sd::Tensor<float>>*>;
     std::vector<QwenPrefixInputs> qwen_prefix_inputs;
-    std::vector<const sd::Tensor<float>*> minimax_context_inputs;
 
     RunnerEndOnExit sample_control_runner_end{!control_image.empty() && control_net != nullptr ? control_net.get() : nullptr};
 
@@ -2535,7 +2534,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                 extension->before_diffusion(diffusion_params, step);
             }
 
-            if (cache_condition_inputs) {
+            if (cache_qwen_prefix) {
                 auto* extra = std::get_if<QwenImage21DiffusionExtra>(&diffusion_params.extra);
                 if (extra != nullptr) {
                     auto key         = std::make_tuple(diffusion_params.context, extra->image_slots,
@@ -2544,12 +2543,6 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                     extra->prefix_id = static_cast<uint64_t>(entry - qwen_prefix_inputs.begin()) + 1;
                     if (entry == qwen_prefix_inputs.end()) {
                         qwen_prefix_inputs.push_back(key);
-                    }
-                } else if (auto* minimax_extra = std::get_if<MiniMaxH3DiffusionExtra>(&diffusion_params.extra)) {
-                    auto entry                = std::find(minimax_context_inputs.begin(), minimax_context_inputs.end(), diffusion_params.context);
-                    minimax_extra->context_id = static_cast<uint64_t>(entry - minimax_context_inputs.begin()) + 1;
-                    if (entry == minimax_context_inputs.end()) {
-                        minimax_context_inputs.push_back(diffusion_params.context);
                     }
                 }
             }

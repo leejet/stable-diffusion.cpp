@@ -205,8 +205,7 @@ namespace sd::model_builders {
             result.diffusion   = std::make_shared<MiniMaxH3::MiniMaxH3Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                             tensor_storage_map,
                                                                             "model.diffusion_model",
-                                                                            weight_manager,
-                                                                            sd_ctx_params->model_args);
+                                                                            weight_manager);
         } else if (sd_version_is_hunyuan_video(version)) {
             result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                tensor_storage_map,

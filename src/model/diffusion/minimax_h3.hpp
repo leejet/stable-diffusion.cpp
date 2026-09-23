@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
-#include <memory>
 #include <set>
 #include <string>
 #include <tuple>
@@ -261,21 +260,15 @@ namespace MiniMaxH3 {
             blocks["final_norm"] = std::make_shared<RMSNorm>(config.hidden_size, config.final_norm_eps);
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx,
-                             ggml_tensor* x) {
-            auto final_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["final_norm"]);
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             for (int64_t i = 0; i < num_layers; ++i) {
-                auto block         = std::dynamic_pointer_cast<TokenRefinerBlock>(blocks["blocks." + std::to_string(i)]);
-                x                  = block->forward(ctx, x);
-                const bool is_last = i + 1 == num_layers;
-                if (is_last) {
-                    x = final_norm->forward(ctx, x);
-                }
+                auto block = std::dynamic_pointer_cast<TokenRefinerBlock>(blocks["blocks." + std::to_string(i)]);
+                x          = block->forward(ctx, x);
                 sd::ggml_graph_cut::mark_graph_cut(x,
                                                    "minimax_h3.token_refiner.blocks." + std::to_string(i),
                                                    "hidden_states");
             }
-            return num_layers == 0 ? final_norm->forward(ctx, x) : x;
+            return std::dynamic_pointer_cast<RMSNorm>(blocks["final_norm"])->forward(ctx, x);
         }
     };
 
@@ -530,8 +523,7 @@ namespace MiniMaxH3 {
             }
         }
 
-        ggml_tensor* refine_context(GGMLRunnerContext* ctx,
-                                    ggml_tensor* context) {
+        ggml_tensor* refine_context(GGMLRunnerContext* ctx, ggml_tensor* context) {
             if (context->ne[0] == config.hidden_size) {
                 return context;
             }
@@ -969,22 +961,14 @@ namespace MiniMaxH3 {
         sd::Tensor<int32_t> curve_index_input_cache;
         sd::Tensor<int32_t> curve_upper_index_input_cache;
         sd::Tensor<float> curve_fraction_input_cache;
-        bool context_cache_enabled  = true;
-        bool context_cache_disabled = false;
 
         MiniMaxH3Runner(ggml_backend_t backend,
                         const String2TensorStorage& tensors,
                         const std::string& prefix                           = "model.diffusion_model",
-                        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr,
-                        const char* model_args                              = nullptr)
+                        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : DiffusionModelRunner(backend, prefix, weight_manager),
               config(Config::detect_from_weights(tensors, prefix)),
               model(config) {
-            for (const auto& [key, value] : parse_key_value_args(model_args, "model arg")) {
-                if (key == "minimax_h3_context_cache" && !parse_strict_bool(value, context_cache_enabled)) {
-                    LOG_WARN("ignoring invalid MiniMax-H3 model arg '%s=%s'", key.c_str(), value.c_str());
-                }
-            }
             model.init(params_ctx, tensors, prefix);
         }
 
@@ -1042,7 +1026,6 @@ namespace MiniMaxH3 {
         ggml_cgraph* build_graph(const sd::Tensor<float>& packed,
                                  const sd::Tensor<float>& timestep,
                                  const sd::Tensor<float>& context_tensor,
-                                 const std::string& context_cache_name,
                                  const std::vector<sd::Tensor<float>>& condition_videos,
                                  const std::vector<sd::Tensor<float>>& condition_audios,
                                  const sd::Tensor<int32_t>& text_tags,
@@ -1059,14 +1042,7 @@ namespace MiniMaxH3 {
 
             auto video         = make_input(video_input_cache);
             auto audio_carrier = make_input(audio_input_cache);
-            auto context       = context_cache_name.empty() ? nullptr : get_cache_tensor_by_name(context_cache_name);
-            if (context == nullptr) {
-                auto ctx = get_context();
-                context  = model.refine_context(&ctx, make_input(context_tensor));
-                if (!context_cache_name.empty()) {
-                    cache(context_cache_name, context);
-                }
-            }
+            auto context       = make_input(context_tensor);
             std::vector<ggml_tensor*> condition_inputs;
             condition_inputs.reserve(condition_videos.size());
             for (const auto& condition : condition_videos) {
@@ -1174,7 +1150,6 @@ namespace MiniMaxH3 {
         sd::Tensor<float> compute(int n_threads,
                                   const DiffusionParams& params) override {
             GGML_ASSERT(params.x != nullptr && params.timesteps != nullptr && params.context != nullptr);
-            GGML_ASSERT(!params.context->empty());
             const auto* extra = diffusion_extra_as<MiniMaxH3DiffusionExtra>(params);
             static const std::vector<sd::Tensor<float>> empty_conditions;
             static const std::vector<MiniMaxH3ReferenceBlock> empty_reference_blocks;
@@ -1186,47 +1161,23 @@ namespace MiniMaxH3 {
                                                ? empty_reference_blocks
                                                : *extra->reference_blocks;
             const sd::Tensor<int32_t> empty_int;
-            if (!runner_started()) {
-                context_cache_disabled = false;
-            }
-            std::string cache_name;
-            if (context_cache_enabled && !context_cache_disabled && extra->context_id != 0 &&
-                params.context->shape()[0] != config.hidden_size) {
-                cache_name = "minimax_h3.context." + std::to_string(extra->context_id);
-            }
-            auto run = [&](const std::string& active_cache_name) {
-                auto get_graph = [&]() {
-                    return build_graph(*params.x,
-                                       *params.timesteps,
-                                       *params.context,
-                                       active_cache_name,
-                                       conditions,
-                                       audio_conditions,
-                                       extra->text_token_tags == nullptr ? empty_int : *extra->text_token_tags,
-                                       extra->keyframe_indices == nullptr ? empty_int : *extra->keyframe_indices,
-                                       reference_blocks,
-                                       extra->audio_length,
-                                       extra->video_sigma_shift,
-                                       extra->audio_sigma_shift);
-                };
-                return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false),
-                                                       params.x->dim());
+            auto get_graph = [&]() {
+                return build_graph(*params.x,
+                                   *params.timesteps,
+                                   *params.context,
+                                   conditions,
+                                   audio_conditions,
+                                   extra->text_token_tags == nullptr ? empty_int : *extra->text_token_tags,
+                                   extra->keyframe_indices == nullptr ? empty_int : *extra->keyframe_indices,
+                                   reference_blocks,
+                                   extra->audio_length,
+                                   extra->video_sigma_shift,
+                                   extra->audio_sigma_shift);
             };
-            auto result = run(cache_name);
-            if (result.empty() && last_compute_status() == GGML_STATUS_ALLOC_FAILED &&
-                (!cache_name.empty() || !cache_.empty())) {
-                // The failed graph has ended before persistent inputs are released.
-                free_cache_ctx_and_buffer();
-                context_cache_disabled = true;
-                LOG_WARN("MiniMax-H3: insufficient memory for context caching; retrying without it for this sampling run");
-                return run("");
-            }
-            if (!result.empty() && !cache_name.empty() && get_cache_tensor_by_name(cache_name) == nullptr) {
-                free_cache_ctx_and_buffer();
-                context_cache_disabled = true;
-                LOG_WARN("MiniMax-H3: missing refined context cache; disabling it for this sampling run");
-            }
-            return result;
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph,
+                                                                       n_threads,
+                                                                       false),
+                                                   params.x->dim());
         }
     };
 
