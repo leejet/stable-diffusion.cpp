@@ -442,9 +442,9 @@ void preview_latent_video(uint8_t* buffer, ggml_tensor* latents, const float (*l
                     }
                 } else {
                     // interpret first 3 channels as RGB
-                    r = *(float*)((char*)latents->data + latent_id + 0 * latents->nb[ggml_n_dims(latents) - 1]);
-                    g = *(float*)((char*)latents->data + latent_id + 1 * latents->nb[ggml_n_dims(latents) - 1]);
-                    b = *(float*)((char*)latents->data + latent_id + 2 * latents->nb[ggml_n_dims(latents) - 1]);
+                    r = *(float*)((char*)latents->data + latent_id + 0 * latents->nb[ggml_n_dims(latents) - 1]) * 0.5f + 0.5f;
+                    g = *(float*)((char*)latents->data + latent_id + 1 * latents->nb[ggml_n_dims(latents) - 1]) * 0.5f + 0.5f;
+                    b = *(float*)((char*)latents->data + latent_id + 2 * latents->nb[ggml_n_dims(latents) - 1]) * 0.5f + 0.5f;
                     a = 1;
                 }
                 if (latent_rgb_bias != nullptr) {
@@ -514,9 +514,9 @@ void preview_latent_video(uint8_t* buffer, const sd::Tensor<float>& latents, con
                         a += value * latent_rgb_proj[d][3];
                     }
                 } else {
-                    r = latent_value(0);
-                    g = latent_value(1);
-                    b = latent_value(2);
+                    r = latent_value(0) * 0.5f + 0.5f;
+                    g = latent_value(1) * 0.5f + 0.5f;
+                    b = latent_value(2) * 0.5f + 0.5f;
                     a = 1;
                 }
                 if (latent_rgb_bias != nullptr) {
