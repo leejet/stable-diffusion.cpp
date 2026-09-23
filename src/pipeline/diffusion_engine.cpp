@@ -1987,6 +1987,14 @@ void StableDiffusionGGML::preview_image(int step,
                 LOG_WARN("No latent to RGB projection known for this model");
                 return;
             }
+        } else if (channels == 64) {
+            if (version == VERSION_QWEN_IMAGE_2_1) {
+                latent_rgb_proj = qwen21_latent_rgb_proj;
+                latent_rgb_bias = qwen21_latent_rgb_bias;
+            } else {
+                LOG_WARN("No latent to RGB projection known for this model");
+                return;
+            }
         } else if (channels == 48) {
             if (sd_version_is_wan(version)) {
                 latent_rgb_proj = wan_22_latent_rgb_proj;
