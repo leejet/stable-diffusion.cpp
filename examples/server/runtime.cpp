@@ -295,6 +295,11 @@ std::string get_lora_full_path(ServerRuntime& rt, const std::string& path) {
 
 void refresh_upscaler_cache(ServerRuntime& rt) {
     std::vector<UpscalerEntry> new_cache;
+    std::vector<UpscalerEntry> previous_cache;
+    {
+        std::lock_guard<std::mutex> lock(*rt.upscaler_mutex);
+        previous_cache = *rt.upscaler_cache;
+    }
 
     fs::path upscaler_dir = rt.ctx_params->hires_upscalers_dir;
     if (fs::exists(upscaler_dir) && fs::is_directory(upscaler_dir)) {
@@ -308,10 +313,24 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
             }
 
             UpscalerEntry upscaler_entry;
-            upscaler_entry.name       = p.stem().u8string();
-            upscaler_entry.fullpath   = fs::absolute(p).lexically_normal().u8string();
-            upscaler_entry.model_name = "ESRGAN_4x";
-            upscaler_entry.path       = p.filename().u8string();
+            upscaler_entry.name                 = p.stem().u8string();
+            upscaler_entry.fullpath             = fs::absolute(p).lexically_normal().u8string();
+            upscaler_entry.model_name           = "ESRGAN_4x";
+            upscaler_entry.path                 = p.filename().u8string();
+            upscaler_entry.file_size            = entry.file_size();
+            upscaler_entry.last_modified        = entry.last_write_time();
+            auto previous                       = std::find_if(previous_cache.begin(), previous_cache.end(), [&](const UpscalerEntry& cached) {
+                return cached.fullpath == upscaler_entry.fullpath &&
+                       cached.file_size == upscaler_entry.file_size &&
+                       cached.last_modified == upscaler_entry.last_modified;
+            });
+            upscaler_entry.image_upscale_factor = previous != previous_cache.end()
+                                                      ? previous->image_upscale_factor
+                                                      : get_upscaler_model_scale(upscaler_entry.fullpath.c_str());
+            if (upscaler_entry.image_upscale_factor > 0) {
+                upscaler_entry.scale      = upscaler_entry.image_upscale_factor;
+                upscaler_entry.model_name = "ESRGAN_" + std::to_string(upscaler_entry.scale) + "x";
+            }
 
             new_cache.push_back(std::move(upscaler_entry));
         }

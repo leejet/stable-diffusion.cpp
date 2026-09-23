@@ -423,7 +423,7 @@ Top-level fields:
 | `schedulers` | `array<string>` | Available schedulers |
 | `loras` | `array<object>` | Available LoRA entries |
 | `upscalers` | `array<object>` | Available highres upscalers, built-in and model-backed |
-| `upscale` | `boolean` | Whether `POST /sdcpp/v1/upscale` can do anything here |
+| `upscale` | `boolean` | Whether a compatible RGB ESRGAN model is available for `POST /sdcpp/v1/upscale` |
 | `limits` | `object` | Shared queue and size limits |
 
 `model`
@@ -466,6 +466,7 @@ Shared nested fields:
 | --- | --- | --- |
 | `upscalers[].name` | `string` | Built-in name or model stem; use this value in `hires.upscaler` |
 | `upscalers[].model` | `boolean` | True for a model-backed upscaler, false for a built-in scaling filter |
+| `upscalers[].image_upscale` | `boolean` | Whether this model can be selected by `POST /sdcpp/v1/upscale`; false for latent upscalers and built-in filters |
 
 Built-in entries include `None`, `Lanczos`, `Nearest`, `Latent`, `Latent (nearest)`, `Latent (nearest-exact)`, `Latent (antialiased)`, `Latent (bicubic)`, and `Latent (bicubic antialiased)`. Model-backed entries are scanned from the top level of `--hires-upscalers-dir`; subdirectories are not scanned.
 
@@ -479,6 +480,8 @@ Built-in entries include `None`, `Lanczos`, `Nearest`, `Latent`, `Latent (neares
 | `limits.max_height` | `integer` |
 | `limits.max_batch_count` | `integer` |
 | `limits.max_queue_size` | `integer` |
+| `limits.max_upscale_width` | `integer` |
+| `limits.max_upscale_height` | `integer` |
 
 Shared default fields used by both `img_gen` and `vid_gen`:
 
@@ -633,7 +636,7 @@ Typical status codes:
 
 #### `POST /sdcpp/v1/upscale`
 
-Runs one model-backed upscaler over an image, with no generation involved.
+Runs one RGB ESRGAN upscaler over an image, with no generation involved. Latent upscaler models remain available for hires generation but cannot be used here.
 
 This is the HTTP equivalent of `sd-cli -M upscale`: no diffusion model, text
 encoder or sampling is used, so it is fast enough to answer synchronously and
@@ -644,10 +647,10 @@ Request fields:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `image` | `string` | Required. Base64 or data URL image |
-| `upscaler` | `string` | A model-backed name from `upscalers`; the first one when omitted |
+| `upscaler` | `string` | A name from `upscalers` with `image_upscale: true`; the first compatible entry when omitted |
 | `repeats` | `integer` | Run the upscaler this many times, 1 to 4 (default `1`) |
 | `tile_size` | `integer` | Tile size, defaulting to the server's `--upscale-tile-size` |
-| `output_format` | `string` | `png`, `jpeg`, or `webp` (default `png`) |
+| `output_format` | `string` | `png`, `jpeg`, or `webp` when built with WebP support (default `png`); unsupported formats return 400 |
 | `output_compression` | `integer` | Range is clamped to `0..100` |
 
 Response fields:
@@ -667,11 +670,12 @@ Response fields:
 Typical status codes:
 
 - `200 OK`
-- `400 Bad Request` (no image, unreadable image, or no such upscaler)
+- `400 Bad Request` (invalid request, unsupported output format, unreadable image, incompatible upscaler, or output dimensions exceeding the limit)
 - `500 Internal Server Error`
 
 Notes:
 
+- Final output dimensions, including all repeats, must not exceed 8192 pixels on either axis (`limits.max_upscale_width` and `limits.max_upscale_height`). Requests exceeding this bound are rejected before upscaling.
 - The upscaler models are three-channel; alpha is not preserved.
 - The request holds the generation context lock, so an upscale and a
   generation never run on the device at the same time.
