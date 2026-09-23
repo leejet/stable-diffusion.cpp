@@ -444,7 +444,7 @@ namespace Qwen {
                         }
                     }
                 }
-                pe_data                   = Rope::embed_nd(std::vector<std::vector<float>>(first_position, layout.positions.end()), 1, 10000.f, config.axes_dim, wrap_dims);
+                pe_data = Rope::embed_nd(std::vector<std::vector<float>>(first_position, layout.positions.end()), 1, 10000.f, config.axes_dim, wrap_dims);
                 mask_data.clear();
                 if (!cached) {
                     for (const auto& segment : layout.segments) {
