@@ -234,8 +234,19 @@ namespace Qwen {
                                      ggml_tensor* params,
                                      ggml_tensor* token_indices,
                                      int64_t prefix_length,
+                                     ggml_tensor* zero_shift,
                                      bool gate = false) {
             auto rows  = ggml_ext_chunk(ctx->ggml_ctx, params, 2, 1);
+            if (!gate && zero_shift != nullptr) {
+                auto out = prefix_length == 0
+                               ? ggml_modulate(ctx->ggml_ctx, x, rows[0], zero_shift,
+                                               x->ne[1], nullptr, nullptr)
+                               : ggml_modulate(ctx->ggml_ctx, x, rows[1], zero_shift,
+                                               prefix_length, rows[0], zero_shift);
+                if (ctx->backend != nullptr && ggml_backend_supports_op(ctx->backend, out)) {
+                    return out;
+                }
+            }
             auto apply = [&](ggml_tensor* part, ggml_tensor* row) {
                 row = gate ? ggml_tanh(ctx->ggml_ctx, row) : ggml_scale_bias(ctx->ggml_ctx, row, 1.f, 1.f);
                 return ggml_mul(ctx->ggml_ctx, part, row);
@@ -255,19 +266,41 @@ namespace Qwen {
             return ggml_concat(ctx->ggml_ctx, prefix, target, 1);
         }
 
+        static ggml_tensor* gated_residual(GGMLRunnerContext* ctx,
+                                           ggml_tensor* base,
+                                           ggml_tensor* branch,
+                                           ggml_tensor* params,
+                                           ggml_tensor* token_indices,
+                                           int64_t prefix_length) {
+            auto rows = ggml_ext_chunk(ctx->ggml_ctx, params, 2, 1);
+            auto gate_target = ggml_tanh(ctx->ggml_ctx, rows[0]);
+            auto gate_prefix = ggml_tanh(ctx->ggml_ctx, rows[1]);
+            auto out = prefix_length == 0
+                           ? ggml_gated_residual(ctx->ggml_ctx, base, branch, gate_target,
+                                                 base->ne[1], nullptr)
+                           : ggml_gated_residual(ctx->ggml_ctx, base, branch, gate_prefix,
+                                                 prefix_length, gate_target);
+            if (ctx->backend != nullptr && ggml_backend_supports_op(ctx->backend, out)) {
+                return out;
+            }
+            return ggml_add(ctx->ggml_ctx, base,
+                            modulate(ctx, branch, params, token_indices, prefix_length, nullptr, true));
+        }
+
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* x,
                              const std::vector<ggml_tensor*>& modulation,
                              ggml_tensor* pe,
                              ggml_tensor* token_indices,
+                             ggml_tensor* zero_shift,
                              const QwenImage21Layout& layout,
                              const std::vector<ggml_tensor*>& masks) {
             auto h    = std::dynamic_pointer_cast<LayerNorm>(blocks["img_norm1"])->forward(ctx, x);
-            h         = modulate(ctx, h, modulation[0], token_indices, layout.prefix_length);
+            h         = modulate(ctx, h, modulation[0], token_indices, layout.prefix_length, zero_shift);
             h         = std::dynamic_pointer_cast<QwenImage21Attention>(blocks["attn"])->forward(ctx, h, pe, token_indices, layout.segments, masks);
-            x         = ggml_add(ctx->ggml_ctx, x, modulate(ctx, h, modulation[1], token_indices, layout.prefix_length, true));
+            x         = gated_residual(ctx, x, h, modulation[1], token_indices, layout.prefix_length);
             h         = std::dynamic_pointer_cast<LayerNorm>(blocks["img_norm2"])->forward(ctx, x);
-            h         = modulate(ctx, h, modulation[2], token_indices, layout.prefix_length);
+            h         = modulate(ctx, h, modulation[2], token_indices, layout.prefix_length, zero_shift);
             ggml_tensor* gate;
             auto fused = blocks.find("img_mlp.gate_up");
             if (fused != blocks.end()) {
@@ -281,7 +314,7 @@ namespace Qwen {
             }
             h         = ggml_mul(ctx->ggml_ctx, h, ggml_silu(ctx->ggml_ctx, gate));
             h         = std::dynamic_pointer_cast<Linear>(blocks["img_mlp.out"])->forward(ctx, h);
-            return ggml_add(ctx->ggml_ctx, x, modulate(ctx, h, modulation[3], token_indices, layout.prefix_length, true));
+            return gated_residual(ctx, x, h, modulation[3], token_indices, layout.prefix_length);
         }
     };
 
@@ -319,6 +352,7 @@ namespace Qwen {
             time               = ggml_silu(ctx->ggml_ctx, time);
             auto modulation    = std::dynamic_pointer_cast<Linear>(blocks["modulation.1"])->forward(ctx, time);
             auto mod           = ggml_ext_chunk(ctx->ggml_ctx, modulation, 4, 0);
+            auto zero_shift    = ggml_ext_zeros(ctx->ggml_ctx, config.hidden_size, 1, 1, 1);
             auto text          = std::dynamic_pointer_cast<QwenImage21TextProjection>(blocks["txt_in"])->forward(ctx, context);
             auto img_in        = std::dynamic_pointer_cast<Linear>(blocks["img_in"]);
             ggml_tensor* joint = nullptr;
@@ -335,7 +369,7 @@ namespace Qwen {
             }
             for (int i = 0; i < config.num_layers; ++i) {
                 auto block = std::dynamic_pointer_cast<QwenImage21TransformerBlock>(blocks["transformer_blocks." + std::to_string(i)]);
-                joint      = block->forward(ctx, joint, mod, pe, token_indices, layout, masks);
+                joint      = block->forward(ctx, joint, mod, pe, token_indices, zero_shift, layout, masks);
             }
             joint      = ggml_ext_slice(ctx->ggml_ctx, joint, 1, layout.prefix_length, joint->ne[1]);
             auto scale = std::dynamic_pointer_cast<Linear>(blocks["norm_out.linear"])->forward(ctx, ggml_ext_chunk(ctx->ggml_ctx, time, 2, 1)[0]);

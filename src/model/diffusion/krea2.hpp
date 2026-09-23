@@ -473,7 +473,7 @@ namespace Krea2 {
             auto mlp      = std::dynamic_pointer_cast<KreaSwiGLU>(blocks["mlp"]);
 
             if (ref_start >= 0 && vec_refs) {
-                // same as normal, but since vec is different for refs and the rest, needs a lot of views and concats
+                // Reference tokens use a separate zero-timestep modulation vector.
                 auto mods_main = mod->forward(ctx, vec);
                 auto mods_refs = mod->forward(ctx, vec_refs);
 
@@ -488,45 +488,53 @@ namespace Krea2 {
 
                 auto pre_x = prenorm->forward(ctx, x);
 
-                auto pre_x_main = ggml_view_3d(ctx->ggml_ctx, pre_x, D, len_main, B, nb1, nb2, 0);
-                auto pre_x_refs = ggml_view_3d(ctx->ggml_ctx, pre_x, D, len_refs, B, nb1, nb2, len_main * nb1);
-
-                auto attn_in_main = Flux::modulate(ctx->ggml_ctx, pre_x_main, mods_main[1], mods_main[0], true);
-                auto attn_in_refs = Flux::modulate(ctx->ggml_ctx, pre_x_refs, mods_refs[1], mods_refs[0], true);
-
-                auto attn_input = ggml_concat(ctx->ggml_ctx, attn_in_main, attn_in_refs, 1);
+                auto attn_input = ggml_modulate(ctx->ggml_ctx, pre_x,
+                                                mods_main[0], mods_main[1], len_main,
+                                                mods_refs[0], mods_refs[1]);
+                if (ctx->backend == nullptr || !ggml_backend_supports_op(ctx->backend, attn_input)) {
+                    auto pre_x_main = ggml_view_3d(ctx->ggml_ctx, pre_x, D, len_main, B, nb1, nb2, 0);
+                    auto pre_x_refs = ggml_view_3d(ctx->ggml_ctx, pre_x, D, len_refs, B, nb1, nb2, len_main * nb1);
+                    auto attn_in_main = Flux::modulate(ctx->ggml_ctx, pre_x_main, mods_main[1], mods_main[0], true);
+                    auto attn_in_refs = Flux::modulate(ctx->ggml_ctx, pre_x_refs, mods_refs[1], mods_refs[0], true);
+                    attn_input = ggml_concat(ctx->ggml_ctx, attn_in_main, attn_in_refs, 1);
+                }
 
                 auto attn_out = attn->forward(ctx, attn_input, pe);
-
-                auto attn_out_main = ggml_view_3d(ctx->ggml_ctx, attn_out, D, len_main, B, attn_out->nb[1], attn_out->nb[2], 0);
-                auto attn_out_refs = ggml_view_3d(ctx->ggml_ctx, attn_out, D, len_refs, B, attn_out->nb[1], attn_out->nb[2], len_main * attn_out->nb[1]);
-
-                auto res_main = ggml_mul(ctx->ggml_ctx, attn_out_main, mods_main[2]);
-                auto res_refs = ggml_mul(ctx->ggml_ctx, attn_out_refs, mods_refs[2]);
-
-                auto attn_res = ggml_concat(ctx->ggml_ctx, res_main, res_refs, 1);
-
-                x = ggml_add(ctx->ggml_ctx, x, attn_res);
+                auto attn_res = ggml_gated_residual(ctx->ggml_ctx, x, attn_out,
+                                                    mods_main[2], len_main, mods_refs[2]);
+                if (ctx->backend != nullptr && ggml_backend_supports_op(ctx->backend, attn_res)) {
+                    x = attn_res;
+                } else {
+                    auto attn_out_main = ggml_view_3d(ctx->ggml_ctx, attn_out, D, len_main, B, attn_out->nb[1], attn_out->nb[2], 0);
+                    auto attn_out_refs = ggml_view_3d(ctx->ggml_ctx, attn_out, D, len_refs, B, attn_out->nb[1], attn_out->nb[2], len_main * attn_out->nb[1]);
+                    auto res_main = ggml_mul(ctx->ggml_ctx, attn_out_main, mods_main[2]);
+                    auto res_refs = ggml_mul(ctx->ggml_ctx, attn_out_refs, mods_refs[2]);
+                    x = ggml_add(ctx->ggml_ctx, x, ggml_concat(ctx->ggml_ctx, res_main, res_refs, 1));
+                }
 
                 auto post_x = postnorm->forward(ctx, x);
-
-                auto post_x_main = ggml_view_3d(ctx->ggml_ctx, post_x, D, len_main, B, post_x->nb[1], post_x->nb[2], 0);
-                auto post_x_refs = ggml_view_3d(ctx->ggml_ctx, post_x, D, len_refs, B, post_x->nb[1], post_x->nb[2], len_main * post_x->nb[1]);
-
-                auto mlp_in_main = Flux::modulate(ctx->ggml_ctx, post_x_main, mods_main[4], mods_main[3], true);
-                auto mlp_in_refs = Flux::modulate(ctx->ggml_ctx, post_x_refs, mods_refs[4], mods_refs[3], true);
-
-                auto mlp_input = ggml_concat(ctx->ggml_ctx, mlp_in_main, mlp_in_refs, 1);
+                auto mlp_input = ggml_modulate(ctx->ggml_ctx, post_x,
+                                               mods_main[3], mods_main[4], len_main,
+                                               mods_refs[3], mods_refs[4]);
+                if (ctx->backend == nullptr || !ggml_backend_supports_op(ctx->backend, mlp_input)) {
+                    auto post_x_main = ggml_view_3d(ctx->ggml_ctx, post_x, D, len_main, B, post_x->nb[1], post_x->nb[2], 0);
+                    auto post_x_refs = ggml_view_3d(ctx->ggml_ctx, post_x, D, len_refs, B, post_x->nb[1], post_x->nb[2], len_main * post_x->nb[1]);
+                    auto mlp_in_main = Flux::modulate(ctx->ggml_ctx, post_x_main, mods_main[4], mods_main[3], true);
+                    auto mlp_in_refs = Flux::modulate(ctx->ggml_ctx, post_x_refs, mods_refs[4], mods_refs[3], true);
+                    mlp_input = ggml_concat(ctx->ggml_ctx, mlp_in_main, mlp_in_refs, 1);
+                }
                 auto mlp_out   = mlp->forward(ctx, mlp_input);
-
-                auto mlp_out_main = ggml_view_3d(ctx->ggml_ctx, mlp_out, D, len_main, B, mlp_out->nb[1], mlp_out->nb[2], 0);
-                auto mlp_out_refs = ggml_view_3d(ctx->ggml_ctx, mlp_out, D, len_refs, B, mlp_out->nb[1], mlp_out->nb[2], len_main * mlp_out->nb[1]);
-
-                auto mlp_res_main = ggml_mul(ctx->ggml_ctx, mlp_out_main, mods_main[5]);
-                auto mlp_res_refs = ggml_mul(ctx->ggml_ctx, mlp_out_refs, mods_refs[5]);
-
-                auto mlp_res = ggml_concat(ctx->ggml_ctx, mlp_res_main, mlp_res_refs, 1);
-                x            = ggml_add(ctx->ggml_ctx, x, mlp_res);
+                auto mlp_res = ggml_gated_residual(ctx->ggml_ctx, x, mlp_out,
+                                                   mods_main[5], len_main, mods_refs[5]);
+                if (ctx->backend != nullptr && ggml_backend_supports_op(ctx->backend, mlp_res)) {
+                    x = mlp_res;
+                } else {
+                    auto mlp_out_main = ggml_view_3d(ctx->ggml_ctx, mlp_out, D, len_main, B, mlp_out->nb[1], mlp_out->nb[2], 0);
+                    auto mlp_out_refs = ggml_view_3d(ctx->ggml_ctx, mlp_out, D, len_refs, B, mlp_out->nb[1], mlp_out->nb[2], len_main * mlp_out->nb[1]);
+                    auto mlp_res_main = ggml_mul(ctx->ggml_ctx, mlp_out_main, mods_main[5]);
+                    auto mlp_res_refs = ggml_mul(ctx->ggml_ctx, mlp_out_refs, mods_refs[5]);
+                    x = ggml_add(ctx->ggml_ctx, x, ggml_concat(ctx->ggml_ctx, mlp_res_main, mlp_res_refs, 1));
+                }
             } else {
                 auto mods       = mod->forward(ctx, vec);
                 auto attn_input = Flux::modulate(ctx->ggml_ctx,

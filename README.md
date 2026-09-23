@@ -232,6 +232,12 @@ Z-Image Turbo generates the reference image, then FLUX.2 Klein removes the Einst
 |---|---|
 | **1024x1024, 8 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/zimage_einstein_1024_s8.png" width="480" alt="Einstein teaching in front of a blackboard"> | **1024x1024, 4 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/klein_edit_remove_equation_1024_s4.png" width="480" alt="Einstein field equation removed from the blackboard"> |
 
+Krea 2 Turbo's text editing is shit. At one step it destroys most of the image; at eight steps it reconstructs the scene but still fails to remove the requested equation.
+
+| Krea 2 Turbo, 1 step | Krea 2 Turbo, 8 steps |
+|---|---|
+| **1024x1024, 1 step**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/krea2_edit_remove_equation_1024_s1.png" width="480" alt="Krea 2 Turbo edit, 1 step"> | **1024x1024, 8 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/krea2_edit_remove_equation_1024_s8.png" width="480" alt="Krea 2 Turbo edit, 8 steps"> |
+
 Qwen Image 2.1 preserves the requested content significantly better in this edit, even with Q4_0 DiT and text-encoder weights.
 
 | FLUX.2 Klein 9B Q4_0 | Qwen Image 2.1 Q4_0 |
@@ -262,41 +268,6 @@ FP8 edit weights: [DiT F8_E4M3](https://huggingface.co/unsloth/Qwen-Image-2.1-FP
   --cfg-scale 1 --steps 8 --sampling-method euler \
   -W 1024 -H 1024 --seed 42 \
   -o zimage_einstein_1024_s8.png
-```
-
-#### Edit with FLUX.2 Klein
-
-```sh
-./sd-cli \
-  --diffusion-model flux-2-klein-4b-fp8.safetensors \
-  --llm llm.gguf \
-  --vae flux2-vae.safetensors \
-  --backend diffusion=HTP0,te=HTP0,vae=HTP0 \
-  --fa --vae-conv-direct \
-  -t 4 \
-  -p "删除黑板上的爱因斯坦场方程‘G_μν + Λg_μν = 8πG T_μν’，将该公式擦除干净并自然补全黑板背景。保留麦克斯韦方程‘dF = 0，d*F = *J’、爱因斯坦、带SJTU标志的讲台桌、粉笔、大学课堂和其他画面内容不变，保持写实风格。" \
-  --ref-image zimage_einstein_1024_s8.png \
-  --cfg-scale 1 --steps 4 --sampling-method euler \
-  -W 1024 -H 1024 --seed 42 \
-  -o klein_edit_remove_equation_1024_s4.png
-```
-
-#### Edit with FLUX.2 Klein 9B Q4_0
-
-```sh
-./sd-cli \
-  --diffusion-model flux-2-klein-9b-Q4_0.gguf \
-  --llm Qwen3-8B-Q4_0.gguf \
-  --vae flux2-vae.safetensors \
-  --backend diffusion=HTP0,te=HTP0,vae=HTP0 \
-  --params-backend te=disk \
-  --fa --vae-conv-direct \
-  -t 4 \
-  -p "删除黑板上的爱因斯坦场方程‘G_μν + Λg_μν = 8πG T_μν’，将该公式擦除干净并自然补全黑板背景。保留麦克斯韦方程‘dF = 0，d*F = *J’、爱因斯坦、带SJTU标志的讲台桌、粉笔、大学课堂和其他画面内容不变，保持写实风格。" \
-  --ref-image zimage_einstein_1024_s8.png \
-  --cfg-scale 1 --steps 4 --sampling-method euler \
-  -W 1024 -H 1024 --seed 42 \
-  -o klein9b_edit_remove_equation_1024_s4.png
 ```
 
 #### Edit with Qwen Image 2.1 Q4_0
