@@ -1157,17 +1157,12 @@ namespace sd::pipeline {
         condition_params.zero_out_masked       = true;
         condition_params.ref_images            = &latents.ref_images;
         condition_params.minimax_h3_references = &latents.minimax_presentation_refs;
-        condition_params.allow_cache =
-            sd_version_is_minimax_h3(sd->version) &&
-            sd->conditioning_cache_allowed_ &&
-            !request.use_uncond;
         if (sd_version_is_lingbot_video(sd->version) || sd_version_is_minimax_h3(sd->version)) {
             condition_params.ref_image_params.vlm_resize_mode = RefImageResizeMode::AREA;
         }
 
         int64_t prepare_start_ms = ggml_time_ms();
-        embeds.cond              = sd->cond_stage_model->get_learned_condition(sd->n_threads,
-                                                                               condition_params);
+        embeds.cond              = sd->get_learned_condition(condition_params);
         if (embeds.cond.empty()) {
             LOG_ERROR("failed to encode video prompt");
             return std::nullopt;
@@ -1192,8 +1187,7 @@ namespace sd::pipeline {
         }
         if (request.use_uncond) {
             condition_params.text = request.negative_prompt;
-            embeds.uncond         = sd->cond_stage_model->get_learned_condition(sd->n_threads,
-                                                                                condition_params);
+            embeds.uncond         = sd->get_learned_condition(condition_params);
             if (embeds.uncond.empty()) {
                 LOG_ERROR("failed to encode negative video prompt");
                 return std::nullopt;

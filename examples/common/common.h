@@ -116,7 +116,8 @@ bool decode_base64_image(const std::string& encoded_input,
                          SDImageOwner& out_image);
 
 struct SDContextParams {
-    int n_threads = -1;
+    int n_threads               = -1;
+    int conditioning_cache_size = 4;
     std::string model_path;
     std::string clip_l_path;
     std::string clip_g_path;
