@@ -441,8 +441,7 @@ namespace sd::pipeline {
         sd->compute_ip_adapter_tokens(sd_img_gen_params->ip_adapter_image, sd_img_gen_params->ip_adapter_strength);
         int64_t prepare_start_ms         = ggml_time_ms();
         condition_params.zero_out_masked = false;
-        auto cond                        = sd->cond_stage_model->get_learned_condition(sd->n_threads,
-                                                                                       condition_params);
+        auto cond                        = sd->get_learned_condition(condition_params);
         if (cond.empty()) {
             LOG_ERROR("failed to encode prompt");
             return std::nullopt;
@@ -480,8 +479,7 @@ namespace sd::pipeline {
                     // LLaDA-Image CFG keeps the source latent but drops its SigVQ features.
                     condition_params.ref_images = nullptr;
                 }
-                uncond = sd->cond_stage_model->get_learned_condition(sd->n_threads,
-                                                                     condition_params);
+                uncond = sd->get_learned_condition(condition_params);
                 if (uncond.empty()) {
                     LOG_ERROR("failed to encode negative prompt");
                     return std::nullopt;
@@ -509,8 +507,7 @@ namespace sd::pipeline {
                 if (use_ref_latent_img_cfg) {
                     condition_params.ref_images = &empty_ref_images;
                 }
-                img_uncond = sd->cond_stage_model->get_learned_condition(sd->n_threads,
-                                                                         condition_params);
+                img_uncond = sd->get_learned_condition(condition_params);
                 if (img_uncond.empty()) {
                     LOG_ERROR("failed to encode image guidance prompt");
                     return std::nullopt;

@@ -571,6 +571,10 @@ ArgOptions SDContextParams::get_options() {
          "number of threads to use during computation (default: -1). "
          "If threads <= 0, then threads will be set to the number of CPU physical cores",
          &n_threads},
+        {"",
+         "--conditioning-cache-size",
+         "maximum number of conditioning results cached per model context (default: " + std::to_string(conditioning_cache_size) + ", 0 disables caching)",
+         &conditioning_cache_size},
     };
 
     options.bool_options = {
@@ -822,6 +826,10 @@ bool SDContextParams::resolve(SDMode mode) {
 }
 
 bool SDContextParams::validate(SDMode mode) {
+    if (conditioning_cache_size < 0) {
+        LOG_ERROR("error: conditioning-cache-size must be non-negative");
+        return false;
+    }
     if (mode == CONVERT) {
         const bool has_convert_input = model_path.length() != 0 ||
                                        clip_l_path.length() != 0 ||
@@ -898,6 +906,7 @@ std::string SDContextParams::to_string() const {
     std::ostringstream oss;
     oss << "SDContextParams {\n"
         << "  n_threads: " << n_threads << ",\n"
+        << "  conditioning_cache_size: " << conditioning_cache_size << ",\n"
         << "  model_path: \"" << model_path << "\",\n"
         << "  clip_l_path: \"" << clip_l_path << "\",\n"
         << "  clip_g_path: \"" << clip_g_path << "\",\n"
@@ -992,6 +1001,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.pulid_weights_path              = pulid_weights_path.c_str();
     sd_ctx_params.tensor_type_rules               = tensor_type_rules.c_str();
     sd_ctx_params.n_threads                       = n_threads;
+    sd_ctx_params.conditioning_cache_size         = conditioning_cache_size;
     sd_ctx_params.wtype                           = wtype;
     sd_ctx_params.rng_type                        = rng_type;
     sd_ctx_params.sampler_rng_type                = sampler_rng_type;

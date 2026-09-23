@@ -644,6 +644,7 @@ int main(int argc, const char* argv[]) {
 
     SDCliParams cli_params;
     SDContextParams ctx_params;
+    ctx_params.conditioning_cache_size = 0;
     SDGenerationParams gen_params;
 
     sd_set_log_callback(sd_log_cb, (void*)&cli_params);

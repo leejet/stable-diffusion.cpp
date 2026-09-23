@@ -247,6 +247,7 @@ typedef struct {
     float attn_scale;                // Override flash-attention K/V scaling; 0 keeps the model default
     const char* tokenizer;           // tokenizer.json path or main=FILE,clip-l=FILE,clip-g=FILE assignments; required for PiD and Lens
     bool sage_attn;
+    int conditioning_cache_size;  // Maximum cached conditioning entries per context; 0 disables caching (default: 4)
 } sd_ctx_params_t;
 
 typedef struct {
