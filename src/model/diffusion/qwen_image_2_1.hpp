@@ -68,6 +68,7 @@ namespace Qwen {
         std::vector<QwenImage21Segment> segments;
         std::vector<std::vector<float>> positions;
         int64_t prefix_length = 0;
+        Rope::PositionLayout rope_layout;
 
         static QwenImage21Layout build(int64_t text_length,
                                        const sd::Tensor<int32_t>& image_slots,
@@ -82,6 +83,7 @@ namespace Qwen {
                 auto [height, width] = image_shapes[index];
                 int64_t start        = static_cast<int64_t>(layout.positions.size());
                 layout.segments.push_back({start, start + height * width, context_start, index});
+                layout.rope_layout.append_image(static_cast<int>(height), static_cast<int>(width));
                 for (int64_t h = 0; h < height; ++h) {
                     for (int64_t w = 0; w < width; ++w) {
                         layout.positions.push_back({static_cast<float>(position),
@@ -106,6 +108,7 @@ namespace Qwen {
                 } else {
                     int64_t start = static_cast<int64_t>(layout.positions.size());
                     layout.segments.push_back({start, start + i - begin, begin, -1});
+                    layout.rope_layout.append_tokens(i - begin);
                     for (int64_t j = begin; j < i; ++j, ++position) {
                         float p = static_cast<float>(position);
                         layout.positions.push_back({p, p, p});
@@ -418,14 +421,26 @@ namespace Qwen {
             }
             QwenImage21PrefixCache cache;
             if (prefix_cache_enabled && !prefix_cache_disabled && extra != nullptr && extra->prefix_id != 0 && layout.prefix_length > 0) {
-                cache.name          = "qwen_image_2_1.prefix." + std::to_string(extra->prefix_id);
+                cache.name = "qwen_image_2_1.prefix." + std::to_string(extra->prefix_id) +
+                             ".circular." + std::to_string(circular_x_enabled) + std::to_string(circular_y_enabled);
                 cache.prefix_length = layout.prefix_length;
                 cache.mode          = has_prefix_cache(cache) ? QwenImage21PrefixCache::Mode::REUSE : QwenImage21PrefixCache::Mode::STORE;
             }
             auto run = [&](const QwenImage21PrefixCache& active_cache) {
                 const bool cached         = active_cache.mode == QwenImage21PrefixCache::Mode::REUSE;
                 const auto first_position = layout.positions.begin() + (cached ? layout.prefix_length : 0);
-                pe_data                   = Rope::embed_nd(std::vector<std::vector<float>>(first_position, layout.positions.end()), 1, 10000.f, config.axes_dim);
+                Rope::Embedding embedding;
+                embedding.ids.assign(first_position, layout.positions.end());
+                const size_t offset             = cached ? static_cast<size_t>(layout.prefix_length) : 0;
+                embedding.positions.token_count = embedding.ids.size();
+                for (auto region : layout.rope_layout.images) {
+                    if (region.begin >= offset) {
+                        region.begin -= offset;
+                        embedding.positions.images.push_back(region);
+                    }
+                }
+                embedding.values = Rope::embed_nd(embedding.ids, 1, 10000.f, config.axes_dim, embedding.layout, &embedding.frequencies);
+                pe_data          = finish_rope_pe(std::move(embedding));
                 mask_data.clear();
                 if (!cached) {
                     for (const auto& segment : layout.segments) {
