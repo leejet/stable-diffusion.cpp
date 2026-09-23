@@ -161,6 +161,9 @@ resident allocations. Vulkan reports exceeding total memory are rejected because
 its heap-budget subtraction can underflow. Other backends use the cap instead of
 treating such reports as zero free memory. Failed checks log the reported free and
 total memory alongside tracked weight and runtime allocations.
+With `--mmap`, device-backed mappings count toward these budgets at their full
+mapped-file size, once per device buffer even when multiple parameter blocks
+share it. Mappings retained in the loader cache continue to count.
 
 Components are considered in `diffusion`, `te`, `vae` order so that repeatedly
 used diffusion weights have priority. Each component's weights use the first
