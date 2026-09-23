@@ -573,7 +573,7 @@ ArgOptions SDContextParams::get_options() {
          &n_threads},
         {"",
          "--conditioning-cache-size",
-         "maximum number of conditioning results cached per model context (default: 4, 0 disables caching)",
+         "maximum number of conditioning results cached per model context (default: " + std::to_string(conditioning_cache_size) + ", 0 disables caching)",
          &conditioning_cache_size},
     };
 

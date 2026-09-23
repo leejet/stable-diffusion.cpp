@@ -1998,6 +1998,8 @@ void StableDiffusionGGML::preview_image(int step,
         int patch_sz                     = 1;
         const float(*latent_rgb_proj)[3] = nullptr;
         float* latent_rgb_bias           = nullptr;
+        const float* latent_alpha_proj   = nullptr;
+        float latent_alpha_bias          = 1.f;
 
         if (channels == 128) {
             if (sd_version_uses_flux2_vae(version)) {
@@ -2007,6 +2009,16 @@ void StableDiffusionGGML::preview_image(int step,
             } else if (version == VERSION_LTXAV) {
                 latent_rgb_proj = ltxav_latent_rgb_proj;
                 latent_rgb_bias = ltxav_latent_rgb_bias;
+            } else {
+                LOG_WARN("No latent to RGB projection known for this model");
+                return;
+            }
+        } else if (channels == 64) {
+            if (version == VERSION_QWEN_IMAGE_2_1) {
+                latent_rgb_proj   = qwen21_latent_rgb_proj;
+                latent_rgb_bias   = qwen21_latent_rgb_bias;
+                latent_alpha_proj = qwen21_latent_alpha_proj;
+                latent_alpha_bias = qwen21_latent_alpha_bias;
             } else {
                 LOG_WARN("No latent to RGB projection known for this model");
                 return;
@@ -2061,13 +2073,14 @@ void StableDiffusionGGML::preview_image(int step,
         uint32_t img_width  = static_cast<uint32_t>(_latents.shape()[0]) * patch_sz;
         uint32_t img_height = static_cast<uint32_t>(_latents.shape()[1]) * patch_sz;
 
-        uint8_t* data = (uint8_t*)malloc(frames * img_width * img_height * 3 * sizeof(uint8_t));
+        uint32_t img_channels = latent_alpha_proj != nullptr ? 4 : 3;
+        uint8_t* data         = (uint8_t*)malloc(frames * img_width * img_height * img_channels * sizeof(uint8_t));
         GGML_ASSERT(data != nullptr);
-        preview_latent_video(data, _latents, latent_rgb_proj, latent_rgb_bias, patch_sz);
+        preview_latent_video(data, _latents, latent_rgb_proj, latent_rgb_bias, patch_sz, latent_alpha_proj, latent_alpha_bias);
         sd_image_t* images = (sd_image_t*)malloc(frames * sizeof(sd_image_t));
         GGML_ASSERT(images != nullptr);
         for (uint32_t i = 0; i < frames; i++) {
-            images[i] = {img_width, img_height, 3, data + i * img_width * img_height * 3};
+            images[i] = {img_width, img_height, img_channels, data + i * img_width * img_height * img_channels};
         }
         step_callback(step, frames, images, is_noisy, step_callback_data);
         free(data);
