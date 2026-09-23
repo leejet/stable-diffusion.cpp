@@ -12,6 +12,10 @@ If you want to update a third-party dependency, please open an issue first inste
 
 ## Pull Requests
 
+When contributing from a fork, use a fork under your personal GitHub account and enable **Allow edits from maintainers**. This lets maintainers make follow-up fixes directly on the PR branch.
+
+PRs from organization-owned forks are automatically closed when opened or reopened because GitHub does not support this maintainer-edit option for those forks. Submit the changes from a personal fork instead. See [GitHub's documentation](https://docs.github.com/en/pull-requests/how-tos/work-with-forks/allowing-changes-to-a-pull-request-branch-created-from-a-fork).
+
 Keep each PR focused on one clear change. Large or overly complex PRs are harder to review and may not be merged.
 
 Do not include test code or test scripts in commits or PRs. Keep them local and report verification results in the PR description.
