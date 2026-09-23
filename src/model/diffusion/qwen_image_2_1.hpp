@@ -425,7 +425,26 @@ namespace Qwen {
             auto run = [&](const QwenImage21PrefixCache& active_cache) {
                 const bool cached         = active_cache.mode == QwenImage21PrefixCache::Mode::REUSE;
                 const auto first_position = layout.positions.begin() + (cached ? layout.prefix_length : 0);
-                pe_data                   = Rope::embed_nd(std::vector<std::vector<float>>(first_position, layout.positions.end()), 1, 10000.f, config.axes_dim);
+                std::vector<std::vector<int>> wrap_dims;
+                if ((circular_y_enabled || circular_x_enabled) && config.axes_dim.size() >= 3) {
+                    int h_len = shapes.back().first;
+                    int w_len = shapes.back().second;
+                    if (h_len > 0 && w_len > 0) {
+                        size_t pos_len = layout.positions.size();
+                        wrap_dims.assign(config.axes_dim.size(), std::vector<int>(pos_len, 0));
+                        size_t cursor     = layout.prefix_length;
+                        size_t img_tokens = static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
+                        for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
+                            if (circular_y_enabled) {
+                                wrap_dims[1][cursor + token_i] = h_len;
+                            }
+                            if (circular_x_enabled) {
+                                wrap_dims[2][cursor + token_i] = w_len;
+                            }
+                        }
+                    }
+                }
+                pe_data                   = Rope::embed_nd(std::vector<std::vector<float>>(first_position, layout.positions.end()), 1, 10000.f, config.axes_dim, wrap_dims);
                 mask_data.clear();
                 if (!cached) {
                     for (const auto& segment : layout.segments) {
