@@ -8,6 +8,8 @@ This branch provides optimized stable-diffusion.cpp and GGML paths for Qualcomm 
 
 Models use standard formats supported by stable-diffusion.cpp: GGUF on Adreno and Hexagon, with direct F8_E4M3 safetensor loading on Hexagon v79+.
 
+Devices with less than 16 GB of memory have not been validated. If memory is insufficient, use `--params-backend te=disk`.
+
 | Backend | Validated weights |
 |---|---|
 | Adreno GPU | Q4_0 GGUF |
@@ -16,6 +18,25 @@ Models use standard formats supported by stable-diffusion.cpp: GGUF on Adreno an
 - GGML tracking: [llama.cpp issue #28904](https://github.com/ggml-org/llama.cpp/issues/28904) and [PR #28952](https://github.com/ggml-org/llama.cpp/pull/28952)
 - SD.cpp integration: [stable-diffusion.cpp PR #1970](https://github.com/leejet/stable-diffusion.cpp/pull/1970)
 - Upstream project: [leejet/stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)
+
+## Weights
+
+- Z-Image Turbo Q4_0 GGUF and Q4_0 text encoder: https://huggingface.co/zhiyuanasad/z_image_turbo_adreno
+- Qwen3-4B Q4_0 text encoder: https://huggingface.co/zhiyuanasad/z_image_turbo_adreno/blob/main/llm.gguf
+- Z-Image Turbo F8_E4M3 DiT: https://huggingface.co/Kijai/Z-Image_comfy_fp8_scaled/blob/main/z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors
+- FLUX.2 Klein 4B Q4_0 GGUF: https://huggingface.co/zhiyuanasad/flux2_klein_adreno
+- FLUX.2 Klein 4B FP8 DiT: https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-fp8/blob/main/flux-2-klein-4b-fp8.safetensors
+- FLUX.2 Klein 9B Q4_0 DiT: https://huggingface.co/leejet/FLUX.2-klein-9B-GGUF/blob/main/flux-2-klein-9b-Q4_0.gguf
+- Qwen3-8B Q4_0 text encoder: https://huggingface.co/bartowski/Qwen_Qwen3-8B-GGUF/blob/main/Qwen_Qwen3-8B-Q4_0.gguf
+- FLUX.2 VAE: https://huggingface.co/unsloth/FLUX.2-VAE/blob/main/split_files/vae/flux2-vae.safetensors
+- Krea 2 Turbo MXFP4 MoE DiT: https://huggingface.co/gguf-org/krea-2-gguf/blob/main/krea2_turbo-mxfp4_moe.gguf
+- Qwen3-VL-4B Q4_0 text encoder: https://huggingface.co/bartowski/Qwen_Qwen3-VL-4B-Instruct-GGUF/blob/main/Qwen_Qwen3-VL-4B-Instruct-Q4_0.gguf
+- Wan 2.1 VAE: https://huggingface.co/Osrivers/wan_2.1_vae.safetensors/blob/main/wan_2.1_vae.safetensors
+- Qwen Image 2.1 Q4_0 DiT: https://huggingface.co/leejet/Qwen-Image-2.1-GGUF/blob/main/qwen_image_2.1-Q4_0.gguf
+- Qwen Image 2.1 F8_E4M3 DiT: https://huggingface.co/unsloth/Qwen-Image-2.1-FP8/blob/main/Qwen-Image-2.1-FP8.safetensors
+- Qwen3-VL-8B Q4_0 text encoder: https://huggingface.co/bartowski/Qwen_Qwen3-VL-8B-Instruct-GGUF/blob/main/Qwen_Qwen3-VL-8B-Instruct-Q4_0.gguf
+- Qwen3-VL-8B F16 vision projector: https://huggingface.co/bartowski/Qwen_Qwen3-VL-8B-Instruct-GGUF/blob/main/mmproj-Qwen_Qwen3-VL-8B-Instruct-f16.gguf
+- Qwen Image 2.1 BF16 VAE: https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/vae/qwen_image_2.1_vae_bf16.safetensors
 
 ## Important News
 
@@ -26,12 +47,6 @@ Models use standard formats supported by stable-diffusion.cpp: GGUF on Adreno an
 | 2026-09-21 | Added Hexagon NPU support for Krea 2 Turbo and Qwen Image 2.1. |
 
 ## Hexagon NPU
-
-### Weights
-
-- Text encoder: export Qwen3-4B as Q4_0 with stable-diffusion.cpp, or use [`llm.gguf`](https://huggingface.co/zhiyuanasad/z_image_turbo_adreno/blob/main/llm.gguf) from [zhiyuanasad/z_image_turbo_adreno](https://huggingface.co/zhiyuanasad/z_image_turbo_adreno).
-- Z-Image Turbo FP8: [`z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors`](https://huggingface.co/Kijai/Z-Image_comfy_fp8_scaled/blob/main/z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors).
-- FLUX.2 Klein 4B FP8: [`flux-2-klein-4b-fp8.safetensors`](https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-fp8/blob/main/flux-2-klein-4b-fp8.safetensors).
 
 ### Performance
 
@@ -58,11 +73,7 @@ The 1024 and 1536 runs use direct VAE decode. The 2048 runs use 64x64 VAE tiles.
 
 ### FLUX.2 Klein 9B
 
-Klein 9B uses Q4_0 DiT and Q4_0 Qwen3-8B weights. Text encoder parameters are released after conditioning with `te=disk`; DiT, text encoding, and VAE execution all run on HTP.
-
-- DiT: [`flux-2-klein-9b-Q4_0.gguf`](https://huggingface.co/leejet/FLUX.2-klein-9B-GGUF/blob/main/flux-2-klein-9b-Q4_0.gguf)
-- Text encoder: [`Qwen_Qwen3-8B-Q4_0.gguf`](https://huggingface.co/bartowski/Qwen_Qwen3-8B-GGUF/blob/main/Qwen_Qwen3-8B-Q4_0.gguf)
-- VAE: [`flux2-vae.safetensors`](https://huggingface.co/unsloth/FLUX.2-VAE/blob/main/split_files/vae/flux2-vae.safetensors)
+Text encoder parameters are released after conditioning with `te=disk`; DiT, text encoding, and VAE execution all run on HTP.
 
 | Resolution | Steps | Warm DiT | VAE decode | E2E |
 |---|---:|---:|---:|---:|
@@ -87,11 +98,7 @@ Klein 9B uses Q4_0 DiT and Q4_0 Qwen3-8B weights. Text encoder parameters are re
 
 ### Krea 2 Turbo
 
-Krea 2 Turbo uses an MXFP4 MoE DiT, a Q4_0 Qwen3-VL-4B text encoder, and the standard Wan 2.1 VAE. Text encoding, DiT sampling, and direct VAE decoding run on HTP. The 1K run does not use tiled VAE decoding or parameter offload.
-
-- DiT: [`krea2_turbo-mxfp4_moe.gguf`](https://huggingface.co/gguf-org/krea-2-gguf/blob/main/krea2_turbo-mxfp4_moe.gguf)
-- Text encoder: [`Qwen_Qwen3-VL-4B-Instruct-Q4_0.gguf`](https://huggingface.co/bartowski/Qwen_Qwen3-VL-4B-Instruct-GGUF/blob/main/Qwen_Qwen3-VL-4B-Instruct-Q4_0.gguf)
-- VAE: [`wan_2.1_vae.safetensors`](https://huggingface.co/Osrivers/wan_2.1_vae.safetensors/blob/main/wan_2.1_vae.safetensors)
+Text encoding, DiT sampling, and direct VAE decoding run on HTP. The 1K run does not use tiled VAE decoding or parameter offload.
 
 | Resolution | Steps | Warm DiT | VAE decode | E2E |
 |---|---:|---:|---:|---:|
@@ -232,27 +239,21 @@ Z-Image Turbo generates the reference image, then FLUX.2 Klein removes the Einst
 |---|---|
 | **1024x1024, 8 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/zimage_einstein_1024_s8.png" width="480" alt="Einstein teaching in front of a blackboard"> | **1024x1024, 4 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/klein_edit_remove_equation_1024_s4.png" width="480" alt="Einstein field equation removed from the blackboard"> |
 
-Krea 2 Turbo's text editing is shit. At one step it destroys most of the image; at eight steps it reconstructs the scene but still fails to remove the requested equation.
+Krea 2 Turbo's text editing is shit.
 
 | Krea 2 Turbo, 1 step | Krea 2 Turbo, 8 steps |
 |---|---|
 | **1024x1024, 1 step**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/krea2_edit_remove_equation_1024_s1.png" width="480" alt="Krea 2 Turbo edit, 1 step"> | **1024x1024, 8 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/krea2_edit_remove_equation_1024_s8.png" width="480" alt="Krea 2 Turbo edit, 8 steps"> |
 
-Qwen Image 2.1 preserves the requested content significantly better in this edit, even with Q4_0 DiT and text-encoder weights.
-
 | FLUX.2 Klein 9B Q4_0 | Qwen Image 2.1 Q4_0 |
 |---|---|
 | **1024x1024, 4 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/klein9b_edit_remove_equation_1024_s4.png" width="480" alt="FLUX.2 Klein 9B edit"> | **1024x1024, 20 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/qwen21_edit_remove_equation_1024_s20.png" width="480" alt="Qwen Image 2.1 edit"> |
-
-Qwen Image 2.1 weights: [DiT Q4_0](https://huggingface.co/leejet/Qwen-Image-2.1-GGUF/blob/main/qwen_image_2.1-Q4_0.gguf), [Qwen3-VL-8B Q4_0](https://huggingface.co/bartowski/Qwen_Qwen3-VL-8B-Instruct-GGUF/blob/main/Qwen_Qwen3-VL-8B-Instruct-Q4_0.gguf), [vision projector F16](https://huggingface.co/bartowski/Qwen_Qwen3-VL-8B-Instruct-GGUF/blob/main/mmproj-Qwen_Qwen3-VL-8B-Instruct-f16.gguf), and [VAE BF16](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/vae/qwen_image_2.1_vae_bf16.safetensors).
 
 With the F8_E4M3 DiT, Qwen Image 2.1 appears to produce a good edit with only one sampling step.
 
 | Qwen Image 2.1 FP8, 1 step | Qwen Image 2.1 FP8, 20 steps |
 |---|---|
 | **1024x1024, 1 step**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/qwen21_fp8_edit_remove_equation_1024_s1.png" width="480" alt="Qwen Image 2.1 FP8 edit, 1 step"> | **1024x1024, 20 steps**<br><img src="https://github.com/happyyzy/stable-diffusion.cpp/releases/download/qualcomm-showcase-assets/qwen21_fp8_edit_remove_equation_1024_s20.png" width="480" alt="Qwen Image 2.1 FP8 edit, 20 steps"> |
-
-FP8 edit weights: [DiT F8_E4M3](https://huggingface.co/unsloth/Qwen-Image-2.1-FP8/blob/main/Qwen-Image-2.1-FP8.safetensors), [Qwen3-VL-8B Q4_0](https://huggingface.co/bartowski/Qwen_Qwen3-VL-8B-Instruct-GGUF/blob/main/Qwen_Qwen3-VL-8B-Instruct-Q4_0.gguf), [vision projector F16](https://huggingface.co/bartowski/Qwen_Qwen3-VL-8B-Instruct-GGUF/blob/main/mmproj-Qwen_Qwen3-VL-8B-Instruct-f16.gguf), and [VAE BF16](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/vae/qwen_image_2.1_vae_bf16.safetensors).
 
 #### Generate the reference with Z-Image Turbo
 
@@ -306,10 +307,6 @@ FP8 edit weights: [DiT F8_E4M3](https://huggingface.co/unsloth/Qwen-Image-2.1-FP
 | Klein 1024, 4 steps | ![Klein 1024 before](https://raw.githubusercontent.com/happyyzy/ggml/a12c1c4bef30676c421626b23b27e1ffafb98698/adreno-qkv-preprocess-20260905/klein-before-1024.png) | ![Klein 1024 after](https://raw.githubusercontent.com/happyyzy/ggml/a12c1c4bef30676c421626b23b27e1ffafb98698/adreno-qkv-preprocess-20260905/klein-after-1024.png) |
 | Z-Image 512, 8 steps | ![Z-Image 512 before](https://raw.githubusercontent.com/happyyzy/ggml/a12c1c4bef30676c421626b23b27e1ffafb98698/adreno-qkv-preprocess-20260905/zimage-before-512.png) | ![Z-Image 512 after](https://raw.githubusercontent.com/happyyzy/ggml/a12c1c4bef30676c421626b23b27e1ffafb98698/adreno-qkv-preprocess-20260905/zimage-after-512.png) |
 | Z-Image 1024, 8 steps | ![Z-Image 1024 before](https://raw.githubusercontent.com/happyyzy/ggml/a12c1c4bef30676c421626b23b27e1ffafb98698/adreno-qkv-preprocess-20260905/zimage-before-1024.png) | ![Z-Image 1024 after](https://raw.githubusercontent.com/happyyzy/ggml/a12c1c4bef30676c421626b23b27e1ffafb98698/adreno-qkv-preprocess-20260905/zimage-after-1024.png) |
-
-### Model weights
-
-The GGUF weights can be converted with stable-diffusion.cpp or downloaded directly from [Flux.2 Klein Adreno](https://huggingface.co/zhiyuanasad/flux2_klein_adreno) and [Z-Image Turbo Adreno](https://huggingface.co/zhiyuanasad/z_image_turbo_adreno).
 
 ### Commands
 
