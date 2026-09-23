@@ -16,6 +16,40 @@ git submodule init
 git submodule update
 ```
 
+## Selecting a GGML source tree
+
+By default, sd.cpp builds the patched GGML submodule in `ggml/`. To build with
+an upstream GGML checkout instead, enable `SD_USE_UPSTREAM_GGML` and set
+`SD_GGML_SOURCE_DIR`:
+
+```shell
+cmake -S . -B build-upstream -DSD_USE_UPSTREAM_GGML=ON -DSD_GGML_SOURCE_DIR=../ggml-upstream
+cmake --build build-upstream --config Release
+```
+
+The selected source tree supplies both the library and its private headers.
+Backend options such as `-DSD_CUDA=ON` apply to the selected tree as usual.
+
+`SD_USE_UPSTREAM_GGML` defaults to `OFF`, which enables the patched GGML
+extensions. Set it to `ON` when using upstream GGML; it selects the compatibility
+mode and does not download or replace the GGML source tree. Upstream mode keeps
+the original FP8 safetensors handling: FP8 tensors are converted to F16 at load
+time (one byte per element in the file, two in RAM and VRAM). INT8
+tensorwise/convrot is disabled and its model files are rejected with an explicit
+error. FP8 GGUF files, FP8 weight type requests and tensor type rules are also
+rejected; no automatic conversion is performed.
+
+Upstream GGML may lack some operators and performance optimizations provided by
+the patched version. A warning is emitted during CMake configuration and when
+creating an inference context. Ordinary floating-point and shared GGML
+quantization types remain available, subject to backend operator support.
+
+`SD_USE_SYSTEM_GGML=ON` instead links an installed GGML CMake package, located
+with `ggml_DIR` or `CMAKE_PREFIX_PATH`. In that mode, `SD_GGML_SOURCE_DIR` must
+point to the matching source tree for private headers. The installed library
+must use the same ABI settings as sd.cpp, including `GGML_MAX_NAME`.
+Set `SD_USE_UPSTREAM_GGML=ON` as well if the installed package is upstream GGML.
+
 ## WebP and WebM Support in Examples
 
 The example applications (`examples/cli` and `examples/server`) use `libwebp` to support WebP image I/O, and `examples/cli` can also use `libwebm` for `.webm` video output. Both are enabled by default. WebM output currently reuses `libwebp` to encode each frame as VP8 before muxing with `libwebm`.
@@ -55,6 +89,10 @@ cmake --build . --config Release
 ```
 
 ## Build with CUDA
+
+Native SageAttention is included when using CUDA with patched GGML
+(`SD_USE_UPSTREAM_GGML=OFF`).
+See [SageAttention](sage_attention.md) for GPU requirements and `--sage-attn` usage.
 
 This provides GPU acceleration using NVIDIA GPU. Make sure to have the CUDA toolkit installed. You can download it from your Linux distro's package manager (e.g. `apt install nvidia-cuda-toolkit`) or from here: [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads). Recommended to have at least 4 GB of VRAM.
 

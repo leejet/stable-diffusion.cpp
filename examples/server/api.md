@@ -148,6 +148,19 @@ Native extension fields:
 
 - any `sdcpp API` fields embedded through `sd_cpp_extra_args` inside `prompt`
 
+Uploaded images are decoded at their original dimensions. The first decoded
+image establishes the generation dimensions if `size` is omitted. Input
+geometry follows `image_preprocess`: references preserve their dimensions by
+default, while init and mask use the generation canvas preset.
+
+Reference encoding then follows model presets and `ref_image_args`. To skip
+input geometry for references and disable resizing before VAE encoding, include
+this in `prompt`:
+
+```text
+edit this image <sd_cpp_extra_args>{"image_preprocess":"target=ref,mode=none","ref_image_args":"resize_before_vae=false"}</sd_cpp_extra_args>
+```
+
 Response fields:
 
 | Field | Type | Notes |
@@ -518,14 +531,15 @@ Shared default fields used by both `img_gen` and `vid_gen`:
 | `output_format` | `string` |
 | `output_compression` | `integer` |
 
-`vae_tiling_params.extra_tiling_args` accepts a key=value list. For LTX video VAE temporal tiling, `temporal_tile_frames` defaults to `4` and `temporal_tile_overlap` defaults to `1`.
+`vae_tiling_params.extra_tiling_args` accepts a key=value list. Supported video VAEs accept `temporal_tile_frames` (alias `temporal_tile_size`, default `4`) and `temporal_tile_overlap` (default `1`).
+LTX and Wan preserve causal state between temporal tiles. Hunyuan Video and TAEHV use overlap blending. MiniMax H3 keeps its model-specific fixed temporal windows because its latent-to-frame mapping is non-linear.
 
 `img_gen`-specific default fields:
 
 | Field | Type |
 | --- | --- |
 | `batch_count` | `integer` |
-| `auto_resize_ref_image` | `boolean` |
+| `ref_image_args` | `string` |
 | `increase_ref_index` | `boolean` |
 | `control_strength` | `number` |
 | `ip_adapter_strength` | `number` |
@@ -652,7 +666,7 @@ Example:
   "strength": 0.75,
   "seed": -1,
   "batch_count": 1,
-  "auto_resize_ref_image": true,
+  "ref_image_args": "",
   "increase_ref_index": false,
   "control_strength": 0.9,
   "ip_adapter_strength": 1.0,
@@ -727,6 +741,17 @@ Example:
 
 ### Image Encoding Rules
 
+Native image/video requests and SDAPI accept `image_preprocess` as a rule string
+or array of rule strings. OpenAI-compatible requests can supply it in
+`sd_cpp_extra_args`. See [Image preprocessing](../../docs/image_preprocessing.md)
+for one-time input geometry, native-resolution decoding, mask alignment, and
+`canny=true` for edge detection on any supported image input.
+
+Image generation also accepts `ref_image_args` as a string (for example,
+`"resize_before_vae=false"`) in native and SDAPI requests, or through
+`sd_cpp_extra_args` in OpenAI-compatible requests. It controls downstream
+reference encoding and is independent of input geometry rules.
+
 Any image field accepts:
 
 - a raw base64 string, or
@@ -734,11 +759,14 @@ Any image field accepts:
 
 Channel expectations:
 
-- `init_image`: 3 channels
-- `ref_images[]`: 3 channels
+- `init_image`: native channels (3 or 4); alpha is preserved and applied per model
+- `ref_images[]`: native channels (3 or 4); alpha is preserved and applied per model
 - `control_image`: 3 channels
 - `ip_adapter_image`: 3 channels
 - `mask_image`: 1 channel
+
+Models that support RGBA (e.g. Qwen-Image 2.1) use the alpha channel of `init_image`
+and `ref_images[]`. RGB-only models drop it, so sending RGBA is safe for every model.
 
 If omitted or null:
 
@@ -759,7 +787,8 @@ Top-level scalar fields:
 | `strength` | `number` |
 | `seed` | `integer` |
 | `batch_count` | `integer` |
-| `auto_resize_ref_image` | `boolean` |
+| `ref_image_args` | `string` |
+| `image_preprocess` | `string \| array<string>` |
 | `increase_ref_index` | `boolean` |
 | `control_strength` | `number` |
 | `ip_adapter_strength` | `number` |

@@ -287,7 +287,11 @@ std::string T5UniGramTokenizer::normalize(const std::string& input) const {
     return normalized;
 }
 
-std::vector<int> T5UniGramTokenizer::encode(const std::string& input, on_new_token_cb_t on_new_token_cb) {
+bool T5UniGramTokenizer::encode(const std::string& input, std::vector<int>& result, on_new_token_cb_t on_new_token_cb, std::string* error) {
+    result.clear();
+    if (error) {
+        error->clear();
+    }
     std::vector<int32_t> tokens;
     std::vector<std::string> token_strs;
     std::string normalized = normalize(input);
@@ -333,7 +337,8 @@ std::vector<int> T5UniGramTokenizer::encode(const std::string& input, on_new_tok
         ss << "\"" << token_str << "\", ";
     }
     ss << "]";
-    LOG_DEBUG("split prompt \"%s\" to tokens %s", input.c_str(), ss.str().c_str());
+    LOG_VERBOSE("split prompt \"%s\" to tokens %s", input.c_str(), ss.str().c_str());
 
-    return tokens;
+    result = std::move(tokens);
+    return true;
 }

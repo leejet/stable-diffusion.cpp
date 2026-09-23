@@ -35,9 +35,11 @@ enum SDVersion {
     VERSION_WAN2,
     VERSION_WAN2_2_I2V,
     VERSION_WAN2_2_TI2V,
+    VERSION_WAN2_2_S2V,
     VERSION_LINGBOT_VIDEO,
     VERSION_QWEN_IMAGE,
     VERSION_QWEN_IMAGE_LAYERED,
+    VERSION_QWEN_IMAGE_2_1,
     VERSION_HUNYUAN_VIDEO,
     VERSION_ANIMA,
     VERSION_FLUX2,
@@ -57,6 +59,8 @@ enum SDVersion {
     VERSION_SEFI_IMAGE,
     VERSION_KREA2,
     VERSION_MAGE_FLOW,
+    VERSION_SENSENOVA_U1_5,
+    VERSION_LLADA_IMAGE,
     VERSION_ESRGAN,
     VERSION_COUNT,
 };
@@ -129,7 +133,7 @@ static inline bool sd_version_is_minimax_h3(SDVersion version) {
 }
 
 static inline bool sd_version_is_wan(SDVersion version) {
-    if (version == VERSION_WAN2 || version == VERSION_WAN2_2_I2V || version == VERSION_WAN2_2_TI2V) {
+    if (version == VERSION_WAN2 || version == VERSION_WAN2_2_I2V || version == VERSION_WAN2_2_TI2V || version == VERSION_WAN2_2_S2V) {
         return true;
     }
     return false;
@@ -143,7 +147,7 @@ static inline bool sd_version_is_lingbot_video(SDVersion version) {
 }
 
 static inline bool sd_version_is_qwen_image(SDVersion version) {
-    if (version == VERSION_QWEN_IMAGE || version == VERSION_QWEN_IMAGE_LAYERED) {
+    if (version == VERSION_QWEN_IMAGE || version == VERSION_QWEN_IMAGE_LAYERED || version == VERSION_QWEN_IMAGE_2_1) {
         return true;
     }
     return false;
@@ -165,6 +169,13 @@ static inline bool sd_version_is_anima(SDVersion version) {
 
 static inline bool sd_version_is_z_image(SDVersion version) {
     if (version == VERSION_Z_IMAGE) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_is_llada_image(SDVersion version) {
+    if (version == VERSION_LLADA_IMAGE) {
         return true;
     }
     return false;
@@ -237,6 +248,18 @@ static inline bool sd_version_is_mage_flow(SDVersion version) {
     return version == VERSION_MAGE_FLOW;
 }
 
+static inline bool sd_version_is_sensenova_u1(SDVersion version) {
+    return version == VERSION_SENSENOVA_U1_5;
+}
+
+static inline bool sd_version_supports_video_generation(SDVersion version) {
+    return version == VERSION_SVD || sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_lingbot_video(version) || sd_version_is_ltxav(version) || sd_version_is_minimax_h3(version);
+}
+
+static inline bool sd_version_supports_image_generation(SDVersion version) {
+    return !sd_version_supports_video_generation(version);
+}
+
 static inline bool sd_version_uses_flux_vae(SDVersion version) {
     if (sd_version_is_flux(version) || sd_version_is_z_image(version) || sd_version_is_boogu_image(version) || sd_version_is_longcat(version)) {
         return true;
@@ -245,7 +268,7 @@ static inline bool sd_version_uses_flux_vae(SDVersion version) {
 }
 
 static inline bool sd_version_uses_flux2_vae(SDVersion version) {
-    if (sd_version_is_flux2(version) || sd_version_is_ernie_image(version) || sd_version_is_lens(version) || sd_version_is_ideogram4(version) || sd_version_is_sefi_image(version)) {
+    if (sd_version_is_flux2(version) || sd_version_is_ernie_image(version) || sd_version_is_lens(version) || sd_version_is_ideogram4(version) || sd_version_is_sefi_image(version) || sd_version_is_llada_image(version)) {
         return true;
     }
     return false;
@@ -286,6 +309,7 @@ static inline bool sd_version_is_dit(SDVersion version) {
         version == VERSION_HIDREAM_O1 ||
         sd_version_is_anima(version) ||
         sd_version_is_z_image(version) ||
+        sd_version_is_llada_image(version) ||
         sd_version_is_boogu_image(version) ||
         sd_version_is_ernie_image(version) ||
         sd_version_is_lens(version) ||
@@ -295,7 +319,8 @@ static inline bool sd_version_is_dit(SDVersion version) {
         sd_version_is_ideogram4(version) ||
         sd_version_is_sefi_image(version) ||
         sd_version_is_krea2(version) ||
-        sd_version_is_mage_flow(version)) {
+        sd_version_is_mage_flow(version) ||
+        sd_version_is_sensenova_u1(version)) {
         return true;
     }
     return false;

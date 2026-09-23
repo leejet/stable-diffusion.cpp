@@ -2,8 +2,14 @@
 #define __SD_MODEL_DIFFUSION_Z_IMAGE_HPP__
 
 #include <algorithm>
+#include <cinttypes>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
+#include "core/ggml_tensor_utils.h"
+#include "core/util.h"
+#include "model/common/ggml_block.hpp"
 #include "model/diffusion/flux.hpp"
 #include "model/diffusion/mmdit.hpp"
 #include "model/diffusion/model.hpp"
@@ -107,14 +113,14 @@ namespace ZImage {
                     config.num_kv_heads = std::max<int64_t>(1, (qkv_heads - config.num_heads) / 2);
                 }
             }
-            LOG_DEBUG("z_image: num_layers = %" PRId64 ", num_refiner_layers = %" PRId64 ", hidden_size = %" PRId64 ", num_heads = %" PRId64 ", num_kv_heads = %" PRId64 ", in_channels = %" PRId64 ", out_channels = %" PRId64,
-                      config.num_layers,
-                      config.num_refiner_layers,
-                      config.hidden_size,
-                      config.num_heads,
-                      config.num_kv_heads,
-                      config.in_channels,
-                      config.out_channels);
+            LOG_VERBOSE("z_image: num_layers = %" PRId64 ", num_refiner_layers = %" PRId64 ", hidden_size = %" PRId64 ", num_heads = %" PRId64 ", num_kv_heads = %" PRId64 ", in_channels = %" PRId64 ", out_channels = %" PRId64,
+                        config.num_layers,
+                        config.num_refiner_layers,
+                        config.hidden_size,
+                        config.num_heads,
+                        config.num_kv_heads,
+                        config.in_channels,
+                        config.out_channels);
             return config;
         }
     };
@@ -125,16 +131,30 @@ namespace ZImage {
         int64_t num_heads;
         int64_t num_kv_heads;
         bool qk_norm;
+        bool split_qkv;
 
     public:
-        JointAttention(int64_t hidden_size, int64_t head_dim, int64_t num_heads, int64_t num_kv_heads, bool qk_norm)
-            : head_dim(head_dim), num_heads(num_heads), num_kv_heads(num_kv_heads), qk_norm(qk_norm) {
-            blocks["qkv"] = std::make_shared<Linear>(hidden_size, (num_heads + num_kv_heads * 2) * head_dim, false);
-            float scale   = 1.f;
-            blocks["out"] = std::make_shared<Linear>(num_heads * head_dim, hidden_size, false, false, false, scale);
+        JointAttention(int64_t hidden_size,
+                       int64_t head_dim,
+                       int64_t num_heads,
+                       int64_t num_kv_heads,
+                       bool qk_norm,
+                       bool norm_elementwise_affine = true,
+                       bool split_qkv               = false)
+            : head_dim(head_dim), num_heads(num_heads), num_kv_heads(num_kv_heads), qk_norm(qk_norm), split_qkv(split_qkv) {
+            float scale = 1.f;
+            if (split_qkv) {
+                blocks["to_q"]     = std::make_shared<Linear>(hidden_size, num_heads * head_dim, false);
+                blocks["to_k"]     = std::make_shared<Linear>(hidden_size, num_kv_heads * head_dim, false);
+                blocks["to_v"]     = std::make_shared<Linear>(hidden_size, num_kv_heads * head_dim, false);
+                blocks["to_out.0"] = std::make_shared<Linear>(num_heads * head_dim, hidden_size, false, false, false, scale);
+            } else {
+                blocks["qkv"] = std::make_shared<Linear>(hidden_size, (num_heads + num_kv_heads * 2) * head_dim, false);
+                blocks["out"] = std::make_shared<Linear>(num_heads * head_dim, hidden_size, false, false, false, scale);
+            }
             if (qk_norm) {
-                blocks["q_norm"] = std::make_shared<RMSNorm>(head_dim);
-                blocks["k_norm"] = std::make_shared<RMSNorm>(head_dim);
+                blocks["q_norm"] = std::make_shared<RMSNorm>(head_dim, 1e-06f, norm_elementwise_affine);
+                blocks["k_norm"] = std::make_shared<RMSNorm>(head_dim, 1e-06f, norm_elementwise_affine);
             }
         }
 
@@ -145,8 +165,35 @@ namespace ZImage {
             // x: [N, n_token, hidden_size]
             int64_t n_token = x->ne[1];
             int64_t N       = x->ne[2];
-            auto qkv_proj   = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
-            auto out_proj   = std::dynamic_pointer_cast<Linear>(blocks["out"]);
+            auto out_proj   = std::dynamic_pointer_cast<Linear>(blocks[split_qkv ? "to_out.0" : "out"]);
+
+            if (split_qkv) {
+                auto q_proj = std::dynamic_pointer_cast<Linear>(blocks["to_q"]);
+                auto k_proj = std::dynamic_pointer_cast<Linear>(blocks["to_k"]);
+                auto v_proj = std::dynamic_pointer_cast<Linear>(blocks["to_v"]);
+
+                if (sd_backend_is(ctx->backend, "ROCm")) {
+                    out_proj->set_scale(1.f / 16.f);
+                    out_proj->set_force_prec_f32(true);
+                    q_proj->set_force_prec_f32(true);
+                    k_proj->set_force_prec_f32(true);
+                    v_proj->set_force_prec_f32(true);
+                }
+
+                auto q = ggml_reshape_4d(ctx->ggml_ctx, q_proj->forward(ctx, x), head_dim, num_heads, n_token, N);
+                auto k = ggml_reshape_4d(ctx->ggml_ctx, k_proj->forward(ctx, x), head_dim, num_kv_heads, n_token, N);
+                auto v = ggml_reshape_4d(ctx->ggml_ctx, v_proj->forward(ctx, x), head_dim, num_kv_heads, n_token, N);
+
+                if (qk_norm) {
+                    q = std::dynamic_pointer_cast<RMSNorm>(blocks["q_norm"])->forward(ctx, q);
+                    k = std::dynamic_pointer_cast<RMSNorm>(blocks["k_norm"])->forward(ctx, k);
+                }
+
+                auto out = Rope::attention(ctx, q, k, v, pe, mask, 1.f / 128.f);
+                return out_proj->forward(ctx, out);
+            }
+
+            auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
 
             if (sd_backend_is(ctx->backend, "ROCm")) {
                 out_proj->set_scale(1.f / 16.f);
@@ -246,9 +293,12 @@ namespace ZImage {
                                             ggml_tensor* x,
                                             ggml_tensor* scale) {
         // x: [N, L, C]
-        // scale: [N, C]
-        scale = ggml_reshape_3d(ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
-        x     = ggml_add(ctx, x, ggml_mul(ctx, x, scale));
+        // scale: [N, C], or [N, L, C] when the caller modulates per token (LLaDA-Image editing
+        // feeds a per-token timestep embedding so each segment carries its own modulation).
+        if (scale->ne[1] != x->ne[1]) {
+            scale = ggml_reshape_3d(ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
+        }
+        x = ggml_add(ctx, x, ggml_mul(ctx, x, scale));
         return x;
     }
 
@@ -266,14 +316,16 @@ namespace ZImage {
                               float ffn_dim_multiplier,
                               float norm_eps,
                               bool qk_norm,
-                              bool modulation = true)
+                              bool modulation              = true,
+                              bool norm_elementwise_affine = true,
+                              bool split_qkv               = false)
             : modulation(modulation) {
-            blocks["attention"]       = std::make_shared<JointAttention>(hidden_size, head_dim, num_heads, num_kv_heads, qk_norm);
+            blocks["attention"]       = std::make_shared<JointAttention>(hidden_size, head_dim, num_heads, num_kv_heads, qk_norm, norm_elementwise_affine, split_qkv);
             blocks["feed_forward"]    = std::make_shared<FeedForward>(hidden_size, hidden_size, multiple_of, ffn_dim_multiplier);
-            blocks["attention_norm1"] = std::make_shared<RMSNorm>(hidden_size, norm_eps);
-            blocks["ffn_norm1"]       = std::make_shared<RMSNorm>(hidden_size, norm_eps);
-            blocks["attention_norm2"] = std::make_shared<RMSNorm>(hidden_size, norm_eps);
-            blocks["ffn_norm2"]       = std::make_shared<RMSNorm>(hidden_size, norm_eps);
+            blocks["attention_norm1"] = std::make_shared<RMSNorm>(hidden_size, norm_eps, norm_elementwise_affine);
+            blocks["ffn_norm1"]       = std::make_shared<RMSNorm>(hidden_size, norm_eps, norm_elementwise_affine);
+            blocks["attention_norm2"] = std::make_shared<RMSNorm>(hidden_size, norm_eps, norm_elementwise_affine);
+            blocks["ffn_norm2"]       = std::make_shared<RMSNorm>(hidden_size, norm_eps, norm_elementwise_affine);
             if (modulation) {
                 blocks["adaLN_modulation.0"] = std::make_shared<Linear>(MIN(hidden_size, ADALN_EMBED_DIM), 4 * hidden_size);
             }
@@ -603,7 +655,7 @@ namespace ZImage {
                                                circular_x_enabled,
                                                config.axes_dim);
             int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            // LOG_DEBUG("pos_len %d", pos_len);
+            // LOG_VERBOSE("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe, true, "pe");
@@ -636,7 +688,7 @@ namespace ZImage {
                 return build_graph(x, timesteps, context, ref_latents, ref_index_mode);
             };
 
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,
@@ -689,7 +741,7 @@ namespace ZImage {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("z_image test done in %lldms", t1 - t0);
+                LOG_VERBOSE("z_image test done in %lldms", t1 - t0);
             }
         }
 
@@ -700,8 +752,8 @@ namespace ZImage {
             ggml_backend_t backend    = sd_backend_cpu_init();
             ggml_type model_data_type = GGML_TYPE_Q8_0;
 
-            auto model_manager        = std::make_shared<ModelManager>();
-            ModelLoader& model_loader = model_manager->loader();
+            auto model_manager = std::make_shared<ModelManager>();
+            ModelLoader model_loader;
             if (!model_loader.init_from_file_and_convert_name(file_path, "model.diffusion_model.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
@@ -722,7 +774,8 @@ namespace ZImage {
                                                                                    VERSION_QWEN_IMAGE,
                                                                                    model_manager);
 
-            if (!model_manager->register_runner_params("ZImage test",
+            if (!model_manager->set_loader(model_loader) ||
+                !model_manager->register_runner_params(ModelComponent::Diffusion,
                                                        *z_image,
                                                        "model.diffusion_model",
                                                        ModelManager::ResidencyMode::ParamBackend,

@@ -20,7 +20,7 @@ void MistralTokenizer::load_from_merges(const std::string& merges_utf8_str, cons
         decoder[i]           = token;
     }
     encoder_len = static_cast<int>(vocab.size());
-    LOG_DEBUG("vocab size: %d", encoder_len);
+    LOG_VERBOSE("vocab size: %d", encoder_len);
 
     auto byte_unicode_pairs = bytes_to_unicode();
     byte_encoder            = std::map<int, std::u32string>(byte_unicode_pairs.begin(), byte_unicode_pairs.end());
@@ -28,7 +28,7 @@ void MistralTokenizer::load_from_merges(const std::string& merges_utf8_str, cons
         byte_decoder[pair.second] = pair.first;
     }
     std::vector<std::u32string> merges = split_utf32(merges_utf8_str);
-    LOG_DEBUG("merges size %zu", merges.size());
+    LOG_VERBOSE("merges size %zu", merges.size());
     std::vector<std::pair<std::u32string, std::u32string>> merge_pairs;
     for (const auto& merge : merges) {
         size_t space_pos = merge.find(' ');
@@ -42,7 +42,8 @@ void MistralTokenizer::load_from_merges(const std::string& merges_utf8_str, cons
     bpe_len = rank;
 }
 
-MistralTokenizer::MistralTokenizer(const std::string& merges_utf8_str, const std::string& vocab_utf8_str) {
+MistralTokenizer::MistralTokenizer(const std::string& merges_utf8_str, const std::string& vocab_utf8_str)
+    : BPETokenizer(R"([^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+)") {
     add_bos_token = true;
 
     UNK_TOKEN = "<unk>";

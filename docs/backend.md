@@ -5,7 +5,8 @@
 - `--backend` selects the runtime backend used to execute model graphs.
 - `--params-backend` selects where model parameters are kept.
 
-If `--params-backend` is not set, parameters use the same backend as their module runtime backend.
+If `--params-backend` is not set, auto-fit chooses parameter placement. With
+`--auto-fit off`, parameters use the same backend as their module runtime backend.
 
 ## Syntax
 
@@ -41,7 +42,11 @@ sd-cli -m model.safetensors -p "a cat" --backend cuda0 --params-backend disk
 sd-cli -m model.safetensors -p "a cat" --backend diffusion=cuda0,vae=vulkan0 --max-vram cuda0=6,vulkan0=2
 ```
 
-The budget applies to every module running on that backend.
+The value is a shared per-device budget for managed weights and registered
+runner compute/cache buffers. Live free memory can lower the effective limit
+for each graph run. Driver contexts and allocations made outside the managed
+model runners are not part of this accounting, so it is not a hard physical
+VRAM cap.
 
 Module names are case-insensitive. Hyphens and underscores in module names are ignored, so `clip_vision`, `clip-vision`, and `clipvision` are equivalent.
 
@@ -79,9 +84,10 @@ with `--params-backend diffusion=disk`, released directly from) its own device;
 an explicit assignment such as `te=cpu` keeps the parameters on that backend
 and stages each range to its device on demand.
 
-Layer split cannot be combined with `--max-vram` graph-cut segmentation or
-`--stream-layers` for the split module; those are single-device mechanisms and
-are disabled for it.
+Layer split uses the fixed graph-cut plan to assign blocks across devices, but
+single-device segmented execution and next-segment prefetch are disabled for
+the split module. `--max-vram` can still provide the per-device limits used by
+layer split and auto-fit.
 
 Use `--list-devices` to see the device names available on the system.
 
@@ -104,43 +110,107 @@ Compared to a layer split this uses all GPUs within every layer (instead of
 sequentially device by device) at the cost of a cross-device reduction per
 matmul - usually the faster option when the devices have fast interconnect.
 
-Row split requires backend support for split buffers and is currently
-available on CUDA only; on other backends (or when the listed devices belong
-to different backend registries) the module falls back to a layer split.
+Row split requires a compatible split-buffer export from the linked GGML
+backend. If it is unavailable (or the listed devices belong to different backend
+registries), the module falls back to a layer split.
 Embeddings, normalization weights, biases and other non-block tensors stay in
 regular buffers on the main device.
+
+Row-split execution can use graph segments, but split weights are loaded
+synchronously instead of using the normal single-device prefetch path. Because
+GGML does not expose exact shard allocation sizes, the managed budget currently
+counts a split buffer's full size on each participating device. This is a
+conservative bound and can reject otherwise feasible layouts.
 
 Direct ("immediately") LoRA application cannot patch row-split tensors; with
 `--split-mode row` the automatic LoRA mode selects runtime application, and an
 explicit `--lora-apply-mode immediately` skips the split tensors with a
 warning.
 
-## Automatic placement (`--auto-fit`)
+## Automatic placement (`--auto-fit on|off`)
 
-`--auto-fit` derives the `diffusion` / `te` / `vae` placements from the model
-metadata and the per-device memory budgets, then feeds them into the same
-backend assignment mechanism described above (the chosen specs are printed).
-`--backend` and `--params-backend` are ignored while auto-fit is enabled.
+`--auto-fit` requires `on` or `off` and defaults to `on` when omitted.
+Explicit `--params-backend` assignments disable auto-fit,
+regardless of argument order, even with `--auto-fit on`.
+
+Auto-fit preserves explicit `--backend` assignments, including per-module
+assignments and device lists. For modules without a runtime assignment, it chooses
+the GPU with the largest available memory budget (the first device on a tie).
+It then derives parameter placements from the model metadata, each module's
+compute devices, and the remaining memory budgets. The chosen backend
+specifications are printed.
 
 ```shell
-sd-cli -m model.safetensors -p "a cat" --auto-fit
-sd-cli -m model.safetensors -p "a cat" --auto-fit --max-vram cuda0=8,cuda1=14
-sd-cli -m model.safetensors -p "a cat" --auto-fit --split-mode row
+sd-cli -m model.safetensors -p "a cat" --auto-fit on
+sd-cli -m model.safetensors -p "a cat" --auto-fit on --max-vram cuda0=8,cuda1=14
+sd-cli -m model.safetensors -p "a cat" --backend cuda0
+sd-cli -m model.safetensors -p "a cat" --backend diffusion=cuda0,te=cpu,vae=cuda1
+sd-cli -m model.safetensors -p "a cat" --auto-fit off
 ```
 
 Budgets reuse `--max-vram`: a positive per-device value caps what auto-fit
 plans with on that device, a negative value means "free memory minus that many
 GiB", and with no budget set each device's free memory minus a 512 MiB margin
-is used. (The same values still drive graph-cut segmented execution for
-modules that end up on a single device.)
+is used. These resolved GPU budgets, including the safety margin, also drive
+the runner's graph-cut capacity checks.
 
-When everything fits resident, components are simply spread across the
-available GPUs. When it does not, auto-fit switches to time-share mode: the
-heavy components get `disk` params residency (loaded for their phase, freed
-after), and a component too large for any single device is split across all
-GPUs with the layer/row split mechanism (`--split-mode` selects which, layer
-by default). Components that fit nowhere fall back to the CPU. If a VAE decode
-still runs out of memory, tiling is enabled and the decode retried once.
+Runtime capacity checks also leave 512 MiB of currently free device memory for
+backend scratch buffers and pipelines, including with explicit backend assignments.
+They cap free-memory reports by the device's total memory minus tracked
+resident allocations. Vulkan reports exceeding total memory are rejected because
+its heap-budget subtraction can underflow. Other backends use the cap instead of
+treating such reports as zero free memory. Failed checks log the reported free and
+total memory alongside tracked weight and runtime allocations.
+
+Components are considered in `diffusion`, `te`, `vae` order so that repeatedly
+used diffusion weights have priority. Each component's weights use the first
+storage location with enough remaining budget:
+
+1. The component's compute GPU, leaving estimated space for computation and weight staging.
+2. CPU RAM, reserving the larger of 2 GiB or 10% of available RAM for other work.
+3. Another GPU, choosing the one with the largest remaining budget that fits.
+4. Disk, reloading weights on demand.
+
+GPU cache space follows the same component priority. Before a lower-priority
+component can become permanently resident, the planner leaves room for the full
+weights and estimated compute space of higher-priority offloaded components.
+If offloaded diffusion already needs the entire main GPU budget, TE and VAE also
+use offloaded parameters. Their GPU copies can then be released after their
+phases, leaving more room to reuse diffusion weights across sampling steps.
+CPU parameter residency allows GPU weight caching; it does not force every
+weight to be copied again at every step.
+
+RAM and GPU budgets are shared across components. Each component uses a single
+parameter backend; several other GPUs' capacities are not combined to store
+one component. If available RAM cannot be queried, RAM residency is skipped.
+Weights stored on another GPU are copied to the component's compute devices for
+execution. CPU modules use RAM or disk. Compute reserves and cache priority are
+accounted for separately on each device, so a CPU module does not reserve GPU
+space. Storage on another module's GPU also leaves room for that module's work.
+
+Auto-fit does not select multi-GPU layer/row computation itself. Explicit device
+lists and `--split-mode` still control that computation. Before the runners have
+built their split plans, auto-fit conservatively counts the full component size
+on each listed GPU when checking residency and cache space. This can offload
+parameters even when a split layout would fit; use `--auto-fit off` to keep the
+default split-device parameter placement.
+
+For example, a diffusion model whose full weights exceed the main GPU's budget
+can use `--backend diffusion=cuda0 --params-backend diffusion=cpu` when RAM is
+sufficient. Automatic graph segmentation can then load the required weights
+for each segment and reclaim idle GPU copies. `--disable-segmented-compute`
+still disables segmentation.
+
+Initial compute reserves are estimates (2 GiB for diffusion and text encoders,
+1 GiB for VAE); higher-priority placements also leave staging space for the
+largest weight tensor of each lower-priority offloaded component. Actual segment
+weights, compute buffers and caches must
+still fit the runner's capacity checks. Offloading weights does not guarantee
+that every resolution or frame count will fit, and auto-fit does not change a
+component to CPU computation solely because its full weights exceed VRAM.
+If a VAE decode fails, decoding retries with spatial tiling even when `--auto-fit`
+is off; supported video decoders try temporal tiling first and can then add
+spatial tiling. Spatial retries use half-size tiles along each latent dimension.
 
 ## Modules
 
@@ -192,7 +262,7 @@ sd-cli -m model.safetensors -p "a cat" --backend cuda0 --params-backend disk
 
 This runs all modules on `cuda0`, reloads parameters from the model file as needed, and releases those parameter buffers after use.
 
-`disk` is never selected implicitly. If `--params-backend` is not set, parameters use the runtime backend.
+Outside `--auto-fit`, `disk` is never selected implicitly. If `--params-backend` is not set, parameters use the runtime backend.
 
 Per-module assignments can be mixed:
 
@@ -241,4 +311,8 @@ The example CLI/server still accepts these older CPU placement flags as compatib
 
 Because this default is inserted first, later explicit `--params-backend` entries can still override it, for example `--offload-to-cpu --params-backend te=disk` keeps non-TE parameters on CPU and reloads TE parameters from disk.
 
-Library callers should set `backend` and `params_backend` directly. The old CPU/offload fields are no longer part of the C API. Explicit `--backend` and `--params-backend` assignments are preferred for new commands.
+Library callers should set `backend` and `params_backend` directly. `sd_ctx_params_init()`
+enables `auto_fit` by default; a nonempty `params_backend` assignment disables it.
+The `backend` assignment constrains auto-fit's compute placement.
+The old CPU/offload fields are no longer part of the C API. Explicit `--backend` and
+`--params-backend` assignments are preferred for new commands.

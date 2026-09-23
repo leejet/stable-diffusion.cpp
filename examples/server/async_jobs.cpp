@@ -237,6 +237,9 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
                          int& output_fps,
                          std::string& error_message) {
     sd_vid_gen_params_t params = job.vid_gen.to_sd_vid_gen_params_t();
+    std::string str_params     = job.vid_gen.gen_params.embed_image_metadata
+                                     ? get_image_params(*runtime.ctx_params, job.vid_gen.gen_params, job.vid_gen.gen_params.seed, VID_GEN)
+                                     : "";
 
     SDImageVec results;
     int num_results             = 0;
@@ -245,7 +248,7 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
     {
         std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
         sd_image_t* raw_results = nullptr;
-        if (!generate_video(runtime.sd_ctx, &params, &raw_results, &num_results, &generated_audio)) {
+        if (!generate_video(runtime.sd_ctx, &params, &raw_results, &num_results, &generated_audio, &output_fps)) {
             raw_results = nullptr;
         }
         results.adopt(raw_results, num_results);
@@ -261,9 +264,10 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
     std::vector<uint8_t> video_bytes = create_video_from_sd_images_to_vector(job.vid_gen.output_format,
                                                                              results.data(),
                                                                              num_results,
-                                                                             job.vid_gen.gen_params.fps,
+                                                                             output_fps,
                                                                              job.vid_gen.output_compression,
-                                                                             generated_audio);
+                                                                             generated_audio,
+                                                                             str_params);
     free_sd_audio(generated_audio);
     if (video_bytes.empty()) {
         error_message = "failed to encode generated video container";
@@ -273,7 +277,6 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
     output_media_b64       = base64_encode(video_bytes);
     output_media_mime_type = video_mime_type(job.vid_gen.output_format);
     output_frame_count     = num_results;
-    output_fps             = job.vid_gen.gen_params.fps;
     return true;
 }
 

@@ -14,6 +14,8 @@ If you want to update a third-party dependency, please open an issue first inste
 
 Keep each PR focused on one clear change. Large or overly complex PRs are harder to review and may not be merged.
 
+Do not include test code or test scripts in commits or PRs. Keep them local and report verification results in the PR description.
+
 Follow Conventional Commit-style subjects seen in history: `feat:`, `fix:`, `refactor:`, `ci:`, `docs:`, `chore:`. Keep subjects imperative and scoped.
 
 PRs should include:
@@ -35,16 +37,30 @@ Naming conventions:
 - In `PascalCase` names, preserve common abbreviations in uppercase, for example `SD`, `API`, `HTTP`, `JSON`, `RGB`, `VAE`, `TAE`, `LoRA`, and `WebP`.
 - Use `snake_case` for functions, methods, variables, and file names unless an existing API requires a different style.
 - Use a trailing underscore for private data member names, for example `hidden_size_` or `tokenizer_`.
-- Use `.h` for C and C++ header files. Do not introduce new `.hpp` headers.
+- Use `.hpp` for model headers under `src/model/`, including new model headers. Do not rename these headers to `.h`. Use `.h` for other C and C++ header files.
 - Use macro-based header include guards instead of `#pragma once`.
 - Format header include guards as `__SD_{PATH}__`, where `{PATH}` is the header path in uppercase snake case without the file extension. For example, `src/sample.h` should use `__SD_SAMPLE_H__`.
 - Do not introduce anonymous namespaces in new or modified code; prefer `static` file-local functions/variables or an explicit named namespace when scoping is needed.
 - In `class`/`struct` definitions, place data members before member functions unless an existing type already clearly follows a different pattern.
-- Keep `test_*.cpp` / `test_*.py` naming for tests.
 
 Some older code in the project may not fully follow the current conventions. Please do not submit PRs that only rewrite existing code to match style rules.
 
 When adding or modifying model implementations, follow the model config and weight detection conventions in [docs/model_config.md](docs/model_config.md).
+
+## Tokenizer Data
+
+New model integrations must use an external `tokenizer.json` by default. Do not
+embed new vocabularies or merge tables solely for less widely used models;
+these tables increase the binary size for every user.
+
+The embedded-data allowlist is CLIP, T5/UMT5, Qwen 2/3, Mistral, and Gemma 3/4.
+Models may reuse an existing embedded tokenizer when its vocabulary and behavior
+match their text encoder. Gemma 2 and GPT-OSS require external JSON files.
+
+Adding to this allowlist requires maintainer approval, supported by the model's
+usage, reuse across models, and measured binary-size cost. Document the matching
+JSON and CLI option for models that require an external tokenizer, and fail
+initialization clearly when it is missing.
 
 ## AI-Assisted Contributions
 

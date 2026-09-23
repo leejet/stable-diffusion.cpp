@@ -2,6 +2,9 @@
 
 sd.cpp can load and execute ComfyUI `int8_tensorwise` safetensors with `convrot` metadata directly. The stored INT8 weights are not converted to another weight type at load time.
 
+This requires the INT8 tensorwise/convrot extensions in the patched GGML.
+Builds with `SD_USE_UPSTREAM_GGML=ON` reject these files during loading.
+
 ## Checkpoint format
 
 Each quantized linear module contains the following tensors:

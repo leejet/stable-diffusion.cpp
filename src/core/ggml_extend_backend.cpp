@@ -8,8 +8,12 @@
 #include <stdexcept>
 #include <vector>
 
+#ifdef SD_USE_CUDA
+#include <cuda.h>
+#endif
+
 #include "core/util.h"
-#include "ggml/src/ggml-impl.h"
+#include "ggml-impl.h"
 #include "stable-diffusion.h"
 
 static std::string trim_copy(const std::string& value) {
@@ -85,6 +89,10 @@ static bool parse_backend_module(const std::string& raw_name, SDBackendModule* m
     }
     if (name == "detector" || name == "adetailer" || name == "yolo") {
         *module = SDBackendModule::DETECTOR;
+        return true;
+    }
+    if (name == "audioencoder" || name == "audio") {
+        *module = SDBackendModule::AUDIO_ENCODER;
         return true;
     }
     return false;
@@ -392,7 +400,7 @@ static bool backend_name_exists(const std::string& name) {
 
 static ggml_backend_t init_named_backend(const std::string& name) {
     ggml_backend_load_all_once();
-    LOG_DEBUG("Initializing backend: %s", name.c_str());
+    LOG_VERBOSE("Initializing backend: %s", name.c_str());
     if (trim_copy(name).empty()) {
         return ggml_backend_init_best();
     }
@@ -423,6 +431,70 @@ bool sd_backend_is_cpu(ggml_backend_t backend) {
     }
     auto dev = ggml_backend_get_device(backend);
     return dev != nullptr && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
+}
+
+bool sd_backend_supports_cuda_mma(ggml_backend_t backend) {
+#ifdef SD_USE_CUDA
+    if (!sd_backend_is(backend, "CUDA")) {
+        return false;
+    }
+    auto dev = ggml_backend_get_device(backend);
+    if (dev == nullptr) {
+        return false;
+    }
+    static std::mutex mutex;
+    static std::unordered_map<ggml_backend_dev_t, bool> cache;
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = cache.find(dev);
+    if (it != cache.end()) {
+        return it->second;
+    }
+    const bool supported = [&]() {
+        ggml_backend_dev_props props{};
+        ggml_backend_dev_get_props(dev, &props);
+        CUdevice device;
+        int major = 0, minor = 0;
+        if (props.device_id == nullptr || cuInit(0) != CUDA_SUCCESS ||
+            cuDeviceGetByPCIBusId(&device, props.device_id) != CUDA_SUCCESS ||
+            cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device) != CUDA_SUCCESS ||
+            cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device) != CUDA_SUCCESS) {
+            return false;
+        }
+        auto reg          = ggml_backend_dev_backend_reg(dev);
+        auto get_features = reinterpret_cast<ggml_backend_get_features_t>(
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_get_features"));
+        if (get_features == nullptr) {
+            return false;
+        }
+        // Match ggml's highest compiled architecture for this device, including PTX fallback.
+        const int cc      = 100 * major + 10 * minor;
+        int compiled_arch = 0;
+        for (auto feature = get_features(reg); feature != nullptr && feature->name != nullptr; ++feature) {
+            if (std::strcmp(feature->name, "ARCHS") != 0 || feature->value == nullptr) {
+                continue;
+            }
+            const char* arch = feature->value;
+            while (*arch != '\0') {
+                char* end        = nullptr;
+                const long value = std::strtol(arch, &end, 10);
+                if (end == arch) {
+                    ++arch;
+                    continue;
+                }
+                if (value <= cc && value > compiled_arch) {
+                    compiled_arch = static_cast<int>(value);
+                }
+                arch = end;
+            }
+        }
+        return compiled_arch == 700 || compiled_arch >= 750;
+    }();
+    cache.emplace(dev, supported);
+    return supported;
+#else
+    (void)backend;
+    return false;
+#endif
 }
 
 ggml_backend_t sd_backend_cpu_init() {
@@ -542,10 +614,10 @@ static ggml_backend_t sd_get_default_backend() {
         if (dev_count == 0) {
             LOG_ERROR("No devices found!");
         } else {
-            LOG_DEBUG("Found %zu backend devices:", dev_count);
+            LOG_VERBOSE("Found %zu backend devices:", dev_count);
             for (size_t i = 0; i < dev_count; ++i) {
                 auto dev = ggml_backend_dev_get(i);
-                LOG_DEBUG("#%zu: %s", i, ggml_backend_dev_name(dev));
+                LOG_VERBOSE("#%zu: %s", i, ggml_backend_dev_name(dev));
             }
         }
     });
@@ -587,13 +659,13 @@ static ggml_backend_t sd_get_default_backend() {
     }
 
     if (sd_backend_is_cpu(backend)) {
-        LOG_DEBUG("Using CPU backend");
+        LOG_VERBOSE("Using CPU backend");
     }
 
     return backend;
 }
 
-static bool sd_parse_backend_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error) {
+bool sd_parse_backend_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error) {
     if (assignment == nullptr) {
         return false;
     }
@@ -660,7 +732,13 @@ void SDBackendAssignment::set_module(SDBackendModule module, const std::string& 
 }
 
 void SDBackendHandleDeleter::operator()(ggml_backend_t backend) const {
-    ggml_backend_free(backend);
+    try {
+        ggml_backend_free(backend);
+    } catch (const std::exception& error) {
+        LOG_ERROR("backend cleanup failed: %s", error.what());
+    } catch (...) {
+        LOG_ERROR("backend cleanup failed: unknown exception");
+    }
 }
 
 SDBackendManager::~SDBackendManager() {
@@ -962,6 +1040,40 @@ const char* sd_backend_module_name(SDBackendModule module) {
             return "upscaler";
         case SDBackendModule::DETECTOR:
             return "detector";
+        case SDBackendModule::AUDIO_ENCODER:
+            return "audio_encoder";
     }
     return "unknown";
+}
+
+void ggml_ext_backend_tensor_get_and_sync(ggml_backend_t backend, const ggml_tensor* tensor, void* data, size_t offset, size_t size) {
+    if ((sd_backend_is(backend, "ROCm") || sd_backend_is(backend, "CUDA") || sd_backend_is(backend, "SYCL")) &&
+        !sd_backend_is_cpu(backend)) {
+        ggml_backend_tensor_get_async(backend, tensor, data, offset, size);
+        ggml_backend_synchronize(backend);
+        return;
+    }
+
+    ggml_backend_tensor_get(tensor, data, offset, size);
+}
+
+float ggml_ext_backend_tensor_get_f32(ggml_tensor* tensor) {
+    GGML_ASSERT(tensor->type == GGML_TYPE_F32 || tensor->type == GGML_TYPE_F16 || tensor->type == GGML_TYPE_I32 || tensor->type == GGML_TYPE_BF16);
+    float value;
+    if (tensor->type == GGML_TYPE_F32) {
+        ggml_backend_tensor_get(tensor, &value, 0, sizeof(value));
+    } else if (tensor->type == GGML_TYPE_BF16) {
+        ggml_bf16_t bf16_value;
+        ggml_backend_tensor_get(tensor, &bf16_value, 0, sizeof(bf16_value));
+        value = ggml_bf16_to_fp32(bf16_value);
+    } else if (tensor->type == GGML_TYPE_F16) {
+        ggml_fp16_t f16_value;
+        ggml_backend_tensor_get(tensor, &f16_value, 0, sizeof(f16_value));
+        value = ggml_fp16_to_fp32(f16_value);
+    } else {  // GGML_TYPE_I32
+        int int32_value;
+        ggml_backend_tensor_get(tensor, &int32_value, 0, sizeof(int32_value));
+        value = (float)int32_value;
+    }
+    return value;
 }

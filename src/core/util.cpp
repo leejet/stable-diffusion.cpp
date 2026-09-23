@@ -15,6 +15,7 @@
 #include <thread>
 #include <unordered_set>
 #include <vector>
+#include "core/ggml_tensor_utils.h"
 #include "runtime/preprocessing.hpp"
 
 #if defined(__APPLE__) && defined(__MACH__)
@@ -61,17 +62,34 @@ void replace_all_chars(std::string& str, char target, char replacement) {
     }
 }
 
+static std::string sd_vformat(const char* fmt, va_list ap) {
+    char small[128];
+    va_list ap2;
+    va_copy(ap2, ap);
+    int size = vsnprintf(small, sizeof small, fmt, ap);
+    if (size < 0) {
+        va_end(ap2);
+        return {};
+    }
+    size_t needed = (size_t)size;
+    if (needed < sizeof small) {
+        va_end(ap2);
+        return std::string(small, needed);
+    }
+    std::string out(needed, '\0');
+    int size2 = vsnprintf(out.data(), needed + 1, fmt, ap2);
+    va_end(ap2);
+    if (size2 < 0)
+        out.clear();
+    return out;
+}
+
 std::string sd_format(const char* fmt, ...) {
     va_list ap;
-    va_list ap2;
     va_start(ap, fmt);
-    va_copy(ap2, ap);
-    int size = vsnprintf(nullptr, 0, fmt, ap);
-    std::vector<char> buf(size + 1);
-    int size2 = vsnprintf(buf.data(), size + 1, fmt, ap2);
-    va_end(ap2);
+    std::string result = sd_vformat(fmt, ap);
     va_end(ap);
-    return std::string(buf.data(), size);
+    return result;
 }
 
 int round_up_to(int value, int base) {
@@ -413,12 +431,41 @@ std::vector<std::string> split_string(const std::string& str, char delimiter) {
 }
 
 ggml_type sd_type_to_ggml_type(sd_type_t sdtype) {
+    if (sdtype == SD_TYPE_F8_E4M3 || sdtype == SD_TYPE_F8_E5M2) {
+#ifndef SD_USE_UPSTREAM_GGML
+        return sdtype == SD_TYPE_F8_E4M3 ? GGML_TYPE_F8_E4M3 : GGML_TYPE_F8_E5M2;
+#else
+        return GGML_TYPE_COUNT;
+#endif
+    }
     const int type_value = static_cast<int>(sdtype);
-    if (type_value < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)) {
+    if (type_value >= 0 && type_value < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)) {
         return static_cast<ggml_type>(type_value);
     } else {
         return GGML_TYPE_COUNT;
     }
+}
+
+bool validate_tensor_types(sd_type_t type, const char* tensor_type_rules) {
+    if (type != SD_TYPE_COUNT && sd_type_to_ggml_type(type) == GGML_TYPE_COUNT) {
+        LOG_ERROR("weight type %s is not supported by this ggml build", sd_type_name(type));
+        return false;
+    }
+#ifdef SD_USE_UPSTREAM_GGML
+    for (const auto& rule : split_string(SAFE_STR(tensor_type_rules), ',')) {
+        const auto pos = rule.find('=');
+        if (pos != std::string::npos) {
+            const auto name = rule.substr(pos + 1);
+            if (name == "f8_e4m3" || name == "f8_e5m2") {
+                LOG_ERROR("FP8 is not supported by this ggml build (tensor type rule '%s')", rule.c_str());
+                return false;
+            }
+        }
+    }
+#else
+    GGML_UNUSED(tensor_type_rules);
+#endif
+    return true;
 }
 
 KeyValueArgs parse_key_value_args(const char* args, const char* context) {
@@ -594,28 +641,45 @@ std::string trim(const std::string& s) {
 static sd_log_cb_t sd_log_cb = nullptr;
 void* sd_log_cb_data         = nullptr;
 
-#define LOG_BUFFER_SIZE 4096
+static void sd_log_dispatch(sd_log_level_t level, const std::string& origin, const std::string& text) {
+    if (sd_log_cb == nullptr)
+        return;
+    std::string message = origin + " - " + text;
+    if (message.back() != '\n') {
+        message += '\n';
+    }
+    sd_log_cb(level, message.c_str(), sd_log_cb_data);
+}
 
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...) {
     va_list args;
     va_start(args, format);
-
-    static char log_buffer[LOG_BUFFER_SIZE + 1];
-    int written = snprintf(log_buffer, LOG_BUFFER_SIZE, "%s:%-4d - ", sd_basename(file).c_str(), line);
-
-    if (written >= 0 && written < LOG_BUFFER_SIZE) {
-        vsnprintf(log_buffer + written, LOG_BUFFER_SIZE - written, format, args);
-    }
-    size_t len = strlen(log_buffer);
-    if (log_buffer[len - 1] != '\n') {
-        strncat(log_buffer, "\n", LOG_BUFFER_SIZE - len);
-    }
-
-    if (sd_log_cb) {
-        sd_log_cb(level, log_buffer, sd_log_cb_data);
-    }
-
+    std::string message = sd_vformat(format, args);
     va_end(args);
+    std::string origin = sd_format("%s:%-4d", sd_basename(file).c_str(), line);
+    sd_log_dispatch(level, origin, message);
+}
+
+void sd_ggml_log_callback(ggml_log_level level, const char* text, void*) {
+    sd_log_level_t sd_level = SD_LOG_VERBOSE;
+    switch (level) {
+        case GGML_LOG_LEVEL_DEBUG:
+            sd_level = SD_LOG_VERBOSE;
+            break;
+        case GGML_LOG_LEVEL_INFO:
+            sd_level = SD_LOG_INFO;
+            break;
+        case GGML_LOG_LEVEL_WARN:
+            sd_level = SD_LOG_WARN;
+            break;
+        case GGML_LOG_LEVEL_ERROR:
+            sd_level = SD_LOG_ERROR;
+            break;
+        default:
+            sd_level = SD_LOG_VERBOSE;
+            break;
+    }
+    sd_log_dispatch(sd_level, "ggml", text);
 }
 
 void sd_set_log_callback(sd_log_cb_t cb, void* data) {
@@ -735,6 +799,13 @@ sd::Tensor<float> clip_preprocess(const sd::Tensor<float>& image, int target_wid
     int64_t resized_width  = static_cast<int64_t>(scale * static_cast<float>(image.shape()[0]));
     int64_t resized_height = static_cast<int64_t>(scale * static_cast<float>(image.shape()[1]));
 
+    // The resized image must cover the crop window. Floating-point rounding can
+    // leave a side one pixel short of the crop target (e.g. 730 -> 735.999...
+    // -> 735 after truncation), so clamp to keep the center crop in bounds.
+    // Truncation is otherwise preserved to avoid changing existing results.
+    resized_width  = std::max<int64_t>(resized_width, target_width);
+    resized_height = std::max<int64_t>(resized_height, target_height);
+
     sd::Tensor<float> resized = sd::ops::interpolate(
         image,
         {resized_width, resized_height, image.shape()[2], image.shape()[3]});
@@ -801,7 +872,11 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
     float round_bracket_multiplier  = 1.1f;
     float square_bracket_multiplier = 1 / 1.1f;
 
-    std::regex re_attention(R"(\\\(|\\\)|\\\[|\\\]|\\\\|\\|\(|\[|:([+-]?[.\d]+)\)|\)|\]|\bBREAK\b|[^\\()\[\]:B]+|:|\bB)");
+    // libstdc++ std::regex recurses per matched character, so unbounded runs
+    // overflow the stack. Split runs are merged back below.
+    const int max_plain_text_run = 1024;
+    std::regex re_attention(R"(\\\(|\\\)|\\\[|\\\]|\\\\|\\|\(|\[|\)|\]|\bBREAK\b|[^\\()\[\]:B]{1,)" +
+                            std::to_string(max_plain_text_run) + R"(}|:|\bB)");
     std::regex re_break(R"(\s*\bBREAK\b\s*)");
 
     auto multiply_range = [&](int start_position, float multiplier) {
@@ -810,22 +885,55 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
         }
     };
 
+    // Kept out of the regex: bounding the repetition rejects valid long weights,
+    // leaving it unbounded overflows the stack.
+    auto lex_weight = [](const std::string& s, float& value) -> size_t {
+        size_t end = 0;
+        if (end < s.size() && (s[end] == '+' || s[end] == '-')) {
+            ++end;
+        }
+        while (end < s.size() && (std::isdigit((unsigned char)s[end]) || s[end] == '.')) {
+            ++end;
+        }
+        if (end >= s.size() || s[end] != ')') {
+            return 0;
+        }
+        std::string number   = s.substr(0, end);
+        char* number_end     = nullptr;
+        float parsed         = std::strtof(number.c_str(), &number_end);
+        const char* expected = number.c_str() + number.size();
+        // Without this ".", "+." and "1.2.3" would silently become weights.
+        if (number.empty() || number_end != expected || !std::isfinite(parsed)) {
+            return 0;
+        }
+        value = parsed;
+        return end + 1;
+    };
+
     std::smatch m, m2;
     std::string remaining_text = text;
 
     while (std::regex_search(remaining_text, m, re_attention)) {
         std::string text   = m[0];
-        std::string weight = m[1];
+        std::string suffix = m.suffix();
+
+        if (text == ":") {
+            float weight_value   = 1.0f;
+            size_t weight_length = lex_weight(suffix, weight_value);
+            if (weight_length > 0) {
+                if (!round_brackets.empty()) {
+                    multiply_range(round_brackets.back(), weight_value);
+                    round_brackets.pop_back();
+                }
+                remaining_text = suffix.substr(weight_length);
+                continue;
+            }
+        }
 
         if (text == "(") {
             round_brackets.push_back((int)res.size());
         } else if (text == "[") {
             square_brackets.push_back((int)res.size());
-        } else if (!weight.empty()) {
-            if (!round_brackets.empty()) {
-                multiply_range(round_brackets.back(), std::stof(weight));
-                round_brackets.pop_back();
-            }
         } else if (text == ")" && !round_brackets.empty()) {
             multiply_range(round_brackets.back(), round_bracket_multiplier);
             round_brackets.pop_back();
@@ -840,7 +948,7 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
             res.push_back({text, 1.0f});
         }
 
-        remaining_text = m.suffix();
+        remaining_text = suffix;
     }
 
     for (int pos : round_brackets) {

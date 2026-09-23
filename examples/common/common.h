@@ -107,6 +107,7 @@ struct ArgOptions {
     void print() const;
 };
 
+void add_log_options(ArgOptions& options, sd_log_level_t& level);
 bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& options_list);
 bool decode_base64_image(const std::string& encoded_input,
                          int target_channels,
@@ -115,7 +116,8 @@ bool decode_base64_image(const std::string& encoded_input,
                          SDImageOwner& out_image);
 
 struct SDContextParams {
-    int n_threads = -1;
+    int n_threads               = -1;
+    int conditioning_cache_size = 4;
     std::string model_path;
     std::string clip_l_path;
     std::string clip_g_path;
@@ -123,6 +125,7 @@ struct SDContextParams {
     std::string t5xxl_path;
     std::string llm_path;
     std::string llm_vision_path;
+    std::string tokenizer;
     std::string diffusion_model_path;
     std::string high_noise_diffusion_model_path;
     std::string uncond_diffusion_model_path;
@@ -130,6 +133,7 @@ struct SDContextParams {
     std::string vae_path;
     std::string vae_format = "auto";
     std::string audio_vae_path;
+    std::string audio_encoder_path;
     std::string taesd_path;
     std::string esrgan_path;
     std::string control_net_path;
@@ -146,17 +150,18 @@ struct SDContextParams {
     std::map<std::string, std::string> embedding_map;
     std::vector<sd_embedding_t> embedding_vec;
 
-    rng_type_t rng_type         = CUDA_RNG;
-    rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
-    bool offload_params_to_cpu  = false;
-    std::string max_vram        = "0";
-    bool stream_layers          = false;
-    bool eager_load             = false;
+    rng_type_t rng_type            = CUDA_RNG;
+    rng_type_t sampler_rng_type    = RNG_TYPE_COUNT;
+    bool offload_params_to_cpu     = false;
+    std::string max_vram           = "0";
+    bool disable_prefetch          = false;
+    bool disable_segmented_compute = false;
+    bool eager_load                = false;
     std::string backend;
     std::string params_backend;
     std::string split_mode;
     std::string model_args;
-    bool auto_fit = false;
+    bool auto_fit = true;
     std::string rpc_servers;
     std::string effective_backend;
     std::string effective_params_backend;
@@ -166,6 +171,7 @@ struct SDContextParams {
     bool vae_on_cpu            = false;
     bool flash_attn            = false;
     bool diffusion_flash_attn  = false;
+    bool sage_attn             = false;
     bool diffusion_conv_direct = false;
     bool vae_conv_direct       = false;
 
@@ -173,6 +179,8 @@ struct SDContextParams {
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
 
     bool force_sdxl_vae_conv_scale = false;
+    float linear_scale             = 0.f;
+    float attn_scale               = 0.f;
 
     float flow_shift = INFINITY;
     ArgOptions get_options();
@@ -193,18 +201,17 @@ struct SDGenerationParams {
     std::string ad_prompt;
     std::string ad_negative_prompt;
     std::string extra_ad_args;
-    int clip_skip              = -1;  // <= 0 represents unspecified
-    int width                  = -1;
-    int height                 = -1;
-    int batch_count            = 1;
-    int qwen_image_layers      = 3;
-    int64_t seed               = 42;
-    float strength             = 0.75f;
-    float control_strength     = 0.9f;
-    float ip_adapter_strength  = 1.0f;
-    bool auto_resize_ref_image = true;
-    bool increase_ref_index    = false;
-    bool embed_image_metadata  = true;
+    int clip_skip             = -1;  // <= 0 represents unspecified
+    int width                 = -1;
+    int height                = -1;
+    int batch_count           = 1;
+    int qwen_image_layers     = 3;
+    int64_t seed              = 42;
+    float strength            = 0.75f;
+    float control_strength    = 0.9f;
+    float ip_adapter_strength = 1.0f;
+    bool increase_ref_index   = false;
+    bool embed_image_metadata = true;
 
     std::string init_image_path;
     std::string end_image_path;
@@ -240,6 +247,7 @@ struct SDGenerationParams {
     std::string extra_tiling_args;
 
     std::string ref_image_args;
+    std::string image_preprocess;
 
     std::string pm_id_images_dir;
     std::string pm_id_embed_path;
@@ -303,6 +311,7 @@ struct SDGenerationParams {
     ArgOptions get_options();
     bool from_json_str(const std::string& json_str,
                        const std::function<std::string(const std::string&)>& lora_path_resolver = {});
+    bool parse_image_preprocess_json(const std::string& json_str);
     bool initialize_cache_params();
     void extract_and_remove_lora(const std::string& lora_model_dir);
     bool width_and_height_are_set() const;

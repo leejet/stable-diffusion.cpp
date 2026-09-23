@@ -325,13 +325,11 @@ namespace HiDreamO1 {
 
         sd::Tensor<float> compute(int n_threads,
                                   const sd::Tensor<float>& image,
-                                  bool auto_free           = true,
-                                  bool free_compute_buffer = true,
-                                  bool free_compute_params = true) {
+                                  bool auto_runner_end = true) {
             auto get_graph = [&]() {
                 return build_graph(image);
             };
-            auto output = GGMLRunner::compute<float>(get_graph, n_threads, auto_free, free_compute_buffer, free_compute_params);
+            auto output = GGMLRunner::compute(get_graph, n_threads, auto_runner_end);
             return output.has_value() ? std::move(output.value()) : sd::Tensor<float>();
         }
     };
@@ -459,7 +457,7 @@ namespace HiDreamO1 {
             auto get_graph = [&]() {
                 return build_graph(x, timestep, input_ids, input_pos, token_types, vinput_mask, image_embeds, ref_images);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,
@@ -486,13 +484,19 @@ namespace HiDreamO1 {
     };
 
     struct HiDreamO1Conditioner : public Conditioner {
-        Qwen2Tokenizer tokenizer;
+        std::shared_ptr<Tokenizer> tokenizer;
         std::shared_ptr<HiDreamO1VisionRunner> vision_runner;
 
         HiDreamO1Conditioner(ggml_backend_t backend,
                              const String2TensorStorage& tensor_storage_map      = {},
-                             std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
-            : vision_runner(std::make_shared<HiDreamO1VisionRunner>(backend, tensor_storage_map, "model.visual", weight_manager)) {}
+                             std::shared_ptr<RunnerWeightManager> weight_manager = nullptr,
+                             const TokenizerConfig& tokenizers                   = {})
+            : vision_runner(std::make_shared<HiDreamO1VisionRunner>(backend, tensor_storage_map, "model.visual", weight_manager)) {
+            tokenizer = tokenizers.create(TokenizerConfig::MAIN, HiDreamO1Config::detect_from_weights(tensor_storage_map, "").llm.vocab_size, 151643);
+            if (!tokenizer) {
+                tokenizer = std::make_shared<Qwen2Tokenizer>();
+            }
+        }
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
             vision_runner->get_param_tensors(tensors);
@@ -506,12 +510,16 @@ namespace HiDreamO1 {
             vision_runner->set_flash_attention_enabled(enabled);
         }
 
+        void set_scale_overrides(float linear_scale, float attn_scale) override {
+            vision_runner->set_scale_overrides(linear_scale, attn_scale);
+        }
+
         void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
             vision_runner->set_weight_adapter(adapter);
         }
 
-        void runner_done() override {
-            vision_runner->runner_done();
+        void runner_end() override {
+            vision_runner->runner_end();
         }
 
         SDCondition get_learned_condition(int n_threads,
@@ -536,7 +544,10 @@ namespace HiDreamO1 {
             if (ref_images.empty()) {
                 prompt += conditioner_params.text;
                 prompt += "<|im_end|>\n<|im_start|>assistant\n<|boi_token|><|tms_token|>";
-                auto input_ids = tokenizer.encode(prompt, nullptr);
+                std::vector<int> input_ids;
+                if (!tokenizer->encode(prompt, input_ids, nullptr)) {
+                    return {};
+                }
 
                 std::vector<int32_t> input_ids_pad = input_ids;
                 input_ids_pad.push_back(VISION_START_TOKEN_ID);
@@ -610,7 +621,11 @@ namespace HiDreamO1 {
 
                 auto patch_img = resized_ref * 2.0f - 1.0f;
                 result.c_ref_images.push_back(std::move(patch_img));
-                int64_t prompt_start = static_cast<int64_t>(tokenizer.encode(prompt + "<|vision_start|>", nullptr).size());
+                std::vector<int> prefix_tokens;
+                if (!tokenizer->encode(prompt + "<|vision_start|>", prefix_tokens, nullptr)) {
+                    return {};
+                }
+                int64_t prompt_start = static_cast<int64_t>(prefix_tokens.size());
                 prompt += "<|vision_start|>";
                 prompt += repeat_special_token("<|image_pad|>", image_tokens);
                 prompt += "<|vision_end|>";
@@ -621,7 +636,10 @@ namespace HiDreamO1 {
 
             prompt += conditioner_params.text;
             prompt += "<|im_end|>\n<|im_start|>assistant\n<|boi_token|><|tms_token|>";
-            auto input_ids = tokenizer.encode(prompt, nullptr);
+            std::vector<int> input_ids;
+            if (!tokenizer->encode(prompt, input_ids, nullptr)) {
+                return {};
+            }
 
             std::vector<int32_t> input_ids_pad = input_ids;
             input_ids_pad.push_back(VISION_START_TOKEN_ID);
@@ -659,7 +677,7 @@ namespace HiDreamO1 {
             result.c_vinput_mask  = sd::Tensor<int32_t>(vinput_mask_shape, std::move(vinput_mask));
             result.c_image_embeds.reserve(vlm_images.size());
             for (const auto& vlm_image : vlm_images) {
-                auto image_embed = vision_runner->compute(n_threads, vlm_image.second, false, true, true);
+                auto image_embed = vision_runner->compute(n_threads, vlm_image.second, false);
                 if (image_embed.empty()) {
                     LOG_ERROR("hidream_o1 conditioner: encode VLM image failed");
                     return SDCondition();
