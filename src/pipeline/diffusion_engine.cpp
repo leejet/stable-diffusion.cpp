@@ -2578,7 +2578,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
         constexpr float kEpsilon = 1e-5f;
 
         bool skip_uncond = false;
-        if (!uncond.empty() && !needs_uncond_denoised) {
+        if (!uncond.empty() && !needs_uncond_denoised && !use_apg_guidance) {
             if (!img_uncond.empty()) {
                 skip_uncond = std::abs(image_guidance_scale - effective_guidance_scale) < kEpsilon;
             } else {
@@ -2587,7 +2587,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
         }
 
         bool skip_img_uncond = false;
-        if (!img_uncond.empty() && !needs_uncond_denoised) {
+        if (!img_uncond.empty() && !needs_uncond_denoised && !use_apg_guidance) {
             if (!uncond.empty()) {
                 skip_img_uncond = std::abs(image_guidance_scale - 1.0f) < kEpsilon;
             } else {
@@ -2600,37 +2600,62 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
             return {};
         }
 
-        if (!uncond.empty() && !skip_uncond) {
-            if (!step_cache.is_step_skipped()) {
-                compute_sample_controls(control_image,
-                                        noised_input,
-                                        timesteps_tensor,
-                                        uncond,
-                                        &controls);
-            }
-            const std::vector<int>* uncond_skip_layers = nullptr;
-            if (is_skiplayer_step && slg_uncond) {
-                LOG_VERBOSE("Skipping layers at uncond step %d\n", step);
-                uncond_skip_layers = &skip_layer_guidance.layers();
-            }
-            uncond_out = run_condition(uncond,
-                                       uncond.c_concat.empty() ? nullptr : &uncond.c_concat,
-                                       uncond_skip_layers,
-                                       nullptr,
-                                       true);
-            if (uncond_out.empty()) {
-                return {};
+        if (!uncond.empty()) {
+            if (!skip_uncond) {
+                if (!step_cache.is_step_skipped()) {
+                    compute_sample_controls(control_image,
+                                            noised_input,
+                                            timesteps_tensor,
+                                            uncond,
+                                            &controls);
+                }
+                const std::vector<int>* uncond_skip_layers = nullptr;
+                if (is_skiplayer_step && slg_uncond) {
+                    LOG_VERBOSE("Skipping layers at uncond step %d\n", step);
+                    uncond_skip_layers = &skip_layer_guidance.layers();
+                }
+                uncond_out = run_condition(uncond,
+                                           uncond.c_concat.empty() ? nullptr : &uncond.c_concat,
+                                           uncond_skip_layers,
+                                           nullptr,
+                                           true);
+                if (uncond_out.empty()) {
+                    return {};
+                }
+            } else {
+                if (step_cache.runtime.easycache_enabled())
+                    step_cache.runtime.easycache.reset_runtime();
+                if (step_cache.runtime.ucache_enabled())
+                    step_cache.runtime.ucache.reset_runtime();
+                if (step_cache.runtime.cachedit_enabled())
+                    step_cache.runtime.cachedit.reset_runtime();
+                if (!img_uncond.empty() && !skip_img_uncond && !step_cache.is_step_skipped()) {
+                    compute_sample_controls(control_image,
+                                            noised_input,
+                                            timesteps_tensor,
+                                            uncond,
+                                            &controls);
+                }
             }
         }
 
-        if (!img_uncond.empty() && !skip_img_uncond) {
-            img_uncond_out = run_condition(img_uncond,
-                                           img_uncond.c_concat.empty() ? nullptr : &img_uncond.c_concat,
-                                           nullptr,
-                                           uncond_without_ref_latents ? &empty_ref_latents : nullptr,
-                                           true);
-            if (img_uncond_out.empty()) {
-                return {};
+        if (!img_uncond.empty()) {
+            if (!skip_img_uncond) {
+                img_uncond_out = run_condition(img_uncond,
+                                               img_uncond.c_concat.empty() ? nullptr : &img_uncond.c_concat,
+                                               nullptr,
+                                               uncond_without_ref_latents ? &empty_ref_latents : nullptr,
+                                               true);
+                if (img_uncond_out.empty()) {
+                    return {};
+                }
+            } else {
+                if (step_cache.runtime.easycache_enabled())
+                    step_cache.runtime.easycache.reset_runtime();
+                if (step_cache.runtime.ucache_enabled())
+                    step_cache.runtime.ucache.reset_runtime();
+                if (step_cache.runtime.cachedit_enabled())
+                    step_cache.runtime.cachedit.reset_runtime();
             }
         }
         sd::guidance::GuidanceInput guidance_input;
