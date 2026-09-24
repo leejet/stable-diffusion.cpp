@@ -3,11 +3,32 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <limits>
 
 #include "async_jobs.h"
 #include "common/common.h"
+#include "common/media_io.h"
+#include "common/resource_owners.hpp"
 
 namespace fs = std::filesystem;
+
+static constexpr uint32_t k_max_upscale_dimension = 8192;
+
+static bool valid_upscale_dimensions(const sd_image_t& image, int factor, int repeats) {
+    if (image.width == 0 || image.height == 0 || factor < 1 || repeats < 1 || repeats > 4) {
+        return false;
+    }
+    uint32_t width  = image.width;
+    uint32_t height = image.height;
+    for (int i = 0; i < repeats; ++i) {
+        if (width > k_max_upscale_dimension / factor || height > k_max_upscale_dimension / factor) {
+            return false;
+        }
+        width *= factor;
+        height *= factor;
+    }
+    return true;
+}
 
 static bool parse_cache_mode(const std::string& mode_str, sd_cache_mode_t& mode_out) {
     if (mode_str == "disabled") {
@@ -241,37 +262,59 @@ static json make_capabilities_json(ServerRuntime& runtime) {
 
     available_upscalers.push_back({
         {"name", "None"},
+        {"model", false},
+        {"image_upscale", false},
     });
     available_upscalers.push_back({
         {"name", "Lanczos"},
+        {"model", false},
+        {"image_upscale", false},
     });
     available_upscalers.push_back({
         {"name", "Nearest"},
+        {"model", false},
+        {"image_upscale", false},
     });
     available_upscalers.push_back({
         {"name", "Latent"},
+        {"model", false},
+        {"image_upscale", false},
     });
     available_upscalers.push_back({
         {"name", "Latent (nearest)"},
+        {"model", false},
+        {"image_upscale", false},
     });
     available_upscalers.push_back({
         {"name", "Latent (nearest-exact)"},
+        {"model", false},
+        {"image_upscale", false},
     });
     available_upscalers.push_back({
         {"name", "Latent (antialiased)"},
+        {"model", false},
+        {"image_upscale", false},
     });
     available_upscalers.push_back({
         {"name", "Latent (bicubic)"},
+        {"model", false},
+        {"image_upscale", false},
     });
     available_upscalers.push_back({
         {"name", "Latent (bicubic antialiased)"},
+        {"model", false},
+        {"image_upscale", false},
     });
+    bool have_upscaler_models = false;
     {
         std::lock_guard<std::mutex> lock(*runtime.upscaler_mutex);
         for (const auto& entry : *runtime.upscaler_cache) {
             available_upscalers.push_back({
                 {"name", entry.name},
+                {"model", true},
+                {"image_upscale", entry.image_upscale_factor > 0},
             });
+            have_upscaler_models = have_upscaler_models || entry.image_upscale_factor > 0;
         }
     }
 
@@ -341,6 +384,8 @@ static json make_capabilities_json(ServerRuntime& runtime) {
                   {"max_height", 4096},
                   {"max_batch_count", 8},
                   {"max_queue_size", manager.max_pending_jobs},
+                  {"max_upscale_width", k_max_upscale_dimension},
+                  {"max_upscale_height", k_max_upscale_dimension},
     };
     result["samplers"]               = samplers;
     result["schedulers"]             = schedulers;
@@ -350,6 +395,7 @@ static json make_capabilities_json(ServerRuntime& runtime) {
     result["features_by_mode"]       = features_by_mode;
     result["loras"]                  = available_loras;
     result["upscalers"]              = available_upscalers;
+    result["upscale"]                = have_upscaler_models;
     return result;
 }
 
@@ -413,6 +459,171 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
     svr.Get("/sdcpp/v1/capabilities", [runtime](const httplib::Request&, httplib::Response& res) {
         res.status = 200;
         res.set_content(make_capabilities_json(*runtime).dump(), "application/json");
+    });
+
+    svr.Post("/sdcpp/v1/upscale", [runtime](const httplib::Request& req, httplib::Response& res) {
+        try {
+            if (req.body.empty()) {
+                res.status = 400;
+                res.set_content(R"({"error":"empty body"})", "application/json");
+                return;
+            }
+            json body = json::parse(req.body);
+            if (!body.is_object()) {
+                res.status = 400;
+                res.set_content(R"({"error":"body must be an object"})", "application/json");
+                return;
+            }
+            for (const char* key : {"repeats", "tile_size", "output_compression"}) {
+                if (!body.contains(key)) {
+                    continue;
+                }
+                const auto& value = body[key];
+                const bool valid  = value.is_number_unsigned()
+                                        ? value.get<uint64_t>() <= static_cast<uint64_t>(std::numeric_limits<int>::max())
+                                        : value.is_number_integer() && value.get<int64_t>() >= std::numeric_limits<int>::min() &&
+                                             value.get<int64_t>() <= std::numeric_limits<int>::max();
+                if (!valid) {
+                    res.status = 400;
+                    res.set_content(json({{"error", std::string(key) + " must be a 32-bit integer"}}).dump(), "application/json");
+                    return;
+                }
+            }
+            ImgGenJobRequest output_options;
+            std::string error_message;
+            if (!assign_output_options(output_options,
+                                       body.value("output_format", std::string("png")),
+                                       body.value("output_compression", 100),
+                                       true,
+                                       error_message)) {
+                res.status = 400;
+                res.set_content(json({{"error", error_message}}).dump(), "application/json");
+                return;
+            }
+            const int tile_size      = std::max(32, body.value("tile_size", runtime->default_gen_params->upscale_tile_size));
+            const int repeats        = std::clamp(body.value("repeats", 1), 1, 4);
+            const std::string wanted = body.value("upscaler", std::string());
+
+            const std::string encoded = body.value("image", std::string());
+            if (encoded.empty()) {
+                res.status = 400;
+                res.set_content(R"({"error":"image is required"})", "application/json");
+                return;
+            }
+            SDImageOwner input;
+            if (!decode_base64_image(encoded, 3, 0, 0, input) || input.get().data == nullptr) {
+                res.status = 400;
+                res.set_content(R"({"error":"image could not be read"})", "application/json");
+                return;
+            }
+
+            refresh_upscaler_cache(*runtime);
+            int model_scale = 0;
+            std::string model_path;
+            std::string used_name;
+            {
+                std::lock_guard<std::mutex> lock(*runtime->upscaler_mutex);
+                for (const auto& entry : *runtime->upscaler_cache) {
+                    if (entry.image_upscale_factor > 0 && (wanted.empty() || entry.name == wanted)) {
+                        model_path  = entry.fullpath;
+                        used_name   = entry.name;
+                        model_scale = entry.image_upscale_factor;
+                        break;
+                    }
+                }
+            }
+            if (model_path.empty()) {
+                res.status = 400;
+                res.set_content(json({{"error", wanted.empty()
+                                                    ? std::string("no RGB ESRGAN upscaler models are available; "
+                                                                  "start the server with --hires-upscalers-dir")
+                                                    : "no compatible image upscaler called " + wanted}})
+                                    .dump(),
+                                "application/json");
+                return;
+            }
+
+            if (!valid_upscale_dimensions(input.get(), model_scale, repeats)) {
+                res.status = 400;
+                res.set_content(R"({"error":"upscaled dimensions must not exceed 8192 x 8192"})", "application/json");
+                return;
+            }
+
+            // One GPU: an upscale must not run while a generation is using it.
+            std::lock_guard<std::mutex> ctx_lock(*runtime->sd_ctx_mutex);
+            UpscalerCtxPtr upscaler_ctx(new_upscaler_ctx(model_path.c_str(),
+                                                         runtime->ctx_params->diffusion_conv_direct,
+                                                         runtime->ctx_params->n_threads,
+                                                         tile_size,
+                                                         runtime->ctx_params->backend.c_str(),
+                                                         runtime->ctx_params->params_backend.c_str()));
+            if (upscaler_ctx == nullptr) {
+                res.status = 500;
+                res.set_content(R"({"error":"the upscaler model could not be loaded"})", "application/json");
+                return;
+            }
+            const int factor = get_upscale_factor(upscaler_ctx.get());
+            // The model file may have changed since its metadata was cached.
+            if (!valid_upscale_dimensions(input.get(), factor, repeats)) {
+                res.status = 400;
+                res.set_content(R"({"error":"upscaled dimensions must not exceed 8192 x 8192"})", "application/json");
+                return;
+            }
+
+            SDImageOwner current(input.release());
+            for (int i = 0; i < repeats; ++i) {
+                sd_image_t* out_images = nullptr;
+                int out_count          = 0;
+                if (!upscale(upscaler_ctx.get(), current.get(), (uint32_t)factor, &out_images, &out_count) ||
+                    out_count <= 0 || out_images[0].data == nullptr) {
+                    free_sd_images(out_images, out_count);
+                    res.status = 500;
+                    res.set_content(R"({"error":"upscale failed"})", "application/json");
+                    return;
+                }
+                sd_image_t produced = out_images[0];
+                out_images[0]       = {0, 0, 0, nullptr};
+                free_sd_images(out_images, out_count);
+                current.reset(produced);
+            }
+
+            const std::string& format = output_options.output_format;
+            const int compression     = output_options.output_compression;
+            const sd_image_t result   = current.get();
+            auto image_bytes          = encode_image_to_vector(format == "jpeg"   ? EncodedImageFormat::JPEG
+                                                               : format == "webp" ? EncodedImageFormat::WEBP
+                                                                                  : EncodedImageFormat::PNG,
+                                                      result.data,
+                                                      result.width,
+                                                      result.height,
+                                                      result.channel,
+                                                      "",
+                                                      compression);
+            if (image_bytes.empty()) {
+                res.status = 500;
+                res.set_content(R"({"error":"the result could not be encoded"})", "application/json");
+                return;
+            }
+
+            json out;
+            out["upscaler"]      = used_name;
+            out["scale"]         = factor;
+            out["repeats"]       = repeats;
+            out["width"]         = result.width;
+            out["height"]        = result.height;
+            out["output_format"] = format;
+            json images          = json::array();
+            images.push_back({{"index", 0}, {"b64_json", base64_encode(image_bytes)}});
+            out["images"] = std::move(images);
+            res.set_content(out.dump(), "application/json");
+            res.status = 200;
+        } catch (const json::exception& e) {
+            res.status = 400;
+            res.set_content(json({{"error", "invalid request"}, {"message", e.what()}}).dump(), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 500;
+            res.set_content(json({{"error", std::string("server_error: ") + e.what()}}).dump(), "application/json");
+        }
     });
 
     svr.Post("/sdcpp/v1/img_gen", [runtime](const httplib::Request& req, httplib::Response& res) {
