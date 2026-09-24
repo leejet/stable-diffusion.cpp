@@ -136,6 +136,11 @@ namespace Qwen {
         int64_t prefix_length = 0;
     };
 
+    static ggml_type prefix_cache_type(bool flash_attn, bool sage_attn, float attn_scale) {
+        const bool f16 = flash_attn && !sage_attn && (attn_scale <= 0.f || attn_scale == 1.f);
+        return f16 ? GGML_TYPE_F16 : GGML_TYPE_F32;
+    }
+
     class QwenImage21ZeroCenterRMSNorm : public RMSNorm {
     public:
         using RMSNorm::RMSNorm;
@@ -189,9 +194,10 @@ namespace Qwen {
             q      = Rope::apply_rope(ctx->ggml_ctx, q, pe);
             k      = Rope::apply_rope(ctx->ggml_ctx, k, pe);
             if (cache.mode == QwenImage21PrefixCache::Mode::STORE) {
-                auto persist = [&](ggml_tensor* tensor, int axis, const char* name) {
+                const ggml_type cache_type = prefix_cache_type(ctx->flash_attn_enabled, ctx->sage_attn_enabled, ctx->attn_scale);
+                auto persist               = [&](ggml_tensor* tensor, int axis, const char* name) {
                     auto part = ggml_ext_slice(ctx->ggml_ctx, tensor, axis, 0, cache.prefix_length);
-                    auto copy = ggml_new_tensor(ctx->ggml_ctx, GGML_TYPE_F32, 4, part->ne);
+                    auto copy = ggml_new_tensor(ctx->ggml_ctx, cache_type, 4, part->ne);
                     copy      = ggml_cpy(ctx->ggml_ctx, part, copy);
                     // Keep the copy in this layer's segment so graph cuts do not
                     // retain or recompute the full-sequence K/V in the final segment.
@@ -206,6 +212,13 @@ namespace Qwen {
                 auto prefix_k = ctx->load_cache_tensor(cache.name + ".k");
                 auto prefix_v = ctx->load_cache_tensor(cache.name + ".v");
                 GGML_ASSERT(prefix_k != nullptr && prefix_v != nullptr);
+                const ggml_type cache_type = prefix_cache_type(ctx->flash_attn_enabled, ctx->sage_attn_enabled, ctx->attn_scale);
+                if (k->type != cache_type) {
+                    k = ggml_cast(ctx->ggml_ctx, k, cache_type);
+                }
+                if (v->type != cache_type) {
+                    v = ggml_cast(ctx->ggml_ctx, v, cache_type);
+                }
                 k      = ggml_concat(ctx->ggml_ctx, prefix_k, k, 1);
                 v      = ggml_concat(ctx->ggml_ctx, prefix_v, v, 2);
                 result = ggml_ext_attention_ext(ctx, q, k, v, heads, nullptr, true, ctx->flash_attn_enabled);
@@ -373,11 +386,12 @@ namespace Qwen {
         }
 
         bool has_prefix_cache(const QwenImage21PrefixCache& cache) {
+            const ggml_type cache_type = prefix_cache_type(flash_attn_enabled, sage_attn_enabled, attn_scale);
             for (int i = 0; i < config.num_layers; ++i) {
                 const auto name = cache.name + "." + std::to_string(i);
                 auto k          = get_cache_tensor_by_name(name + ".k");
                 auto v          = get_cache_tensor_by_name(name + ".v");
-                if (k == nullptr || v == nullptr || k->type != GGML_TYPE_F32 || v->type != GGML_TYPE_F32 ||
+                if (k == nullptr || v == nullptr || k->type != cache_type || v->type != cache_type ||
                     k->ne[0] != config.head_dim || k->ne[1] != cache.prefix_length ||
                     k->ne[2] != config.hidden_size / config.head_dim || k->ne[3] != 1 ||
                     v->ne[0] != config.head_dim || v->ne[1] != config.hidden_size / config.head_dim ||

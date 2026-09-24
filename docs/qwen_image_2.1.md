@@ -44,7 +44,7 @@ For multiple reference images, repeat `-r` in the desired order, for example `-r
 
 By default, the first denoising call for each fixed condition saves the text and reference-image keys and values from every transformer layer. Later calls only compute the target-image tokens. Positive and negative conditions use separate caches, which are released when sampling ends.
 
-The cache uses FP32 on all attention backends. For the default 32-layer model, a prefix of 4096 tokens takes about 4 GiB per condition, in addition to weights and working buffers. The runner accounts for the cache when checking the memory budget. If a cached execution runs out of memory, it releases the prefix caches, disables caching for the rest of that sampling run, and retries the full sequence once. Per-step conditioning extensions currently use the full-sequence path.
+With flash attention, the cache stores keys and values as F16, which is what the attention kernel receives anyway; a prefix of 4096 tokens then takes about 2 GiB per condition for the default 32-layer model. Without flash attention, with sage attention, or with a kv scale, it stays FP32 at about 4 GiB, in addition to weights and working buffers. The runner accounts for the cache when checking the memory budget. If a cached execution runs out of memory, it releases the prefix caches, disables caching for the rest of that sampling run, and retries the full sequence once. Per-step conditioning extensions currently use the full-sequence path.
 
 Disable this optimization with `--model-args qwen_image_2_1_prefix_cache=false`. It reuses step-independent activations; numerical results can still differ slightly because the matrix sizes change.
 
