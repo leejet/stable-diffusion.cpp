@@ -3,8 +3,6 @@
 
 #include "model/diffusion/qwen_image.hpp"
 
-#include "ggml-cpu.h"
-
 namespace Qwen {
 
     struct QwenImage21Config {
@@ -381,6 +379,31 @@ namespace Qwen {
         bool prefix_cache_disabled  = false;
         bool prefix_cache_auto_f32  = false;
 
+        static bool supports_prefix_cache_type(ggml_type type) {
+            if (type == GGML_TYPE_F32) {
+                return true;
+            }
+            const auto* traits = ggml_get_type_traits(type);
+            if (traits->from_float_ref == nullptr || traits->to_float == nullptr) {
+                return false;
+            }
+            auto cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+            if (cpu == nullptr) {
+                return false;
+            }
+            auto ctx = std::unique_ptr<ggml_context, decltype(&ggml_free)>(
+                ggml_init({3 * ggml_tensor_overhead(), nullptr, true}), ggml_free);
+            if (ctx == nullptr) {
+                return false;
+            }
+            // Some reference quantizers have no runtime copy support. Query the
+            // device through the registry so dynamically loaded CPU backends work.
+            auto source  = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, ggml_blck_size(type));
+            auto encoded = ggml_cast(ctx.get(), source, type);
+            auto decoded = ggml_cast(ctx.get(), encoded, GGML_TYPE_F32);
+            return ggml_backend_dev_supports_op(cpu, encoded) && ggml_backend_dev_supports_op(cpu, decoded);
+        }
+
         QwenImage21Runner(ggml_backend_t backend, const String2TensorStorage& weights, const std::string& prefix, std::shared_ptr<RunnerWeightManager> weight_manager = nullptr, const char* model_args = nullptr)
             : DiffusionModelRunner(backend, prefix, weight_manager),
               config(QwenImage21Config::detect_from_weights(weights, prefix)),
@@ -396,8 +419,7 @@ namespace Qwen {
                     const auto type = sd_type_to_ggml_type(str_to_sd_type(value.c_str()));
                     if (type == GGML_TYPE_COUNT) {
                         LOG_WARN("ignoring unknown Qwen Image 2.1 cache type '%s'", value.c_str());
-                    } else if (type != GGML_TYPE_F32 &&
-                               (ggml_get_type_traits_cpu(type)->from_float == nullptr || ggml_get_type_traits(type)->to_float == nullptr)) {
+                    } else if (!supports_prefix_cache_type(type)) {
                         LOG_WARN("ignoring Qwen Image 2.1 cache type '%s': runtime conversion to and from F32 is unavailable", value.c_str());
                     } else if (config.hidden_size % ggml_blck_size(type) != 0) {
                         LOG_WARN("ignoring Qwen Image 2.1 cache type '%s': block size %" PRId64 " does not divide hidden size %" PRId64,
