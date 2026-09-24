@@ -40,6 +40,14 @@ Pass the reference image with `-r` and describe the edit in `-p`. Vision weights
 
 For multiple reference images, repeat `-r` in the desired order, for example `-r first.png -r second.png`.
 
+### Prefix cache
+
+By default, the first denoising call for each fixed condition saves the text and reference-image keys and values from every transformer layer. Later calls only compute the target-image tokens. Positive and negative conditions use separate caches, which are released when sampling ends.
+
+The cache uses FP32 on all attention backends. For the default 32-layer model, a prefix of 4096 tokens takes about 4 GiB per condition, in addition to weights and working buffers. The runner accounts for the cache when checking the memory budget. If a cached execution runs out of memory, it releases the prefix caches, disables caching for the rest of that sampling run, and retries the full sequence once. Per-step conditioning extensions currently use the full-sequence path.
+
+Disable this optimization with `--model-args qwen_image_2_1_prefix_cache=false`. It reuses step-independent activations; numerical results can still differ slightly because the matrix sizes change.
+
 ### Alpha channel
 
 This model supports alpha channel output. As the model determines whether to output a regular image or with transparency through the prompt, according to [official recommendation](https://github.com/QwenLM/Qwen-Image-2.1#transparent-image-generation-rgba), use the following prompt format for better results:

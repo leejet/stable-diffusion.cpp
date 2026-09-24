@@ -76,9 +76,9 @@ int main(int argc, const char** argv) {
     SDSvrParams svr_params;
     SDContextParams ctx_params;
     SDGenerationParams default_gen_params;
-    parse_args(argc, argv, svr_params, ctx_params, default_gen_params);
 
     sd_set_log_callback(sd_log_cb, (void*)&svr_params);
+    parse_args(argc, argv, svr_params, ctx_params, default_gen_params);
 
     LOG_VERBOSE("version: %s", version_string().c_str());
     LOG_VERBOSE("%s", sd_get_system_info());
