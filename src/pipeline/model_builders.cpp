@@ -28,6 +28,7 @@
 #include "model/diffusion/mmdit.hpp"
 #include "model/diffusion/model.hpp"
 #include "model/diffusion/pid.hpp"
+#include "model/diffusion/pixart.hpp"
 #include "model/diffusion/qwen_image.hpp"
 #include "model/diffusion/qwen_image_2_1.hpp"
 #include "model/diffusion/sensenova_u1.h"
@@ -301,6 +302,19 @@ namespace sd::model_builders {
                                                                            weight_manager,
                                                                            sd_ctx_params->model_args);
             }
+        } else if (version == VERSION_PIXART) {
+            result.conditioner = std::make_shared<T5CLIPEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
+                                                                  tensor_storage_map,
+                                                                  true,
+                                                                  0,
+                                                                  false,
+                                                                  weight_manager,
+                                                                  sd_ctx_params->model_args);
+            result.diffusion   = std::make_shared<PixArt::PixArtRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                      tensor_storage_map,
+                                                                      "model.diffusion_model",
+                                                                      weight_manager,
+                                                                      sd_ctx_params->model_args);
         } else if (sd_version_is_mage_flow(version)) {
             result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                tensor_storage_map,

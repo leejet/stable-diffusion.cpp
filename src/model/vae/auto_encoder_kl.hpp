@@ -544,7 +544,7 @@ public:
                        const String2TensorStorage& tensor_storage_map = {},
                        const std::string& prefix                      = "")
         : version(version), decode_only(decode_only), use_video_decoder(use_video_decoder) {
-        if (sd_version_is_dit(version)) {
+        if (sd_version_is_dit(version) && version != VERSION_PIXART) {
             if (sd_version_uses_flux2_vae(version)) {
                 dd_config.z_channels = 32;
                 embed_dim            = 32;
@@ -675,7 +675,7 @@ struct AutoEncoderKL : public VAE {
                   SDVersion version                                   = VERSION_SD1,
                   std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
         : VAE(version, backend, prefix, weight_manager), decode_only(decode_only) {
-        if (sd_version_is_sd1(version) || sd_version_is_sd2(version)) {
+        if (sd_version_is_sd1(version) || sd_version_is_sd2(version) || sd_version_is_pixart(version)) {
             scale_factor = 0.18215f;
             shift_factor = 0.f;
         } else if (sd_version_is_sdxl(version)) {

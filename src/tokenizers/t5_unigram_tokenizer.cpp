@@ -295,6 +295,12 @@ bool T5UniGramTokenizer::encode(const std::string& input, std::vector<int>& resu
     std::vector<int32_t> tokens;
     std::vector<std::string> token_strs;
     std::string normalized = normalize(input);
+    if (normalized.empty()) {
+        // HF reference tokenizers emit no pieces for empty input; pad_tokens
+        // still appends EOS so the sequence becomes [EOS] + padding.
+        result = std::move(tokens);
+        return true;
+    }
     auto splited_texts     = split_with_special_tokens(normalized, special_tokens);
     if (splited_texts.empty()) {
         splited_texts.push_back(normalized);  // for empty string
