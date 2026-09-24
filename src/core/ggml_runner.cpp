@@ -837,11 +837,20 @@ std::optional<Tensor<float>> GGMLRunner::execute_graph(ggml_cgraph* graph, int n
         last_compute_status_ = GGML_STATUS_ALLOC_FAILED;
         return std::nullopt;
     }
+    auto fits_monolithic = [&]() {
+        // Planning headroom absorbs allocation estimate drift; execution keeps the normal limits.
+        constexpr size_t planning_headroom = 128ULL * 1024ULL * 1024ULL;
+        auto requests                      = memory_requests(full_measurement.buffers, cache_.pending_bytes(graph));
+        for (auto& request : requests) {
+            request.pending_allocation_bytes = add_bytes(request.pending_allocation_bytes, planning_headroom);
+        }
+        return fits(requests, params);
+    };
     auto manager         = residency_manager.lock();
     const bool segmented = !is_multi_device() && !sd_backend_is_cpu(runtime_backend) &&
                            manager != nullptr && manager->segmented_compute_enabled() &&
                            cached_plan.valid && cached_plan.has_cuts && cached_plan.segments.size() > 1 &&
-                           !fits(memory_requests(full_measurement.buffers, cache_.pending_bytes(graph)), params);
+                           !fits_monolithic();
     ggml_graph_cut::Plan monolithic_plan;
     if (!segmented) {
         monolithic_plan.segments.emplace_back();
