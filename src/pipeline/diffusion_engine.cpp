@@ -2441,6 +2441,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                                 timesteps_tensor,
                                 cond,
                                 &controls);
+        bool uncond_controls_ready = false;
 
         static const std::vector<sd::Tensor<float>> empty_ref_latents;
         bool uncond_without_ref_latents = !img_uncond.empty() &&
@@ -2530,6 +2531,17 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                 return std::move(cached_output);
             }
 
+            // A re-enabled condition can miss the cache even when the positive pass was reused.
+            if (!uncond_controls_ready && !uncond.empty() &&
+                (&condition == &uncond || &condition == &img_uncond)) {
+                compute_sample_controls(control_image,
+                                        noised_input,
+                                        timesteps_tensor,
+                                        uncond,
+                                        &controls);
+                uncond_controls_ready = true;
+            }
+
             for (const auto& extension : generation_extensions) {
                 extension->before_diffusion(diffusion_params, step);
             }
@@ -2569,11 +2581,11 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
             }
         }
 
-        float effective_guidance_scale = guidance_schedule.empty() 
-            ? cfg_scale
-            : guidance_schedule[guidance_schedule.size() - 1 - step];
+        float effective_guidance_scale = guidance_schedule.empty()
+                                             ? cfg_scale
+                                             : guidance_schedule[guidance_schedule.size() - 1 - step];
 
-        float image_guidance_scale = img_cfg_scale; 
+        float image_guidance_scale = img_cfg_scale;
 
         constexpr float kEpsilon = 1e-5f;
 
@@ -2602,13 +2614,6 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
 
         if (!uncond.empty()) {
             if (!skip_uncond) {
-                if (!step_cache.is_step_skipped()) {
-                    compute_sample_controls(control_image,
-                                            noised_input,
-                                            timesteps_tensor,
-                                            uncond,
-                                            &controls);
-                }
                 const std::vector<int>* uncond_skip_layers = nullptr;
                 if (is_skiplayer_step && slg_uncond) {
                     LOG_VERBOSE("Skipping layers at uncond step %d\n", step);
@@ -2623,19 +2628,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                     return {};
                 }
             } else {
-                if (step_cache.runtime.easycache_enabled())
-                    step_cache.runtime.easycache.reset_runtime();
-                if (step_cache.runtime.ucache_enabled())
-                    step_cache.runtime.ucache.reset_runtime();
-                if (step_cache.runtime.cachedit_enabled())
-                    step_cache.runtime.cachedit.reset_runtime();
-                if (!img_uncond.empty() && !skip_img_uncond && !step_cache.is_step_skipped()) {
-                    compute_sample_controls(control_image,
-                                            noised_input,
-                                            timesteps_tensor,
-                                            uncond,
-                                            &controls);
-                }
+                step_cache.invalidate_condition(&uncond);
             }
         }
 
@@ -2650,12 +2643,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                     return {};
                 }
             } else {
-                if (step_cache.runtime.easycache_enabled())
-                    step_cache.runtime.easycache.reset_runtime();
-                if (step_cache.runtime.ucache_enabled())
-                    step_cache.runtime.ucache.reset_runtime();
-                if (step_cache.runtime.cachedit_enabled())
-                    step_cache.runtime.cachedit.reset_runtime();
+                step_cache.invalidate_condition(&img_uncond);
             }
         }
         sd::guidance::GuidanceInput guidance_input;
