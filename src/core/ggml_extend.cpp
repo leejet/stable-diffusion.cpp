@@ -434,7 +434,17 @@ ggml_tensor* ggml_ext_conv_2d(ggml_context* ctx,
         p1 = 0;
     }
 
-    if (direct) {
+    if (w->type == GGML_TYPE_F32) {
+        // ggml_conv_2d hardcodes the im2col dtype to f16 for non-bf16 weights,
+        // which would re-introduce f16 overflow in high-magnitude VAE decoder
+        // activations. Build the same im2col + mul_mat with explicit f32.
+        ggml_tensor* im2col = ggml_im2col(ctx, w, x, s0, s1, p0, p1, d0, d1, true, GGML_TYPE_F32);
+        x                   = ggml_mul_mat(ctx,
+                                           ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[3] * im2col->ne[2] * im2col->ne[1]),
+                                           ggml_reshape_2d(ctx, w, w->ne[0] * w->ne[1] * w->ne[2], w->ne[3]));
+        x                   = ggml_reshape_4d(ctx, x, im2col->ne[1], im2col->ne[2], im2col->ne[3], w->ne[3]);
+        x                   = ggml_cont(ctx, ggml_permute(ctx, x, 0, 1, 3, 2));
+    } else if (direct) {
         x = ggml_conv_2d_direct(ctx, w, x, s0, s1, p0, p1, d0, d1);
     } else {
         x = ggml_conv_2d(ctx, w, x, s0, s1, p0, p1, d0, d1);
@@ -466,11 +476,10 @@ ggml_tensor* ggml_ext_conv_3d(ggml_context* ctx,
                               int d2,
                               bool force_prec_f32,
                               bool direct) {
-    if (direct) {
-        int64_t OC = w->ne[3] / IC;
-        int64_t N  = x->ne[3] / IC;
-        x          = ggml_conv_3d_direct(ctx, w, x, s0, s1, s2, p0, p1, p2, d0, d1, d2, (int)IC, (int)N, (int)OC);
-    } else if (force_prec_f32) {
+    if (force_prec_f32 || w->type == GGML_TYPE_F32) {
+        // The f32-weight case must bypass ggml_conv_3d: its im2col dtype is
+        // hardcoded to f16 for non-bf16 weights, which saturates high-magnitude
+        // VAE decoder activations to inf.
         ggml_tensor* im2col = ggml_im2col_3d(ctx, w, x, IC, s0, s1, s2, p0, p1, p2, d0, d1, d2, w->type);
 
         int64_t OC = w->ne[3] / IC;
@@ -484,6 +493,10 @@ ggml_tensor* ggml_ext_conv_3d(ggml_context* ctx,
         x          = ggml_reshape_4d(ctx, x, im2col->ne[1] * im2col->ne[2], OD, N, OC);
         x          = ggml_cont(ctx, ggml_permute(ctx, x, 0, 1, 3, 2));
         x          = ggml_reshape_4d(ctx, x, im2col->ne[1], im2col->ne[2], OD, OC * N);
+    } else if (direct) {
+        int64_t OC = w->ne[3] / IC;
+        int64_t N  = x->ne[3] / IC;
+        x          = ggml_conv_3d_direct(ctx, w, x, s0, s1, s2, p0, p1, p2, d0, d1, d2, (int)IC, (int)N, (int)OC);
     } else {
         // ggml_conv_3d decomposes into GGML_OP_IM2COL_3D, which some backends
         // (e.g. Metal, see #850) do not implement. Fall back to

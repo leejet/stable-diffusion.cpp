@@ -33,8 +33,13 @@ namespace WAN {
                 std::get<0>(kernel_size) = 1;
                 std::get<0>(padding)     = 0;
             }
+            // VAE conv weights keep their stored dtype so compute precision can
+            // be decided per run; the decoder residual stream can exceed the
+            // f16 range, so forcing f16 here saturates im2col output to inf.
+            ggml_type wtype  = sd_conv_prefix_is_vae(prefix) ? sd_vae_conv_param_type(tensor_storage_map, prefix + "weight")
+                                                             : GGML_TYPE_F16;
             params["weight"] = ggml_new_tensor_4d(ctx,
-                                                  GGML_TYPE_F16,
+                                                  wtype,
                                                   std::get<2>(kernel_size),
                                                   std::get<1>(kernel_size),
                                                   std::get<0>(kernel_size),
@@ -64,6 +69,7 @@ namespace WAN {
             // x: [N*IC, ID, IH, IW]
             // result: x: [N*OC, ID, IH, IW]
             ggml_tensor* w = params["weight"];
+            w              = sd_conv_cast_weight(ctx->ggml_ctx, w, sd_conv_target_type(ctx, w->type));
             ggml_tensor* b = nullptr;
             if (bias) {
                 b = params["bias"];
