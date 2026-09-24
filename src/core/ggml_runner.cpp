@@ -527,6 +527,7 @@ GGMLRunnerContext GGMLRunner::get_context() {
     runner_ctx.conv3d_direct_enabled = conv3d_direct_enabled;
     runner_ctx.circular_x_enabled    = circular_x_enabled;
     runner_ctx.circular_y_enabled    = circular_y_enabled;
+    runner_ctx.vae_compute_type      = vae_compute_type;
     runner_ctx.weight_adapter        = weight_adapter;
     runner_ctx.debug_tensors         = &debug_tensors;
     runner_ctx.get_cache_tensor      = [this](const std::string& name) {

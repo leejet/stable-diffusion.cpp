@@ -427,6 +427,63 @@ public:
     }
 };
 
+// VAE/TAE conv weights keep their stored dtype so compute precision can be
+// decided per run (see --vae-dtype); other convs (UNet, ControlNet, patch
+// embeds, upscalers) stay on the historical hardcoded f16.
+static inline bool sd_conv_prefix_is_vae(const std::string& prefix) {
+    static const std::vector<std::string> kVaePrefixes = {"first_stage_model", "vae", "tae", "decoder"};
+    for (const auto& v : kVaePrefixes) {
+        if (prefix.size() >= v.size() && prefix.compare(0, v.size(), v) == 0 &&
+            (prefix.size() == v.size() || prefix[v.size()] == '.')) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static inline bool sd_conv_type_computable(ggml_type t) {
+    return t == GGML_TYPE_F16 || t == GGML_TYPE_F32 || t == GGML_TYPE_BF16;
+}
+
+static inline ggml_type sd_vae_conv_param_type(const String2TensorStorage& map, const std::string& key) {
+    auto it = map.find(key);
+    if (it == map.end()) {
+        return GGML_TYPE_F16;
+    }
+    const TensorStorage& ts = it->second;
+    ggml_type t             = ts.expected_type != GGML_TYPE_COUNT ? ts.expected_type : ts.type;
+    if (sd_conv_type_computable(t)) {
+        return t;
+    }
+    // Block-quantized types need ne[0] % blck_size == 0, but conv weights have
+    // ne[0] = kernel width, so they cannot stay quantized in a conv param and
+    // keep the historical load-time f16 expansion. int8-tensorwise needs its
+    // weight_scale applied by dedicated kernels that conv paths do not have.
+    if (ggml_is_quantized(t) && !ts.is_int8_tensorwise && ts.ne[0] % ggml_blck_size(t) == 0) {
+        return t;
+    }
+    return GGML_TYPE_F16;
+}
+
+static inline ggml_type sd_conv_target_type(GGMLRunnerContext* ctx, ggml_type wtype) {
+    if (ctx->vae_compute_type != GGML_TYPE_COUNT) {
+        return ctx->vae_compute_type;
+    }
+    return sd_conv_type_computable(wtype) ? wtype : GGML_TYPE_F16;
+}
+
+// Quantized sources route through f32: backends only register direct
+// CPY kernels for quantized -> f32, not quantized -> f16/bf16.
+static inline ggml_tensor* sd_conv_cast_weight(ggml_context* ctx, ggml_tensor* w, ggml_type target) {
+    if (w->type == target) {
+        return w;
+    }
+    if (ggml_is_quantized(w->type) && target != GGML_TYPE_F32) {
+        w = ggml_cast(ctx, w, GGML_TYPE_F32);
+    }
+    return ggml_cast(ctx, w, target);
+}
+
 class Conv2d : public UnaryBlock {
 protected:
     int64_t in_channels;
@@ -440,9 +497,10 @@ protected:
     std::string prefix;
 
     void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
-        this->prefix         = prefix;
-        enum ggml_type wtype = GGML_TYPE_F16;
-        params["weight"]     = ggml_new_tensor_4d(ctx, wtype, kernel_size.second, kernel_size.first, in_channels, out_channels);
+        this->prefix = prefix;
+        enum ggml_type wtype =
+            sd_conv_prefix_is_vae(prefix) ? sd_vae_conv_param_type(tensor_storage_map, prefix + "weight") : GGML_TYPE_F16;
+        params["weight"] = ggml_new_tensor_4d(ctx, wtype, kernel_size.second, kernel_size.first, in_channels, out_channels);
         if (bias) {
             enum ggml_type wtype = GGML_TYPE_F32;
             params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_channels);
@@ -475,6 +533,7 @@ public:
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         ggml_tensor* w = params["weight"];
+        w              = sd_conv_cast_weight(ctx->ggml_ctx, w, sd_conv_target_type(ctx, w->type));
         ggml_tensor* b = nullptr;
         if (bias) {
             b = params["bias"];
@@ -525,9 +584,10 @@ protected:
     std::string prefix;
 
     void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
-        this->prefix         = prefix;
-        enum ggml_type wtype = GGML_TYPE_F16;
-        params["weight"]     = ggml_new_tensor_4d(ctx, wtype, kernel_size.second, kernel_size.first, in_channels / groups, out_channels);
+        this->prefix = prefix;
+        enum ggml_type wtype =
+            sd_conv_prefix_is_vae(prefix) ? sd_vae_conv_param_type(tensor_storage_map, prefix + "weight") : GGML_TYPE_F16;
+        params["weight"] = ggml_new_tensor_4d(ctx, wtype, kernel_size.second, kernel_size.first, in_channels / groups, out_channels);
         if (bias) {
             enum ggml_type wtype = GGML_TYPE_F32;
             params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_channels);
@@ -562,6 +622,7 @@ public:
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         ggml_tensor* w = params["weight"];
+        w              = sd_conv_cast_weight(ctx->ggml_ctx, w, sd_conv_target_type(ctx, w->type));
         ggml_tensor* b = nullptr;
         if (bias) {
             b = params["bias"];
@@ -682,14 +743,15 @@ protected:
     std::string prefix;
 
     void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
-        this->prefix         = prefix;
-        enum ggml_type wtype = GGML_TYPE_F16;
-        params["weight"]     = ggml_new_tensor_4d(ctx,
-                                                  wtype,
-                                                  std::get<2>(kernel_size),
-                                                  std::get<1>(kernel_size),
-                                                  std::get<0>(kernel_size),
-                                                  in_channels * out_channels);
+        this->prefix = prefix;
+        enum ggml_type wtype =
+            sd_conv_prefix_is_vae(prefix) ? sd_vae_conv_param_type(tensor_storage_map, prefix + "weight") : GGML_TYPE_F16;
+        params["weight"] = ggml_new_tensor_4d(ctx,
+                                              wtype,
+                                              std::get<2>(kernel_size),
+                                              std::get<1>(kernel_size),
+                                              std::get<0>(kernel_size),
+                                              in_channels * out_channels);
         if (bias) {
             params["bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_channels);
         }
@@ -715,6 +777,7 @@ public:
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         ggml_tensor* w = params["weight"];
+        w              = sd_conv_cast_weight(ctx->ggml_ctx, w, sd_conv_target_type(ctx, w->type));
         ggml_tensor* b = nullptr;
         if (ctx->weight_adapter) {
             w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");

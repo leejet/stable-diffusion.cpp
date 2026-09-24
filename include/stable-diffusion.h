@@ -248,6 +248,7 @@ typedef struct {
     const char* tokenizer;           // tokenizer.json path or main=FILE,clip-l=FILE,clip-g=FILE assignments; required for PiD and Lens
     bool sage_attn;
     int conditioning_cache_size;  // Maximum cached conditioning entries per context; 0 disables caching (default: 4)
+    const char* vae_dtype;  // VAE/TAE inference precision: "f16", "f32" or "bf16"; null or empty uses weight dtype
 } sd_ctx_params_t;
 
 typedef struct {

@@ -461,6 +461,11 @@ ArgOptions SDContextParams::get_options() {
          0,
          &vae_format},
         {"",
+         "--vae-dtype",
+         "VAE/TAE inference precision, without this will use weight dtype (f16, f32 or bf16)",
+         0,
+         &vae_dtype},
+        {"",
          "--audio-vae",
          "path to standalone LTX audio vae model",
          0,
@@ -921,6 +926,7 @@ std::string SDContextParams::to_string() const {
         << "  embeddings_connectors_path: \"" << embeddings_connectors_path << "\",\n"
         << "  vae_path: \"" << vae_path << "\",\n"
         << "  vae_format: \"" << vae_format << "\",\n"
+        << "  vae_dtype: \"" << vae_dtype << "\",\n"
         << "  audio_vae_path: \"" << audio_vae_path << "\",\n"
         << "  audio_encoder_path: \"" << audio_encoder_path << "\",\n"
         << "  taesd_path: \"" << taesd_path << "\",\n"
@@ -1018,6 +1024,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.vae_conv_direct                 = vae_conv_direct;
     sd_ctx_params.force_sdxl_vae_conv_scale       = force_sdxl_vae_conv_scale;
     sd_ctx_params.vae_format                      = str_to_vae_format(vae_format);
+    sd_ctx_params.vae_dtype                       = vae_dtype.c_str();
     sd_ctx_params.max_vram                        = max_vram.c_str();
     sd_ctx_params.disable_prefetch                = disable_prefetch;
     sd_ctx_params.disable_segmented_compute       = disable_segmented_compute;

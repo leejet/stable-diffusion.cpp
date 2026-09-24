@@ -77,6 +77,7 @@ struct GGMLRunnerContext {
     bool circular_y_enabled                                          = false;
     ggml_tensor* ip_context                                          = nullptr;
     float ip_scale                                                   = 1.0f;
+    ggml_type vae_compute_type                                       = GGML_TYPE_COUNT;  // VAE/TAE conv compute precision; COUNT keeps the stored dtype
     std::shared_ptr<WeightAdapter> weight_adapter                    = nullptr;
     std::vector<std::pair<ggml_tensor*, std::string>>* debug_tensors = nullptr;
     std::function<ggml_tensor*(const std::string&)> get_cache_tensor;
@@ -185,6 +186,7 @@ protected:
     bool conv3d_direct_enabled = false;
     bool circular_x_enabled    = false;
     bool circular_y_enabled    = false;
+    ggml_type vae_compute_type = GGML_TYPE_COUNT;
 
     sd::ggml_graph_cut::PlanCache graph_cut_plan_cache_;
     std::unordered_set<const ggml_tensor*> params_tensor_set_;
@@ -353,6 +355,10 @@ public:
     void set_scale_overrides(float linear_scale, float attn_scale) {
         this->linear_scale = linear_scale;
         this->attn_scale   = attn_scale;
+    }
+
+    void set_vae_compute_type(ggml_type type) {
+        vae_compute_type = type;
     }
 
     void set_conv2d_direct_enabled(bool enabled) {

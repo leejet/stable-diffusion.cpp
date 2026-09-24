@@ -615,6 +615,26 @@ namespace sd::model_builders {
                 result.preview->set_conv3d_direct_enabled(true);
             }
         }
+        {
+            ggml_type vae_compute_type = GGML_TYPE_COUNT;
+            if (SAFE_STR(sd_ctx_params->vae_dtype)[0] != '\0') {
+                const std::string dtype = sd_ctx_params->vae_dtype;
+                if (dtype == "f16" || dtype == "f32" || dtype == "bf16") {
+                    vae_compute_type = dtype == "f16"   ? GGML_TYPE_F16
+                                       : dtype == "f32" ? GGML_TYPE_F32
+                                                        : GGML_TYPE_BF16;
+                } else {
+                    LOG_WARN("invalid --vae-dtype '%s' (expected f16, f32 or bf16), using weight dtype", dtype.c_str());
+                }
+            }
+            if (vae_compute_type != GGML_TYPE_COUNT) {
+                LOG_INFO("VAE/TAE compute dtype: %s", ggml_type_name(vae_compute_type));
+                result.vae->set_vae_compute_type(vae_compute_type);
+                if (result.preview) {
+                    result.preview->set_vae_compute_type(vae_compute_type);
+                }
+            }
+        }
         if (result.vae) {
             result.vae->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
         }

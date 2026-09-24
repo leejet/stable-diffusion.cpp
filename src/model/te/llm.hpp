@@ -277,6 +277,11 @@ namespace LLM {
                 if (!starts_with(name, prefix)) {
                     continue;
                 }
+                // Quant scale tensors mirror the weight name and can share its suffix with a
+                // different shape; never use them for config detection.
+                if (contains(name, "weight_scale")) {
+                    continue;
+                }
                 size_t pos = name.find("visual.");
                 if (pos != std::string::npos) {
                     config.have_vision_weight = true;
@@ -332,7 +337,9 @@ namespace LLM {
                         }
                     }
                 }
-                if (contains(name, "embed_tokens.weight")) {
+                // ends_with: int8 checkpoints also carry embed_tokens.weight_scale tensors whose
+                // shape would otherwise be mistaken for the embedding matrix.
+                if (ends_with(name, "embed_tokens.weight")) {
                     config.hidden_size = tensor_storage.ne[0];
                     config.vocab_size  = tensor_storage.ne[1];
                 }

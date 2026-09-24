@@ -398,7 +398,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "sage_attn: %s\n"
              "linear_scale: %g\n"
              "attn_scale: %g\n"
-             "vae_format: %s\n",
+             "vae_format: %s\n"
+             "vae_dtype: %s\n",
              SAFE_STR(sd_ctx_params->model_path),
              SAFE_STR(sd_ctx_params->clip_l_path),
              SAFE_STR(sd_ctx_params->clip_g_path),
@@ -439,7 +440,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              BOOL_STR(sd_ctx_params->sage_attn),
              sd_ctx_params->linear_scale,
              sd_ctx_params->attn_scale,
-             sd_vae_format_name(sd_ctx_params->vae_format));
+             sd_vae_format_name(sd_ctx_params->vae_format),
+             SAFE_STR(sd_ctx_params->vae_dtype));
 
     return buf;
 }

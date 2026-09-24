@@ -144,6 +144,7 @@ struct SDContextParams {
     std::string pulid_weights_path;
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string tensor_type_rules;
+    std::string vae_dtype;  // VAE/TAE inference precision: f16/f32/bf16; empty uses weight dtype
     std::string lora_model_dir = ".";
     std::string hires_upscalers_dir;
 
