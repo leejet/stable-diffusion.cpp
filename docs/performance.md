@@ -21,6 +21,54 @@ CPU fallback. It excludes weights and cache buffers. Within a runner lifecycle,
 the summary is printed only on the first graph or when backend capacities or the
 segment count change.
 
+## Use VAE tiling to reduce encode and decode memory usage.
+
+`--vae-tiling` enables spatial tiling for both VAE encoding and decoding. The
+default tile size is 256x256 **image pixels**, independent of the VAE scale factor:
+
+```shell
+--vae-tiling --vae-tile-size 256x256 --vae-tile-overlap 0.5
+```
+
+`--vae-tile-size` accepts one size or `WIDTHxHEIGHT`. A zero dimension uses the
+256-pixel default. Sizes are rounded down to a multiple of the VAE scale factor
+and capped at the current input dimensions. Explicit sizes below four latent
+pixels per axis (or the full axis when it is smaller) are rejected. Encoding and
+decoding use the same spatial sizes, without an additional encoding multiplier.
+Inputs that fit within a tile are processed as one tile.
+
+For a 512x512 image with the default 50% overlap, both encoding and decoding use
+3x3 tiles. A 256-pixel tile corresponds to 32 latent pixels for an 8x VAE, 16 for
+a 16x VAE, and 8 for a 32x VAE. Smaller tiles reduce each graph's memory demand,
+but overlapping work can increase processing time and tiling can affect image
+quality, especially during encoding. Use larger tiles when more context is needed.
+
+`--vae-relative-tile-size` overrides the absolute size on each axis with a positive
+value. Values up to and including 1 specify a fraction of the current input size;
+values greater than 1 specify a target number of tiles per axis, accounting for
+overlap. For example, `0.5x0.5` uses half the width and height in both encode and
+decode. The target overlap is clamped to 0 through 0.5 and the actual overlap is
+adjusted to fit the image. Size and overlap options require `--vae-tiling`.
+
+**Migration:** `--vae-tile-size` and the C/JSON fields `tile_size_w` and
+`tile_size_h` now use image pixels instead of latent units. The C/JSON fields
+`tile_size_x/y` have been renamed to `tile_size_w/h`, and `rel_size_x/y` to
+`rel_size_w/h`. The command-line option names are unchanged. For example, an old
+decode tile size of 32 corresponds to 256 pixels for an 8x VAE or 512 pixels for a
+16x VAE. Encoding no longer enlarges explicit or relative tile sizes.
+
+The main VAE decode path retries allocation failures with smaller tiles, even
+without `--vae-tiling`. Supported video VAEs first try temporal tiling; spatial
+retries use at most 256-pixel tiles initially and then halve the effective tile
+dimensions down to the minimum size. Each spatial retry must reduce the effective
+tile size. These runtime adjustments do not change the caller's parameters.
+Execution failures are not retried, and encoding has no automatic OOM retry.
+
+`--temporal-tiling` remains independent of spatial tiling. MiniMax H3 always uses
+spatial tiling (256x256 pixels and 25% overlap by default) and its own temporal
+windows. With `--vae-tiling`, its overlap follows `--vae-tile-overlap`; explicit
+spatial sizes are honored.
+
 ## Offload weights to the CPU to save VRAM without reducing generation speed.
 
 Using `--offload-to-cpu` allows you to offload weights to the CPU, saving VRAM without reducing generation speed.

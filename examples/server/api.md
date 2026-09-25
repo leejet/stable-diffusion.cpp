@@ -524,11 +524,11 @@ Shared default fields used by both `img_gen` and `vid_gen`:
 | `vae_tiling_params` | `object` |
 | `vae_tiling_params.enabled` | `boolean` |
 | `vae_tiling_params.temporal_tiling` | `boolean` |
-| `vae_tiling_params.tile_size_x` | `integer` |
-| `vae_tiling_params.tile_size_y` | `integer` |
+| `vae_tiling_params.tile_size_w` | `integer` |
+| `vae_tiling_params.tile_size_h` | `integer` |
 | `vae_tiling_params.target_overlap` | `number` |
-| `vae_tiling_params.rel_size_x` | `number` |
-| `vae_tiling_params.rel_size_y` | `number` |
+| `vae_tiling_params.rel_size_w` | `number` |
+| `vae_tiling_params.rel_size_h` | `number` |
 | `vae_tiling_params.extra_tiling_args` | `string` |
 | `cache_mode` | `string` |
 | `cache_option` | `string` |
@@ -536,6 +536,8 @@ Shared default fields used by both `img_gen` and `vid_gen`:
 | `scm_policy_dynamic` | `boolean` |
 | `output_format` | `string` |
 | `output_compression` | `integer` |
+
+`vae_tiling_params.tile_size_w` and `tile_size_h` are in **image pixels**, with `0` selecting the 256-pixel default. Both encode and decode use these sizes without an encoding multiplier. Positive `rel_size_w`/`rel_size_h` values override the corresponding absolute size: values up to 1 are dimension fractions, and values greater than 1 are target tile counts. Set `enabled` to use spatial tiling. Sizes are aligned down to the VAE scale factor and capped at the input dimensions; explicit sizes below the minimum supported tile size are rejected. These fields previously used latent units; see [VAE tiling](../../docs/performance.md#use-vae-tiling-to-reduce-encode-and-decode-memory-usage) for migration and OOM retry behavior.
 
 `vae_tiling_params.extra_tiling_args` accepts a key=value list. Supported video VAEs accept `temporal_tile_frames` (alias `temporal_tile_size`, default `4`) and `temporal_tile_overlap` (default `1`).
 LTX and Wan preserve causal state between temporal tiles. Hunyuan Video and TAEHV use overlap blending. MiniMax H3 keeps its model-specific fixed temporal windows because its latent-to-frame mapping is non-linear.
@@ -767,11 +769,11 @@ Example:
   "vae_tiling_params": {
     "enabled": false,
     "temporal_tiling": false,
-    "tile_size_x": 0,
-    "tile_size_y": 0,
+    "tile_size_w": 0,
+    "tile_size_h": 0,
     "target_overlap": 0.5,
-    "rel_size_x": 0.0,
-    "rel_size_y": 0.0,
+    "rel_size_w": 0.0,
+    "rel_size_h": 0.0,
     "extra_tiling_args": ""
   },
 
@@ -900,11 +902,11 @@ Other native fields:
 | `vae_tiling_params` | `object` |
 | `vae_tiling_params.enabled` | `boolean` |
 | `vae_tiling_params.temporal_tiling` | `boolean` |
-| `vae_tiling_params.tile_size_x` | `integer` |
-| `vae_tiling_params.tile_size_y` | `integer` |
+| `vae_tiling_params.tile_size_w` | `integer` |
+| `vae_tiling_params.tile_size_h` | `integer` |
 | `vae_tiling_params.target_overlap` | `number` |
-| `vae_tiling_params.rel_size_x` | `number` |
-| `vae_tiling_params.rel_size_y` | `number` |
+| `vae_tiling_params.rel_size_w` | `number` |
+| `vae_tiling_params.rel_size_h` | `number` |
 | `vae_tiling_params.extra_tiling_args` | `string` |
 | `cache_mode` | `string` |
 | `cache_option` | `string` |
@@ -1115,11 +1117,11 @@ Example:
   "vae_tiling_params": {
     "enabled": false,
     "temporal_tiling": false,
-    "tile_size_x": 0,
-    "tile_size_y": 0,
+    "tile_size_w": 0,
+    "tile_size_h": 0,
     "target_overlap": 0.5,
-    "rel_size_x": 0.0,
-    "rel_size_y": 0.0,
+    "rel_size_w": 0.0,
+    "rel_size_h": 0.0,
     "extra_tiling_args": ""
   },
 
@@ -1240,11 +1242,11 @@ Other native fields:
 | `vae_tiling_params` | `object` |
 | `vae_tiling_params.enabled` | `boolean` |
 | `vae_tiling_params.temporal_tiling` | `boolean` |
-| `vae_tiling_params.tile_size_x` | `integer` |
-| `vae_tiling_params.tile_size_y` | `integer` |
+| `vae_tiling_params.tile_size_w` | `integer` |
+| `vae_tiling_params.tile_size_h` | `integer` |
 | `vae_tiling_params.target_overlap` | `number` |
-| `vae_tiling_params.rel_size_x` | `number` |
-| `vae_tiling_params.rel_size_y` | `number` |
+| `vae_tiling_params.rel_size_w` | `number` |
+| `vae_tiling_params.rel_size_h` | `number` |
 | `vae_tiling_params.extra_tiling_args` | `string` |
 | `cache_mode` | `string` |
 | `cache_option` | `string` |

@@ -78,11 +78,11 @@ static json make_vae_tiling_json(const sd_tiling_params_t& params) {
     return {
         {"enabled", params.enabled},
         {"temporal_tiling", params.temporal_tiling},
-        {"tile_size_x", params.tile_size_x},
-        {"tile_size_y", params.tile_size_y},
+        {"tile_size_w", params.tile_size_w},
+        {"tile_size_h", params.tile_size_h},
         {"target_overlap", params.target_overlap},
-        {"rel_size_x", params.rel_size_x},
-        {"rel_size_y", params.rel_size_y},
+        {"rel_size_w", params.rel_size_w},
+        {"rel_size_h", params.rel_size_h},
         {"extra_tiling_args", params.extra_tiling_args ? params.extra_tiling_args : ""},
     };
 }
