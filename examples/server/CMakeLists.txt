@@ -21,21 +21,21 @@ if(SD_SERVER_BUILD_FRONTEND AND EXISTS "${FRONTEND_DIR}")
         set(HAVE_FRONTEND_BUILD ON)
 
         add_custom_target(${TARGET}_frontend_install
-            COMMAND "${PNPM_EXECUTABLE}" -C "${FRONTEND_DIR}" install
+            COMMAND "${PNPM_EXECUTABLE}" --ignore-workspace -C "${FRONTEND_DIR}" install
             WORKING_DIRECTORY "${FRONTEND_DIR}"
             COMMENT "Installing frontend dependencies"
             VERBATIM
         )
 
         add_custom_target(${TARGET}_frontend_build
-            COMMAND "${PNPM_EXECUTABLE}" -C "${FRONTEND_DIR}" run build
+            COMMAND "${PNPM_EXECUTABLE}" --ignore-workspace -C "${FRONTEND_DIR}" run build
             WORKING_DIRECTORY "${FRONTEND_DIR}"
             COMMENT "Building frontend"
             VERBATIM
         )
 
         add_custom_target(${TARGET}_frontend_header
-            COMMAND "${PNPM_EXECUTABLE}" -C "${FRONTEND_DIR}" run build:header
+            COMMAND "${PNPM_EXECUTABLE}" --ignore-workspace -C "${FRONTEND_DIR}" run build:header
             WORKING_DIRECTORY "${FRONTEND_DIR}"
             COMMENT "Generating gen_index_html.h"
             VERBATIM
