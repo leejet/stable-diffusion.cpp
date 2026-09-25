@@ -41,28 +41,28 @@ namespace PixArt {
                 auto it = weights.find(prefix + "." + suffix);
                 return it == weights.end() ? nullptr : &it->second;
             };
-            if (auto w = find("pos_embed.proj.weight")) {
+            if (auto w = find("x_embedder.proj.weight")) {
                 config.hidden_size = w->ne[3];
                 config.in_channels = w->ne[2];
                 config.patch_size  = w->ne[0];
             }
-            if (auto w = find("proj_out.weight")) {
+            if (auto w = find("final_layer.linear.weight")) {
                 config.out_channels = w->ne[1] / (config.patch_size * config.patch_size);
             }
-            if (auto w = find("caption_projection.linear_1.weight")) {
+            if (auto w = find("y_embedder.y_proj.fc1.weight")) {
                 config.caption_channels = w->ne[0];
             }
-            if (auto w = find("transformer_blocks.0.attn2.to_k.weight")) {
+            if (auto w = find("blocks.0.cross_attn.kv_linear.weight")) {
                 config.cross_attention_dim = w->ne[0];
             }
-            if (auto w = find("transformer_blocks.0.ff.net.0.proj.weight")) {
+            if (auto w = find("blocks.0.mlp.fc1.weight")) {
                 config.ffn_dim = w->ne[1];
             }
-            if (find("adaln_single.emb.resolution_embedder.linear_1.weight") != nullptr) {
+            if (find("csize_embedder.mlp.0.weight") != nullptr) {
                 LOG_WARN("pixart: resolution/aspect-ratio micro conditions are not supported; output may differ from the reference");
             }
             int layers                     = 0;
-            const std::string block_prefix = prefix + ".transformer_blocks.";
+            const std::string block_prefix = prefix + ".blocks.";
             for (const auto& [name, _] : weights) {
                 if (starts_with(name, block_prefix)) {
                     layers = std::max(layers, atoi(name.substr(block_prefix.size()).c_str()) + 1);
@@ -108,37 +108,46 @@ namespace PixArt {
     class PixArtTimestepEmbedding : public GGMLBlock {
     public:
         PixArtTimestepEmbedding(int64_t in_channels, int64_t out_dim) {
-            blocks["linear_1"] = std::make_shared<Linear>(in_channels, out_dim);
-            blocks["linear_2"] = std::make_shared<Linear>(out_dim, out_dim);
+            blocks["mlp.0"] = std::make_shared<Linear>(in_channels, out_dim);
+            blocks["mlp.2"] = std::make_shared<Linear>(out_dim, out_dim);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
-            x = std::dynamic_pointer_cast<Linear>(blocks["linear_1"])->forward(ctx, x);
+            x = std::dynamic_pointer_cast<Linear>(blocks["mlp.0"])->forward(ctx, x);
             x = ggml_silu(ctx->ggml_ctx, x);
-            return std::dynamic_pointer_cast<Linear>(blocks["linear_2"])->forward(ctx, x);
+            return std::dynamic_pointer_cast<Linear>(blocks["mlp.2"])->forward(ctx, x);
         }
     };
 
     class PixArtAttention : public GGMLBlock {
         int64_t num_heads;
+        bool self_attention;
 
     public:
-        PixArtAttention(int64_t dim, int64_t num_heads, int64_t context_dim)
-            : num_heads(num_heads) {
-            blocks["to_q"]     = std::make_shared<Linear>(dim, dim);
-            blocks["to_k"]     = std::make_shared<Linear>(context_dim, dim);
-            blocks["to_v"]     = std::make_shared<Linear>(context_dim, dim);
-            blocks["to_out.0"] = std::make_shared<Linear>(dim, dim);
+        PixArtAttention(int64_t dim, int64_t num_heads, int64_t context_dim, bool self_attention)
+            : num_heads(num_heads), self_attention(self_attention) {
+            if (self_attention) {
+                blocks["qkv"] = std::make_shared<Linear>(dim, 3 * dim);
+            } else {
+                blocks["q_linear"]  = std::make_shared<Linear>(dim, dim);
+                blocks["kv_linear"] = std::make_shared<Linear>(context_dim, 2 * dim);
+            }
+            blocks["proj"] = std::make_shared<Linear>(dim, dim);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* context, ggml_tensor* mask = nullptr) {
-            // x: [N, n_token, dim], context: [N, n_context, context_dim]
-            auto q = std::dynamic_pointer_cast<Linear>(blocks["to_q"])->forward(ctx, x);
-            auto k = std::dynamic_pointer_cast<Linear>(blocks["to_k"])->forward(ctx, context);
-            auto v = std::dynamic_pointer_cast<Linear>(blocks["to_v"])->forward(ctx, context);
-
-            auto out = ggml_ext_attention_ext(ctx, q, k, v, num_heads, mask, false, ctx->flash_attn_enabled);
-            return std::dynamic_pointer_cast<Linear>(blocks["to_out.0"])->forward(ctx, out);
+            std::vector<ggml_tensor*> qkv;
+            if (self_attention) {
+                auto projected = std::dynamic_pointer_cast<Linear>(blocks["qkv"])->forward(ctx, x);
+                qkv            = ggml_ext_chunk(ctx->ggml_ctx, projected, 3, 0);
+            } else {
+                auto q     = std::dynamic_pointer_cast<Linear>(blocks["q_linear"])->forward(ctx, x);
+                auto kv    = std::dynamic_pointer_cast<Linear>(blocks["kv_linear"])->forward(ctx, context);
+                auto parts = ggml_ext_chunk(ctx->ggml_ctx, kv, 2, 0);
+                qkv        = {q, parts[0], parts[1]};
+            }
+            auto out = ggml_ext_attention_ext(ctx, qkv[0], qkv[1], qkv[2], num_heads, mask, false, ctx->flash_attn_enabled);
+            return std::dynamic_pointer_cast<Linear>(blocks["proj"])->forward(ctx, out);
         }
     };
 
@@ -155,10 +164,10 @@ namespace PixArt {
     public:
         PixArtBlock(int64_t dim, int64_t num_heads, int64_t context_dim, int64_t ffn_dim)
             : dim(dim) {
-            blocks["attn1"]         = std::make_shared<PixArtAttention>(dim, num_heads, dim);
-            blocks["attn2"]         = std::make_shared<PixArtAttention>(dim, num_heads, context_dim);
-            blocks["ff.net.0.proj"] = std::make_shared<Linear>(dim, ffn_dim);
-            blocks["ff.net.2"]      = std::make_shared<Linear>(ffn_dim, dim);
+            blocks["attn"]       = std::make_shared<PixArtAttention>(dim, num_heads, dim, true);
+            blocks["cross_attn"] = std::make_shared<PixArtAttention>(dim, num_heads, context_dim, false);
+            blocks["mlp.fc1"]    = std::make_shared<Linear>(dim, ffn_dim);
+            blocks["mlp.fc2"]    = std::make_shared<Linear>(ffn_dim, dim);
         }
 
         static ggml_tensor* norm(ggml_context* ctx, ggml_tensor* x) {
@@ -174,14 +183,14 @@ namespace PixArt {
             if (table->type != GGML_TYPE_F32) {
                 table = ggml_cast(ctx->ggml_ctx, table, GGML_TYPE_F32);
             }
-            table = ggml_reshape_3d(ctx->ggml_ctx, table, dim, 6, 1);
-            auto m     = ggml_add(ctx->ggml_ctx, ggml_reshape_3d(ctx->ggml_ctx, mod, dim, 6, N), table);
-            auto mv    = ggml_ext_chunk(ctx->ggml_ctx, ggml_reshape_2d(ctx->ggml_ctx, ggml_ext_cont(ctx->ggml_ctx, m), dim * 6, N), 6, 0);
+            table   = ggml_reshape_3d(ctx->ggml_ctx, table, dim, 6, 1);
+            auto m  = ggml_add(ctx->ggml_ctx, ggml_reshape_3d(ctx->ggml_ctx, mod, dim, 6, N), table);
+            auto mv = ggml_ext_chunk(ctx->ggml_ctx, ggml_reshape_2d(ctx->ggml_ctx, ggml_ext_cont(ctx->ggml_ctx, m), dim * 6, N), 6, 0);
 
-            auto attn1 = std::dynamic_pointer_cast<PixArtAttention>(blocks["attn1"]);
-            auto attn2 = std::dynamic_pointer_cast<PixArtAttention>(blocks["attn2"]);
-            auto proj  = std::dynamic_pointer_cast<Linear>(blocks["ff.net.0.proj"]);
-            auto fc2   = std::dynamic_pointer_cast<Linear>(blocks["ff.net.2"]);
+            auto attn1 = std::dynamic_pointer_cast<PixArtAttention>(blocks["attn"]);
+            auto attn2 = std::dynamic_pointer_cast<PixArtAttention>(blocks["cross_attn"]);
+            auto proj  = std::dynamic_pointer_cast<Linear>(blocks["mlp.fc1"]);
+            auto fc2   = std::dynamic_pointer_cast<Linear>(blocks["mlp.fc2"]);
 
             auto gate = [&](ggml_tensor* y, ggml_tensor* g) {
                 g = ggml_reshape_3d(ctx->ggml_ctx, g, dim, 1, N);
@@ -206,29 +215,29 @@ namespace PixArt {
         void init_params(ggml_context* ctx,
                          const String2TensorStorage& tensor_storage_map = {},
                          const std::string prefix                       = "") override {
-            ggml_type wtype             = get_type(prefix + "scale_shift_table", tensor_storage_map, GGML_TYPE_F32);
-            params["scale_shift_table"] = ggml_new_tensor_2d(ctx, wtype, config.hidden_size, 2);
+            ggml_type wtype                         = get_type(prefix + "final_layer.scale_shift_table", tensor_storage_map, GGML_TYPE_F32);
+            params["final_layer.scale_shift_table"] = ggml_new_tensor_2d(ctx, wtype, config.hidden_size, 2);
         }
 
     public:
         PixArtModel() = default;
         PixArtModel(const PixArtConfig& config)
             : config(config) {
-            blocks["pos_embed.proj"]                     = std::make_shared<Conv2d>(config.in_channels,
-                                                                                    config.hidden_size,
-                                                                                    std::pair<int, int>{static_cast<int>(config.patch_size), static_cast<int>(config.patch_size)},
-                                                                                    std::pair<int, int>{static_cast<int>(config.patch_size), static_cast<int>(config.patch_size)});
-            blocks["adaln_single.emb.timestep_embedder"] = std::make_shared<PixArtTimestepEmbedding>(ADALN_EMBED_DIM, config.hidden_size);
-            blocks["adaln_single.linear"]                = std::make_shared<Linear>(config.hidden_size, 6 * config.hidden_size);
-            blocks["caption_projection.linear_1"]        = std::make_shared<Linear>(config.caption_channels, config.hidden_size);
-            blocks["caption_projection.linear_2"]        = std::make_shared<Linear>(config.hidden_size, config.cross_attention_dim);
+            blocks["x_embedder.proj"]       = std::make_shared<Conv2d>(config.in_channels,
+                                                                 config.hidden_size,
+                                                                 std::pair<int, int>{static_cast<int>(config.patch_size), static_cast<int>(config.patch_size)},
+                                                                 std::pair<int, int>{static_cast<int>(config.patch_size), static_cast<int>(config.patch_size)});
+            blocks["t_embedder"]            = std::make_shared<PixArtTimestepEmbedding>(ADALN_EMBED_DIM, config.hidden_size);
+            blocks["t_block.1"]             = std::make_shared<Linear>(config.hidden_size, 6 * config.hidden_size);
+            blocks["y_embedder.y_proj.fc1"] = std::make_shared<Linear>(config.caption_channels, config.hidden_size);
+            blocks["y_embedder.y_proj.fc2"] = std::make_shared<Linear>(config.hidden_size, config.cross_attention_dim);
             for (int i = 0; i < config.num_layers; ++i) {
-                blocks["transformer_blocks." + std::to_string(i)] =
+                blocks["blocks." + std::to_string(i)] =
                     std::make_shared<PixArtBlock>(config.hidden_size, config.num_heads, config.cross_attention_dim, config.ffn_dim);
             }
-            blocks["norm_out"] = std::make_shared<LayerNorm>(config.hidden_size, 1e-6f, false);
-            blocks["proj_out"] = std::make_shared<Linear>(config.hidden_size,
-                                                          config.patch_size * config.patch_size * config.out_channels);
+            blocks["final_layer.norm_final"] = std::make_shared<LayerNorm>(config.hidden_size, 1e-6f, false);
+            blocks["final_layer.linear"]     = std::make_shared<Linear>(config.hidden_size,
+                                                                    config.patch_size * config.patch_size * config.out_channels);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -245,29 +254,29 @@ namespace PixArt {
             int64_t wp = W / p;
             int64_t hp = H / p;
 
-            auto h = std::dynamic_pointer_cast<Conv2d>(blocks["pos_embed.proj"])->forward(ctx, x);  // [N, hidden, hp, wp]
-            h      = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, h, 1, 2, 0, 3));      // [N, hp, wp, hidden] -> [N, hp*wp, hidden]
-            h      = ggml_reshape_3d(ctx->ggml_ctx, h, config.hidden_size, wp * hp, N);             // [N, hp*wp, hidden]
+            auto h = std::dynamic_pointer_cast<Conv2d>(blocks["x_embedder.proj"])->forward(ctx, x);  // [N, hidden, hp, wp]
+            h      = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, h, 1, 2, 0, 3));       // [N, hp, wp, hidden] -> [N, hp*wp, hidden]
+            h      = ggml_reshape_3d(ctx->ggml_ctx, h, config.hidden_size, wp * hp, N);              // [N, hp*wp, hidden]
             h      = ggml_add(ctx->ggml_ctx, h, pos_embed);
 
             auto t   = ggml_ext_timestep_embedding(ctx->ggml_ctx, timesteps, ADALN_EMBED_DIM, 10000);
-            auto emb = std::dynamic_pointer_cast<PixArtTimestepEmbedding>(blocks["adaln_single.emb.timestep_embedder"])->forward(ctx, t);
+            auto emb = std::dynamic_pointer_cast<PixArtTimestepEmbedding>(blocks["t_embedder"])->forward(ctx, t);
 
-            auto mod = std::dynamic_pointer_cast<Linear>(blocks["adaln_single.linear"])
+            auto mod = std::dynamic_pointer_cast<Linear>(blocks["t_block.1"])
                            ->forward(ctx, ggml_silu(ctx->ggml_ctx, emb));  // [N, 6 * hidden]
 
-            auto ctx_emb = std::dynamic_pointer_cast<Linear>(blocks["caption_projection.linear_1"])->forward(ctx, context);
+            auto ctx_emb = std::dynamic_pointer_cast<Linear>(blocks["y_embedder.y_proj.fc1"])->forward(ctx, context);
             ctx_emb      = ggml_ext_gelu(ctx->ggml_ctx, ctx_emb, true);
-            ctx_emb      = std::dynamic_pointer_cast<Linear>(blocks["caption_projection.linear_2"])->forward(ctx, ctx_emb);
+            ctx_emb      = std::dynamic_pointer_cast<Linear>(blocks["y_embedder.y_proj.fc2"])->forward(ctx, ctx_emb);
 
             for (int i = 0; i < config.num_layers; ++i) {
-                auto block = std::dynamic_pointer_cast<PixArtBlock>(blocks["transformer_blocks." + std::to_string(i)]);
+                auto block = std::dynamic_pointer_cast<PixArtBlock>(blocks["blocks." + std::to_string(i)]);
                 h          = block->forward(ctx, h, mod, ctx_emb, context_mask);
-                sd::ggml_graph_cut::mark_graph_cut(h, "pixart.transformer_blocks." + std::to_string(i), "h");
+                sd::ggml_graph_cut::mark_graph_cut(h, "pixart.blocks." + std::to_string(i), "h");
             }
 
             // scale_shift_table + emb -> (shift, scale) for the affine-free final norm
-            auto tail_table = params["scale_shift_table"];
+            auto tail_table = params["final_layer.scale_shift_table"];
             if (tail_table->type != GGML_TYPE_F32) {
                 tail_table = ggml_cast(ctx->ggml_ctx, tail_table, GGML_TYPE_F32);
             }
@@ -277,9 +286,9 @@ namespace PixArt {
             auto parts = ggml_ext_chunk(ctx->ggml_ctx,
                                         ggml_reshape_2d(ctx->ggml_ctx, ggml_ext_cont(ctx->ggml_ctx, ss), config.hidden_size * 2, N),
                                         2, 0);
-            h          = std::dynamic_pointer_cast<LayerNorm>(blocks["norm_out"])->forward(ctx, h);
+            h          = std::dynamic_pointer_cast<LayerNorm>(blocks["final_layer.norm_final"])->forward(ctx, h);
             h          = modulate(ctx->ggml_ctx, h, parts[0], parts[1]);
-            h          = std::dynamic_pointer_cast<Linear>(blocks["proj_out"])->forward(ctx, h);  // [N, hp*wp, p*p*out_ch]
+            h          = std::dynamic_pointer_cast<Linear>(blocks["final_layer.linear"])->forward(ctx, h);  // [N, hp*wp, p*p*out_ch]
             h          = DiT::unpatchify(ctx->ggml_ctx, h, hp, wp, static_cast<int>(p), static_cast<int>(p), false);
             return h;  // [N, out_channels, H, W]
         }
