@@ -7,6 +7,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "model.h"
@@ -62,6 +63,7 @@ private:
     std::string tensor_type_rules_;
     std::vector<FileStamp> parsed_dependencies_;
     std::map<std::string, std::set<std::string>> parsed_tensor_names_;
+    std::unordered_set<std::string> loading_safetensors_indexes_;
 
     static bool read_file_stamp(const std::string& path, FileStamp& stamp);
     static bool file_unchanged(const FileStamp& stamp);

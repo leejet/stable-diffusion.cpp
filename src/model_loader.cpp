@@ -311,7 +311,27 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
     return true;
 }
 
+static std::string canonical_loader_path(const std::string& path) {
+    std::error_code error;
+    const std::filesystem::path canonical = std::filesystem::weakly_canonical(std::filesystem::u8path(path), error);
+    if (!error) {
+        return canonical.generic_string();
+    }
+    return std::filesystem::u8path(path).lexically_normal().generic_string();
+}
+
 bool ModelLoader::init_from_safetensors_index_file(const std::string& file_path, const std::string& prefix) {
+    const std::string index_key = canonical_loader_path(file_path);
+    if (!loading_safetensors_indexes_.insert(index_key).second) {
+        LOG_ERROR("cyclic safetensors index reference '%s'", file_path.c_str());
+        return false;
+    }
+    struct SafetensorsIndexGuard {
+        std::unordered_set<std::string>& active;
+        std::string key;
+        ~SafetensorsIndexGuard() { active.erase(key); }
+    } guard{loading_safetensors_indexes_, index_key};
+
     LOG_VERBOSE("init from safetensors index '%s', prefix = '%s'", file_path.c_str(), prefix.c_str());
 
     std::vector<std::string> shard_paths;
@@ -322,6 +342,10 @@ bool ModelLoader::init_from_safetensors_index_file(const std::string& file_path,
     }
 
     for (const std::string& shard_path : shard_paths) {
+        if (loading_safetensors_indexes_.count(canonical_loader_path(shard_path)) != 0) {
+            LOG_ERROR("cyclic safetensors index reference '%s'", shard_path.c_str());
+            return false;
+        }
         if (!parse_file(shard_path, prefix)) {
             return false;
         }
