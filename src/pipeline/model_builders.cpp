@@ -579,7 +579,7 @@ namespace sd::model_builders {
                                                              weight_manager);
                 if (sd_version_is_pixart(version)) {
                     // Alpha-512 and Sigma share tensor layouts; Alpha-512 needs an explicit scale override.
-                    if (tensor_storage_map.count("model.diffusion_model.adaln_single.emb.resolution_embedder.linear_1.weight") != 0) {
+                    if (tensor_storage_map.count("model.diffusion_model.csize_embedder.mlp.0.weight") != 0) {
                         model->scale_factor = 0.18215f;
                     }
                     for (const auto& [key, value] : parse_key_value_args(sd_ctx_params->model_args, "model arg")) {
