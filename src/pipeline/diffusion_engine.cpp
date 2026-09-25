@@ -2883,14 +2883,26 @@ sd::Tensor<float> StableDiffusionGGML::decode_first_stage(const sd::Tensor<float
         return sd::ops::clamp((x + 1.f) * 0.5f, 0.0f, 1.0f);
     }
     auto latents                      = first_stage_model->diffusion_to_vae_latents(x);
-    auto decoded                      = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
-    const bool prefer_temporal_tiling = decode_video && first_stage_model->can_temporal_tile_decode();
-    while (decoded.empty() &&
-           sd::backend_fit::prepare_vae_decode_retry_tiling(vae_tiling_params, prefer_temporal_tiling,
-                                                            first_stage_model->last_compute_status())) {
-        decoded = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
+    auto tiling_params                = first_stage_model->resolve_tiling_params(vae_tiling_params);
+    const bool prefer_temporal_tiling = decode_video && latents.dim() == 5 && latents.shape()[2] > 1 &&
+                                        first_stage_model->can_temporal_tile_decode();
+    for (;;) {
+        int tile_size_w = static_cast<int>(latents.shape()[0]);
+        int tile_size_h = static_cast<int>(latents.shape()[1]);
+        float tile_overlap;
+        if (tiling_params.enabled &&
+            !first_stage_model->get_tile_sizes(tile_size_w, tile_size_h, tile_overlap, tiling_params,
+                                               latents.shape()[0], latents.shape()[1])) {
+            return {};
+        }
+        auto decoded = first_stage_model->decode(n_threads, latents, tiling_params, decode_video, circular_x, circular_y);
+        if (!decoded.empty() ||
+            !sd::backend_fit::prepare_vae_decode_retry_tiling(tiling_params, prefer_temporal_tiling,
+                                                              first_stage_model->last_compute_status(),
+                                                              tile_size_w, tile_size_h, first_stage_model->get_scale_factor())) {
+            return decoded;
+        }
     }
-    return decoded;
 }
 
 sd::Tensor<float> StableDiffusionGGML::normalize_ltx_video_latents(const sd::Tensor<float>& x) {
