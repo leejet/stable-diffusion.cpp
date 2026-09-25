@@ -533,6 +533,10 @@ SDVersion ModelLoader::get_sd_version() const {
             return VERSION_ERNIE_IMAGE;
         }
         if (tensor_storage.name.find("model.diffusion_model.adaln_single.emb.timestep_embedder.linear_1.bias") != std::string::npos) {
+            // PixArt shares this signature with LTX-AV; pos_embed.proj is PixArt-only.
+            if (tensor_storage_map.find("model.diffusion_model.pos_embed.proj.weight") != tensor_storage_map.end()) {
+                return VERSION_PIXART;
+            }
             return VERSION_LTXAV;
         }
         if (tensor_storage.name.find("model.diffusion_model.video_patch_proj.weight") != std::string::npos &&
@@ -1597,6 +1601,9 @@ bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage
             // Pass, do not convert. For Unet
         } else if (contains(name, "embedding")) {
             // Pass, do not convert embedding
+        } else if (contains(name, "scale_shift_table")) {
+            // Pass, do not convert. adaLN modulation tables (PixArt, LTXV) are sliced
+            // element-wise, which is invalid on quantized block layouts.
         } else if (ends_with(name, "_pad_token")) {
             // Pass, do not convert. LLaDA-Image stores its pad tokens far outside the f16
             // range, so any format with an f16 scale or payload turns them into inf.
