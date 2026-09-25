@@ -1,5 +1,6 @@
 #include "model_builders.h"
 
+#include <cmath>
 #include <cstring>
 #include <utility>
 
@@ -576,6 +577,23 @@ namespace sd::model_builders {
                                                              false,
                                                              vae_version,
                                                              weight_manager);
+                if (sd_version_is_pixart(version)) {
+                    // Alpha-512 and Sigma share tensor layouts; Alpha-512 needs an explicit scale override.
+                    if (tensor_storage_map.count("model.diffusion_model.adaln_single.emb.resolution_embedder.linear_1.weight") != 0) {
+                        model->scale_factor = 0.18215f;
+                    }
+                    for (const auto& [key, value] : parse_key_value_args(sd_ctx_params->model_args, "model arg")) {
+                        if (key == "pixart_vae_scale_factor") {
+                            float parsed = 0.f;
+                            if (parse_strict_float(value, parsed) && std::isfinite(parsed) && parsed > 0.f) {
+                                model->scale_factor = parsed;
+                            } else {
+                                LOG_WARN("ignoring invalid PixArt model arg '%s=%s'", key.c_str(), value.c_str());
+                            }
+                        }
+                    }
+                    LOG_VERBOSE("pixart: VAE scale factor = %.5f", model->scale_factor);
+                }
                 if (sd_version_is_sdxl(version) &&
                     (strlen(SAFE_STR(sd_ctx_params->vae_path)) == 0 || sd_ctx_params->force_sdxl_vae_conv_scale || options.external_vae_is_invalid)) {
                     float vae_conv_2d_scale = 1.f / 32.f;

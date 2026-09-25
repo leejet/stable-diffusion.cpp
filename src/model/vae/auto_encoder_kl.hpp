@@ -675,10 +675,10 @@ struct AutoEncoderKL : public VAE {
                   SDVersion version                                   = VERSION_SD1,
                   std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
         : VAE(version, backend, prefix, weight_manager), decode_only(decode_only) {
-        if (sd_version_is_sd1(version) || sd_version_is_sd2(version) || sd_version_is_pixart(version)) {
+        if (sd_version_is_sd1(version) || sd_version_is_sd2(version)) {
             scale_factor = 0.18215f;
             shift_factor = 0.f;
-        } else if (sd_version_is_sdxl(version)) {
+        } else if (sd_version_is_sdxl(version) || sd_version_is_pixart(version)) {
             scale_factor = 0.13025f;
             shift_factor = 0.f;
         } else if (sd_version_is_sd3(version)) {
