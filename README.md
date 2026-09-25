@@ -64,6 +64,7 @@ API and command-line option may change frequently.***
     - [HiDream-O1-Image](./docs/hidream_o1_image.md)
     - [Ideogram4](./docs/ideogram4.md)
     - [LLaDA-Image](./docs/llada_image.md)
+    - [Ming-Image Design](./docs/ming_image.md)
     - [PixArt](./docs/pixart.md)
   - [Image Edit Models](./docs/edit.md)
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
