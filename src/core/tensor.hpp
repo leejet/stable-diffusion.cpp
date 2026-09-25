@@ -1106,6 +1106,15 @@ namespace sd {
         }
 
         template <typename T>
+        inline Tensor<T> sqrt(const Tensor<T>& input) {
+            Tensor<T> output(input.shape());
+            for (int64_t i = 0; i < input.numel(); ++i) {
+                output[i] = static_cast<T>(std::sqrt(static_cast<double>(input[i])));
+            }
+            return output;
+        }
+
+        template <typename T>
         inline Tensor<T> clamp(const Tensor<T>& input, const T& min_value, const T& max_value) {
             if (min_value > max_value) {
                 tensor_throw_invalid_argument("Tensor clamp requires min_value <= max_value");

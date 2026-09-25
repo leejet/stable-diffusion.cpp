@@ -16,6 +16,7 @@ namespace sd::guidance {
         sd::Tensor<float> pred_uncond;
         sd::Tensor<float> pred_img_cond;
         sd::Tensor<float> pred_skip_layer;
+        sd::Tensor<float> pred_big;
     };
 
     struct AdaptiveProjectedGuidanceParams {

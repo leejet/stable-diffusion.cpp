@@ -1635,7 +1635,7 @@ struct SenseNovaU1FlowDenoiser : public DiscreteFlowDenoiser {
     }
 };
 
-typedef std::function<sd::guidance::GuiderOutput(const sd::Tensor<float>&, float, int)> denoise_cb_t;
+typedef std::function<sd::guidance::GuiderOutput(sd::Tensor<float>&, float, int)> denoise_cb_t;
 
 static std::pair<float, float> get_ancestral_step(float sigma_from,
                                                   float sigma_to,
