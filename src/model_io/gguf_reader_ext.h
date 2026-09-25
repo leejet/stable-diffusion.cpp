@@ -35,6 +35,7 @@ enum class GGUFMetadataType : uint32_t {
 class GGUFReader {
 private:
     std::vector<GGUFTensorInfo> tensors_;
+    bool has_wide_tensors_ = false;
     size_t data_offset_;
     size_t alignment_ = 32;  // default alignment is 32
 
@@ -119,11 +120,39 @@ private:
                 if (!safe_read(fin, len))
                     return false;
 
-                for (uint64_t i = 0; i < len; i++) {
-                    if (!read_metadata(fin))
+                switch (static_cast<GGUFMetadataType>(elem_type)) {
+                    case GGUFMetadataType::UINT8:
+                    case GGUFMetadataType::INT8:
+                    case GGUFMetadataType::BOOL:
+                        return safe_seek(fin, len, std::ios::cur);
+
+                    case GGUFMetadataType::UINT16:
+                    case GGUFMetadataType::INT16:
+                        return safe_seek(fin, len * 2, std::ios::cur);
+
+                    case GGUFMetadataType::UINT32:
+                    case GGUFMetadataType::INT32:
+                    case GGUFMetadataType::FLOAT32:
+                        return safe_seek(fin, len * 4, std::ios::cur);
+
+                    case GGUFMetadataType::UINT64:
+                    case GGUFMetadataType::INT64:
+                    case GGUFMetadataType::FLOAT64:
+                        return safe_seek(fin, len * 8, std::ios::cur);
+
+                    case GGUFMetadataType::STRING:
+                        for (uint64_t i = 0; i < len; i++) {
+                            uint64_t elem_len = 0;
+                            if (!safe_read(fin, elem_len))
+                                return false;
+                            if (!safe_seek(fin, elem_len, std::ios::cur))
+                                return false;
+                        }
+                        return true;
+
+                    default:
                         return false;
                 }
-                return true;
             }
 
             default:
@@ -154,6 +183,7 @@ private:
         }
 
         if (n_dims > GGML_MAX_DIMS) {
+            has_wide_tensors_ = true;
             for (uint32_t i = GGML_MAX_DIMS; i < n_dims; i++) {
                 info.shape[GGML_MAX_DIMS - 1] *= info.shape[i];  // stack to last dim;
             }
@@ -228,6 +258,10 @@ public:
     }
 
     const std::vector<GGUFTensorInfo>& tensors() const { return tensors_; }
+
+    // true when a tensor declared more dims than ggml supports — such files
+    // cannot go through gguf_init_from_file and need this reader.
+    bool has_tensors_beyond_ggml_limits() const { return has_wide_tensors_; }
     size_t data_offset() const { return data_offset_; }
 };
 
