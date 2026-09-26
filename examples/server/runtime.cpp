@@ -255,24 +255,40 @@ void refresh_lora_cache(ServerRuntime& rt) {
     std::vector<LoraEntry> new_cache;
 
     fs::path lora_dir = rt.ctx_params->lora_model_dir;
-    if (fs::exists(lora_dir) && fs::is_directory(lora_dir)) {
-        for (auto& entry : fs::recursive_directory_iterator(lora_dir, fs::directory_options::skip_permission_denied)) {
-            if (!entry.is_regular_file()) {
-                continue;
-            }
-            const fs::path& p = entry.path();
-            if (!is_supported_model_ext(p)) {
-                continue;
-            }
+    std::error_code ec;
+    if (fs::exists(lora_dir, ec) && !ec && fs::is_directory(lora_dir, ec) && !ec) {
+        try {
+            auto it = fs::recursive_directory_iterator(
+                lora_dir,
+                fs::directory_options::skip_permission_denied,
+                ec
+            );
+            auto end = fs::recursive_directory_iterator();
+            while (!ec && it != end) {
+                std::error_code entry_ec;
+                bool is_reg = it->is_regular_file(entry_ec);
+                if (entry_ec || !is_reg) {
+                    it.increment(ec);
+                    continue;
+                }
+                const fs::path& p = it->path();
+                if (!is_supported_model_ext(p)) {
+                    it.increment(ec);
+                    continue;
+                }
 
-            LoraEntry lora_entry;
-            lora_entry.name     = p.stem().u8string();
-            lora_entry.fullpath = p.u8string();
-            std::string rel     = p.lexically_relative(lora_dir).u8string();
-            std::replace(rel.begin(), rel.end(), '\\', '/');
-            lora_entry.path = rel;
+                LoraEntry lora_entry;
+                lora_entry.name     = p.stem().u8string();
+                lora_entry.fullpath = p.u8string();
+                std::string rel     = p.lexically_relative(lora_dir).u8string();
+                std::replace(rel.begin(), rel.end(), '\\', '/');
+                lora_entry.path = rel;
 
-            new_cache.push_back(std::move(lora_entry));
+                new_cache.push_back(std::move(lora_entry));
+                it.increment(ec);
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("error while scanning lora directory '%s': %s", lora_dir.string().c_str(), e.what());
         }
     }
 
@@ -302,37 +318,63 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
     }
 
     fs::path upscaler_dir = rt.ctx_params->hires_upscalers_dir;
-    if (fs::exists(upscaler_dir) && fs::is_directory(upscaler_dir)) {
-        for (auto& entry : fs::directory_iterator(upscaler_dir)) {
-            if (!entry.is_regular_file()) {
-                continue;
-            }
-            const fs::path& p = entry.path();
-            if (!is_supported_model_ext(p)) {
-                continue;
-            }
+    std::error_code ec;
+    if (fs::exists(upscaler_dir, ec) && !ec && fs::is_directory(upscaler_dir, ec) && !ec) {
+        try {
+            auto it = fs::directory_iterator(
+                upscaler_dir,
+                fs::directory_options::skip_permission_denied,
+                ec
+            );
+            auto end = fs::directory_iterator();
+            while (!ec && it != end) {
+                std::error_code entry_ec;
+                bool is_reg = it->is_regular_file(entry_ec);
+                if (entry_ec || !is_reg) {
+                    it.increment(ec);
+                    continue;
+                }
+                const fs::path& p = it->path();
+                if (!is_supported_model_ext(p)) {
+                    it.increment(ec);
+                    continue;
+                }
 
-            UpscalerEntry upscaler_entry;
-            upscaler_entry.name                 = p.stem().u8string();
-            upscaler_entry.fullpath             = fs::absolute(p).lexically_normal().u8string();
-            upscaler_entry.model_name           = "ESRGAN_4x";
-            upscaler_entry.path                 = p.filename().u8string();
-            upscaler_entry.file_size            = entry.file_size();
-            upscaler_entry.last_modified        = entry.last_write_time();
-            auto previous                       = std::find_if(previous_cache.begin(), previous_cache.end(), [&](const UpscalerEntry& cached) {
-                return cached.fullpath == upscaler_entry.fullpath &&
-                       cached.file_size == upscaler_entry.file_size &&
-                       cached.last_modified == upscaler_entry.last_modified;
-            });
-            upscaler_entry.image_upscale_factor = previous != previous_cache.end()
-                                                      ? previous->image_upscale_factor
-                                                      : get_upscaler_model_scale(upscaler_entry.fullpath.c_str());
-            if (upscaler_entry.image_upscale_factor > 0) {
-                upscaler_entry.scale      = upscaler_entry.image_upscale_factor;
-                upscaler_entry.model_name = "ESRGAN_" + std::to_string(upscaler_entry.scale) + "x";
-            }
+                UpscalerEntry upscaler_entry;
+                upscaler_entry.name     = p.stem().u8string();
+                std::error_code abs_ec;
+                fs::path abs_path = fs::absolute(p, abs_ec);
+                upscaler_entry.fullpath = (abs_ec ? p : abs_path.lexically_normal()).u8string();
+                upscaler_entry.model_name = "ESRGAN_4x";
+                upscaler_entry.path       = p.filename().u8string();
 
-            new_cache.push_back(std::move(upscaler_entry));
+                std::error_code size_ec;
+                upscaler_entry.file_size = it->file_size(size_ec);
+                if (size_ec) {
+                    it.increment(ec);
+                    continue;
+                }
+
+                std::error_code time_ec;
+                upscaler_entry.last_modified = it->last_write_time(time_ec);
+                auto previous                = std::find_if(previous_cache.begin(), previous_cache.end(), [&](const UpscalerEntry& cached) {
+                    return cached.fullpath == upscaler_entry.fullpath &&
+                           cached.file_size == upscaler_entry.file_size &&
+                           (!time_ec && cached.last_modified == upscaler_entry.last_modified);
+                });
+                upscaler_entry.image_upscale_factor = previous != previous_cache.end()
+                                                          ? previous->image_upscale_factor
+                                                          : get_upscaler_model_scale(upscaler_entry.fullpath.c_str());
+                if (upscaler_entry.image_upscale_factor > 0) {
+                    upscaler_entry.scale      = upscaler_entry.image_upscale_factor;
+                    upscaler_entry.model_name = "ESRGAN_" + std::to_string(upscaler_entry.scale) + "x";
+                }
+
+                new_cache.push_back(std::move(upscaler_entry));
+                it.increment(ec);
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("error while scanning upscalers directory '%s': %s", upscaler_dir.string().c_str(), e.what());
         }
     }
 

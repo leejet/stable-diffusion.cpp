@@ -42,4 +42,6 @@ RUN printf '#!/bin/sh\nexec /sd.cpp/bin/sd-cli "$@"\n' > /sd-cli && \
     printf '#!/bin/sh\nexec /sd.cpp/bin/sd-server "$@"\n' > /sd-server && \
     chmod +x /sd-cli /sd-server
 
+WORKDIR /sd.cpp
+
 ENTRYPOINT [ "/sd-cli" ]
