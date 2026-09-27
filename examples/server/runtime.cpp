@@ -289,7 +289,13 @@ void refresh_lora_cache(ServerRuntime& rt) {
             }
         } catch (const std::exception& e) {
             LOG_WARN("error while scanning lora directory '%s': %s", lora_dir.string().c_str(), e.what());
+            return;
         }
+    }
+
+    if (ec) {
+        LOG_WARN("error while scanning lora directory '%s': %s", lora_dir.string().c_str(), ec.message().c_str());
+        return;
     }
 
     std::sort(new_cache.begin(), new_cache.end(), [](const LoraEntry& a, const LoraEntry& b) {
@@ -375,7 +381,13 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
             }
         } catch (const std::exception& e) {
             LOG_WARN("error while scanning upscalers directory '%s': %s", upscaler_dir.string().c_str(), e.what());
+            return;
         }
+    }
+
+    if (ec) {
+        LOG_WARN("error while scanning upscalers directory '%s': %s", upscaler_dir.string().c_str(), ec.message().c_str());
+        return;
     }
 
     std::sort(new_cache.begin(), new_cache.end(), [](const UpscalerEntry& a, const UpscalerEntry& b) {
