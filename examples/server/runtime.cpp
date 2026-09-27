@@ -261,8 +261,7 @@ void refresh_lora_cache(ServerRuntime& rt) {
             auto it = fs::recursive_directory_iterator(
                 lora_dir,
                 fs::directory_options::skip_permission_denied,
-                ec
-            );
+                ec);
             auto end = fs::recursive_directory_iterator();
             while (!ec && it != end) {
                 std::error_code entry_ec;
@@ -330,8 +329,7 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
             auto it = fs::directory_iterator(
                 upscaler_dir,
                 fs::directory_options::skip_permission_denied,
-                ec
-            );
+                ec);
             auto end = fs::directory_iterator();
             while (!ec && it != end) {
                 std::error_code entry_ec;
@@ -347,10 +345,10 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
                 }
 
                 UpscalerEntry upscaler_entry;
-                upscaler_entry.name     = p.stem().u8string();
+                upscaler_entry.name = p.stem().u8string();
                 std::error_code abs_ec;
-                fs::path abs_path = fs::absolute(p, abs_ec);
-                upscaler_entry.fullpath = (abs_ec ? p : abs_path.lexically_normal()).u8string();
+                fs::path abs_path         = fs::absolute(p, abs_ec);
+                upscaler_entry.fullpath   = (abs_ec ? p : abs_path.lexically_normal()).u8string();
                 upscaler_entry.model_name = "ESRGAN_4x";
                 upscaler_entry.path       = p.filename().u8string();
 
@@ -362,8 +360,8 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
                 }
 
                 std::error_code time_ec;
-                upscaler_entry.last_modified = it->last_write_time(time_ec);
-                auto previous                = std::find_if(previous_cache.begin(), previous_cache.end(), [&](const UpscalerEntry& cached) {
+                upscaler_entry.last_modified        = it->last_write_time(time_ec);
+                auto previous                       = std::find_if(previous_cache.begin(), previous_cache.end(), [&](const UpscalerEntry& cached) {
                     return cached.fullpath == upscaler_entry.fullpath &&
                            cached.file_size == upscaler_entry.file_size &&
                            (!time_ec && cached.last_modified == upscaler_entry.last_modified);
