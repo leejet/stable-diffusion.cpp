@@ -84,13 +84,13 @@ The floating-point output is reconstructed as
 Y[r, o] ~= A[r, o] * s_x[r] * s_w[o] + b[o]
 ```
 
-The packed runtime activation tensor contains the I8 activation rows and their floating-point row scales. Linear layers that share the same input and convrot group size reuse this packed tensor, avoiding repeated rotation and activation quantization within the graph.
+The packed runtime activation tensor contains the I8 activation rows and their floating-point row scales. Linear layers with an input scale of `1` that share the same input and convrot group size reuse this packed tensor, avoiding repeated rotation and activation quantization within the graph. For other input scales, activations are scaled before explicit convrot quantization, and the linear output is unscaled before adding bias.
 
 ## Backend support
 
 - CPU provides the portable regular Hadamard, activation quantization, INT8 matrix multiplication, and scale restoration implementations.
 - NVIDIA CUDA devices with compute capability 7.5 or newer use the native accelerated path. For H256, CUDA fuses the rotation, row-wise maximum reduction, and activation quantization. It uses cuBLAS for I8 x I8 to I32 GEMM and a CUDA kernel for scale restoration and bias addition.
-- Vulkan and other GPU backends do not currently have dedicated INT8 convrot kernels. They use the backend scheduler to fall back to CPU, which is expected to be substantially slower than the CUDA path.
+- Vulkan provides native H256 activation quantization and INT8 matrix multiplication when the build and device support accelerated packed INT8 dot products. Unsupported configurations and GPU backends without these kernels use the backend scheduler to fall back to CPU.
 
 LoRA adapters are applied at runtime without modifying the INT8 weights. The INT8 convrot path computes the base linear output, while LoRA, LoHa, LoKr, and raw weight-difference adapters compute their output corrections from the original, unrotated activation and add them to the base output. `--lora-apply-mode auto` selects this path for models containing INT8 tensorwise weights. If `immediately` is requested, sd.cpp falls back to runtime application because merging an adapter would require dequantizing and rotating its weight update, then recalculating the per-row scales and requantizing the result.
 
