@@ -299,22 +299,22 @@ namespace LLM {
                     if (contains(name, "attn.q_proj")) {
                         config.llama_cpp_style = true;
                     }
-                    if (contains(name, "visual.patch_embed.proj.1.weight")) {
+                    if (ends_with(name, "visual.patch_embed.proj.1.weight")) {
                         config.vision.split_patch_embed = true;
                     }
-                    if (contains(name, "visual.patch_embed.proj.0.weight")) {
+                    if (ends_with(name, "visual.patch_embed.proj.0.weight")) {
                         config.vision.patch_size  = static_cast<int>(tensor_storage.ne[0]);
                         config.vision.in_channels = tensor_storage.ne[2];
                         config.vision.hidden_size = tensor_storage.ne[3];
                     }
                     // HF-format checkpoints keep the patch embed unsplit under a single name.
-                    if (contains(name, "visual.patch_embed.proj.weight")) {
+                    if (ends_with(name, "visual.patch_embed.proj.weight")) {
                         config.vision.patch_size = static_cast<int>(tensor_storage.ne[0]);
                     }
                     if (contains(name, "visual.patch_embed.bias") || contains(name, "visual.patch_embed.proj.bias")) {
                         config.vision.hidden_size = tensor_storage.ne[0];
                     }
-                    if (contains(name, "visual.pos_embed.weight")) {
+                    if (ends_with(name, "visual.pos_embed.weight") && tensor_storage.n_dims == 2) {
                         config.vision.hidden_size             = tensor_storage.ne[0];
                         config.vision.num_position_embeddings = static_cast<int>(tensor_storage.ne[1]);
                     }
@@ -348,7 +348,7 @@ namespace LLM {
                         }
                     }
                 }
-                if (contains(name, "embed_tokens.weight")) {
+                if (ends_with(name, "embed_tokens.weight") && tensor_storage.n_dims == 2) {
                     config.hidden_size = tensor_storage.ne[0];
                     config.vocab_size  = tensor_storage.ne[1];
                 }
