@@ -47,10 +47,6 @@ bool read_gguf_file(const std::string& file_path,
     gguf_context* ctx_gguf_ = nullptr;
     ggml_context* ctx_meta_ = nullptr;
 
-    // Cheap header pre-scan: checkpoints declaring tensors beyond ggml's limits
-    // (e.g. 5-dim conv3d weights in Wan2.2 models) cannot go through
-    // gguf_init_from_file — calling it anyway only produces misleading ERROR
-    // logs. Skip the probe and use the extended reader directly.
     GGUFReader gguf_reader;
     bool probe_ok = gguf_reader.load(file_path);
 
