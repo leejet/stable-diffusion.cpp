@@ -1717,7 +1717,7 @@ namespace LLM {
                 v_attn      = ggml_reshape_3d(ctx->ggml_ctx, v_attn, n_token, head_dim, num_kv_heads * N);
 
                 auto kq = ggml_mul_mat(ctx->ggml_ctx, k, q);
-                ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+                ggml_prec_set_acc(kq, GGML_PREC_F32);
                 kq = ggml_scale_inplace(ctx->ggml_ctx, kq, 1.0f / std::sqrt(static_cast<float>(head_dim)));
                 if (attention_mask != nullptr) {
                     kq = ggml_add_inplace(ctx->ggml_ctx, kq, attention_mask);

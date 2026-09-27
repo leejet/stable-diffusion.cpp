@@ -214,7 +214,7 @@ public:
             if (ctx->backend != nullptr) {
                 ggml_tensor* fp8_matmul = ggml_mul_mat(ctx->ggml_ctx, w, x);
                 if (force_prec_f32) {
-                    ggml_mul_mat_set_prec(fp8_matmul, GGML_PREC_F32);
+                    ggml_prec_set_acc(fp8_matmul, GGML_PREC_F32);
                 }
                 supports_fp8_matmul = ggml_backend_supports_op(ctx->backend, fp8_matmul);
             }
