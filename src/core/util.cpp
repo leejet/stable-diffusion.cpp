@@ -609,9 +609,9 @@ void pretty_progress(int step, int steps, float time) {
     } else {
         float remainder = time * (steps - step);
         remainder_text  = (remainder < 60.f)      ? sd_format(" %.0fs left ", std::min(remainder, 59.f))
-                          : (remainder < 3600.f)  ? sd_format(" %.0fm %02.0fs left ", std::floor(remainder / 60.f), std::min(fmod(remainder, 60.f), 59.f))
-                          : (remainder < 86400.f) ? sd_format(" %.0fh %02.0fm %02.0fs left ", std::floor(remainder / 3600.f), std::fmod(std::floor(remainder / 60.f), 60.f), std::min(fmod(remainder, 60.f), 59.f))
-                                                  : sd_format(" %.0fd %.0fh %02.0fm %02.0fs left ", std::floor(remainder / 86400.f), std::fmod(std::floor(remainder / 3600.f), 24.f), std::fmod(std::floor(remainder / 60.f), 60.f), std::min(fmod(remainder, 60.f), 59.f));
+                          : (remainder < 3600.f)  ? sd_format(" %.0fm %02.0fs left ", std::floor(remainder / 60.f), std::min(std::fmod(remainder, 60.f), 59.f))
+                          : (remainder < 86400.f) ? sd_format(" %.0fh %02.0fm %02.0fs left ", std::floor(remainder / 3600.f), std::fmod(std::floor(remainder / 60.f), 60.f), std::min(std::fmod(remainder, 60.f), 59.f))
+                                                  : sd_format(" %.0fd %.0fh %02.0fm %02.0fs left ", std::floor(remainder / 86400.f), std::fmod(std::floor(remainder / 3600.f), 24.f), std::fmod(std::floor(remainder / 60.f), 60.f), std::min(std::fmod(remainder, 60.f), 59.f));
     }
     const char* unit = "s/it";
     float speed      = time;
