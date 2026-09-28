@@ -550,31 +550,46 @@ bool parse_strict_bool(const std::string& text, bool& value) {
     return false;
 }
 
-static std::string build_progress_bar(int step, int steps, char progress_char = '=', bool show_head = true) {
-    std::string progress = "  |";
-    int max_progress     = 50;
-    int32_t current      = 0;
+static std::string build_progress_bar(int step, int steps, char progress_char = '=', bool show_head = true, const std::string& annot_text = "") {
+    std::string progress       = "  |";
+    constexpr int max_progress = 50;
+    int32_t current            = 0;
+    int annot_length           = annot_text.length();
     if (steps > 0) {
         current = (int32_t)(step * 1.f * max_progress / steps);
     }
-    for (int i = 0; i < 50; i++) {
-        if (i > current) {
-            progress += " ";
-        } else if (show_head && i == current && i != max_progress - 1) {
-            progress += ">";
-        } else {
-            progress += progress_char;
+    if (step <= steps >> 1) {
+        for (int i = 0; i < max_progress - annot_length - 2; i++) {
+            if (i > current) {
+                progress += " ";
+            } else if (show_head && i == current && i != max_progress - 1) {
+                progress += ">";
+            } else {
+                progress += progress_char;
+            }
         }
+        progress += annot_text + "  |";
+    } else {
+        progress += std::string(2, progress_char) + annot_text;
+        for (int i = annot_length + 2; i < max_progress; i++) {
+            if (i > current) {
+                progress += " ";
+            } else if (show_head && i == current && i != max_progress - 1) {
+                progress += ">";
+            } else {
+                progress += progress_char;
+            }
+        }
+        progress += "|";
     }
-    progress += "|";
     return progress;
 }
 
-static void print_progress_line(int step, int steps, const std::string& speed_text, char progress_char = '=', bool show_head = true) {
+static void print_progress_line(int step, int steps, const std::string& speed_text, char progress_char = '=', bool show_head = true, const std::string& annot_text = "") {
     if (step == 0) {
         return;
     }
-    std::string progress = build_progress_bar(step, steps, progress_char, show_head);
+    std::string progress = build_progress_bar(step, steps, progress_char, show_head, annot_text);
     const char* lf       = (step == steps ? "\n" : "");
     printf("\r%s %i/%i - %s\033[K%s", progress.c_str(), step, steps, speed_text.c_str(), lf);
     fflush(stdout);  // for linux
@@ -588,13 +603,23 @@ void pretty_progress(int step, int steps, float time) {
     if (step == 0) {
         return;
     }
+    std::string remainder_text;
+    if (step == steps) {
+        remainder_text = "";
+    } else {
+        float remainder = time * (steps - step);
+        remainder_text  = (remainder < 60.f)      ? sd_format(" %.0fs left ", std::min(remainder, 59.f))
+                          : (remainder < 3600.f)  ? sd_format(" %.0fm %02.0fs left ", std::floor(remainder / 60.f), std::min(fmod(remainder, 60.f), 59.f))
+                          : (remainder < 86400.f) ? sd_format(" %.0fh %02.0fm %02.0fs left ", std::floor(remainder / 3600.f), std::fmod(std::floor(remainder / 60.f), 60.f), std::min(fmod(remainder, 60.f), 59.f))
+                                                  : sd_format(" %.0fd %.0fh %02.0fm %02.0fs left ", std::floor(remainder / 86400.f), std::fmod(std::floor(remainder / 3600.f), 24.f), std::fmod(std::floor(remainder / 60.f), 60.f), std::min(fmod(remainder, 60.f), 59.f));
+    }
     const char* unit = "s/it";
     float speed      = time;
     if (speed < 1.0f && speed > 0.f) {
         speed = 1.0f / speed;
         unit  = "it/s";
     }
-    print_progress_line(step, steps, sd_format("%.2f%s", speed, unit));
+    print_progress_line(step, steps, sd_format("%.2f%s", speed, unit), '=', true, remainder_text);
 }
 
 void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds) {
