@@ -200,6 +200,11 @@ namespace ZImage {
                 out_proj->set_scale(1.f / 16.f);
                 out_proj->set_force_prec_f32(true);
                 qkv_proj->set_force_prec_f32(true);
+            } else if (out_proj->has_quantized_weight()) {
+                // a quantized matmul converts the activation to a low precision inside the
+                // kernel, where a large enough activation overflows; on CUDA the precision
+                // override used by the ROCm branch does not prevent that, this scale does
+                out_proj->set_scale(1.f / 16.f);
             }
 
             auto qkv = qkv_proj->forward(ctx, x);                                                                            // [N, n_token, (num_heads + num_kv_heads*2)*head_dim]
