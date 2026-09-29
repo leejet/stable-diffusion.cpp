@@ -200,6 +200,7 @@ ArgOptions SDSvrParams::get_options() {
 
     options.bool_options = {
         {"", "--color", "colors the logging tags according to level", true, &color},
+        {"", "--metrics", "enable the /metrics HTTP endpoint (disabled by default)", true, &metrics_enabled},
     };
 
     auto on_help_arg = [&](int, const char**, int, bool& valid) {
@@ -402,4 +403,15 @@ int64_t unix_timestamp_now() {
     return std::chrono::duration_cast<std::chrono::seconds>(
                std::chrono::system_clock::now().time_since_epoch())
         .count();
+}
+
+void record_sync_completion(ServerRuntime& runtime, double duration_seconds) {
+    std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
+    runtime.sync_completed++;
+    runtime.sync_total_seconds += duration_seconds;
+}
+
+void record_sync_failure(ServerRuntime& runtime) {
+    std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
+    runtime.sync_failed++;
 }
