@@ -550,35 +550,60 @@ bool parse_strict_bool(const std::string& text, bool& value) {
     return false;
 }
 
-static std::string build_progress_bar(int step, int steps, char progress_char = '=', bool show_head = true) {
-    std::string progress = "  |";
-    int max_progress     = 50;
-    int32_t current      = 0;
+static std::string build_progress_bar(int step, int steps, char progress_char = '=', bool show_head = true, const std::string& annot_text = "") {
+    std::string progress       = "  |";
+    constexpr int max_progress = 50;
+    int32_t current            = 0;
+    int annot_length           = annot_text.length();
     if (steps > 0) {
         current = (int32_t)(step * 1.f * max_progress / steps);
     }
-    for (int i = 0; i < 50; i++) {
-        if (i > current) {
-            progress += " ";
-        } else if (show_head && i == current && i != max_progress - 1) {
-            progress += ">";
-        } else {
-            progress += progress_char;
+    if (!annot_length) {
+        int head_length = (current == max_progress) ? 0 : 1;
+        progress += std::string(current, progress_char)                          //
+                    + std::string(head_length, show_head ? '>' : progress_char)  //
+                    + std::string(max_progress - current - head_length, ' ')     //
+                    + "|";
+    } else if (step <= steps >> 1) {
+        for (int i = 0; i < max_progress - annot_length - 2; i++) {
+            if (i > current) {
+                progress += " ";
+            } else if (show_head && i == current && i != max_progress - 1) {
+                progress += ">";
+            } else {
+                progress += progress_char;
+            }
         }
+        progress += annot_text + "  |";
+    } else {
+        progress += std::string(2, progress_char) + annot_text;
+        for (int i = annot_length + 2; i < max_progress; i++) {
+            if (i > current) {
+                progress += " ";
+            } else if (show_head && i == current && i != max_progress - 1) {
+                progress += ">";
+            } else {
+                progress += progress_char;
+            }
+        }
+        progress += "|";
     }
-    progress += "|";
     return progress;
 }
 
-static void print_progress_line(int step, int steps, const std::string& speed_text, char progress_char = '=', bool show_head = true) {
+static void print_progress_line(int step, int steps, const std::string& speed_text, char progress_char = '=', bool show_head = true, const std::string& annot_text = "") {
     if (step == 0) {
         return;
     }
-    std::string progress = build_progress_bar(step, steps, progress_char, show_head);
+    std::string progress = build_progress_bar(step, steps, progress_char, show_head, annot_text);
     const char* lf       = (step == steps ? "\n" : "");
     printf("\r%s %i/%i - %s\033[K%s", progress.c_str(), step, steps, speed_text.c_str(), lf);
     fflush(stdout);  // for linux
 }
+
+int hide_annot    = -1;  // -1 - check, 0 - show, 1 - hide
+float passed_time = 0.f;
+#define PRETTY_PRECISE_TIME 0  // 0/1 for integer/rational seconds
 
 void pretty_progress(int step, int steps, float time) {
     if (sd_progress_cb) {
@@ -586,7 +611,31 @@ void pretty_progress(int step, int steps, float time) {
         return;
     }
     if (step == 0) {
+        hide_annot  = -1;  // reinitialize for batch generations
+        passed_time = 0.f;
         return;
+    }
+    std::string remainder_text;
+    if (hide_annot == 1 || step == steps) {
+        remainder_text = "";
+    } else {                                             // either check the duration or make the string
+        if (step == 1)                                   // estimate the total time once
+            hide_annot = (time * steps < 15.f) ? 1 : 0;  // hide the timer if total is less than 15 seconds
+#if PRETTY_PRECISE_TIME
+        float remainder = (passed_time += time) / step * (steps - step);  // average speed; time*(steps-step) for current
+        remainder_text  = hide_annot              ? ""                    // for the 1st step, because it will be evaluated always
+                          : (remainder < 60.f)    ? sd_format(" %.1fs left ", std::min(remainder, 59.9f))
+                          : (remainder < 3600.f)  ? sd_format(" %.0fm %04.1fs left ", std::floor(remainder / 60.f), std::min(std::fmod(remainder, 60.f), 59.9f))
+                          : (remainder < 86400.f) ? sd_format(" %.0fh %02.0fm %04.1fs left ", std::floor(remainder / 3600.f), std::fmod(std::floor(remainder / 60.f), 60.f), std::min(std::fmod(remainder, 60.f), 59.9f))
+                                                  : sd_format(" %.0fd %2.0fh %02.0fm %04.1fs left ", std::floor(remainder / 86400.f), std::fmod(std::floor(remainder / 3600.f), 24.f), std::fmod(std::floor(remainder / 60.f), 60.f), std::min(std::fmod(remainder, 60.f), 59.9f));
+#else
+        unsigned remainder = (passed_time += time) / step * (steps - step);  // average speed; time*(steps-step) for current
+        remainder_text     = hide_annot            ? ""
+                             : (remainder < 60)    ? sd_format(" %us left ", remainder)
+                             : (remainder < 3600)  ? sd_format(" %um %02us left ", remainder / 60, remainder % 60)
+                             : (remainder < 86400) ? sd_format(" %uh %02um %02us left ", remainder / 3600, (remainder / 60) % 60, remainder % 60)
+                                                   : sd_format(" %ud %2uh %02um %02us left ", remainder / 86400, (remainder / 3600) % 24, (remainder / 60) % 60, remainder % 60);
+#endif
     }
     const char* unit = "s/it";
     float speed      = time;
@@ -594,7 +643,7 @@ void pretty_progress(int step, int steps, float time) {
         speed = 1.0f / speed;
         unit  = "it/s";
     }
-    print_progress_line(step, steps, sd_format("%.2f%s", speed, unit));
+    print_progress_line(step, steps, sd_format("%.2f%s", speed, unit), '=', true, remainder_text);
 }
 
 void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds) {
