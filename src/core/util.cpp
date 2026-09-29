@@ -558,7 +558,13 @@ static std::string build_progress_bar(int step, int steps, char progress_char = 
     if (steps > 0) {
         current = (int32_t)(step * 1.f * max_progress / steps);
     }
-    if (step <= steps >> 1) {
+    if (!annot_length) {
+        int head_length = (current == max_progress) ? 0 : 1;
+        progress += std::string(current, progress_char)                          //
+                    + std::string(head_length, show_head ? '>' : progress_char)  //
+                    + std::string(max_progress - current - head_length, ' ')     //
+                    + "|";
+    } else if (step <= steps >> 1) {
         for (int i = 0; i < max_progress - annot_length - 2; i++) {
             if (i > current) {
                 progress += " ";
@@ -595,23 +601,41 @@ static void print_progress_line(int step, int steps, const std::string& speed_te
     fflush(stdout);  // for linux
 }
 
+int hide_annot    = -1;  // -1 - check, 0 - show, 1 - hide
+float passed_time = 0.f;
+#define PRETTY_PRECISE_TIME 0  // 0/1 for integer/rational seconds
+
 void pretty_progress(int step, int steps, float time) {
     if (sd_progress_cb) {
         sd_progress_cb(step, steps, time, sd_progress_cb_data);
         return;
     }
     if (step == 0) {
+        hide_annot  = -1;  // reinitialize for batch generations
+        passed_time = 0.f;
         return;
     }
     std::string remainder_text;
-    if (step == steps) {
+    if (hide_annot == 1 || step == steps) {
         remainder_text = "";
-    } else {
-        float remainder = time * (steps - step);
-        remainder_text  = (remainder < 60.f)      ? sd_format(" %.0fs left ", std::min(remainder, 59.f))
-                          : (remainder < 3600.f)  ? sd_format(" %.0fm %02.0fs left ", std::floor(remainder / 60.f), std::min(std::fmod(remainder, 60.f), 59.f))
-                          : (remainder < 86400.f) ? sd_format(" %.0fh %02.0fm %02.0fs left ", std::floor(remainder / 3600.f), std::fmod(std::floor(remainder / 60.f), 60.f), std::min(std::fmod(remainder, 60.f), 59.f))
-                                                  : sd_format(" %.0fd %.0fh %02.0fm %02.0fs left ", std::floor(remainder / 86400.f), std::fmod(std::floor(remainder / 3600.f), 24.f), std::fmod(std::floor(remainder / 60.f), 60.f), std::min(std::fmod(remainder, 60.f), 59.f));
+    } else {                                             // either check the duration or make the string
+        if (step == 1)                                   // estimate the total time once
+            hide_annot = (time * steps < 15.f) ? 1 : 0;  // hide the timer if total is less than 15 seconds
+#if PRETTY_PRECISE_TIME
+        float remainder = (passed_time += time) / step * (steps - step);  // average speed; time*(steps-step) for current
+        remainder_text  = hide_annot              ? ""                    // for the 1st step, because it will be evaluated always
+                          : (remainder < 60.f)    ? sd_format(" %.1fs left ", std::min(remainder, 59.9f))
+                          : (remainder < 3600.f)  ? sd_format(" %.0fm %04.1fs left ", std::floor(remainder / 60.f), std::min(std::fmod(remainder, 60.f), 59.9f))
+                          : (remainder < 86400.f) ? sd_format(" %.0fh %02.0fm %04.1fs left ", std::floor(remainder / 3600.f), std::fmod(std::floor(remainder / 60.f), 60.f), std::min(std::fmod(remainder, 60.f), 59.9f))
+                                                  : sd_format(" %.0fd %2.0fh %02.0fm %04.1fs left ", std::floor(remainder / 86400.f), std::fmod(std::floor(remainder / 3600.f), 24.f), std::fmod(std::floor(remainder / 60.f), 60.f), std::min(std::fmod(remainder, 60.f), 59.9f));
+#else
+        unsigned remainder = (passed_time += time) / step * (steps - step);  // average speed; time*(steps-step) for current
+        remainder_text     = hide_annot            ? ""
+                             : (remainder < 60)    ? sd_format(" %us left ", remainder)
+                             : (remainder < 3600)  ? sd_format(" %um %02us left ", remainder / 60, remainder % 60)
+                             : (remainder < 86400) ? sd_format(" %uh %02um %02us left ", remainder / 3600, (remainder / 60) % 60, remainder % 60)
+                                                   : sd_format(" %ud %2uh %02um %02us left ", remainder / 86400, (remainder / 3600) % 24, (remainder / 60) % 60, remainder % 60);
+#endif
     }
     const char* unit = "s/it";
     float speed      = time;
