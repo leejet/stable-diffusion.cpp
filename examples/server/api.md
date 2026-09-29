@@ -1403,3 +1403,8 @@ Example cancelled job:
 - `400 Bad Request` for an empty body, unsupported model mode, invalid JSON, invalid generation parameters, or an unsupported output format
 - `429 Too Many Requests` when the job queue is full
 - `500 Internal Server Error` for unexpected server exceptions during submission
+
+### GET /metrics
+
+See documentation in metrics.md
+

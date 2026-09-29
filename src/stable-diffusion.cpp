@@ -697,6 +697,22 @@ SD_API bool sd_ctx_supports_video_generation(const sd_ctx_t* sd_ctx) {
     return sd_version_supports_video_generation(sd_ctx->sd->version);
 }
 
+SD_API bool sd_get_model_memory_stats(const sd_ctx_t* sd_ctx, sd_model_memory_stats_t* out) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || out == nullptr) {
+        return false;
+    }
+    const auto& s = sd_ctx->sd->model_memory_stats;
+    out->total_size              = s.total_size;
+    out->vram_size               = s.vram_size;
+    out->ram_size                = s.ram_size;
+    out->text_encoders_size      = s.text_encoders_size;
+    out->diffusion_model_size    = s.diffusion_model_size;
+    out->vae_size                = s.vae_size;
+    out->control_net_size        = s.control_net_size;
+    out->extensions_size         = s.extensions_size;
+    return true;
+}
+
 SD_API bool sd_ctx_load_control_net(sd_ctx_t* sd_ctx, const char* path) {
     if (sd_ctx == nullptr || sd_ctx->sd == nullptr || path == nullptr) {
         return false;

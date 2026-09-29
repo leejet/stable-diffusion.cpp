@@ -1289,7 +1289,10 @@ bool StableDiffusionGGML::validate_and_load_runners() {
         size_t extension_params_mem_size    = model_manager->registered_params_size(runner_components().at(RunnerGroup::Extensions));
         size_t total_params_ram_size        = 0;
         size_t total_params_vram_size       = 0;
-        auto add_params_memory              = [&](size_t size, SDBackendModule module) {
+
+        bool te_on_vram = false, unet_on_vram = false, vae_on_vram = false, cn_on_vram = false, ext_on_vram = false;
+
+        auto try_record = [&](size_t size, SDBackendModule module, bool& on_vram) -> bool {
             if (size == 0) {
                 return true;
             }
@@ -1297,13 +1300,40 @@ bool StableDiffusionGGML::validate_and_load_runners() {
             if (module_backend == nullptr) {
                 return false;
             }
-            if (sd_backend_is_cpu(module_backend)) {
+            bool is_cpu = sd_backend_is_cpu(module_backend);
+            on_vram = !is_cpu;
+            if (is_cpu) {
                 total_params_ram_size += size;
             } else {
                 total_params_vram_size += size;
             }
             return true;
         };
+
+        if (!try_record(text_encoder_params_mem_size, SDBackendModule::TE, te_on_vram) ||
+            !try_record(extension_params_mem_size, SDBackendModule::PHOTOMAKER, ext_on_vram) ||
+            !try_record(unet_params_mem_size, SDBackendModule::DIFFUSION, unet_on_vram) ||
+            !try_record(vae_params_mem_size, SDBackendModule::VAE, vae_on_vram) ||
+            !try_record(control_net_params_mem_size, SDBackendModule::CONTROL_NET, cn_on_vram)) {
+            return false;
+        }
+
+        size_t total_params_size = total_params_ram_size + total_params_vram_size;
+
+        model_memory_stats.total_size        = total_params_size;
+        model_memory_stats.vram_size         = total_params_vram_size;
+        model_memory_stats.ram_size          = total_params_ram_size;
+        model_memory_stats.text_encoders_size    = text_encoder_params_mem_size;
+        model_memory_stats.text_encoders_vram    = te_on_vram;
+        model_memory_stats.diffusion_model_size  = unet_params_mem_size;
+        model_memory_stats.diffusion_model_vram  = unet_on_vram;
+        model_memory_stats.vae_size            = vae_params_mem_size;
+        model_memory_stats.vae_vram            = vae_on_vram;
+        model_memory_stats.control_net_size      = control_net_params_mem_size;
+        model_memory_stats.control_net_vram      = cn_on_vram;
+        model_memory_stats.extensions_size       = extension_params_mem_size;
+        model_memory_stats.extensions_vram       = ext_on_vram;
+
         auto params_memory_location = [&](size_t size, SDBackendModule module) {
             if (size == 0) {
                 return "N/A";
@@ -1315,15 +1345,6 @@ bool StableDiffusionGGML::validate_and_load_runners() {
             return sd_backend_is_cpu(module_backend) ? "RAM" : "VRAM";
         };
 
-        if (!add_params_memory(text_encoder_params_mem_size, SDBackendModule::TE) ||
-            !add_params_memory(extension_params_mem_size, SDBackendModule::PHOTOMAKER) ||
-            !add_params_memory(unet_params_mem_size, SDBackendModule::DIFFUSION) ||
-            !add_params_memory(vae_params_mem_size, SDBackendModule::VAE) ||
-            !add_params_memory(control_net_params_mem_size, SDBackendModule::CONTROL_NET)) {
-            return false;
-        }
-
-        size_t total_params_size = total_params_ram_size + total_params_vram_size;
         LOG_INFO(
             "total params memory size = %.2fMB (VRAM %.2fMB, RAM %.2fMB): "
             "text_encoders %.2fMB(%s), diffusion_model %.2fMB(%s), vae %.2fMB(%s), controlnet %.2fMB(%s), extensions %.2fMB(%s)",

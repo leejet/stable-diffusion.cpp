@@ -104,6 +104,26 @@ public:
 
     bool diffusion_conv_direct = false;
 
+    // Model memory stats — populated after init() completes.
+    // EXPERIMENTAL: accuracy depends on backend and device; not tested on all
+    // model families. Use at your own risk.
+    struct ModelMemoryStats {
+        uint64_t total_size        = 0;
+        uint64_t vram_size         = 0;
+        uint64_t ram_size          = 0;
+        uint64_t text_encoders_size    = 0;
+        bool     text_encoders_vram    = true;
+        uint64_t diffusion_model_size  = 0;
+        bool     diffusion_model_vram  = true;
+        uint64_t vae_size            = 0;
+        bool     vae_vram            = true;
+        uint64_t control_net_size      = 0;
+        bool     control_net_vram      = true;
+        uint64_t extensions_size       = 0;
+        bool     extensions_vram       = true;
+    };
+    ModelMemoryStats model_memory_stats;
+
     bool is_using_v_parameterization     = false;
     bool is_using_edm_v_parameterization = false;
 
