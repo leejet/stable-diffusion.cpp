@@ -2223,6 +2223,28 @@ void StableDiffusionGGML::report_sample_progress(int step,
     }
 }
 
+static sd::Tensor<float> batch_two_condition_tensors(const sd::Tensor<float>& a_in, const sd::Tensor<float>& b_in) {
+    if (a_in.empty() || b_in.empty()) {
+        return {};
+    }
+    if (a_in.dim() != b_in.dim()) {
+        return {};
+    }
+    sd::Tensor<float> a = a_in;
+    sd::Tensor<float> b = b_in;
+    if (a.dim() == 1) {
+        a = a.reshape({a.shape()[0], 1});
+        b = b.reshape({b.shape()[0], 1});
+    }
+    const int64_t batch_dim = a.dim() - 1;
+    for (int64_t d = 0; d < batch_dim; d++) {
+        if (a.shape()[d] != b.shape()[d]) {
+            return {};
+        }
+    }
+    return sd::ops::concat(a, b, static_cast<size_t>(batch_dim));
+}
+
 void StableDiffusionGGML::compute_sample_controls(const sd::Tensor<float>& control_image,
                                                   const sd::Tensor<float>& noised_input,
                                                   const sd::Tensor<float>& timesteps_tensor,
@@ -2599,6 +2621,61 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
             return output_opt;
         };
 
+        auto run_batched_condition = [&](const SDCondition& condition,
+                                         const sd::Tensor<float>* c_concat_override) -> sd::Tensor<float> {
+            const sd::Tensor<float>& condition_concat =
+                c_concat_override != nullptr ? *c_concat_override : condition.c_concat;
+
+            sd::Tensor<float> batched_context = batch_two_condition_tensors(condition.c_crossattn, uncond.c_crossattn);
+            sd::Tensor<float> batched_y       = batch_two_condition_tensors(condition.c_vector, uncond.c_vector);
+            sd::Tensor<float> batched_concat  = batch_two_condition_tensors(condition_concat, uncond.c_concat);
+            if (!condition.c_crossattn.empty() && batched_context.empty()) {
+                return {};
+            }
+            if ((!condition.c_vector.empty() || !uncond.c_vector.empty()) && batched_y.empty()) {
+                return {};
+            }
+            if ((!condition_concat.empty() || !uncond.c_concat.empty()) && batched_concat.empty()) {
+                return {};
+            }
+
+            std::vector<sd::Tensor<float>> condition_controls;
+            std::vector<sd::Tensor<float>> uncond_controls;
+            compute_sample_controls(control_image, noised_input, timesteps_tensor, condition, &condition_controls);
+            compute_sample_controls(control_image, noised_input, timesteps_tensor, uncond, &uncond_controls);
+            std::vector<sd::Tensor<float>> batched_controls;
+            batched_controls.reserve(condition_controls.size());
+            if (condition_controls.size() != uncond_controls.size()) {
+                return {};
+            }
+            for (size_t i = 0; i < condition_controls.size(); i++) {
+                sd::Tensor<float> batched_control = batch_two_condition_tensors(condition_controls[i], uncond_controls[i]);
+                if (batched_control.empty()) {
+                    return {};
+                }
+                batched_controls.push_back(std::move(batched_control));
+            }
+
+            sd::Tensor<float> batched_x =
+                sd::ops::concat(noised_input, noised_input, static_cast<size_t>(noised_input.dim() - 1));
+
+            diffusion_params.x           = &batched_x;
+            diffusion_params.timesteps   = &timesteps_tensor;
+            diffusion_params.context     = batched_context.empty() ? nullptr : &batched_context;
+            diffusion_params.c_concat    = batched_concat.empty() ? nullptr : &batched_concat;
+            diffusion_params.y           = batched_y.empty() ? nullptr : &batched_y;
+            diffusion_params.ref_latents = nullptr;
+            UNetDiffusionExtra unet_extra{1, &batched_controls, control_strength};
+            diffusion_params.extra       = unet_extra;
+
+            sd::Tensor<float> output = work_diffusion_model->compute(n_threads, diffusion_params);
+            if (output.empty()) {
+                LOG_ERROR("batched diffusion model compute failed");
+                return {};
+            }
+            return output;
+        };
+
         const SDCondition* positive_condition      = &cond;
         const sd::Tensor<float>* c_concat_override = nullptr;
         for (const auto& extension : generation_extensions) {
@@ -2638,12 +2715,39 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
             }
         }
 
-        cond_out = run_condition(*positive_condition, c_concat_override);
-        if (cond_out.empty()) {
-            return {};
+        const bool batch_cfg_ok = sd_version_is_unet(version) &&
+                                  !uncond.empty() &&
+                                  img_uncond.empty() &&
+                                  !skip_uncond &&
+                                  !cache_runtime.ucache_enabled() &&
+                                  !(is_skiplayer_step && slg_uncond) &&
+                                  ip_adapter_tokens.empty() &&
+                                  ip_adapter_uncond_tokens.empty() &&
+                                  !config_->animatediff_loaded &&
+                                  (noised_input.dim() < 4 || noised_input.shape()[3] <= 1) &&
+                                  std::none_of(generation_extensions.begin(),
+                                               generation_extensions.end(),
+                                               [](const std::shared_ptr<GenerationExtension>& extension) {
+                                                   return extension->is_enabled();
+                                               });
+
+        if (batch_cfg_ok) {
+            sd::Tensor<float> batched_out = run_batched_condition(*positive_condition, c_concat_override);
+            if (!batched_out.empty() && batched_out.dim() >= 4 && batched_out.shape()[3] == 2) {
+                auto parts    = sd::ops::chunk(batched_out, 2, 3);
+                cond_out      = std::move(parts[0]);
+                uncond_out    = std::move(parts[1]);
+            }
         }
 
-        if (!uncond.empty()) {
+        if (cond_out.empty()) {
+            cond_out = run_condition(*positive_condition, c_concat_override);
+            if (cond_out.empty()) {
+                return {};
+            }
+        }
+
+        if (uncond_out.empty() && !uncond.empty()) {
             if (!skip_uncond) {
                 const std::vector<int>* uncond_skip_layers = nullptr;
                 if (is_skiplayer_step && slg_uncond) {
