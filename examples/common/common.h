@@ -144,7 +144,7 @@ struct SDContextParams {
     std::string pulid_weights_path;
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string tensor_type_rules;
-    std::string lora_model_dir = ".";
+    std::string lora_model_dir;
     std::string hires_upscalers_dir;
 
     std::map<std::string, std::string> embedding_map;
