@@ -2715,7 +2715,8 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
             }
         }
 
-        const bool batch_cfg_ok = sd_version_is_unet(version) &&
+        const bool batch_cfg_ok = config_->params.batched_cfg &&
+                                  sd_version_is_unet(version) &&
                                   !uncond.empty() &&
                                   img_uncond.empty() &&
                                   !skip_uncond &&
