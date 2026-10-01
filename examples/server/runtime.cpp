@@ -254,6 +254,12 @@ std::string SDSvrParams::to_string() const {
 void refresh_lora_cache(ServerRuntime& rt) {
     std::vector<LoraEntry> new_cache;
 
+    if (rt.ctx_params->lora_model_dir.empty()) {
+        std::lock_guard<std::mutex> lock(*rt.lora_mutex);
+        rt.lora_cache->clear();
+        return;
+    }
+
     fs::path lora_dir = rt.ctx_params->lora_model_dir;
     std::error_code ec;
     if (fs::exists(lora_dir, ec) && !ec && fs::is_directory(lora_dir, ec) && !ec) {
