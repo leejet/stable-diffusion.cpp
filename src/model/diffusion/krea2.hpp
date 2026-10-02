@@ -541,17 +541,19 @@ namespace Krea2 {
                                                  prenorm->forward(ctx, x),
                                                  mods[1],
                                                  mods[0],
-                                                 true);
+                                                 true,
+                                                 ctx->backend);
                 auto attn_out   = attn->forward(ctx, attn_input, pe);
-                x               = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, attn_out, mods[2]));
+                x               = Flux::gated_residual(ctx, x, attn_out, mods[2]);
 
                 auto mlp_input = Flux::modulate(ctx->ggml_ctx,
                                                 postnorm->forward(ctx, x),
                                                 mods[4],
                                                 mods[3],
-                                                true);
+                                                true,
+                                                ctx->backend);
                 auto mlp_out   = mlp->forward(ctx, mlp_input);
-                x              = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, mlp_out, mods[5]));
+                x              = Flux::gated_residual(ctx, x, mlp_out, mods[5]);
             }
             return x;
         }
@@ -633,7 +635,8 @@ namespace Krea2 {
                                        norm->forward(ctx, x),
                                        mods[1],
                                        mods[0],
-                                       true);
+                                       true,
+                                       ctx->backend);
             x         = linear->forward(ctx, x);
             return x;
         }

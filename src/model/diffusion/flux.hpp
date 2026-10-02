@@ -458,7 +458,8 @@ namespace Flux {
                                             ggml_tensor* x,
                                             ggml_tensor* shift,
                                             ggml_tensor* scale,
-                                            bool skip_reshape = false) {
+                                            bool skip_reshape = false,
+                                            ggml_backend_t backend = nullptr) {
         // x: [N, L, C]
         // scale: [N, C]
         // shift: [N, C]
@@ -466,9 +467,36 @@ namespace Flux {
             scale = ggml_reshape_3d(ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
             shift = ggml_reshape_3d(ctx, shift, shift->ne[0], 1, shift->ne[1]);  // [N, 1, C]
         }
+        if (backend != nullptr && x->type == GGML_TYPE_F32 &&
+            scale->type == GGML_TYPE_F32 && shift->type == GGML_TYPE_F32 &&
+            scale->ne[0] == x->ne[0] && shift->ne[0] == x->ne[0] &&
+            scale->ne[1] == 1 && shift->ne[1] == 1 &&
+            ggml_can_repeat(scale, x) && ggml_can_repeat(shift, x)) {
+            auto out = ggml_modulate(ctx, x, scale, shift, x->ne[1], nullptr, nullptr);
+            if (ggml_backend_supports_op(backend, out)) {
+                return out;
+            }
+        }
         x = ggml_add(ctx, x, ggml_mul(ctx, x, scale));
         x = ggml_add(ctx, x, shift);
         return x;
+    }
+
+    __STATIC_INLINE__ ggml_tensor* gated_residual(GGMLRunnerContext* ctx,
+                                                  ggml_tensor* base,
+                                                  ggml_tensor* branch,
+                                                  ggml_tensor* gate) {
+        if (ctx->backend != nullptr && base->type == GGML_TYPE_F32 &&
+            branch->type == GGML_TYPE_F32 && gate->type == GGML_TYPE_F32 &&
+            gate->ne[0] == base->ne[0] && gate->ne[1] == 1 &&
+            ggml_can_repeat(gate, base)) {
+            auto out = ggml_gated_residual(ctx->ggml_ctx, base, branch, gate,
+                                           base->ne[1], nullptr);
+            if (ggml_backend_supports_op(ctx->backend, out)) {
+                return out;
+            }
+        }
+        return ggml_add(ctx->ggml_ctx, base, ggml_mul(ctx->ggml_ctx, branch, gate));
     }
 
     struct DoubleStreamBlock : public GGMLBlock {
@@ -591,7 +619,7 @@ namespace Flux {
 
             // prepare image for attention
             auto img_modulated = img_norm1->forward(ctx, img);
-            img_modulated      = Flux::modulate(ctx->ggml_ctx, img_modulated, img_mod1.shift, img_mod1.scale);
+            img_modulated      = Flux::modulate(ctx->ggml_ctx, img_modulated, img_mod1.shift, img_mod1.scale, false, ctx->backend);
             auto img_qkv       = img_attn->pre_attention(ctx, img_modulated, img_pe);
             auto img_q         = img_qkv[0];
             auto img_k         = img_qkv[1];
@@ -599,7 +627,7 @@ namespace Flux {
 
             // prepare txt for attention
             auto txt_modulated = txt_norm1->forward(ctx, txt);
-            txt_modulated      = Flux::modulate(ctx->ggml_ctx, txt_modulated, txt_mod1.shift, txt_mod1.scale);
+            txt_modulated      = Flux::modulate(ctx->ggml_ctx, txt_modulated, txt_mod1.shift, txt_mod1.scale, false, ctx->backend);
             auto txt_qkv       = txt_attn->pre_attention(ctx, txt_modulated, txt_pe);
             auto txt_q         = txt_qkv[0];
             auto txt_k         = txt_qkv[1];
@@ -637,17 +665,17 @@ namespace Flux {
                                              txt->ne[1] * attn->nb[1]);  // [N, n_img_token, hidden_size]
 
             // calculate the img bloks
-            img = ggml_add(ctx->ggml_ctx, img, ggml_mul(ctx->ggml_ctx, img_attn->post_attention(ctx, img_attn_out), img_mod1.gate));
+            img = Flux::gated_residual(ctx, img, img_attn->post_attention(ctx, img_attn_out), img_mod1.gate);
 
-            auto img_mlp_out = img_mlp->forward(ctx, Flux::modulate(ctx->ggml_ctx, img_norm2->forward(ctx, img), img_mod2.shift, img_mod2.scale));
+            auto img_mlp_out = img_mlp->forward(ctx, Flux::modulate(ctx->ggml_ctx, img_norm2->forward(ctx, img), img_mod2.shift, img_mod2.scale, false, ctx->backend));
 
-            img = ggml_add(ctx->ggml_ctx, img, ggml_mul(ctx->ggml_ctx, img_mlp_out, img_mod2.gate));
+            img = Flux::gated_residual(ctx, img, img_mlp_out, img_mod2.gate);
 
             // calculate the txt bloks
-            txt = ggml_add(ctx->ggml_ctx, txt, ggml_mul(ctx->ggml_ctx, txt_attn->post_attention(ctx, txt_attn_out), txt_mod1.gate));
+            txt = Flux::gated_residual(ctx, txt, txt_attn->post_attention(ctx, txt_attn_out), txt_mod1.gate);
 
-            auto txt_mlp_out = txt_mlp->forward(ctx, Flux::modulate(ctx->ggml_ctx, txt_norm2->forward(ctx, txt), txt_mod2.shift, txt_mod2.scale));
-            txt              = ggml_add(ctx->ggml_ctx, txt, ggml_mul(ctx->ggml_ctx, txt_mlp_out, txt_mod2.gate));
+            auto txt_mlp_out = txt_mlp->forward(ctx, Flux::modulate(ctx->ggml_ctx, txt_norm2->forward(ctx, txt), txt_mod2.shift, txt_mod2.scale, false, ctx->backend));
+            txt              = Flux::gated_residual(ctx, txt, txt_mlp_out, txt_mod2.gate);
 
             return {img, txt};
         }
@@ -729,7 +757,7 @@ namespace Flux {
                 }
             }
 
-            auto x_mod   = Flux::modulate(ctx->ggml_ctx, pre_norm->forward(ctx, x), mod.shift, mod.scale);
+            auto x_mod   = Flux::modulate(ctx->ggml_ctx, pre_norm->forward(ctx, x), mod.shift, mod.scale, false, ctx->backend);
             auto qkv_mlp = linear1->forward(ctx, x_mod);  // [N, n_token, hidden_size * 3 + mlp_hidden_dim*mlp_mult_factor]
 
             int64_t head_dim = hidden_size / num_heads;
@@ -763,7 +791,7 @@ namespace Flux {
             }
             auto output = linear2->forward_segmented(ctx, attn, mlp);  // [N, n_token, hidden_size]
 
-            output = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, output, mod.gate));
+            output = Flux::gated_residual(ctx, x, output, mod.gate);
             return output;
         }
     };
@@ -818,7 +846,7 @@ namespace Flux {
                 scale      = m_vec[1];
             }
 
-            x = Flux::modulate(ctx->ggml_ctx, norm_final->forward(ctx, x), shift, scale);
+            x = Flux::modulate(ctx->ggml_ctx, norm_final->forward(ctx, x), shift, scale, false, ctx->backend);
             x = linear->forward(ctx, x);
 
             return x;

@@ -266,14 +266,21 @@ namespace ZImage {
         }
     };
 
-    __STATIC_INLINE__ ggml_tensor* modulate(ggml_context* ctx,
+    __STATIC_INLINE__ ggml_tensor* modulate(GGMLRunnerContext* ctx,
                                             ggml_tensor* x,
-                                            ggml_tensor* scale) {
+                                            ggml_tensor* scale,
+                                            ggml_tensor* zero_shift) {
         // x: [N, L, C]
         // scale: [N, C]
-        scale = ggml_reshape_3d(ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
-        x     = ggml_add(ctx, x, ggml_mul(ctx, x, scale));
-        return x;
+        scale = ggml_reshape_3d(ctx->ggml_ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
+        if (ctx->backend != nullptr && zero_shift != nullptr &&
+            x->type == GGML_TYPE_F32 && scale->type == GGML_TYPE_F32) {
+            auto out = ggml_modulate(ctx->ggml_ctx, x, scale, zero_shift, x->ne[1], nullptr, nullptr);
+            if (ggml_backend_supports_op(ctx->backend, out)) {
+                return out;
+            }
+        }
+        return ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, x, scale));
     }
 
     struct JointTransformerBlock : public GGMLBlock {
@@ -307,7 +314,8 @@ namespace ZImage {
                              ggml_tensor* x,
                              ggml_tensor* pe,
                              ggml_tensor* mask        = nullptr,
-                             ggml_tensor* adaln_input = nullptr) {
+                             ggml_tensor* adaln_input = nullptr,
+                             ggml_tensor* zero_shift  = nullptr) {
             auto attention       = std::dynamic_pointer_cast<JointAttention>(blocks["attention"]);
             auto feed_forward    = std::dynamic_pointer_cast<FeedForward>(blocks["feed_forward"]);
             auto attention_norm1 = std::dynamic_pointer_cast<RMSNorm>(blocks["attention_norm1"]);
@@ -327,18 +335,16 @@ namespace ZImage {
                 auto gate_mlp  = mods[3];
 
                 auto residual = x;
-                x             = modulate(ctx->ggml_ctx, attention_norm1->forward(ctx, x), scale_msa);
+                x             = modulate(ctx, attention_norm1->forward(ctx, x), scale_msa, zero_shift);
                 x             = attention->forward(ctx, x, pe, mask);
                 x             = attention_norm2->forward(ctx, x);
-                x             = ggml_mul(ctx->ggml_ctx, x, ggml_tanh(ctx->ggml_ctx, gate_msa));
-                x             = ggml_add(ctx->ggml_ctx, x, residual);
+                x             = Flux::gated_residual(ctx, residual, x, ggml_tanh(ctx->ggml_ctx, gate_msa));
 
                 residual = x;
-                x        = modulate(ctx->ggml_ctx, ffn_norm1->forward(ctx, x), scale_mlp);
+                x        = modulate(ctx, ffn_norm1->forward(ctx, x), scale_mlp, zero_shift);
                 x        = feed_forward->forward(ctx, x);
                 x        = ffn_norm2->forward(ctx, x);
-                x        = ggml_mul(ctx->ggml_ctx, x, ggml_tanh(ctx->ggml_ctx, gate_mlp));
-                x        = ggml_add(ctx->ggml_ctx, x, residual);
+                x        = Flux::gated_residual(ctx, residual, x, ggml_tanh(ctx->ggml_ctx, gate_mlp));
             } else {
                 GGML_ASSERT(adaln_input == nullptr);
 
@@ -371,7 +377,8 @@ namespace ZImage {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* x,
-                             ggml_tensor* c) {
+                             ggml_tensor* c,
+                             ggml_tensor* zero_shift) {
             // x: [N, n_token, hidden_size]
             // c: [N, hidden_size]
             // return: [N, n_token, patch_size * patch_size * out_channels]
@@ -381,7 +388,7 @@ namespace ZImage {
 
             auto scale = adaLN_modulation_1->forward(ctx, ggml_silu(ctx->ggml_ctx, c));  // [N, hidden_size]
             x          = norm_final->forward(ctx, x);
-            x          = modulate(ctx->ggml_ctx, x, scale);
+            x          = modulate(ctx, x, scale, zero_shift);
             x          = linear->forward(ctx, x);
 
             return x;
@@ -477,6 +484,7 @@ namespace ZImage {
 
             auto txt = cap_embedder_1->forward(ctx, cap_embedder_0->forward(ctx, context));  // [N, n_txt_token, hidden_size]
             auto img = x_embedder->forward(ctx, x);                                          // [N, n_img_token, hidden_size]
+            auto zero_shift = ggml_ext_zeros(ctx->ggml_ctx, config.hidden_size, 1, 1, 1);
             sd::ggml_graph_cut::mark_graph_cut(txt, "z_image.prelude", "txt");
             sd::ggml_graph_cut::mark_graph_cut(img, "z_image.prelude", "img");
             sd::ggml_graph_cut::mark_graph_cut(t_emb, "z_image.prelude", "t_emb");
@@ -508,7 +516,7 @@ namespace ZImage {
             for (int i = 0; i < config.num_refiner_layers; i++) {
                 auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["noise_refiner." + std::to_string(i)]);
 
-                img = block->forward(ctx, img, img_pe, nullptr, t_emb);
+                img = block->forward(ctx, img, img_pe, nullptr, t_emb, zero_shift);
                 sd::ggml_graph_cut::mark_graph_cut(img, "z_image.noise_refiner." + std::to_string(i), "img");
             }
 
@@ -518,11 +526,11 @@ namespace ZImage {
             for (int i = 0; i < config.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["layers." + std::to_string(i)]);
 
-                txt_img = block->forward(ctx, txt_img, pe, nullptr, t_emb);
+                txt_img = block->forward(ctx, txt_img, pe, nullptr, t_emb, zero_shift);
                 sd::ggml_graph_cut::mark_graph_cut(txt_img, "z_image.layers." + std::to_string(i), "txt_img");
             }
 
-            txt_img = final_layer->forward(ctx, txt_img, t_emb);  // [N, n_txt_token + n_txt_pad_token + n_img_token + n_img_pad_token, ph*pw*C]
+            txt_img = final_layer->forward(ctx, txt_img, t_emb, zero_shift);  // [N, n_txt_token + n_txt_pad_token + n_img_token + n_img_pad_token, ph*pw*C]
 
             img = ggml_ext_slice(ctx->ggml_ctx, txt_img, 1, n_txt_token + n_txt_pad_token, n_txt_token + n_txt_pad_token + n_img_token);  // [N, n_img_token, ph*pw*C]
 

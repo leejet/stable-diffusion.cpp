@@ -54,12 +54,12 @@ Device: Snapdragon 8 Elite, SM8750, HTP v79. Text encoder, DiT, and VAE run on H
 
 | Model | Resolution | Steps | Upstream Q4_0 DiT | FP8 DiT | VAE | E2E |
 |---|---:|---:|---:|---:|---:|---:|
-| Z-Image Turbo | 1024x1024 | 8 | **91.03 s/it** | **10.26 s/it** | 2.47 s | 100.54 s |
-| FLUX.2 Klein 4B | 1024x1024 | 4 | **79.42 s/it** | **8.54 s/it** | 2.14 s | 49.89 s |
-| Z-Image Turbo | 1536x1536 | 8 | **OOM** | **32.91 s/it** | 9.08 s | 306.03 s |
-| FLUX.2 Klein 4B | 1536x1536 | 4 | **OOM** | **22.42 s/it** | 5.44 s | 111.68 s |
-| Z-Image Turbo | 2048x2048 | 4 | **OOM** | **72.51 s/it** | 14.24 s | 307.07 s |
-| FLUX.2 Klein 4B | 2048x2048 | 4 | **OOM** | **46.24 s/it** | 19.28 s | 210.77 s |
+| Z-Image Turbo | 1024x1024 | 8 | **91.03 s/it** | **8.24 s/it** | 2.54 s | 82.53 s |
+| FLUX.2 Klein 4B | 1024x1024 | 4 | **79.42 s/it** | **6.62 s/it** | 2.10 s | 37.38 s |
+| Z-Image Turbo | 1536x1536 | 8 | **OOM** | **29.63 s/it** | 9.08 s | 265.78 s |
+| FLUX.2 Klein 4B | 1536x1536 | 4 | **OOM** | **18.62 s/it** | 5.64 s | 96.98 s |
+| Z-Image Turbo | 2048x2048 | 4 | **OOM** | **60.20 s/it** | 13.61 s | 275.32 s |
+| FLUX.2 Klein 4B | 2048x2048 | 4 | **OOM** | **42.49 s/it** | 19.70 s | 209.52 s |
 
 The 1024 and 1536 runs use direct VAE decode. The 2048 runs use 64x64 VAE tiles. At 1K, FP8 is 8.87x faster for Z-Image and 9.30x faster for FLUX.2 Klein than the current upstream Hexagon Q4_0/Q8_0 path.
 
