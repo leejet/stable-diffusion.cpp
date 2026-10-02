@@ -560,6 +560,18 @@ jobs:
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         uses: pr-mpt/actions-commit-hash@v2
 
+      - name: Bundle HIP runtime libraries
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $binPath = (rocm-sdk path --bin).Trim()
+          if (-not $binPath) { throw "rocm-sdk path --bin returned empty" }
+          foreach ($dll in @("amdhip64_7.dll", "rocm_kpack.dll", "amd_comgr.dll")) {
+            $f = Get-ChildItem -Path $binPath -Filter $dll -ErrorAction SilentlyContinue
+            if (-not $f) { throw "no match for $dll in $binPath" }
+            Copy-Item $f.FullName -Destination .\build\bin\ -Force
+          }
+
       - name: Pack artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         run: |
