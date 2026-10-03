@@ -205,6 +205,7 @@ static json make_img_gen_features_json() {
         {"cache", true},
         {"cancel_queued", true},
         {"cancel_generating", false},
+        {"preview", true},
     };
 }
 
@@ -219,8 +220,18 @@ static json make_vid_gen_features_json() {
         {"cache", true},
         {"cancel_queued", true},
         {"cancel_generating", false},
+        {"preview", true},
     };
 }
+
+static json make_preview_modes_json() {
+    json modes = json::array();
+    for (int i = 0; i < PREVIEW_COUNT; ++i) {
+        modes.push_back(sd_preview_name((preview_t)i));
+    }
+    return modes;
+}
+
 
 static json make_capabilities_json(ServerRuntime& runtime) {
     refresh_lora_cache(runtime);
@@ -396,6 +407,7 @@ static json make_capabilities_json(ServerRuntime& runtime) {
     result["loras"]                  = available_loras;
     result["upscalers"]              = available_upscalers;
     result["upscale"]                = have_upscaler_models;
+    result["preview_modes"]          = make_preview_modes_json();
     return result;
 }
 
@@ -418,6 +430,8 @@ static bool parse_img_gen_request(const json& body,
     if (!assign_output_options(request, output_format, output_compression, true, error_message)) {
         return false;
     }
+    request.preview_mode   = body.value("preview", std::string("none"));
+    request.preview_interval = body.value("preview_interval", 1);
     // Intentionally disable prompt-embedded LoRA tag parsing for server APIs.
     if (!request.gen_params.resolve_and_validate(IMG_GEN, "", runtime.ctx_params->hires_upscalers_dir, true)) {
         error_message = "invalid generation parameters";
@@ -445,6 +459,8 @@ static bool parse_vid_gen_request(const json& body,
     if (!assign_output_options(request, output_format, output_compression, error_message)) {
         return false;
     }
+    request.preview_mode   = body.value("preview", std::string("none"));
+    request.preview_interval = body.value("preview_interval", 1);
     // Intentionally disable prompt-embedded LoRA tag parsing for server APIs.
     if (!request.gen_params.resolve_and_validate(VID_GEN, "", runtime.ctx_params->hires_upscalers_dir, true)) {
         error_message = "invalid generation parameters";
