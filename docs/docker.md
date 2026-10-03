@@ -30,6 +30,12 @@ Vulkan:
 docker build -f docker/Dockerfile.vulkan -t sd .
 ```
 
+ROCm (AMD GPU):
+
+```shell
+docker build -f docker/Dockerfile.rocm --build-arg AMDGPU_TARGETS=gfx1100 -t sd .
+```
+
 ## Run locally built image's CLI
 
 ```shell
