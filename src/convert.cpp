@@ -439,6 +439,7 @@ static bool load_model_into_memory(ModelLoader& model_loader,
                                    int lora_count,
                                    int n_threads,
                                    ModelManager& manager,
+                                   ggml_backend_t cpu,
                                    ggml_context* ctx,
                                    std::map<std::string, ggml_tensor*>& mem,
                                    std::vector<ggml_tensor*>& all_tensors,
@@ -450,11 +451,9 @@ static bool load_model_into_memory(ModelLoader& model_loader,
         return false;
     }
 
-    ggml_backend_t cpu = sd_backend_cpu_init();
-    if (cpu == nullptr) {
-        LOG_ERROR("failed to init CPU backend for in-memory convert");
-        return false;
-    }
+    const SDVersion version  = model_loader.get_sd_version();
+    ModelLoader merge_loader = model_loader;
+    merge_loader.convert_tensors_name();
 
     std::map<ModelComponent, std::map<std::string, ggml_tensor*>> groups;
     size_t total_bytes = 0;
@@ -475,8 +474,13 @@ static bool load_model_into_memory(ModelLoader& model_loader,
             LOG_ERROR("failed to create tensor '%s' for in-memory convert", name.c_str());
             return false;
         }
-        ggml_set_name(tensor, name.c_str());
-        groups[component_for_tensor_name(name)][name] = tensor;
+        const std::string merge_name = convert_tensor_name(name, version);
+        auto& group                  = groups[component_for_tensor_name(merge_name)];
+        if (!group.emplace(merge_name, tensor).second) {
+            LOG_ERROR("duplicate tensor name '%s' after name conversion", merge_name.c_str());
+            return false;
+        }
+        mem[name] = tensor;
         all_tensors.push_back(tensor);
         total_bytes += ggml_nbytes(tensor);
     }
@@ -485,7 +489,7 @@ static bool load_model_into_memory(ModelLoader& model_loader,
 
     manager.set_n_threads(n_threads);
     manager.set_enable_mmap(false);
-    if (!manager.set_loader(model_loader)) {
+    if (!manager.set_loader(std::move(merge_loader))) {
         LOG_ERROR("failed to set model loader for in-memory convert");
         return false;
     }
@@ -502,7 +506,7 @@ static bool load_model_into_memory(ModelLoader& model_loader,
         LOG_ERROR("failed to prepare LoRA sources for convert");
         return false;
     }
-    if (!manager.set_loras(lora_specs, model_loader.get_sd_version())) {
+    if (!manager.set_loras(lora_specs, version)) {
         LOG_ERROR("failed to set LoRAs for convert");
         return false;
     }
@@ -511,9 +515,6 @@ static bool load_model_into_memory(ModelLoader& model_loader,
         return false;
     }
 
-    for (ggml_tensor* tensor : all_tensors) {
-        mem[ggml_get_name(tensor)] = tensor;
-    }
     return true;
 }
 
@@ -525,6 +526,12 @@ static bool convert_model_in_memory(ModelLoader& model_loader,
                                     int n_threads,
                                     const sd_lora_t* loras,
                                     int lora_count) {
+    auto cpu = std::unique_ptr<ggml_backend, decltype(&ggml_backend_free)>(sd_backend_cpu_init(), ggml_backend_free);
+    if (cpu == nullptr) {
+        LOG_ERROR("failed to init CPU backend for in-memory convert");
+        return false;
+    }
+
     ggml_init_params ctx_params;
     ctx_params.mem_size   = model_loader.get_tensor_storage_map().size() * ggml_tensor_overhead();
     ctx_params.mem_buffer = nullptr;
@@ -545,7 +552,7 @@ static bool convert_model_in_memory(ModelLoader& model_loader,
         // The manager owns the buffers backing `mem` and must outlive the export; it is
         // destroyed (freeing those buffers) before the tensor context is freed below.
         ModelManager manager;
-        if (load_model_into_memory(model_loader, loras, lora_count, n_threads, manager, ctx, mem, all_tensors, type, type_rules)) {
+        if (load_model_into_memory(model_loader, loras, lora_count, n_threads, manager, cpu.get(), ctx, mem, all_tensors, type, type_rules)) {
             success = export_loaded_model(model_loader, output_path, output_type, tensor_type_rules, n_threads, convert_name, &mem);
         }
     }

@@ -2462,8 +2462,7 @@ bool SDGenerationParams::initialize_cache_params() {
     return true;
 }
 
-bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::string& hires_upscalers_dir, bool strict,
-                                 bool validate_missing_loras) {
+bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::string& hires_upscalers_dir, bool strict, bool validate_missing_loras) {
     vae_tiling_params.extra_tiling_args = extra_tiling_args.empty() ? nullptr : extra_tiling_args.c_str();
 
     if (high_noise_sample_params.sample_steps <= 0) {
