@@ -205,9 +205,6 @@ public:
         force_prec_f32 = force_prec_f32_;
     }
 
-    // ggml quantized types only (Q*_0, Q*_1, Q*_K, IQ*, ...), which are dequantized on
-    // the fly: the activation side of such a matmul can overflow when its magnitude
-    // grows. fp8 and int8 weights are excluded on purpose, they take separate paths
     bool has_quantized_weight() const {
         auto it = params.find("weight");
         return it != params.end() && it->second != nullptr && ggml_is_quantized(it->second->type);
