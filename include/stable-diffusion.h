@@ -610,7 +610,9 @@ SD_API bool convert_with_components(const char* model_path,
                                     enum sd_type_t output_type,
                                     const char* tensor_type_rules,
                                     bool convert_name,
-                                    int n_threads);
+                                    int n_threads,
+                                    const sd_lora_t* loras,
+                                    int lora_count);
 
 SD_API bool preprocess_canny(sd_image_t image,
                              float high_threshold,

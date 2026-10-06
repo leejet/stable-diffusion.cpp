@@ -40,6 +40,9 @@ Wan models require `-M vid_gen`, including single-frame generation. `--video-fra
             - safetensors: https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/tree/main/split_files/diffusion_models
             - gguf: https://huggingface.co/QuantStack/Wan2.2-S2V-14B-GGUF/tree/main
             - int8_convrot safetensors: https://huggingface.co/noctrex/Wan2.2-S2V-14B-int8_convrot
+        - Wan2.2 VACE-Fun A14B
+            - safetensors: https://huggingface.co/alibaba-pai/Wan2.2-VACE-Fun-A14B
+            - gguf: https://huggingface.co/QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/tree/main
 - Download vae
     - wan_2.1_vae (for all the wan model except Wan2.2 TI2V 5B)
         - safetensors: https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/vae/wan_2.1_vae.safetensors
@@ -256,3 +259,25 @@ ffmpeg -i ..\..\ComfyUI\input\post+depth.mp4 -qscale:v 1 -vf fps=8 post+depth\fr
 ```
 
 <video src=../assets/wan/Wan2.1_14B_vace_v2v.mp4 controls="controls" muted="muted" type="video/mp4"></video>
+
+### Wan2.2 VACE-Fun A14B
+
+VACE-Fun runs as a MoE pair: `--diffusion-model` takes the low-noise expert and
+`--high-noise-diffusion-model` the high-noise one. Reference-to-video uses `-i`
+for the reference image, same as Wan2.1 VACE.
+
+#### R2V
+
+```
+.\bin\Release\sd-cli.exe -M vid_gen --diffusion-model ..\models\diffusion_models\Wan2.2-VACE-Fun-A14B-low-noise-Q8_0.gguf --high-noise-diffusion-model ..\models\diffusion_models\Wan2.2-VACE-Fun-A14B-high-noise-Q8_0.gguf --vae ..\models\vae\wan_2.1_vae.safetensors --t5xxl ..\models\text_encoders\umt5-xxl-encoder-Q8_0.gguf -p "a lovely cat" --cfg-scale 3.5 --sampling-method euler --steps 10 --high-noise-cfg-scale 3.5 --high-noise-sampling-method euler --high-noise-steps 8 -v -n "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部， 畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走" -W 832 -H 480 --diffusion-fa -i ..\assets\cat_with_sd_cpp_42.png --video-frames 33 --offload-to-cpu
+```
+
+<video src=../assets/wan/Wan2.2_A14B_vace_r2v.mp4 controls="controls" muted="muted" type="video/mp4"></video>
+
+#### T2V
+
+Same command without `-i` (VACE context is synthesized from an empty control
+video, like Wan2.1 VACE t2v).
+
+> On GPUs with ~12 GB VRAM, VACE also needs `--vae-tiling` — the control-video
+> encode can exceed the budget otherwise.

@@ -24,6 +24,7 @@
 #include "model/diffusion/llada_image.hpp"
 #include "model/diffusion/ltxv.hpp"
 #include "model/diffusion/mage_flow.hpp"
+#include "model/diffusion/ming_image.hpp"
 #include "model/diffusion/minimax_h3.hpp"
 #include "model/diffusion/minit2i.hpp"
 #include "model/diffusion/mmdit.hpp"
@@ -36,6 +37,7 @@
 #include "model/diffusion/unet.hpp"
 #include "model/diffusion/wan.hpp"
 #include "model/diffusion/z_image.hpp"
+#include "model/diffusion/z_image_l2p.hpp"
 #include "model/vae/auto_encoder_kl.hpp"
 #include "model/vae/hunyuan_vae.hpp"
 #include "model/vae/ltx_audio_vae.hpp"
@@ -374,6 +376,11 @@ namespace sd::model_builders {
                                                                     tensor_storage_map,
                                                                     "model.diffusion_model",
                                                                     weight_manager);
+        } else if (version == VERSION_MING_IMAGE) {
+            result.conditioner = std::make_shared<MingImageEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
+                                                                     tensor_storage_map, weight_manager, tokenizers);
+            result.diffusion   = std::make_shared<MingImage::MingImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                            tensor_storage_map, "model.diffusion_model", weight_manager);
         } else if (sd_version_is_z_image(version)) {
             result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                tensor_storage_map,
@@ -387,6 +394,18 @@ namespace sd::model_builders {
                                                                       "model.diffusion_model",
                                                                       version,
                                                                       weight_manager);
+        } else if (sd_version_is_z_image_l2p(version)) {
+            result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
+                                                               tensor_storage_map,
+                                                               version,
+                                                               "",
+                                                               false,
+                                                               weight_manager,
+                                                               tokenizers);
+            result.diffusion   = std::make_shared<ZImageL2P::ZImageL2PRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                            tensor_storage_map,
+                                                                            "model.diffusion_model",
+                                                                            weight_manager);
         } else if (sd_version_is_llada_image(version)) {
             result.conditioner = std::make_shared<LLaDAImageEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                       tensor_storage_map,
@@ -579,7 +598,7 @@ namespace sd::model_builders {
                                                              weight_manager);
                 if (sd_version_is_pixart(version)) {
                     // Alpha-512 and Sigma share tensor layouts; Alpha-512 needs an explicit scale override.
-                    if (tensor_storage_map.count("model.diffusion_model.adaln_single.emb.resolution_embedder.linear_1.weight") != 0) {
+                    if (tensor_storage_map.count("model.diffusion_model.csize_embedder.mlp.0.weight") != 0) {
                         model->scale_factor = 0.18215f;
                     }
                     for (const auto& [key, value] : parse_key_value_args(sd_ctx_params->model_args, "model arg")) {
@@ -607,7 +626,7 @@ namespace sd::model_builders {
             }
         };
 
-        if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version) || sd_version_is_sensenova_u1(version)) {
+        if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version) || sd_version_is_sensenova_u1(version) || sd_version_is_z_image_l2p(version)) {
             LOG_INFO("using FakeVAE");
             result.vae = std::make_shared<FakeVAE>(version,
                                                    ctx.backends.runtime_backend(SDBackendModule::VAE),

@@ -115,7 +115,7 @@ void convert_tensor(void* src,
                     ggml_type dst_type,
                     int nrows,
                     int n_per_row,
-                    std::vector<float> imatrix = {}) {
+                    std::vector<float> imatrix) {
     int n = nrows * n_per_row;
     if (src_type == dst_type) {
         size_t nbytes = n * ggml_type_size(src_type) / ggml_blck_size(src_type);
@@ -524,6 +524,12 @@ SDVersion ModelLoader::get_sd_version() const {
             return VERSION_LLADA_IMAGE;
         }
         if (tensor_storage.name.find("model.diffusion_model.cap_embedder.0.weight") != std::string::npos) {
+            if (tensor_storage_map.find("text_encoders.llm.connector.layers.0.self_attn.q_proj.weight") != tensor_storage_map.end()) {
+                return VERSION_MING_IMAGE;
+            }
+            if (tensor_storage_map.find("model.diffusion_model.local_decoder.out_conv.weight") != tensor_storage_map.end()) {
+                return VERSION_Z_IMAGE_L2P;
+            }
             return VERSION_Z_IMAGE;
         }
         if (tensor_storage.name.find("double_stream_layers.0.img_instruct_attn.processor.img_to_q.weight") != std::string::npos) {
@@ -532,9 +538,16 @@ SDVersion ModelLoader::get_sd_version() const {
         if (tensor_storage.name.find("model.diffusion_model.layers.0.adaLN_sa_ln.weight") != std::string::npos) {
             return VERSION_ERNIE_IMAGE;
         }
+        if (tensor_storage.name.find("model.diffusion_model.t_block.1.weight") != std::string::npos &&
+            tensor_storage_map.find("model.diffusion_model.x_embedder.proj.weight") != tensor_storage_map.end() &&
+            tensor_storage_map.find("model.diffusion_model.audio_patchify_proj.weight") == tensor_storage_map.end()) {
+            return VERSION_PIXART;
+        }
         if (tensor_storage.name.find("model.diffusion_model.adaln_single.emb.timestep_embedder.linear_1.bias") != std::string::npos) {
-            // PixArt shares this signature with LTX-AV; pos_embed.proj is PixArt-only.
-            if (tensor_storage_map.find("model.diffusion_model.pos_embed.proj.weight") != tensor_storage_map.end()) {
+            // PixArt shares this timestep embedding with LTX-AV.
+            if (tensor_storage_map.find("model.diffusion_model.pos_embed.proj.weight") != tensor_storage_map.end() &&
+                tensor_storage_map.find("model.diffusion_model.adaln_single.linear.weight") != tensor_storage_map.end() &&
+                tensor_storage_map.find("model.diffusion_model.audio_patchify_proj.weight") == tensor_storage_map.end()) {
                 return VERSION_PIXART;
             }
             return VERSION_LTXAV;
@@ -1094,10 +1107,12 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
         if (tensors_to_process.empty()) {
             continue;
         }
-        LOG_VERBOSE("loading %zu/%zu tensors from %s",
-                    tensors_to_process.size(),
-                    file_tensors.size(),
-                    file_path.c_str());
+        if (log_progress) {
+            LOG_VERBOSE("loading %zu/%zu tensors from %s",
+                        tensors_to_process.size(),
+                        file_tensors.size(),
+                        file_path.c_str());
+        }
 
         bool is_zip = fdata.is_zip;
 
