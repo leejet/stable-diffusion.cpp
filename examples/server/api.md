@@ -1095,7 +1095,8 @@ Response fields:
 Compared with `img_gen`, the `vid_gen` request body:
 
 - `vid_gen` is a single video sequence job, so `batch_count` is not part of the request schema
-- `ref_images`, `mask_image`, `control_image`, `control_strength`, `ip_adapter_image`, `ip_adapter_strength`, and `embed_image_metadata` are not part of the request schema
+- `mask_image`, `control_image`, `control_strength`, `ip_adapter_image`, `ip_adapter_strength`, and `embed_image_metadata` are not part of the request schema
+- `ref_images` is accepted for MiniMax-H3 Ref2VA conditioning; other video model families currently ignore it
 - `vid_gen` adds `end_image`, `control_frames`, `high_noise_sample_params`, `video_frames`, `fps`, `moe_boundary`, and `vace_strength`
 
 Example:
@@ -1116,6 +1117,7 @@ Example:
 
   "init_image": null,
   "end_image": null,
+  "ref_images": [],
   "control_frames": [],
 
   "sample_params": {
@@ -1185,6 +1187,17 @@ Example:
 }
 ```
 
+### Reference Image Rules
+
+- `ref_images` contains reference images for MiniMax-H3 Ref2VA conditioning.
+- Images retain request order and correspond to `<Picture 1>`, `<Picture 2>`, and so on in the prompt.
+- For MiniMax-H3, non-empty `ref_images` cannot be combined with `init_image` or `end_image`. A conflicting API request fails during generation; the WebUI checks this before submission.
+- MiniMax-H3 does not support `control_frames`; leave that array empty.
+- Other video model families currently ignore `ref_images`.
+- `features_by_mode.vid_gen` does not currently advertise `ref_images`; its absence is not an indication that MiniMax-H3 reference images are unsupported.
+
+See [MiniMax-H3 reference conditioning](../../docs/minimax_h3.md#reference-to-audio-video-conditioning) for model requirements and prompt examples.
+
 ### LoRA Rules
 
 - The server only accepts explicit LoRA entries from the `lora` field.
@@ -1202,6 +1215,7 @@ Channel expectations:
 
 - `init_image`: 3 channels
 - `end_image`: 3 channels
+- `ref_images[]`: decoded with native channels, then converted to RGB by MiniMax-H3
 - `control_frames[]`: 3 channels
 
 Frame ordering rules:
@@ -1240,6 +1254,7 @@ Image and frame fields:
 | --- | --- |
 | `init_image` | `string \| null` |
 | `end_image` | `string \| null` |
+| `ref_images` | `array<string>` |
 | `control_frames` | `array<string>` |
 
 LoRA fields:
