@@ -1101,23 +1101,23 @@ namespace Rope {
             auto pe_1 = ggml_view_3d(ctx, pe, pe->ne[0], pe->ne[1], pe->ne[2], pe->nb[1], pe->nb[2], offset * 1);  // [L, d_head/2, 2]
 
             auto x_out = ggml_add_inplace(ctx, ggml_mul(ctx, x_0, pe_0), ggml_mul(ctx, x_1, pe_1));  // [N * n_head, L, d_head/2, 2]
-            x_out      = ggml_reshape_3d(ctx, x_out, d_head, L, n_head * N);  // [N*n_head, L, d_head]
+            x_out      = ggml_reshape_3d(ctx, x_out, d_head, L, n_head * N);                         // [N*n_head, L, d_head]
             return x_out;
         }
 
         // Non-interleaved: pairs (i, i + d_head/2) are contiguous halves of the head dim, so the
         // rotation is computed on views of the permuted x and assembled with one concat, avoiding
         // the extra permute+cont round trips the interleaved layout requires.
-        auto x_lo = ggml_view_3d(ctx, x, d_head / 2, L, n_head * N, x->nb[1], x->nb[2], 0);                       // [d_head/2, L, n_head*N]
-        auto x_hi = ggml_view_3d(ctx, x, d_head / 2, L, n_head * N, x->nb[1], x->nb[2], (d_head / 2) * x->nb[0]); // [d_head/2, L, n_head*N]
+        auto x_lo = ggml_view_3d(ctx, x, d_head / 2, L, n_head * N, x->nb[1], x->nb[2], 0);                        // [d_head/2, L, n_head*N]
+        auto x_hi = ggml_view_3d(ctx, x, d_head / 2, L, n_head * N, x->nb[1], x->nb[2], (d_head / 2) * x->nb[0]);  // [d_head/2, L, n_head*N]
 
-        auto pe2 = ggml_cont(ctx, ggml_permute(ctx, pe, 2, 3, 0, 1));  // [d_head/2, L, 2, 2]
+        auto pe2 = ggml_cont(ctx, ggml_permute(ctx, pe, 2, 3, 0, 1));              // [d_head/2, L, 2, 2]
         auto cos = ggml_view_2d(ctx, pe2, d_head / 2, L, pe2->nb[1], 0);           // [d_head/2, L] = pe[0,0,i,l]
         auto sin = ggml_view_2d(ctx, pe2, d_head / 2, L, pe2->nb[1], pe2->nb[3]);  // [d_head/2, L] = pe[0,1,i,l]
 
         auto part0 = ggml_sub(ctx, ggml_mul(ctx, x_lo, cos), ggml_mul(ctx, x_hi, sin));  // [d_head/2, L, n_head*N]
         auto part1 = ggml_add(ctx, ggml_mul(ctx, x_lo, sin), ggml_mul(ctx, x_hi, cos));  // [d_head/2, L, n_head*N]
-        return ggml_concat(ctx, part0, part1, 0);  // [d_head, L, n_head*N]
+        return ggml_concat(ctx, part0, part1, 0);                                        // [d_head, L, n_head*N]
     }
 
     __STATIC_INLINE__ ggml_tensor* attention(GGMLRunnerContext* ctx,
