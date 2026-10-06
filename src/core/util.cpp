@@ -62,6 +62,21 @@ void replace_all_chars(std::string& str, char target, char replacement) {
     }
 }
 
+std::string escape_newlines(const std::string& text) {
+    std::string escaped;
+    escaped.reserve(text.size());
+    for (char ch : text) {
+        if (ch == '\n') {
+            escaped += "\\n";
+        } else if (ch == '\r') {
+            escaped += "\\r";
+        } else {
+            escaped += ch;
+        }
+    }
+    return escaped;
+}
+
 static std::string sd_vformat(const char* fmt, va_list ap) {
     char small[128];
     va_list ap2;
@@ -652,7 +667,7 @@ static void sd_log_dispatch(sd_log_level_t level, const std::string& origin, con
     if (origin == "ggml") {
         message = origin + ": " + message + '\n';
     } else {
-        message += " - " + origin + '\n';
+        message += " --- " + origin + '\n';
     }
     sd_log_cb(level, message.c_str(), sd_log_cb_data);
 }

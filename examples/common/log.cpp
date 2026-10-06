@@ -139,7 +139,7 @@ void example_log_printf(sd_log_level_t level, const char* file, int line, const 
     while (!message.empty() && (message.back() == '\n' || message.back() == '\r')) {
         message.pop_back();
     }
-    message += " - " + sd_basename(file) + ":" + std::to_string(line) + '\n';
+    message += " --- " + sd_basename(file) + ":" + std::to_string(line) + '\n';
 
     log_print(level, message.c_str(), log_level, log_color);
 }
