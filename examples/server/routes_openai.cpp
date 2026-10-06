@@ -89,7 +89,6 @@ static bool build_openai_edit_request(const httplib::Request& req,
         return false;
     }
 
-    // Parse stream boolean fro     m form field
     stream = false;
     if (req.form.has_field("stream")) {
         std::string stream_val = req.form.get_field("stream");
@@ -263,6 +262,14 @@ struct PreviewStreamContext {
     const ImgGenJobRequest* request = nullptr;
 };
 
+static void write_sse_event(httplib::DataSink& sink, const json& event) {
+    if (!sink.is_writable()) {
+        return;
+    }
+    std::string sse = "data: " + event.dump() + "\n\n";
+    sink.write(sse.data(), sse.size());
+}
+
 static void preview_callback(int step, int frame_count, sd_image_t* frames, bool is_noisy, void* data) {
     if (!data || frame_count <= 0 || !frames || !frames[0].data) {
         return;
@@ -286,13 +293,17 @@ static void preview_callback(int step, int frame_count, sd_image_t* frames, bool
         return;
     }
 
-    json preview_chunk;
-    preview_chunk["object"] = "image.preview";
-    preview_chunk["step"]   = step;
-    preview_chunk["data"]   = json::array({{{"b64_json", base64_encode(image_bytes)}}});
+    json chunk;
+    chunk["type"]                = "image_generation.partial_image";
+    chunk["b64_json"]            = base64_encode(image_bytes);
+    chunk["created_at"]          = static_cast<long long>(std::time(nullptr));
+    chunk["size"]                = std::to_string(frames[0].width) + "x" + std::to_string(frames[0].height);
+    chunk["quality"]             = "auto";
+    chunk["background"]          = frames[0].channel != 4 ? "opaque" : "auto";
+    chunk["output_format"]       = "jpeg";
+    chunk["partial_image_index"] = step;
 
-    std::string sse_data = "data: " + preview_chunk.dump() + "\n\n";
-    ctx->sink->write(sse_data.data(), sse_data.size());
+    write_sse_event(*ctx->sink, chunk);
 }
 
 static void execute_streaming_img_gen(ServerRuntime& runtime,
@@ -324,20 +335,16 @@ static void execute_streaming_img_gen(ServerRuntime& runtime,
         sd_set_preview_callback(nullptr, PREVIEW_NONE, 0, false, false, nullptr);
     }
 
-    if (results.empty() || !sink.is_writable()) {
+    if (results.empty()) {
         if (sink.is_writable()) {
-            json err            = {{"error", "generate_image returned no results"}};
-            std::string err_msg = "data: " + err.dump() + "\n\n";
-            sink.write(err_msg.data(), err_msg.size());
+            json err;
+            err["type"]  = "image_generation.error";
+            err["error"] = "generate_image returned no results";
+            write_sse_event(sink, err);
         }
         sink.done();
         return;
     }
-
-    json final_out;
-    final_out["created"]       = static_cast<long long>(std::time(nullptr));
-    final_out["data"]          = json::array();
-    final_out["output_format"] = request.output_format;
 
     int result_count     = results.count();
     int images_per_batch = request.gen_params.batch_count > 0
@@ -358,17 +365,23 @@ static void execute_streaming_img_gen(ServerRuntime& runtime,
                                               : EncodedImageFormat::PNG,
             results[i].data, results[i].width, results[i].height,
             results[i].channel, params, request.output_compression);
-
-        if (!image_bytes.empty()) {
-            final_out["data"].push_back({{"b64_json", base64_encode(image_bytes)}});
+        if (image_bytes.empty()) {
+            continue;
         }
+
+        json chunk;
+        chunk["type"]          = "image_generation.completed";
+        chunk["b64_json"]      = base64_encode(image_bytes);
+        chunk["created_at"]    = static_cast<long long>(std::time(nullptr));
+        chunk["size"]          = std::to_string(results[i].width) + "x" + std::to_string(results[i].height);
+        chunk["quality"]       = "auto";
+        chunk["background"]    = results[i].channel == 4 ? "transparent" : "opaque";
+        chunk["output_format"] = request.output_format;
+        write_sse_event(sink, chunk);
     }
 
     if (sink.is_writable()) {
-        std::string final_sse = "data: " + final_out.dump() + "\n\n";
-        sink.write(final_sse.data(), final_sse.size());
-
-        const std::string done_msg = "data: [DONE]\n\n";
+        static const std::string done_msg = "data: [DONE]\n\n";
         sink.write(done_msg.data(), done_msg.size());
     }
 
@@ -411,12 +424,10 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                     "text/event-stream",
                     [runtime, request](size_t /*offset*/, httplib::DataSink& sink) mutable {
                         execute_streaming_img_gen(*runtime, request, sink);
-                        return false; 
-                    }
-                );
+                        return false;
+                    });
                 return;
             }
-
 
             SDImageVec results;
             if (!execute_sync_img_gen_request(*runtime, request, results, error_message)) {
@@ -503,8 +514,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                     [runtime, req_ptr](size_t /*offset*/, httplib::DataSink& sink) {
                         execute_streaming_img_gen(*runtime, *req_ptr, sink);
                         return false;
-                    }
-                );
+                    });
                 return;
             }
 
