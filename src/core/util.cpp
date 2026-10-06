@@ -644,9 +644,14 @@ void* sd_log_cb_data         = nullptr;
 static void sd_log_dispatch(sd_log_level_t level, const std::string& origin, const std::string& text) {
     if (sd_log_cb == nullptr)
         return;
-    std::string message = origin + " - " + text;
-    if (message.back() != '\n') {
-        message += '\n';
+    std::string message = text;
+    while (!message.empty() && (message.back() == '\n' || message.back() == '\r')) {
+        message.pop_back();
+    }
+    if (origin == "ggml") {
+        message = origin + ": " + message + '\n';
+    } else {
+        message += " - " + origin + '\n';
     }
     sd_log_cb(level, message.c_str(), sd_log_cb_data);
 }
@@ -656,7 +661,7 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
     va_start(args, format);
     std::string message = sd_vformat(format, args);
     va_end(args);
-    std::string origin = sd_format("%s:%-4d", sd_basename(file).c_str(), line);
+    std::string origin = sd_format("%s:%d", sd_basename(file).c_str(), line);
     sd_log_dispatch(level, origin, message);
 }
 
