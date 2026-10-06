@@ -4,20 +4,8 @@
 
 ## Download weights
 
-- Download Mage-Flow
-    - safetensors: https://huggingface.co/microsoft/Mage-Flow/tree/main/transformer
-- Download Mage-Flow-Base
-    - safetensors: https://huggingface.co/microsoft/Mage-Flow-Base/tree/main/transformer
-- Download Mage-Flow-Turbo
-    - safetensors: https://huggingface.co/microsoft/Mage-Flow-Turbo/tree/main/transformer
-- Download Mage-Flow-Edit
-    - safetensors: https://huggingface.co/microsoft/Mage-Flow-Edit/tree/main/transformer
-- Download Mage-Flow-Edit-Turbo
-    - safetensors: https://huggingface.co/microsoft/Mage-Flow-Edit-Turbo/tree/main/transformer
-- Download Mage-Flow-Edit-Base
-    - safetensors: https://huggingface.co/microsoft/Mage-Flow-Edit-Base/tree/main/transformer
-- Download Mage-Flow vae
-    - safetensors: https://huggingface.co/microsoft/Mage-Flow/tree/main/vae
+- Download Mage-Flow diffusion from https://huggingface.co/Comfy-Org/Mage-Flow/tree/main/diffusion_models
+- Download Mage-Flow vae from https://huggingface.co/Comfy-Org/Mage-Flow/tree/main/vae
 - Download Qwen3-VL 4B
     - safetensors: https://huggingface.co/Comfy-Org/Krea-2/tree/main/text_encoders
     - gguf: https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/tree/main

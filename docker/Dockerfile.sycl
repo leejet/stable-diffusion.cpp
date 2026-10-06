@@ -29,4 +29,6 @@ FROM intel/oneapi-basekit:${SYCL_VERSION}-devel-ubuntu24.04 AS runtime
 COPY --from=build /sd.cpp/build/bin/sd-cli /sd-cli
 COPY --from=build /sd.cpp/build/bin/sd-server /sd-server
 
+WORKDIR /sd.cpp
+
 ENTRYPOINT [ "/sd-cli" ]

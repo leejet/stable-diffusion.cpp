@@ -301,7 +301,7 @@ bool T5UniGramTokenizer::encode(const std::string& input, std::vector<int>& resu
         result = std::move(tokens);
         return true;
     }
-    auto splited_texts     = split_with_special_tokens(normalized, special_tokens);
+    auto splited_texts = split_with_special_tokens(normalized, special_tokens);
     if (splited_texts.empty()) {
         splited_texts.push_back(normalized);  // for empty string
     }

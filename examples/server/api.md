@@ -410,6 +410,20 @@ Field types:
 | `queue_position` | `integer` |
 | `result` | `object \| null` |
 | `error` | `object \| null` |
+| `preview` | `object \| null` |
+
+`preview` sub-fields:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `preview.pass` | `integer` | Sampling pass number, starting at 1 within the job |
+| `preview.step` | `integer` | Positive logical sample step within this pass |
+| `preview.total_steps` | `integer` | Actual sample steps in this pass, after schedule and strength adjustments |
+| `preview.b64_json` | `string` | Base64-encoded PNG of the current preview frame |
+
+The preview is updated in place as sampling progresses; poll `GET /sdcpp/v1/jobs/{id}` to retrieve the latest frame. Only the most recent preview is retained.
+
+`step / total_steps` describes the current sampling pass, not overall job completion. A new batch item, high/low-noise stage, or highres pass increments `pass` and restarts `step`. Samplers with multiple denoiser evaluations per logical step may update a preview more than once at the same step. The frame and its pass/step metadata are published together.
 
 ### Endpoints
 
@@ -437,6 +451,7 @@ Top-level fields:
 | `loras` | `array<object>` | Available LoRA entries |
 | `upscalers` | `array<object>` | Available highres upscalers, built-in and model-backed |
 | `upscale` | `boolean` | Whether a compatible RGB ESRGAN model is available for `POST /sdcpp/v1/upscale` |
+| `preview_modes` | `array<string>` | Available preview modes, e.g. `["none", "proj", "tae", "vae"]` |
 | `limits` | `object` | Shared queue and size limits |
 
 `model`
@@ -598,6 +613,7 @@ Fields returned in `features_by_mode.img_gen`:
 - `cache`
 - `cancel_queued`
 - `cancel_generating`
+- `preview`
 
 Fields returned in `features_by_mode.vid_gen`:
 
@@ -610,6 +626,7 @@ Fields returned in `features_by_mode.vid_gen`:
 - `cache`
 - `cancel_queued`
 - `cancel_generating`
+- `preview`
 
 #### `POST /sdcpp/v1/img_gen`
 
@@ -782,6 +799,9 @@ Example:
   "scm_mask": "",
   "scm_policy_dynamic": true,
 
+  "preview": "none",
+  "preview_interval": 1,
+
   "output_format": "png",
   "output_compression": 100
 }
@@ -847,6 +867,8 @@ Top-level scalar fields:
 | `control_strength` | `number` |
 | `ip_adapter_strength` | `number` |
 | `embed_image_metadata` | `boolean` |
+| `preview` | `string` |
+| `preview_interval` | `integer` |
 
 Image fields:
 
@@ -933,6 +955,10 @@ When omitted, backend defaults apply to these fields:
 - `sample_params.eta`
 - `sample_params.flow_shift`
 - `sample_params.guidance.img_cfg`
+
+### Preview Interval Semantics
+
+`preview_interval` controls the period (in sample steps) at which preview frames are generated. The default is `1` (every step). Any non-positive values will be clamped to `1`. Note that if `preview` is set to `"none"`, no previews are produced regardless of the interval.
 
 ### Completion Result
 
@@ -1130,6 +1156,9 @@ Example:
   "scm_mask": "",
   "scm_policy_dynamic": true,
 
+  "preview": "none",
+  "preview_interval": 1,
+
   "output_format": "webm",
   "output_compression": 100
 }
@@ -1181,6 +1210,8 @@ Top-level scalar fields:
 | `fps` | `integer` |
 | `moe_boundary` | `number` |
 | `vace_strength` | `number` |
+| `preview` | `string` |
+| `preview_interval` | `integer` |
 
 Image and frame fields:
 

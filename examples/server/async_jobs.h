@@ -44,6 +44,11 @@ struct AsyncGenerationJob {
     int result_fps         = 0;
     std::string error_code;
     std::string error_message;
+    mutable std::mutex preview_mutex;
+    std::string preview_b64;
+    int preview_pass          = 0;
+    int preview_step          = 0;
+    int preview_total_steps   = 0;
 };
 
 struct AsyncJobManager {

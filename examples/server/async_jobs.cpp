@@ -10,6 +10,55 @@
 #include "common/media_io.h"
 #include "common/resource_owners.hpp"
 
+static void preview_callback(int step, int frame_count, sd_image_t* frames, bool is_noisy, void* data) {
+    (void)is_noisy;
+    if (frame_count <= 0 || frames == nullptr || frames[0].data == nullptr) {
+        return;
+    }
+
+    AsyncGenerationJob* job      = static_cast<AsyncGenerationJob*>(data);
+    const sd_image_t& frame      = frames[0];
+    const sd_preview_info_t info = sd_get_preview_info();
+
+    auto image_bytes = encode_image_to_vector(EncodedImageFormat::PNG,
+                                              frame.data,
+                                              frame.width,
+                                              frame.height,
+                                              frame.channel,
+                                              "",
+                                              80);
+    if (image_bytes.empty()) {
+        return;
+    }
+
+    std::string b64 = base64_encode(image_bytes);
+    std::lock_guard<std::mutex> lock(job->preview_mutex);
+    job->preview_b64         = std::move(b64);
+    job->preview_step        = step < 0 ? -step : step;
+    job->preview_pass        = info.sample_pass;
+    job->preview_total_steps = info.total_steps;
+}
+
+static void clear_preview_callback() {
+    sd_set_preview_callback(nullptr, PREVIEW_NONE, 1, false, false, nullptr);
+}
+
+static void set_preview_callback(AsyncGenerationJob& job) {
+    preview_t mode = str_to_preview(job.kind == AsyncJobKind::ImgGen
+                                        ? job.img_gen.preview_mode.c_str()
+                                        : job.vid_gen.preview_mode.c_str());
+    if (mode == PREVIEW_COUNT || mode == PREVIEW_NONE) {
+        return;
+    }
+    int interval = job.kind == AsyncJobKind::ImgGen
+                       ? job.img_gen.preview_interval
+                       : job.vid_gen.preview_interval;
+    if (interval <= 0) {
+        interval = 1;
+    }
+    sd_set_preview_callback(preview_callback, mode, interval, true, false, &job);
+}
+
 const char* async_job_kind_name(AsyncJobKind kind) {
     switch (kind) {
         case AsyncJobKind::ImgGen:
@@ -161,6 +210,18 @@ json make_async_job_json(const AsyncJobManager& manager, const AsyncGenerationJo
         result["error"]  = nullptr;
     }
 
+    if (job.status == AsyncJobStatus::Generating) {
+        std::lock_guard<std::mutex> lock(job.preview_mutex);
+        if (!job.preview_b64.empty()) {
+            result["preview"] = {
+                {"pass", job.preview_pass},
+                {"step", job.preview_step},
+                {"total_steps", job.preview_total_steps},
+                {"b64_json", job.preview_b64},
+            };
+        }
+    }
+
     return result;
 }
 
@@ -174,12 +235,14 @@ bool execute_img_gen_job(ServerRuntime& runtime,
 
     {
         std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
+        set_preview_callback(job);
         sd_image_t* raw_results = nullptr;
         int num_results         = 0;
         if (!generate_image(runtime.sd_ctx, &params, &raw_results, &num_results)) {
             raw_results = nullptr;
             num_results = 0;
         }
+        clear_preview_callback();
         results.adopt(raw_results, num_results);
     }
 
@@ -247,10 +310,12 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
 
     {
         std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
+        set_preview_callback(job);
         sd_image_t* raw_results = nullptr;
         if (!generate_video(runtime.sd_ctx, &params, &raw_results, &num_results, &generated_audio, &output_fps)) {
             raw_results = nullptr;
         }
+        clear_preview_callback();
         results.adopt(raw_results, num_results);
     }
 
