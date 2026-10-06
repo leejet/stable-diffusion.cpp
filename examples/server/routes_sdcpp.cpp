@@ -232,7 +232,6 @@ static json make_preview_modes_json() {
     return modes;
 }
 
-
 static json make_capabilities_json(ServerRuntime& runtime) {
     refresh_lora_cache(runtime);
     refresh_upscaler_cache(runtime);
@@ -430,7 +429,7 @@ static bool parse_img_gen_request(const json& body,
     if (!assign_output_options(request, output_format, output_compression, true, error_message)) {
         return false;
     }
-    request.preview_mode   = body.value("preview", std::string("none"));
+    request.preview_mode     = body.value("preview", std::string("none"));
     request.preview_interval = body.value("preview_interval", 1);
     // Intentionally disable prompt-embedded LoRA tag parsing for server APIs.
     if (!request.gen_params.resolve_and_validate(IMG_GEN, "", runtime.ctx_params->hires_upscalers_dir, true)) {
@@ -459,7 +458,7 @@ static bool parse_vid_gen_request(const json& body,
     if (!assign_output_options(request, output_format, output_compression, error_message)) {
         return false;
     }
-    request.preview_mode   = body.value("preview", std::string("none"));
+    request.preview_mode     = body.value("preview", std::string("none"));
     request.preview_interval = body.value("preview_interval", 1);
     // Intentionally disable prompt-embedded LoRA tag parsing for server APIs.
     if (!request.gen_params.resolve_and_validate(VID_GEN, "", runtime.ctx_params->hires_upscalers_dir, true)) {

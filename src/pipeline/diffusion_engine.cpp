@@ -2360,7 +2360,8 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
         noise *= eta;
     }
 
-    int64_t last_progress_us     = ggml_time_us();
+    int64_t last_progress_us = ggml_time_us();
+    sd_begin_preview_pass(static_cast<int>(steps));
     SamplePreviewContext preview = prepare_sample_preview_context();
 
     sd::Tensor<float> processed_init_latent       = denoiser->process_latent_in(init_latent);

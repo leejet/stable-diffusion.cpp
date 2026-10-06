@@ -174,9 +174,9 @@ namespace PixArt {
             if (table->type != GGML_TYPE_F32) {
                 table = ggml_cast(ctx->ggml_ctx, table, GGML_TYPE_F32);
             }
-            table = ggml_reshape_3d(ctx->ggml_ctx, table, dim, 6, 1);
-            auto m     = ggml_add(ctx->ggml_ctx, ggml_reshape_3d(ctx->ggml_ctx, mod, dim, 6, N), table);
-            auto mv    = ggml_ext_chunk(ctx->ggml_ctx, ggml_reshape_2d(ctx->ggml_ctx, ggml_ext_cont(ctx->ggml_ctx, m), dim * 6, N), 6, 0);
+            table   = ggml_reshape_3d(ctx->ggml_ctx, table, dim, 6, 1);
+            auto m  = ggml_add(ctx->ggml_ctx, ggml_reshape_3d(ctx->ggml_ctx, mod, dim, 6, N), table);
+            auto mv = ggml_ext_chunk(ctx->ggml_ctx, ggml_reshape_2d(ctx->ggml_ctx, ggml_ext_cont(ctx->ggml_ctx, m), dim * 6, N), 6, 0);
 
             auto attn1 = std::dynamic_pointer_cast<PixArtAttention>(blocks["attn1"]);
             auto attn2 = std::dynamic_pointer_cast<PixArtAttention>(blocks["attn2"]);
@@ -215,9 +215,9 @@ namespace PixArt {
         PixArtModel(const PixArtConfig& config)
             : config(config) {
             blocks["pos_embed.proj"]                     = std::make_shared<Conv2d>(config.in_channels,
-                                                                                    config.hidden_size,
-                                                                                    std::pair<int, int>{static_cast<int>(config.patch_size), static_cast<int>(config.patch_size)},
-                                                                                    std::pair<int, int>{static_cast<int>(config.patch_size), static_cast<int>(config.patch_size)});
+                                                                config.hidden_size,
+                                                                std::pair<int, int>{static_cast<int>(config.patch_size), static_cast<int>(config.patch_size)},
+                                                                std::pair<int, int>{static_cast<int>(config.patch_size), static_cast<int>(config.patch_size)});
             blocks["adaln_single.emb.timestep_embedder"] = std::make_shared<PixArtTimestepEmbedding>(ADALN_EMBED_DIM, config.hidden_size);
             blocks["adaln_single.linear"]                = std::make_shared<Linear>(config.hidden_size, 6 * config.hidden_size);
             blocks["caption_projection.linear_1"]        = std::make_shared<Linear>(config.caption_channels, config.hidden_size);

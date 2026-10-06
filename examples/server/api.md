@@ -410,17 +410,20 @@ Field types:
 | `queue_position` | `integer` |
 | `result` | `object \| null` |
 | `error` | `object \| null` |
-| `preview` | `object \| null` | 
+| `preview` | `object \| null` |
 
 `preview` sub-fields:
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `preview.step` | `integer` | The sample step that produced this preview |
-| `preview.total_steps` | `integer` | Total planned sample steps for the job |
+| `preview.pass` | `integer` | Sampling pass number, starting at 1 within the job |
+| `preview.step` | `integer` | Positive logical sample step within this pass |
+| `preview.total_steps` | `integer` | Actual sample steps in this pass, after schedule and strength adjustments |
 | `preview.b64_json` | `string` | Base64-encoded PNG of the current preview frame |
 
 The preview is updated in place as sampling progresses; poll `GET /sdcpp/v1/jobs/{id}` to retrieve the latest frame. Only the most recent preview is retained.
+
+`step / total_steps` describes the current sampling pass, not overall job completion. A new batch item, high/low-noise stage, or highres pass increments `pass` and restarts `step`. Samplers with multiple denoiser evaluations per logical step may update a preview more than once at the same step. The frame and its pass/step metadata are published together.
 
 ### Endpoints
 
