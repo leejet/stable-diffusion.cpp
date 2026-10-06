@@ -37,6 +37,7 @@ Current generation-related endpoints include:
 
 - `POST /sdapi/v1/txt2img`
 - `POST /sdapi/v1/img2img`
+- `GET /sdapi/v1/progress`
 - `GET /sdapi/v1/loras`
 - `GET /sdapi/v1/upscalers`
 - `GET /sdapi/v1/latent-upscale-modes`
@@ -277,6 +278,26 @@ Response fields:
 | `images` | `array<string>` | Base64-encoded PNG images |
 | `parameters` | `object` | Echo of the parsed outer request body |
 | `info` | `string` | Currently empty string |
+
+#### `GET /sdapi/v1/progress`
+
+Poll this endpoint while a synchronous SDAPI generation request is running.
+An optional `id_task` query parameter selects the task with the same `id_task`
+provided in the generation request (default: `"sdapi"`). Set
+`skip_current_image=true` or `1` to omit the preview image.
+
+`current_image` contains the latest base64 JPEG latent projection, or `null`
+when unavailable. `state.sampling_step` is the positive logical step and
+`state.sampling_steps` is the actual step count for the current sampling pass,
+including schedule and img2img strength adjustments. `state.job_no` is the
+zero-based pass index; `state.job_count` includes one pass per batch image and
+an additional pass per image when highres fix is enabled. `progress` weights
+these passes equally. Sampling progress can reach `1` before final decoding
+finishes; `eta_relative` is currently always `0`.
+
+When no SDAPI task is active, or `id_task` does not match, the endpoint returns
+`progress=0`, `state.job=""`, zero job/step counts, and `current_image=null`.
+Completed and failed requests do not retain an active preview.
 
 #### Discovery / Compatibility Endpoints
 
