@@ -350,6 +350,10 @@ bool read_safetensors_file(const std::string& file_path,
                 tensor_storage.ne[1]  = 1;
                 tensor_storage.n_dims = 1;
             }
+        } else if (ends_with(name, "._weight_scale") && tensor_storage.n_dims == 2 && tensor_storage.ne[0] == 1) {
+            tensor_storage.ne[0] = tensor_storage.ne[1];
+            tensor_storage.ne[1] = 1;
+            tensor_storage.n_dims = 1;
         }
 
         size_t tensor_data_size = end - begin;
