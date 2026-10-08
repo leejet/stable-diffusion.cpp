@@ -909,6 +909,31 @@ struct SD3CLIPEmbedder : public Conditioner {
 
         size_t chunk_count = std::max(std::max(clip_l_tokens.size(), clip_g_tokens.size()), t5_tokens.size()) / chunk_len;
 
+        // Each active encoder must cover every chunk of the longest token sequence.
+        Tokenizer* tokenizers[] = {
+            clip_l ? clip_l_tokenizer.get() : nullptr,
+            clip_g ? clip_g_tokenizer.get() : nullptr,
+            t5 ? &t5_tokenizer : nullptr,
+        };
+        const size_t target_length = chunk_count * chunk_len;
+
+        for (size_t encoder_idx = 0; encoder_idx < 3; encoder_idx++) {
+            auto& tokens  = token_and_weights[encoder_idx].first;
+            auto& weights = token_and_weights[encoder_idx].second;
+            if (!tokenizers[encoder_idx] || tokens.size() >= target_length) {
+                continue;
+            }
+
+            std::vector<int> empty_tokens;
+            std::vector<float> empty_weights;
+            tokenizers[encoder_idx]->pad_tokens(empty_tokens, &empty_weights, nullptr, chunk_len, chunk_len, false);
+
+            while (tokens.size() < target_length) {
+                tokens.insert(tokens.end(), empty_tokens.begin(), empty_tokens.end());
+                weights.insert(weights.end(), empty_weights.begin(), empty_weights.end());
+            }
+        }
+
         for (int chunk_idx = 0; chunk_idx < chunk_count; chunk_idx++) {
             // clip_l
             sd::Tensor<float> chunk_hidden_states_l;
