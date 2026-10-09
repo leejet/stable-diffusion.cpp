@@ -67,6 +67,7 @@ API and command-line option may change frequently.***
     - [LLaDA-Image](./docs/llada_image.md)
     - [Ming-Image Design](./docs/ming_image.md)
     - [PixArt](./docs/pixart.md)
+    - [Iris-3B](./docs/iris.md)
   - [Image Edit Models](./docs/edit.md)
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
     - [Qwen Image Edit series](./docs/qwen_image_edit.md)
