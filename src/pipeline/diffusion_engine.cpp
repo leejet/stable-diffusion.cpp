@@ -2227,18 +2227,17 @@ void StableDiffusionGGML::report_sample_progress(int step,
     }
 }
 
-static sd::Tensor<float> batch_two_condition_tensors(const sd::Tensor<float>& a_in, const sd::Tensor<float>& b_in) {
-    if (a_in.empty() || b_in.empty()) {
+static sd::Tensor<float> batch_two_condition_tensors(const sd::Tensor<float>& a, const sd::Tensor<float>& b) {
+    if (a.empty() || b.empty() || a.dim() != b.dim()) {
         return {};
     }
-    if (a_in.dim() != b_in.dim()) {
-        return {};
-    }
-    sd::Tensor<float> a = a_in;
-    sd::Tensor<float> b = b_in;
     if (a.dim() == 1) {
-        a = a.reshape({a.shape()[0], 1});
-        b = b.reshape({b.shape()[0], 1});
+        if (a.shape() != b.shape()) {
+            return {};
+        }
+        auto batched = sd::ops::concat(a, b, 0);
+        batched.reshape_({a.shape()[0], 2});
+        return batched;
     }
     const int64_t batch_dim = a.dim() - 1;
     for (int64_t d = 0; d < batch_dim; d++) {
@@ -2646,11 +2645,11 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
 
             std::vector<sd::Tensor<float>> uncond_controls;
             compute_sample_controls(control_image, noised_input, timesteps_tensor, uncond, &uncond_controls);
-            std::vector<sd::Tensor<float>> batched_controls;
-            batched_controls.reserve(controls.size());
             if (controls.size() != uncond_controls.size()) {
                 return {};
             }
+            std::vector<sd::Tensor<float>> batched_controls;
+            batched_controls.reserve(controls.size());
             for (size_t i = 0; i < controls.size(); i++) {
                 sd::Tensor<float> batched_control = batch_two_condition_tensors(controls[i], uncond_controls[i]);
                 if (batched_control.empty()) {
@@ -2664,18 +2663,15 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
 
             DiffusionParams batched_params = diffusion_params;
             batched_params.x               = &batched_x;
-            batched_params.timesteps       = &timesteps_tensor;
             batched_params.context         = batched_context.empty() ? nullptr : &batched_context;
             batched_params.c_concat        = batched_concat.empty() ? nullptr : &batched_concat;
             batched_params.y               = batched_y.empty() ? nullptr : &batched_y;
             batched_params.ref_latents     = nullptr;
-            UNetDiffusionExtra unet_extra{1, &batched_controls, control_strength};
-            batched_params.extra           = unet_extra;
+            batched_params.extra           = UNetDiffusionExtra{1, &batched_controls, control_strength};
 
             sd::Tensor<float> output = work_diffusion_model->compute(n_threads, batched_params);
             if (output.empty()) {
                 LOG_ERROR("batched diffusion model compute failed");
-                return {};
             }
             return output;
         };
