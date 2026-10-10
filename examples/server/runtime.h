@@ -66,6 +66,8 @@ struct ImgGenJobRequest {
     SDGenerationParams gen_params;
     std::string output_format = "png";
     int output_compression    = 100;
+    std::string preview_mode  = "none";
+    int preview_interval      = 1;
 
     sd_img_gen_params_t to_sd_img_gen_params_t() {
         return gen_params.to_sd_img_gen_params_t();
@@ -76,6 +78,8 @@ struct VidGenJobRequest {
     SDGenerationParams gen_params;
     std::string output_format = "webm";
     int output_compression    = 100;
+    std::string preview_mode  = "none";
+    int preview_interval      = 1;
 
     sd_vid_gen_params_t to_sd_vid_gen_params_t() {
         return gen_params.to_sd_vid_gen_params_t();
