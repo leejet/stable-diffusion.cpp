@@ -533,7 +533,7 @@ namespace sd::model_builders {
         }
 
         auto create_tae = [&](bool decode_only) -> std::shared_ptr<VAE> {
-            if (sd_version_uses_wan_vae(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version) || sd_version_is_minimax_h3(version)) {
+            if ((sd_version_uses_wan_vae(version) && version != VERSION_QWEN_IMAGE_2_1) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version) || sd_version_is_minimax_h3(version)) {
                 return std::make_shared<TinyVideoAutoEncoder>(ctx.backends.runtime_backend(SDBackendModule::VAE),
                                                               tensor_storage_map,
                                                               "decoder",
