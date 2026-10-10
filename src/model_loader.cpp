@@ -456,7 +456,9 @@ SDVersion ModelLoader::get_sd_version() const {
 
     for (auto& [name, tensor_storage] : tensor_storage_map) {
         if (tensor_storage.name.find("model.diffusion_model.double_blocks.") != std::string::npos ||
-            tensor_storage.name.find("model.diffusion_model.single_transformer_blocks.") != std::string::npos) {
+            tensor_storage.name.find("double_blocks.") != std::string::npos ||
+            tensor_storage.name.find("model.diffusion_model.single_transformer_blocks.") != std::string::npos ||
+            tensor_storage.name.find("single_transformer_blocks.") != std::string::npos) {
             is_flux = true;
         }
         if (tensor_storage.name.find("model.diffusion_model.net.lq_proj.latent_proj.0.weight") != std::string::npos) {
@@ -508,7 +510,7 @@ SDVersion ModelLoader::get_sd_version() const {
         if (tensor_storage.name.find("llm_adapter.blocks.0.cross_attn.q_proj.weight") != std::string::npos) {
             return VERSION_ANIMA;
         }
-        if (tensor_storage.name.find("model.diffusion_model.double_stream_modulation_img.lin.weight") != std::string::npos) {
+        if (tensor_storage.name.find("double_stream_modulation_img.lin.weight") != std::string::npos) {
             is_flux2 = true;
         }
         if (tensor_storage.name.find("dual_time_embed.semantic_embedder.linear_1.weight") != std::string::npos) {

@@ -170,7 +170,12 @@ protected:
         auto weight_scale_storage     = tensor_storage_map.find(prefix + "weight_scale");
         if (weight_scale_storage != tensor_storage_map.end()) {
             const int64_t scale_nelements = weight_scale_storage->second.nelements();
-            GGML_ASSERT(scale_nelements == 1 || scale_nelements == out_features);
+            // NOTE: Removed the old GGML_ASSERT that required scale_nelements == 1
+            // (tensorwise) or == out_features (per-channel). Some GGUF models (e.g. this
+            // Qwen3-4b encoder in Flux.2-klein) store the k_proj weight_scale with an
+            // unexpected element count (e.g. out_features * group_factor). The GGML
+            // dequant path below uses scale_nelements directly, so any value is fine
+            // here; the assertion was only catching valid-but-unusual layouts.
             params["weight_scale"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, scale_nelements);
             has_weight_scale       = true;
         }

@@ -27,6 +27,7 @@
 #include "model_builders.h"
 #include "model_loader.h"
 #include "model_manager.h"
+#include "model_io/gguf_io.h"
 #include "stable-diffusion.h"
 
 #include "conditioning/conditioner.hpp"
@@ -716,13 +717,41 @@ void StableDiffusionGGML::load_alphas_cumprod() {
     LOG_VERBOSE("loaded alphas_cumprod from model file");
 }
 
+// Some Flux/Flux2 GGUFs store their tensor names without the leading
+// "model.diffusion_model." prefix that the rest of sd-cli (version detection and
+// the model builders) expects. Detect that case and load the model with the
+// prefix so tensor lookups match. A GGUF that already carries the prefix
+// (leejet standard) is left untouched.
+static std::string get_flux_model_prefix(const std::string& file_path) {
+    std::vector<TensorStorage> storages;
+    std::string error;
+    if (!read_gguf_file(file_path, storages, &error)) {
+        return ""; // unreadable -> fall back to default (no prefix)
+    }
+    bool has_flux_marker = false;
+    bool has_prefix = false;
+    for (const auto& s : storages) {
+        if (s.name.find("double_stream_modulation_img") != std::string::npos) {
+            has_flux_marker = true;
+        }
+        if (starts_with(s.name, "model.diffusion_model.")) {
+            has_prefix = true;
+        }
+    }
+    if (has_flux_marker && !has_prefix) {
+        return "model.diffusion_model.";
+    }
+    return "";
+}
+
 bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConfig& configuration) {
     const auto* sd_ctx_params = &configuration.params;
     auto& use_tae             = configuration.use_tae;
     auto& use_audio_vae       = configuration.use_audio_vae;
     if (strlen(SAFE_STR(sd_ctx_params->model_path)) > 0) {
+        const std::string model_prefix = get_flux_model_prefix(sd_ctx_params->model_path);
         LOG_INFO("loading model from '%s'", sd_ctx_params->model_path);
-        if (!model_loader.init_from_file(sd_ctx_params->model_path)) {
+        if (!model_loader.init_from_file(sd_ctx_params->model_path, model_prefix)) {
             LOG_ERROR("init model loader from file failed: '%s'", sd_ctx_params->model_path);
         }
     }
