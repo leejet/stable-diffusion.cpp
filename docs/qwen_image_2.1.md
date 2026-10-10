@@ -16,6 +16,8 @@ Qwen Image 2.1 supports text-to-image generation and image editing, using Qwen3-
 
 Use `qwen_image_2.1_vae_bf16.safetensors` with this model. The earlier Qwen Image and Wan 2.2 VAE weights are not interchangeable with the Qwen Image 2.1 VAE weights.
 
+For faster encoding, decoding, or previews, see [TAEQI2.1](taesd.md#qwen-image-21-taeqi21).
+
 ## Examples
 
 Run the following commands from the build directory. Use image dimensions divisible by 32. The resolution-dependent flow schedule is selected automatically.
