@@ -1904,16 +1904,17 @@ bool ModelManager::ensure_compute_backend_capacity(
         }
     }
 
-    // Params resident on the compute device have no reloadable backing copy, so
-    // nothing above could reclaim them. As a last resort, demote file-reloadable
-    // states to disk residency; demotion only unlocks evictability; the same
-    // machinery still decides what is actually released. Required states are
-    // skipped: they are counted by fits(), so releasing them can never help.
+    // The loader retains mmap buffers after storage blocks are released, so
+    // demoting mapped states would only force duplicate allocations on reload.
+    std::unordered_set<TensorState*> mapped_states;
+    for (const auto& block : params_storage_blocks_) {
+        if (!block->mmap_tensor_stores.empty()) {
+            mapped_states.insert(block->states.begin(), block->states.end());
+        }
+    }
     std::unordered_set<TensorState*> required_set(required_states.begin(), required_states.end());
     std::vector<TensorState*> demoted_states;
     auto revert_demotions = [&]() {
-        // Keep disk residency only for states that were actually evicted; states
-        // still holding memory revert so the flag cannot outlive its purpose.
         for (TensorState* state : demoted_states) {
             if (state->loaded_to_params_backend) {
                 state->residency_mode = ResidencyMode::ParamBackend;
@@ -1928,6 +1929,7 @@ bool ModelManager::ensure_compute_backend_capacity(
                state->pin_count == 0 && !state->staged_to_compute_backend && state->loaded_to_params_backend &&
                protected_states.find(state) == protected_states.end() &&
                required_set.find(state) == required_set.end() &&
+               mapped_states.find(state) == mapped_states.end() &&
                !state->sources.empty() && state->applied_lora_epoch == UINT64_MAX &&
                state->split_buffer_type == nullptr;
     };
