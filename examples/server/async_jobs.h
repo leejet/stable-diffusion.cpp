@@ -62,10 +62,36 @@ struct AsyncJobManager {
     size_t max_pending_jobs       = 64;
     int64_t completed_ttl_seconds = 600;
     int64_t failed_ttl_seconds    = 600;
+
+    // Monitoring stats (updated under mutex)
+    uint64_t total_completed = 0;
+    uint64_t total_failed    = 0;
+    double total_generation_seconds = 0.0;
+    // Rolling window for last N completion durations (seconds per image)
+    std::vector<double> last_generation_durations;
+    static constexpr size_t k_rolling_window_size = 10;
 };
 
 void purge_expired_jobs(AsyncJobManager& manager);
 size_t count_pending_jobs(const AsyncJobManager& manager);
+void record_job_completion(AsyncJobManager& manager, double duration_seconds, bool success);
+struct AsyncJobStats {
+    uint64_t total_completed  = 0;
+    uint64_t total_failed     = 0;
+    double total_generation_seconds = 0.0;
+    size_t queued             = 0;
+    size_t generating         = 0;
+    size_t completed          = 0;
+    size_t failed             = 0;
+    size_t cancelled          = 0;
+    // Rolling window (up to k_rolling_window_size most recent)
+    std::vector<double> last_generation_durations;
+    double avg_seconds_per_image() const;
+    double images_per_second() const;
+    double last_10_avg_seconds_per_image() const;
+    size_t last_10_samples() const;
+};
+AsyncJobStats collect_job_stats(const AsyncJobManager& manager);
 std::string make_async_job_id(AsyncJobManager& manager);
 bool cancel_queued_job(AsyncJobManager& manager, AsyncGenerationJob& job);
 json make_async_job_json(const AsyncJobManager& manager, const AsyncGenerationJob& job);

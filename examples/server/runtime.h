@@ -25,6 +25,7 @@ struct SDSvrParams {
     bool normal_exit = false;
     sd_log_level_t log_level = SD_LOG_INFO;
     bool color       = false;
+    bool metrics_enabled = false;
 
     ArgOptions get_options();
     bool validate();
@@ -60,6 +61,14 @@ struct ServerRuntime {
     std::vector<UpscalerEntry>* upscaler_cache;
     std::mutex* upscaler_mutex;
     AsyncJobManager* async_job_manager;
+
+    // Sync generation tracking (updated under sd_ctx_mutex)
+    uint64_t sync_completed   = 0;
+    uint64_t sync_failed      = 0;
+    double   sync_total_seconds = 0.0;
+
+    // Whether the --metrics switch was passed
+    bool metrics_enabled = false;
 };
 
 struct ImgGenJobRequest {
@@ -106,3 +115,5 @@ void refresh_lora_cache(ServerRuntime& rt);
 std::string get_lora_full_path(ServerRuntime& rt, const std::string& path);
 void refresh_upscaler_cache(ServerRuntime& rt);
 int64_t unix_timestamp_now();
+void record_sync_completion(ServerRuntime& runtime, double duration_seconds);
+void record_sync_failure(ServerRuntime& runtime);

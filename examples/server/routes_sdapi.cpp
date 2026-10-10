@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstring>
 #include <regex>
 #include <string_view>
@@ -400,6 +401,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             LOG_VERBOSE("%s\n", request.gen_params.to_string().c_str());
 
+            auto exec_start = std::chrono::steady_clock::now();
             sd_img_gen_params_t img_gen_params = request.to_sd_img_gen_params_t();
             SDImageVec results;
             int num_results = 0;
@@ -415,11 +417,16 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 results.adopt(raw_results, num_results);
             }
 
+            double duration = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - exec_start).count();
+
             if (results.empty()) {
+                record_sync_failure(*runtime);
                 res.status = 500;
                 res.set_content(R"({"error":"generate_image returned no results"})", "application/json");
                 return;
             }
+            record_sync_completion(*runtime, duration);
 
             json out;
             out["images"]     = json::array();

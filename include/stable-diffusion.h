@@ -459,6 +459,21 @@ typedef struct {
 typedef struct sd_ctx_t sd_ctx_t;
 struct ggml_tensor;
 
+// Model memory statistics — populated after model loading.
+// EXPERIMENTAL: accuracy depends on backend and device; not tested on all
+// model families. Use at your own risk.
+// All sizes are in bytes.
+typedef struct {
+    uint64_t total_size;
+    uint64_t vram_size;
+    uint64_t ram_size;
+    uint64_t text_encoders_size;
+    uint64_t diffusion_model_size;
+    uint64_t vae_size;
+    uint64_t control_net_size;
+    uint64_t extensions_size;
+} sd_model_memory_stats_t;
+
 typedef void (*sd_log_cb_t)(enum sd_log_level_t level, const char* text, void* data);
 typedef void (*sd_progress_cb_t)(int step, int steps, float time, void* data);
 typedef void (*sd_preview_cb_t)(int step, int frame_count, sd_image_t* frames, bool is_noisy, void* data);
@@ -484,6 +499,9 @@ SD_API int32_t sd_get_num_physical_cores();
 SD_API const char* sd_get_system_info();
 SD_API bool sd_ctx_supports_image_generation(const sd_ctx_t* sd_ctx);
 SD_API bool sd_ctx_supports_video_generation(const sd_ctx_t* sd_ctx);
+
+// Requires a loaded context. Returns false if the context has no model loaded.
+SD_API bool sd_get_model_memory_stats(const sd_ctx_t* sd_ctx, sd_model_memory_stats_t* out);
 
 // ControlNet hot-swap APIs are not safe to call while generation is in flight.
 SD_API bool sd_ctx_load_control_net(sd_ctx_t* sd_ctx, const char* path);
