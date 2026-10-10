@@ -29,6 +29,10 @@ PRs should include:
 - Linked issue/PR context when applicable.
 - Screenshots or sample outputs for UI/visual behavior changes.
 
+## README UI Listings
+
+The [UIs list in the README](README.md#uis) only includes open-source projects that use `stable-diffusion.cpp` as a backend. Do not submit PRs to add closed-source UIs.
+
 ## Code Style
 
 Format code according to the repository style before submitting changes.
