@@ -25,6 +25,7 @@ RUN cmake . -B ./build -G Ninja \
     -DCMAKE_C_COMPILER=clang \
     -DCMAKE_CXX_COMPILER=clang++ \
     -DSD_HIPBLAS=ON \
+    -DGGML_NATIVE=OFF \
     -DAMDGPU_TARGETS=${AMDGPU_TARGETS} \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
