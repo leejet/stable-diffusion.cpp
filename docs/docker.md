@@ -24,16 +24,23 @@ docker build -f docker/Dockerfile -t sd .
 
 ## Building variants using Docker
 
-Vulkan:
+### Vulkan:
 
 ```shell
 docker build -f docker/Dockerfile.vulkan -t sd .
 ```
 
-ROCm (AMD GPU):
+### ROCm (AMD GPU):
+
+Defining one or multiple targets with `--build-arg AMDGPU_TARGETS` is strongly recommended.
+Building the image will otherwise likely fail or build for a target that does not fit your
+hardware.
 
 ```shell
+# Build for one target
 docker build -f docker/Dockerfile.rocm --build-arg AMDGPU_TARGETS=gfx1100 -t sd .
+# Build for multiple targets
+docker build -f docker/Dockerfile.rocm --build-arg AMDGPU_TARGETS=gfx1030;gfx1100 -t sd .
 ```
 
 ## Run locally built image's CLI
