@@ -38,9 +38,9 @@ hardware.
 
 ```shell
 # Build for one target
-docker build -f docker/Dockerfile.rocm --build-arg AMDGPU_TARGETS=gfx1100 -t sd .
+docker build -f docker/Dockerfile.rocm --build-arg "AMDGPU_TARGETS=gfx1100" -t sd .
 # Build for multiple targets
-docker build -f docker/Dockerfile.rocm --build-arg AMDGPU_TARGETS=gfx1030;gfx1100 -t sd .
+docker build -f docker/Dockerfile.rocm --build-arg "AMDGPU_TARGETS=gfx1030;gfx1100" -t sd .
 ```
 
 ## Run locally built image's CLI
