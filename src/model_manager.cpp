@@ -1760,11 +1760,11 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
             if (ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_IGPU) {
                 return size_t{0};
             }
-            // Integrated GPUs share system memory, so a wrapped report does not imply
-            // exhaustion: fall back to tracked residency against the shared total.
+            // A wrapped report may reflect real pressure; reclaim before accepting the tracked estimate.
             LOG_VERBOSE("ignoring impossible free memory report on %s (%.2f MB free / %.2f MB total), using tracked residency",
                         ggml_backend_name(backend), free_bytes / (1024.0 * 1024.0), total_bytes / (1024.0 * 1024.0));
-            free_bytes = total_bytes;
+            free_bytes                  = total_bytes;
+            result.requires_reclamation = true;
         }
         if (total_bytes > 0) {
             free_bytes = std::min(free_bytes, resident < total_bytes ? total_bytes - resident : 0);
@@ -1810,8 +1810,11 @@ bool ModelManager::fits_compute_backend_capacity(
     const DeviceMemoryRequest& request,
     const std::vector<ggml_tensor*>& required_params) const {
     std::vector<TensorState*> states;
-    return resolve_required_tensor_states(required_params, states, request.compute_backend) &&
-           check_capacity(request, states).fits();
+    if (!resolve_required_tensor_states(required_params, states, request.compute_backend)) {
+        return false;
+    }
+    const auto capacity = check_capacity(request, states);
+    return !capacity.requires_reclamation && capacity.fits();
 }
 
 bool ModelManager::ensure_compute_backend_capacity(
@@ -1833,7 +1836,10 @@ bool ModelManager::ensure_compute_backend_capacity(
         return true;
     }
 
-    auto fits = [&]() { return check_capacity(request, required_states).fits(); };
+    auto fits = [&]() {
+        const auto capacity = check_capacity(request, required_states);
+        return !capacity.requires_reclamation && capacity.fits();
+    };
     if (fits()) {
         return true;
     }
@@ -1873,7 +1879,12 @@ bool ModelManager::ensure_compute_backend_capacity(
             eviction_states.insert(state);
         }
     };
+    size_t last_eviction_count   = 0;
     auto release_eviction_states = [&]() {
+        if (eviction_states.size() == last_eviction_count) {
+            return false;
+        }
+        last_eviction_count = eviction_states.size();
         release_compute_staging_blocks(false, &eviction_states);
         release_params_storage_blocks(false, &eviction_states);
         return fits();
@@ -1954,6 +1965,9 @@ bool ModelManager::ensure_compute_backend_capacity(
     }
     revert_demotions();
 
+    if (check_capacity(request, required_states).fits()) {
+        return true;
+    }
     const auto capacity                = check_capacity(request, required_states, true);
     const std::string available_device = capacity.available_device_bytes == SIZE_MAX
                                              ? "unknown"
