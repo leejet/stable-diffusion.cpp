@@ -2735,9 +2735,9 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
         if (batch_cfg_ok) {
             sd::Tensor<float> batched_out = run_batched_condition(*positive_condition, c_concat_override);
             if (!batched_out.empty() && batched_out.dim() >= 4 && batched_out.shape()[3] == 2) {
-                auto parts    = sd::ops::chunk(batched_out, 2, 3);
-                cond_out      = std::move(parts[0]);
-                uncond_out    = std::move(parts[1]);
+                auto parts = sd::ops::chunk(batched_out, 2, 3);
+                cond_out   = std::move(parts[0]);
+                uncond_out = std::move(parts[1]);
             }
         }
 
