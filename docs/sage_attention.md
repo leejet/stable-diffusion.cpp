@@ -37,12 +37,12 @@ rebuild with CUDA 12.8 or newer to use SageAttention2++.
 
 ## Use
 
-Replace `--diffusion-fa` with `--sage-attn` in an existing command. For example,
+Add `--sage-attn` to enable SageAttention. For example,
 from the build directory:
 
 ```powershell
 .\bin\Release\sd-cli.exe -M vid_gen --diffusion-model  ..\models\diffusion_models\Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf --high-noise-diffusion-model  ..\models\diffusion_models\Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf --vae ..\models\vae\wan_2.1_vae.safetensors --t5xxl ..\models\text_encoders\umt5-xxl-encoder-Q8_0.gguf  -p "a lovely cat" --cfg-scale 3.5 --sampling-method euler --steps 10 --high-noise-cfg-scale 3.5 --high-noise-sampling-method euler --high-noise-steps 8 -v -n "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，
-形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走" -W 832 -H 480 --diffusion-fa --offload-to-cpu --video-frames 33 --sage-attn
+形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走" -W 832 -H 480 --offload-to-cpu --video-frames 33 --sage-attn
 ```
 
 SageAttention currently handles unmasked attention with head dimensions from
@@ -51,9 +51,7 @@ and multiple batches. Dimensions below 64 are zero-padded to 64; dimensions
 between 65 and 127 are zero-padded to 128. The original softmax scale is preserved,
 and the output is cropped back to the original dimension. Other attention
 operations fall back to FlashAttention when supported, then ordinary attention.
-SageAttention takes precedence in diffusion
-when combined with `--fa` or `--diffusion-fa`; `--fa` continues to control other
-modules. Existing attention scaling overrides remain effective.
+SageAttention takes precedence over FlashAttention in diffusion. Existing attention scaling overrides remain effective.
 
 Attention quantization changes numerical results. Compare image quality and
 end-to-end generation time using the same seed, dimensions, and sampling

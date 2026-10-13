@@ -43,6 +43,5 @@ MiniT2I uses a MiniT2I diffusion transformer and `google/flan-t5-large` as the t
   --height 512 \
   --seed 42 \
   --sampling-method euler \
-  --diffusion-fa \
   --output minit2i_cuda.png
 ```

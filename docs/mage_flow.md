@@ -15,7 +15,7 @@
 Use 30 steps for Base models and 4 steps with `--cfg-scale 1` for Turbo models. Image dimensions must be multiples of 16; the official checkpoints are trained for native resolutions from 512 to 2048 pixels.
 
 ```bash
-.\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\Mage-Flow-Turbo.safetensors --llm ..\models\text_encoders\Qwen3-VL-4B-Instruct-Q4_K_M.gguf --vae ..\models\vae\mage_vae.safetensors -p "a lovely cat holding a sign says 'mage.cpp'" --cfg-scale 1.0 --steps 4 --diffusion-fa -v --offload-to-cpu
+.\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\Mage-Flow-Turbo.safetensors --llm ..\models\text_encoders\Qwen3-VL-4B-Instruct-Q4_K_M.gguf --vae ..\models\vae\mage_vae.safetensors -p "a lovely cat holding a sign says 'mage.cpp'" --cfg-scale 1.0 --steps 4 -v --offload-to-cpu
 ```
 
 <img width="256" alt="Mage-Flow example" src="../assets/mage_flow/example.png" />
@@ -27,7 +27,7 @@ Mage-Flow-Edit accepts one or more reference images. The default `mage_flow` ref
 For the Turbo edit checkpoint, use 4 steps and `--cfg-scale 1`.
 
 ```bash
-.\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\Mage-Flow-Edit.safetensors --llm ..\models\text_encoders\Qwen3-VL-4B-Instruct-Q4_K_M.gguf --llm_vision ..\models\text_encoders\Qwen3-VL-4B-Instruct-mmproj-BF16.gguf --vae ..\models\vae\mage_vae.safetensors -r ..\assets\flux\flux1-dev-q8_0.png -p "change 'flux.cpp' to 'mage.cpp'" --cfg-scale 4.0 --sampling-method euler -v --diffusion-fa --offload-to-cpu
+.\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\Mage-Flow-Edit.safetensors --llm ..\models\text_encoders\Qwen3-VL-4B-Instruct-Q4_K_M.gguf --llm_vision ..\models\text_encoders\Qwen3-VL-4B-Instruct-mmproj-BF16.gguf --vae ..\models\vae\mage_vae.safetensors -r ..\assets\flux\flux1-dev-q8_0.png -p "change 'flux.cpp' to 'mage.cpp'" --cfg-scale 4.0 --sampling-method euler -v --offload-to-cpu
 ```
 
 <img width="256" alt="Mage-Flow-Edit example" src="../assets/mage_flow/edit_example.png" />

@@ -166,15 +166,14 @@ struct SDContextParams {
     std::string rpc_servers;
     std::string effective_backend;
     std::string effective_params_backend;
-    bool enable_mmap           = false;
-    bool control_net_cpu       = false;
-    bool clip_on_cpu           = false;
-    bool vae_on_cpu            = false;
-    bool flash_attn            = false;
-    bool diffusion_flash_attn  = false;
-    bool sage_attn             = false;
-    bool diffusion_conv_direct = false;
-    bool vae_conv_direct       = false;
+    bool enable_mmap            = false;
+    bool control_net_cpu        = false;
+    bool clip_on_cpu            = false;
+    bool vae_on_cpu             = false;
+    std::string flash_attn_mode = "auto";
+    bool sage_attn              = false;
+    bool diffusion_conv_direct  = false;
+    bool vae_conv_direct        = false;
 
     prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;

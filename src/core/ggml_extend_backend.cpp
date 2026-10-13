@@ -6,10 +6,15 @@
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #ifdef SD_USE_CUDA
 #include <cuda.h>
+#endif
+
+#ifdef SD_USE_HIP
+#include <hip/hip_runtime_api.h>
 #endif
 
 #include "core/util.h"
@@ -516,6 +521,49 @@ bool sd_backend_supports_cuda_mma(ggml_backend_t backend) {
 #endif
 }
 
+bool sd_backend_supports_hip_mma(ggml_backend_t backend) {
+#ifdef SD_USE_HIP
+    if (!sd_backend_is(backend, "ROCm")) {
+        return false;
+    }
+    auto dev = ggml_backend_get_device(backend);
+    if (dev == nullptr) {
+        return false;
+    }
+    ggml_backend_dev_props props{};
+    ggml_backend_dev_get_props(dev, &props);
+    int device = 0;
+    hipDeviceProp_t hip_props{};
+    if (props.device_id == nullptr ||
+        hipDeviceGetByPCIBusId(&device, props.device_id) != hipSuccess ||
+        hipGetDeviceProperties(&hip_props, device) != hipSuccess) {
+        return false;
+    }
+    const char* arch = hip_props.gcnArchName;
+    if (std::strncmp(arch, "gfx", 3) != 0) {
+        return false;
+    }
+    char* end        = nullptr;
+    const long value = std::strtol(arch + 3, &end, 16);
+    if (end == arch + 3 || (*end != '\0' && *end != ':')) {
+        return false;
+    }
+    // Match the HIP FA kernels; keep unknown architecture families on the probe path.
+    if (value >= 0x1100 && value < 0x1300) {
+        return true;
+    }
+#ifdef SD_HIP_MFMA
+    return value == 0x908 || value == 0x90a ||
+           value == 0x940 || value == 0x941 || value == 0x942 || value == 0x950;
+#else
+    return false;
+#endif
+#else
+    (void)backend;
+    return false;
+#endif
+}
+
 ggml_backend_t sd_backend_cpu_init() {
     ggml_backend_load_all_once();
     return ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
@@ -731,6 +779,59 @@ bool sd_parse_backend_assignment(const std::string& spec, SDBackendAssignment* a
         }
         assignment->set_module(module, value);
     }
+    return true;
+}
+
+bool sd_parse_flash_attention_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error) {
+    if (assignment == nullptr) {
+        return false;
+    }
+    SDBackendAssignment result;
+    result.set_default("auto");
+    std::istringstream stream(spec);
+    std::string part;
+    while (std::getline(stream, part, ',')) {
+        SDBackendAssignment entry;
+        if (!sd_parse_backend_assignment(part, &entry, error)) {
+            return false;
+        }
+        auto valid_mode = [&](const std::string& mode) {
+            if (mode == "on" || mode == "off" || mode == "auto") {
+                return true;
+            }
+            if (error != nullptr) {
+                *error = "invalid flash attention mode '" + mode + "': expected on, off, or auto";
+            }
+            return false;
+        };
+        if (!entry.default_name.empty()) {
+            if (!valid_mode(entry.default_name)) {
+                return false;
+            }
+            result.set_default(entry.default_name);
+        }
+        for (const auto& setting : entry.module_names) {
+            switch (setting.first) {
+                case SDBackendModule::DIFFUSION:
+                case SDBackendModule::TE:
+                case SDBackendModule::CLIP_VISION:
+                case SDBackendModule::VAE:
+                case SDBackendModule::CONTROL_NET:
+                case SDBackendModule::AUDIO_ENCODER:
+                    break;
+                default:
+                    if (error != nullptr) {
+                        *error = std::string("flash attention is not configurable for module '") + sd_backend_module_name(setting.first) + "'";
+                    }
+                    return false;
+            }
+            if (!valid_mode(setting.second)) {
+                return false;
+            }
+            result.set_module(setting.first, setting.second);
+        }
+    }
+    *assignment = std::move(result);
     return true;
 }
 

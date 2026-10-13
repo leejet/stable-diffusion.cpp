@@ -3,7 +3,7 @@
 The following example starts `sd-server` with a standalone diffusion model, VAE, and LLM text encoder:
 
 ```
-.\bin\Release\sd-server.exe --diffusion-model  ..\models\diffusion_models\z_image_turbo_bf16.safetensors --vae ..\models\vae\ae.sft  --llm ..\models\text_encoders\qwen_3_4b.safetensors --diffusion-fa --offload-to-cpu -v --cfg-scale 1.0
+.\bin\Release\sd-server.exe --diffusion-model  ..\models\diffusion_models\z_image_turbo_bf16.safetensors --vae ..\models\vae\ae.sft  --llm ..\models\text_encoders\qwen_3_4b.safetensors --offload-to-cpu -v --cfg-scale 1.0
 ```
 
 What this example does:
@@ -11,7 +11,6 @@ What this example does:
 * `--diffusion-model` selects the standalone diffusion model
 * `--vae` selects the VAE decoder
 * `--llm` selects the text encoder / language model used by this pipeline
-* `--diffusion-fa` enables flash attention in the diffusion model
 * `--offload-to-cpu` reduces VRAM pressure by keeping weights in RAM when possible
 * `-v` enables verbose logging (equivalent to `--log-level verbose`)
 * `--cfg-scale 1.0` sets the default CFG scale for generation

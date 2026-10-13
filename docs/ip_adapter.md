@@ -48,7 +48,7 @@ sd-cli -m ..\models\sd_v1.5.safetensors --clip_vision ..\models\clip_vision_h.sa
 ## Example (SDXL)
 
 ```
-sd-cli -m ..\models\sdxl.safetensors --clip_vision ..\models\clip_vision_h.safetensors --ip-adapter ..\models\ip-adapter_sdxl_vit-h.safetensors --ip-adapter-image ..\assets\reference.png --ip-adapter-strength 0.8 -p "a woman, best quality" -n "lowres, bad anatomy" --cfg-scale 6 --steps 25 --sampling-method dpm++2m --scheduler karras -W 1024 -H 1024 --diffusion-fa --vae-tiling
+sd-cli -m ..\models\sdxl.safetensors --clip_vision ..\models\clip_vision_h.safetensors --ip-adapter ..\models\ip-adapter_sdxl_vit-h.safetensors --ip-adapter-image ..\assets\reference.png --ip-adapter-strength 0.8 -p "a woman, best quality" -n "lowres, bad anatomy" --cfg-scale 6 --steps 25 --sampling-method dpm++2m --scheduler karras -W 1024 -H 1024 --vae-tiling
 ```
 
 The SDXL VAE decode at 1024x1024 is memory heavy; add `--vae-tiling` (and
@@ -83,5 +83,5 @@ Add the usual Control Net options to keep the reference appearance while
 controlling the pose:
 
 ```
-sd-cli -m ..\models\sdxl.safetensors --clip_vision ..\models\clip_vision_h.safetensors --ip-adapter ..\models\ip-adapter_sdxl_vit-h.safetensors --ip-adapter-image ..\assets\character.png --ip-adapter-strength 0.9 --control-net ..\models\OpenPoseXL2.safetensors --control-image ..\assets\pose.png --control-strength 0.8 -p "a character, side view" --cfg-scale 6 --steps 25 -W 1024 -H 1024 --diffusion-fa --vae-tiling
+sd-cli -m ..\models\sdxl.safetensors --clip_vision ..\models\clip_vision_h.safetensors --ip-adapter ..\models\ip-adapter_sdxl_vit-h.safetensors --ip-adapter-image ..\assets\character.png --ip-adapter-strength 0.9 --control-net ..\models\OpenPoseXL2.safetensors --control-image ..\assets\pose.png --control-strength 0.8 -p "a character, side view" --cfg-scale 6 --steps 25 -W 1024 -H 1024 --vae-tiling
 ```

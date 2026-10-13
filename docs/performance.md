@@ -8,7 +8,7 @@ eg.:
 For most backends, it slows things down, but for cuda it generally speeds it up too.
 At the moment, it is only supported for some models and some backends (like cpu, cuda/rocm, metal).
 
-Run by adding `--diffusion-fa` to the arguments and watch for:
+Watch for:
 ```
 [INFO ] stable-diffusion.cpp:312  - Using flash attention in the diffusion model
 ```

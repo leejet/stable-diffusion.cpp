@@ -18,6 +18,7 @@
 #include "core/ggml_runner.h"
 #include "core/ggml_tensor_utils.h"
 #include "core/layer_split_partition.h"
+#include "core/probe/flash_attn.h"
 #include "model.h"
 
 #include "core/rng.hpp"
@@ -944,6 +945,13 @@ bool StableDiffusionGGML::init(const sd_ctx_params_t* sd_ctx_params) {
         LOG_ERROR("conditioning_cache_size must be non-negative");
         return false;
     }
+    const std::string flash_mode = SAFE_STR(sd_ctx_params->flash_attn_mode);
+    std::string flash_error;
+    if (!sd_parse_flash_attention_assignment(flash_mode, &flash_attn_assignment, &flash_error)) {
+        LOG_ERROR("invalid flash_attn_mode '%s': %s", flash_mode.c_str(), flash_error.c_str());
+        return false;
+    }
+    flash_attn_by_backend.clear();
     conditioning_cache_->set_capacity(static_cast<size_t>(sd_ctx_params->conditioning_cache_size));
     auto configuration = std::make_unique<ModelConfig>(*sd_ctx_params);
     n_threads          = sd_ctx_params->n_threads;
@@ -1182,30 +1190,73 @@ bool StableDiffusionGGML::build_extension_runners() {
     return true;
 }
 
+bool StableDiffusionGGML::flash_attention_for(SDBackendModule module) {
+    const auto& params     = config_->params;
+    const std::string mode = flash_attn_assignment.get(module);
+    if (mode == "on") {
+        return true;
+    }
+    if (mode == "off") {
+        return false;
+    }
+    if (strlen(SAFE_STR(params.flash_attn_mode)) == 0) {
+        if (params.flash_attn) {
+            return true;
+        }
+        if (params.diffusion_flash_attn) {
+            return module == SDBackendModule::DIFFUSION;
+        }
+    }
+    auto backends    = backend_manager.runtime_backends(module);
+    bool enabled     = !backends.empty();
+    bool any_enabled = false;
+    for (auto backend : backends) {
+        auto it = flash_attn_by_backend.find(backend);
+        if (it == flash_attn_by_backend.end()) {
+            it = flash_attn_by_backend.emplace(backend, sd_probe_flash_attention(backend, n_threads)).first;
+        }
+        enabled     = enabled && it->second;
+        any_enabled = any_enabled || it->second;
+    }
+    if (any_enabled && !enabled) {
+        LOG_INFO("flash attention auto: %s -> off (compute devices disagree)", sd_backend_module_name(module));
+    }
+    return enabled;
+}
+
 bool StableDiffusionGGML::validate_and_load_runners() {
     const auto* sd_ctx_params   = &config_->params;
     const bool use_tae          = uses_tae();
     const bool tae_preview_only = this->tae_preview_only();
-    if (sd_ctx_params->flash_attn) {
-        LOG_INFO("Using flash attention");
-        cond_stage_model->set_flash_attention_enabled(true);
-        if (clip_vision) {
-            clip_vision->set_flash_attention_enabled(true);
-        }
+    cond_stage_model->set_flash_attention_enabled(flash_attention_for(SDBackendModule::TE));
+    if (clip_vision) {
+        clip_vision->set_flash_attention_enabled(flash_attention_for(SDBackendModule::CLIP_VISION));
+    }
+    if (first_stage_model || preview_vae || audio_vae_model) {
+        const bool enabled = flash_attention_for(SDBackendModule::VAE);
         if (first_stage_model) {
-            first_stage_model->set_flash_attention_enabled(true);
+            first_stage_model->set_flash_attention_enabled(enabled);
         }
         if (preview_vae) {
-            preview_vae->set_flash_attention_enabled(true);
+            preview_vae->set_flash_attention_enabled(enabled);
+        }
+        if (audio_vae_model) {
+            audio_vae_model->set_flash_attention_enabled(enabled);
         }
     }
-
-    if (sd_ctx_params->flash_attn || sd_ctx_params->diffusion_flash_attn) {
-        LOG_INFO("Using flash attention in the diffusion model");
-        diffusion_model->set_flash_attention_enabled(true);
-        if (high_noise_diffusion_model) {
-            high_noise_diffusion_model->set_flash_attention_enabled(true);
-        }
+    const bool diffusion_fa = flash_attention_for(SDBackendModule::DIFFUSION);
+    diffusion_model->set_flash_attention_enabled(diffusion_fa);
+    if (high_noise_diffusion_model) {
+        high_noise_diffusion_model->set_flash_attention_enabled(diffusion_fa);
+    }
+    if (ip_adapter) {
+        ip_adapter->set_flash_attention_enabled(diffusion_fa);
+    }
+    if (control_net) {
+        control_net->set_flash_attention_enabled(flash_attention_for(SDBackendModule::CONTROL_NET));
+    }
+    if (audio_encoder) {
+        audio_encoder->set_flash_attention_enabled(flash_attention_for(SDBackendModule::AUDIO_ENCODER));
     }
     if (sd_ctx_params->sage_attn && !set_sage_attention_enabled(true)) {
         return false;
