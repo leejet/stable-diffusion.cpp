@@ -1633,7 +1633,7 @@ bool StableDiffusionGGML::build_runners(const RunnerGroups& groups) {
     LOG_INFO("Diffusion model weight type stat: %s", wtype_stat_to_str(diffusion_model_wtype_stat).c_str());
     LOG_INFO("VAE weight type stat:             %s", wtype_stat_to_str(vae_wtype_stat).c_str());
 
-    LOG_VERBOSE("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
+    LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
 
     configure_weight_loading();
     for (auto group : groups) {

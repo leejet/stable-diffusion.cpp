@@ -630,7 +630,7 @@ SDVersion ModelLoader::get_sd_version() const {
         }
     }
     if (is_wan) {
-        LOG_VERBOSE("patch_embedding_channels %d", patch_embedding_channels);
+        LOG_DEBUG("patch_embedding_channels %d", patch_embedding_channels);
         if (is_s2v) {
             return VERSION_WAN2_2_S2V;
         }
