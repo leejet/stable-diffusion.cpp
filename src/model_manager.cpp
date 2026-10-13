@@ -1762,7 +1762,7 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
             }
             // A wrapped report may reflect real pressure; reclaim before accepting the tracked estimate.
             LOG_VERBOSE("ignoring impossible free memory report on %s (%.2f MB free / %.2f MB total), using tracked residency",
-                        ggml_backend_name(backend), free_bytes / (1024.0 * 1024.0), total_bytes / (1024.0 * 1024.0));
+                           ggml_backend_name(backend), free_bytes / (1024.0 * 1024.0), total_bytes / (1024.0 * 1024.0));
             free_bytes                  = total_bytes;
             result.requires_reclamation = true;
         }

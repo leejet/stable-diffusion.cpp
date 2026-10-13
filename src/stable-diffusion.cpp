@@ -339,6 +339,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->eager_load                = false;
     sd_ctx_params->enable_mmap               = false;
     sd_ctx_params->flash_attn_mode           = nullptr;
+    sd_ctx_params->conv_direct_mode          = nullptr;
     sd_ctx_params->diffusion_flash_attn      = false;
     sd_ctx_params->sage_attn                 = false;
     sd_ctx_params->linear_scale              = 0.f;
@@ -397,6 +398,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "auto_fit: %s\n"
              "flash_attn: %s\n"
              "flash_attn_mode: %s\n"
+             "conv_direct_mode: %s\n"
              "diffusion_flash_attn: %s\n"
              "sage_attn: %s\n"
              "linear_scale: %g\n"
@@ -439,6 +441,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              BOOL_STR(sd_ctx_params->auto_fit),
              BOOL_STR(sd_ctx_params->flash_attn),
              sd_ctx_params->flash_attn_mode && sd_ctx_params->flash_attn_mode[0] ? sd_ctx_params->flash_attn_mode : "auto (legacy flags honored)",
+             sd_ctx_params->conv_direct_mode && sd_ctx_params->conv_direct_mode[0] ? sd_ctx_params->conv_direct_mode : "auto (legacy flags honored)",
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
              BOOL_STR(sd_ctx_params->sage_attn),
              sd_ctx_params->linear_scale,

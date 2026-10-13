@@ -17,6 +17,11 @@ for probing behavior.
 Use module assignments such as `--flash-attn auto,te=off,vae=on` to override
 individual modules.
 
+`--conv-direct on|off|auto` also defaults to `auto`, enabling direct convolution
+on backends with implicit GEMM implementations. Use `--conv-direct auto,vae=off`
+for module overrides; supported modules are `diffusion`, `vae`, and `controlnet`.
+See [Direct convolution](../../docs/backend.md#direct-convolution---conv-direct-onoffauto).
+
 For direct image repair or automatic post-generation YOLOv8 detection followed by cropped inpainting, see
 [ADetailer](../../docs/adetailer.md).
 

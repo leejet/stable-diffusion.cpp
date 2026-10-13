@@ -18,6 +18,7 @@
 #include "core/ggml_runner.h"
 #include "core/ggml_tensor_utils.h"
 #include "core/layer_split_partition.h"
+#include "core/probe/conv_direct.h"
 #include "core/probe/flash_attn.h"
 #include "model.h"
 
@@ -951,7 +952,15 @@ bool StableDiffusionGGML::init(const sd_ctx_params_t* sd_ctx_params) {
         LOG_ERROR("invalid flash_attn_mode '%s': %s", flash_mode.c_str(), flash_error.c_str());
         return false;
     }
+    const std::string conv_mode = SAFE_STR(sd_ctx_params->conv_direct_mode);
+    std::string conv_error;
+    if (!sd_parse_conv_direct_assignment(conv_mode, &conv_direct_assignment, &conv_error)) {
+        LOG_ERROR("invalid conv_direct_mode '%s': %s", conv_mode.c_str(), conv_error.c_str());
+        return false;
+    }
     flash_attn_by_backend.clear();
+    conv2d_direct_by_backend.clear();
+    conv3d_direct_by_backend.clear();
     conditioning_cache_->set_capacity(static_cast<size_t>(sd_ctx_params->conditioning_cache_size));
     auto configuration = std::make_unique<ModelConfig>(*sd_ctx_params);
     n_threads          = sd_ctx_params->n_threads;
@@ -1224,6 +1233,34 @@ bool StableDiffusionGGML::flash_attention_for(SDBackendModule module) {
     return enabled;
 }
 
+bool StableDiffusionGGML::conv_direct_for(SDBackendModule module, bool conv3d) {
+    const auto& params     = config_->params;
+    const std::string mode = conv_direct_assignment.get(module);
+    if (mode == "on" || mode == "off") {
+        return mode == "on";
+    }
+    if (strlen(SAFE_STR(params.conv_direct_mode)) == 0 &&
+        (module == SDBackendModule::VAE ? params.vae_conv_direct : params.diffusion_conv_direct)) {
+        return true;
+    }
+    auto& by_backend = conv3d ? conv3d_direct_by_backend : conv2d_direct_by_backend;
+    auto backends    = backend_manager.runtime_backends(module);
+    bool enabled     = !backends.empty();
+    bool any_enabled = false;
+    for (auto backend : backends) {
+        auto it = by_backend.find(backend);
+        if (it == by_backend.end()) {
+            it = by_backend.emplace(backend, sd_probe_conv_direct(backend, conv3d)).first;
+        }
+        enabled     = enabled && it->second;
+        any_enabled = any_enabled || it->second;
+    }
+    if (any_enabled && !enabled) {
+        LOG_INFO("conv%dd direct auto: %s -> off (compute devices disagree)", conv3d ? 3 : 2, sd_backend_module_name(module));
+    }
+    return enabled;
+}
+
 bool StableDiffusionGGML::validate_and_load_runners() {
     const auto* sd_ctx_params   = &config_->params;
     const bool use_tae          = uses_tae();
@@ -1260,6 +1297,23 @@ bool StableDiffusionGGML::validate_and_load_runners() {
     }
     if (sd_ctx_params->sage_attn && !set_sage_attention_enabled(true)) {
         return false;
+    }
+    const auto set_conv_direct = [this](SDBackendModule module, const std::vector<GGMLRunner*>& runners) {
+        const bool conv2d = conv_direct_for(module, false);
+        const bool conv3d = conv_direct_for(module, true);
+        for (auto runner : runners) {
+            if (runner != nullptr) {
+                runner->set_conv2d_direct_enabled(conv2d);
+                runner->set_conv3d_direct_enabled(conv3d);
+            }
+        }
+    };
+    set_conv_direct(SDBackendModule::DIFFUSION, {diffusion_model.get(), high_noise_diffusion_model.get()});
+    if (first_stage_model || preview_vae || audio_vae_model) {
+        set_conv_direct(SDBackendModule::VAE, {first_stage_model.get(), preview_vae.get(), audio_vae_model.get()});
+    }
+    if (control_net) {
+        set_conv_direct(SDBackendModule::CONTROL_NET, {control_net.get()});
     }
     LOG_VERBOSE("validating model metadata");
 

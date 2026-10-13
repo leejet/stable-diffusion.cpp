@@ -3,8 +3,9 @@
 `src/core/probe/backend_probe.h` provides the shared measurement machinery. Operator
 policy stays separate: `src/core/probe/flash_attn.cpp`, for example, defines attention
 shapes and its CPU/CUDA/HIP/Vulkan shortcuts, then calls `sd_run_backend_probe` for unknown
-configurations. A future convolution probe can use the same runner without
-changing the attention implementation.
+configurations. `src/core/probe/conv_direct.cpp` uses metadata-only probe graphs
+to check direct 2D/3D convolution support, then enables known implicit GEMM
+paths. It does not allocate device tensors, execute kernels, or run measurements.
 
 For each representative shape, create a `BackendProbeCase`:
 
@@ -40,7 +41,9 @@ cache by both operation and backend); an attention result must not select a
 convolution implementation. If shapes or settings vary within one context,
 include them in the corresponding cache key as well.
 
-No convolution policy or CLI option is added by this infrastructure.
+Convolution results are cached separately for 2D and 3D, once per compute backend
+in the context, just like attention results. Each probe logs its backend, decision,
+and reason; mixed-device modules log when their compute devices disagree.
 
 Module assignment parsing remains in `src/core/ggml_extend_backend.cpp`, next
 to backend assignment parsing. The probe directory does not parse CLI/API options.

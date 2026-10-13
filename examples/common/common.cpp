@@ -636,14 +636,6 @@ ArgOptions SDContextParams::get_options() {
          "--sage-attn",
          "use native CUDA SageAttention in the diffusion model, with flash/default attention fallback",
          true, &sage_attn},
-        {"",
-         "--diffusion-conv-direct",
-         "use ggml_conv2d_direct in the diffusion model",
-         true, &diffusion_conv_direct},
-        {"",
-         "--vae-conv-direct",
-         "use direct 2D and 3D convolutions in the vae model",
-         true, &vae_conv_direct},
     };
 
     auto on_type_arg = [&](int argc, const char** argv, int index) {
@@ -728,6 +720,33 @@ ArgOptions SDContextParams::get_options() {
          "flash-attention K/V scale override (float, default: 0 = model default, 1 = no scaling); applies when flash attention is selected",
          [this](int argc, const char** argv, int index) {
              return parse_scale_override(argc, argv, index, attn_scale);
+         }},
+        {"",
+         "--diffusion-conv-direct",
+         "deprecated; use --conv-direct auto,diffusion=on,controlnet=on",
+         [this](int, const char**, int) {
+             LOG_WARN("--diffusion-conv-direct is deprecated; use --conv-direct auto,diffusion=on,controlnet=on instead.");
+             diffusion_conv_direct = true;
+             return 0;
+         }},
+        {"",
+         "--vae-conv-direct",
+         "deprecated; use --conv-direct auto,vae=on",
+         [this](int, const char**, int) {
+             LOG_WARN("--vae-conv-direct is deprecated; use --conv-direct auto,vae=on instead.");
+             vae_conv_direct = true;
+             return 0;
+         }},
+        {"",
+         "--conv-direct",
+         "on|off|auto or diffusion/vae/controlnet assignments (default: auto), e.g. auto,vae=off. Overrides legacy convolution flags",
+         [this](int argc, const char** argv, int index) {
+             if (++index >= argc || argv[index][0] == '\0') {
+                 LOG_ERROR("--conv-direct requires on, off, auto, or module assignments");
+                 return -1;
+             }
+             conv_direct_mode = argv[index];
+             return 1;
          }},
         {"",
          "--flash-attn",
@@ -984,6 +1003,7 @@ std::string SDContextParams::to_string() const {
         << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
         << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
         << "  flash_attn_mode: " << flash_attn_mode << ",\n"
+        << "  conv_direct_mode: " << (conv_direct_mode.empty() ? "auto (legacy flags honored)" : conv_direct_mode) << ",\n"
         << "  sage_attn: " << (sage_attn ? "true" : "false") << ",\n"
         << "  linear_scale: " << linear_scale << ",\n"
         << "  attn_scale: " << attn_scale << ",\n"
@@ -1042,6 +1062,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.lora_apply_mode                 = lora_apply_mode;
     sd_ctx_params.enable_mmap                     = enable_mmap;
     sd_ctx_params.flash_attn_mode                 = flash_attn_mode.c_str();
+    sd_ctx_params.conv_direct_mode                = conv_direct_mode.c_str();
     sd_ctx_params.sage_attn                       = sage_attn;
     sd_ctx_params.linear_scale                    = linear_scale;
     sd_ctx_params.attn_scale                      = attn_scale;
