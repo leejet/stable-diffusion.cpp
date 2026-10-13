@@ -40,8 +40,7 @@ the intended output scale:
 - `--linear-scale` scales Linear inputs before matrix multiplication and rescales
   the result.
 - `--attn-scale` scales attention keys and values (K/V). It takes effect only in
-  the Flash Attention path, where `--fa` or `--diffusion-fa` is enabled and the
-  backend supports it.
+  the Flash Attention path, when selected and supported by the backend.
 
 The two values can be set independently and apply across model components. The
 default `0` preserves each model's built-in settings; `1` explicitly disables the

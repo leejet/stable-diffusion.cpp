@@ -17,5 +17,5 @@ Do not pass `--vae`. Image dimensions must be multiples of 16. The reference pip
 The released checkpoint keeps part of the transformer in F32. Pass `--type bf16` to load it in BF16, as the reference pipeline runs it; this reduces the diffusion model from about 18.6 GB to 11.8 GB.
 
 ```bash
-.\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\model-1k-merge.safetensors --llm ..\models\text_encoders\qwen_3_4b.safetensors -p "an origami pig on fire in the middle of a dark room with a pentagram on the floor" --cfg-scale 2.0 --steps 30 --sampling-method euler -W 1024 -H 1024 --diffusion-fa --type bf16 -v -o z_image_l2p.png
+.\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\model-1k-merge.safetensors --llm ..\models\text_encoders\qwen_3_4b.safetensors -p "an origami pig on fire in the middle of a dark room with a pentagram on the floor" --cfg-scale 2.0 --steps 30 --sampling-method euler -W 1024 -H 1024 --type bf16 -v -o z_image_l2p.png
 ```

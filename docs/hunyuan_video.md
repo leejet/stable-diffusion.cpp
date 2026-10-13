@@ -18,7 +18,7 @@ and ByT5 Small GlyphXL for glyph-aware text conditioning.
 ## Text-to-video example
 
 ```shell
-.\bin\Release\sd-cli.exe -M vid_gen --diffusion-model  ..\models\diffusion_models\hunyuanvideo1.5_720p_t2v_fp16.safetensors --vae ..\models\vae\hunyuanvideo15_vae_fp16.safetensors --llm ..\models\text_encoders\qwen_2.5_vl_7b.safetensors --t5xxl ..\models\text_encoders\byt5_small_glyphxl_fp16.safetensors  -p "a lovely cat" --cfg-scale 6.0 --sampling-method euler -v -W 1280 -H 720 --offload-to-cpu --diffusion-fa --video-frames 33 --vae-tiling
+.\bin\Release\sd-cli.exe -M vid_gen --diffusion-model  ..\models\diffusion_models\hunyuanvideo1.5_720p_t2v_fp16.safetensors --vae ..\models\vae\hunyuanvideo15_vae_fp16.safetensors --llm ..\models\text_encoders\qwen_2.5_vl_7b.safetensors --t5xxl ..\models\text_encoders\byt5_small_glyphxl_fp16.safetensors  -p "a lovely cat" --cfg-scale 6.0 --sampling-method euler -v -W 1280 -H 720 --offload-to-cpu --video-frames 33 --vae-tiling
 ```
 
 <video src=../assets/hunyuan_video/hy1.5_t2v.mp4 controls="controls" muted="muted" type="video/mp4"></video>

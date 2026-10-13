@@ -102,5 +102,5 @@ The dedicated CUDA and HIP convrot activation paths currently require a group si
 ComfyUI INT8 convrot safetensors can be passed to `--diffusion-model` without conversion:
 
 ```powershell
-.\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\krea2_turbo_int8_convrot.safetensors --llm ..\models\text_encoders\Qwen3-VL-4B-Instruct-Q4_K_M.gguf --vae ..\models\vae\wan_2.1_vae.safetensors -p "a lovely cat holding a sign says 'krea2.cpp'" --steps 8 --cfg-scale 1 --diffusion-fa -v --offload-to-cpu
+.\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\krea2_turbo_int8_convrot.safetensors --llm ..\models\text_encoders\Qwen3-VL-4B-Instruct-Q4_K_M.gguf --vae ..\models\vae\wan_2.1_vae.safetensors -p "a lovely cat holding a sign says 'krea2.cpp'" --steps 8 --cfg-scale 1 -v --offload-to-cpu
 ```

@@ -28,7 +28,6 @@ and the tokenizer files.
   --seed 42 \
   --sampling-method euler \
   --rng cuda \
-  --fa \
   --output output.png
 ```
 

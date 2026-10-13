@@ -21,6 +21,7 @@
 #include <windows.h>
 #endif  // _WIN32
 
+#include "core/ggml_extend_backend.h"
 #include "log.h"
 #include "media_io.h"
 #include "resource_owners.hpp"
@@ -634,11 +635,11 @@ ArgOptions SDContextParams::get_options() {
          true, &vae_on_cpu},
         {"",
          "--fa",
-         "use flash attention",
+         "deprecated; use --flash-attn on",
          true, &flash_attn},
         {"",
          "--diffusion-fa",
-         "use flash attention in the diffusion model only",
+         "deprecated; use --flash-attn off,diffusion=on",
          true, &diffusion_flash_attn},
         {"",
          "--sage-attn",
@@ -733,9 +734,28 @@ ArgOptions SDContextParams::get_options() {
          }},
         {"",
          "--attn-scale",
-         "flash-attention K/V scale override (float, default: 0 = model default, 1 = no scaling); requires --fa or --diffusion-fa",
+         "flash-attention K/V scale override (float, default: 0 = model default, 1 = no scaling); applies when flash attention is selected",
          [this](int argc, const char** argv, int index) {
              return parse_scale_override(argc, argv, index, attn_scale);
+         }},
+        {"",
+         "--flash-attn",
+         "on|off|auto or module assignments (default: auto), e.g. auto,te=off,vae=on. Last repeated option wins",
+         [this](int argc, const char** argv, int index) {
+             if (++index >= argc) {
+                 LOG_ERROR("--flash-attn requires on, off, or auto");
+                 return -1;
+             }
+             const std::string value = argv[index];
+             SDBackendAssignment assignment;
+             std::string error;
+             if (value.empty() || !sd_parse_flash_attention_assignment(value, &assignment, &error)) {
+                 LOG_ERROR("invalid --flash-attn value '%s': %s", value.c_str(), error.empty() ? "expected on, off, auto, or module assignments" : error.c_str());
+                 return -1;
+             }
+             flash_attn_mode          = value;
+             flash_attn_mode_explicit = true;
+             return 1;
          }},
         {"",
          "--auto-fit",
@@ -825,6 +845,12 @@ void SDContextParams::build_embedding_map() {
 }
 
 bool SDContextParams::resolve(SDMode mode) {
+    if (flash_attn) {
+        LOG_WARN("--fa is deprecated; use --flash-attn on instead. Explicit --flash-attn takes precedence.");
+    }
+    if (diffusion_flash_attn) {
+        LOG_WARN("--diffusion-fa is deprecated; use --flash-attn off,diffusion=on instead. Explicit --flash-attn takes precedence.");
+    }
     if (n_threads <= 0) {
         n_threads = sd_get_num_physical_cores();
     }
@@ -959,6 +985,7 @@ std::string SDContextParams::to_string() const {
         << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
         << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
         << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
+        << "  flash_attn_mode: " << flash_attn_mode << ",\n"
         << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
         << "  sage_attn: " << (sage_attn ? "true" : "false") << ",\n"
@@ -1018,8 +1045,9 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.prediction                      = prediction;
     sd_ctx_params.lora_apply_mode                 = lora_apply_mode;
     sd_ctx_params.enable_mmap                     = enable_mmap;
-    sd_ctx_params.flash_attn                      = flash_attn;
-    sd_ctx_params.diffusion_flash_attn            = diffusion_flash_attn;
+    sd_ctx_params.flash_attn_mode                 = flash_attn_mode_explicit ? flash_attn_mode.c_str() : nullptr;
+    sd_ctx_params.flash_attn                      = !flash_attn_mode_explicit && flash_attn;
+    sd_ctx_params.diffusion_flash_attn            = !flash_attn_mode_explicit && diffusion_flash_attn;
     sd_ctx_params.sage_attn                       = sage_attn;
     sd_ctx_params.linear_scale                    = linear_scale;
     sd_ctx_params.attn_scale                      = attn_scale;
