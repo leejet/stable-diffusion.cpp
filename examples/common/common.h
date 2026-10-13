@@ -171,9 +171,10 @@ struct SDContextParams {
     bool clip_on_cpu            = false;
     bool vae_on_cpu             = false;
     std::string flash_attn_mode = "auto";
-    bool sage_attn              = false;
-    bool diffusion_conv_direct  = false;
-    bool vae_conv_direct        = false;
+    std::string conv_direct_mode;  // Empty selects auto while honoring legacy convolution flags.
+    bool sage_attn             = false;
+    bool diffusion_conv_direct = false;
+    bool vae_conv_direct       = false;
 
     prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;

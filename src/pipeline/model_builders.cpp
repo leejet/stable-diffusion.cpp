@@ -478,10 +478,6 @@ namespace sd::model_builders {
                                                                  "model.diffusion_model",
                                                                  version,
                                                                  weight_manager);
-            if (sd_ctx_params->diffusion_conv_direct) {
-                LOG_INFO("Using Conv2d direct in the diffusion model");
-                result.diffusion->set_conv2d_direct_enabled(true);
-            }
         }
 
         if (strlen(SAFE_STR(sd_ctx_params->ip_adapter_path)) > 0 && result.clip_vision == nullptr) {
@@ -668,15 +664,6 @@ namespace sd::model_builders {
             }
         }
 
-        if (sd_ctx_params->vae_conv_direct) {
-            LOG_INFO("Using Conv2d/Conv3d direct in the vae model");
-            result.vae->set_conv2d_direct_enabled(true);
-            result.vae->set_conv3d_direct_enabled(true);
-            if (result.preview) {
-                result.preview->set_conv2d_direct_enabled(true);
-                result.preview->set_conv3d_direct_enabled(true);
-            }
-        }
         if (result.vae) {
             result.vae->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
         }
@@ -703,10 +690,6 @@ namespace sd::model_builders {
                                                         version,
                                                         "",
                                                         weight_manager);
-        if (sd_ctx_params->diffusion_conv_direct) {
-            LOG_INFO("Using Conv2d direct in the control net");
-            control_net->set_conv2d_direct_enabled(true);
-        }
         control_net->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
         runner = std::move(control_net);
         return true;

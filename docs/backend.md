@@ -215,6 +215,47 @@ If a VAE decode fails, decoding retries with spatial tiling even when `--auto-fi
 is off; supported video decoders try temporal tiling first and can then add
 spatial tiling. Spatial retries use half-size tiles along each latent dimension.
 
+## Direct convolution (`--conv-direct on|off|auto`)
+
+`--conv-direct` defaults to `auto` and accepts module assignments for
+`diffusion`, `vae` (including preview VAE), and `controlnet`, using the same
+aliases and precedence rules as `--flash-attn`:
+
+```shell
+sd-cli -m model.safetensors -p "a cat" --conv-direct auto,vae=off
+sd-cli -m model.safetensors -p "a cat" --conv-direct off,diffusion=on
+```
+
+- `on` requests direct 2D and 3D convolution.
+- `off` uses the existing im2col-based convolution paths.
+- `auto` enables direct convolution on compute backends with implicit GEMM
+  implementations, without running a benchmark. A metadata-only probe first
+  checks support for a representative F16-weight/F32-input direct convolution
+  graph. Results and decision logs are cached per compute backend and dimension
+  in the context, as with flash attention. Vulkan enables both 2D and 3D.
+  CUDA 2D requires a compiled Turing-or-newer MMA architecture; HIP 2D requires
+  the supported CDNA MFMA or RDNA WMMA architectures described below for flash
+  attention. MUSA 2D has a SIMT implementation. CUDA, HIP, and MUSA 3D also have
+  a SIMT implementation, so they do not require MMA. Other backends default to
+  `off`. Each dimension is selected independently, and all compute devices in
+  a module must qualify. Parameter-storage devices do not affect this choice.
+
+These are backend-level defaults. GGML still chooses the actual kernel based on
+weight type, shape, and hardware; enabling direct convolution does not guarantee
+that every operation uses implicit GEMM. The CUDA-family implicit GEMM paths
+require F16 weights and can use ordinary direct kernels for other cases.
+This option does not change the separately created image upscaler context.
+
+Repeating `--conv-direct` replaces the previous assignment string. Existing
+`--diffusion-conv-direct` (diffusion and ControlNet) and `--vae-conv-direct`
+flags are deprecated and emit a warning, but remain supported when
+`--conv-direct` is omitted. Use `--conv-direct auto,diffusion=on,controlnet=on`
+and `--conv-direct auto,vae=on`, respectively. An explicit
+`--conv-direct` takes precedence over both legacy flags regardless of order.
+Library callers can set the appended `sd_ctx_params_t::conv_direct_mode` field
+to the same string; null or empty selects `auto` while honoring legacy true
+flags. The context copies the string.
+
 ## Flash attention (`--flash-attn on|off|auto`)
 
 `--flash-attn` defaults to `auto`. Selection happens while creating the model
