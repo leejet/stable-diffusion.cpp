@@ -21,7 +21,6 @@
 #include <windows.h>
 #endif  // _WIN32
 
-#include "core/ggml_extend_backend.h"
 #include "log.h"
 #include "media_io.h"
 #include "resource_owners.hpp"
@@ -634,14 +633,6 @@ ArgOptions SDContextParams::get_options() {
          "deprecated; use --backend vae=cpu",
          true, &vae_on_cpu},
         {"",
-         "--fa",
-         "deprecated; use --flash-attn on",
-         true, &flash_attn},
-        {"",
-         "--diffusion-fa",
-         "deprecated; use --flash-attn off,diffusion=on",
-         true, &diffusion_flash_attn},
-        {"",
          "--sage-attn",
          "use native CUDA SageAttention in the diffusion model, with flash/default attention fallback",
          true, &sage_attn},
@@ -747,15 +738,28 @@ ArgOptions SDContextParams::get_options() {
                  return -1;
              }
              const std::string value = argv[index];
-             SDBackendAssignment assignment;
-             std::string error;
-             if (value.empty() || !sd_parse_flash_attention_assignment(value, &assignment, &error)) {
-                 LOG_ERROR("invalid --flash-attn value '%s': %s", value.c_str(), error.empty() ? "expected on, off, auto, or module assignments" : error.c_str());
+             if (value.empty()) {
+                 LOG_ERROR("--flash-attn requires a nonempty value");
                  return -1;
              }
-             flash_attn_mode          = value;
-             flash_attn_mode_explicit = true;
+             flash_attn_mode = value;
              return 1;
+         }},
+        {"",
+         "--fa",
+         "deprecated; use --flash-attn on",
+         [this](int, const char**, int) {
+             LOG_WARN("--fa is deprecated; use --flash-attn on instead.");
+             flash_attn_mode = "on";
+             return 0;
+         }},
+        {"",
+         "--diffusion-fa",
+         "deprecated; use --flash-attn off,diffusion=on",
+         [this](int, const char**, int) {
+             LOG_WARN("--diffusion-fa is deprecated; use --flash-attn off,diffusion=on instead.");
+             flash_attn_mode = "off,diffusion=on";
+             return 0;
          }},
         {"",
          "--auto-fit",
@@ -845,12 +849,6 @@ void SDContextParams::build_embedding_map() {
 }
 
 bool SDContextParams::resolve(SDMode mode) {
-    if (flash_attn) {
-        LOG_WARN("--fa is deprecated; use --flash-attn on instead. Explicit --flash-attn takes precedence.");
-    }
-    if (diffusion_flash_attn) {
-        LOG_WARN("--diffusion-fa is deprecated; use --flash-attn off,diffusion=on instead. Explicit --flash-attn takes precedence.");
-    }
     if (n_threads <= 0) {
         n_threads = sd_get_num_physical_cores();
     }
@@ -986,8 +984,6 @@ std::string SDContextParams::to_string() const {
         << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
         << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
         << "  flash_attn_mode: " << flash_attn_mode << ",\n"
-        << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
-        << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
         << "  sage_attn: " << (sage_attn ? "true" : "false") << ",\n"
         << "  linear_scale: " << linear_scale << ",\n"
         << "  attn_scale: " << attn_scale << ",\n"
@@ -1045,9 +1041,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.prediction                      = prediction;
     sd_ctx_params.lora_apply_mode                 = lora_apply_mode;
     sd_ctx_params.enable_mmap                     = enable_mmap;
-    sd_ctx_params.flash_attn_mode                 = flash_attn_mode_explicit ? flash_attn_mode.c_str() : nullptr;
-    sd_ctx_params.flash_attn                      = !flash_attn_mode_explicit && flash_attn;
-    sd_ctx_params.diffusion_flash_attn            = !flash_attn_mode_explicit && diffusion_flash_attn;
+    sd_ctx_params.flash_attn_mode                 = flash_attn_mode.c_str();
     sd_ctx_params.sage_attn                       = sage_attn;
     sd_ctx_params.linear_scale                    = linear_scale;
     sd_ctx_params.attn_scale                      = attn_scale;

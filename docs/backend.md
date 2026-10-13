@@ -275,9 +275,8 @@ row-split configurations, which can fall back to layer split during initializati
 
 `--fa` and `--diffusion-fa` are deprecated and emit a warning when used.
 Use `--flash-attn on` and `--flash-attn off,diffusion=on`, respectively.
-Both retain their old meanings when `--flash-attn` is omitted.
-An explicit `--flash-attn` overrides both aliases, regardless of argument
-order, including when only one module is explicitly assigned. Library callers
+Both aliases write the same mode string as `--flash-attn`; the last occurrence
+of any of these options wins. Library callers
 can set `sd_ctx_params_t::flash_attn_mode` to the same string, including
 `"on"`, `"off"`, `"auto"`, or `"auto,te=off,vae=on"`.
 A null or empty string uses automatic selection unless a
