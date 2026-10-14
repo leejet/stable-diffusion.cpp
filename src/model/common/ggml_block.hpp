@@ -222,7 +222,7 @@ public:
                 if (force_prec_f32) {
                     ggml_prec_set_acc(fp8_matmul, GGML_PREC_F32);
                 }
-                supports_fp8_matmul = ggml_backend_supports_op(ctx->backend, fp8_matmul);
+                supports_fp8_matmul = ggml_backend_supports_op(ctx->backend, fp8_matmul) && !sd_backend_is(ctx->backend,"cpu");
             }
             if (!supports_fp8_matmul) {
                 w = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_BF16);
