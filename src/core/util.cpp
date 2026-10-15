@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <locale>
 #include <regex>
@@ -123,12 +124,12 @@ int round_up_to(int value, int base) {
 #include <windows.h>
 
 bool file_exists(const std::string& filename) {
-    DWORD attributes = GetFileAttributesA(filename.c_str());
+    DWORD attributes = GetFileAttributesW(std::filesystem::u8path(filename).c_str());
     return (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY));
 }
 
 bool is_directory(const std::string& path) {
-    DWORD attributes = GetFileAttributesA(path.c_str());
+    DWORD attributes = GetFileAttributesW(std::filesystem::u8path(path).c_str());
     return (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY));
 }
 
@@ -152,8 +153,8 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename, bo
     void* mapped_data = nullptr;
     size_t file_size  = 0;
 
-    HANDLE file_handle = CreateFileA(
-        filename.c_str(),
+    HANDLE file_handle = CreateFileW(
+        std::filesystem::u8path(filename).c_str(),
         GENERIC_READ,
         FILE_SHARE_READ,
         nullptr,
