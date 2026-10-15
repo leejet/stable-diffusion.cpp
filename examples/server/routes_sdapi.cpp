@@ -28,10 +28,10 @@ static std::string extract_and_remove_sd_cpp_extra_args(std::string& text) {
 static fs::path resolve_display_model_path(const ServerRuntime& runtime) {
     const auto& ctx = *runtime.ctx_params;
     if (!ctx.model_path.empty()) {
-        return fs::path(ctx.model_path);
+        return fs::u8path(ctx.model_path);
     }
     if (!ctx.diffusion_model_path.empty()) {
-        return fs::path(ctx.diffusion_model_path);
+        return fs::u8path(ctx.diffusion_model_path);
     }
     return {};
 }
@@ -583,9 +583,9 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
     svr.Get("/sdapi/v1/sd-models", [runtime](const httplib::Request&, httplib::Response& res) {
         fs::path model_path = resolve_display_model_path(*runtime);
         json entry;
-        entry["title"]      = model_path.stem();
-        entry["model_name"] = model_path.stem();
-        entry["filename"]   = model_path.filename();
+        entry["title"]      = model_path.stem().u8string();
+        entry["model_name"] = model_path.stem().u8string();
+        entry["filename"]   = model_path.filename().u8string();
         entry["hash"]       = "8888888888";
         entry["sha256"]     = "8888888888888888888888888888888888888888888888888888888888888888";
         entry["config"]     = nullptr;
@@ -598,7 +598,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         fs::path model_path = resolve_display_model_path(*runtime);
         json r;
         r["samples_format"]      = "png";
-        r["sd_model_checkpoint"] = model_path.stem();
+        r["sd_model_checkpoint"] = model_path.stem().u8string();
         res.set_content(r.dump(), "application/json");
     });
 

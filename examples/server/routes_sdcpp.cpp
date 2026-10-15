@@ -90,10 +90,10 @@ static json make_vae_tiling_json(const sd_tiling_params_t& params) {
 static fs::path resolve_display_model_path(const ServerRuntime& runtime) {
     const auto& ctx = *runtime.ctx_params;
     if (!ctx.model_path.empty()) {
-        return fs::path(ctx.model_path);
+        return fs::u8path(ctx.model_path);
     }
     if (!ctx.diffusion_model_path.empty()) {
-        return fs::path(ctx.diffusion_model_path);
+        return fs::u8path(ctx.diffusion_model_path);
     }
     return {};
 }
