@@ -14,6 +14,7 @@ Depending on the architecture, different models handle reference images differen
 | [**Qwen Image Edit**](./qwen_image_edit.md) | `qwen` |
 | **Qwen Image LAYERED** | `qwen_layered` |
 | [**Flux.2 [Dev] / Flux.2 [Klein]**](./flux2.md) | `flux2` |
+| [**FLUX.3 Image Klein / Klein Base**](./flux3.md) | `flux2` |
 | [**Boogu Image Edit**](./boogu_image.md) | `z_image_omni` |
 | **Krea2 (Community Edit LoRAs)** | `krea2_ostris_edit` |
 | [**Mage-Flow-Edit**](./mage_flow.md#image-editing) | `mage_flow` |

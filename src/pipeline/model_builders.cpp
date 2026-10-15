@@ -15,6 +15,7 @@
 #include "model/diffusion/control.hpp"
 #include "model/diffusion/ernie_image.hpp"
 #include "model/diffusion/flux.hpp"
+#include "model/diffusion/flux3.hpp"
 #include "model/diffusion/hidream_o1.hpp"
 #include "model/diffusion/hunyuan.hpp"
 #include "model/diffusion/ideogram4.hpp"
@@ -173,6 +174,11 @@ namespace sd::model_builders {
                                                                   version,
                                                                   weight_manager,
                                                                   sd_ctx_params->model_args);
+        } else if (sd_version_is_flux3(version)) {
+            result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
+                                                               tensor_storage_map, version, "", false, weight_manager, tokenizers);
+            result.diffusion   = std::make_shared<Flux3::Flux3Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                    tensor_storage_map, "model.diffusion_model", weight_manager);
         } else if (sd_version_is_flux2(version) || sd_version_is_sefi_image(version)) {
             bool is_chroma     = false;
             result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
