@@ -5,8 +5,13 @@ eg.:
  - flux 768x768 ~600mb
  - SD2 768x768 ~1400mb
 
-For most backends, it slows things down, but for cuda it generally speeds it up too.
-At the moment, it is only supported for some models and some backends (like cpu, cuda/rocm, metal).
+`--flash-attn on|off|auto` controls flash attention. Its effect on speed depends
+on GPU architecture, backend, driver, model, and tensor shapes. Automatic
+selection uses backend rules and, for some paths, small probes; it does not
+guarantee the fastest end-to-end generation. Compare `on` and `off` with the
+same model and generation settings over repeated runs, separating startup/probe
+time from steady-state generation time. See [backend selection](backend.md)
+for automatic selection rules and per-module overrides.
 
 Watch for:
 ```
@@ -20,6 +25,19 @@ This reports the actual peak compute workspace capacity per backend, including
 CPU fallback. It excludes weights and cache buffers. Within a runner lifecycle,
 the summary is printed only on the first graph or when backend capacities or the
 segment count change.
+
+## Tune direct convolution.
+
+`--conv-direct on|off|auto` selects direct convolution or the im2col-based
+path. Performance depends on GPU architecture, backend, driver, model, and
+tensor shapes, so enabling direct convolution can either improve or reduce speed.
+
+Automatic selection uses small benchmarks on Vulkan and implicit GEMM checks
+on other backends. It does not guarantee the fastest end-to-end generation.
+Compare `on` and `off` with the same model and generation settings over
+repeated runs, keeping flash attention unchanged and separating startup/probe
+time from steady-state generation time. See [backend selection](backend.md)
+for automatic selection rules and per-module overrides.
 
 ## Run conditional and unconditional CFG in one batched UNet forward.
 
