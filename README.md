@@ -15,6 +15,7 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
+* **2026/10/16** 🚀 stable-diffusion.cpp adds **Day-0 support for FLUX.3 Image Klein / Klein Base**
 * **2026/09/20** 🚀 stable-diffusion.cpp adds **Day-0 support for Qwen-Image-2.1**
 * **2026/08/20** 🚀 stable-diffusion.cpp now supports **LTX-2.5**
 * **2026/08/04** 🚀 stable-diffusion.cpp adds **Day-1 support for MiniMax-H3**
@@ -44,6 +45,7 @@ API and command-line option may change frequently.***
     - [SD3/SD3.5](./docs/sd3.md)
     - [FLUX.1-dev/FLUX.1-schnell](./docs/flux.md)
     - [FLUX.2-dev/FLUX.2-klein](./docs/flux2.md)
+    - [FLUX.3 Image Klein / Klein Base](./docs/flux3.md)
     - [Lens](./docs/lens.md)
     - [Chroma](./docs/chroma.md)
     - [Chroma1-Radiance](./docs/chroma_radiance.md)
