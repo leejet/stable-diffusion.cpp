@@ -601,7 +601,7 @@ static void print_progress_line(int step, int steps, const std::string& speed_te
     fflush(stdout);  // for linux
 }
 
-static int hide_annot    = -1;  // -1 - check, 0 - show, 1 - hide
+static int hide_annot    = -1;  // -1 - estimate duration, 0 - show, 1 - hide
 static float passed_time = 0.f;
 #define PRETTY_PRECISE_TIME 0  // 0/1 for integer/rational seconds
 
