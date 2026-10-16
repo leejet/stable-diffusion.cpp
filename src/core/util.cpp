@@ -616,7 +616,7 @@ void pretty_progress(int step, int steps, float time) {
         return;
     }
     std::string remainder_text = "";
-    if (show_annot && step != steps) {                                    // if timer is not disabled and bar is not filled,
+    if (show_annot && step < steps) {                                     // if timer is not disabled and bar is not filled,
         if (show_annot == -1 && step)                                     // estimate the total time once, then
             show_annot = (std::abs(time * steps / step) < 15.f) ? 0 : 1;  // hide the timer if total is less than 15 seconds
         if (show_annot) {
