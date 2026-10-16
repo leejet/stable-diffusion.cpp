@@ -46,6 +46,7 @@ API and command-line option may change frequently.***
     - [FLUX.1-dev/FLUX.1-schnell](./docs/flux.md)
     - [FLUX.2-dev/FLUX.2-klein](./docs/flux2.md)
     - [FLUX.3 Image Klein / Klein Base](./docs/flux3.md)
+    - [MOSS-Image-Base / MOSS-Image-SFT](./docs/moss_image.md)
     - [Lens](./docs/lens.md)
     - [Chroma](./docs/chroma.md)
     - [Chroma1-Radiance](./docs/chroma_radiance.md)
