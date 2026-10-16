@@ -601,8 +601,8 @@ static void print_progress_line(int step, int steps, const std::string& speed_te
     fflush(stdout);  // for linux
 }
 
-int hide_annot    = -1;  // -1 - check, 0 - show, 1 - hide
-float passed_time = 0.f;
+static int hide_annot    = -1;  // -1 - check, 0 - show, 1 - hide
+static float passed_time = 0.f;
 #define PRETTY_PRECISE_TIME 0  // 0/1 for integer/rational seconds
 
 void pretty_progress(int step, int steps, float time) {
@@ -618,9 +618,9 @@ void pretty_progress(int step, int steps, float time) {
     std::string remainder_text;
     if (hide_annot == 1 || step == steps) {
         remainder_text = "";
-    } else {                                             // either check the duration or make the string
-        if (step == 1)                                   // estimate the total time once
-            hide_annot = (time * steps < 15.f) ? 1 : 0;  // hide the timer if total is less than 15 seconds
+    } else {                                                              // either check the duration or make the string
+        if (hide_annot == -1 && step > 0)                                 // estimate the total time once
+            hide_annot = (std::abs(time * steps / step) < 15.f) ? 1 : 0;  // hide the timer if total is less than 15 seconds
 #if PRETTY_PRECISE_TIME
         float remainder = (passed_time += time) / step * (steps - step);  // average speed; time*(steps-step) for current
         remainder_text  = hide_annot              ? ""                    // for the 1st step, because it will be evaluated always
