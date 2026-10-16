@@ -22,7 +22,7 @@ static std::string lower_ascii(std::string value) {
 }
 
 static bool is_supported_model_ext(const fs::path& p) {
-    auto ext = lower_ascii(p.extension().string());
+    auto ext = lower_ascii(p.extension().u8string());
     return ext == ".gguf" || ext == ".pt" || ext == ".pth" || ext == ".safetensors";
 }
 
@@ -226,7 +226,7 @@ bool SDSvrParams::validate() {
         return false;
     }
 
-    if (!serve_html_path.empty() && !fs::exists(serve_html_path)) {
+    if (!serve_html_path.empty() && !fs::exists(fs::u8path(serve_html_path))) {
         LOG_ERROR("error: serve_html_path file does not exist: %s", serve_html_path.c_str());
         return false;
     }
@@ -260,7 +260,7 @@ void refresh_lora_cache(ServerRuntime& rt) {
         return;
     }
 
-    fs::path lora_dir = rt.ctx_params->lora_model_dir;
+    fs::path lora_dir = fs::u8path(rt.ctx_params->lora_model_dir);
     std::error_code ec;
     if (fs::exists(lora_dir, ec) && !ec && fs::is_directory(lora_dir, ec) && !ec) {
         try {
@@ -293,13 +293,13 @@ void refresh_lora_cache(ServerRuntime& rt) {
                 it.increment(ec);
             }
         } catch (const std::exception& e) {
-            LOG_WARN("error while scanning lora directory '%s': %s", lora_dir.string().c_str(), e.what());
+            LOG_WARN("error while scanning lora directory '%s': %s", lora_dir.u8string().c_str(), e.what());
             return;
         }
     }
 
     if (ec) {
-        LOG_WARN("error while scanning lora directory '%s': %s", lora_dir.string().c_str(), ec.message().c_str());
+        LOG_WARN("error while scanning lora directory '%s': %s", lora_dir.u8string().c_str(), ec.message().c_str());
         return;
     }
 
@@ -328,7 +328,7 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
         previous_cache = *rt.upscaler_cache;
     }
 
-    fs::path upscaler_dir = rt.ctx_params->hires_upscalers_dir;
+    fs::path upscaler_dir = fs::u8path(rt.ctx_params->hires_upscalers_dir);
     std::error_code ec;
     if (fs::exists(upscaler_dir, ec) && !ec && fs::is_directory(upscaler_dir, ec) && !ec) {
         try {
@@ -384,13 +384,13 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
                 it.increment(ec);
             }
         } catch (const std::exception& e) {
-            LOG_WARN("error while scanning upscalers directory '%s': %s", upscaler_dir.string().c_str(), e.what());
+            LOG_WARN("error while scanning upscalers directory '%s': %s", upscaler_dir.u8string().c_str(), e.what());
             return;
         }
     }
 
     if (ec) {
-        LOG_WARN("error while scanning upscalers directory '%s': %s", upscaler_dir.string().c_str(), ec.message().c_str());
+        LOG_WARN("error while scanning upscalers directory '%s': %s", upscaler_dir.u8string().c_str(), ec.message().c_str());
         return;
     }
 
