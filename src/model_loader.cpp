@@ -444,6 +444,11 @@ SDVersion ModelLoader::get_sd_version() const {
         return VERSION_FLUX3;
     }
 
+    if (tensor_storage_map.count("model.diffusion_model.video_embedder.weight") &&
+        tensor_storage_map.count("model.diffusion_model.shared_block_modulation.weight")) {
+        return VERSION_MOSS_IMAGE;
+    }
+
     bool has_multiple_encoders = false;
     bool is_unet               = false;
 
