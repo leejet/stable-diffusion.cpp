@@ -224,8 +224,11 @@ namespace MOSSImage {
                 auto text = make_input(*inputs.context);
                 GGML_ASSERT(x->ne[3] == 1 && x->ne[2] == config.channels && text->ne[0] == config.text_dim);
                 int64_t h = x->ne[1], w = x->ne[0], nt = text->ne[1];
-                int64_t bands = config.head_dim / 8;
-                pe_data.clear();
+                Rope::Embedding embedding;
+                embedding.positions.append_image(static_cast<int>(h), static_cast<int>(w));
+                embedding.positions.images.back().height_axis = 2;
+                embedding.positions.images.back().width_axis  = 3;
+                embedding.positions.append_tokens(nt);
                 for (int64_t token = 0; token < h * w + nt; ++token) {
                     float pos[4] = {0.f, float(token - h * w), 0.f, 0.f};
                     if (token < h * w) {
@@ -233,13 +236,10 @@ namespace MOSSImage {
                         pos[2] = float(token / w) - float(h - 1) / 2.f;
                         pos[3] = float(token % w) - float(w - 1) / 2.f;
                     }
-                    for (float p : pos) {
-                        for (int64_t i = 0; i < bands; ++i) {
-                            float angle = p * std::pow(10000.f, -float(i) / float(bands));
-                            pe_data.insert(pe_data.end(), {std::cos(angle), -std::sin(angle), std::sin(angle), std::cos(angle)});
-                        }
-                    }
+                    embedding.ids.push_back({pos[0], pos[1], pos[2], pos[3]});
                 }
+                embedding.values = Rope::embed_nd(embedding.ids, 1, 10000.f, std::vector<int>(4, static_cast<int>(config.head_dim / 4)), embedding.layout, &embedding.frequencies);
+                pe_data          = finish_rope_pe(std::move(embedding));
                 time_data.resize(config.freq_dim);
                 for (int64_t i = 0; i < config.freq_dim / 2; ++i) {
                     double angle                       = inputs.timesteps->values()[0] * std::pow(10000.0, -double(i) / double(config.freq_dim / 2));
