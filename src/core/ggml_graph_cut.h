@@ -51,6 +51,8 @@ namespace sd::ggml_graph_cut {
     struct PlanCache {
         static constexpr size_t MAX_PLANS = 4;
         std::list<Plan> graph_cut_plans;
+        Plan budgeted_graph_cut_plan;
+        size_t budgeted_graph_cut_plan_bytes = 0;
     };
 
     static constexpr const char* GGML_RUNNER_CUT_PREFIX = "ggml_runner_cut:";
@@ -95,9 +97,12 @@ namespace sd::ggml_graph_cut {
                     const std::unordered_set<const ggml_tensor*>& params_tensor_set,
                     const char* log_desc);
     // The returned reference is valid until its cache entry is evicted or the cache is destroyed.
+    // When max_graph_vram_bytes > 0 and the base plan has multiple segments, adjacent segments
+    // are merged while the merged segment stays within the budget (pre-#1940 behavior restored).
     const Plan& resolve_plan(ggml_backend_t backend,
                              ggml_cgraph* gf,
                              PlanCache* cache,
+                             size_t max_graph_vram_bytes,
                              const std::unordered_set<const ggml_tensor*>& params_tensor_set,
                              const char* log_desc);
 
