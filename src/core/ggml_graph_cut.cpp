@@ -875,6 +875,7 @@ namespace sd::ggml_graph_cut {
         return sizes[0];
     }
 
+    // True when a later segment still consumes the given cut output node.
     static bool is_output_needed_after(const Plan& plan,
                                        size_t end_segment_index,
                                        int output_node_index) {
@@ -893,6 +894,8 @@ namespace sd::ggml_graph_cut {
         return false;
     }
 
+    // Seed for a merged segment spanning [start_segment_index, end_segment_index]:
+    // boundary outputs plus intermediate outputs still needed by later segments.
     static Segment make_merge_seed(const Plan& plan,
                                    size_t start_segment_index,
                                    size_t end_segment_index) {
@@ -924,6 +927,8 @@ namespace sd::ggml_graph_cut {
         return seed;
     }
 
+    // VRAM estimate of a (possibly merged) segment: compute buffer, input tensors
+    // and cut-cached outputs. Used as the merge criterion against the budget.
     static size_t merged_segment_vram_bytes(ggml_cgraph* gf, const Segment& segment) {
         size_t bytes = segment.compute_buffer_size;
         for (const auto& input : segment.input_refs) {
@@ -944,6 +949,9 @@ namespace sd::ggml_graph_cut {
         return bytes;
     }
 
+    // Greedily merge adjacent segments of the base plan while the merged segment
+    // stays within max_graph_vram_bytes. Falls back to the base plan when the
+    // merged plan fails validation.
     static Plan apply_max_vram_budget(ggml_cgraph* gf,
                                       const Plan& base_plan,
                                       size_t max_graph_vram_bytes,
@@ -1183,6 +1191,7 @@ namespace sd::ggml_graph_cut {
         return plan;
     }
 
+    // Resolve (and cache, keyed by budget) the budgeted variant of a base plan.
     static const Plan& apply_cached_budget(ggml_backend_t backend,
                                            ggml_cgraph* gf,
                                            PlanCache* cache,
