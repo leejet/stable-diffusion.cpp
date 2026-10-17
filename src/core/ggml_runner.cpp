@@ -348,6 +348,7 @@ const GGMLRunner::GraphCutPlan& GGMLRunner::resolve_graph_cut_plan(ggml_cgraph* 
     return sd::ggml_graph_cut::resolve_plan(runtime_backend,
                                             gf,
                                             &graph_cut_plan_cache_,
+                                            max_graph_vram_bytes,
                                             params_tensor_set_,
                                             get_desc().c_str());
 }

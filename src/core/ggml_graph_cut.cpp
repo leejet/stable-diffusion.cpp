@@ -875,6 +875,184 @@ namespace sd::ggml_graph_cut {
         return sizes[0];
     }
 
+    static bool is_output_needed_after(const Plan& plan,
+                                       size_t end_segment_index,
+                                       int output_node_index) {
+        if (end_segment_index + 1 >= plan.segments.size()) {
+            return false;
+        }
+        for (size_t seg_idx = end_segment_index + 1; seg_idx < plan.segments.size(); ++seg_idx) {
+            const auto& segment = plan.segments[seg_idx];
+            for (const auto& input_ref : segment.input_refs) {
+                if (input_ref.type == Segment::INPUT_PREVIOUS_CUT &&
+                    input_ref.node_index == output_node_index) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    static Segment make_merge_seed(const Plan& plan,
+                                   size_t start_segment_index,
+                                   size_t end_segment_index) {
+        GGML_ASSERT(start_segment_index < plan.segments.size());
+        GGML_ASSERT(end_segment_index < plan.segments.size());
+        GGML_ASSERT(start_segment_index <= end_segment_index);
+
+        Segment seed;
+        const auto& start_segment  = plan.segments[start_segment_index];
+        const auto& target_segment = plan.segments[end_segment_index];
+        std::unordered_set<int> seen_output_node_indices;
+        for (size_t seg_idx = start_segment_index; seg_idx <= end_segment_index; ++seg_idx) {
+            const bool is_boundary_segment = seg_idx == end_segment_index;
+            for (int output_node_index : plan.segments[seg_idx].output_node_indices) {
+                if ((is_boundary_segment ||
+                     is_output_needed_after(plan, end_segment_index, output_node_index)) &&
+                    seen_output_node_indices.insert(output_node_index).second) {
+                    seed.output_node_indices.push_back(output_node_index);
+                }
+            }
+        }
+        if (start_segment_index == end_segment_index) {
+            seed.group_name = target_segment.group_name;
+        } else {
+            seed.group_name = sd_format("%s..%s",
+                                        start_segment.group_name.c_str(),
+                                        target_segment.group_name.c_str());
+        }
+        return seed;
+    }
+
+    static size_t merged_segment_vram_bytes(ggml_cgraph* gf, const Segment& segment) {
+        size_t bytes = segment.compute_buffer_size;
+        for (const auto& input : segment.input_refs) {
+            ggml_tensor* tensor = input_tensor(gf, input);
+            if (tensor == nullptr) {
+                continue;
+            }
+            bytes += input.type == Segment::INPUT_PREVIOUS_CUT
+                         ? cache_tensor_bytes(tensor)
+                         : ggml_nbytes(tensor);
+        }
+        for (int output_node_index : segment.output_node_indices) {
+            ggml_tensor* output = ggml_graph_node(gf, output_node_index);
+            if (output != nullptr) {
+                bytes += cache_tensor_bytes(output);
+            }
+        }
+        return bytes;
+    }
+
+    static Plan apply_max_vram_budget(ggml_cgraph* gf,
+                                      const Plan& base_plan,
+                                      size_t max_graph_vram_bytes,
+                                      ggml_backend_t backend,
+                                      const std::unordered_set<const ggml_tensor*>& params_tensor_set,
+                                      const char* log_desc) {
+        GGML_ASSERT(backend != nullptr);
+        GGML_ASSERT(gf != nullptr);
+        int64_t t_budget_begin = ggml_time_ms();
+        if (max_graph_vram_bytes == 0 || !base_plan.has_cuts || base_plan.segments.size() <= 1) {
+            return base_plan;
+        }
+
+        const int n_nodes = ggml_graph_n_nodes(gf);
+        std::unordered_map<const ggml_tensor*, int> producer_index;
+        producer_index.reserve(static_cast<size_t>(n_nodes));
+        for (int i = 0; i < n_nodes; ++i) {
+            producer_index[ggml_graph_node(gf, i)] = i;
+        }
+
+        Plan merged_plan;
+        merged_plan.available    = true;
+        merged_plan.has_cuts     = base_plan.has_cuts;
+        merged_plan.valid        = base_plan.valid;
+        merged_plan.layout       = base_plan.layout;
+        merged_plan.leaf_names   = base_plan.leaf_names;
+        merged_plan.cut_markers  = base_plan.cut_markers;
+
+        std::unordered_set<int> available_cut_output_node_indices;
+        available_cut_output_node_indices.reserve(static_cast<size_t>(n_nodes));
+
+        size_t start_segment_index = 0;
+        while (start_segment_index < base_plan.segments.size()) {
+            size_t best_end_segment_index = start_segment_index;
+            while (best_end_segment_index + 1 < base_plan.segments.size()) {
+                const size_t next_end_segment_index = best_end_segment_index + 1;
+                Plan candidate_plan;
+                auto candidate_available_cut_output_node_indices = available_cut_output_node_indices;
+                auto candidate_seed                              = make_merge_seed(base_plan,
+                                                                                 start_segment_index,
+                                                                                 next_end_segment_index);
+                build_segment(gf,
+                              candidate_plan,
+                              candidate_seed,
+                              producer_index,
+                              candidate_available_cut_output_node_indices,
+                              backend,
+                              params_tensor_set,
+                              log_desc);
+                GGML_ASSERT(!candidate_plan.segments.empty());
+
+                if (merged_segment_vram_bytes(gf, candidate_plan.segments.back()) > max_graph_vram_bytes) {
+                    break;
+                }
+                best_end_segment_index = next_end_segment_index;
+            }
+
+            auto best_seed = make_merge_seed(base_plan,
+                                             start_segment_index,
+                                             best_end_segment_index);
+            build_segment(gf,
+                          merged_plan,
+                          best_seed,
+                          producer_index,
+                          available_cut_output_node_indices,
+                          backend,
+                          params_tensor_set,
+                          log_desc);
+            start_segment_index = best_end_segment_index + 1;
+        }
+
+        std::unordered_set<std::string> future_cut_names;
+        for (auto segment = merged_plan.segments.rbegin(); segment != merged_plan.segments.rend(); ++segment) {
+            segment->future_cut_names = future_cut_names;
+            segment->live_cut_names   = future_cut_names;
+            for (const auto& input : segment->input_refs) {
+                if (input.type != Segment::INPUT_PREVIOUS_CUT) {
+                    continue;
+                }
+                segment->live_cut_names.insert(input.display_name);
+                future_cut_names.insert(input.display_name);
+            }
+        }
+
+        std::string plan_validation_error;
+        merged_plan.valid = validate_plan(gf, merged_plan, &plan_validation_error);
+        if (!merged_plan.valid) {
+            if (log_desc != nullptr) {
+                LOG_WARN("%s graph cut max_vram budget merge failed validation (%s); using unmerged plan",
+                         log_desc,
+                         plan_validation_error.c_str());
+            }
+            return base_plan;
+        }
+
+        if (log_desc != nullptr && merged_plan.segments.size() != base_plan.segments.size()) {
+            LOG_INFO("%s graph cut max_vram=%.2f MB merged %zu segments -> %zu segments",
+                     log_desc,
+                     max_graph_vram_bytes / 1024.0 / 1024.0,
+                     base_plan.segments.size(),
+                     merged_plan.segments.size());
+            LOG_DEBUG("%s graph cut max_vram budget merge took %lld ms",
+                      log_desc,
+                      ggml_time_ms() - t_budget_begin);
+        }
+
+        return merged_plan;
+    }
+
     Plan build_plan(ggml_backend_t backend,
                     ggml_cgraph* gf,
                     const std::unordered_set<const ggml_tensor*>& params_tensor_set,
@@ -1005,9 +1183,36 @@ namespace sd::ggml_graph_cut {
         return plan;
     }
 
+    static const Plan& apply_cached_budget(ggml_backend_t backend,
+                                           ggml_cgraph* gf,
+                                           PlanCache* cache,
+                                           size_t max_graph_vram_bytes,
+                                           const std::unordered_set<const ggml_tensor*>& params_tensor_set,
+                                           const char* log_desc,
+                                           const Plan& base_plan) {
+        if (max_graph_vram_bytes == 0 || !base_plan.has_cuts || base_plan.segments.size() <= 1) {
+            return base_plan;
+        }
+        const auto layout = graph_layout(gf, false);
+        if (cache->budgeted_graph_cut_plan.available &&
+            cache->budgeted_graph_cut_plan_bytes == max_graph_vram_bytes &&
+            plan_matches_graph(gf, cache->budgeted_graph_cut_plan, layout)) {
+            return cache->budgeted_graph_cut_plan;
+        }
+        cache->budgeted_graph_cut_plan        = apply_max_vram_budget(gf,
+                                                                      base_plan,
+                                                                      max_graph_vram_bytes,
+                                                                      backend,
+                                                                      params_tensor_set,
+                                                                      log_desc);
+        cache->budgeted_graph_cut_plan_bytes  = max_graph_vram_bytes;
+        return cache->budgeted_graph_cut_plan;
+    }
+
     const Plan& resolve_plan(ggml_backend_t backend,
                              ggml_cgraph* gf,
                              PlanCache* cache,
+                             size_t max_graph_vram_bytes,
                              const std::unordered_set<const ggml_tensor*>& params_tensor_set,
                              const char* log_desc) {
         GGML_ASSERT(backend != nullptr);
@@ -1019,7 +1224,8 @@ namespace sd::ggml_graph_cut {
         for (auto it = plans.begin(); it != plans.end(); ++it) {
             if (it->available && plan_matches_graph(gf, *it, layout)) {
                 plans.splice(plans.begin(), plans, it);
-                return plans.front();
+                return apply_cached_budget(backend, gf, cache, max_graph_vram_bytes,
+                                           params_tensor_set, log_desc, plans.front());
             }
         }
 
@@ -1033,7 +1239,8 @@ namespace sd::ggml_graph_cut {
                      log_desc,
                      ggml_time_ms() - t_plan_begin);
         }
-        return plans.front();
+        return apply_cached_budget(backend, gf, cache, max_graph_vram_bytes,
+                                   params_tensor_set, log_desc, plans.front());
     }
 
 }  // namespace sd::ggml_graph_cut
