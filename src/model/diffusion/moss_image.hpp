@@ -19,6 +19,7 @@ namespace MOSSImage {
         int64_t head_dim = 128;
         int64_t depth    = 42;
         int64_t freq_dim = 256;
+        bool split_qkv   = false;
 
         static MOSSImageConfig detect_from_weights(const String2TensorStorage& weights, const std::string& prefix) {
             MOSSImageConfig config;
@@ -39,6 +40,9 @@ namespace MOSSImage {
                     config.head_dim = tensor.ne[0];
                 } else if (key == "time_embedding.0.weight") {
                     config.freq_dim = tensor.ne[0];
+                }
+                if (key == "layers.0.proj.q.weight") {
+                    config.split_qkv = true;
                 }
                 if (starts_with(key, "layers.")) {
                     depth = std::max<int64_t>(depth, std::stoi(key.substr(7)) + 1);
@@ -107,7 +111,13 @@ namespace MOSSImage {
             blocks["norm2"]            = std::make_shared<RMSNorm>(config.dim, 1e-6f);
             blocks["q_norm"]           = std::make_shared<RMSNorm>(config.head_dim, 1e-6f);
             blocks["k_norm"]           = std::make_shared<RMSNorm>(config.head_dim, 1e-6f);
-            blocks["proj.qkv"]         = std::make_shared<Linear>(config.dim, config.dim * 3, false);
+            if (config.split_qkv) {
+                blocks["proj.q"]       = std::make_shared<Linear>(config.dim, config.dim, false);
+                blocks["proj.k"]       = std::make_shared<Linear>(config.dim, config.dim, false);
+                blocks["proj.v"]       = std::make_shared<Linear>(config.dim, config.dim, false);
+            } else {
+                blocks["proj.qkv"]     = std::make_shared<Linear>(config.dim, config.dim * 3, false);
+            }
             blocks["proj.o"]           = std::make_shared<Linear>(config.dim, config.dim, false);
             blocks["proj.ffn_up_gate"] = std::make_shared<Linear>(config.dim, config.ffn_dim * 2, false);
             blocks["proj.ffn_down"]    = std::make_shared<Linear>(config.ffn_dim, config.dim, false);
@@ -120,13 +130,25 @@ namespace MOSSImage {
             auto part   = [&](int i) { return ggml_ext_slice(c, mod, 0, i * config.dim, (i + 1) * config.dim); };
             auto y      = norm("norm1", x);
             y           = ggml_add(c, ggml_add(c, y, ggml_mul(c, y, part(1))), part(0));
-            auto qkv    = linear("proj.qkv", y);
-            auto split  = [&](int i) {
-                return ggml_reshape_4d(c, ggml_ext_slice(c, qkv, 0, i * config.dim, (i + 1) * config.dim), config.head_dim, config.dim / config.head_dim, x->ne[1], x->ne[2]);
-            };
-            auto q       = norm("q_norm", split(0));
-            auto k       = norm("k_norm", split(1));
-            auto v       = split(2);
+            ggml_tensor *q, *k, *v;
+            if (config.split_qkv) {
+                auto reshape = [&](ggml_tensor* t) {
+                    return ggml_reshape_4d(c, t, config.head_dim, config.dim / config.head_dim, x->ne[1], x->ne[2]);
+                };
+                q = reshape(linear("proj.q", y));
+                k = reshape(linear("proj.k", y));
+                v = reshape(linear("proj.v", y));
+            } else {
+                auto qkv   = linear("proj.qkv", y);
+                auto split = [&](int i) {
+                    return ggml_reshape_4d(c, ggml_ext_slice(c, qkv, 0, i * config.dim, (i + 1) * config.dim), config.head_dim, config.dim / config.head_dim, x->ne[1], x->ne[2]);
+                };
+                q = split(0);
+                k = split(1);
+                v = split(2);
+            }
+            q            = norm("q_norm", q);
+            k            = norm("k_norm", k);
             y            = Rope::attention(ctx, q, k, v, pe, nullptr, 1.f, false);
             y            = linear("proj.o", y);
             y            = ggml_mul(c, y, part(2));
