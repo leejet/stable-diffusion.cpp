@@ -119,13 +119,15 @@ cmake --build . --config Release
 
 ## Build with MUSA
 
-This provides GPU acceleration using Moore Threads GPU. Make sure to have the MUSA toolkit installed.
+This provides GPU acceleration using Moore Threads GPUs. The configuration below follows upstream validation with MUSA SDK 5.2.0 and MTT S5000 (PH1, `mp_31`). Install that toolkit before building. Older SDKs such as 4.2 may lack the CUB headers required by the current backend.
 
 ```shell
 mkdir build && cd build
-cmake .. -DCMAKE_C_COMPILER=/usr/local/musa/bin/clang -DCMAKE_CXX_COMPILER=/usr/local/musa/bin/clang++ -DSD_MUSA=ON -DCMAKE_BUILD_TYPE=Release
+cmake .. -DCMAKE_C_COMPILER=/usr/local/musa/bin/clang -DCMAKE_CXX_COMPILER=/usr/local/musa/bin/clang++ -DSD_MUSA=ON -DMUSA_ARCHITECTURES=31 -DCMAKE_BUILD_TYPE=Release
 cmake --build . --config Release
 ```
+
+The MUSA Docker image uses the same SDK 5.2.0 development image as upstream for both build and runtime stages, and targets `mp_31` only. It includes the development tools and PyTorch from that base image, so it is larger than a minimal runtime image. Other GPU architectures require separate validation.
 
 ## Build with Metal
 
