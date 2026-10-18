@@ -1077,6 +1077,12 @@ void StableDiffusionGGML::configure_weight_loading() {
         const bool params_offloaded      = params_backend_for(SDBackendModule::DIFFUSION) != backend_for(SDBackendModule::DIFFUSION);
         const bool streaming_constrained = params_offloaded ||
                                            backend_manager.params_backend_is_disk(SDBackendModule::DIFFUSION);
+        const ggml_type wtype_param = (int)sd_ctx_params->wtype < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)
+                                          ? (ggml_type)sd_ctx_params->wtype
+                                          : GGML_TYPE_COUNT;
+        if (wtype_param < GGML_TYPE_COUNT) {
+            have_quantized_weight = have_quantized_weight || ggml_is_quantized(wtype_param);
+        }
         if (have_quantized_weight || streaming_constrained || row_split_active()) {
             apply_lora_immediately = false;
         } else {
