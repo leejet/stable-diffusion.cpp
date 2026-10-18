@@ -1013,6 +1013,16 @@ static std::string convert_diffusers_dit_to_original_pixart(std::string name) {
     return prefix + name;
 }
 
+static std::string convert_moss_image_dit_name(std::string name) {
+    static const std::vector<std::pair<std::string, std::string>> name_map = {
+        {".proj.q.weight", ".proj.qkv.weight"},
+        {".proj.k.weight", ".proj.qkv.weight.1"},
+        {".proj.v.weight", ".proj.qkv.weight.2"},
+    };
+    replace_with_name_map(name, name_map);
+    return name;
+}
+
 static std::string convert_ming_image_dit_name(std::string name) {
     static const std::vector<std::pair<std::string, std::string>> name_map = {
         {"all_x_embedder.2-1.", "x_embedder."},
@@ -1053,6 +1063,8 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_diffusers_dit_to_original_flux(name);
     } else if (sd_version_is_hunyuan_video(version)) {
         name = convert_hunyuan_video_to_original_flux(name);
+    } else if (version == VERSION_MOSS_IMAGE) {
+        name = convert_moss_image_dit_name(name);
     } else if (version == VERSION_MING_IMAGE) {
         name = convert_ming_image_dit_name(name);
     } else if (sd_version_is_z_image(version) || sd_version_is_z_image_l2p(version)) {
