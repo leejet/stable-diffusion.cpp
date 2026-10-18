@@ -1874,15 +1874,26 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
     // eviction path, which reclaims params storage blocks and staged replicas.
     size_t host_missing_bytes = 0;
     bool   host_pool_in_use   = false;
+    // Existing host-pinned parameter storage keeps the floor active even when
+    // this request pins nothing new.
+    for (const auto& block : params_storage_blocks_) {
+        if (block != nullptr && block->buffer != nullptr &&
+            model_manager_buffer_type_is_host_pinned(ggml_backend_buffer_get_type(block->buffer))) {
+            host_pool_in_use = true;
+            break;
+        }
+    }
+    // Placement probing is only valid for unloaded tensors (the operator
+    // probe rejects loaded ones); ignored and optional-missing states never
+    // load, so they must not be counted as missing host capacity.
     for (TensorState* state : states) {
-        if (state == nullptr) {
+        if (state == nullptr || should_ignore(*state) || is_optional_missing_tensor(state->name)) {
             continue;
         }
-        if (model_manager_buffer_type_is_host_pinned(params_buffer_type_for(*state))) {
-            host_pool_in_use = true;
-            if (!state->loaded_to_params_backend && state->tensor != nullptr) {
-                host_missing_bytes += ggml_nbytes(state->tensor);
-            }
+        if (!state->loaded_to_params_backend && state->tensor != nullptr &&
+            model_manager_buffer_type_is_host_pinned(params_buffer_type_for(*state))) {
+            host_missing_bytes += ggml_nbytes(state->tensor);
+            host_pool_in_use    = true;
         }
     }
     if (missing > 0 && model_manager_buffer_type_is_host_pinned(
@@ -2063,17 +2074,37 @@ bool ModelManager::ensure_compute_backend_capacity(
             }
         }
     };
+    // Offloaded parameter storage can also sit in host-pinned memory (the
+    // compute device's host buffer type); under host pressure those blocks
+    // must be reclaimable too, or only device staging gets evicted while the
+    // host pool cannot recover.
+    std::unordered_set<TensorState*> host_pinned_states;
+    for (const auto& block : params_storage_blocks_) {
+        if (block != nullptr && block->buffer != nullptr &&
+            model_manager_buffer_type_is_host_pinned(ggml_backend_buffer_get_type(block->buffer))) {
+            host_pinned_states.insert(block->states.begin(), block->states.end());
+        }
+    }
     auto can_demote_to_disk = [&](TensorState* state) {
-        return state != nullptr && state->tensor != nullptr && state->tensor->view_src == nullptr &&
-               state->residency_mode == ResidencyMode::ParamBackend &&
-               state->params_backend != nullptr && state->params_backend == state->compute_backend &&
-               state->compute_backend == compute_backend && !sd_backend_is_cpu(state->params_backend) &&
-               state->pin_count == 0 && !state->staged_to_compute_backend && state->loaded_to_params_backend &&
-               protected_states.find(state) == protected_states.end() &&
-               required_set.find(state) == required_set.end() &&
-               mapped_states.find(state) == mapped_states.end() &&
-               !state->sources.empty() && state->applied_lora_epoch == UINT64_MAX &&
-               state->split_buffer_type == nullptr;
+        if (state == nullptr || state->tensor == nullptr || state->tensor->view_src != nullptr ||
+            state->residency_mode != ResidencyMode::ParamBackend ||
+            state->pin_count != 0 || state->staged_to_compute_backend || !state->loaded_to_params_backend ||
+            protected_states.find(state) != protected_states.end() ||
+            required_set.find(state) != required_set.end() ||
+            state->sources.empty() || state->applied_lora_epoch != UINT64_MAX ||
+            state->split_buffer_type != nullptr) {
+            return false;
+        }
+        const bool device_resident = state->params_backend != nullptr &&
+                                     state->params_backend == state->compute_backend &&
+                                     state->compute_backend == compute_backend &&
+                                     !sd_backend_is_cpu(state->params_backend) &&
+                                     mapped_states.find(state) == mapped_states.end();
+        // Host-pinned parameter storage of an offloaded model reloads from
+        // the model loader like Disk-resident states; mmap-backed blocks are
+        // still freed (the pinned copy is a separate allocation).
+        const bool host_pinned = host_pinned_states.find(state) != host_pinned_states.end();
+        return device_resident || host_pinned;
     };
     for (TensorState* state : global_candidates) {
         if (!can_demote_to_disk(state)) {
@@ -2089,7 +2120,8 @@ bool ModelManager::ensure_compute_backend_capacity(
     }
     revert_demotions();
 
-    if (check_capacity(request, required_states).fits()) {
+    const auto final_capacity = check_capacity(request, required_states);
+    if (!final_capacity.requires_reclamation && final_capacity.fits()) {
         return true;
     }
     const auto capacity                = check_capacity(request, required_states, true);
@@ -2099,11 +2131,19 @@ bool ModelManager::ensure_compute_backend_capacity(
     const std::string available_budget = capacity.available_budget_bytes == SIZE_MAX
                                              ? "unlimited"
                                              : sd_format("%.2f MB", capacity.available_budget_bytes / (1024.0 * 1024.0));
-    LOG_WARN("model manager cannot make enough memory available on %s: need %.2f MB device / %.2f MB budget, available %s device / %s budget",
+    const std::string required_host    = capacity.required_host_bytes == 0
+                                             ? "none"
+                                             : sd_format("%.2f MB", capacity.required_host_bytes / (1024.0 * 1024.0));
+    const std::string available_host   = capacity.available_host_bytes == SIZE_MAX
+                                             ? "unknown"
+                                             : sd_format("%.2f MB", capacity.available_host_bytes / (1024.0 * 1024.0));
+    LOG_WARN("model manager cannot make enough memory available on %s: need %.2f MB device / %.2f MB budget / %s host, available %s device / %s budget / %s host",
              ggml_backend_name(compute_backend),
              capacity.required_device_bytes / (1024.0 * 1024.0),
              capacity.required_budget_bytes / (1024.0 * 1024.0),
+             required_host.c_str(),
              available_device.c_str(),
-             available_budget.c_str());
+             available_budget.c_str(),
+             available_host.c_str());
     return false;
 }
