@@ -2113,6 +2113,14 @@ bool ModelManager::ensure_compute_backend_capacity(
         state->residency_mode = ResidencyMode::Disk;
         demoted_states.push_back(state);
         add_evictable_state(state);
+        if (host_pinned_states.find(state) != host_pinned_states.end()) {
+            // Host-pinned offloaded params are resident through their
+            // parameter block (loaded_to_params_backend), not through
+            // compute staging, so add_evictable_state's residency test
+            // cannot admit them — insert directly so the block becomes
+            // releasable.
+            eviction_states.insert(state);
+        }
         if (release_eviction_states()) {
             revert_demotions();
             return true;
