@@ -1024,6 +1024,24 @@ static std::string convert_ming_image_dit_name(std::string name) {
     return name;
 }
 
+std::string convert_diffusers_dit_to_original_minimax_h3(std::string name) {
+    static const std::vector<std::pair<std::string, std::string>> prefix_map = {
+        {"transformer_blocks.", "blocks."},
+        {"token_refiner.refiner_blocks.", "token_refiner.blocks."},
+    };
+    static const std::vector<std::pair<std::string, std::string>> name_map = {
+        {".attn.to_q.weight", ".attn.qkv_proj.weight"},
+        {".attn.to_k.weight", ".attn.qkv_proj.weight.1"},
+        {".attn.to_v.weight", ".attn.qkv_proj.weight.2"},
+        {".attn.to_out.0.", ".attn.out_proj."},
+        {".ff.net.0.proj.", ".mlp.fc1."},
+        {".ff.net.2.", ".mlp.fc2."},
+    };
+    replace_with_prefix_map(name, prefix_map);
+    replace_with_name_map(name, name_map);
+    return name;
+}
+
 std::string convert_diffusion_model_name(std::string name, std::string prefix, SDVersion version) {
     if (sd_version_is_sd1(version) || sd_version_is_sd2(version)) {
         name = convert_diffusers_unet_to_original_sd1(name);
@@ -1047,6 +1065,8 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_diffusers_dit_to_original_krea2(name);
     } else if (sd_version_is_pixart(version)) {
         name = convert_diffusers_dit_to_original_pixart(name);
+    } else if (sd_version_is_minimax_h3(version)) {
+        name = convert_diffusers_dit_to_original_minimax_h3(name);
     }
     return name;
 }
