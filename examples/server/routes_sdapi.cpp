@@ -406,13 +406,20 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             {
                 std::lock_guard<std::mutex> lock(*runtime->sd_ctx_mutex);
-                SDAPIPreviewGuard preview_guard(id_task, img_gen_params, img2img ? "img2img" : "txt2img");
-                sd_image_t* raw_results = nullptr;
-                if (!generate_image(runtime->sd_ctx, &img_gen_params, &raw_results, &num_results)) {
-                    raw_results = nullptr;
-                    num_results = 0;
+                {
+                    SDAPIPreviewGuard preview_guard(id_task, img_gen_params, img2img ? "img2img" : "txt2img");
+                    sd_image_t* raw_results = nullptr;
+                    if (!generate_image(runtime->sd_ctx, &img_gen_params, &raw_results, &num_results)) {
+                        raw_results = nullptr;
+                        num_results = 0;
+                    }
+                    results.adopt(raw_results, num_results);
                 }
-                results.adopt(raw_results, num_results);
+                if (!results.empty() && !apply_server_adetailer(*runtime, request, img_gen_params, results)) {
+                    res.status = 500;
+                    res.set_content(R"({"error":"ADetailer failed"})", "application/json");
+                    return;
+                }
             }
 
             if (results.empty()) {

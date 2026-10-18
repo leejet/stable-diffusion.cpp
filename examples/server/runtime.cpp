@@ -14,6 +14,61 @@
 
 namespace fs = std::filesystem;
 
+bool apply_server_adetailer(ServerRuntime& runtime,
+                            const ImgGenJobRequest& request,
+                            const sd_img_gen_params_t& params,
+                            SDImageVec& results) {
+    const auto& gen_params = request.gen_params;
+    if (gen_params.ad_model_path.empty()) {
+        return true;
+    }
+
+    sd_adetailer_params_t ad_params{};
+    ad_params.prompt          = gen_params.ad_prompt.empty() ? nullptr : gen_params.ad_prompt.c_str();
+    ad_params.negative_prompt = gen_params.ad_negative_prompt.empty() ? nullptr : gen_params.ad_negative_prompt.c_str();
+    ad_params.extra_ad_args   = gen_params.extra_ad_args.c_str();
+
+    ADetailerCtxPtr ad_ctx(new_adetailer_ctx(gen_params.ad_model_path.c_str(),
+                                             runtime.ctx_params->n_threads,
+                                             runtime.ctx_params->effective_backend.c_str(),
+                                             runtime.ctx_params->effective_params_backend.c_str()));
+    if (ad_ctx == nullptr) {
+        LOG_ERROR("new_adetailer_ctx failed");
+        return false;
+    }
+
+    for (int i = 0; i < results.count(); ++i) {
+        if (results[i].data == nullptr) {
+            continue;
+        }
+        sd_img_gen_params_t ad_generation_params = params;
+        ad_generation_params.seed                = params.seed + i;
+        ad_generation_params.width               = 512;
+        ad_generation_params.height              = 512;
+        ad_generation_params.strength            = 0.4f;
+
+        sd_image_t* detailed_images = nullptr;
+        int detailed_count          = 0;
+        if (!adetail_image(ad_ctx.get(),
+                           runtime.sd_ctx,
+                           results[i],
+                           &ad_params,
+                           &ad_generation_params,
+                           &detailed_images,
+                           &detailed_count) ||
+            detailed_count <= 0 || detailed_images == nullptr || detailed_images[0].data == nullptr) {
+            free_sd_images(detailed_images, detailed_count);
+            LOG_ERROR("ADetailer failed for image %d", i + 1);
+            return false;
+        }
+        free(results[i].data);
+        results[i]         = detailed_images[0];
+        detailed_images[0] = {0, 0, 0, nullptr};
+        free_sd_images(detailed_images, detailed_count);
+    }
+    return true;
+}
+
 static std::string lower_ascii(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));

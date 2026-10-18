@@ -1,9 +1,10 @@
 # ADetailer
 
 `sd-cli` can run a YOLOv8 object detector on an existing or newly generated
-image and perform a cropped inpaint pass for every detected object. The first
-implementation supports YOLOv8 detection checkpoints. YOLOv8 segmentation and
-MediaPipe models are not supported yet.
+image, and `sd-server` can run it after image generation. Both perform a cropped
+inpaint pass for every detected object. The implementation supports YOLOv8
+detection checkpoints. YOLOv8 segmentation and MediaPipe models are not
+supported yet.
 
 ## Convert a detector
 
@@ -67,6 +68,12 @@ ADetailer can also run automatically after normal image generation:
   --ad-negative-prompt "" \
   --extra-ad-args "confidence=0.3,denoising_strength=0.4,inpaint_width=512,inpaint_height=512"
 ```
+
+The same options can be supplied when starting `sd-server`. When `--ad-model` is set,
+its detector runs after each image generation request, including OpenAI-compatible,
+SDAPI, and native asynchronous image generation. If no object is detected, the
+original image is returned unchanged. Detector initialization or detail-pass
+failures are reported as request failures.
 
 An empty ADetailer prompt inherits the main prompt. `[PROMPT]` inserts the main
 prompt, `[SEP]` assigns different prompts to consecutive masks, and `[SKIP]`

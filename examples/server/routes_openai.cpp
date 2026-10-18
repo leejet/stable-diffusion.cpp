@@ -238,6 +238,10 @@ static bool execute_sync_img_gen_request(ServerRuntime& runtime,
             num_results = 0;
         }
         results.adopt(raw_results, num_results);
+        if (!results.empty() && !apply_server_adetailer(runtime, request, img_gen_params, results)) {
+            error_message = "ADetailer failed";
+            return false;
+        }
     }
 
     if (results.empty()) {
