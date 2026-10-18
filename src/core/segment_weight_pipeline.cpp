@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "core/ggml_graph_cut.h"
+#include "core/util.h"
 #include "device_residency_manager.h"
 
 namespace sd {
@@ -175,6 +176,8 @@ namespace sd {
                                                       params,
                                                       preferred_eviction_order(),
                                                       protected_params)) {
+            LOG_VERBOSE("segment weight pipeline: prefetch capacity check failed for segment %zu, disabling prefetch",
+                        next_segment);
             disable();
             return;
         }

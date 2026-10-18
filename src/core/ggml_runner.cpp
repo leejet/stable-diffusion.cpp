@@ -983,6 +983,18 @@ std::optional<Tensor<float>> GGMLRunner::execute_graph(ggml_cgraph* graph, int n
         }
         LOG_DEBUG("%s executing segment %zu/%zu: %s", get_desc().c_str(),
                   index + 1, plan.segments.size(), segment.group_name.c_str());
+        {
+            size_t dev_free_bytes  = 0;
+            size_t dev_total_bytes = 0;
+            auto   dev             = ggml_backend_get_device(runtime_backend);
+            if (dev != nullptr) {
+                ggml_backend_dev_memory(dev, &dev_free_bytes, &dev_total_bytes);
+            }
+            LOG_VERBOSE("%s segment %zu/%zu start on %s: device reports %.2f MB free / %.2f MB total",
+                        get_desc().c_str(), index + 1, plan.segments.size(),
+                        ggml_backend_name(runtime_backend),
+                        dev_free_bytes / (1024.0 * 1024.0), dev_total_bytes / (1024.0 * 1024.0));
+        }
         if (!execute_segment(segment_graph, n_threads)) {
             return fail_segment("execution");
         }

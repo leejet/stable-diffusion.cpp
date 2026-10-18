@@ -1780,6 +1780,11 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
         const size_t weights_resident = compute_backend_resident_bytes(backend);
         const size_t other_runtime    = other_runtime_resident_bytes(request.owner_id, backend);
         const size_t resident         = add(weights_resident, add(other_runtime, request.runtime_resident_bytes));
+        LOG_VERBOSE("model manager memory on %s: reported free %.2f MB / total %.2f MB, tracked weights %.2f MB / other runtime %.2f MB / current runtime %.2f MB",
+                    ggml_backend_name(backend),
+                    free_bytes / (1024.0 * 1024.0), total_bytes / (1024.0 * 1024.0),
+                    weights_resident / (1024.0 * 1024.0), other_runtime / (1024.0 * 1024.0),
+                    request.runtime_resident_bytes / (1024.0 * 1024.0));
         if (log_details) {
             LOG_WARN("model manager memory on %s: reported free %.2f MB / total %.2f MB, tracked weights %.2f MB / other runtime %.2f MB / current runtime %.2f MB",
                         ggml_backend_name(backend),
@@ -1838,6 +1843,13 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
             result.available_budget_bytes = std::min(result.available_budget_bytes, available);
         }
     }
+    LOG_VERBOSE("capacity check verdict on %s: required device %.2f MB / available %.2f MB, required budget %.2f MB / available %.2f MB, fits %s",
+                ggml_backend_name(request.compute_backend),
+                result.required_device_bytes / (1024.0 * 1024.0),
+                result.available_device_bytes / (1024.0 * 1024.0),
+                result.required_budget_bytes / (1024.0 * 1024.0),
+                result.available_budget_bytes / (1024.0 * 1024.0),
+                result.fits() ? "yes" : "no");
     return result;
 }
 
