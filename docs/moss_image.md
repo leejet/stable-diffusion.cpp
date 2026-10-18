@@ -6,6 +6,9 @@ MOSS-Image uses a 5B diffusion transformer, the FLUX.2 VAE, and Qwen3.5 9B as th
 
 - Download MOSS-Image Base or SFT
     - safetensors: https://huggingface.co/Comfy-Org/MOSS-Image/tree/main/diffusion_models
+    - gguf:
+        - Base: https://huggingface.co/leejet/MOSS-Image-Base-GGUF/tree/main
+        - SFT: https://huggingface.co/leejet/MOSS-Image-SFT-GGUF/tree/main
 - Download vae
     - safetensors: https://huggingface.co/Comfy-Org/MOSS-Image/tree/main/vae
 - Download Qwen3.5 9B
