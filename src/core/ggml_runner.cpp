@@ -3,6 +3,12 @@
 #include <map>
 #include <utility>
 
+#ifdef _WIN32
+    #define NOMINMAX
+    #include <windows.h>
+    #include <psapi.h>
+#endif
+
 #include "core/ggml_extend.h"
 #include "core/ggml_extend_backend.h"
 #include "core/ggml_runner.h"
@@ -990,13 +996,53 @@ std::optional<Tensor<float>> GGMLRunner::execute_graph(ggml_cgraph* graph, int n
             if (dev != nullptr) {
                 ggml_backend_dev_memory(dev, &dev_free_bytes, &dev_total_bytes);
             }
-            LOG_VERBOSE("%s segment %zu/%zu start on %s: device reports %.2f MB free / %.2f MB total",
+            size_t cpu_free_bytes  = 0;
+            size_t cpu_total_bytes = 0;
+            if (workspace_.cpu_backend() != nullptr) {
+                if (auto cpu_dev = ggml_backend_get_device(workspace_.cpu_backend()); cpu_dev != nullptr) {
+                    ggml_backend_dev_memory(cpu_dev, &cpu_free_bytes, &cpu_total_bytes);
+                }
+            }
+            const double cut_mb =
+                (dev != nullptr ? cut_cache_.resident_bytes(dev) : 0) / (1024.0 * 1024.0);
+#ifdef _WIN32
+            MEMORYSTATUSEX           mem_status{};
+            PROCESS_MEMORY_COUNTERS_EX proc_counters{};
+            mem_status.dwLength    = sizeof(mem_status);
+            proc_counters.cb       = sizeof(proc_counters);
+            const bool have_status = GlobalMemoryStatusEx(&mem_status) != 0;
+            const bool have_proc   = GetProcessMemoryInfo(GetCurrentProcess(),
+                                                reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&proc_counters),
+                                                sizeof(proc_counters)) != 0;
+            LOG_VERBOSE("%s segment %zu/%zu start on %s: device reports %.2f MB free / %.2f MB total"
+                        " | host: avail phys %.2f MB, avail commit %.2f MB, proc commit %.2f MB, proc ws %.2f MB"
+                        " | CPU device %.2f MB free / %.2f MB total | cut cache %.2f MB",
                         get_desc().c_str(), index + 1, plan.segments.size(),
                         ggml_backend_name(runtime_backend),
-                        dev_free_bytes / (1024.0 * 1024.0), dev_total_bytes / (1024.0 * 1024.0));
+                        dev_free_bytes / (1024.0 * 1024.0), dev_total_bytes / (1024.0 * 1024.0),
+                        have_status ? mem_status.ullAvailPhys / (1024.0 * 1024.0) : -1.0,
+                        have_status ? mem_status.ullAvailPageFile / (1024.0 * 1024.0) : -1.0,
+                        have_proc ? proc_counters.PrivateUsage / (1024.0 * 1024.0) : -1.0,
+                        have_proc ? proc_counters.WorkingSetSize / (1024.0 * 1024.0) : -1.0,
+                        cpu_free_bytes / (1024.0 * 1024.0), cpu_total_bytes / (1024.0 * 1024.0), cut_mb);
+#else
+            LOG_VERBOSE("%s segment %zu/%zu start on %s: device reports %.2f MB free / %.2f MB total"
+                        " | CPU device %.2f MB free / %.2f MB total | cut cache %.2f MB",
+                        get_desc().c_str(), index + 1, plan.segments.size(),
+                        ggml_backend_name(runtime_backend),
+                        dev_free_bytes / (1024.0 * 1024.0), dev_total_bytes / (1024.0 * 1024.0),
+                        cpu_free_bytes / (1024.0 * 1024.0), cpu_total_bytes / (1024.0 * 1024.0), cut_mb);
+#endif
         }
-        if (!execute_segment(segment_graph, n_threads)) {
-            return fail_segment("execution");
+        try {
+            if (!execute_segment(segment_graph, n_threads)) {
+                return fail_segment("execution");
+            }
+        } catch (const std::exception& error) {
+            LOG_VERBOSE("%s segment %zu/%zu (%s) raised during execution: %s",
+                        get_desc().c_str(), index + 1, plan.segments.size(),
+                        segment.group_name.c_str(), error.what());
+            throw;
         }
         auto cache_status = cache_.capture(segment_graph);
         if (cache_status == GGML_STATUS_SUCCESS) {
