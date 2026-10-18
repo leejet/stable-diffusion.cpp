@@ -1,6 +1,7 @@
 #include "routes.h"
 
 #include <algorithm>
+#include <chrono>
 #include <ctime>
 #include <regex>
 
@@ -227,6 +228,8 @@ static bool execute_sync_img_gen_request(ServerRuntime& runtime,
                                          ImgGenJobRequest& request,
                                          SDImageVec& results,
                                          std::string& error_message) {
+    auto exec_start = std::chrono::steady_clock::now();
+
     sd_img_gen_params_t img_gen_params = request.to_sd_img_gen_params_t();
     int num_results                    = 0;
 
@@ -240,10 +243,15 @@ static bool execute_sync_img_gen_request(ServerRuntime& runtime,
         results.adopt(raw_results, num_results);
     }
 
+    double duration = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - exec_start).count();
+
     if (results.empty()) {
+        record_sync_failure(runtime);
         error_message = "generate_image returned no results";
         return false;
     }
+    record_sync_completion(runtime, duration);
     return true;
 }
 

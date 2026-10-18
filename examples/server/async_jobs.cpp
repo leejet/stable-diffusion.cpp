@@ -3,6 +3,7 @@
 #include "async_jobs.h"
 
 #include <algorithm>
+#include <chrono>
 #include <iomanip>
 #include <sstream>
 
@@ -115,6 +116,85 @@ void purge_expired_jobs(AsyncJobManager& manager) {
             ++it;
         }
     }
+}
+
+void record_job_completion(AsyncJobManager& manager, double duration_seconds, bool success) {
+    if (success) {
+        manager.total_completed++;
+    } else {
+        manager.total_failed++;
+    }
+    manager.total_generation_seconds += duration_seconds;
+    manager.last_generation_durations.push_back(duration_seconds);
+    // Keep rolling window bounded
+    while (manager.last_generation_durations.size() > AsyncJobManager::k_rolling_window_size) {
+        manager.last_generation_durations.erase(manager.last_generation_durations.begin());
+    }
+}
+
+AsyncJobStats collect_job_stats(const AsyncJobManager& manager) {
+    AsyncJobStats stats;
+    stats.total_completed    = manager.total_completed;
+    stats.total_failed       = manager.total_failed;
+    stats.total_generation_seconds = manager.total_generation_seconds;
+    stats.last_generation_durations = manager.last_generation_durations;
+    for (const auto& entry : manager.jobs) {
+        switch (entry.second->status) {
+            case AsyncJobStatus::Queued:
+                stats.queued++;
+                break;
+            case AsyncJobStatus::Generating:
+                stats.generating++;
+                break;
+            case AsyncJobStatus::Completed:
+                stats.completed++;
+                break;
+            case AsyncJobStatus::Failed:
+                stats.failed++;
+                break;
+            case AsyncJobStatus::Cancelled:
+                stats.cancelled++;
+                break;
+        }
+    }
+    return stats;
+}
+
+double AsyncJobStats::avg_seconds_per_image() const {
+    if (total_completed == 0 || total_generation_seconds == 0.0) {
+        return 0.0;
+    }
+    double avg = total_generation_seconds / static_cast<double>(total_completed);
+    // Floor at 1ms to prevent inflated images_per_second from sub-millisecond
+    // completions. A single generation cannot realistically complete faster
+    // than ~1ms, so values below this are almost certainly noise.
+    if (avg < 0.001) {
+        avg = 0.001;
+    }
+    return avg;
+}
+
+double AsyncJobStats::images_per_second() const {
+    double avg = avg_seconds_per_image();
+    if (avg <= 0.0) {
+        return 0.0;
+    }
+    return 1.0 / avg;
+}
+
+double AsyncJobStats::last_10_avg_seconds_per_image() const {
+    if (last_generation_durations.empty()) {
+        return 0.0;
+    }
+    double sum = 0.0;
+    for (double d : last_generation_durations) {
+        sum += d;
+    }
+    return sum / static_cast<double>(last_generation_durations.size());
+}
+
+size_t AsyncJobStats::last_10_samples() const {
+    return last_generation_durations.size();
 }
 
 size_t count_pending_jobs(const AsyncJobManager& manager) {
@@ -350,6 +430,7 @@ void async_job_worker(ServerRuntime& runtime) {
 
     while (true) {
         std::shared_ptr<AsyncGenerationJob> job;
+        int64_t job_started_epoch = 0;
         {
             std::unique_lock<std::mutex> lock(manager.mutex);
             manager.cv.wait(lock, [&]() { return manager.stop || !manager.queue.empty(); });
@@ -374,7 +455,10 @@ void async_job_worker(ServerRuntime& runtime) {
             job             = it->second;
             job->status     = AsyncJobStatus::Generating;
             job->started_at = unix_timestamp_now();
+            job_started_epoch = job->started_at;
         }
+
+        auto exec_start = std::chrono::steady_clock::now();
 
         std::vector<std::string> output_images;
         std::string output_media_b64;
@@ -397,6 +481,9 @@ void async_job_worker(ServerRuntime& runtime) {
         } else {
             error_message = "unsupported job kind";
         }
+
+        auto exec_end = std::chrono::steady_clock::now();
+        double duration_seconds = std::chrono::duration<double>(exec_end - exec_start).count();
 
         {
             std::lock_guard<std::mutex> lock(manager.mutex);
@@ -426,6 +513,7 @@ void async_job_worker(ServerRuntime& runtime) {
                 job->result_fps         = 0;
             }
 
+            record_job_completion(manager, duration_seconds, ok);
             purge_expired_jobs(manager);
         }
     }
