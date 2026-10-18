@@ -6,8 +6,10 @@ FLUX.3 Image Klein uses a FLUX.3 diffusion transformer, the FLUX.2 VAE, and Qwen
 
 - Download FLUX.3 Image Klein
     - safetensors: https://huggingface.co/black-forest-labs/flux-3-image-klein/tree/main
+    - gguf: https://huggingface.co/leejet/flux-3-image-klein-GGUF/tree/main
 - Download FLUX.3 Image Klein Base
     - safetensors: https://huggingface.co/black-forest-labs/flux-3-image-klein-base/tree/main
+    - gguf: https://huggingface.co/leejet/flux-3-image-klein-base-GGUF/tree/main
 - Download vae
     - safetensors: https://huggingface.co/black-forest-labs/FLUX.2-dev/tree/main
     - The `ae.safetensors` included with FLUX.3 can also be used.
