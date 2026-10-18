@@ -150,12 +150,15 @@ private:
     struct CapacityCheck {
         size_t required_device_bytes  = 0;
         size_t required_budget_bytes  = 0;
+        size_t required_host_bytes    = 0;
         size_t available_device_bytes = SIZE_MAX;
         size_t available_budget_bytes = SIZE_MAX;
+        size_t available_host_bytes   = SIZE_MAX;
         bool requires_reclamation     = false;
         bool fits() const {
             return required_device_bytes <= available_device_bytes &&
-                   required_budget_bytes <= available_budget_bytes;
+                   required_budget_bytes <= available_budget_bytes &&
+                   required_host_bytes <= available_host_bytes;
         }
     };
     CapacityCheck check_capacity(const DeviceMemoryRequest& request,

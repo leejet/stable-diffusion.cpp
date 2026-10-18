@@ -7,6 +7,11 @@
 #include <tuple>
 #include <unordered_set>
 
+#ifdef _WIN32
+    #define NOMINMAX
+    #include <windows.h>
+#endif
+
 #include "core/ggml_extend_backend.h"
 #include "core/util.h"
 #include "model/adapter/lora.hpp"
@@ -15,6 +20,20 @@ static size_t aligned_offset(const void* buffer, size_t offset, size_t alignment
     GGML_ASSERT(alignment != 0 && (alignment & (alignment - 1)) == 0);
     size_t align = (alignment - ((reinterpret_cast<uintptr_t>(buffer) + offset) % alignment)) % alignment;
     return offset + align;
+}
+
+// True when allocations through this buffer type consume host-visible memory:
+// plain host buffer types, or a compute device's host-pinned pool (e.g. the
+// Vulkan "Vulkan_Host" buffer type backed by pinned system memory).
+static bool model_manager_buffer_type_is_host_pinned(ggml_backend_buffer_type_t buft) {
+    if (buft == nullptr) {
+        return false;
+    }
+    if (ggml_backend_buft_is_host(buft)) {
+        return true;
+    }
+    ggml_backend_dev_t device = ggml_backend_buft_get_device(buft);
+    return device != nullptr && buft == ggml_backend_dev_host_buffer_type(device);
 }
 
 static bool lora_specs_equal(const std::vector<ModelManager::LoraSpec>& lhs,
@@ -1843,12 +1862,70 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
             result.available_budget_bytes = std::min(result.available_budget_bytes, available);
         }
     }
-    LOG_VERBOSE("capacity check verdict on %s: required device %.2f MB / available %.2f MB, required budget %.2f MB / available %.2f MB, fits %s",
+    // Host dimension (#1976): memory allocated through host-visible buffer
+    // types is invisible to the compute device's heap report. With an
+    // offloaded model (params backend != compute backend), params buffers
+    // take the compute device's host-pinned buffer type (e.g. Vulkan_Host)
+    // and are loaded lazily, so they accumulate on the host while every
+    // device-side gate stays green. Account for the actual placement: only
+    // bytes this request would allocate through host-visible buffer types
+    // count against host availability; device-local staging/prefetch stay on
+    // the device/budget dimensions. A host failure feeds the existing
+    // eviction path, which reclaims params storage blocks and staged replicas.
+    size_t host_missing_bytes = 0;
+    bool   host_pool_in_use   = false;
+    for (TensorState* state : states) {
+        if (state == nullptr) {
+            continue;
+        }
+        if (model_manager_buffer_type_is_host_pinned(params_buffer_type_for(*state))) {
+            host_pool_in_use = true;
+            if (!state->loaded_to_params_backend && state->tensor != nullptr) {
+                host_missing_bytes += ggml_nbytes(state->tensor);
+            }
+        }
+    }
+    if (missing > 0 && model_manager_buffer_type_is_host_pinned(
+                           ggml_backend_get_default_buffer_type(request.compute_backend))) {
+        host_missing_bytes += missing;
+        host_pool_in_use    = true;
+    }
+    if (host_pool_in_use) {
+        // The +1 byte enforces the safety floor itself — once the host-pinned
+        // pool is in use, a request that pins nothing new must still fail
+        // when availability has fallen to zero, so reclamation runs before
+        // the driver's allocations start failing.
+        result.required_host_bytes = host_missing_bytes + 1;
+#ifdef _WIN32
+        MEMORYSTATUSEX status{};
+        status.dwLength = sizeof(status);
+        if (GlobalMemoryStatusEx(&status)) {
+            // Two thresholds, from measurements on the #1976 machine (32 GB
+            // RAM, both resident models loaded): the driver fails allocations
+            // once available physical memory drops below ~0.5-0.8 GB (512 MiB
+            // + request bytes = hard refusal region), while up to ~0.5 GB is
+            // consumed between a capacity check and the following submit
+            // (1 GiB = proactive reclamation watermark so eviction keeps the
+            // pool above the failing region instead of only reacting at it).
+            constexpr uint64_t host_safety_margin      = 512ULL * 1024ULL * 1024ULL;
+            constexpr uint64_t host_reclaim_watermark  = 1ULL * 1024ULL * 1024ULL * 1024ULL;
+            result.available_host_bytes               = status.ullAvailPhys > host_safety_margin
+                                                              ? static_cast<size_t>(status.ullAvailPhys - host_safety_margin)
+                                                              : 0;
+            if (status.ullAvailPhys < host_reclaim_watermark) {
+                result.requires_reclamation = true;
+            }
+        }
+#endif
+    }
+    LOG_VERBOSE("capacity check verdict on %s: required device %.2f MB / available %.2f MB, required budget %.2f MB / available %.2f MB, required host %.2f MB / available %.2f MB, fits %s",
                 ggml_backend_name(request.compute_backend),
                 result.required_device_bytes / (1024.0 * 1024.0),
                 result.available_device_bytes / (1024.0 * 1024.0),
                 result.required_budget_bytes / (1024.0 * 1024.0),
                 result.available_budget_bytes / (1024.0 * 1024.0),
+                result.required_host_bytes / (1024.0 * 1024.0),
+                result.available_host_bytes / (1024.0 * 1024.0),
                 result.fits() ? "yes" : "no");
     return result;
 }

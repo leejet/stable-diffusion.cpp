@@ -68,15 +68,22 @@ namespace sd {
 
     void SegmentWeightPipeline::activate(size_t segment_index) {
         if (!enabled_ || queued_segment_ == SIZE_MAX || queued_segment_ != segment_index) {
+            if (enabled_ && queued_segment_ != SIZE_MAX) {
+                LOG_VERBOSE("segment weight pipeline: segment %zu started without its prefetched block (queued for segment %zu)",
+                            segment_index, queued_segment_);
+            }
             return;
         }
 
         auto manager = residency_manager_.lock();
         if (manager == nullptr ||
             !manager->activate_prefetched_params(owner_id_, queued_params_)) {
+            LOG_VERBOSE("segment weight pipeline: failed to activate the prefetched block for segment %zu, disabling prefetch",
+                        segment_index);
             disable();
             return;
         }
+        LOG_VERBOSE("segment weight pipeline: segment %zu activated its prefetched weight block", segment_index);
         queued_params_.clear();
         queued_segment_ = SIZE_MAX;
     }
