@@ -1058,9 +1058,15 @@ void StableDiffusionGGML::configure_weight_loading() {
     const auto& model_loader  = model_manager->loader();
     const auto wtype_stat     = model_loader.get_wtype_stat();
     bool have_int8_tensorwise = false;
+    bool have_quant_type_rule = false;
     for (const auto& [_, tensor_storage] : model_loader.get_tensor_storage_map()) {
         if (tensor_storage.is_int8_tensorwise) {
             have_int8_tensorwise = true;
+        }
+        if (tensor_storage.expected_type < GGML_TYPE_COUNT && ggml_is_quantized(tensor_storage.expected_type)) {
+            have_quant_type_rule = true;
+        }
+        if (have_int8_tensorwise && have_quant_type_rule) {
             break;
         }
     }
@@ -1077,13 +1083,8 @@ void StableDiffusionGGML::configure_weight_loading() {
         const bool params_offloaded      = params_backend_for(SDBackendModule::DIFFUSION) != backend_for(SDBackendModule::DIFFUSION);
         const bool streaming_constrained = params_offloaded ||
                                            backend_manager.params_backend_is_disk(SDBackendModule::DIFFUSION);
-        const ggml_type wtype_param = (int)sd_ctx_params->wtype < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)
-                                          ? (ggml_type)sd_ctx_params->wtype
-                                          : GGML_TYPE_COUNT;
-        if (wtype_param < GGML_TYPE_COUNT) {
-            have_quantized_weight = have_quantized_weight || ggml_is_quantized(wtype_param);
-        }
-        if (have_quantized_weight || streaming_constrained || row_split_active()) {
+
+        if (have_quant_type_rule || have_quantized_weight || streaming_constrained || row_split_active()) {
             apply_lora_immediately = false;
         } else {
             apply_lora_immediately = true;
