@@ -19,7 +19,8 @@ bool apply_server_adetailer(ServerRuntime& runtime,
                             const sd_img_gen_params_t& params,
                             SDImageVec& results) {
     const auto& gen_params = request.gen_params;
-    if (gen_params.ad_model_path.empty()) {
+    const auto& ad_model_path = runtime.default_gen_params->ad_model_path;
+    if (ad_model_path.empty()) {
         return true;
     }
 
@@ -28,7 +29,7 @@ bool apply_server_adetailer(ServerRuntime& runtime,
     ad_params.negative_prompt = gen_params.ad_negative_prompt.empty() ? nullptr : gen_params.ad_negative_prompt.c_str();
     ad_params.extra_ad_args   = gen_params.extra_ad_args.c_str();
 
-    ADetailerCtxPtr ad_ctx(new_adetailer_ctx(gen_params.ad_model_path.c_str(),
+    ADetailerCtxPtr ad_ctx(new_adetailer_ctx(ad_model_path.c_str(),
                                              runtime.ctx_params->n_threads,
                                              runtime.ctx_params->effective_backend.c_str(),
                                              runtime.ctx_params->effective_params_backend.c_str()));
