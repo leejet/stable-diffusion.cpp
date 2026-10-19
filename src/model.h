@@ -385,8 +385,7 @@ static inline bool sd_version_supports_ref_image_conditioning(SDVersion version)
            sd_version_is_mage_flow(version) ||
            sd_version_is_anima(version) ||
            sd_version_is_sefi_image(version) ||
-           sd_version_is_pid(version) ||
-           version == VERSION_HIDREAM_O1;
+           sd_version_is_pid(version);
 }
 
 static bool sd_version_is_inpaint_or_unet_edit(SDVersion version) {
