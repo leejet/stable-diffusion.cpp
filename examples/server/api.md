@@ -901,6 +901,7 @@ LTX and Wan preserve causal state between temporal tiles. Hunyuan Video and TAEH
 | --- | --- |
 | `video_frames` | `integer` |
 | `fps` | `integer` |
+| `ref_image_args` | `string` |
 | `moe_boundary` | `number` |
 | `vace_strength` | `number` |
 | `high_noise_sample_params` | `object` |
@@ -1394,7 +1395,7 @@ Compared with `img_gen`, the `vid_gen` request body:
 - `vid_gen` is a single video sequence job, so `batch_count` is not part of the request schema
 - `mask_image`, `control_image`, `control_strength`, `ip_adapter_image`, `ip_adapter_strength`, and `embed_image_metadata` are not part of the request schema
 - `ref_images` is accepted for MiniMax-H3 Ref2VA conditioning; other video model families currently ignore it
-- `vid_gen` adds `end_image`, `control_frames`, `high_noise_sample_params`, `video_frames`, `fps`, `moe_boundary`, and `vace_strength`
+- `vid_gen` adds `end_image`, `control_frames`, `high_noise_sample_params`, `video_frames`, `fps`, `ref_image_args`, `moe_boundary`, and `vace_strength`
 
 Example:
 
@@ -1409,6 +1410,7 @@ Example:
   "seed": -1,
   "video_frames": 33,
   "fps": 16,
+  "ref_image_args": "",
   "moe_boundary": 0.875,
   "vace_strength": 1.0,
 
@@ -1490,6 +1492,7 @@ Example:
 - Images retain request order and correspond to `<Picture 1>`, `<Picture 2>`, and so on in the prompt.
 - For MiniMax-H3, non-empty `ref_images` cannot be combined with `init_image` or `end_image`. A conflicting API request fails during generation; the WebUI checks this before submission.
 - MiniMax-H3 does not support `control_frames`; leave that array empty.
+- `ref_image_args` applies to `vid_gen`; MiniMax-H3 honors `ref_image_size` there (`match` default, `max` for a 2048 px short edge). Both modes only downscale references.
 - Other video model families currently ignore `ref_images`.
 - `features_by_mode.vid_gen` does not currently advertise `ref_images`; its absence is not an indication that MiniMax-H3 reference images are unsupported.
 
@@ -1540,6 +1543,7 @@ Top-level scalar fields:
 | `seed` | `integer` |
 | `video_frames` | `integer` |
 | `fps` | `integer` |
+| `ref_image_args` | `string` |
 | `moe_boundary` | `number` |
 | `vace_strength` | `number` |
 | `preview` | `string` |

@@ -178,6 +178,7 @@ static json make_vid_gen_defaults_json(const SDGenerationParams& defaults, const
         {"seed", defaults.seed},
         {"video_frames", defaults.video_frames},
         {"image_preprocess", defaults.image_preprocess},
+        {"ref_image_args", defaults.ref_image_args},
         {"fps", defaults.fps},
         {"moe_boundary", defaults.moe_boundary},
         {"vace_strength", defaults.vace_strength},

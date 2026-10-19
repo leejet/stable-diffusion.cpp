@@ -633,6 +633,7 @@ void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
     sd_vid_gen_params->hires.custom_sigmas_count             = 0;
     sd_vid_gen_params->circular_x                            = false;
     sd_vid_gen_params->circular_y                            = false;
+    sd_vid_gen_params->ref_image_args                        = "";
     sd_cache_params_init(&sd_vid_gen_params->cache);
 }
 

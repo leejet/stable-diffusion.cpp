@@ -78,6 +78,9 @@ If presets are insufficient, you can manually configure the following parameters
 | `vlm_max_size` | int | Maximum VLM input size; interpreted according to `vlm_resize_mode`. | Integer |
 | `vlm_min_size` | int | Minimum VLM input size; interpreted according to `vlm_resize_mode`. | Integer |
 | `vlm_size` | int | Shortcut to set both VLM min and max size to the same value. | Integer |
+| `ref_image_size` | string | MiniMax-H3 reference image sizing before VAE encoding. `match` scales each reference down to the generation's pixel area; `max` uses a 2048 px short edge. Both only downscale. | `match`, `max` |
+
+`ref_image_size` applies to `vid_gen` with MiniMax-H3 Ref2VA. Reference latents are attended to at every sampling step, so `max` can be several times slower.
 
 ### Preset Default Values
 

@@ -16,6 +16,11 @@ enum class RefImageResizeMode {
     AREA,
 };
 
+enum class RefImageSizeMode {
+    MATCH,
+    MAX,
+};
+
 struct RefImageParams {
     bool pass_to_vlm                   = false;
     bool pass_to_dit                   = true;
@@ -27,6 +32,7 @@ struct RefImageParams {
     int vlm_min_size                   = -1;
     int vlm_max_size                   = -1;
     bool resize_vae_to_target          = false;
+    RefImageSizeMode ref_image_size    = RefImageSizeMode::MATCH;
 };
 
 const std::unordered_map<std::string, RefImageParams> REF_IMAGE_PRESETS = {
