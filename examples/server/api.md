@@ -208,7 +208,11 @@ each recipe. This is response-only metadata, like `source` and slot `categories`
 omit it when writing a user recipe file. The defaults are maintained by the
 server, not duplicated by the frontend.
 
-`GET /sdcpp/v1/capabilities` adds `generation_features` for the loaded context.
+`GET /sdcpp/v1/capabilities` adds `generation_features` for the loaded context,
+derived from the active recipe and component availability without inferring
+features from model-family names. When no model is loaded, every feature is
+present and false. The UI can still preview a selected recipe using its
+`effective_features` before loading.
 Existing `features` / `features_by_mode` keys are retained and their model-specific
 values reflect these declarations. A loaded recipe is snapshotted: refreshing
 recipe files does not change the active context's capabilities until reloading.

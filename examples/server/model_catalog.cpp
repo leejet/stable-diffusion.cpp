@@ -349,46 +349,15 @@ json resolve_recipe_features(const json& recipe) {
 }
 
 json model_generation_features(const ServerRuntime& runtime) {
-    json features;
-    if (!runtime.models->active_recipe.is_null()) {
-        features = resolve_recipe_features(runtime.models->active_recipe);
-        if (runtime.models->active_recipe.value("source", "") == "command_line")
-            return features;
-    } else {
-        features                  = k_recipe_features;
-        const char* name          = runtime.sd_ctx ? sd_get_model_version_name(runtime.sd_ctx) : nullptr;
-        const std::string version = name ? name : "";
-        const bool unet           = version.rfind("SD 1.", 0) == 0 || version.rfind("SD 2.", 0) == 0 ||
-                          version.rfind("SDXL", 0) == 0 || version.rfind("SDXS", 0) == 0 || version == "Instruct-Pix2Pix" || version == "SVD";
-        const bool flux                = version == "Flux" || version == "Flux Fill" || version == "Flux Control" || version == "Flex.2" || version == "Flux.2";
-        const bool pixel               = version == "Chroma Radiance" || version == "MiniT2I" || version == "Iris-3B" || version == "Z-Image L2P";
-        features["clip_skip"]          = unet || version == "SD3.x" || flux;
-        features["cache_unet"]         = unet;
-        features["cache_dit"]          = !unet;
-        features["flow_shift"]         = !version.empty() && !unet && version != "PixArt" && version != "LLaDA-Image" && version != "MiniT2I" && version != "SeFi-Image";
-        features["shifted_timestep"]   = version.rfind("SDXL", 0) == 0;
-        features["distilled_guidance"] = flux || version == "Hunyuan Video";
-        features["slg"]                = flux || version == "SD3.x" || version == "MOSS-Image" || version == "Longcat-Image" || version == "SeFi-Image";
-        features["ref_images"]         = flux || version.rfind("Flux.", 0) == 0 || version.rfind("Qwen Image", 0) == 0 ||
-                                 version == "Longcat-Image" || version == "Mage Flow" || version == "Boogu Image" ||
-                                 version == "Z-Image" || version == "HiDream O1" || version == "Instruct-Pix2Pix" || version == "SDXL Instruct-Pix2Pix" || version == "MiniMax-H3" || version == "PiD";
-        features["img_cfg"] = flux || version == "Flux.2 klein" || version == "Qwen Image" || version == "Qwen Image Layered" ||
-                              version == "Longcat-Image" || version == "Mage Flow" || version == "Boogu Image" || version == "Z-Image" ||
-                              version == "Instruct-Pix2Pix" || version == "SDXL Instruct-Pix2Pix" || version.find("Inpaint") != std::string::npos;
-        features["init_image"]     = version.rfind("Wan", 0) == 0 || version == "LTXAV" || version == "MiniMax-H3" || version == "Hunyuan Video" || version == "LingBot Video";
-        features["end_image"]      = version.rfind("Wan", 0) == 0 || version == "LTXAV" || version == "MiniMax-H3";
-        features["control_frames"] = version.rfind("Wan", 0) == 0;
-        features["vace"]           = features["control_frames"];
-        features["vae_tiling"]     = !pixel;
-        features["preview"]        = !pixel && version != "PiD";
-        features["img2img"]        = version != "PiD";
-        features["mask_image"]     = version != "PiD" && version != "Flux Control";
-        features["control_image"]  = version == "Flux Control" || version == "Flex.2";
-        features["ip_adapter"]     = !runtime.ctx_params->ip_adapter_path.empty();
-        features["controlnet"]     = !runtime.ctx_params->control_net_path.empty();
-        features["high_noise"]     = !runtime.ctx_params->high_noise_diffusion_model_path.empty();
-        features["preview_tae"]    = !runtime.ctx_params->taesd_path.empty();
+    if (!runtime.sd_ctx || runtime.models->active_recipe.is_null()) {
+        json features = k_recipe_features;
+        for (auto& feature : features)
+            feature = false;
+        return features;
     }
+    json features = resolve_recipe_features(runtime.models->active_recipe);
+    if (runtime.models->active_recipe.value("source", "") == "command_line")
+        return features;
     // Optional components only become usable once selected and loaded.
     features["ip_adapter"]  = features.value("ip_adapter", false) && !runtime.ctx_params->ip_adapter_path.empty();
     features["controlnet"]  = features.value("controlnet", false) && !runtime.ctx_params->control_net_path.empty();
