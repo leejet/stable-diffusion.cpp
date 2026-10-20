@@ -85,10 +85,11 @@ pixel area exceeds the requested generation canvas.
 
 Pass `--ref-image-args "ref_image_size=max"` (or `ref_image_size` in
 `sd_vid_gen_params_t.ref_image_args`) to size references by a 2048 px short edge
-instead, which preserves more identity detail at a higher sampling cost. Both
-modes only downscale: references at or below the limit keep their size. Either
-way the per-axis result is rounded to the 32-pixel grid, so a dimension can grow
-by up to 16 pixels, and very small references are widened to 32 pixels.
+instead, which preserves more identity detail at a higher sampling cost. Neither
+mode scales a reference up beyond its limit, but each axis is snapped to the
+nearest 32-pixel multiple, so an axis can grow by up to 16 pixels past the scaled
+size (a 48-pixel axis becomes 64) and references are never narrower than 32
+pixels.
 `resize_before_vae=false` is not supported here; MiniMax-H3 keeps references on
 the 32-pixel grid and reports a warning.
 

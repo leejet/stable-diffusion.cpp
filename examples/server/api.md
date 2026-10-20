@@ -1492,7 +1492,7 @@ Example:
 - Images retain request order and correspond to `<Picture 1>`, `<Picture 2>`, and so on in the prompt.
 - For MiniMax-H3, non-empty `ref_images` cannot be combined with `init_image` or `end_image`. A conflicting API request fails during generation; the WebUI checks this before submission.
 - MiniMax-H3 does not support `control_frames`; leave that array empty.
-- `ref_image_args` applies to `vid_gen`; MiniMax-H3 honors `ref_image_size` there (`match` default, `max` for a 2048 px short edge). Both modes only downscale references.
+- `ref_image_args` applies to `vid_gen`; MiniMax-H3 honors `ref_image_size` there (`match` default, `max` for a 2048 px short edge). Only references above the limit are downscaled; each axis is then snapped to the nearest 32 px multiple.
 - Other video model families currently ignore `ref_images`.
 - `features_by_mode.vid_gen` does not currently advertise `ref_images`; its absence is not an indication that MiniMax-H3 reference images are unsupported.
 

@@ -463,7 +463,9 @@ namespace sd::pipeline {
     }
 
     // ComfyUI-compatible reference sizing: per-axis rounding to 32 px keeps the reference
-    // divisible by VAE 16 x patch 2 without padding in the H3 graph.
+    // divisible by VAE 16 x patch 2 without padding in the H3 graph. Both modes round rather
+    // than floor: flooring would under-size in-limit references and diverge from the
+    // upstream node, which rounds in both branches.
     static std::pair<int, int> minimax_h3_reference_size(int source_w,
                                                          int source_h,
                                                          int target_w,
