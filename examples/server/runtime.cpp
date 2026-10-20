@@ -18,16 +18,20 @@ bool apply_server_adetailer(ServerRuntime& runtime,
                             const ImgGenJobRequest& request,
                             const sd_img_gen_params_t& params,
                             SDImageVec& results) {
-    const auto& gen_params = request.gen_params;
+    const auto& gen_params    = request.gen_params;
     const auto& ad_model_path = runtime.default_gen_params->ad_model_path;
-    if (ad_model_path.empty()) {
+    if (!request.adetailer_enabled || ad_model_path.empty()) {
         return true;
     }
 
-    sd_adetailer_params_t ad_params{};
-    ad_params.prompt          = gen_params.ad_prompt.empty() ? nullptr : gen_params.ad_prompt.c_str();
-    ad_params.negative_prompt = gen_params.ad_negative_prompt.empty() ? nullptr : gen_params.ad_negative_prompt.c_str();
-    ad_params.extra_ad_args   = gen_params.extra_ad_args.c_str();
+    std::vector<ServerADetailerPass> passes = request.adetailer_passes;
+    if (passes.empty()) {
+        ServerADetailerPass pass;
+        pass.prompt          = gen_params.ad_prompt;
+        pass.negative_prompt = gen_params.ad_negative_prompt;
+        pass.extra_args      = gen_params.extra_ad_args;
+        passes.push_back(std::move(pass));
+    }
 
     ADetailerCtxPtr ad_ctx(new_adetailer_ctx(ad_model_path.c_str(),
                                              runtime.ctx_params->n_threads,
@@ -38,34 +42,46 @@ bool apply_server_adetailer(ServerRuntime& runtime,
         return false;
     }
 
-    for (int i = 0; i < results.count(); ++i) {
-        if (results[i].data == nullptr) {
-            continue;
-        }
-        sd_img_gen_params_t ad_generation_params = params;
-        ad_generation_params.seed                = params.seed + i;
-        ad_generation_params.width               = 512;
-        ad_generation_params.height              = 512;
-        ad_generation_params.strength            = 0.4f;
+    for (const auto& pass : passes) {
+        sd_adetailer_params_t ad_params{};
+        ad_params.prompt          = pass.prompt.empty() ? nullptr : pass.prompt.c_str();
+        ad_params.negative_prompt = pass.negative_prompt.empty() ? nullptr : pass.negative_prompt.c_str();
+        ad_params.extra_ad_args   = pass.extra_args.c_str();
+        for (int i = 0; i < results.count(); ++i) {
+            if (results[i].data == nullptr) {
+                continue;
+            }
+            sd_img_gen_params_t ad_generation_params = params;
+            ad_generation_params.seed                = params.seed + i;
+            ad_generation_params.width               = pass.width;
+            ad_generation_params.height              = pass.height;
+            ad_generation_params.strength            = pass.strength;
+            if (pass.clip_skip > 0) {
+                ad_generation_params.clip_skip = pass.clip_skip;
+            }
+            if (pass.automatic_scheduler) {
+                ad_generation_params.sample_params.scheduler = SCHEDULER_COUNT;
+            }
 
-        sd_image_t* detailed_images = nullptr;
-        int detailed_count          = 0;
-        if (!adetail_image(ad_ctx.get(),
-                           runtime.sd_ctx,
-                           results[i],
-                           &ad_params,
-                           &ad_generation_params,
-                           &detailed_images,
-                           &detailed_count) ||
-            detailed_count <= 0 || detailed_images == nullptr || detailed_images[0].data == nullptr) {
+            sd_image_t* detailed_images = nullptr;
+            int detailed_count          = 0;
+            if (!adetail_image(ad_ctx.get(),
+                               runtime.sd_ctx,
+                               results[i],
+                               &ad_params,
+                               &ad_generation_params,
+                               &detailed_images,
+                               &detailed_count) ||
+                detailed_count <= 0 || detailed_images == nullptr || detailed_images[0].data == nullptr) {
+                free_sd_images(detailed_images, detailed_count);
+                LOG_ERROR("ADetailer failed for image %d", i + 1);
+                return false;
+            }
+            free(results[i].data);
+            results[i]         = detailed_images[0];
+            detailed_images[0] = {0, 0, 0, nullptr};
             free_sd_images(detailed_images, detailed_count);
-            LOG_ERROR("ADetailer failed for image %d", i + 1);
-            return false;
         }
-        free(results[i].data);
-        results[i]         = detailed_images[0];
-        detailed_images[0] = {0, 0, 0, nullptr};
-        free_sd_images(detailed_images, detailed_count);
     }
     return true;
 }

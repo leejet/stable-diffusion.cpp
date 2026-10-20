@@ -3,9 +3,12 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <limits>
 #include <regex>
+#include <stdexcept>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "common/common.h"
 #include "common/media_io.h"
@@ -78,6 +81,200 @@ static enum sample_method_t get_sdapi_sample_method(std::string name) {
     };
     auto it = hardcoded.find(name);
     return it != hardcoded.end() ? it->second : SAMPLE_METHOD_COUNT;
+}
+
+static bool parse_sdapi_adetailer(const json& body,
+                                  ServerRuntime& runtime,
+                                  bool img2img,
+                                  ImgGenJobRequest& request,
+                                  std::string& error_message) {
+    request.adetailer_enabled = false;
+    request.adetailer_passes.clear();
+    if (!body.contains("alwayson_scripts")) {
+        return true;
+    }
+    try {
+        const auto& scripts = body.at("alwayson_scripts");
+        if (!scripts.is_object()) {
+            throw std::invalid_argument("alwayson_scripts must be an object");
+        }
+        if (!scripts.contains("ADetailer")) {
+            return true;
+        }
+        const auto& args = scripts.at("ADetailer").at("args");
+        if (!args.is_array()) {
+            throw std::invalid_argument("ADetailer.args must be an array");
+        }
+        if (args.empty() || (args[0].is_boolean() && !args[0].get<bool>())) {
+            return true;
+        }
+        static const std::unordered_set<std::string> keys = {
+            "ad_model", "ad_model_classes", "ad_tab_enable", "ad_prompt", "ad_negative_prompt",
+            "ad_confidence", "ad_mask_filter_method", "ad_mask_k", "ad_mask_min_ratio", "ad_mask_max_ratio",
+            "ad_dilate_erode", "ad_x_offset", "ad_y_offset", "ad_mask_merge_invert", "ad_mask_blur",
+            "ad_denoising_strength", "ad_inpaint_only_masked", "ad_inpaint_only_masked_padding",
+            "ad_use_inpaint_width_height", "ad_inpaint_width", "ad_inpaint_height", "ad_use_steps", "ad_steps",
+            "ad_use_cfg_scale", "ad_cfg_scale", "ad_use_sampler", "ad_sampler", "ad_scheduler",
+            "ad_use_checkpoint", "ad_checkpoint", "ad_use_vae", "ad_vae", "ad_use_noise_multiplier",
+            "ad_noise_multiplier", "ad_use_clip_skip", "ad_clip_skip", "ad_restore_face", "ad_controlnet_model",
+            "ad_controlnet_module", "ad_controlnet_weight", "ad_controlnet_guidance_start", "ad_controlnet_guidance_end", "is_api"};
+        for (const auto& config : args) {
+            if (!config.is_object()) {
+                continue;
+            }
+            auto boolean = [&](const char* key, bool fallback) {
+                if (!config.contains(key))
+                    return fallback;
+                if (!config.at(key).is_boolean())
+                    throw std::invalid_argument(std::string(key) + " must be boolean");
+                return config.at(key).get<bool>();
+            };
+            auto text = [&](const char* key, const char* fallback) {
+                if (!config.contains(key))
+                    return std::string(fallback);
+                if (!config.at(key).is_string())
+                    throw std::invalid_argument(std::string(key) + " must be a string");
+                return config.at(key).get<std::string>();
+            };
+            auto number = [&](const char* key, double fallback, double minimum, double maximum) {
+                double value = fallback;
+                if (config.contains(key)) {
+                    if (!config.at(key).is_number())
+                        throw std::invalid_argument(std::string(key) + " must be numeric");
+                    value = config.at(key).get<double>();
+                }
+                if (!std::isfinite(value) || value < minimum || value > maximum)
+                    throw std::invalid_argument(std::string(key) + " is out of range");
+                return value;
+            };
+            auto integer = [&](const char* key, int fallback, int minimum, int maximum = std::numeric_limits<int>::max()) {
+                if (config.contains(key) && !config.at(key).is_number_integer())
+                    throw std::invalid_argument(std::string(key) + " must be an integer");
+                return static_cast<int>(number(key, fallback, minimum, maximum));
+            };
+            const std::string model = text("ad_model", "None");
+            if (model == "None" || !boolean("ad_tab_enable", true)) {
+                continue;
+            }
+            for (const auto& item : config.items()) {
+                if (keys.count(item.key()) == 0)
+                    throw std::invalid_argument("unsupported ADetailer setting: " + item.key());
+            }
+            const auto& configured = runtime.default_gen_params->ad_model_path;
+            if (configured.empty())
+                throw std::invalid_argument("ADetailer requires a server-configured --ad-model");
+            const auto path = fs::u8path(configured);
+            if (model.find_first_of("/\\") != std::string::npos ||
+                (lower_ascii(model) != lower_ascii(path.filename().u8string()) && lower_ascii(model) != lower_ascii(path.stem().u8string() + ".pt"))) {
+                throw std::invalid_argument("ADetailer model must match the server-configured detector");
+            }
+            if (!text("ad_model_classes", "").empty())
+                throw std::invalid_argument("ad_model_classes is not supported");
+            if (boolean("ad_use_checkpoint", false)) {
+                const auto checkpoint = config.contains("ad_checkpoint") && config.at("ad_checkpoint").is_null() ? "" : text("ad_checkpoint", "Use same checkpoint");
+                if (!checkpoint.empty() && checkpoint != "None" && checkpoint != "Use same checkpoint")
+                    throw std::invalid_argument("ADetailer checkpoint switching is not supported");
+            }
+            if (boolean("ad_use_vae", false)) {
+                const auto vae = config.contains("ad_vae") && config.at("ad_vae").is_null() ? "" : text("ad_vae", "Use same VAE");
+                if (!vae.empty() && vae != "None" && vae != "Use same VAE")
+                    throw std::invalid_argument("ADetailer VAE switching is not supported");
+            }
+            if (boolean("ad_use_noise_multiplier", false) && number("ad_noise_multiplier", 1, 0.5, 1.5) != 1)
+                throw std::invalid_argument("ADetailer noise multiplier is not supported");
+            if (boolean("ad_restore_face", false))
+                throw std::invalid_argument("ADetailer face restoration is not supported");
+            if (text("ad_controlnet_model", "None") != "None")
+                throw std::invalid_argument("ADetailer ControlNet is not supported");
+
+            ServerADetailerPass pass;
+            pass.prompt          = text("ad_prompt", "");
+            pass.negative_prompt = text("ad_negative_prompt", "");
+            pass.width           = request.gen_params.get_resolved_width();
+            pass.height          = request.gen_params.get_resolved_height();
+            pass.strength        = static_cast<float>(number("ad_denoising_strength", 0.4, 0, 1));
+            auto append          = [&](const char* key, const std::string& value) {
+                if (!pass.extra_args.empty())
+                    pass.extra_args += ",";
+                pass.extra_args += std::string(key) + "=" + value;
+            };
+            auto append_number = [&](const char* target, const char* key, double fallback, double minimum, double maximum) {
+                append(target, json(number(key, fallback, minimum, maximum)).dump());
+            };
+            auto append_integer = [&](const char* target, const char* key, int fallback, int minimum, int maximum = std::numeric_limits<int>::max()) {
+                append(target, std::to_string(integer(key, fallback, minimum, maximum)));
+            };
+            append_number("confidence", "ad_confidence", 0.3, 0, 1);
+            append_integer("mask_k_largest", "ad_mask_k", 0, 0);
+            const auto filter = text("ad_mask_filter_method", "Area");
+            if (filter != "Area" && filter != "Confidence")
+                throw std::invalid_argument("invalid ad_mask_filter_method");
+            append("mask_filter_method", lower_ascii(filter));
+            const auto min_ratio = number("ad_mask_min_ratio", 0, 0, 1);
+            const auto max_ratio = number("ad_mask_max_ratio", 1, 0, 1);
+            if (min_ratio > max_ratio)
+                throw std::invalid_argument("ad_mask_min_ratio exceeds ad_mask_max_ratio");
+            append("mask_min_ratio", json(min_ratio).dump());
+            append("mask_max_ratio", json(max_ratio).dump());
+            // Bound pixel operations before converting them to the native mask parameters.
+            const int mask_limit = std::clamp(std::max(pass.width, pass.height), 32, 16384);
+            append_integer("dilate_erode", "ad_dilate_erode", 4, -mask_limit, mask_limit);
+            append_integer("x_offset", "ad_x_offset", 0, -mask_limit, mask_limit);
+            append_integer("y_offset", "ad_y_offset", 0, -mask_limit, mask_limit);
+            append_integer("mask_blur", "ad_mask_blur", 4, 0, mask_limit);
+            append_integer("inpaint_padding", "ad_inpaint_only_masked_padding", 32, 0, mask_limit);
+            append("inpaint_only_masked", boolean("ad_inpaint_only_masked", true) ? "true" : "false");
+            const auto merge = text("ad_mask_merge_invert", "None");
+            if (merge != "None" && merge != "Merge" && merge != "Merge and Invert")
+                throw std::invalid_argument("invalid ad_mask_merge_invert");
+            append("mask_mode", merge == "None" ? "none" : merge == "Merge" ? "merge"
+                                                                            : "merge_invert");
+            if (boolean("ad_use_inpaint_width_height", false)) {
+                pass.width  = integer("ad_inpaint_width", 512, 1);
+                pass.height = integer("ad_inpaint_height", 512, 1);
+            }
+            if (boolean("ad_use_steps", false))
+                append_integer("steps", "ad_steps", 28, 1);
+            if (boolean("ad_use_cfg_scale", false))
+                append_number("cfg_scale", "ad_cfg_scale", 7, 0, std::numeric_limits<float>::max());
+            if (boolean("ad_use_clip_skip", false)) {
+                pass.clip_skip = integer("ad_clip_skip", 1, 1);
+                if (pass.clip_skip > 12)
+                    throw std::invalid_argument("ad_clip_skip is out of range");
+            }
+            if (boolean("ad_use_sampler", false)) {
+                std::string sampler = text("ad_sampler", "DPM++ 2M Karras");
+                if (sampler != "Use same sampler") {
+                    const std::string suffix = " karras";
+                    const bool legacy_karras = sampler.size() > suffix.size() && lower_ascii(sampler.substr(sampler.size() - suffix.size())) == suffix;
+                    if (legacy_karras)
+                        sampler.resize(sampler.size() - suffix.size());
+                    const auto method = get_sdapi_sample_method(sampler);
+                    if (method == SAMPLE_METHOD_COUNT)
+                        throw std::invalid_argument("unsupported ADetailer sampler");
+                    append("sample_method", sd_sample_method_name(method));
+                }
+                const auto scheduler = text("ad_scheduler", "Use same scheduler");
+                if (scheduler == "Automatic") {
+                    pass.automatic_scheduler = true;
+                } else if (scheduler != "Use same scheduler") {
+                    const auto value = str_to_scheduler(scheduler.c_str());
+                    if (value == SCHEDULER_COUNT)
+                        throw std::invalid_argument("unsupported ADetailer scheduler");
+                    append("scheduler", sd_scheduler_name(value));
+                }
+            }
+            request.adetailer_passes.push_back(std::move(pass));
+        }
+        if (!request.adetailer_passes.empty() && img2img && args.size() > 1 && args[1].is_boolean() && args[1].get<bool>()) {
+            throw std::invalid_argument("ADetailer skip img2img is not supported");
+        }
+        request.adetailer_enabled = !request.adetailer_passes.empty();
+        return true;
+    } catch (const std::exception& error) {
+        error_message = std::string("invalid ADetailer args: ") + error.what();
+        return false;
+    }
 }
 
 static bool build_sdapi_img_gen_request(const json& j,
@@ -256,7 +453,7 @@ static bool build_sdapi_img_gen_request(const json& j,
         return false;
     }
 
-    return true;
+    return parse_sdapi_adetailer(j, runtime, img2img, request, error_message);
 }
 
 static nlohmann::json prepare_info_field(const SDContextParams& ctx_params,
@@ -346,7 +543,7 @@ static void preview_callback(int step, int frame_count, sd_image_t* frames, bool
 }
 
 struct SDAPIPreviewGuard {
-    SDAPIPreviewGuard(const std::string& id_task, const sd_img_gen_params_t& params, const std::string& job_type) {
+    SDAPIPreviewGuard(const std::string& id_task, const sd_img_gen_params_t& params, const std::string& job_type, bool detailing = false) {
         std::lock_guard<std::mutex> lock(g_preview.mutex);
         g_preview.id_task  = id_task;
         g_preview.total    = 0;
@@ -355,9 +552,18 @@ struct SDAPIPreviewGuard {
         g_preview.step   = 0;
         g_preview.active = true;
         // Each batch item has a base pass and, when enabled, a hires pass.
-        g_preview.job_count = static_cast<int64_t>(std::max(1, params.batch_count)) * (params.hires.enabled ? 2 : 1);
+        g_preview.job_count = static_cast<int64_t>(std::max(1, params.batch_count)) * (params.hires.enabled ? 2 : 1) + (detailing ? 1 : 0);
         g_preview.job_no    = 0;
         sd_set_preview_callback(preview_callback, PREVIEW_PROJ, 1, true, false, nullptr);
+    }
+
+    void begin_detailing() {
+        sd_set_preview_callback(nullptr, PREVIEW_NONE, 1, false, false, nullptr);
+        std::lock_guard<std::mutex> lock(g_preview.mutex);
+        g_preview.job_type = "adetailer";
+        g_preview.job_no   = static_cast<int>(g_preview.job_count - 1);
+        g_preview.step     = 0;
+        g_preview.total    = 0;
     }
 
     ~SDAPIPreviewGuard() {
@@ -406,15 +612,16 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             {
                 std::lock_guard<std::mutex> lock(*runtime->sd_ctx_mutex);
-                {
-                    SDAPIPreviewGuard preview_guard(id_task, img_gen_params, img2img ? "img2img" : "txt2img");
-                    sd_image_t* raw_results = nullptr;
-                    if (!generate_image(runtime->sd_ctx, &img_gen_params, &raw_results, &num_results)) {
-                        raw_results = nullptr;
-                        num_results = 0;
-                    }
-                    results.adopt(raw_results, num_results);
+                const bool detailing = request.adetailer_enabled && !runtime->default_gen_params->ad_model_path.empty();
+                SDAPIPreviewGuard preview_guard(id_task, img_gen_params, img2img ? "img2img" : "txt2img", detailing);
+                sd_image_t* raw_results = nullptr;
+                if (!generate_image(runtime->sd_ctx, &img_gen_params, &raw_results, &num_results)) {
+                    raw_results = nullptr;
+                    num_results = 0;
                 }
+                results.adopt(raw_results, num_results);
+                if (detailing && !results.empty())
+                    preview_guard.begin_detailing();
                 if (!results.empty() && !apply_server_adetailer(*runtime, request, img_gen_params, results)) {
                     res.status = 500;
                     res.set_content(R"({"error":"ADetailer failed"})", "application/json");

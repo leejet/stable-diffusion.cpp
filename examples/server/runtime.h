@@ -62,12 +62,25 @@ struct ServerRuntime {
     AsyncJobManager* async_job_manager;
 };
 
+struct ServerADetailerPass {
+    std::string prompt;
+    std::string negative_prompt;
+    std::string extra_args;
+    int width                = 512;
+    int height               = 512;
+    float strength           = 0.4f;
+    int clip_skip            = -1;
+    bool automatic_scheduler = false;
+};
+
 struct ImgGenJobRequest {
     SDGenerationParams gen_params;
     std::string output_format = "png";
     int output_compression    = 100;
     std::string preview_mode  = "none";
     int preview_interval      = 1;
+    bool adetailer_enabled    = true;
+    std::vector<ServerADetailerPass> adetailer_passes;
 
     sd_img_gen_params_t to_sd_img_gen_params_t() {
         return gen_params.to_sd_img_gen_params_t();
