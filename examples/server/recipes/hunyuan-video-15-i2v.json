@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "id": "hunyuan-video-15-i2v",
+  "name": "HunyuanVideo 1.5 I2V",
+  "description": "Select HunyuanVideo 1.5 I2V weights and supply a start image in Video Generation.",
+  "model_url": "https://huggingface.co/tencent/HunyuanVideo-1.5",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Qwen 2.5 VL 7B Text Encoder"
+    },
+    {
+      "id": "t5xxl",
+      "required": true,
+      "label": "ByT5 Small GlyphXL"
+    },
+    {
+      "id": "vae",
+      "required": false,
+      "label": "HunyuanVideo 1.5 VAE"
+    },
+    {
+      "id": "tae",
+      "required": false,
+      "label": "TAEHV 1.5"
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "video_frames": 33,
+    "cfg_scale": 6,
+    "steps": 20,
+    "width": 1280,
+    "height": 720,
+    "flow_shift": 7
+  },
+  "features": [
+    "flow_shift",
+    "init_image"
+  ],
+  "disabled_features": [
+    "img2img",
+    "mask_image"
+  ]
+}

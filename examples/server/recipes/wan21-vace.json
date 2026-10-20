@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "id": "wan21-vace",
+  "name": "Wan 2.1 VACE 1.3B / 14B",
+  "description": "Select matching VACE weights. Supports text, reference images and control video through Video Generation.",
+  "model_url": "https://huggingface.co/Wan-AI/Wan2.1-VACE-14B",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "t5xxl",
+      "required": true,
+      "label": "UMT5-XXL"
+    },
+    {
+      "id": "vae",
+      "required": false,
+      "label": "Wan 2.1 VAE"
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "video_frames": 33,
+    "cfg_scale": 5,
+    "steps": 20,
+    "width": 832,
+    "height": 480,
+    "flow_shift": 16
+  },
+  "features": [
+    "control_frames",
+    "flow_shift",
+    "init_image",
+    "vace"
+  ],
+  "disabled_features": [
+    "img2img",
+    "mask_image"
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "id": "krea2-turbo",
+  "name": "Krea 2 Turbo",
+  "description": "For reference-image editing with a community LoRA, use the corresponding Krea 2 Edit recipe.",
+  "model_url": "https://huggingface.co/krea/Krea-2-Turbo",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Qwen 3 VL 4B Text Encoder"
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "cfg_scale": 1,
+    "steps": 8,
+    "width": 2048,
+    "height": 2048,
+    "sampling_method": "euler"
+  },
+  "features": [
+    "flow_shift"
+  ]
+}

@@ -352,9 +352,9 @@ if (SD_HIPBLAS)
         set_property(SOURCE src/core/ggml_extend_backend.cpp APPEND PROPERTY COMPILE_DEFINITIONS SD_HIP_MFMA)
     endif()
 endif()
-target_include_directories(${SD_LIB} PUBLIC . src include)
-target_include_directories(${SD_LIB} PRIVATE src/core)
-target_include_directories(${SD_LIB} PUBLIC . thirdparty)
+target_include_directories(${SD_LIB} PUBLIC include)
+target_include_directories(${SD_LIB} PRIVATE src src/core)
+target_include_directories(${SD_LIB} PUBLIC thirdparty)
 target_compile_features(${SD_LIB} PUBLIC c_std_11 cxx_std_17)
 
 

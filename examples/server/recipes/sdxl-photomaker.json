@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "id": "sdxl-photomaker",
+  "name": "SDXL PhotoMaker",
+  "description": "Select PhotoMaker v1 and supply identity images. Include the img trigger in the prompt.",
+  "model_url": "https://huggingface.co/TencentARC/PhotoMaker",
+  "slots": [
+    {
+      "id": "model",
+      "required": true
+    },
+    {
+      "id": "photo_maker",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "defaults": {
+    "width": 1024,
+    "height": 1024
+  },
+  "features": [
+    "cache_unet",
+    "clip_skip",
+    "shifted_timestep"
+  ],
+  "disabled_features": [
+    "cache_dit"
+  ]
+}

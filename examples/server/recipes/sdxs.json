@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "id": "sdxs",
+  "name": "SDXS",
+  "model_url": "https://huggingface.co/IDKiro/sdxs-512-dreamshaper",
+  "slots": [
+    {
+      "id": "model",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    }
+  ],
+  "defaults": {
+    "cfg_scale": 1,
+    "steps": 1,
+    "width": 512,
+    "height": 512
+  },
+  "features": [
+    "cache_unet",
+    "clip_skip"
+  ],
+  "disabled_features": [
+    "cache_dit"
+  ]
+}

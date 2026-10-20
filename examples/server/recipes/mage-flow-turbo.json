@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "id": "mage-flow-turbo",
+  "name": "Mage Flow Turbo",
+  "model_url": "https://huggingface.co/microsoft/Mage-Flow-Turbo",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Qwen 3 VL 4B Text Encoder"
+    },
+    {
+      "id": "vae",
+      "required": true
+    }
+  ],
+  "defaults": {
+    "cfg_scale": 1,
+    "steps": 4,
+    "width": 1024,
+    "height": 1024,
+    "sampling_method": "euler"
+  },
+  "features": [
+    "flow_shift"
+  ]
+}

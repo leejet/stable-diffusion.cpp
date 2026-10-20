@@ -32,7 +32,7 @@ struct AsyncGenerationJob {
     std::string id;
     AsyncJobKind kind     = AsyncJobKind::ImgGen;
     AsyncJobStatus status = AsyncJobStatus::Queued;
-    int64_t created_at    = unix_timestamp_now();
+    int64_t created_at    = unix_timestamp_now_ms();
     int64_t started_at    = 0;
     int64_t completed_at  = 0;
     ImgGenJobRequest img_gen;

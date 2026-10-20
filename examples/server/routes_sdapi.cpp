@@ -13,6 +13,7 @@
 #include "common/common.h"
 #include "common/media_io.h"
 #include "common/resource_owners.hpp"
+#include "model_catalog.h"
 
 namespace fs = std::filesystem;
 
@@ -312,8 +313,9 @@ static bool build_sdapi_img_gen_request(const json& j,
     request.gen_params.sample_params.sample_steps     = steps;
     request.gen_params.batch_count                    = batch_size;
     request.gen_params.sample_params.guidance.txt_cfg = cfg_scale;
-    request.gen_params.width                          = j.value("width", -1);
-    request.gen_params.height                         = j.value("height", -1);
+    const bool recipe_dimensions                      = !img2img && model_status(runtime)["recipe"].is_string();
+    request.gen_params.width                          = j.value("width", recipe_dimensions ? runtime.default_gen_params->width : -1);
+    request.gen_params.height                         = j.value("height", recipe_dimensions ? runtime.default_gen_params->height : -1);
 
     if (!img2img && j.value("enable_hr", false)) {
         request.gen_params.hires_enabled = true;
@@ -348,6 +350,7 @@ static bool build_sdapi_img_gen_request(const json& j,
     }
 
     if (j.contains("lora") && j["lora"].is_array()) {
+        refresh_lora_cache(runtime);
         request.gen_params.lora_map.clear();
         request.gen_params.high_noise_lora_map.clear();
 
@@ -579,6 +582,7 @@ struct SDAPIPreviewGuard {
 
 void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
     ServerRuntime* runtime = &rt;
+    RuntimeRoutes routes(svr, rt);
 
     auto sdapi_any2img = [runtime](const httplib::Request& req, httplib::Response& res, bool img2img) {
         try {
@@ -604,7 +608,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 return;
             }
 
-            LOG_VERBOSE("%s\n", request.gen_params.to_string().c_str());
+            LOG_DEBUG("%s\n", request.gen_params.to_string().c_str());
 
             sd_img_gen_params_t img_gen_params = request.to_sd_img_gen_params_t();
             SDImageVec results;
@@ -687,15 +691,15 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         }
     };
 
-    svr.Post("/sdapi/v1/txt2img", [sdapi_any2img](const httplib::Request& req, httplib::Response& res) {
+    routes.post("/sdapi/v1/txt2img", [sdapi_any2img](const httplib::Request& req, httplib::Response& res) {
         sdapi_any2img(req, res, false);
     });
 
-    svr.Post("/sdapi/v1/img2img", [sdapi_any2img](const httplib::Request& req, httplib::Response& res) {
+    routes.post("/sdapi/v1/img2img", [sdapi_any2img](const httplib::Request& req, httplib::Response& res) {
         sdapi_any2img(req, res, true);
     });
 
-    svr.Get("/sdapi/v1/loras", [runtime](const httplib::Request&, httplib::Response& res) {
+    routes.get("/sdapi/v1/loras", [runtime](const httplib::Request&, httplib::Response& res) {
         refresh_lora_cache(*runtime);
 
         json result = json::array();
@@ -703,8 +707,9 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             std::lock_guard<std::mutex> lock(*runtime->lora_mutex);
             for (const auto& e : *runtime->lora_cache) {
                 json item;
-                item["name"] = e.name;
-                item["path"] = e.path;
+                item["name"]         = e.name;
+                item["path"]         = e.path;
+                item["display_path"] = e.display_path;
                 result.push_back(item);
             }
         }
@@ -712,7 +717,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         res.set_content(result.dump(), "application/json");
     });
 
-    svr.Get("/sdapi/v1/upscalers", [runtime](const httplib::Request&, httplib::Response& res) {
+    routes.get("/sdapi/v1/upscalers", [runtime](const httplib::Request&, httplib::Response& res) {
         refresh_upscaler_cache(*runtime);
 
         auto make_builtin = [](const char* name) {
@@ -746,7 +751,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         res.set_content(result.dump(), "application/json");
     });
 
-    svr.Get("/sdapi/v1/latent-upscale-modes", [](const httplib::Request&, httplib::Response& res) {
+    routes.get("/sdapi/v1/latent-upscale-modes", [](const httplib::Request&, httplib::Response& res) {
         json result = json::array({
             {{"name", "Latent"}},
             {{"name", "Latent (nearest)"}},
@@ -758,7 +763,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         res.set_content(result.dump(), "application/json");
     });
 
-    svr.Get("/sdapi/v1/samplers", [runtime](const httplib::Request&, httplib::Response& res) {
+    routes.get("/sdapi/v1/samplers", [runtime](const httplib::Request&, httplib::Response& res) {
         std::vector<std::string> sampler_names;
         sampler_names.push_back("default");
         for (int i = 0; i < SAMPLE_METHOD_COUNT; i++) {
@@ -775,7 +780,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         res.set_content(r.dump(), "application/json");
     });
 
-    svr.Get("/sdapi/v1/schedulers", [runtime](const httplib::Request&, httplib::Response& res) {
+    routes.get("/sdapi/v1/schedulers", [runtime](const httplib::Request&, httplib::Response& res) {
         std::vector<std::string> scheduler_names;
         scheduler_names.push_back("default");
         for (int i = 0; i < SCHEDULER_COUNT; i++) {
@@ -794,7 +799,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         res.set_content(r.dump(), "application/json");
     });
 
-    svr.Get("/sdapi/v1/sd-models", [runtime](const httplib::Request&, httplib::Response& res) {
+    routes.get("/sdapi/v1/sd-models", [runtime](const httplib::Request&, httplib::Response& res) {
         fs::path model_path = resolve_display_model_path(*runtime);
         json entry;
         entry["title"]      = model_path.stem().u8string();
@@ -804,11 +809,13 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         entry["sha256"]     = "8888888888888888888888888888888888888888888888888888888888888888";
         entry["config"]     = nullptr;
         json r              = json::array();
-        r.push_back(entry);
+        if (runtime->sd_ctx) {
+            r.push_back(entry);
+        }
         res.set_content(r.dump(), "application/json");
     });
 
-    svr.Get("/sdapi/v1/options", [runtime](const httplib::Request&, httplib::Response& res) {
+    routes.get("/sdapi/v1/options", [runtime](const httplib::Request&, httplib::Response& res) {
         fs::path model_path = resolve_display_model_path(*runtime);
         json r;
         r["samples_format"]      = "png";
@@ -816,7 +823,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         res.set_content(r.dump(), "application/json");
     });
 
-    svr.Get("/sdapi/v1/progress", [](const httplib::Request& req, httplib::Response& res) {
+    routes.get("/sdapi/v1/progress", [](const httplib::Request& req, httplib::Response& res) {
         bool skip_current_image = false;
         bool has_id_param       = req.has_param("id_task");
         std::string req_id_task = has_id_param ? req.get_param_value("id_task") : "";

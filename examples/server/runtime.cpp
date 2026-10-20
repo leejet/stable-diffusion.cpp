@@ -11,6 +11,10 @@
 
 #include "common/common.h"
 #include "common/log.h"
+#include "model_catalog.h"
+
+#include <map>
+#include <set>
 
 namespace fs = std::filesystem;
 
@@ -282,6 +286,13 @@ ArgOptions SDSvrParams::get_options() {
 
     options.manual_options = {
         {"-h", "--help", "show this help message and exit", on_help_arg},
+        {"", "--model-dir", "model root; repeat to search multiple directories (default: models)",
+         [this](int argc, const char** argv, int index) {
+             if (++index >= argc || argv[index][0] == '\0')
+                 return -1;
+             model_dirs.push_back(argv_to_utf8(index, argv));
+             return 1;
+         }},
     };
     add_log_options(options, log_level);
     return options;
@@ -325,71 +336,79 @@ std::string SDSvrParams::to_string() const {
 
 void refresh_lora_cache(ServerRuntime& rt) {
     std::vector<LoraEntry> new_cache;
-
-    if (rt.ctx_params->lora_model_dir.empty()) {
-        std::lock_guard<std::mutex> lock(*rt.lora_mutex);
-        rt.lora_cache->clear();
-        return;
-    }
-
-    fs::path lora_dir = fs::u8path(rt.ctx_params->lora_model_dir);
-    std::error_code ec;
-    if (fs::exists(lora_dir, ec) && !ec && fs::is_directory(lora_dir, ec) && !ec) {
-        try {
-            auto it = fs::recursive_directory_iterator(
-                lora_dir,
-                fs::directory_options::skip_permission_denied,
-                ec);
-            auto end = fs::recursive_directory_iterator();
-            while (!ec && it != end) {
-                std::error_code entry_ec;
-                bool is_reg = it->is_regular_file(entry_ec);
-                if (entry_ec || !is_reg) {
-                    it.increment(ec);
-                    continue;
+    std::vector<ModelRoot> directories;
+    if (!rt.ctx_params->lora_model_dir.empty()) {
+        directories.push_back(make_model_root(fs::u8path(rt.ctx_params->lora_model_dir), true));
+    } else {
+        for (const auto& root : get_model_roots(*rt.svr_params)) {
+            try {
+                const auto paths = model_category_directories(root, "loras");
+                for (size_t i = 0; i < paths.size(); ++i) {
+                    if (!model_path_inside(root.path, fs::canonical(paths[i]))) {
+                        LOG_WARN("LoRA directory escapes model directory: %s", paths[i].u8string().c_str());
+                        continue;
+                    }
+                    directories.push_back(make_model_root(paths[i], root.primary && lower_ascii(paths[i].filename().u8string()) == "loras"));
                 }
-                const fs::path& p = it->path();
-                if (!is_supported_model_ext(p)) {
-                    it.increment(ec);
-                    continue;
-                }
-
-                LoraEntry lora_entry;
-                lora_entry.name     = p.stem().u8string();
-                lora_entry.fullpath = p.u8string();
-                std::string rel     = p.lexically_relative(lora_dir).u8string();
-                std::replace(rel.begin(), rel.end(), '\\', '/');
-                lora_entry.path = rel;
-
-                new_cache.push_back(std::move(lora_entry));
-                it.increment(ec);
+            } catch (const std::exception& e) {
+                LOG_WARN("error while finding LoRA directories in %s: %s", root.label.c_str(), e.what());
             }
-        } catch (const std::exception& e) {
-            LOG_WARN("error while scanning lora directory '%s': %s", lora_dir.u8string().c_str(), e.what());
-            return;
         }
     }
-
-    if (ec) {
-        LOG_WARN("error while scanning lora directory '%s': %s", lora_dir.u8string().c_str(), ec.message().c_str());
-        return;
+    std::set<std::string> seen;
+    std::map<std::string, size_t> names;
+    for (const auto& directory : directories) {
+        try {
+            if (!fs::exists(directory.path))
+                continue;
+            for (fs::recursive_directory_iterator it(directory.path), end; it != end; ++it) {
+                std::error_code ec;
+                const auto canonical = fs::canonical(it->path(), ec);
+                if (ec || !model_path_inside(directory.path, canonical)) {
+                    it.disable_recursion_pending();
+                    LOG_WARN("skipping inaccessible LoRA or path outside LoRA directory: %s", it->path().u8string().c_str());
+                    continue;
+                }
+                const auto ext = lower_ascii(it->path().extension().u8string());
+                if (!it->is_regular_file() || (!is_supported_model_ext(it->path()) && ext != ".ckpt" && ext != ".sft") ||
+                    !seen.insert(model_path_key(canonical)).second)
+                    continue;
+                const auto relative = it->path().lexically_relative(directory.path).generic_u8string();
+                LoraEntry entry;
+                entry.name         = it->path().stem().u8string();
+                entry.path         = directory.primary ? relative : directory.id + "/" + relative;
+                entry.fullpath     = it->path().u8string();
+                entry.display_path = relative;
+                entry.root         = directory.path;
+                ++names[relative];
+                new_cache.push_back(std::move(entry));
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("error while scanning LoRA directory '%s': %s", directory.path.u8string().c_str(), e.what());
+        }
     }
-
+    for (auto& entry : new_cache) {
+        if (names[entry.display_path] > 1)
+            entry.display_path = fs::u8path(entry.fullpath).generic_u8string();
+    }
     std::sort(new_cache.begin(), new_cache.end(), [](const LoraEntry& a, const LoraEntry& b) {
         return a.path < b.path;
     });
-
-    {
-        std::lock_guard<std::mutex> lock(*rt.lora_mutex);
-        *rt.lora_cache = std::move(new_cache);
-    }
+    std::lock_guard<std::mutex> lock(*rt.lora_mutex);
+    *rt.lora_cache = std::move(new_cache);
 }
 
 std::string get_lora_full_path(ServerRuntime& rt, const std::string& path) {
     std::lock_guard<std::mutex> lock(*rt.lora_mutex);
     auto it = std::find_if(rt.lora_cache->begin(), rt.lora_cache->end(),
                            [&](const LoraEntry& entry) { return entry.path == path; });
-    return it != rt.lora_cache->end() ? it->fullpath : "";
+    if (it == rt.lora_cache->end())
+        return "";
+    std::error_code ec;
+    const auto canonical = fs::canonical(fs::u8path(it->fullpath), ec);
+    if (ec || !model_path_inside(it->root, canonical) || !fs::is_regular_file(canonical, ec) || ec)
+        return "";
+    return canonical.u8string();
 }
 
 void refresh_upscaler_cache(ServerRuntime& rt) {
@@ -476,8 +495,8 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
     }
 }
 
-int64_t unix_timestamp_now() {
-    return std::chrono::duration_cast<std::chrono::seconds>(
+int64_t unix_timestamp_now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::system_clock::now().time_since_epoch())
         .count();
 }
