@@ -71,6 +71,8 @@ ADetailer can also run automatically after normal image generation:
 
 The same options can be supplied when starting `sd-server`. When `--ad-model` is set, its detector runs after OpenAI-compatible and native asynchronous image generation. SDAPI requests enable ADetailer through `alwayson_scripts`, as described below. If no object is detected, the original image is returned unchanged. RGBA output keeps its original alpha channel, including when detected regions are repaired. Detector initialization or detail-pass failures are reported as request failures.
 
+Server image-generation requests limit base, hires, and detail-pass dimensions to 4096 pixels per side. ADetailer step overrides are limited to 1–100; `steps=0` in `extra_ad_args` keeps inheriting the main generation steps. These limits also apply to inherited dimensions and `extra_ad_args` overrides. Requests exceeding the limits return a parameter error before generation. CLI limits are unchanged.
+
 ### SDAPI requests
 
 `/sdapi/v1/txt2img` and `/sdapi/v1/img2img` accept the WebUI ADetailer argument format:

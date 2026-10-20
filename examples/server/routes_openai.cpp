@@ -75,7 +75,7 @@ static bool build_openai_generation_request(const httplib::Request& req,
         error_message = "invalid params";
         return false;
     }
-    return true;
+    return validate_server_img_gen_request(runtime, request, error_message);
 }
 
 static bool build_openai_edit_request(const httplib::Request& req,
@@ -252,7 +252,7 @@ static bool build_openai_edit_request(const httplib::Request& req,
         return false;
     }
 
-    return true;
+    return validate_server_img_gen_request(runtime, request, error_message);
 }
 
 static bool execute_sync_img_gen_request(ServerRuntime& runtime,

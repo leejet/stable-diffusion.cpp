@@ -231,11 +231,11 @@ static bool parse_sdapi_adetailer(const json& body,
             append("mask_mode", merge == "None" ? "none" : merge == "Merge" ? "merge"
                                                                             : "merge_invert");
             if (boolean("ad_use_inpaint_width_height", false)) {
-                pass.width  = integer("ad_inpaint_width", 512, 1);
-                pass.height = integer("ad_inpaint_height", 512, 1);
+                pass.width  = integer("ad_inpaint_width", 512, 1, k_max_generation_dimension);
+                pass.height = integer("ad_inpaint_height", 512, 1, k_max_generation_dimension);
             }
             if (boolean("ad_use_steps", false))
-                append_integer("steps", "ad_steps", 28, 1);
+                append_integer("steps", "ad_steps", 28, 1, k_max_adetailer_steps);
             if (boolean("ad_use_cfg_scale", false))
                 append_number("cfg_scale", "ad_cfg_scale", 7, 0, std::numeric_limits<float>::max());
             if (boolean("ad_use_clip_skip", false)) {
@@ -458,7 +458,8 @@ static bool build_sdapi_img_gen_request(const json& j,
         return false;
     }
 
-    return parse_sdapi_adetailer(j, runtime, img2img, request, error_message);
+    return parse_sdapi_adetailer(j, runtime, img2img, request, error_message) &&
+           validate_server_img_gen_request(runtime, request, error_message);
 }
 
 static nlohmann::json prepare_info_field(const SDContextParams& ctx_params,

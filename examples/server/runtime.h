@@ -92,6 +92,13 @@ struct ImgGenJobRequest {
     }
 };
 
+constexpr int k_max_generation_dimension = 4096;
+constexpr int k_max_adetailer_steps      = 100;
+
+bool validate_server_img_gen_request(const ServerRuntime& runtime,
+                                     const ImgGenJobRequest& request,
+                                     std::string& error_message);
+
 struct VidGenJobRequest {
     SDGenerationParams gen_params;
     std::string output_format = "webm";
