@@ -254,6 +254,8 @@ static bool parse_sdapi_adetailer(const json& body,
                     if (method == SAMPLE_METHOD_COUNT)
                         throw std::invalid_argument("unsupported ADetailer sampler");
                     append("sample_method", sd_sample_method_name(method));
+                    if (legacy_karras && text("ad_scheduler", "Use same scheduler") == "Use same scheduler")
+                        append("scheduler", sd_scheduler_name(KARRAS_SCHEDULER));
                 }
                 const auto scheduler = text("ad_scheduler", "Use same scheduler");
                 if (scheduler == "Automatic") {
