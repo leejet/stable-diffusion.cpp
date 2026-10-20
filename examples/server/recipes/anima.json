@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "id": "anima",
+  "name": "Anima",
+  "description": "Supports all Anima variants supported by sd.cpp. Use a compatible Qwen Image VAE or TAE; adjust generation settings for distilled variants.",
+  "model_url": "https://huggingface.co/circlestone-labs/Anima",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Qwen 3 0.6B Base Text Encoder"
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "cfg_scale": 4,
+    "steps": 20,
+    "width": 1024,
+    "height": 1024
+  },
+  "features": [
+    "flow_shift"
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "id": "flux1-kontext",
+  "name": "FLUX.1 Kontext dev",
+  "description": "Select FLUX.1 Kontext weights. Supports text-to-image and native reference-image editing; an editing LoRA is not required.",
+  "model_url": "https://huggingface.co/black-forest-labs/FLUX.1-Kontext-dev",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "clip_l",
+      "required": true
+    },
+    {
+      "id": "t5xxl",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "cfg_scale": 1,
+    "steps": 20,
+    "distilled_guidance": 2.5
+  },
+  "features": [
+    "clip_skip",
+    "distilled_guidance",
+    "flow_shift",
+    "img_cfg",
+    "ref_images",
+    "slg"
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "id": "wan21-t2v",
+  "name": "Wan 2.1 T2V",
+  "description": "Text-to-video with Wan 2.1 or a compatible single Wan 2.2 T2V expert. Defaults target Wan 2.1 14B; adjust settings for the selected weights and acceleration LoRAs.",
+  "model_url": "https://huggingface.co/Wan-AI/Wan2.1-T2V-14B",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "t5xxl",
+      "label": "UMT5-XXL",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "label": "Wan 2.1 VAE",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "video_frames": 33,
+    "fps": 16,
+    "flow_shift": 5,
+    "cfg_scale": 5,
+    "steps": 20,
+    "width": 1280,
+    "height": 720
+  },
+  "features": [
+    "flow_shift"
+  ],
+  "disabled_features": [
+    "img2img",
+    "mask_image"
+  ]
+}

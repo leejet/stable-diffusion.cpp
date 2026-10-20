@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "id": "anima-edit",
+  "name": "Anima Edit (LoRA)",
+  "description": "Requires a matching community editing LoRA. Apply it after loading and supply reference images; uses the cosmos_reference preset.",
+  "model_url": "https://huggingface.co/circlestone-labs/Anima",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Qwen 3 0.6B Base Text Encoder"
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "scheduler": "discrete",
+    "cfg_scale": 4,
+    "steps": 20,
+    "width": 1024,
+    "height": 1024
+  },
+  "features": [
+    "flow_shift",
+    "ref_images"
+  ]
+}

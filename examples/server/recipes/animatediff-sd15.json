@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "id": "animatediff-sd15",
+  "name": "AnimateDiff SD 1.5",
+  "description": "Use Video Generation with an SD 1.5 checkpoint and compatible motion module.",
+  "model_url": "https://huggingface.co/guoyww/animatediff",
+  "slots": [
+    {
+      "id": "model",
+      "required": true
+    },
+    {
+      "id": "motion_module",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "video_frames": 8,
+    "fps": 8,
+    "cfg_scale": 7.5,
+    "steps": 20,
+    "width": 512,
+    "height": 512
+  },
+  "features": [
+    "cache_unet",
+    "clip_skip",
+    "init_image"
+  ],
+  "disabled_features": [
+    "cache_dit",
+    "img2img",
+    "mask_image"
+  ]
+}

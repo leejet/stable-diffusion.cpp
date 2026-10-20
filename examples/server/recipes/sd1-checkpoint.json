@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "sd1-checkpoint",
+  "name": "SD 1.x",
+  "description": "Supports SD 1.x, compatible LCM checkpoints and layer-count variants. For LCM weights, select LCM sampling and adjust steps/CFG. Tiny SD Diffusers directories must first be converted into a single-file checkpoint.",
+  "model_url": "https://huggingface.co/CompVis/stable-diffusion-v1-4",
+  "slots": [
+    {
+      "id": "model",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "label": "VAE override",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "defaults": {
+    "cfg_scale": 7.5,
+    "steps": 20,
+    "width": 512,
+    "height": 512
+  },
+  "features": [
+    "cache_unet",
+    "clip_skip"
+  ],
+  "disabled_features": [
+    "cache_dit"
+  ]
+}

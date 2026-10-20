@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "id": "wan22-s2v",
+  "name": "Wan 2.2 S2V 14B",
+  "description": "Supply a start image and reference audio through Video Generation.",
+  "model_url": "https://huggingface.co/Wan-AI/Wan2.2-S2V-14B",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "t5xxl",
+      "required": true,
+      "label": "UMT5-XXL"
+    },
+    {
+      "id": "audio_encoder",
+      "required": true,
+      "label": "Wav2Vec2 Large English"
+    },
+    {
+      "id": "vae",
+      "required": false,
+      "label": "Wan 2.1 VAE"
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "flow_shift": 3,
+    "video_frames": 33,
+    "cfg_scale": 4.5,
+    "steps": 20
+  },
+  "features": [
+    "flow_shift",
+    "init_image"
+  ],
+  "disabled_features": [
+    "img2img",
+    "mask_image"
+  ]
+}

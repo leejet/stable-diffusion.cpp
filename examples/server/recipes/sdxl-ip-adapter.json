@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "id": "sdxl-ip-adapter",
+  "name": "SDXL IP-Adapter / Plus",
+  "description": "Select matching SDXL ViT-H IP-Adapter or Plus weights and CLIP Vision H, then supply an IP-Adapter image.",
+  "model_url": "https://huggingface.co/h94/IP-Adapter",
+  "slots": [
+    {
+      "id": "model",
+      "required": true
+    },
+    {
+      "id": "clip_vision",
+      "required": true,
+      "label": "CLIP Vision H"
+    },
+    {
+      "id": "ip_adapter",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "defaults": {
+    "scheduler": "discrete",
+    "sampling_method": "dpm++2m",
+    "cfg_scale": 5,
+    "steps": 20,
+    "width": 1024,
+    "height": 1024
+  },
+  "features": [
+    "cache_unet",
+    "clip_skip",
+    "shifted_timestep"
+  ],
+  "disabled_features": [
+    "cache_dit"
+  ]
+}

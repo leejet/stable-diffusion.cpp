@@ -17,14 +17,16 @@ using json = nlohmann::json;
 struct ArgOptions;
 struct SDContextParams;
 struct AsyncJobManager;
+struct ServerModels;
 
 struct SDSvrParams {
     std::string listen_ip = "127.0.0.1";
     int listen_port       = 1234;
     std::string serve_html_path;
-    bool normal_exit = false;
+    std::vector<std::string> model_dirs;
+    bool normal_exit         = false;
     sd_log_level_t log_level = SD_LOG_INFO;
-    bool color       = false;
+    bool color               = false;
 
     ArgOptions get_options();
     bool validate();
@@ -36,6 +38,8 @@ struct LoraEntry {
     std::string name;
     std::string path;
     std::string fullpath;
+    std::string display_path;
+    std::filesystem::path root;
 };
 
 struct UpscalerEntry {
@@ -43,7 +47,7 @@ struct UpscalerEntry {
     std::string path;
     std::string fullpath;
     std::string model_name;
-    int scale = 4;
+    int scale                = 4;
     int image_upscale_factor = 0;
     uintmax_t file_size      = 0;
     std::filesystem::file_time_type last_modified;
@@ -53,13 +57,14 @@ struct ServerRuntime {
     sd_ctx_t* sd_ctx;
     std::mutex* sd_ctx_mutex;
     const SDSvrParams* svr_params;
-    const SDContextParams* ctx_params;
-    const SDGenerationParams* default_gen_params;
+    SDContextParams* ctx_params;
+    SDGenerationParams* default_gen_params;
     std::vector<LoraEntry>* lora_cache;
     std::mutex* lora_mutex;
     std::vector<UpscalerEntry>* upscaler_cache;
     std::mutex* upscaler_mutex;
     AsyncJobManager* async_job_manager;
+    ServerModels* models;
 };
 
 struct ImgGenJobRequest {
@@ -105,4 +110,4 @@ std::string unsupported_generation_mode_error(SDMode mode);
 void refresh_lora_cache(ServerRuntime& rt);
 std::string get_lora_full_path(ServerRuntime& rt, const std::string& path);
 void refresh_upscaler_cache(ServerRuntime& rt);
-int64_t unix_timestamp_now();
+int64_t unix_timestamp_now_ms();

@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "id": "nitrosd-realism",
+  "name": "NitroSD Realism",
+  "model_url": "https://huggingface.co/ChenDY/NitroFusion",
+  "slots": [
+    {
+      "id": "model",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "defaults": {
+    "scheduler": "sgm_uniform",
+    "shifted_timestep": 250,
+    "cfg_scale": 1,
+    "steps": 1,
+    "width": 1024,
+    "height": 1024
+  },
+  "features": [
+    "cache_unet",
+    "clip_skip",
+    "shifted_timestep"
+  ],
+  "disabled_features": [
+    "cache_dit"
+  ]
+}

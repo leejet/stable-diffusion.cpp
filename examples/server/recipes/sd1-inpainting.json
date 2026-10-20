@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "sd1-inpainting",
+  "name": "SD 1.5 Inpainting",
+  "description": "Select an inpainting checkpoint, then supply an input image and mask.",
+  "slots": [
+    {
+      "id": "model",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "defaults": {
+    "cfg_scale": 7.5,
+    "steps": 20,
+    "width": 512,
+    "height": 512
+  },
+  "features": [
+    "cache_unet",
+    "clip_skip",
+    "img_cfg"
+  ],
+  "disabled_features": [
+    "cache_dit"
+  ]
+}

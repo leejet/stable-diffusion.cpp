@@ -10,6 +10,7 @@
 #include "async_jobs.h"
 #include "common/common.h"
 #include "common/resource_owners.hpp"
+#include "model_catalog.h"
 #include "routes.h"
 #include "runtime.h"
 
@@ -50,7 +51,7 @@ static void parse_args(int argc,
     const bool random_seed_requested = default_gen_params.seed < 0;
 
     if (!svr_params.resolve_and_validate() ||
-        !ctx_params.resolve_and_validate(IMG_GEN) ||
+        !ctx_params.resolve_and_validate(ctx_params.model_path.empty() && ctx_params.diffusion_model_path.empty() ? METADATA : IMG_GEN) ||
         !default_gen_params.resolve_and_validate(IMG_GEN,
                                                  ctx_params.lora_model_dir,
                                                  ctx_params.hires_upscalers_dir)) {
@@ -84,14 +85,19 @@ int main(int argc, const char** argv) {
 
     LOG_VERBOSE("version: %s", version_string().c_str());
     LOG_VERBOSE("%s", sd_get_system_info());
-    LOG_VERBOSE("%s", svr_params.to_string().c_str());
+    LOG_DEBUG("%s", svr_params.to_string().c_str());
     LOG_DEBUG("%s", ctx_params.to_string().c_str());
     LOG_DEBUG("%s", default_gen_params.to_string().c_str());
 
     sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(false);
-    SDCtxPtr sd_ctx(new_sd_ctx(&sd_ctx_params));
+    ServerModels models;
+    if (!ctx_params.model_path.empty() || !ctx_params.diffusion_model_path.empty()) {
+        const auto started = std::chrono::steady_clock::now();
+        models.context.reset(new_sd_ctx(&sd_ctx_params));
+        models.status["load_elapsed_seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    }
 
-    if (sd_ctx == nullptr) {
+    if ((!ctx_params.model_path.empty() || !ctx_params.diffusion_model_path.empty()) && !models.context) {
         LOG_ERROR("new_sd_ctx_t failed");
         return 1;
     }
@@ -104,7 +110,7 @@ int main(int argc, const char** argv) {
     std::mutex upscaler_mutex;
     AsyncJobManager async_job_manager;
     ServerRuntime runtime = {
-        sd_ctx.get(),
+        models.context.get(),
         &sd_ctx_mutex,
         &svr_params,
         &ctx_params,
@@ -114,7 +120,15 @@ int main(int argc, const char** argv) {
         &upscaler_cache,
         &upscaler_mutex,
         &async_job_manager,
+        &models,
     };
+
+    try {
+        initialize_server_models(runtime);
+    } catch (const std::exception& e) {
+        LOG_ERROR("model catalog initialization failed: %s", e.what());
+        return 1;
+    }
 
     std::thread async_worker(async_job_worker, std::ref(runtime));
 
@@ -147,6 +161,7 @@ int main(int argc, const char** argv) {
     register_openai_api_endpoints(svr, runtime);
     register_sdapi_endpoints(svr, runtime);
     register_sdcpp_api_endpoints(svr, runtime);
+    register_model_endpoints(svr, runtime);
 
     LOG_INFO("listening on: http://%s:%d\n", svr_params.listen_ip.c_str(), svr_params.listen_port);
     svr.listen(svr_params.listen_ip, svr_params.listen_port);

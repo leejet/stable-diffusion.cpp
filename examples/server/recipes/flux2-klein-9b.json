@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "id": "flux2-klein-9b",
+  "name": "FLUX.2 Klein 9B",
+  "description": "Supports text-to-image and reference-image editing.",
+  "model_url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-9B",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Qwen 3 8B Text Encoder"
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "cfg_scale": 1,
+    "steps": 4,
+    "width": 1024,
+    "height": 1024,
+    "sampling_method": "euler"
+  },
+  "features": [
+    "flow_shift",
+    "img_cfg",
+    "ref_images",
+    "slg"
+  ]
+}

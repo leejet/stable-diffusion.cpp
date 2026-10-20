@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "id": "qwen-image-edit-2511",
+  "name": "Qwen Image Edit 2511",
+  "description": "Supply reference images. Select a vision projector for GGUF text encoders; omit it if vision weights are included in the text encoder.",
+  "model_url": "https://huggingface.co/Qwen/Qwen-Image-Edit-2511",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Qwen 2.5 VL 7B Text Encoder"
+    },
+    {
+      "id": "llm_vision",
+      "required": false,
+      "label": "Vision projector (required for separate GGUF text encoders)"
+    },
+    {
+      "id": "vae",
+      "required": false,
+      "label": "Qwen Image VAE"
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "context": {
+    "model_args": "qwen_image_zero_cond_t=true"
+  },
+  "defaults": {
+    "sampling_method": "euler",
+    "flow_shift": 3.0,
+    "cfg_scale": 4,
+    "steps": 20
+  },
+  "features": [
+    "flow_shift",
+    "img_cfg",
+    "ref_images"
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "id": "pid-qwen-image",
+  "name": "PiD (Qwen Image VAE)",
+  "description": "Supply a reference image; the first image is used as the source latent. Select a matching Qwen Image PiD checkpoint and VAE. Use the Qwen Image 2D VAE.",
+  "model_url": "https://huggingface.co/nvidia/PiD",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Gemma 2 2B ELM Text Encoder"
+    },
+    {
+      "id": "tokenizer",
+      "required": true,
+      "label": "Gemma 2 tokenizer.json"
+    },
+    {
+      "id": "vae",
+      "required": true
+    }
+  ],
+  "context": {
+    "vae_format": "wan"
+  },
+  "defaults": {
+    "sampling_method": "lcm",
+    "scheduler": "lcm",
+    "cfg_scale": 1,
+    "steps": 4,
+    "width": 2048,
+    "height": 2048
+  },
+  "features": [
+    "flow_shift",
+    "ref_images"
+  ],
+  "disabled_features": [
+    "img2img",
+    "mask_image",
+    "preview"
+  ]
+}

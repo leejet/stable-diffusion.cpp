@@ -88,7 +88,7 @@ const char* async_job_status_name(AsyncJobStatus status) {
 }
 
 void purge_expired_jobs(AsyncJobManager& manager) {
-    const int64_t now = unix_timestamp_now();
+    const int64_t now = unix_timestamp_now_ms();
 
     for (auto it = manager.expired_jobs.begin(); it != manager.expired_jobs.end();) {
         if (it->second <= now) {
@@ -108,8 +108,8 @@ void purge_expired_jobs(AsyncJobManager& manager) {
         int64_t ttl_seconds = job->status == AsyncJobStatus::Completed
                                   ? manager.completed_ttl_seconds
                                   : manager.failed_ttl_seconds;
-        if (now - job->completed_at >= ttl_seconds) {
-            manager.expired_jobs[job->id] = now + std::max<int64_t>(ttl_seconds, 60);
+        if (now - job->completed_at >= ttl_seconds * 1000) {
+            manager.expired_jobs[job->id] = now + std::max<int64_t>(ttl_seconds, 60) * 1000;
             it                            = manager.jobs.erase(it);
         } else {
             ++it;
@@ -130,7 +130,7 @@ size_t count_pending_jobs(const AsyncJobManager& manager) {
 
 std::string make_async_job_id(AsyncJobManager& manager) {
     std::ostringstream oss;
-    oss << "job_" << std::hex << unix_timestamp_now() << "_" << std::setw(8)
+    oss << "job_" << std::hex << unix_timestamp_now_ms() << "_" << std::setw(8)
         << std::setfill('0') << manager.next_id++;
     return oss.str();
 }
@@ -143,7 +143,7 @@ bool cancel_queued_job(AsyncJobManager& manager, AsyncGenerationJob& job) {
 
     manager.queue.erase(new_end, manager.queue.end());
     job.status       = AsyncJobStatus::Cancelled;
-    job.completed_at = unix_timestamp_now();
+    job.completed_at = unix_timestamp_now_ms();
     job.result_images_b64.clear();
     job.result_media_b64.clear();
     job.result_media_mime_type.clear();
@@ -373,7 +373,7 @@ void async_job_worker(ServerRuntime& runtime) {
 
             job             = it->second;
             job->status     = AsyncJobStatus::Generating;
-            job->started_at = unix_timestamp_now();
+            job->started_at = unix_timestamp_now_ms();
         }
 
         std::vector<std::string> output_images;
@@ -405,7 +405,7 @@ void async_job_worker(ServerRuntime& runtime) {
                 continue;
             }
 
-            job->completed_at = unix_timestamp_now();
+            job->completed_at = unix_timestamp_now_ms();
             if (ok) {
                 job->status                 = AsyncJobStatus::Completed;
                 job->result_images_b64      = std::move(output_images);
