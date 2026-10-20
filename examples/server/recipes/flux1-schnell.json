@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "id": "flux1-schnell",
+  "name": "FLUX.1 schnell",
+  "model_url": "https://huggingface.co/black-forest-labs/FLUX.1-schnell",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "clip_l",
+      "required": true
+    },
+    {
+      "id": "t5xxl",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "cfg_scale": 1,
+    "steps": 4,
+    "width": 1024,
+    "height": 1024
+  },
+  "features": [
+    "clip_skip",
+    "flow_shift",
+    "slg"
+  ]
+}

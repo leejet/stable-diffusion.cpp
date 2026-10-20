@@ -37,7 +37,7 @@ static bool build_openai_generation_request(const httplib::Request& req,
     std::string output_format = j.value("output_format", "png");
     int output_compression    = j.value("output_compression", 100);
     int width                 = runtime.default_gen_params->width > 0 ? runtime.default_gen_params->width : 512;
-    int height                = runtime.default_gen_params->width > 0 ? runtime.default_gen_params->height : 512;
+    int height                = runtime.default_gen_params->height > 0 ? runtime.default_gen_params->height : 512;
     if (!size.empty()) {
         auto pos = size.find('x');
         if (pos != std::string::npos) {
@@ -281,15 +281,18 @@ static bool execute_sync_img_gen_request(ServerRuntime& runtime,
 
 void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
     ServerRuntime* runtime = &rt;
+    RuntimeRoutes routes(svr, rt);
 
-    svr.Get("/v1/models", [runtime](const httplib::Request&, httplib::Response& res) {
+    routes.get("/v1/models", [runtime](const httplib::Request&, httplib::Response& res) {
         json r;
         r["data"] = json::array();
-        r["data"].push_back({{"id", "sd-cpp-local"}, {"object", "model"}, {"owned_by", "local"}});
+        if (runtime->sd_ctx) {
+            r["data"].push_back({{"id", "sd-cpp-local"}, {"object", "model"}, {"owned_by", "local"}});
+        }
         res.set_content(r.dump(), "application/json");
     });
 
-    svr.Post("/v1/images/generations", [runtime](const httplib::Request& req, httplib::Response& res) {
+    routes.post("/v1/images/generations", [runtime](const httplib::Request& req, httplib::Response& res) {
         try {
             if (!runtime_supports_generation_mode(*runtime, IMG_GEN)) {
                 res.status = 400;
@@ -305,7 +308,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 return;
             }
 
-            LOG_VERBOSE("%s\n", request.gen_params.to_string().c_str());
+            LOG_DEBUG("%s\n", request.gen_params.to_string().c_str());
 
             SDImageVec results;
             if (!execute_sync_img_gen_request(*runtime, request, results, error_message)) {
@@ -363,7 +366,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         }
     });
 
-    svr.Post("/v1/images/edits", [runtime](const httplib::Request& req, httplib::Response& res) {
+    routes.post("/v1/images/edits", [runtime](const httplib::Request& req, httplib::Response& res) {
         try {
             if (!runtime_supports_generation_mode(*runtime, IMG_GEN)) {
                 res.status = 400;
@@ -379,7 +382,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 return;
             }
 
-            LOG_VERBOSE("%s\n", request.gen_params.to_string().c_str());
+            LOG_DEBUG("%s\n", request.gen_params.to_string().c_str());
 
             SDImageVec results;
             if (!execute_sync_img_gen_request(*runtime, request, results, error_message)) {

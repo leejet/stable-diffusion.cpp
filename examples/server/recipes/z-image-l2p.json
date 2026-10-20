@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "id": "z-image-l2p",
+  "name": "Z-Image L2P",
+  "description": "Pixel-space L2P checkpoint with Qwen 3 4B; no VAE is needed. Use dimensions divisible by 16.",
+  "model_url": "https://huggingface.co/zhen-nan/L2P",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Qwen 3 4B Text Encoder"
+    }
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "scheduler": "discrete"
+  },
+  "features": [
+    "flow_shift"
+  ],
+  "disabled_features": [
+    "vae_tiling",
+    "preview"
+  ]
+}

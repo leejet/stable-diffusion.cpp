@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "id": "wan21-i2v",
+  "name": "Wan 2.1 I2V",
+  "description": "Image-to-video with Wan 2.1, compatible SkyReels V2 weights, or a single Wan 2.2 I2V expert. CLIP Vision is required by Wan 2.1 I2V and is unused by Wan 2.2. Defaults target Wan 2.1 480p.",
+  "model_url": "https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "t5xxl",
+      "label": "UMT5-XXL",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "label": "Wan 2.1 VAE",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    },
+    {
+      "id": "clip_vision",
+      "label": "CLIP Vision H (Wan 2.1 I2V)",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "video_frames": 33,
+    "fps": 16,
+    "flow_shift": 3,
+    "cfg_scale": 5,
+    "steps": 20,
+    "width": 832,
+    "height": 480
+  },
+  "features": [
+    "flow_shift",
+    "init_image"
+  ],
+  "disabled_features": [
+    "img2img",
+    "mask_image"
+  ]
+}

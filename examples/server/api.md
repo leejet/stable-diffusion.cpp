@@ -59,6 +59,293 @@ Current endpoints include:
 - `POST /sdcpp/v1/vid_gen`
 - `POST /sdcpp/v1/upscale`
 
+## Model management
+
+Model management is additive: existing generation request bodies, successful
+responses, job polling and cancellation remain unchanged. All three API families
+use the current loaded context. Starting with the existing model arguments
+preserves command-line preloading and its generation defaults; it does not
+require a recipe.
+
+Recipe defaults apply when a generation request omits the corresponding
+parameters. Image editing endpoints retain their existing input-image size
+inference when dimensions are omitted.
+
+Without a loaded model, generation endpoints return HTTP 503 with
+`{"error":"No model is loaded","code":"model_not_loaded"}`.
+While loading/unloading, endpoints that access the context return HTTP 503
+with `code: "model_loading"`. These errors retain the existing string-valued
+`error` field. Job polling/cancellation, catalog queries and model status remain
+available during loading. Model lists are empty when no model is loaded;
+`/v1/models` retains the `sd-cpp-local` ID when ready.
+
+| Method | Endpoint | Response / behavior |
+| --- | --- | --- |
+| GET | `/sdcpp/v1/recipes` | `{recipes: [...], errors: [...]}` |
+| GET | `/sdcpp/v1/model-files` | `{files: [{id, name, category, root, relative_path}], errors: [...]}` |
+| POST | `/sdcpp/v1/models/refresh` | Rescan recipes and files; return `{errors: [...]}` |
+| GET | `/sdcpp/v1/models/status` | Current state, recipe, selection, error, loading time and optional revision |
+| POST | `/sdcpp/v1/models/load` | Load the submitted recipe and selection; return status after completion |
+| POST | `/sdcpp/v1/models/unload` | Release the active context; return empty status |
+
+Load request:
+
+```json
+{
+  "recipe": "flux1-dev",
+  "models": {
+    "diffusion_model": "diffusion_models/flux1-dev.gguf",
+    "clip_l": "text_encoders/clip_l.safetensors",
+    "t5xxl": "text_encoders/t5xxl.safetensors",
+    "vae": "vae/ae.safetensors"
+  }
+}
+```
+
+File IDs are opaque strings returned by `model-files`. The first model root
+retains the existing relative IDs, such as `checkpoints/nested/model.gguf`.
+Additional roots use `@<root-id>/<relative-path>` so identical paths in different
+roots remain selectable. Root qualifiers derive from the canonical root path;
+adding unrelated roots or refreshing the catalog does not change them. Moving
+a root changes its qualifier. Do not construct IDs or use display names in load
+requests.
+
+The display `name` omits the physical category directory (including aliases such
+as `Stable-diffusion`). Duplicate display paths use the full absolute file path,
+with the source directories before the filename and no hash suffix.
+`root` is an opaque source identifier, and
+`relative_path` is the file path beneath that root. Duplicate canonical files
+appear only once, using the first root that discovers them. Categories depend
+on directories, never on filename suffixes such as `.vae.safetensors`.
+
+Repeated `--model-dir` arguments merge roots in order; absent arguments default
+to `./models`. User recipes override built-ins; the earliest root containing a
+valid user recipe wins across roots. Duplicate recipe IDs within one root are
+rejected. Directory aliases do not change recipe slot categories.
+
+LoRA lists retain relative `path` IDs for `loras/` in the first model root and
+for an explicit `--lora-model-dir`, and qualify other directories. The additive `display_path` field provides a readable
+relative path, or the full absolute file path when needed to distinguish duplicates.
+Continue sending `path` in structured LoRA requests. `--lora-model-dir` overrides
+automatic discovery across all model roots.
+Absolute paths, unknown files, wrong categories and
+paths escaping the configured root are rejected. Optional slots can be omitted
+or set to an empty string. Load/unload returns HTTP 409 (`model_busy`) while
+requests or queued jobs are pending. Invalid configurations return HTTP 400
+(`invalid_model_config`) before unloading the current context. An initialization
+failure returns HTTP 422 (`model_load_failed`) and leaves no active context.
+The load HTTP request waits for completion; a separate client can poll status
+while it runs. Refreshing the catalog never modifies an already loaded context.
+
+Status uses `state: empty | loading | ready | error`, `recipe` (ID or null),
+`models` (slot-to-file-ID mapping), and `error` (string or null). A monotonically
+increasing `revision` identifies runtime transitions within this server process.
+Command-line preloading keeps `origin: command_line` and `recipe: null` for
+compatibility, and adds `runtime_recipe`: a read-only `@command-line` recipe
+with all feature declarations enabled. It is only available while that context
+is loaded and cannot be submitted to `models/load`. The UI selects it by default
+and uses command-line generation defaults, not defaults from a catalog recipe.
+Capabilities also include this status as an additive `runtime` field.
+
+`load_elapsed_seconds` is the server-measured duration in seconds (a number or
+null). It updates while a model is loading and freezes on success or failure.
+Timing starts after selection validation and includes releasing the previous
+model. It resets for each load and is null before any load and during/after
+unloading. Command-line preloading reports its completed initialization time.
+Poll `/sdcpp/v1/models/status` to display elapsed time, including while loading;
+timer updates alone do not change `revision`.
+
+### Recipe feature declarations
+
+Recipes may declare `features` and `disabled_features` arrays. The server starts
+with shared defaults, enables features declared by component slots and `features`,
+then applies `disabled_features` last. A disabled feature always wins. Unknown
+names, non-array values and duplicate names within an array are rejected.
+Both fields are optional; existing recipes remain valid.
+
+```json
+{
+  "features": ["flow_shift", "distilled_guidance"],
+  "disabled_features": ["clip_skip", "lora"]
+}
+```
+
+Default-enabled features are `img2img`, `mask_image`, `lora`, `vae_tiling`,
+`cache`, `cache_dit` and `preview`. All other features below default to false:
+
+| Feature | Controls |
+| --- | --- |
+| `flow_shift` | Flow shift, where used by the selected scheduler |
+| `distilled_guidance` | Distilled guidance embedding |
+| `shifted_timestep` | SDXL timestep shifting |
+| `img_cfg` | Image CFG |
+| `slg` | Skip-layer guidance fields |
+| `clip_skip` | CLIP Skip |
+| `img2img`, `mask_image` | Image initialization/strength and masks |
+| `ref_images` | Reference image inputs |
+| `controlnet` | Control image and ControlNet strength |
+| `control_image` | Control image without a separate ControlNet (FLUX Canny/Depth) |
+| `ip_adapter` | IP-Adapter image and strength |
+| `init_image`, `end_image` | Video start/end frames |
+| `control_frames`, `vace` | Video control frames and VACE strength |
+| `high_noise` | High-noise pass, MoE boundary and high-noise LoRAs |
+| `lora`, `vae_tiling` | LoRA overrides and VAE tiling |
+| `cache`, `cache_unet`, `cache_dit` | Cache panel and architecture-specific algorithms |
+| `preview`, `preview_tae` | Preview panel and TAE preview option |
+
+A `control_net` slot enables `controlnet`, `ip_adapter` enables `ip_adapter`,
+`high_noise_diffusion_model` enables `high_noise`, and `tae`/`taesd` enables `preview_tae`, unless explicitly disabled.
+ControlNet controls are shown when previewing a supporting recipe, even before
+a model file is selected. High-noise and TAE controls additionally require their
+component to be selected. Runtime capabilities require the component to be loaded.
+PuLID disables SLG while selected.
+Image-only and video-only inputs are filtered by the active generation mode.
+Eta depends on the selected sampler; SCM fields only apply to DBCache,
+TaylorSeer and Cache-DIT. Empty panels and advanced sections are hidden.
+
+`GET /sdcpp/v1/recipes` adds a resolved boolean `effective_features` object to
+each recipe. This is response-only metadata, like `source` and slot `categories`;
+omit it when writing a user recipe file. The defaults are maintained by the
+server, not duplicated by the frontend.
+
+`GET /sdcpp/v1/capabilities` adds `generation_features` for the loaded context,
+derived from the active recipe and component availability without inferring
+features from model-family names. When no model is loaded, every feature is
+present and false. The UI can still preview a selected recipe using its
+`effective_features` before loading.
+Existing `features` / `features_by_mode` keys are retained and their model-specific
+values reflect these declarations. A loaded recipe is snapshotted: refreshing
+recipe files does not change the active context's capabilities until reloading.
+Command-line preloading uses the runtime-only all-features recipe instead of model-family inference
+and component paths; variant-specific recipe declarations are more precise.
+
+These declarations govern the Web UI and advertised capabilities, not API
+request validation. Existing generation APIs continue accepting their existing
+fields. The Web UI omits unsupported/hidden fields and ignores hidden image
+inputs when building requests, so switching recipes cannot submit stale options.
+
+### User recipe format
+
+Contributions to the built-in catalog must follow the
+[built-in recipe policy](recipes/README.md). Personal user recipes may define
+workflow-specific presets without adding them to the built-in catalog.
+
+Each UTF-8 JSON file in `<model-dir>/recipes/` defines one complete recipe.
+The maximum recipe file size is 1 MiB. Unknown fields, invalid types and
+duplicate slots are errors. Built-ins in `examples/server/recipes/*.json` use
+the same one-recipe-per-file schema:
+
+```json
+{
+  "schema_version": 1,
+  "id": "my-flux",
+  "name": "My FLUX",
+  "description": "FLUX.1 dev",
+  "model_url": "https://huggingface.co/black-forest-labs/FLUX.1-dev",
+  "slots": [
+    {"id": "diffusion_model", "required": true},
+    {"id": "clip_l", "required": true},
+    {"id": "t5xxl", "required": true},
+    {"id": "vae", "required": false},
+    {"id": "tae", "required": false}
+  ],
+  "required_any": [["vae", "tae"]],
+  "defaults": {"width": 1024, "height": 1024, "cfg_scale": 1.0, "distilled_guidance": 3.5, "sampling_method": "euler", "steps": 20}
+}
+```
+
+IDs contain 1–128 ASCII letters, digits, dots, underscores or hyphens.
+`name`, `schema_version: 1` and `slots` are required; `description` and
+`model_url`, `required_any`, `defaults`, `context`, `features` and `disabled_features` are optional. Each slot requires only `id` and boolean `required`.
+The server supplies the default label and search directories for each slot.
+An optional nonempty `label` overrides the display name, for example
+`{"id": "diffusion_model", "label": "Low-noise diffusion model", "required": true}`.
+Legacy `category` fields remain accepted, but must match one of the slot's
+supported directories; they cannot redefine or restrict its search directories.
+At least one required `model` or `diffusion_model` slot is necessary.
+
+`model_url` is an optional HTTPS Hugging Face model repository link, shown beside
+the recipe description. Built-ins link to the model's author/publisher, not repacks.
+`required_any` contains groups of declared slot IDs. At least one model in each
+group must be selected. For example, `"required_any": [["vae", "tae"]]` with both
+slots marked `required: false` allows either the full VAE or a compatible TAE.
+Selecting both is allowed; the current server uses TAE for encoding/decoding when
+TAE is selected. Checkpoint recipes with a bundled VAE do not need this group.
+Use complete, model-compatible TAE weights; decoder-only preview weights cannot
+replace a full VAE. Pixel-space models and unsupported latent formats have no
+TAE slot.
+
+| Slot IDs | Search directories |
+| --- | --- |
+| `model` | `checkpoints` |
+| `diffusion_model`, `high_noise_diffusion_model`, `uncond_diffusion_model` | `diffusion_models` |
+| `clip_l`, `clip_g`, `t5xxl`, `llm`, `audio_encoder`, `embeddings_connectors` | `text_encoders` |
+| `clip_vision`, `llm_vision` | `clip_vision` |
+| `vae`, `audio_vae` | `vae` |
+| `tae` (legacy alias: `taesd`) | `vae` or `vae_approx` |
+| `tokenizer` | `tokenizers` |
+| `control_net` | `controlnet` |
+| `ip_adapter` | `ipadapter` |
+| `motion_module` | `motion_modules` |
+| `photo_maker` | `photomaker` |
+| `pulid_weights` | `pulid` |
+
+Built-in recipes use `tae` for the Tiny AutoEncoder slot. TAE selections can use files from either `vae/` or the legacy
+`vae_approx/` directory. Existing recipes and load requests using `taesd`
+remain supported. Do not specify both `tae` and `taesd` in the same recipe
+or load request.
+
+Model files can use `.gguf`, `.safetensors`, `.sft`, `.ckpt`, `.pt`, `.pth`
+or `.bin` extensions. The tokenizer category lists `.json` files only.
+Custom recipes compose components supported by the backend; they do not add
+new model architectures.
+
+Optional `context` settings apply to each model load and override the matching
+startup setting. Supported fields are `vae_format` (`auto`, `flux`, `sd3`,
+`flux2`, or `wan`) and `model_args` (a string in the same format as
+`--model-args`; replaces the startup string). Other startup settings remain
+unchanged. Switching to a recipe that omits these fields restores the startup
+values. For example, PiD uses `{"vae_format": "flux"}` and Qwen Image Edit
+2511 uses `{"model_args": "qwen_image_zero_cond_t=true"}`.
+
+Supported defaults:
+
+- Integer `width`/`height` (64–4096), `steps` (1–1000), `video_frames`
+  (1–4096), `fps` (1–240), `shifted_timestep` (0–1000), and
+  `high_noise_steps` (1–1000 or -1 for automatic).
+- Numeric `cfg_scale`, `img_cfg_scale`, `distilled_guidance`, `flow_shift`,
+  `high_noise_cfg_scale`, and `high_noise_flow_shift` (0–1000).
+- Numeric `strength` (0–1), used for image-to-image denoising, and
+  `moe_boundary` (0–1), used for automatic Wan MoE expert switching.
+- `custom_sigmas`: an empty array or 2–1001 finite, nonnegative numbers.
+  A nonempty array overrides the generated schedule; the sigma count minus one
+  determines the actual step count. Include the final zero. An empty array uses
+  the generated schedule. Loaded recipe sigmas apply to generation requests
+  unless `sample_params.custom_sigmas` overrides them; switching recipes restores
+  that recipe's schedule or the startup default.
+- Supported `sampling_method`/`scheduler` and
+  `high_noise_sampling_method`/`high_noise_scheduler` names.
+
+Other generation parameters continue to use startup defaults unless explicitly
+supplied by the generation request. Built-in Wan recipes provide video defaults;
+use `/sdcpp/v1/vid_gen` after loading a video model.
+LoRAs are merged from `loras/` and `Lora/` in every model root unless
+`--lora-model-dir` is supplied.
+
+Recipe responses fill in each slot's `label`, `category` (the legacy value,
+if supplied, or the first search directory), and `categories` (the complete
+server-defined list of search directories). Clients should filter model files
+using `categories`; `category` remains available for older clients.
+For example, `{"id": "tae", "required": false}` expands to
+`{"id": "tae", "required": false, "label": "TAE", "category": "vae", "categories": ["vae", "vae_approx"]}`.
+
+Recipe responses also add `source: builtin | user` and, for user recipes, `file`.
+Do not include `source`, `file`, or slot `categories` in a recipe file. A valid user recipe
+replaces a built-in with the same ID in full; inheritance/partial merging is
+not supported. Invalid recipes are skipped. Multiple valid user files sharing
+an ID are all skipped, preserving any built-in with that ID. Catalog errors
+are returned as `{file, message}` entries.
+
 ## `sd_cpp_extra_args`
 
 `sd_cpp_extra_args` is an extension mechanism for the compatibility APIs.
@@ -413,7 +700,7 @@ Common job shape:
   "id": "job_01HTXYZABC",
   "kind": "img_gen",
   "status": "queued",
-  "created": 1775401200,
+  "created": 1775401200000,
   "started": null,
   "completed": null,
   "queue_position": 2,
@@ -436,6 +723,11 @@ Field types:
 | `result` | `object \| null` |
 | `error` | `object \| null` |
 | `preview` | `object \| null` |
+
+`created`, `started`, and `completed` are integer Unix timestamps in
+**milliseconds**. Subtract `started` from `completed` and divide by 1000 to get
+the elapsed generation time in seconds, including output encoding and excluding
+queue time.
 
 `preview` sub-fields:
 
@@ -512,6 +804,7 @@ Shared nested fields:
 | --- | --- |
 | `loras[].name` | `string` |
 | `loras[].path` | `string` |
+| `loras[].display_path` | `string` (display only) |
 
 `upscalers`
 
@@ -666,7 +959,7 @@ Example response:
   "id": "job_01HTXYZABC",
   "kind": "img_gen",
   "status": "queued",
-  "created": 1775401200,
+  "created": 1775401200000,
   "poll_url": "/sdcpp/v1/jobs/job_01HTXYZABC"
 }
 ```
@@ -994,9 +1287,9 @@ Example completed job:
   "id": "job_01HTXYZABC",
   "kind": "img_gen",
   "status": "completed",
-  "created": 1775401200,
-  "started": 1775401203,
-  "completed": 1775401215,
+  "created": 1775401200000,
+  "started": 1775401203000,
+  "completed": 1775401215237,
   "queue_position": 0,
   "result": {
     "output_format": "png",
@@ -1020,9 +1313,9 @@ Example failed job:
   "id": "job_01HTXYZABC",
   "kind": "img_gen",
   "status": "failed",
-  "created": 1775401200,
-  "started": 1775401203,
-  "completed": 1775401204,
+  "created": 1775401200000,
+  "started": 1775401203000,
+  "completed": 1775401204000,
   "queue_position": 0,
   "result": null,
   "error": {
@@ -1041,9 +1334,9 @@ Example cancelled job:
   "id": "job_01HTXYZABC",
   "kind": "img_gen",
   "status": "cancelled",
-  "created": 1775401200,
+  "created": 1775401200000,
   "started": null,
-  "completed": 1775401202,
+  "completed": 1775401202000,
   "queue_position": 0,
   "result": null,
   "error": {
@@ -1079,7 +1372,7 @@ Example response:
   "id": "job_01HTXYZVID",
   "kind": "vid_gen",
   "status": "queued",
-  "created": 1775401200,
+  "created": 1775401200000,
   "poll_url": "/sdcpp/v1/jobs/job_01HTXYZVID"
 }
 ```
@@ -1407,9 +1700,9 @@ Example completed job:
   "id": "job_01HTXYZVID",
   "kind": "vid_gen",
   "status": "completed",
-  "created": 1775401200,
-  "started": 1775401203,
-  "completed": 1775401215,
+  "created": 1775401200000,
+  "started": 1775401203000,
+  "completed": 1775401215237,
   "queue_position": 0,
   "result": {
     "output_format": "webm",
@@ -1433,9 +1726,9 @@ Example failed job:
   "id": "job_01HTXYZVID",
   "kind": "vid_gen",
   "status": "failed",
-  "created": 1775401200,
-  "started": 1775401203,
-  "completed": 1775401204,
+  "created": 1775401200000,
+  "started": 1775401203000,
+  "completed": 1775401204000,
   "queue_position": 0,
   "result": null,
   "error": {
@@ -1454,9 +1747,9 @@ Example cancelled job:
   "id": "job_01HTXYZVID",
   "kind": "vid_gen",
   "status": "cancelled",
-  "created": 1775401200,
+  "created": 1775401200000,
   "started": null,
-  "completed": 1775401202,
+  "completed": 1775401202000,
   "queue_position": 0,
   "result": null,
   "error": {

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "id": "lens",
+  "name": "LENS",
+  "model_url": "https://huggingface.co/microsoft/Lens",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "GPT-OSS 20B Text Encoder"
+    },
+    {
+      "id": "tokenizer",
+      "required": true,
+      "label": "GPT-OSS tokenizer.json"
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "cfg_scale": 5,
+    "steps": 20,
+    "width": 1440,
+    "height": 1440,
+    "sampling_method": "euler"
+  },
+  "features": [
+    "flow_shift"
+  ]
+}

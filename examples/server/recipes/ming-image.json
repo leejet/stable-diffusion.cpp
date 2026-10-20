@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "id": "ming-image",
+  "name": "Ming Image 0.1",
+  "model_url": "https://huggingface.co/inclusionAI/Ming-Image-0.1-Design",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Ling Mini 2.0 Text Encoder"
+    },
+    {
+      "id": "tokenizer",
+      "required": true,
+      "label": "Ling tokenizer.json"
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "cfg_scale": 1,
+    "steps": 12,
+    "width": 2048,
+    "height": 2048,
+    "sampling_method": "euler"
+  },
+  "features": [
+    "flow_shift"
+  ]
+}

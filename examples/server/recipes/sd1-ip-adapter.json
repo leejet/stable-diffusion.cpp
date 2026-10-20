@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "id": "sd1-ip-adapter",
+  "name": "SD 1.5 IP-Adapter / Plus",
+  "description": "Select matching SD 1.5 IP-Adapter or Plus weights and CLIP Vision H, then supply an IP-Adapter image.",
+  "model_url": "https://huggingface.co/h94/IP-Adapter",
+  "slots": [
+    {
+      "id": "model",
+      "required": true
+    },
+    {
+      "id": "clip_vision",
+      "required": true,
+      "label": "CLIP Vision H"
+    },
+    {
+      "id": "ip_adapter",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "defaults": {
+    "cfg_scale": 7.5,
+    "steps": 20,
+    "width": 512,
+    "height": 512
+  },
+  "features": [
+    "cache_unet",
+    "clip_skip"
+  ],
+  "disabled_features": [
+    "cache_dit"
+  ]
+}

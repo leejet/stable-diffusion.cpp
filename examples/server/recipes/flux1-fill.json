@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "id": "flux1-fill",
+  "name": "FLUX.1 Fill dev",
+  "description": "Select Fill weights and supply Init Image plus Mask Image for inpainting. Denoising strength defaults to 1 for a full denoising schedule.",
+  "model_url": "https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "clip_l",
+      "required": true
+    },
+    {
+      "id": "t5xxl",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "distilled_guidance": 30,
+    "strength": 1.0,
+    "scheduler": "flux",
+    "cfg_scale": 1,
+    "steps": 20,
+    "width": 1232,
+    "height": 1632
+  },
+  "features": [
+    "clip_skip",
+    "distilled_guidance",
+    "flow_shift",
+    "slg",
+    "img_cfg"
+  ]
+}

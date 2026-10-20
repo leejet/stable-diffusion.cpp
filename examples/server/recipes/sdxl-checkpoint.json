@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "id": "sdxl-checkpoint",
+  "name": "SDXL",
+  "description": "Supports SDXL and compatible reduced-depth checkpoints such as SSD-1B and Segmind Vega.",
+  "model_url": "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0",
+  "slots": [
+    {
+      "id": "model",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "label": "VAE override",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "defaults": {
+    "cfg_scale": 5,
+    "steps": 20,
+    "width": 1024,
+    "height": 1024
+  },
+  "features": [
+    "cache_unet",
+    "clip_skip",
+    "shifted_timestep"
+  ],
+  "disabled_features": [
+    "cache_dit"
+  ]
+}

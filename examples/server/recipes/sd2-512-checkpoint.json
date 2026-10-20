@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "sd2-512-checkpoint",
+  "name": "SD 2.1 512",
+  "description": "Supports SD 2.x 512 and compatible layer-count variants. Tiny SD2 Diffusers directories must first be converted into a single-file checkpoint.",
+  "slots": [
+    {
+      "id": "model",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "defaults": {
+    "cfg_scale": 7.5,
+    "steps": 20,
+    "width": 512,
+    "height": 512
+  },
+  "features": [
+    "cache_unet",
+    "clip_skip"
+  ],
+  "disabled_features": [
+    "cache_dit"
+  ]
+}
