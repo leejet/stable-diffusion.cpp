@@ -195,6 +195,7 @@ struct SDContextParams {
     bool validate(SDMode mode);
     bool resolve_and_validate(SDMode mode);
     std::string to_string() const;
+    bool upscaler_conv_direct() const;
     sd_ctx_params_t to_sd_ctx_params_t(bool taesd_preview);
 };
 
