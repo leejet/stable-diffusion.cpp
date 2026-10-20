@@ -163,6 +163,7 @@ static bool build_openai_edit_request(const httplib::Request& req,
                                                      ? json::object()
                                                      : json::parse(sd_cpp_extra_args_str, nullptr, false);
     const bool has_extra_init_image_override   = extra_args.is_object() && extra_args.contains("init_image");
+    const bool has_extra_ref_images_override   = extra_args.is_object() && extra_args.contains("ref_images");
     const bool has_extra_strength_override     = extra_args.is_object() &&
                                                  extra_args.contains("strength") &&
                                                  extra_args["strength"].is_number();
@@ -172,7 +173,7 @@ static bool build_openai_edit_request(const httplib::Request& req,
     const bool supports_ref_image_conditioning = sd_ctx_supports_ref_image_conditioning(runtime.sd_ctx);
     const bool may_need_uploaded_init_image    = !has_extra_init_image_override &&
                                                  (!supports_ref_image_conditioning || !mask_bytes.empty() ||
-                                                  has_extra_mask_image || has_extra_strength_override);
+                                                  has_extra_mask_image || has_extra_strength_override || has_extra_ref_images_override);
     SDImageOwner uploaded_image_for_init;
     bool uploaded_image_was_first_reference = false;
     for (auto& bytes : images_bytes) {
@@ -235,7 +236,8 @@ static bool build_openai_edit_request(const httplib::Request& req,
         uploaded_image_for_init,
         uploaded_image_was_first_reference,
         supports_ref_image_conditioning,
-        !mask_bytes.empty() || request.gen_params.mask_image.get().data != nullptr,
+        !request.gen_params.ref_images.empty(),
+        request.gen_params.mask_image.get().data != nullptr,
         has_extra_init_image_override,
         has_extra_strength_override);
     if (init_image_action == OpenAIEditInitImageAction::UseUploaded &&

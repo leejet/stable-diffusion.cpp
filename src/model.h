@@ -368,7 +368,7 @@ static inline bool sd_version_is_control(SDVersion version) {
 // These model families consume uploaded reference images as generation
 // conditioning. Inpaint and control variants keep their init-image semantics.
 static inline bool sd_version_supports_ref_image_conditioning(SDVersion version) {
-    if (sd_version_is_inpaint(version) || sd_version_is_control(version)) {
+    if (sd_version_is_inpaint(version) || sd_version_is_control(version) || version == VERSION_CHROMA_RADIANCE) {
         return false;
     }
 
