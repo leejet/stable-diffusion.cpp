@@ -276,6 +276,10 @@ bool read_safetensors_file(const std::string& file_path,
                             config.format = "int8_tensorwise";
                         }
                         if (config.format == "int8_tensorwise") {
+#ifdef SD_USE_UPSTREAM_GGML
+                            set_error(error, "INT8 tensorwise/convrot is not supported by this ggml build (tensor '" + module_name + ".weight')");
+                            return false;
+#endif
                             comfy_quant_configs.emplace(module_name, std::move(config));
                         }
                     }
