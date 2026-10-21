@@ -48,6 +48,10 @@ static void parse_args(int argc,
     log_level = svr_params.log_level;
     log_color = svr_params.color;
 
+    if (ctx_params.list_devices) {
+        exit(ctx_params.print_devices() ? 0 : 1);
+    }
+
     const bool random_seed_requested = default_gen_params.seed < 0;
 
     if (!svr_params.resolve_and_validate() ||
