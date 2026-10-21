@@ -409,14 +409,14 @@ static json make_capabilities_json(ServerRuntime& runtime) {
     result["defaults"]            = top_level_defaults;
     result["defaults_by_mode"]    = defaults_by_mode;
     result["limits"]              = {
-        {"min_width", 64},
-        {"max_width", k_max_generation_dimension},
-        {"min_height", 64},
-        {"max_height", k_max_generation_dimension},
-        {"max_batch_count", 8},
-        {"max_queue_size", manager.max_pending_jobs},
-        {"max_upscale_width", k_max_upscale_dimension},
-        {"max_upscale_height", k_max_upscale_dimension},
+                     {"min_width", 64},
+                     {"max_width", k_max_generation_dimension},
+                     {"min_height", 64},
+                     {"max_height", k_max_generation_dimension},
+                     {"max_batch_count", 8},
+                     {"max_queue_size", manager.max_pending_jobs},
+                     {"max_upscale_width", k_max_upscale_dimension},
+                     {"max_upscale_height", k_max_upscale_dimension},
     };
     result["samplers"]               = samplers;
     result["schedulers"]             = schedulers;
