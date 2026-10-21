@@ -247,6 +247,46 @@ bool read_safetensors_file(const std::string& file_path,
         comfy_quant_configs.emplace(module_name, std::move(config));
     }
 
+    // StarNodes stores INT8 ConvRot configuration in safetensors file metadata
+    // rather than in per-layer .comfy_quant tensors.
+    auto metadata_item = header_.find("__metadata__");
+    if (metadata_item != header_.end() && metadata_item->is_object()) {
+        auto quantization_item = metadata_item->find("_quantization_metadata");
+        if (quantization_item != metadata_item->end() && quantization_item->is_string()) {
+            try {
+                const nlohmann::json quantization = nlohmann::json::parse(quantization_item->get<std::string>());
+                auto layers = quantization.find("layers");
+                if (layers != quantization.end() && layers->is_object()) {
+                    const std::string format = quantization.value("format", "");
+                    for (const auto& layer : layers->items()) {
+                        const std::string& module_name = layer.key();
+                        if (!layer.value().is_object() ||
+                            header_.find(module_name + ".weight") == header_.end() ||
+                            header_.find(module_name + ".weight_scale") == header_.end() ||
+                            comfy_quant_configs.find(module_name) != comfy_quant_configs.end()) {
+                            continue;
+                        }
+
+                        ComfyQuantConfig config;
+                        config.format = layer.value().value("format", format);
+                        config.convrot = config.format == "int8_convrot" || layer.value().value("convrot", false);
+                        config.group_size = layer.value().value("convrot_groupsize",
+                                                               layer.value().value("group_size", 0));
+                        if (config.format == "int8_convrot") {
+                            config.format = "int8_tensorwise";
+                        }
+                        if (config.format == "int8_tensorwise") {
+                            comfy_quant_configs.emplace(module_name, std::move(config));
+                        }
+                    }
+                }
+            } catch (const std::exception&) {
+                set_error(error, "parsing StarNodes quantization metadata failed: '" + file_path + "'");
+                return false;
+            }
+        }
+    }
+
     tensor_storages.clear();
     for (auto& item : header_.items()) {
         std::string name           = item.key();
