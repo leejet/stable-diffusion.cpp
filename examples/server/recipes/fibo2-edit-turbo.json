@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "id": "fibo2-edit-turbo",
+  "name": "Fibo 2.0 Edit Turbo",
+  "description": "Dedicated reference-image editing checkpoint; supply reference images. Select a separate vision projector when it is not bundled in the text encoder.",
+  "model_url": "https://huggingface.co/briaai/Fibo-2.0-edit-turbo",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Qwen 3 VL 4B Text Encoder"
+    },
+    {
+      "id": "llm_vision",
+      "required": false,
+      "label": "Vision projector (required for separate GGUF text encoders)"
+    },
+    {
+      "id": "vae",
+      "required": true,
+      "label": "FLUX.2 VAE"
+    }
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "cfg_scale": 1,
+    "steps": 4,
+    "width": 1024,
+    "height": 1024
+  },
+  "features": [
+    "flow_shift",
+    "ref_images"
+  ]
+}

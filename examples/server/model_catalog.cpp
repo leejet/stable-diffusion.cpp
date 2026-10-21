@@ -32,7 +32,7 @@ static const ModelSlot k_model_slots[] = {
     {"clip_vision", "CLIP Vision", {"clip_vision"}, &SDContextParams::clip_vision_path},
     {"t5xxl", "T5", {"text_encoders"}, &SDContextParams::t5xxl_path},
     {"llm", "LLM Text Encoder", {"text_encoders"}, &SDContextParams::llm_path},
-    {"llm_vision", "LLM Vision Encoder", {"clip_vision"}, &SDContextParams::llm_vision_path},
+    {"llm_vision", "LLM Vision Encoder", {"text_encoders", "clip_vision"}, &SDContextParams::llm_vision_path},
     {"tokenizer", "Tokenizer", {"tokenizers"}, &SDContextParams::tokenizer},
     {"vae", "VAE", {"vae"}, &SDContextParams::vae_path},
     {"audio_vae", "Audio VAE", {"vae"}, &SDContextParams::audio_vae_path},

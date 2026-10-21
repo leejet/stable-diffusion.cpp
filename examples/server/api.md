@@ -280,7 +280,8 @@ TAE slot.
 | `model` | `checkpoints` |
 | `diffusion_model`, `high_noise_diffusion_model`, `uncond_diffusion_model` | `diffusion_models` |
 | `clip_l`, `clip_g`, `t5xxl`, `llm`, `audio_encoder`, `embeddings_connectors` | `text_encoders` |
-| `clip_vision`, `llm_vision` | `clip_vision` |
+| `clip_vision` | `clip_vision` |
+| `llm_vision` | `text_encoders` or `clip_vision` |
 | `vae`, `audio_vae` | `vae` |
 | `tae` (legacy alias: `taesd`) | `vae` or `vae_approx` |
 | `tokenizer` | `tokenizers` |
