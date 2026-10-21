@@ -244,6 +244,10 @@ bool execute_img_gen_job(ServerRuntime& runtime,
         }
         clear_preview_callback();
         results.adopt(raw_results, num_results);
+        if (!results.empty() && !apply_server_adetailer(runtime, job.img_gen, params, results)) {
+            error_message = "ADetailer failed";
+            return false;
+        }
     }
 
     const int num_results = results.count();

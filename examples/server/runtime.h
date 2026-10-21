@@ -67,17 +67,37 @@ struct ServerRuntime {
     ServerModels* models;
 };
 
+struct ServerADetailerPass {
+    std::string prompt;
+    std::string negative_prompt;
+    std::string extra_args;
+    int width                = 512;
+    int height               = 512;
+    float strength           = 0.4f;
+    int clip_skip            = -1;
+    bool automatic_scheduler = false;
+};
+
 struct ImgGenJobRequest {
     SDGenerationParams gen_params;
     std::string output_format = "png";
     int output_compression    = 100;
     std::string preview_mode  = "none";
     int preview_interval      = 1;
+    bool adetailer_enabled    = true;
+    std::vector<ServerADetailerPass> adetailer_passes;
 
     sd_img_gen_params_t to_sd_img_gen_params_t() {
         return gen_params.to_sd_img_gen_params_t();
     }
 };
+
+constexpr int k_max_generation_dimension = 4096;
+constexpr int k_max_adetailer_steps      = 100;
+
+bool validate_server_img_gen_request(const ServerRuntime& runtime,
+                                     const ImgGenJobRequest& request,
+                                     std::string& error_message);
 
 struct VidGenJobRequest {
     SDGenerationParams gen_params;
@@ -111,3 +131,7 @@ void refresh_lora_cache(ServerRuntime& rt);
 std::string get_lora_full_path(ServerRuntime& rt, const std::string& path);
 void refresh_upscaler_cache(ServerRuntime& rt);
 int64_t unix_timestamp_now_ms();
+bool apply_server_adetailer(ServerRuntime& runtime,
+                            const ImgGenJobRequest& request,
+                            const sd_img_gen_params_t& params,
+                            SDImageVec& results);

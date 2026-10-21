@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <mutex>
@@ -17,6 +18,157 @@
 #include <set>
 
 namespace fs = std::filesystem;
+
+bool validate_server_img_gen_request(const ServerRuntime& runtime,
+                                     const ImgGenJobRequest& request,
+                                     std::string& error_message) {
+    auto dimensions_valid = [&](double width, double height) {
+        if (!std::isfinite(width) || !std::isfinite(height) ||
+            width < 1 || height < 1 || width > k_max_generation_dimension || height > k_max_generation_dimension) {
+            error_message = "generation width and height must be between 1 and " + std::to_string(k_max_generation_dimension);
+            return false;
+        }
+        return true;
+    };
+    const auto& params = request.gen_params;
+    const int width    = params.get_resolved_width();
+    const int height   = params.get_resolved_height();
+    if (!dimensions_valid(width, height)) {
+        return false;
+    }
+    if (params.hires_enabled) {
+        const double hires_width  = params.hires_width > 0 ? params.hires_width : params.hires_height > 0 ? params.hires_height
+                                                                                                          : std::round(width * params.hires_scale);
+        const double hires_height = params.hires_height > 0 ? params.hires_height : params.hires_width > 0 ? params.hires_width
+                                                                                                           : std::round(height * params.hires_scale);
+        if (!dimensions_valid(hires_width, hires_height)) {
+            return false;
+        }
+    }
+    if (!request.adetailer_enabled || runtime.default_gen_params->ad_model_path.empty()) {
+        return true;
+    }
+    auto pass_valid = [&](const ServerADetailerPass& pass) {
+        if (!dimensions_valid(pass.width, pass.height)) {
+            return false;
+        }
+        // Match the native key normalization, but leave full option parsing to ADetailer.
+        auto trim = [](const std::string& text) {
+            const auto first = text.find_first_not_of(" \t\r\n");
+            return first == std::string::npos ? std::string() : text.substr(first, text.find_last_not_of(" \t\r\n") - first + 1);
+        };
+        std::stringstream stream(pass.extra_args);
+        std::string item;
+        while (std::getline(stream, item, ',')) {
+            const auto equals = item.find('=');
+            if (equals == std::string::npos) {
+                continue;
+            }
+            auto key = trim(item.substr(0, equals));
+            std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (key != "inpaint_width" && key != "inpaint_height" && key != "steps") {
+                continue;
+            }
+            const auto value  = trim(item.substr(equals + 1));
+            const int minimum = key == "steps" ? 0 : 1;
+            const int maximum = key == "steps" ? k_max_adetailer_steps : k_max_generation_dimension;
+            try {
+                size_t used      = 0;
+                const int parsed = std::stoi(value, &used);
+                if (used == value.size() && parsed >= minimum && parsed <= maximum) {
+                    continue;
+                }
+            } catch (const std::exception&) {
+            }
+            error_message = "ADetailer " + key + " must be between " + std::to_string(minimum) + " and " + std::to_string(maximum);
+            return false;
+        }
+        return true;
+    };
+    if (request.adetailer_passes.empty()) {
+        ServerADetailerPass pass;
+        pass.extra_args = params.extra_ad_args;
+        return pass_valid(pass);
+    }
+    return std::all_of(request.adetailer_passes.begin(), request.adetailer_passes.end(), pass_valid);
+}
+
+bool apply_server_adetailer(ServerRuntime& runtime,
+                            const ImgGenJobRequest& request,
+                            const sd_img_gen_params_t& params,
+                            SDImageVec& results) {
+    const auto& gen_params    = request.gen_params;
+    const auto& ad_model_path = runtime.default_gen_params->ad_model_path;
+    if (!request.adetailer_enabled || ad_model_path.empty()) {
+        return true;
+    }
+    std::string error_message;
+    if (!validate_server_img_gen_request(runtime, request, error_message)) {
+        LOG_ERROR("%s", error_message.c_str());
+        return false;
+    }
+
+    std::vector<ServerADetailerPass> passes = request.adetailer_passes;
+    if (passes.empty()) {
+        ServerADetailerPass pass;
+        pass.prompt          = gen_params.ad_prompt;
+        pass.negative_prompt = gen_params.ad_negative_prompt;
+        pass.extra_args      = gen_params.extra_ad_args;
+        passes.push_back(std::move(pass));
+    }
+
+    ADetailerCtxPtr ad_ctx(new_adetailer_ctx(ad_model_path.c_str(),
+                                             runtime.ctx_params->n_threads,
+                                             runtime.ctx_params->effective_backend.c_str(),
+                                             runtime.ctx_params->effective_params_backend.c_str()));
+    if (ad_ctx == nullptr) {
+        LOG_ERROR("new_adetailer_ctx failed");
+        return false;
+    }
+
+    for (const auto& pass : passes) {
+        sd_adetailer_params_t ad_params{};
+        ad_params.prompt          = pass.prompt.empty() ? nullptr : pass.prompt.c_str();
+        ad_params.negative_prompt = pass.negative_prompt.empty() ? nullptr : pass.negative_prompt.c_str();
+        ad_params.extra_ad_args   = pass.extra_args.c_str();
+        for (int i = 0; i < results.count(); ++i) {
+            if (results[i].data == nullptr) {
+                continue;
+            }
+            sd_img_gen_params_t ad_generation_params = params;
+            ad_generation_params.seed                = params.seed + i;
+            ad_generation_params.width               = pass.width;
+            ad_generation_params.height              = pass.height;
+            ad_generation_params.strength            = pass.strength;
+            if (pass.clip_skip > 0) {
+                ad_generation_params.clip_skip = pass.clip_skip;
+            }
+            if (pass.automatic_scheduler) {
+                ad_generation_params.sample_params.scheduler = SCHEDULER_COUNT;
+            }
+
+            sd_image_t* detailed_images = nullptr;
+            int detailed_count          = 0;
+            if (!adetail_image(ad_ctx.get(),
+                               runtime.sd_ctx,
+                               results[i],
+                               &ad_params,
+                               &ad_generation_params,
+                               &detailed_images,
+                               &detailed_count) ||
+                detailed_count <= 0 || detailed_images == nullptr || detailed_images[0].data == nullptr) {
+                free_sd_images(detailed_images, detailed_count);
+                LOG_ERROR("ADetailer failed for image %d", i + 1);
+                return false;
+            }
+            free(results[i].data);
+            results[i]         = detailed_images[0];
+            detailed_images[0] = {0, 0, 0, nullptr};
+            free_sd_images(detailed_images, detailed_count);
+        }
+    }
+    return true;
+}
 
 static std::string lower_ascii(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
