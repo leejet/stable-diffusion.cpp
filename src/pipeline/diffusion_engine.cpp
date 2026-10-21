@@ -41,6 +41,7 @@
 #include "model/diffusion/animatediff.hpp"
 #include "model/diffusion/control.hpp"
 #include "model/diffusion/model.hpp"
+#include "model/diffusion/z_image.hpp"
 #include "model/vae/audio_vae.hpp"
 #include "model/vae/ltx_vae.hpp"
 #include "model/vae/vae.hpp"
@@ -294,6 +295,15 @@ bool StableDiffusionGGML::apply_model_update(ModelLoader candidate,
             if (runner_state_.sources.at(entry.first) != runner_source_versions(entry.first, candidate)) {
                 groups.insert(entry.first);
             }
+        }
+    }
+    if (sd_version_is_z_image(version) && sd_version_is_z_image(next_version)) {
+        if (groups.count(RunnerGroup::ControlNet) > 0) {
+            groups.insert(RunnerGroup::Core);
+        }
+        if (groups.count(RunnerGroup::Core) > 0 &&
+            model_manager->registered_params_size({ModelComponent::ControlNet}) > 0) {
+            groups.insert(RunnerGroup::ControlNet);
         }
     }
     runner_state_.ready = false;
@@ -1177,6 +1187,27 @@ bool StableDiffusionGGML::build_vae_runners() {
 bool StableDiffusionGGML::build_control_net_runner() {
     if (config_->control_net_file == 0) {
         return true;
+    }
+    if (sd_version_is_z_image(version)) {
+        auto z_image = std::dynamic_pointer_cast<ZImage::ZImageRunner>(diffusion_model);
+        if (z_image == nullptr || !z_image->control_enabled()) {
+            LOG_WARN("z-image control net file present but the diffusion model has no control weights; ignoring");
+            return true;
+        }
+        std::map<std::string, ggml_tensor*> control_tensors;
+        z_image->get_control_param_tensors(control_tensors);
+        if (control_tensors.empty()) {
+            LOG_ERROR("z-image control net has no param tensors to register");
+            return false;
+        }
+        ModelManager::ResidencyMode residency_mode = backend_manager.params_backend_is_disk(SDBackendModule::DIFFUSION)
+                                                          ? ModelManager::ResidencyMode::Disk
+                                                          : ModelManager::ResidencyMode::ParamBackend;
+        return model_manager->register_param_tensors(ModelComponent::ControlNet,
+                                                     std::move(control_tensors),
+                                                     residency_mode,
+                                                     backend_for(SDBackendModule::DIFFUSION),
+                                                     params_backend_for(SDBackendModule::DIFFUSION));
     }
     if (!sd::model_builders::build_control_net_runner(model_build_context(), control_net)) {
         return false;
@@ -2710,6 +2741,10 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
             } else if (sd_version_is_sensenova_u1(version)) {
                 diffusion_params.extra = SenseNovaU1DiffusionExtra{
                     condition.c_input_ids.empty() ? nullptr : &condition.c_input_ids};
+            } else if (sd_version_is_z_image(version)) {
+                if (!control_image.empty()) {
+                    diffusion_params.extra = ZImageDiffusionExtra{&control_image, control_strength};
+                }
             } else {
                 diffusion_params.extra = std::monostate{};
             }

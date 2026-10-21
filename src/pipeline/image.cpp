@@ -250,10 +250,38 @@ namespace sd::pipeline {
         }
 
         if (!control_image_tensor.empty()) {
-            control_latent = sd->encode_first_stage(control_image_tensor);
-            if (control_latent.empty()) {
-                LOG_ERROR("failed to encode control image");
-                return std::nullopt;
+            const bool z_image_control = sd_version_is_z_image(sd->version) &&
+                                         sd->model_manager->registered_params_size({ModelComponent::ControlNet}) > 0;
+            if (z_image_control) {
+                sd::Tensor<float> vae_output = sd->first_stage_model->encode(sd->n_threads,
+                                                                             control_image_tensor,
+                                                                             sd->vae_tiling_params,
+                                                                             sd->circular_x,
+                                                                             sd->circular_y);
+                if (vae_output.empty()) {
+                    LOG_ERROR("failed to encode control image");
+                    return std::nullopt;
+                }
+                sd::Tensor<float> ctrl_latent = sd::ops::chunk(vae_output, 2, 2)[0];
+                ctrl_latent                   = sd->first_stage_model->vae_to_diffusion_latents(ctrl_latent);
+                if (ctrl_latent.empty() || ctrl_latent.dim() != 4 || ctrl_latent.shape()[2] > 33) {
+                    LOG_ERROR("failed to encode control image");
+                    return std::nullopt;
+                }
+                std::vector<int64_t> padded_shape = ctrl_latent.shape();
+                padded_shape[2]                    = 33;
+                sd::Tensor<float> padded(padded_shape);
+                sd::ops::slice_assign(&padded, 2, 0, ctrl_latent.shape()[2], ctrl_latent);
+                control_image_tensor = std::move(padded);
+            } else if (sd_version_is_z_image(sd->version)) {
+                LOG_WARN("control image provided but the z-image model has no control net; ignoring");
+                control_image_tensor = {};
+            } else {
+                control_latent = sd->encode_first_stage(control_image_tensor);
+                if (control_latent.empty()) {
+                    LOG_ERROR("failed to encode control image");
+                    return std::nullopt;
+                }
             }
         }
 
