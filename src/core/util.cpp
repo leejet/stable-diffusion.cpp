@@ -556,7 +556,7 @@ static std::string build_progress_bar(int step, int steps, char progress_char = 
     int32_t current            = 0;
     int annot_length           = annot_text.length();
     if (steps > 0) {
-        current = (int32_t)(step * 1.f * max_progress / steps);
+        current = (int32_t)(std::clamp(step, 0, steps) * 1.f * max_progress / steps);
     }
     if (!annot_length) {
         int head_length = (current == max_progress) ? 0 : 1;
