@@ -131,7 +131,7 @@ If you want to allow connections from other machines on the network:
 
 > **Drivers & Hardware:** Ensure the Server machine has the necessary drivers installed and functional (e.g., Nvidia Drivers for CUDA, Vulkan SDK, or Metal). If no devices are found, the server will simply fallback to CPU usage.
 
-<!-- ### Step B: Check if the client is able to connect to the server and see the available devices
+### Step B: Check if the client is able to connect to the server and see the available devices
 
 We're assuming the server is running on your local machine, and listening on the default port `50052`. If it's running on a different machine, you can replace `localhost` with the IP address of the server.
 
@@ -147,15 +147,15 @@ Example output:
 (Client built without GPU acceleration, two GPUs available on the server)
 
 ```
-List of available GGML devices:
-Name    Description
--------------------
 CPU     AMD Ryzen 9 5900X 12-Core Processor
 RPC0    localhost:50052
 RPC1    localhost:50052
-``` -->
+```
 
-### Step B: Run with RPC device
+The options can be given in either order; no model is required. The client exits
+with an error if RPC support is unavailable or a server cannot provide devices.
+
+### Step C: Run with RPC device
 
 If everything is working correctly, you can now run the client while offloading some or all of the work to the RPC server.
 
