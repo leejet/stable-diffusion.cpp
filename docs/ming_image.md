@@ -20,5 +20,5 @@ The example below uses `ming_image_0.1_design_bf16.safetensors` for the DiT. You
 Pass the Ling `tokenizer.json` with `--tokenizer` and use the matching Ming-Image VAE. Image dimensions must be multiples of 16. Save the output as PNG to preserve the alpha channel.
 
 ```bash
-.\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\ming_image_0.1_design_bf16.safetensors --llm ..\models\text_encoders\ming_image_0.1_ling_mini_2.0_bf16.safetensors --vae ..\models\vae\ming_image_vae_bf16.safetensors --tokenizer ..\models\text_encoders\tokenizer.json -p "A cheerful orange cat sticker, transparent background" --width 1024 --height 1024 --steps 12 --cfg-scale 1 --sampling-method euler --diffusion-fa -v --offload-to-cpu -o ming_image.png
+.\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\ming_image_0.1_design_bf16.safetensors --llm ..\models\text_encoders\ming_image_0.1_ling_mini_2.0_bf16.safetensors --vae ..\models\vae\ming_image_vae_bf16.safetensors --tokenizer ..\models\text_encoders\tokenizer.json -p "A cheerful orange cat sticker, transparent background" --width 1024 --height 1024 --steps 12 --cfg-scale 1 --sampling-method euler -v --offload-to-cpu -o ming_image.png
 ```

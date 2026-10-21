@@ -8,6 +8,7 @@ cd "$repo_root"
 for f in src/*.cpp src/*.h src/*.hpp \
          src/conditioning/*.cpp src/conditioning/*.h src/conditioning/*.hpp \
          src/core/*.cpp src/core/*.h src/core/*.hpp \
+         src/core/probe/*.cpp src/core/probe/*.h \
          src/extensions/*.cpp src/extensions/*.h src/extensions/*.hpp \
          src/pipeline/*.cpp src/pipeline/*.h \
          src/runtime/*.cpp src/runtime/*.h src/runtime/*.hpp \

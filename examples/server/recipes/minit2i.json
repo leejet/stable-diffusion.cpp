@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "id": "minit2i",
+  "name": "MiniT2I",
+  "description": "Pixel-space model; no VAE is required.",
+  "model_url": "https://huggingface.co/MiniT2I/MiniT2I",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "t5xxl",
+      "required": true,
+      "label": "FLAN-T5 Large"
+    }
+  ],
+  "defaults": {
+    "cfg_scale": 2.5,
+    "steps": 20,
+    "width": 512,
+    "height": 512,
+    "sampling_method": "euler"
+  },
+  "disabled_features": [
+    "preview",
+    "vae_tiling"
+  ]
+}

@@ -7,6 +7,7 @@
 #include "common/common.h"
 #include "common/media_io.h"
 #include "common/resource_owners.hpp"
+#include "openai_edit_policy.h"
 
 static std::string extract_and_remove_sd_cpp_extra_args(std::string& text) {
     std::regex re("<sd_cpp_extra_args>(.*?)</sd_cpp_extra_args>");
@@ -36,7 +37,7 @@ static bool build_openai_generation_request(const httplib::Request& req,
     std::string output_format = j.value("output_format", "png");
     int output_compression    = j.value("output_compression", 100);
     int width                 = runtime.default_gen_params->width > 0 ? runtime.default_gen_params->width : 512;
-    int height                = runtime.default_gen_params->width > 0 ? runtime.default_gen_params->height : 512;
+    int height                = runtime.default_gen_params->height > 0 ? runtime.default_gen_params->height : 512;
     if (!size.empty()) {
         auto pos = size.find('x');
         if (pos != std::string::npos) {
@@ -74,7 +75,7 @@ static bool build_openai_generation_request(const httplib::Request& req,
         error_message = "invalid params";
         return false;
     }
-    return true;
+    return validate_server_img_gen_request(runtime, request, error_message);
 }
 
 static bool build_openai_edit_request(const httplib::Request& req,
@@ -157,7 +158,24 @@ static bool build_openai_edit_request(const httplib::Request& req,
     request.gen_params.height      = height;
     request.gen_params.batch_count = n;
 
-    std::string sd_cpp_extra_args_str = extract_and_remove_sd_cpp_extra_args(request.gen_params.prompt);
+    std::string sd_cpp_extra_args_str        = extract_and_remove_sd_cpp_extra_args(request.gen_params.prompt);
+    const json extra_args                    = sd_cpp_extra_args_str.empty()
+                                                   ? json::object()
+                                                   : json::parse(sd_cpp_extra_args_str, nullptr, false);
+    const bool has_extra_init_image_override = extra_args.is_object() && extra_args.contains("init_image");
+    const bool has_extra_ref_images_override = extra_args.is_object() && extra_args.contains("ref_images");
+    const bool has_extra_strength_override   = extra_args.is_object() &&
+                                             extra_args.contains("strength") &&
+                                             extra_args["strength"].is_number();
+    const bool has_extra_mask_image = extra_args.is_object() &&
+                                      extra_args.contains("mask_image") &&
+                                      !extra_args["mask_image"].is_null();
+    const bool supports_ref_image_conditioning = sd_ctx_supports_ref_image_conditioning(runtime.sd_ctx);
+    const bool may_need_uploaded_init_image    = !has_extra_init_image_override &&
+                                              (!supports_ref_image_conditioning || !mask_bytes.empty() ||
+                                               has_extra_mask_image || has_extra_strength_override || has_extra_ref_images_override);
+    SDImageOwner uploaded_image_for_init;
+    bool uploaded_image_was_first_reference = false;
     for (auto& bytes : images_bytes) {
         int img_w            = 0;
         int img_h            = 0;
@@ -177,10 +195,9 @@ static bool build_openai_edit_request(const httplib::Request& req,
         request.gen_params.set_width_and_height_if_unset(image_owner.get().width, image_owner.get().height);
 
         if (is_first_ref_image) {
-            request.gen_params.init_image = image_owner;
-            if (request.gen_params.init_image.get().data == nullptr) {
-                error_message = "could not allocate init image";
-                return false;
+            uploaded_image_was_first_reference = true;
+            if (may_need_uploaded_init_image) {
+                uploaded_image_for_init = image_owner;
             }
         }
 
@@ -214,13 +231,28 @@ static bool build_openai_edit_request(const httplib::Request& req,
         return false;
     }
 
+    const auto init_image_action = apply_openai_edit_init_image_policy(
+        request.gen_params.init_image,
+        uploaded_image_for_init,
+        uploaded_image_was_first_reference,
+        supports_ref_image_conditioning,
+        !request.gen_params.ref_images.empty(),
+        request.gen_params.mask_image.get().data != nullptr,
+        has_extra_init_image_override,
+        has_extra_strength_override);
+    if (init_image_action == OpenAIEditInitImageAction::UseUploaded &&
+        request.gen_params.init_image.get().data == nullptr) {
+        error_message = "could not allocate init image";
+        return false;
+    }
+
     // Intentionally disable prompt-embedded LoRA tag parsing for server APIs.
     if (!request.gen_params.resolve_and_validate(IMG_GEN, "", runtime.ctx_params->hires_upscalers_dir, true)) {
         error_message = "invalid params";
         return false;
     }
 
-    return true;
+    return validate_server_img_gen_request(runtime, request, error_message);
 }
 
 static bool execute_sync_img_gen_request(ServerRuntime& runtime,
@@ -238,6 +270,10 @@ static bool execute_sync_img_gen_request(ServerRuntime& runtime,
             num_results = 0;
         }
         results.adopt(raw_results, num_results);
+        if (!results.empty() && !apply_server_adetailer(runtime, request, img_gen_params, results)) {
+            error_message = "ADetailer failed";
+            return false;
+        }
     }
 
     if (results.empty()) {
@@ -249,15 +285,18 @@ static bool execute_sync_img_gen_request(ServerRuntime& runtime,
 
 void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
     ServerRuntime* runtime = &rt;
+    RuntimeRoutes routes(svr, rt);
 
-    svr.Get("/v1/models", [runtime](const httplib::Request&, httplib::Response& res) {
+    routes.get("/v1/models", [runtime](const httplib::Request&, httplib::Response& res) {
         json r;
         r["data"] = json::array();
-        r["data"].push_back({{"id", "sd-cpp-local"}, {"object", "model"}, {"owned_by", "local"}});
+        if (runtime->sd_ctx) {
+            r["data"].push_back({{"id", "sd-cpp-local"}, {"object", "model"}, {"owned_by", "local"}});
+        }
         res.set_content(r.dump(), "application/json");
     });
 
-    svr.Post("/v1/images/generations", [runtime](const httplib::Request& req, httplib::Response& res) {
+    routes.post("/v1/images/generations", [runtime](const httplib::Request& req, httplib::Response& res) {
         try {
             if (!runtime_supports_generation_mode(*runtime, IMG_GEN)) {
                 res.status = 400;
@@ -273,7 +312,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 return;
             }
 
-            LOG_VERBOSE("%s\n", request.gen_params.to_string().c_str());
+            LOG_DEBUG("%s\n", request.gen_params.to_string().c_str());
 
             SDImageVec results;
             if (!execute_sync_img_gen_request(*runtime, request, results, error_message)) {
@@ -331,7 +370,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         }
     });
 
-    svr.Post("/v1/images/edits", [runtime](const httplib::Request& req, httplib::Response& res) {
+    routes.post("/v1/images/edits", [runtime](const httplib::Request& req, httplib::Response& res) {
         try {
             if (!runtime_supports_generation_mode(*runtime, IMG_GEN)) {
                 res.status = 400;
@@ -347,7 +386,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 return;
             }
 
-            LOG_VERBOSE("%s\n", request.gen_params.to_string().c_str());
+            LOG_DEBUG("%s\n", request.gen_params.to_string().c_str());
 
             SDImageVec results;
             if (!execute_sync_img_gen_request(*runtime, request, results, error_message)) {

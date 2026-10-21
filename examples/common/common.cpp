@@ -75,7 +75,7 @@ static std::string utf16_to_utf8(const std::wstring& wstr) {
     return utf8;
 }
 
-static std::string argv_to_utf8(int index, const char** argv) {
+std::string argv_to_utf8(int index, const char** argv) {
     (void)argv;
     int argc;
     wchar_t** argv_w = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -91,7 +91,7 @@ static std::string argv_to_utf8(int index, const char** argv) {
 }
 
 #else  // Linux / macOS
-static std::string argv_to_utf8(int index, const char** argv) {
+std::string argv_to_utf8(int index, const char** argv) {
     return std::string(argv[index]);
 }
 
@@ -378,6 +378,23 @@ static int parse_scale_override(int argc, const char** argv, int index, float& s
     return 1;
 }
 
+static int parse_on_off_arg(int argc, const char** argv, int index, const char* option, bool& value) {
+    if (++index >= argc) {
+        LOG_ERROR("%s requires 'on' or 'off'", option);
+        return -1;
+    }
+    const std::string arg = argv[index];
+    if (arg == "on") {
+        value = true;
+    } else if (arg == "off") {
+        value = false;
+    } else {
+        LOG_ERROR("invalid %s value '%s'; expected 'on' or 'off'", option, argv[index]);
+        return -1;
+    }
+    return 1;
+}
+
 ArgOptions SDContextParams::get_options() {
     ArgOptions options;
     options.string_options = {
@@ -616,42 +633,9 @@ ArgOptions SDContextParams::get_options() {
          "deprecated; use --backend vae=cpu",
          true, &vae_on_cpu},
         {"",
-         "--fa",
-         "use flash attention",
-         true, &flash_attn},
-        {"",
-         "--diffusion-fa",
-         "use flash attention in the diffusion model only",
-         true, &diffusion_flash_attn},
-        {"",
          "--sage-attn",
          "use native CUDA SageAttention in the diffusion model, with flash/default attention fallback",
          true, &sage_attn},
-        {"",
-         "--diffusion-conv-direct",
-         "use ggml_conv2d_direct in the diffusion model",
-         true, &diffusion_conv_direct},
-        {"",
-         "--vae-conv-direct",
-         "use direct 2D and 3D convolutions in the vae model",
-         true, &vae_conv_direct},
-    };
-
-    auto on_auto_fit_arg = [&](int argc, const char** argv, int index) {
-        if (++index >= argc) {
-            LOG_ERROR("--auto-fit requires 'on' or 'off'");
-            return -1;
-        }
-        const std::string arg = argv[index];
-        if (arg == "on") {
-            auto_fit = true;
-        } else if (arg == "off") {
-            auto_fit = false;
-        } else {
-            LOG_ERROR("invalid --auto-fit value '%s'; expected 'on' or 'off'", argv[index]);
-            return -1;
-        }
-        return 1;
     };
 
     auto on_type_arg = [&](int argc, const char** argv, int index) {
@@ -733,16 +717,83 @@ ArgOptions SDContextParams::get_options() {
          }},
         {"",
          "--attn-scale",
-         "flash-attention K/V scale override (float, default: 0 = model default, 1 = no scaling); requires --fa or --diffusion-fa",
+         "flash-attention K/V scale override (float, default: 0 = model default, 1 = no scaling); applies when flash attention is selected",
          [this](int argc, const char** argv, int index) {
              return parse_scale_override(argc, argv, index, attn_scale);
+         }},
+        {"",
+         "--diffusion-conv-direct",
+         "deprecated; use --conv-direct auto,diffusion=on,controlnet=on",
+         [this](int, const char**, int) {
+             LOG_WARN("--diffusion-conv-direct is deprecated; use --conv-direct auto,diffusion=on,controlnet=on instead.");
+             diffusion_conv_direct = true;
+             return 0;
+         }},
+        {"",
+         "--vae-conv-direct",
+         "deprecated; use --conv-direct auto,vae=on",
+         [this](int, const char**, int) {
+             LOG_WARN("--vae-conv-direct is deprecated; use --conv-direct auto,vae=on instead.");
+             vae_conv_direct = true;
+             return 0;
+         }},
+        {"",
+         "--conv-direct",
+         "on|off|auto or diffusion/vae/controlnet assignments (default: auto), e.g. auto,vae=off. Overrides legacy convolution flags",
+         [this](int argc, const char** argv, int index) {
+             if (++index >= argc || argv[index][0] == '\0') {
+                 LOG_ERROR("--conv-direct requires on, off, auto, or module assignments");
+                 return -1;
+             }
+             conv_direct_mode = argv[index];
+             return 1;
+         }},
+        {"",
+         "--flash-attn",
+         "on|off|auto or module assignments (default: auto), e.g. auto,te=off,vae=on. Last repeated option wins",
+         [this](int argc, const char** argv, int index) {
+             if (++index >= argc) {
+                 LOG_ERROR("--flash-attn requires on, off, or auto");
+                 return -1;
+             }
+             const std::string value = argv[index];
+             if (value.empty()) {
+                 LOG_ERROR("--flash-attn requires a nonempty value");
+                 return -1;
+             }
+             flash_attn_mode = value;
+             return 1;
+         }},
+        {"",
+         "--fa",
+         "deprecated; use --flash-attn on",
+         [this](int, const char**, int) {
+             LOG_WARN("--fa is deprecated; use --flash-attn on instead.");
+             flash_attn_mode = "on";
+             return 0;
+         }},
+        {"",
+         "--diffusion-fa",
+         "deprecated; use --flash-attn off,diffusion=on",
+         [this](int, const char**, int) {
+             LOG_WARN("--diffusion-fa is deprecated; use --flash-attn off,diffusion=on instead.");
+             flash_attn_mode = "off,diffusion=on";
+             return 0;
          }},
         {"",
          "--auto-fit",
          "on|off (default: on). Preserve --backend (otherwise select one GPU) and place weights on the compute GPU, "
          "RAM, another GPU, or disk in that order, according to available memory (--max-vram limits GPU budgets). "
          "Disabled by explicit --params-backend; uses automatic graph segmentation when needed",
-         on_auto_fit_arg},
+         [this](int argc, const char** argv, int index) {
+             return parse_on_off_arg(argc, argv, index, "--auto-fit", auto_fit);
+         }},
+        {"",
+         "--batched-cfg",
+         "on|off (default: on). Run the conditional and unconditional CFG branches in one batched UNet forward when supported",
+         [this](int argc, const char** argv, int index) {
+             return parse_on_off_arg(argc, argv, index, "--batched-cfg", batched_cfg);
+         }},
         {"",
          "--type",
          "weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K). "
@@ -788,16 +839,17 @@ ArgOptions SDContextParams::get_options() {
 void SDContextParams::build_embedding_map() {
     static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt", ".ckpt"};
 
-    if (!fs::exists(embedding_dir) || !fs::is_directory(embedding_dir)) {
+    const fs::path embedding_dir_path = fs::u8path(embedding_dir);
+    if (!fs::exists(embedding_dir_path) || !fs::is_directory(embedding_dir_path)) {
         return;
     }
 
-    for (auto& p : fs::directory_iterator(embedding_dir)) {
+    for (auto& p : fs::directory_iterator(embedding_dir_path)) {
         if (!p.is_regular_file())
             continue;
 
         auto path       = p.path();
-        std::string ext = path.extension().string();
+        std::string ext = path.extension().u8string();
 
         bool valid = false;
         for (auto& e : valid_ext) {
@@ -809,8 +861,8 @@ void SDContextParams::build_embedding_map() {
         if (!valid)
             continue;
 
-        std::string key   = path.stem().string();
-        std::string value = path.string();
+        std::string key   = path.stem().u8string();
+        std::string value = path.u8string();
 
         embedding_map[key] = value;
     }
@@ -940,6 +992,7 @@ std::string SDContextParams::to_string() const {
         << "  max_vram: \"" << max_vram << "\",\n"
         << "  disable_prefetch: " << (disable_prefetch ? "true" : "false") << ",\n"
         << "  disable_segmented_compute: " << (disable_segmented_compute ? "true" : "false") << ",\n"
+        << "  batched_cfg: " << (batched_cfg ? "true" : "false") << ",\n"
         << "  eager_load: " << (eager_load ? "true" : "false") << ",\n"
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
@@ -950,8 +1003,8 @@ std::string SDContextParams::to_string() const {
         << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
         << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
         << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
-        << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
-        << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
+        << "  flash_attn_mode: " << flash_attn_mode << ",\n"
+        << "  conv_direct_mode: " << (conv_direct_mode.empty() ? "auto (legacy flags honored)" : conv_direct_mode) << ",\n"
         << "  sage_attn: " << (sage_attn ? "true" : "false") << ",\n"
         << "  linear_scale: " << linear_scale << ",\n"
         << "  attn_scale: " << attn_scale << ",\n"
@@ -1009,8 +1062,8 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.prediction                      = prediction;
     sd_ctx_params.lora_apply_mode                 = lora_apply_mode;
     sd_ctx_params.enable_mmap                     = enable_mmap;
-    sd_ctx_params.flash_attn                      = flash_attn;
-    sd_ctx_params.diffusion_flash_attn            = diffusion_flash_attn;
+    sd_ctx_params.flash_attn_mode                 = flash_attn_mode.c_str();
+    sd_ctx_params.conv_direct_mode                = conv_direct_mode.c_str();
     sd_ctx_params.sage_attn                       = sage_attn;
     sd_ctx_params.linear_scale                    = linear_scale;
     sd_ctx_params.attn_scale                      = attn_scale;
@@ -1022,6 +1075,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.max_vram                        = max_vram.c_str();
     sd_ctx_params.disable_prefetch                = disable_prefetch;
     sd_ctx_params.disable_segmented_compute       = disable_segmented_compute;
+    sd_ctx_params.batched_cfg                     = batched_cfg;
     sd_ctx_params.eager_load                      = eager_load;
     sd_ctx_params.backend                         = effective_backend.c_str();
     sd_ctx_params.params_backend                  = effective_params_backend.c_str();
@@ -1465,6 +1519,9 @@ ArgOptions SDGenerationParams::get_options() {
             return -1;
         }
         std::string sigmas_str = value;
+        if (sigmas_str == "qwen-image-2.1-turbo") {
+            sigmas_str = "1.0,0.978453,0.95418,0.926626,0.89508,0.845148,0.704534,0.414568,0.0";
+        }
         if (!sigmas_str.empty() && sigmas_str.front() == '[') {
             sigmas_str.erase(0, 1);
         }
@@ -1516,7 +1573,7 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        ref_image_paths.push_back(argv[index]);
+        ref_image_paths.push_back(argv_to_utf8(index, argv));
         return 1;
     };
 
@@ -1524,7 +1581,7 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        ref_video_paths.push_back(argv[index]);
+        ref_video_paths.push_back(argv_to_utf8(index, argv));
         return 1;
     };
 
@@ -1532,7 +1589,7 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        ref_video_audio_paths.push_back(argv[index]);
+        ref_video_audio_paths.push_back(argv_to_utf8(index, argv));
         return 1;
     };
 
@@ -1540,7 +1597,7 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        ref_audio_paths.push_back(argv[index]);
+        ref_audio_paths.push_back(argv_to_utf8(index, argv));
         return 1;
     };
 
@@ -1548,7 +1605,7 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        ref_audio_paths.push_back(argv[index]);
+        ref_audio_paths.push_back(argv_to_utf8(index, argv));
         return 1;
     };
 
@@ -1647,15 +1704,15 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        const char* arg = argv[index];
-        std::ifstream f(arg, std::ios::binary);
+        const std::string arg = argv_to_utf8(index, argv);
+        std::ifstream f(fs::u8path(arg), std::ios::binary);
         try {
             prompt = std::string(std::istreambuf_iterator<char>{f}, {});
         } catch (const std::ios_base::failure&) {
             f.setstate(std::ios_base::failbit);
         }
         if (f.fail()) {
-            LOG_ERROR("error: failed to read prompt file '%s'\n", arg);
+            LOG_ERROR("error: failed to read prompt file '%s'\n", arg.c_str());
             return -1;
         }
         return 1;
@@ -1665,15 +1722,15 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        const char* arg = argv[index];
-        std::ifstream f(arg, std::ios::binary);
+        const std::string arg = argv_to_utf8(index, argv);
+        std::ifstream f(fs::u8path(arg), std::ios::binary);
         try {
             negative_prompt = std::string(std::istreambuf_iterator<char>{f}, {});
         } catch (const std::ios_base::failure&) {
             f.setstate(std::ios_base::failbit);
         }
         if (f.fail()) {
-            LOG_ERROR("error: failed to read negative prompt file '%s'\n", arg);
+            LOG_ERROR("error: failed to read negative prompt file '%s'\n", arg.c_str());
             return -1;
         }
         return 1;
@@ -1711,11 +1768,11 @@ ArgOptions SDGenerationParams::get_options() {
          on_scheduler_arg},
         {"",
          "--sigmas",
-         "custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\").",
+         "custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\") or preset: qwen-image-2.1-turbo.",
          on_sigmas_arg},
         {"",
          "--hires-sigmas",
-         "custom sigma values for the highres fix second pass, comma-separated (e.g., \"0.85,0.725,0.421875,0.0\").",
+         "custom sigma values for the highres fix second pass, comma-separated (e.g., \"0.85,0.725,0.421875,0.0\") or preset: qwen-image-2.1-turbo.",
          on_hires_sigmas_arg},
         {"",
          "--skip-layers",
@@ -1994,22 +2051,22 @@ static bool resolve_model_file_from_dir(const std::string& model_name,
     if (model_name.empty() ||
         model_name.find('/') != std::string::npos ||
         model_name.find('\\') != std::string::npos ||
-        fs::path(model_name).has_root_path() ||
+        fs::u8path(model_name).has_root_path() ||
         ends_with_valid_ext()) {
         LOG_ERROR("%s must be a model name without path or extension: %s", label, model_name.c_str());
         return false;
     }
 
-    fs::path model_dir_path = model_dir;
+    fs::path model_dir_path = fs::u8path(model_dir);
     for (const auto& ext : valid_ext) {
-        fs::path try_path = model_dir_path / (model_name + ext);
+        fs::path try_path = model_dir_path / fs::u8path(model_name + ext);
         if (fs::exists(try_path) && fs::is_regular_file(try_path)) {
-            resolved_path = try_path.lexically_normal().string();
+            resolved_path = try_path.lexically_normal().u8string();
             return true;
         }
     }
 
-    LOG_ERROR("can not find %s %s in %s", label, model_name.c_str(), model_dir_path.lexically_normal().string().c_str());
+    LOG_ERROR("can not find %s %s in %s", label, model_name.c_str(), model_dir_path.lexically_normal().u8string().c_str());
     return false;
 }
 
@@ -2161,7 +2218,8 @@ bool SDGenerationParams::from_json_str(
         }
         if (target_custom_sigmas != nullptr &&
             sample_json.contains("custom_sigmas") &&
-            sample_json["custom_sigmas"].is_array()) {
+            sample_json["custom_sigmas"].is_array() &&
+            !sample_json["custom_sigmas"].empty()) {  // empty [] = "not specified", keep server/CLI default
             *target_custom_sigmas = sample_json["custom_sigmas"].get<std::vector<float>>();
         }
         if (sample_json.contains("sample_method") && sample_json["sample_method"].is_string()) {
@@ -2271,14 +2329,15 @@ bool SDGenerationParams::from_json_str(
     return true;
 }
 
-void SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_dir) {
+bool SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_dir) {
     if (lora_model_dir.empty()) {
-        return;
+        return true;
     }
     static const std::regex re(R"(<lora:([^:>]+):([^>]+)>)");
     static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt", ".ckpt"};
     std::smatch m;
 
+    bool missing    = false;
     std::string tmp = prompt;
 
     while (std::regex_search(tmp, m, re)) {
@@ -2302,10 +2361,18 @@ void SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
         }
 
         fs::path final_path;
-        if (is_absolute_path(raw_path)) {
-            final_path = raw_path;
-        } else {
-            final_path = fs::path(lora_model_dir) / raw_path;
+        try {
+            if (is_absolute_path(raw_path)) {
+                final_path = fs::u8path(raw_path);
+            } else {
+                final_path = fs::u8path(lora_model_dir) / fs::u8path(raw_path);
+            }
+        } catch (const std::exception&) {  // not UTF-8, e.g. a prompt file in another encoding
+            LOG_WARN("invalid lora path %s", raw_path.c_str());
+            tmp     = m.suffix().str();
+            prompt  = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+            missing = true;
+            continue;
         }
         if (!fs::exists(final_path)) {
             bool found = false;
@@ -2319,14 +2386,15 @@ void SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
                 }
             }
             if (!found) {
-                LOG_WARN("can not found lora %s", final_path.lexically_normal().string().c_str());
-                tmp    = m.suffix().str();
-                prompt = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+                LOG_WARN("can not found lora %s", final_path.lexically_normal().u8string().c_str());
+                tmp     = m.suffix().str();
+                prompt  = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+                missing = true;
                 continue;
             }
         }
 
-        const std::string key = final_path.lexically_normal().string();
+        const std::string key = final_path.lexically_normal().u8string();
 
         if (is_high_noise)
             high_noise_lora_map[key] += mul;
@@ -2337,6 +2405,8 @@ void SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
 
         tmp = m.suffix().str();
     }
+
+    return !missing;
 }
 
 bool SDGenerationParams::width_and_height_are_set() const {
@@ -2458,7 +2528,7 @@ bool SDGenerationParams::initialize_cache_params() {
     return true;
 }
 
-bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::string& hires_upscalers_dir, bool strict) {
+bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::string& hires_upscalers_dir, bool strict, bool validate_missing_loras) {
     vae_tiling_params.extra_tiling_args = extra_tiling_args.empty() ? nullptr : extra_tiling_args.c_str();
 
     if (high_noise_sample_params.sample_steps <= 0) {
@@ -2502,7 +2572,9 @@ bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::s
 
     prompt_with_lora = prompt;
     if (!lora_model_dir.empty()) {
-        extract_and_remove_lora(lora_model_dir);
+        if (!extract_and_remove_lora(lora_model_dir) && validate_missing_loras) {
+            return false;
+        }
     }
     return true;
 }
@@ -2630,7 +2702,7 @@ bool SDGenerationParams::resolve_and_validate(SDMode mode,
                                               const std::string& lora_model_dir,
                                               const std::string& hires_upscalers_dir,
                                               bool strict) {
-    if (!resolve(lora_model_dir, hires_upscalers_dir, strict)) {
+    if (!resolve(lora_model_dir, hires_upscalers_dir, strict, mode == CONVERT)) {
         return false;
     }
     if (!validate(mode)) {

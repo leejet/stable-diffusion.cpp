@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "id": "flux1-canny",
+  "name": "FLUX.1 Canny dev",
+  "description": "Select Canny weights and supply a precomputed edge map as Control Image. Edge detection is not performed by this recipe.",
+  "model_url": "https://huggingface.co/black-forest-labs/FLUX.1-Canny-dev",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "clip_l",
+      "required": true
+    },
+    {
+      "id": "t5xxl",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "cfg_scale": 1,
+    "steps": 20,
+    "width": 1024,
+    "height": 1024,
+    "distilled_guidance": 30
+  },
+  "features": [
+    "clip_skip",
+    "distilled_guidance",
+    "flow_shift",
+    "slg",
+    "control_image"
+  ],
+  "disabled_features": [
+    "mask_image"
+  ]
+}

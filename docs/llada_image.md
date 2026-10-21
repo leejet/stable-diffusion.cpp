@@ -122,7 +122,6 @@ save_file(merged, "llada_connectors.safetensors")
   --height 1024 \
   --steps 4 \
   --cfg-scale 1.0 \
-  --diffusion-fa \
   --output output.png
 ```
 
@@ -145,7 +144,7 @@ only in the positive branch. Editing requires connectors that include the SigVQ 
   unchanged instead of applying the instruction; LLaDA-Image-Turbo edits correctly at both.
 - Editing runs the reference and the target in one sequence, so it needs roughly twice the
   tokens of text to image at the same size. On 12 GB, editing at 1024x1024 needs
-  `--diffusion-fa`; without it the diffusion graph does not fit.
+  flash attention; without it the diffusion graph does not fit.
 - The weights total about 16 GB, but segmented execution streams them, so a much smaller
   budget works. At 512x512, `--max-vram 6` costs almost nothing over unconstrained execution,
   and `--max-vram 3` still produces byte-identical output at roughly 2.5x the time.

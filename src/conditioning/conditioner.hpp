@@ -399,7 +399,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", escape_newlines(text).c_str(), escape_newlines(ss.str()).c_str());
         }
 
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
@@ -817,7 +817,7 @@ struct SD3CLIPEmbedder : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", escape_newlines(text).c_str(), escape_newlines(ss.str()).c_str());
         }
 
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
@@ -908,6 +908,31 @@ struct SD3CLIPEmbedder : public Conditioner {
         sd::Tensor<float> pooled;
 
         size_t chunk_count = std::max(std::max(clip_l_tokens.size(), clip_g_tokens.size()), t5_tokens.size()) / chunk_len;
+
+        // Each active encoder must cover every chunk of the longest token sequence.
+        Tokenizer* tokenizers[] = {
+            clip_l ? clip_l_tokenizer.get() : nullptr,
+            clip_g ? clip_g_tokenizer.get() : nullptr,
+            t5 ? &t5_tokenizer : nullptr,
+        };
+        const size_t target_length = chunk_count * chunk_len;
+
+        for (size_t encoder_idx = 0; encoder_idx < 3; encoder_idx++) {
+            auto& tokens  = token_and_weights[encoder_idx].first;
+            auto& weights = token_and_weights[encoder_idx].second;
+            if (!tokenizers[encoder_idx] || tokens.size() >= target_length) {
+                continue;
+            }
+
+            std::vector<int> empty_tokens;
+            std::vector<float> empty_weights;
+            tokenizers[encoder_idx]->pad_tokens(empty_tokens, &empty_weights, nullptr, chunk_len, chunk_len, false);
+
+            while (tokens.size() < target_length) {
+                tokens.insert(tokens.end(), empty_tokens.begin(), empty_tokens.end());
+                weights.insert(weights.end(), empty_weights.begin(), empty_weights.end());
+            }
+        }
 
         for (int chunk_idx = 0; chunk_idx < chunk_count; chunk_idx++) {
             // clip_l
@@ -1207,7 +1232,7 @@ struct FluxCLIPEmbedder : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", escape_newlines(text).c_str(), escape_newlines(ss.str()).c_str());
         }
 
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
@@ -1484,7 +1509,7 @@ struct T5CLIPEmbedder : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", escape_newlines(text).c_str(), escape_newlines(ss.str()).c_str());
         }
 
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
@@ -1873,7 +1898,7 @@ struct AnimaConditioner : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", escape_newlines(text).c_str(), escape_newlines(ss.str()).c_str());
         }
 
         std::vector<int> qwen_tokens;
@@ -1970,6 +1995,9 @@ struct LLMEmbedder : public Conditioner {
             if (sd_version_is_pid(version)) {
                 throw std::runtime_error("PiD requires an external Gemma 2 tokenizer.json; pass --tokenizer FILE or set sd_ctx_params_t::tokenizer");
             }
+            if (version == VERSION_MOSS_IMAGE) {
+                throw std::runtime_error("MOSS-Image requires the official Qwen3.5 tokenizer.json; pass --tokenizer FILE or set sd_ctx_params_t::tokenizer");
+            }
         }
         LLM::LLMArch arch = LLM::LLMArch::QWEN2_5_VL;
         if (version == VERSION_FLUX2) {
@@ -1981,16 +2009,20 @@ struct LLMEmbedder : public Conditioner {
         } else if (sd_version_is_pid(version)) {
             arch = LLM::LLMArch::GEMMA2_2B;
         } else if (version == VERSION_QWEN_IMAGE_2_1 ||
+                   sd_version_is_flux3(version) ||
                    sd_version_is_lingbot_video(version) ||
                    sd_version_is_ideogram4(version) ||
                    sd_version_is_boogu_image(version) ||
                    sd_version_is_sefi_image(version) ||
                    sd_version_is_krea2(version) ||
                    sd_version_is_minimax_h3(version) ||
-                   sd_version_is_mage_flow(version)) {
+                   sd_version_is_mage_flow(version) ||
+                   version == VERSION_IRIS) {
             arch = LLM::LLMArch::QWEN3_VL;
-        } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
+        } else if (sd_version_is_z_image(version) || sd_version_is_z_image_l2p(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
             arch = LLM::LLMArch::QWEN3;
+        } else if (version == VERSION_MOSS_IMAGE) {
+            arch = LLM::LLMArch::QWEN3_5;
         }
         llm        = std::make_shared<LLM::LLMRunner>(arch,
                                                backend,
@@ -2005,6 +2037,8 @@ struct LLMEmbedder : public Conditioner {
             pad_id = 199999;
         } else if (arch == LLM::LLMArch::GEMMA2_2B) {
             pad_id = 0;
+        } else if (arch == LLM::LLMArch::QWEN3_5) {
+            pad_id = 248044;
         }
         tokenizer = tokenizers.create(TokenizerConfig::MAIN, llm->config.vocab_size, pad_id);
         if (!tokenizer) {
@@ -2113,9 +2147,10 @@ struct LLMEmbedder : public Conditioner {
 
     std::tuple<std::vector<int>, std::vector<float>, std::vector<float>> tokenize(std::string text,
                                                                                   const std::pair<int, int>& attn_range,
-                                                                                  size_t min_length = 0,
-                                                                                  size_t max_length = 100000000,
-                                                                                  bool spell_quotes = false) {
+                                                                                  size_t min_length         = 0,
+                                                                                  size_t max_length         = 100000000,
+                                                                                  bool spell_quotes         = false,
+                                                                                  const std::string& suffix = "") {
         std::vector<std::pair<std::string, float>> parsed_attention;
         if (attn_range.first >= 0 && attn_range.second > 0) {
             if (attn_range.first > 0) {
@@ -2144,7 +2179,7 @@ struct LLMEmbedder : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", escape_newlines(text).c_str(), escape_newlines(ss.str()).c_str());
         }
 
         std::vector<int> tokens;
@@ -2160,6 +2195,23 @@ struct LLMEmbedder : public Conditioner {
             weights.insert(weights.end(), curr_tokens.size(), curr_weight);
         }
 
+        if (!suffix.empty()) {
+            std::vector<int> suffix_tokens;
+            if (!tokenizer->encode(suffix, suffix_tokens) || suffix_tokens.size() >= max_length) {
+                return {};
+            }
+            // Reserve the assistant-turn marker before truncating the caption.
+            if (tokens.size() > max_length - suffix_tokens.size()) {
+                tokens.resize(max_length - suffix_tokens.size());
+                weights.resize(tokens.size());
+            }
+            tokens.insert(tokens.end(), suffix_tokens.begin(), suffix_tokens.end());
+            weights.insert(weights.end(), suffix_tokens.size(), 1.f);
+        }
+
+        if (sd_version_is_flux3(version)) {
+            min_length = std::min(max_length, ((tokens.size() + 79) / 80) * 80);
+        }
         std::vector<float> mask;
         tokenizer->pad_tokens(tokens, &weights, &mask, min_length, max_length);
 
@@ -2182,8 +2234,10 @@ struct LLMEmbedder : public Conditioner {
                                     bool spell_quotes                                       = false,
                                     int max_length                                          = 100000000,
                                     const LLM::DeepStackImageEmbeds& deepstack_image_embeds = {},
-                                    const std::vector<LLM::ImageGrid>& image_grids          = {}) {
-        auto tokens_weights_mask = tokenize(prompt, prompt_attn_range, min_length, max_length, spell_quotes);
+                                    const std::vector<LLM::ImageGrid>& image_grids          = {},
+                                    const std::string& prompt_suffix                        = "",
+                                    sd::Tensor<float>* output_mask                          = nullptr) {
+        auto tokens_weights_mask = tokenize(prompt, prompt_attn_range, min_length, max_length, spell_quotes, prompt_suffix);
         auto& tokens             = std::get<0>(tokens_weights_mask);
         auto& weights            = std::get<1>(tokens_weights_mask);
         auto& mask               = std::get<2>(tokens_weights_mask);
@@ -2211,6 +2265,15 @@ struct LLMEmbedder : public Conditioner {
             }
         }
 
+        sd::Tensor<int32_t> position_ids;
+        if (sd_version_is_flux3(version)) {
+            position_ids = sd::Tensor<int32_t>::zeros({static_cast<int64_t>(tokens.size() * 4)});
+            for (size_t axis = 0; axis < 4; ++axis) {
+                for (size_t i = 0; i < tokens.size(); ++i) {
+                    position_ids[axis * tokens.size() + i] = mask[i] == 0.f ? 1 : static_cast<int32_t>(i);
+                }
+            }
+        }
         auto hidden_states = llm->compute(n_threads,
                                           input_ids,
                                           attention_mask,
@@ -2219,7 +2282,8 @@ struct LLMEmbedder : public Conditioner {
                                           false,
                                           false,
                                           deepstack_image_embeds,
-                                          image_grids);
+                                          image_grids,
+                                          position_ids);
         if (hidden_states.empty()) {
             LOG_ERROR("LLM prompt encoding failed");
             return {};
@@ -2246,6 +2310,12 @@ struct LLMEmbedder : public Conditioner {
                                                 1);
         }
 
+        if (output_mask != nullptr) {
+            *output_mask = sd::Tensor<float>::zeros({new_hidden_states.shape()[1]});
+            for (size_t i = prompt_template_encode_start_idx; i < mask.size(); ++i) {
+                output_mask->data()[i - prompt_template_encode_start_idx] = mask[i];
+            }
+        }
         return new_hidden_states;
     }
 
@@ -2312,6 +2382,8 @@ struct LLMEmbedder : public Conditioner {
         int hidden_states_min_length         = 0;  // zero pad hidden_states
         bool spell_quotes                    = false;
         std::set<int> out_layers;
+        std::string prompt_suffix;
+        sd::Tensor<float> text_mask;
 
         int64_t t0                     = ggml_time_ms();
         RefImageResizeMode resize_mode = conditioner_params.ref_image_params.vlm_resize_mode;
@@ -2953,7 +3025,7 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.second = static_cast<int>(prompt.size());
 
             prompt += "<|end|><|start|>assistant<|channel|>analysis<|message|>Need to generate one image according to the description.<|end|><|start|>assistant<|channel|>final<|message|>";
-        } else if (sd_version_is_z_image(version)) {
+        } else if (sd_version_is_z_image(version) || sd_version_is_z_image_l2p(version)) {
             prompt_template_encode_start_idx = 0;
             out_layers                       = {35};  // -2
 
@@ -2974,6 +3046,20 @@ struct LLMEmbedder : public Conditioner {
 
                 prompt += "<|im_end|>\n<|im_start|>assistant\n";
             }
+        } else if (version == VERSION_MOSS_IMAGE) {
+            prompt_template_encode_start_idx = 0;
+            max_length                       = 4096;
+            prompt                           = "<|im_start|>user\n" + conditioner_params.text + "<|im_end|>\n<|im_start|>assistant\n<think>\n";
+            prompt_attn_range                = {0, 0};
+        } else if (sd_version_is_flux3(version)) {
+            prompt_template_encode_start_idx = 0;
+            max_length                       = 4096;
+            out_layers                       = {4, 8, 12, 16, 20, 24, 28, 32};
+            prompt                           = "<|im_start|>user\n";
+            prompt_attn_range.first          = static_cast<int>(prompt.size());
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+            prompt += "<|im_end|>\n<|im_start|>assistant\n";
         } else if (version == VERSION_FLUX2_KLEIN) {
             prompt_template_encode_start_idx = 0;
             min_length                       = 512;
@@ -3061,6 +3147,23 @@ struct LLMEmbedder : public Conditioner {
             SDCondition result;
             result.c_crossattn = std::move(hidden_states);
             return result;
+        } else if (version == VERSION_IRIS) {
+            prompt =
+                "<|im_start|>system\n"
+                "Describe the image by detailing the color, shape, size, texture, quantity, text, spatial "
+                "relationships of the objects and background:<|im_end|>\n<|im_start|>user\n";
+            auto prefix_tokens = std::get<0>(tokenize(prompt, {0, 0}));
+            if (prefix_tokens.empty()) {
+                return {};
+            }
+            prompt_template_encode_start_idx = static_cast<int>(prefix_tokens.size());
+            hidden_states_min_length         = 300;
+            max_length                       = prompt_template_encode_start_idx + hidden_states_min_length;
+            out_layers                       = {2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35};
+            prompt_attn_range.first          = static_cast<int>(prompt.size());
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+            prompt_suffix            = "<|im_end|>\n<|im_start|>assistant\n";
         } else {
             GGML_ABORT("unknown version %d", version);
         }
@@ -3076,7 +3179,9 @@ struct LLMEmbedder : public Conditioner {
                                            spell_quotes,
                                            max_length,
                                            deepstack_image_embeds,
-                                           image_grids);
+                                           image_grids,
+                                           prompt_suffix,
+                                           version == VERSION_IRIS ? &text_mask : nullptr);
         if (hidden_states.empty()) {
             return {};
         }
@@ -3141,6 +3246,7 @@ struct LLMEmbedder : public Conditioner {
         SDCondition result;
         result.c_crossattn        = std::move(hidden_states);
         result.extra_c_crossattns = std::move(extra_hidden_states_vec);
+        result.c_vector           = std::move(text_mask);
         if (version == VERSION_QWEN_IMAGE_2_1) {
             auto slots = sd::Tensor<int32_t>::zeros({result.c_crossattn.shape()[1]});
             for (size_t i = 0; i < image_embeds.size(); ++i) {

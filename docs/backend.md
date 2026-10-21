@@ -215,6 +215,123 @@ If a VAE decode fails, decoding retries with spatial tiling even when `--auto-fi
 is off; supported video decoders try temporal tiling first and can then add
 spatial tiling. Spatial retries use half-size tiles along each latent dimension.
 
+## Direct convolution (`--conv-direct on|off|auto`)
+
+`--conv-direct` defaults to `auto` and accepts module assignments for
+`diffusion`, `vae` (including preview VAE), and `controlnet`, using the same
+aliases and precedence rules as `--flash-attn`:
+
+```shell
+sd-cli -m model.safetensors -p "a cat" --conv-direct auto,vae=off
+sd-cli -m model.safetensors -p "a cat" --conv-direct off,diffusion=on
+```
+
+- `on` requests direct 2D and 3D convolution.
+- `off` uses the existing im2col-based convolution paths.
+- `auto` first checks support for a representative F16-weight/F32-input direct
+  convolution graph. Vulkan then benchmarks direct convolution against im2col
+  using two small shapes per dimension, with warmup, output validation, and five
+  interleaved measurements per shape. Direct convolution must improve the sum of
+  median times by at least 5%; a failed probe defaults to `off`.
+  Other backends retain their implicit GEMM checks without benchmarking:
+  CUDA 2D requires a compiled Turing-or-newer MMA architecture; HIP 2D requires
+  the supported CDNA MFMA or RDNA WMMA architectures described below for flash
+  attention. MUSA 2D has a SIMT implementation. CUDA, HIP, and MUSA 3D also have
+  a SIMT implementation, so they do not require MMA. Other backends default to
+  `off`. Results and decision logs are cached per compute backend and dimension
+  in the context, as with flash attention. Each dimension is selected independently,
+  and all compute devices in a module must qualify. Parameter-storage devices do
+  not affect this choice.
+
+These are backend-level defaults. GGML still chooses the actual kernel based on
+weight type, shape, and hardware; enabling direct convolution does not guarantee
+that every operation uses implicit GEMM. The CUDA-family implicit GEMM paths
+require F16 weights and can use ordinary direct kernels for other cases.
+This option does not change the separately created image upscaler context.
+
+Repeating `--conv-direct` replaces the previous assignment string. Existing
+`--diffusion-conv-direct` (diffusion and ControlNet) and `--vae-conv-direct`
+flags are deprecated and emit a warning, but remain supported when
+`--conv-direct` is omitted. Use `--conv-direct auto,diffusion=on,controlnet=on`
+and `--conv-direct auto,vae=on`, respectively. An explicit
+`--conv-direct` takes precedence over both legacy flags regardless of order.
+Library callers can set the appended `sd_ctx_params_t::conv_direct_mode` field
+to the same string; null or empty selects `auto` while honoring legacy true
+flags. The context copies the string.
+
+## Flash attention (`--flash-attn on|off|auto`)
+
+`--flash-attn` defaults to `auto`. Selection happens while creating the model
+context, before inference, and is cached once per compute backend in that context.
+Parameter-storage backends are not benchmarked.
+
+The option also accepts module assignments, using the same module aliases as
+`--backend`:
+
+```shell
+sd-cli -m model.safetensors -p "a cat" --flash-attn auto,te=off,vae=on
+sd-cli -m model.safetensors -p "a cat" --flash-attn off,diffusion=auto
+```
+
+Supported modules are `diffusion`, `te`, `clip_vision`, `vae`, `controlnet`, and
+`audio_encoder`. Modules without an assignment use the default (`auto` if no
+default is supplied). A bare mode or `all=`, `default=`, or `*=` sets the default;
+module-specific settings take precedence regardless of their position. Within
+one assignment string, the last setting for the same module or default wins.
+Repeating `--flash-attn` replaces the entire previous string.
+
+Only modules set to `auto` need backend probing. An explicit `on` or `off` for
+one module does not change another module's decision, even when they share a
+backend. Modules without configurable attention are rejected instead of silently
+ignoring their settings.
+
+- `on` requests flash attention for all models. Unsupported attention operations
+  still fall back to ordinary attention.
+- `off` disables flash attention, including the flash-attention fallback from
+  SageAttention. SageAttention itself remains controlled by `--sage-attn`.
+- `auto` enables CPU and supported CUDA MMA configurations without timing a
+  benchmark. CUDA uses both the device's capability and the compiled GGML
+  architectures. HIP also skips timing on known CDNA MFMA architectures
+  (`gfx908`, `gfx90a`, `gfx940`/`gfx941`/`gfx942`, `gfx950`) and RDNA 3/3.5/4
+  WMMA architectures (`gfx11xx`/`gfx12xx`). The CDNA shortcut requires
+  `GGML_HIP_MMQ_MFMA` to be enabled at build time. All shortcuts still check
+  support for the FA probe graph. Vulkan devices whose description identifies
+  NVIDIA RTX hardware (GeForce RTX, TITAN RTX, Quadro RTX and professional RTX)
+  also skip timing. This is a device-name heuristic and needs no CUDA runtime.
+  Unsupported graphs are disabled; other configurations, including older or
+  unknown HIP architectures and other Vulkan devices, are benchmarked.
+
+The probe compares ordinary and flash attention through the same attention
+builder used by models, including layout conversion and F16 conversion. It uses
+two small self-attention graphs (512 tokens with head size 64, and 1024 tokens
+with head size 128, both with four heads), checks their outputs, warms up each
+path, then alternates five synchronized measurements. Flash attention is enabled
+when the sum of its median times is at least 5% lower. These representative
+shapes are a startup heuristic, not a guarantee for every model or resolution.
+Allocation/execution failures and inconclusive probes select `off`. Timing stops
+starting new measurement pairs after one second of measured computation;
+backend initialization, warmup and an in-flight pair can take longer.
+
+Different modules can select different results. A multi-device model enables
+flash attention only if all of its compute devices select `on`, preserving the
+model's existing single boolean setting. This conservative rule also covers
+row-split configurations, which can fall back to layer split during initialization.
+
+`--fa` and `--diffusion-fa` are deprecated and emit a warning when used.
+Use `--flash-attn on` and `--flash-attn off,diffusion=on`, respectively.
+Both aliases write the same mode string as `--flash-attn`; the last occurrence
+of any of these options wins. Library callers
+can set `sd_ctx_params_t::flash_attn_mode` to the same string, including
+`"on"`, `"off"`, `"auto"`, or `"auto,te=off,vae=on"`.
+A null or empty string uses automatic selection unless a
+legacy `flash_attn` or `diffusion_flash_attn` boolean is set. The context copies
+the string; no new enum is required.
+
+```shell
+sd-cli -m model.safetensors -p "a cat" --flash-attn auto
+sd-cli -m model.safetensors -p "a cat" --flash-attn off
+```
+
 ## Modules
 
 | Module | Purpose | Accepted names |

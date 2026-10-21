@@ -26,15 +26,15 @@ static void set_error(std::string* error, const std::string& message) {
 }
 
 static std::string resolve_index_shard_path(const std::string& index_path, const std::string& shard_path) {
-    fs::path shard_fs_path(shard_path);
+    fs::path shard_fs_path = fs::u8path(shard_path);
     if (shard_fs_path.is_absolute()) {
-        return shard_fs_path.lexically_normal().string();
+        return shard_fs_path.lexically_normal().u8string();
     }
-    return (fs::path(index_path).parent_path() / shard_fs_path).lexically_normal().string();
+    return (fs::u8path(index_path).parent_path() / shard_fs_path).lexically_normal().u8string();
 }
 
 bool is_safetensors_file(const std::string& file_path) {
-    std::ifstream file(file_path, std::ios::binary);
+    std::ifstream file(fs::u8path(file_path), std::ios::binary);
     if (!file.is_open()) {
         return false;
     }
@@ -153,7 +153,7 @@ bool read_safetensors_file(const std::string& file_path,
                            std::string* error,
                            std::map<std::string, std::string>* metadata,
                            std::set<std::string>* tensor_names) {
-    std::ifstream file(file_path, std::ios::binary);
+    std::ifstream file(fs::u8path(file_path), std::ios::binary);
     if (!file.is_open()) {
         set_error(error, "failed to open '" + file_path + "'");
         return false;
@@ -418,7 +418,7 @@ bool read_safetensors_index_file(const std::string& file_path,
                                  std::string* error) {
     shard_paths.clear();
 
-    std::ifstream file(file_path);
+    std::ifstream file(fs::u8path(file_path));
     if (!file.is_open()) {
         set_error(error, "failed to open '" + file_path + "'");
         return false;
@@ -522,7 +522,7 @@ bool write_safetensors_file(const std::string& file_path,
 
     const std::string header_str = header.dump();
 
-    std::ofstream file(file_path, std::ios::binary);
+    std::ofstream file(fs::u8path(file_path), std::ios::binary);
     if (!file.is_open()) {
         set_error(error, "failed to open '" + file_path + "' for writing");
         return false;
@@ -596,7 +596,7 @@ bool SafetensorsStreamingWriter::write_metadata(const std::string& file_path,
     data_start_                  = ST_HEADER_SIZE_LEN + header_str.size();
 
     LOG_INFO("trying to save tensors to %s", file_path.c_str());
-    std::ofstream file(file_path, std::ios::binary | std::ios::trunc);
+    std::ofstream file(fs::u8path(file_path), std::ios::binary | std::ios::trunc);
     if (!file.is_open()) {
         set_error(error, "failed to open '" + file_path + "' for writing");
         return false;

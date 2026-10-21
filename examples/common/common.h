@@ -12,6 +12,10 @@
 #include "resource_owners.hpp"
 #include "stable-diffusion.h"
 
+// The command-line argument at `index` as UTF-8 (on Windows, read again from
+// the UTF-16 command line: argv itself is in the ANSI code page).
+std::string argv_to_utf8(int index, const char** argv);
+
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")
 
@@ -157,6 +161,7 @@ struct SDContextParams {
     bool disable_prefetch          = false;
     bool disable_segmented_compute = false;
     bool eager_load                = false;
+    bool batched_cfg               = true;
     std::string backend;
     std::string params_backend;
     std::string split_mode;
@@ -165,12 +170,12 @@ struct SDContextParams {
     std::string rpc_servers;
     std::string effective_backend;
     std::string effective_params_backend;
-    bool enable_mmap           = false;
-    bool control_net_cpu       = false;
-    bool clip_on_cpu           = false;
-    bool vae_on_cpu            = false;
-    bool flash_attn            = false;
-    bool diffusion_flash_attn  = false;
+    bool enable_mmap            = false;
+    bool control_net_cpu        = false;
+    bool clip_on_cpu            = false;
+    bool vae_on_cpu             = false;
+    std::string flash_attn_mode = "auto";
+    std::string conv_direct_mode;  // Empty selects auto while honoring legacy convolution flags.
     bool sage_attn             = false;
     bool diffusion_conv_direct = false;
     bool vae_conv_direct       = false;
@@ -313,12 +318,12 @@ struct SDGenerationParams {
                        const std::function<std::string(const std::string&)>& lora_path_resolver = {});
     bool parse_image_preprocess_json(const std::string& json_str);
     bool initialize_cache_params();
-    void extract_and_remove_lora(const std::string& lora_model_dir);
+    bool extract_and_remove_lora(const std::string& lora_model_dir);
     bool width_and_height_are_set() const;
     void set_width_and_height_if_unset(int w, int h);
     int get_resolved_width() const;
     int get_resolved_height() const;
-    bool resolve(const std::string& lora_model_dir, const std::string& hires_upscalers_dir, bool strict = false);
+    bool resolve(const std::string& lora_model_dir, const std::string& hires_upscalers_dir, bool strict = false, bool validate_missing_loras = false);
     bool validate(SDMode mode);
     bool resolve_and_validate(SDMode mode,
                               const std::string& lora_model_dir,

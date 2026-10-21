@@ -8,6 +8,8 @@ $patterns = @(
     "src/core/*.cpp"
     "src/core/*.h"
     "src/core/*.hpp"
+    "src/core/probe/*.cpp"
+    "src/core/probe/*.h"
     "src/extensions/*.cpp"
     "src/extensions/*.h"
     "src/extensions/*.hpp"

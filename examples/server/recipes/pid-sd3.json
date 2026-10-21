@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "id": "pid-sd3",
+  "name": "PiD (SD3 VAE)",
+  "description": "Supply a reference image; the first image is used as the source latent. Select a matching SD3 PiD checkpoint and VAE.",
+  "model_url": "https://huggingface.co/nvidia/PiD",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Gemma 2 2B ELM Text Encoder"
+    },
+    {
+      "id": "tokenizer",
+      "required": true,
+      "label": "Gemma 2 tokenizer.json"
+    },
+    {
+      "id": "vae",
+      "required": true
+    }
+  ],
+  "context": {
+    "vae_format": "sd3"
+  },
+  "defaults": {
+    "sampling_method": "lcm",
+    "scheduler": "lcm",
+    "cfg_scale": 1,
+    "steps": 4,
+    "width": 2048,
+    "height": 2048
+  },
+  "features": [
+    "flow_shift",
+    "ref_images"
+  ],
+  "disabled_features": [
+    "img2img",
+    "mask_image",
+    "preview"
+  ]
+}

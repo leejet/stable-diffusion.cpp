@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "id": "wan21-flf2v",
+  "name": "Wan 2.1 FLF2V 14B",
+  "description": "Select FLF2V weights and supply both start and end images.",
+  "model_url": "https://huggingface.co/Wan-AI/Wan2.1-FLF2V-14B-720P",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "t5xxl",
+      "required": true,
+      "label": "UMT5-XXL"
+    },
+    {
+      "id": "clip_vision",
+      "required": true,
+      "label": "CLIP Vision H"
+    },
+    {
+      "id": "vae",
+      "required": false,
+      "label": "Wan 2.1 VAE"
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "flow_shift": 16,
+    "video_frames": 21,
+    "cfg_scale": 5,
+    "steps": 20,
+    "width": 1280,
+    "height": 720
+  },
+  "features": [
+    "end_image",
+    "flow_shift",
+    "init_image"
+  ],
+  "disabled_features": [
+    "img2img",
+    "mask_image"
+  ]
+}

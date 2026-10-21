@@ -29,6 +29,21 @@ PRs should include:
 - Linked issue/PR context when applicable.
 - Screenshots or sample outputs for UI/visual behavior changes.
 
+## README UI Listings
+
+The [UIs list in the README](README.md#uis) only includes open-source projects that use `stable-diffusion.cpp` as a backend. Do not submit PRs to add closed-source UIs.
+
+## Server Recipes
+
+Before adding or changing a built-in server recipe, read and follow the
+[built-in recipe policy](examples/server/recipes/README.md). The policy governs
+native editing, community editing LoRAs, distinct task checkpoints, external
+adapters, native components and layer-count variants. Do not add recipes solely
+for style or acceleration LoRAs, separately stored native components, or added
+or removed model layers. Explain the task, component compatibility or capability
+difference that justifies a new recipe, and verify its required components,
+feature declarations and embedded API representation.
+
 ## Code Style
 
 Format code according to the repository style before submitting changes.

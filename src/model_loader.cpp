@@ -4,6 +4,7 @@
 #include <cinttypes>
 #include <cstdarg>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <mutex>
@@ -115,7 +116,7 @@ void convert_tensor(void* src,
                     ggml_type dst_type,
                     int nrows,
                     int n_per_row,
-                    std::vector<float> imatrix = {}) {
+                    std::vector<float> imatrix) {
     int n = nrows * n_per_row;
     if (src_type == dst_type) {
         size_t nbytes = n * ggml_type_size(src_type) / ggml_blck_size(src_type);
@@ -333,7 +334,7 @@ bool ModelLoader::init_from_safetensors_index_file(const std::string& file_path,
         }
     }
 
-    std::ifstream index_file(file_path);
+    std::ifstream index_file(std::filesystem::u8path(file_path));
     const auto index = nlohmann::json::parse(index_file);
     for (const auto& entry : index.at("weight_map").items()) {
         const auto expected = (std::filesystem::u8path(file_path).parent_path() /
@@ -438,6 +439,16 @@ bool ModelLoader::init_from_diffusers_file(const std::string& file_path, const s
 SDVersion ModelLoader::get_sd_version() const {
     TensorStorage token_embedding_weight, input_block_weight, context_ebedding_weight;
 
+    if (tensor_storage_map.find("model.diffusion_model.emb_in.image.weight") != tensor_storage_map.end() &&
+        tensor_storage_map.find("model.diffusion_model.txt_mode_blocks.0.q_proj.weight") != tensor_storage_map.end()) {
+        return VERSION_FLUX3;
+    }
+
+    if (tensor_storage_map.count("model.diffusion_model.video_embedder.weight") &&
+        tensor_storage_map.count("model.diffusion_model.shared_block_modulation.weight")) {
+        return VERSION_MOSS_IMAGE;
+    }
+
     bool has_multiple_encoders = false;
     bool is_unet               = false;
 
@@ -527,6 +538,9 @@ SDVersion ModelLoader::get_sd_version() const {
             if (tensor_storage_map.find("text_encoders.llm.connector.layers.0.self_attn.q_proj.weight") != tensor_storage_map.end()) {
                 return VERSION_MING_IMAGE;
             }
+            if (tensor_storage_map.find("model.diffusion_model.local_decoder.out_conv.weight") != tensor_storage_map.end()) {
+                return VERSION_Z_IMAGE_L2P;
+            }
             return VERSION_Z_IMAGE;
         }
         if (tensor_storage.name.find("double_stream_layers.0.img_instruct_attn.processor.img_to_q.weight") != std::string::npos) {
@@ -552,6 +566,10 @@ SDVersion ModelLoader::get_sd_version() const {
         if (tensor_storage.name.find("model.diffusion_model.video_patch_proj.weight") != std::string::npos &&
             tensor_storage_map.find("model.diffusion_model.audio_patch_proj.weight") != tensor_storage_map.end()) {
             return VERSION_MINIMAX_H3;
+        }
+        if (name == "model.diffusion_model.y_embedder.layer_pool.weight" &&
+            tensor_storage_map.count("model.diffusion_model.modulation_cores.adaln_img.weight")) {
+            return VERSION_IRIS;
         }
         if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
             is_wan = true;
@@ -623,7 +641,7 @@ SDVersion ModelLoader::get_sd_version() const {
         }
     }
     if (is_wan) {
-        LOG_VERBOSE("patch_embedding_channels %d", patch_embedding_channels);
+        LOG_DEBUG("patch_embedding_channels %d", patch_embedding_channels);
         if (is_s2v) {
             return VERSION_WAN2_2_S2V;
         }
@@ -1138,7 +1156,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                         return;
                     }
                 } else if (!mmapped) {
-                    file.open(file_path, std::ios::binary);
+                    file.open(std::filesystem::u8path(file_path), std::ios::binary);
                     if (!file.is_open()) {
                         LOG_ERROR("failed to open '%s'", file_path.c_str());
                         failed = true;

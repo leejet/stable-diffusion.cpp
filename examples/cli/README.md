@@ -11,6 +11,17 @@ Logging defaults to `info`. Use `--log-level <level>` to select `debug`, `verbos
 messages at that level and all less detailed levels. `-v` and `--verbose` are
 equivalent to `--log-level verbose`. If repeated, the last logging option wins.
 
+`--flash-attn on|off|auto` defaults to `auto`, selecting flash attention for each
+compute backend during context creation. See [Backend selection](../../docs/backend.md#flash-attention---flash-attn-onoffauto)
+for probing behavior.
+Use module assignments such as `--flash-attn auto,te=off,vae=on` to override
+individual modules.
+
+`--conv-direct on|off|auto` also defaults to `auto`, enabling direct convolution
+on backends with implicit GEMM implementations. Use `--conv-direct auto,vae=off`
+for module overrides; supported modules are `diffusion`, `vae`, and `controlnet`.
+See [Direct convolution](../../docs/backend.md#direct-convolution---conv-direct-onoffauto).
+
 For direct image repair or automatic post-generation YOLOv8 detection followed by cropped inpainting, see
 [ADetailer](../../docs/adetailer.md).
 

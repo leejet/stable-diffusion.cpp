@@ -51,7 +51,7 @@ SD 1.5 defaults (euler_a, low CFG) produces noise-like output.
 .\bin\Release\sd-cli.exe -M vid_gen \
     --model ..\models\checkpoints\realisticVisionV60B1.safetensors \
     --motion-module ..\models\animatediff\mm_sd15_v3.safetensors \
-    --offload-to-cpu --diffusion-fa \
+    --offload-to-cpu \
     -p "a red apple on a wooden table" \
     --cfg-scale 8.0 --sampling-method euler --scheduler discrete \
     -H 512 -W 512 --video-frames 8 --fps 8 --steps 20 -s 42 \
@@ -66,7 +66,7 @@ use layer streaming:
 .\bin\Release\sd-cli.exe -M vid_gen \
     --model ..\models\checkpoints\realisticVisionV60B1.safetensors \
     --motion-module ..\models\animatediff\mm_sd15_v3.safetensors \
-    --offload-to-cpu --diffusion-fa \
+    --offload-to-cpu \
     -p "photo of coastline, rocks, storm weather, wind, waves, lightning" \
     --cfg-scale 8.0 --sampling-method euler --scheduler discrete \
     -H 384 -W 384 --video-frames 16 --fps 8 --steps 20 -s 42 \
@@ -79,7 +79,7 @@ Low-VRAM streaming (verified with a 2 GiB cap on RTX 3060):
 .\bin\Release\sd-cli.exe -M vid_gen \
     --model ..\models\checkpoints\realisticVisionV60B1.safetensors \
     --motion-module ..\models\animatediff\mm_sd15_v3.safetensors \
-    --max-vram 2.0 --diffusion-fa \
+    --max-vram 2.0 \
     -p "photo of coastline, rocks, storm weather, wind, waves, lightning" \
     --cfg-scale 8.0 --sampling-method euler --scheduler discrete \
     -H 384 -W 384 --video-frames 8 --fps 8 --steps 20 -s 42 \

@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "id": "ltx25-dev",
+  "name": "LTX 2.5 dev",
+  "description": "Use the conv video VAE and LTX-specific Gemma 4 with bundled projection. Audio VAE is optional for silent video.",
+  "model_url": "https://huggingface.co/Lightricks/LTX-2.5",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "LTX-2.5 Gemma 4 12B with projection"
+    },
+    {
+      "id": "vae",
+      "required": false,
+      "label": "LTX 2.5 Conv Video VAE"
+    },
+    {
+      "id": "tae",
+      "required": false
+    },
+    {
+      "id": "audio_vae",
+      "required": false,
+      "label": "LTX 2.5 Audio VAE"
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "fps": 24,
+    "video_frames": 33,
+    "cfg_scale": 3,
+    "steps": 20,
+    "width": 768,
+    "height": 512
+  },
+  "features": [
+    "end_image",
+    "flow_shift",
+    "init_image"
+  ],
+  "disabled_features": [
+    "img2img",
+    "mask_image"
+  ]
+}

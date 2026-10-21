@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "id": "wan22-ti2v-5b",
+  "name": "Wan 2.2 TI2V 5B",
+  "description": "Use Wan 2.2 VAE. Supports text, start-image and start/end-image conditioning.",
+  "model_url": "https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "t5xxl",
+      "required": true,
+      "label": "UMT5-XXL"
+    },
+    {
+      "id": "vae",
+      "required": false,
+      "label": "Wan 2.2 VAE"
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "video_frames": 33,
+    "cfg_scale": 5,
+    "steps": 20,
+    "width": 1280,
+    "height": 704,
+    "flow_shift": 5
+  },
+  "features": [
+    "flow_shift",
+    "init_image"
+  ],
+  "disabled_features": [
+    "img2img",
+    "mask_image"
+  ]
+}

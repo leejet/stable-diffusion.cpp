@@ -15,6 +15,8 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
+* **2026/10/16** 🚀 stable-diffusion.cpp adds **Day-0 support for MOSS-Image-Base / MOSS-Image-SFT**
+* **2026/10/16** 🚀 stable-diffusion.cpp adds **Day-0 support for FLUX.3 Image Klein / Klein Base**
 * **2026/09/20** 🚀 stable-diffusion.cpp adds **Day-0 support for Qwen-Image-2.1**
 * **2026/08/20** 🚀 stable-diffusion.cpp now supports **LTX-2.5**
 * **2026/08/04** 🚀 stable-diffusion.cpp adds **Day-1 support for MiniMax-H3**
@@ -44,6 +46,8 @@ API and command-line option may change frequently.***
     - [SD3/SD3.5](./docs/sd3.md)
     - [FLUX.1-dev/FLUX.1-schnell](./docs/flux.md)
     - [FLUX.2-dev/FLUX.2-klein](./docs/flux2.md)
+    - [FLUX.3 Image Klein / Klein Base](./docs/flux3.md)
+    - [MOSS-Image-Base / MOSS-Image-SFT](./docs/moss_image.md)
     - [Lens](./docs/lens.md)
     - [Chroma](./docs/chroma.md)
     - [Chroma1-Radiance](./docs/chroma_radiance.md)
@@ -52,6 +56,7 @@ API and command-line option may change frequently.***
     - [PiD](./docs/pid.md)
     - [LongCat Image](./docs/longcat_image.md)
     - [Z-Image](./docs/z_image.md)
+    - [Z-Image L2P](./docs/z_image_l2p.md)
     - [MiniT2I](./docs/minit2i.md)
     - [SenseNova U1.5](./docs/sensenova_u1.md)
     - [Ovis-Image](./docs/ovis_image.md)
@@ -66,6 +71,7 @@ API and command-line option may change frequently.***
     - [LLaDA-Image](./docs/llada_image.md)
     - [Ming-Image Design](./docs/ming_image.md)
     - [PixArt](./docs/pixart.md)
+    - [Iris-3B](./docs/iris.md)
   - [Image Edit Models](./docs/edit.md)
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
     - [Qwen Image Edit series](./docs/qwen_image_edit.md)
@@ -181,7 +187,6 @@ These projects wrap `stable-diffusion.cpp` for easier use in other languages/fra
 These projects use `stable-diffusion.cpp` as a backend for their image generation.
 
 - [GIMP Plugins](https://github.com/themanyone/gimp-plugins)
-- [Jellybox](https://jellybox.com)
 - [Stable Diffusion GUI](https://github.com/fszontagh/sd.cpp.gui.wx)
 - [Stable Diffusion CLI-GUI](https://github.com/piallai/stable-diffusion.cpp)
 - [Local Diffusion](https://github.com/rmatif/Local-Diffusion)
@@ -189,6 +194,7 @@ These projects use `stable-diffusion.cpp` as a backend for their image generatio
 - [LocalAI](https://github.com/mudler/LocalAI)
 - [Neural-Pixel](https://github.com/Luiz-Alcantara/Neural-Pixel)
 - [KoboldCpp](https://github.com/LostRuins/koboldcpp)
+- [Kokon](https://github.com/GabrieleLozupone/kokon)
 
 ## Contributors
 

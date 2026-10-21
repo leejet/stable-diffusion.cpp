@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "id": "sdxl-inpainting",
+  "name": "SDXL Inpainting",
+  "description": "Select an inpainting checkpoint, then supply Init Image and Mask Image.",
+  "model_url": "https://huggingface.co/diffusers/stable-diffusion-xl-1.0-inpainting-0.1",
+  "slots": [
+    {
+      "id": "model",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "label": "VAE override",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "defaults": {
+    "scheduler": "discrete",
+    "sampling_method": "euler_a",
+    "cfg_scale": 8,
+    "steps": 20,
+    "width": 1024,
+    "height": 1024
+  },
+  "features": [
+    "cache_unet",
+    "clip_skip",
+    "shifted_timestep",
+    "img_cfg"
+  ],
+  "disabled_features": [
+    "cache_dit"
+  ]
+}

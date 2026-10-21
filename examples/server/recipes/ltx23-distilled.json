@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "id": "ltx23-distilled",
+  "name": "LTX 2.3 Distilled 1.1",
+  "description": "Supports text, start-image and start/end-image video. Audio VAE is optional for silent video. Configure latent upscaling separately in generation settings.",
+  "model_url": "https://huggingface.co/Lightricks/LTX-2.3",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Gemma 3 12B Text Encoder"
+    },
+    {
+      "id": "embeddings_connectors",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false,
+      "label": "LTX 2.3 Video VAE"
+    },
+    {
+      "id": "tae",
+      "required": false
+    },
+    {
+      "id": "audio_vae",
+      "required": false,
+      "label": "LTX 2.3 Audio VAE"
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "video_frames": 121,
+    "fps": 24,
+    "cfg_scale": 1,
+    "steps": 8,
+    "width": 768,
+    "height": 512
+  },
+  "features": [
+    "end_image",
+    "flow_shift",
+    "init_image"
+  ],
+  "disabled_features": [
+    "img2img",
+    "mask_image"
+  ]
+}
