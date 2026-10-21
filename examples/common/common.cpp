@@ -21,6 +21,7 @@
 #include <windows.h>
 #endif  // _WIN32
 
+#include "core/ggml_extend_backend.h"
 #include "log.h"
 #include "media_io.h"
 #include "resource_owners.hpp"
@@ -728,9 +729,9 @@ ArgOptions SDContextParams::get_options() {
          }},
         {"",
          "--diffusion-conv-direct",
-         "deprecated; use --conv-direct auto,diffusion=on,controlnet=on",
+         "deprecated; use --conv-direct auto,diffusion=on,controlnet=on,upscaler=on",
          [this](int, const char**, int) {
-             LOG_WARN("--diffusion-conv-direct is deprecated; use --conv-direct auto,diffusion=on,controlnet=on instead.");
+             LOG_WARN("--diffusion-conv-direct is deprecated; use --conv-direct auto,diffusion=on,controlnet=on,upscaler=on instead.");
              diffusion_conv_direct = true;
              return 0;
          }},
@@ -744,7 +745,7 @@ ArgOptions SDContextParams::get_options() {
          }},
         {"",
          "--conv-direct",
-         "on|off|auto or diffusion/vae/controlnet assignments (default: auto), e.g. auto,vae=off. Overrides legacy convolution flags",
+         "on|off|auto or diffusion/vae/controlnet/upscaler assignments (default: auto), e.g. auto,vae=off. Overrides legacy convolution flags",
          [this](int argc, const char** argv, int index) {
              if (++index >= argc || argv[index][0] == '\0') {
                  LOG_ERROR("--conv-direct requires on, off, auto, or module assignments");
@@ -1019,6 +1020,19 @@ std::string SDContextParams::to_string() const {
         << "  force_sdxl_vae_conv_scale: " << (force_sdxl_vae_conv_scale ? "true" : "false") << "\n"
         << "}";
     return oss.str();
+}
+
+bool SDContextParams::upscaler_conv_direct() const {
+    if (conv_direct_mode.empty()) {
+        return diffusion_conv_direct;
+    }
+
+    SDBackendAssignment assignment;
+    std::string error;
+    if (!sd_parse_conv_direct_assignment(conv_direct_mode, &assignment, &error)) {
+        return false;
+    }
+    return assignment.get(SDBackendModule::UPSCALER) == "on";
 }
 
 sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {

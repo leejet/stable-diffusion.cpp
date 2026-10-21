@@ -589,7 +589,7 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             // One GPU: an upscale must not run while a generation is using it.
             std::lock_guard<std::mutex> ctx_lock(*runtime->sd_ctx_mutex);
             UpscalerCtxPtr upscaler_ctx(new_upscaler_ctx(model_path.c_str(),
-                                                         runtime->ctx_params->diffusion_conv_direct,
+                                                         runtime->ctx_params->upscaler_conv_direct(),
                                                          runtime->ctx_params->n_threads,
                                                          tile_size,
                                                          runtime->ctx_params->backend.c_str(),

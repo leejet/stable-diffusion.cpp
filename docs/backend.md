@@ -218,16 +218,20 @@ spatial tiling. Spatial retries use half-size tiles along each latent dimension.
 ## Direct convolution (`--conv-direct on|off|auto`)
 
 `--conv-direct` defaults to `auto` and accepts module assignments for
-`diffusion`, `vae` (including preview VAE), and `controlnet`, using the same
-aliases and precedence rules as `--flash-attn`:
+`diffusion`, `vae` (including preview VAE), `controlnet`, and the standalone
+`upscaler` (for ESRGAN), using the same aliases and precedence rules as
+`--flash-attn`:
 
 ```shell
 sd-cli -m model.safetensors -p "a cat" --conv-direct auto,vae=off
 sd-cli -m model.safetensors -p "a cat" --conv-direct off,diffusion=on
+sd-cli -M upscale --conv-direct auto,upscaler=on
 ```
 
 - `on` requests direct 2D and 3D convolution.
 - `off` uses the existing im2col-based convolution paths.
+- For the standalone upscaler, `auto` leaves direct convolution disabled; use
+  `upscaler=on` to enable it.
 - `auto` first checks support for a representative F16-weight/F32-input direct
   convolution graph. Vulkan then benchmarks direct convolution against im2col
   using two small shapes per dimension, with warmup, output validation, and five
@@ -247,12 +251,13 @@ These are backend-level defaults. GGML still chooses the actual kernel based on
 weight type, shape, and hardware; enabling direct convolution does not guarantee
 that every operation uses implicit GEMM. The CUDA-family implicit GEMM paths
 require F16 weights and can use ordinary direct kernels for other cases.
-This option does not change the separately created image upscaler context.
+`upscaler=on|off` controls direct convolution in the separately created ESRGAN
+image upscaler context.
 
 Repeating `--conv-direct` replaces the previous assignment string. Existing
 `--diffusion-conv-direct` (diffusion and ControlNet) and `--vae-conv-direct`
 flags are deprecated and emit a warning, but remain supported when
-`--conv-direct` is omitted. Use `--conv-direct auto,diffusion=on,controlnet=on`
+`--conv-direct` is omitted. Use `--conv-direct auto,diffusion=on,controlnet=on,upscaler=on`
 and `--conv-direct auto,vae=on`, respectively. An explicit
 `--conv-direct` takes precedence over both legacy flags regardless of order.
 Library callers can set the appended `sd_ctx_params_t::conv_direct_mode` field

@@ -846,6 +846,7 @@ static bool parse_operation_assignment(const std::string& spec, SDBackendAssignm
                 case SDBackendModule::DIFFUSION:
                 case SDBackendModule::VAE:
                 case SDBackendModule::CONTROL_NET:
+                case SDBackendModule::UPSCALER:
                     break;
                 case SDBackendModule::TE:
                 case SDBackendModule::CLIP_VISION:
