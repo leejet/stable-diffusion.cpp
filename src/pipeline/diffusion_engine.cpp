@@ -1061,7 +1061,7 @@ void StableDiffusionGGML::configure_weight_loading() {
     bool have_int8_tensorwise = false;
     bool have_quant_type_rule = false;
     for (const auto& [_, tensor_storage] : model_loader.get_tensor_storage_map()) {
-        if (tensor_storage.is_int8_tensorwise) {
+        if (tensor_storage.is_int8_tensorwise || tensor_storage.w4_convrot_kind != W4_CONVROT_NONE) {
             have_int8_tensorwise = true;
         }
         if (tensor_storage.expected_type < GGML_TYPE_COUNT && ggml_is_quantized(tensor_storage.expected_type)) {
