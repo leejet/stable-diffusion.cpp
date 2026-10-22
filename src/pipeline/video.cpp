@@ -612,8 +612,8 @@ namespace sd::pipeline {
                         LOG_ERROR("failed to load MiniMax-H3 reference image %d", i + 1);
                         return std::nullopt;
                     }
-                    int source_w       = static_cast<int>(image.shape()[0]);
-                    int source_h       = static_cast<int>(image.shape()[1]);
+                    int source_w = static_cast<int>(image.shape()[0]);
+                    int source_h = static_cast<int>(image.shape()[1]);
                     auto [width, height] =
                         minimax_h3_reference_size(source_w, source_h, request->width, request->height, ref_image_params.ref_image_size);
                     LOG_INFO("MiniMax-H3 reference image %d: %dx%d -> %dx%d",
@@ -622,8 +622,8 @@ namespace sd::pipeline {
                              source_h,
                              width,
                              height);
-                    image = resize_reference(image, width, height);
-                    auto latent        = sd->encode_first_stage(image);
+                    image       = resize_reference(image, width, height);
+                    auto latent = sd->encode_first_stage(image);
                     if (latent.empty()) {
                         LOG_ERROR("failed to encode MiniMax-H3 reference image %d", i + 1);
                         return std::nullopt;
