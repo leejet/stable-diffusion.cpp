@@ -303,11 +303,15 @@ new model architectures.
 
 Optional `context` settings apply to each model load and override the matching
 startup setting. Supported fields are `vae_format` (`auto`, `flux`, `sd3`,
-`flux2`, or `wan`) and `model_args` (a string in the same format as
-`--model-args`; replaces the startup string). Other startup settings remain
-unchanged. Switching to a recipe that omits these fields restores the startup
-values. For example, PiD uses `{"vae_format": "flux"}` and Qwen Image Edit
-2511 uses `{"model_args": "qwen_image_zero_cond_t=true"}`.
+`flux2`, or `wan`), `model_args` (a string in the same format as
+`--model-args`; replaces the startup string), and `backend` / `params_backend`
+(strings in the same format as `--backend` / `--params-backend`; replace the
+startup assignments for that load, so a recipe can place components on
+specific devices, e.g. keep a large text encoder on CPU while another recipe
+uses the GPU). Other startup settings remain unchanged. Switching to a
+recipe that omits these fields restores the startup values. For example, PiD
+uses `{"vae_format": "flux"}` and Qwen Image Edit 2511 uses
+`{"model_args": "qwen_image_zero_cond_t=true"}`.
 
 Supported defaults:
 
