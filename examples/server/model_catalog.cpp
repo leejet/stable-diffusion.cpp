@@ -312,6 +312,8 @@ static const std::map<std::string, bool> k_recipe_features = {
     {"init_image", false},
     {"end_image", false},
     {"control_frames", false},
+    {"ref_videos", false},
+    {"ref_audios", false},
     {"vace", false},
     {"high_noise", false},
     {"cache_unet", false},

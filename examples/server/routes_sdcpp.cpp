@@ -216,6 +216,8 @@ static json make_vid_gen_features_json() {
         {"init_image", true},
         {"end_image", true},
         {"control_frames", true},
+        {"ref_videos", true},
+        {"ref_audios", true},
         {"high_noise_sample_params", true},
         {"lora", true},
         {"vae_tiling", true},
@@ -350,8 +352,9 @@ static json make_capabilities_json(ServerRuntime& runtime) {
     const json generation_features = model_generation_features(runtime);
     auto recipe_features           = [&](json features, bool video) {
         features["init_image"] = generation_features.at(video ? "init_image" : "img2img");
-        for (const char* key : {"mask_image", "ref_images", "end_image", "control_frames", "lora", "vae_tiling", "cache", "preview"}) {
-            if (features.contains(key) || std::string(key) == "ref_images")
+        for (const char* key : {"mask_image", "ref_images", "end_image", "control_frames", "ref_videos", "ref_audios", "lora", "vae_tiling", "cache", "preview"}) {
+            if (features.contains(key) || std::string(key) == "ref_images" ||
+                (video && (std::string(key) == "ref_videos" || std::string(key) == "ref_audios")))
                 features[key] = generation_features.at(key);
         }
         if (video)

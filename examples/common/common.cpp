@@ -1988,6 +1988,82 @@ static bool parse_image_array_json_field(const json& parent,
     return true;
 }
 
+static bool parse_audio_array_json_field(const json& parent,
+                                         const char* key,
+                                         std::vector<SDAudioOwner>& out_audios) {
+    if (!parent.contains(key)) {
+        return true;
+    }
+    if (parent.at(key).is_null()) {
+        out_audios.clear();
+        return true;
+    }
+    if (!parent.at(key).is_array()) {
+        return false;
+    }
+
+    out_audios.clear();
+    for (const auto& item : parent.at(key)) {
+        if (!item.is_string()) {
+            return false;
+        }
+        std::string encoded = item.get<std::string>();
+        auto comma_pos      = encoded.find(',');
+        if (comma_pos != std::string::npos) {
+            encoded = encoded.substr(comma_pos + 1);
+        }
+        std::vector<uint8_t> audio_bytes = decode_base64_bytes(encoded);
+        if (audio_bytes.empty()) {
+            return false;
+        }
+        std::vector<float> samples;
+        uint32_t sample_rate = 0;
+        uint32_t channels    = 0;
+        if (!load_wav_from_memory(audio_bytes.data(), audio_bytes.size(), samples, sample_rate, channels)) {
+            return false;
+        }
+        SDAudioOwner audio;
+        audio.reset(std::move(samples), sample_rate, channels);
+        out_audios.push_back(std::move(audio));
+    }
+    return true;
+}
+
+static bool parse_video_array_json_field(const json& parent,
+                                         const char* key,
+                                         std::vector<std::vector<SDImageOwner>>& out_videos) {
+    if (!parent.contains(key)) {
+        return true;
+    }
+    if (parent.at(key).is_null()) {
+        out_videos.clear();
+        return true;
+    }
+    if (!parent.at(key).is_array()) {
+        return false;
+    }
+
+    out_videos.clear();
+    for (const auto& video : parent.at(key)) {
+        if (!video.is_array()) {
+            return false;
+        }
+        std::vector<SDImageOwner> frames;
+        for (const auto& frame : video) {
+            if (!frame.is_string()) {
+                return false;
+            }
+            SDImageOwner image;
+            if (!decode_base64_image(frame.get<std::string>(), 0, 0, 0, image)) {
+                return false;
+            }
+            frames.push_back(std::move(image));
+        }
+        out_videos.push_back(std::move(frames));
+    }
+    return true;
+}
+
 static bool parse_lora_json_field(const json& parent,
                                   const std::function<std::string(const std::string&)>& lora_path_resolver,
                                   std::map<std::string, float>& lora_map,
@@ -2330,8 +2406,11 @@ bool SDGenerationParams::from_json_str(
         return false;
     }
     if (!parse_image_array_json_field(j, "ref_images", 0, ref_images) ||
-        !parse_image_array_json_field(j, "control_frames", 3, control_frames)) {
-        LOG_ERROR("invalid input image array");
+        !parse_image_array_json_field(j, "control_frames", 3, control_frames) ||
+        !parse_audio_array_json_field(j, "ref_audios", ref_audios) ||
+        !parse_audio_array_json_field(j, "ref_video_audios", ref_video_audios) ||
+        !parse_video_array_json_field(j, "ref_videos", ref_videos)) {
+        LOG_ERROR("invalid input image/audio/video array");
         return false;
     }
 
