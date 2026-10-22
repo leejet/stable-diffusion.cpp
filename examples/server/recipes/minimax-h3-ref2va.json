@@ -45,7 +45,10 @@
   },
   "features": [
     "flow_shift",
-    "ref_images"
+    "ref_images",
+    "ref_videos",
+    "ref_audios",
+    "ref_video_audios"
   ],
   "disabled_features": [
     "img2img",

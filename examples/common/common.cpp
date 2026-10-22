@@ -1959,6 +1959,7 @@ static bool parse_image_json_field(const json& parent,
     return decode_base64_image(parent.at(key).get<std::string>(), channels, 0, 0, out_image);
 }
 
+/** Parses a JSON array of base64 image strings into owned images. */
 static bool parse_image_array_json_field(const json& parent,
                                          const char* key,
                                          int channels,
@@ -1988,6 +1989,7 @@ static bool parse_image_array_json_field(const json& parent,
     return true;
 }
 
+/** Parses a JSON array of base64 WAV strings into owned audio clips. */
 static bool parse_audio_array_json_field(const json& parent,
                                          const char* key,
                                          std::vector<SDAudioOwner>& out_audios) {
@@ -2029,6 +2031,7 @@ static bool parse_audio_array_json_field(const json& parent,
     return true;
 }
 
+/** Parses a JSON array of per-video base64 frame arrays into owned videos. */
 static bool parse_video_array_json_field(const json& parent,
                                          const char* key,
                                          std::vector<std::vector<SDImageOwner>>& out_videos) {
@@ -2178,6 +2181,7 @@ bool SDGenerationParams::parse_image_preprocess_json(const std::string& json_str
     return true;
 }
 
+/** Populates generation params from a JSON payload (server APIs); returns false on any malformed field. */
 bool SDGenerationParams::from_json_str(
     const std::string& json_str,
     const std::function<std::string(const std::string&)>& lora_path_resolver) {
@@ -2667,6 +2671,7 @@ bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::s
     return true;
 }
 
+/** Validates params for a generation mode; enforces mode-specific input rules. */
 bool SDGenerationParams::validate(SDMode mode) {
     if (!image_preprocess.empty() && mode != IMG_GEN && mode != VID_GEN) {
         LOG_ERROR("--image-preprocess requires img_gen or vid_gen mode");

@@ -291,6 +291,7 @@ static void apply_recipe_context(const json& settings, SDContextParams& params) 
     }
 }
 
+// Known recipe feature names with their defaults; recipes may flip any of these.
 static const std::map<std::string, bool> k_recipe_features = {
     {"img2img", true},
     {"mask_image", true},
@@ -314,6 +315,7 @@ static const std::map<std::string, bool> k_recipe_features = {
     {"control_frames", false},
     {"ref_videos", false},
     {"ref_audios", false},
+    {"ref_video_audios", false},
     {"vace", false},
     {"high_noise", false},
     {"cache_unet", false},

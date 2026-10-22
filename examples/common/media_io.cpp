@@ -1469,6 +1469,7 @@ static uint32_t read_le32(const uint8_t* data) {
            (static_cast<uint32_t>(data[3]) << 24);
 }
 
+/** Loads a WAV file from disk and delegates decoding to load_wav_from_memory(). */
 bool load_wav_from_file(const std::string& path,
                         std::vector<float>& interleaved_samples,
                         uint32_t& sample_rate,
@@ -1499,6 +1500,8 @@ bool load_wav_from_file(const std::string& path,
     return load_wav_from_memory(buffer.data(), buffer.size(), interleaved_samples, sample_rate, channels);
 }
 
+/** Parses a RIFF/WAVE buffer in place; compares chunk sizes against the remaining
+ * bytes so payload-controlled sizes cannot wrap size_t on 32-bit builds. */
 bool load_wav_from_memory(const uint8_t* data,
                           size_t size,
                           std::vector<float>& interleaved_samples,
