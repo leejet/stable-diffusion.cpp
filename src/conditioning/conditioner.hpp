@@ -3045,7 +3045,10 @@ struct LLMEmbedder : public Conditioner {
         } else if (sd_version_is_z_image(version) || sd_version_is_z_image_l2p(version)) {
             prompt_template_encode_start_idx = 0;
             out_layers                       = {35};  // -2
-
+            if (conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
+                LOG_ERROR("Z-Image currently does not support reference-image conditioning");
+                return {};
+            }
             if (conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
                 LOG_INFO("ZImageOmniPipeline");
                 prompt = "<|im_start|>user\n<|vision_start|>";
