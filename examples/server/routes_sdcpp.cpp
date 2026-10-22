@@ -380,8 +380,8 @@ static json make_capabilities_json(ServerRuntime& runtime) {
     json top_level_defaults       = json::object();
     json top_level_output_formats = json::array();
     json top_level_features       = {
-        {"cancel_queued", true},
-        {"cancel_generating", true},
+              {"cancel_queued", true},
+              {"cancel_generating", true},
     };
     std::string current_mode = "";
     if (supports_img) {
