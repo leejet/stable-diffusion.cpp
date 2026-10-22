@@ -2720,12 +2720,13 @@ bool SDGenerationParams::validate(SDMode mode) {
         return false;
     }
 
-    if (ref_video_audio_paths.size() > ref_video_paths.size()) {
+    if (ref_video_audio_paths.size() + ref_video_audios.size() > ref_video_paths.size() + ref_videos.size()) {
         LOG_ERROR("error: each --ref-video-audio needs a corresponding --ref-video");
         return false;
     }
 
-    if (mode != VID_GEN && (!ref_video_paths.empty() || !ref_video_audio_paths.empty() || !ref_audio_paths.empty())) {
+    if (mode != VID_GEN && (!ref_video_paths.empty() || !ref_video_audio_paths.empty() || !ref_audio_paths.empty() ||
+                            !ref_videos.empty() || !ref_video_audios.empty() || !ref_audios.empty())) {
         LOG_ERROR("error: reference video and audio inputs require vid_gen mode");
         return false;
     }

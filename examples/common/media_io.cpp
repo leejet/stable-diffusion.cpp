@@ -1525,13 +1525,13 @@ bool load_wav_from_memory(const uint8_t* data,
     while (pos + 8 <= size) {
         uint32_t chunk_size    = read_le32(data + pos + 4);
         size_t chunk_data_pos  = pos + 8;
-        size_t next_pos        = chunk_data_pos + static_cast<size_t>(chunk_size) + (chunk_size & 1);
-        if (next_pos > size) {
-            next_pos = size;
-        }
+        const size_t remaining = size - chunk_data_pos;  // safe: chunk_data_pos <= size
+        // Chunk sizes come from the payload, so compare against the remaining bytes
+        // instead of adding them to offsets (avoids size_t wrap on 32-bit builds).
+        const bool data_fits   = static_cast<size_t>(chunk_size) <= remaining;
 
         if (std::memcmp(data + pos, "fmt ", 4) == 0) {
-            if (chunk_size < 16 || chunk_data_pos + chunk_size > size) {
+            if (chunk_size < 16 || !data_fits) {
                 return false;
             }
             audio_format    = read_le16(data + chunk_data_pos);
@@ -1546,7 +1546,10 @@ bool load_wav_from_memory(const uint8_t* data,
             data_pos  = chunk_data_pos;
             data_size = chunk_size;
         }
-        pos = next_pos;
+        // Only advance past a chunk whose size and pad byte fully fit (keeps the sum
+        // overflow-free); a chunk truncated at the buffer end terminates the walk.
+        const bool chunk_fits = data_fits && ((chunk_size & 1) == 0 || static_cast<size_t>(chunk_size) < remaining);
+        pos                   = chunk_fits ? chunk_data_pos + static_cast<size_t>(chunk_size) + (chunk_size & 1) : size;
     }
 
     const uint32_t bytes_per_sample = (bits_per_sample + 7) / 8;
@@ -1560,7 +1563,7 @@ bool load_wav_from_memory(const uint8_t* data,
     if (frame_count == 0 || frame_count > SIZE_MAX / channels) {
         return false;
     }
-    if (data_pos + static_cast<size_t>(data_size) > size) {
+    if (static_cast<size_t>(data_size) > size - data_pos) {
         return false;
     }
     const uint8_t* pcm = data + data_pos;
