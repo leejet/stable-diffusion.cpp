@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -32,9 +33,10 @@ struct AsyncGenerationJob {
     std::string id;
     AsyncJobKind kind     = AsyncJobKind::ImgGen;
     AsyncJobStatus status = AsyncJobStatus::Queued;
-    int64_t created_at    = unix_timestamp_now_ms();
-    int64_t started_at    = 0;
-    int64_t completed_at  = 0;
+    std::atomic<bool> cancel_requested{false};
+    int64_t created_at   = unix_timestamp_now_ms();
+    int64_t started_at   = 0;
+    int64_t completed_at = 0;
     ImgGenJobRequest img_gen;
     VidGenJobRequest vid_gen;
     std::vector<std::string> result_images_b64;

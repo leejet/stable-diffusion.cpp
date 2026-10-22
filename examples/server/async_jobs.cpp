@@ -3,12 +3,45 @@
 #include "async_jobs.h"
 
 #include <algorithm>
+#include <chrono>
 #include <iomanip>
 #include <sstream>
+#include <thread>
 
 #include "common/log.h"
 #include "common/media_io.h"
 #include "common/resource_owners.hpp"
+
+class JobCancellationMonitor {
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool done_ = false;
+    std::thread thread_;
+
+public:
+    // The caller holds sd_ctx_mutex until this monitor has joined, keeping the
+    // context alive and preventing cancellation from reaching another request.
+    JobCancellationMonitor(sd_ctx_t* ctx, const AsyncGenerationJob& job)
+        : thread_([this, ctx, &job]() {
+              std::unique_lock<std::mutex> lock(mutex_);
+              while (!done_) {
+                  if (job.cancel_requested.load()) {
+                      // Each generation pass resets the library flag, including ADetailer.
+                      sd_cancel_generation(ctx, SD_CANCEL_ALL);
+                  }
+                  cv_.wait_for(lock, std::chrono::milliseconds(10), [this]() { return done_; });
+              }
+          }) {}
+
+    ~JobCancellationMonitor() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            done_ = true;
+        }
+        cv_.notify_one();
+        thread_.join();
+    }
+};
 
 static void preview_callback(int step, int frame_count, sd_image_t* frames, bool is_noisy, void* data) {
     (void)is_noisy;
@@ -142,6 +175,7 @@ bool cancel_queued_job(AsyncJobManager& manager, AsyncGenerationJob& job) {
     }
 
     manager.queue.erase(new_end, manager.queue.end());
+    job.cancel_requested.store(true);
     job.status       = AsyncJobStatus::Cancelled;
     job.completed_at = unix_timestamp_now_ms();
     job.result_images_b64.clear();
@@ -156,13 +190,14 @@ bool cancel_queued_job(AsyncJobManager& manager, AsyncGenerationJob& job) {
 
 json make_async_job_json(const AsyncJobManager& manager, const AsyncGenerationJob& job) {
     json result;
-    result["id"]             = job.id;
-    result["kind"]           = async_job_kind_name(job.kind);
-    result["status"]         = async_job_status_name(job.status);
-    result["created"]        = job.created_at;
-    result["started"]        = job.started_at == 0 ? json(nullptr) : json(job.started_at);
-    result["completed"]      = job.completed_at == 0 ? json(nullptr) : json(job.completed_at);
-    result["queue_position"] = 0;
+    result["id"]               = job.id;
+    result["kind"]             = async_job_kind_name(job.kind);
+    result["status"]           = async_job_status_name(job.status);
+    result["cancel_requested"] = job.cancel_requested.load();
+    result["created"]          = job.created_at;
+    result["started"]          = job.started_at == 0 ? json(nullptr) : json(job.started_at);
+    result["completed"]        = job.completed_at == 0 ? json(nullptr) : json(job.completed_at);
+    result["queue_position"]   = 0;
 
     if (job.status == AsyncJobStatus::Queued) {
         size_t position = 1;
@@ -235,6 +270,10 @@ bool execute_img_gen_job(ServerRuntime& runtime,
 
     {
         std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
+        if (job.cancel_requested.load()) {
+            return false;
+        }
+        JobCancellationMonitor cancellation(runtime.sd_ctx, job);
         set_preview_callback(job);
         sd_image_t* raw_results = nullptr;
         int num_results         = 0;
@@ -244,6 +283,9 @@ bool execute_img_gen_job(ServerRuntime& runtime,
         }
         clear_preview_callback();
         results.adopt(raw_results, num_results);
+        if (job.cancel_requested.load()) {
+            return false;
+        }
         if (!results.empty() && !apply_server_adetailer(runtime, job.img_gen, params, results)) {
             error_message = "ADetailer failed";
             return false;
@@ -251,7 +293,7 @@ bool execute_img_gen_job(ServerRuntime& runtime,
     }
 
     const int num_results = results.count();
-    if (num_results <= 0) {
+    if (job.cancel_requested.load() || num_results <= 0) {
         error_message = "generate_image returned no results";
         return false;
     }
@@ -314,6 +356,10 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
 
     {
         std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
+        if (job.cancel_requested.load()) {
+            return false;
+        }
+        JobCancellationMonitor cancellation(runtime.sd_ctx, job);
         set_preview_callback(job);
         sd_image_t* raw_results = nullptr;
         if (!generate_video(runtime.sd_ctx, &params, &raw_results, &num_results, &generated_audio, &output_fps)) {
@@ -324,7 +370,7 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
     }
 
     num_results = results.count();
-    if (num_results <= 0) {
+    if (job.cancel_requested.load() || num_results <= 0) {
         free_sd_audio(generated_audio);
         error_message = "generate_video returned no results";
         return false;
@@ -410,7 +456,11 @@ void async_job_worker(ServerRuntime& runtime) {
             }
 
             job->completed_at = unix_timestamp_now_ms();
-            if (ok) {
+            if (job->cancel_requested.load()) {
+                job->status        = AsyncJobStatus::Cancelled;
+                job->error_code    = "cancelled";
+                job->error_message = "job cancelled by client";
+            } else if (ok) {
                 job->status                 = AsyncJobStatus::Completed;
                 job->result_images_b64      = std::move(output_images);
                 job->result_media_b64       = std::move(output_media_b64);
