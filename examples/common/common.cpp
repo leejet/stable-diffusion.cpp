@@ -2045,7 +2045,7 @@ static bool parse_video_array_json_field(const json& parent,
 
     out_videos.clear();
     for (const auto& video : parent.at(key)) {
-        if (!video.is_array()) {
+        if (!video.is_array() || video.empty()) {
             return false;
         }
         std::vector<SDImageOwner> frames;
