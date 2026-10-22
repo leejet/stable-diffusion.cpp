@@ -481,7 +481,7 @@ namespace sd::pipeline {
             double target_area = static_cast<double>(target_w) * target_h;
             scale              = std::min(1.0, std::sqrt(target_area / source_area));
         }
-        auto align32 = [](double value) {
+        auto align32 = [kCanvasMultiple](double value) {
             return std::max(32, static_cast<int>(std::round(value / kCanvasMultiple)) * 32);
         };
         return {align32(source_w * scale), align32(source_h * scale)};
@@ -1206,9 +1206,6 @@ namespace sd::pipeline {
         condition_params.ref_images            = &latents.ref_images;
         condition_params.minimax_h3_references = &latents.minimax_presentation_refs;
         condition_params.ref_image_params      = ref_image_params;
-        if (sd_version_is_lingbot_video(sd->version) || sd_version_is_minimax_h3(sd->version)) {
-            condition_params.ref_image_params.vlm_resize_mode = RefImageResizeMode::AREA;
-        }
 
         int64_t prepare_start_ms = ggml_time_ms();
         embeds.cond              = sd->get_learned_condition(condition_params);
