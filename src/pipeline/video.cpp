@@ -633,8 +633,8 @@ namespace sd::pipeline {
                     latents.minimax_reference_blocks.push_back({MiniMaxH3ReferenceKind::IMAGE,
                                                                 video_index,
                                                                 -1});
-                    // Latents are patched by 2x2 in the DiT, so the token count is a quarter of the
-                    // 16-pixel latent grid.
+                    // The DiT patchifies latents 2 x 2, so the token count is a quarter of the
+                    // latent grid.
                     ref_image_tokens += static_cast<int64_t>(latents.ref_latents.back().shape()[0] / 2) *
                                         (latents.ref_latents.back().shape()[1] / 2);
                     MiniMaxH3PresentationItem item;
