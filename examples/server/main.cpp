@@ -93,7 +93,7 @@ int main(int argc, const char** argv) {
     LOG_DEBUG("%s", ctx_params.to_string().c_str());
     LOG_DEBUG("%s", default_gen_params.to_string().c_str());
 
-    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(false);
+    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t();
     ServerModels models;
     if (!ctx_params.model_path.empty() || !ctx_params.diffusion_model_path.empty()) {
         const auto started = std::chrono::steady_clock::now();
