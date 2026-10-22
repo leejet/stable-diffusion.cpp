@@ -3384,21 +3384,19 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
     }
     if (sd_version_is_minimax_h3(version)) {
         // H3 consumes references as VAE latents in its own packed sequence rather than
-        // through the generic conditioner/DiT reference path, so only sizing args apply.
-        // force_ref_timestep_zero is already covered by the Krea2-only warning above.
-        static const std::set<std::string> h3_noop_keys = {
-            "preset",
-            "pass_to_vlm",
-            "pass_to_dit",
-            "ref_index_mode",
-            "vae_input_max_pixels",
-            "vlm_resize_mode",
-            "vlm_min_size",
-            "vlm_max_size",
-            "vlm_size",
+        // through the generic conditioner/DiT reference path, so ref_image_size is the
+        // only arg it acts on. Everything else is reported as ineffective rather than
+        // enumerated, so newly added RefImageParams members cannot silently do nothing.
+        static const std::set<std::string> h3_effective_keys = {"ref_image_size"};
+        // Keys that already have their own, more specific warning above.
+        static const std::set<std::string> h3_separately_reported_keys = {
+            "resize_before_vae",
+            "force_ref_timestep_zero",
         };
         for (const auto& arg : parse_key_value_args(ref_image_args, "reference image args")) {
-            if (h3_noop_keys.count(arg.first) > 0 && rejected_keys.count(arg.first) == 0) {
+            if (h3_effective_keys.count(arg.first) == 0 &&
+                h3_separately_reported_keys.count(arg.first) == 0 &&
+                rejected_keys.count(arg.first) == 0) {
                 LOG_WARN("reference image arg '%s' has no effect for MiniMax-H3", arg.first.c_str());
             }
         }
