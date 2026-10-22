@@ -48,6 +48,7 @@ API and command-line option may change frequently.***
     - [FLUX.2-dev/FLUX.2-klein](./docs/flux2.md)
     - [FLUX.3 Image Klein / Klein Base](./docs/flux3.md)
     - [MOSS-Image-Base / MOSS-Image-SFT](./docs/moss_image.md)
+    - [Fibo 2.0 Dev](./docs/fibo2.md)
     - [Lens](./docs/lens.md)
     - [Chroma](./docs/chroma.md)
     - [Chroma1-Radiance](./docs/chroma_radiance.md)
@@ -79,6 +80,7 @@ API and command-line option may change frequently.***
     - [Boogu Image Edit](./docs/boogu_image.md)
     - [Mage-Flow-Edit](./docs/mage_flow.md#image-editing)
     - [LLaDA-Image Edit](./docs/llada_image.md#image-editing)
+    - [Fibo 2.0 Dev / Edit Turbo](./docs/fibo2.md#editing-and-turbo)
   - Video Models
     - [Wan2.1/Wan2.2](./docs/wan.md)
     - [MiniMax-H3](./docs/minimax_h3.md)

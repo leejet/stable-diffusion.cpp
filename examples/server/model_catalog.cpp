@@ -32,7 +32,7 @@ static const ModelSlot k_model_slots[] = {
     {"clip_vision", "CLIP Vision", {"clip_vision"}, &SDContextParams::clip_vision_path},
     {"t5xxl", "T5", {"text_encoders"}, &SDContextParams::t5xxl_path},
     {"llm", "LLM Text Encoder", {"text_encoders"}, &SDContextParams::llm_path},
-    {"llm_vision", "LLM Vision Encoder", {"clip_vision"}, &SDContextParams::llm_vision_path},
+    {"llm_vision", "LLM Vision Encoder", {"text_encoders", "clip_vision"}, &SDContextParams::llm_vision_path},
     {"tokenizer", "Tokenizer", {"tokenizers"}, &SDContextParams::tokenizer},
     {"vae", "VAE", {"vae"}, &SDContextParams::vae_path},
     {"audio_vae", "Audio VAE", {"vae"}, &SDContextParams::audio_vae_path},
@@ -273,7 +273,7 @@ static void apply_recipe_defaults(const json& defaults, SDGenerationParams& para
 }
 
 static void apply_recipe_context(const json& settings, SDContextParams& params) {
-    check_keys(settings, {"vae_format", "model_args"});
+    check_keys(settings, {"vae_format", "model_args", "backend", "params_backend"});
     if (settings.contains("vae_format")) {
         const auto format = settings.at("vae_format").get<std::string>();
         if (format != "auto" && format != "flux" && format != "sd3" && format != "flux2" && format != "wan")
@@ -282,6 +282,12 @@ static void apply_recipe_context(const json& settings, SDContextParams& params) 
     }
     if (settings.contains("model_args")) {
         params.model_args = settings.at("model_args").get<std::string>();
+    }
+    if (settings.contains("backend")) {
+        params.backend = settings.at("backend").get<std::string>();
+    }
+    if (settings.contains("params_backend")) {
+        params.params_backend = settings.at("params_backend").get<std::string>();
     }
 }
 

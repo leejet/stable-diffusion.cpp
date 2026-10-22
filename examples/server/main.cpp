@@ -48,6 +48,10 @@ static void parse_args(int argc,
     log_level = svr_params.log_level;
     log_color = svr_params.color;
 
+    if (ctx_params.list_devices) {
+        exit(ctx_params.print_devices() ? 0 : 1);
+    }
+
     const bool random_seed_requested = default_gen_params.seed < 0;
 
     if (!svr_params.resolve_and_validate() ||
@@ -89,7 +93,7 @@ int main(int argc, const char** argv) {
     LOG_DEBUG("%s", ctx_params.to_string().c_str());
     LOG_DEBUG("%s", default_gen_params.to_string().c_str());
 
-    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(false);
+    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t();
     ServerModels models;
     if (!ctx_params.model_path.empty() || !ctx_params.diffusion_model_path.empty()) {
         const auto started = std::chrono::steady_clock::now();

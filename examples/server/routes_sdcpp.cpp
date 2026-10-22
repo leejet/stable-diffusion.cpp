@@ -411,9 +411,9 @@ static json make_capabilities_json(ServerRuntime& runtime) {
     result["defaults_by_mode"]    = defaults_by_mode;
     result["limits"]              = {
                      {"min_width", 64},
-                     {"max_width", 4096},
+                     {"max_width", k_max_generation_dimension},
                      {"min_height", 64},
-                     {"max_height", 4096},
+                     {"max_height", k_max_generation_dimension},
                      {"max_batch_count", 8},
                      {"max_queue_size", manager.max_pending_jobs},
                      {"max_upscale_width", k_max_upscale_dimension},
@@ -458,7 +458,7 @@ static bool parse_img_gen_request(const json& body,
         error_message = "invalid generation parameters";
         return false;
     }
-    return true;
+    return validate_server_img_gen_request(runtime, request, error_message);
 }
 
 static bool parse_vid_gen_request(const json& body,

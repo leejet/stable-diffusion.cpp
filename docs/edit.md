@@ -19,6 +19,7 @@ Depending on the architecture, different models handle reference images differen
 | **Krea2 (Community Edit LoRAs)** | `krea2_ostris_edit` |
 | [**Mage-Flow-Edit**](./mage_flow.md#image-editing) | `mage_flow` |
 | [**LLaDA-Image**](./llada_image.md#image-editing) | `llada_image` |
+| [**Fibo 2.0 Dev / Edit Turbo**](./fibo2.md#examples) | `fibo2` |
 | **Anima (Community Edit LoRAs)** | `cosmos_reference` |
 
 Stable-diffusion.spp also supports basic Unet-based editing models like instruct-pix2pix or CosXL-Edit. This document is not about those.
@@ -50,6 +51,7 @@ The `--ref-image-args` argument accepts a comma-separated list of key-value pair
 | `flux_kontext` | FLUX.1 Kontext |
 | `longcat` | LongCat Image Edit |
 | `flux2` | FLUX.2 models |
+| `fibo2` | Fibo 2.0 Dev / Edit Turbo |
 | `qwen` | Qwen Image Edit |
 | `qwen_layered` | Qwen Image Layered |
 | `z_image_omni` | Boogu, Z-Image Omni |
@@ -73,7 +75,12 @@ If presets are insufficient, you can manually configure the following parameters
 | `ref_index_mode` | string | Behavior of the RoPE index. | `fixed`, `increase`, `decrease` |
 | `force_ref_timestep_zero` | bool | Forces timestep=0 for reference tokens. | `true`, `false` (Krea2 only) |
 | `resize_before_vae` | bool | Whether reference images are resized before VAE encoding. | `true`, `false` |
-| `vae_input_max_pixels` | int | Maximum pixel area for VAE reference inputs. | Integer |
+| `resize_vae_to_target` | bool | Use output dimensions for every reference, overriding area-based sizing. | `true`, `false` |
+| `resize_single_ref_to_target` | bool | Use output dimensions when exactly one reference is supplied. | `true`, `false` |
+| `vae_size_buckets` | bool | Choose aligned dimensions within ±10% of the requested area, minimizing aspect-ratio cropping. Ignored when using output dimensions. | `true`, `false` |
+| `vae_center_crop` | bool | Scale to cover the selected dimensions with Lanczos, then center-crop. Otherwise resize directly. | `true`, `false` |
+| `vae_input_max_pixels` | int | VAE area budget, also capped by output area in ordinary resizing. With size buckets, this is the target area and output area does not cap it. | Integer |
+| `vlm_use_vae_input` | bool | Reuse the resized/cropped VAE input for the VLM, before the VLM's own resize. Has no effect when `resize_before_vae=false`. | `true`, `false` |
 | `vlm_resize_mode` | string | How to resize VLM reference inputs. | `longest_side`, `area`, `none` |
 | `vlm_max_size` | int | Maximum VLM input size; interpreted according to `vlm_resize_mode`. | Integer |
 | `vlm_min_size` | int | Minimum VLM input size; interpreted according to `vlm_resize_mode`. | Integer |
@@ -91,6 +98,7 @@ For a technical overview of how each preset is configured, see the table below.
 | `flux_kontext` | No | `fixed` | `none` | |
 | `longcat` | Yes | `fixed` | `area` | |
 | `flux2` | No | `increase` | `none` | |
+| `fibo2` | Yes | `increase` | `longest` | Shared reference crops; clean reference timesteps; see [Fibo 2.0](./fibo2.md) |
 | `qwen` | Yes | `increase` | `area` | |
 | `qwen_layered` | Yes | `decrease` | `area` | |
 | `mage_flow` | Yes | `increase` | `longest` | `vlm_max_size = 384`, VAE input resized to target |
@@ -102,3 +110,5 @@ For a technical overview of how each preset is configured, see the table below.
 **Additional Default Notes:**
 - **VLM Input Sizes:** For most presets, `vlm_max_size` and `vlm_min_size` are set to `-1`, meaning the values are model-dependent and handled automatically. In `area` mode they represent pixel area; in `longest_side` mode they represent a side length in pixels.
 - **VAE Input Size:** `vae_input_max_pixels` defaults to $1024 \times 1024$ pixels (`1048576`).
+- **VAE Geometry:** `resize_vae_to_target` defaults to `true` for Mage-Flow and LLaDA-Image. Fibo enables `resize_single_ref_to_target`, `vae_size_buckets`, and `vae_center_crop`. These options are otherwise `false`. Bucket dimensions use the model's alignment (normally 16, Qwen Image 32), with a minimum side of four alignment units; if no bucket fits, output dimensions are used.
+- **Shared Encoder Input:** `vlm_use_vae_input` defaults to `true` for Fibo and Qwen Image 2.1, otherwise `false`. All these options can be overridden individually after selecting a preset.

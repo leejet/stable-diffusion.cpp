@@ -49,3 +49,5 @@ curl -L -o taeqi2_1.safetensors https://huggingface.co/madebyollin/taeqi2_1/reso
 ```
 
 Replace `--vae PATH` with `--taesd taeqi2_1.safetensors` in the [Qwen Image 2.1 examples](qwen_image_2.1.md) to use it for encoding and decoding. For previews only, keep `--vae PATH` and add `--taesd taeqi2_1.safetensors --taesd-preview-only --preview tae`.
+
+`sd-server` accepts the same `--taesd` and `--taesd-preview-only` options; the preview method is selected per request instead of via `--preview`.

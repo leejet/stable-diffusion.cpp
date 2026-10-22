@@ -75,7 +75,7 @@ static bool build_openai_generation_request(const httplib::Request& req,
         error_message = "invalid params";
         return false;
     }
-    return true;
+    return validate_server_img_gen_request(runtime, request, error_message);
 }
 
 static bool build_openai_edit_request(const httplib::Request& req,
@@ -158,22 +158,22 @@ static bool build_openai_edit_request(const httplib::Request& req,
     request.gen_params.height      = height;
     request.gen_params.batch_count = n;
 
-    std::string sd_cpp_extra_args_str          = extract_and_remove_sd_cpp_extra_args(request.gen_params.prompt);
-    const json extra_args                      = sd_cpp_extra_args_str.empty()
-                                                     ? json::object()
-                                                     : json::parse(sd_cpp_extra_args_str, nullptr, false);
-    const bool has_extra_init_image_override   = extra_args.is_object() && extra_args.contains("init_image");
-    const bool has_extra_ref_images_override   = extra_args.is_object() && extra_args.contains("ref_images");
-    const bool has_extra_strength_override     = extra_args.is_object() &&
-                                                 extra_args.contains("strength") &&
-                                                 extra_args["strength"].is_number();
-    const bool has_extra_mask_image            = extra_args.is_object() &&
-                                                 extra_args.contains("mask_image") &&
-                                                 !extra_args["mask_image"].is_null();
+    std::string sd_cpp_extra_args_str        = extract_and_remove_sd_cpp_extra_args(request.gen_params.prompt);
+    const json extra_args                    = sd_cpp_extra_args_str.empty()
+                                                   ? json::object()
+                                                   : json::parse(sd_cpp_extra_args_str, nullptr, false);
+    const bool has_extra_init_image_override = extra_args.is_object() && extra_args.contains("init_image");
+    const bool has_extra_ref_images_override = extra_args.is_object() && extra_args.contains("ref_images");
+    const bool has_extra_strength_override   = extra_args.is_object() &&
+                                             extra_args.contains("strength") &&
+                                             extra_args["strength"].is_number();
+    const bool has_extra_mask_image = extra_args.is_object() &&
+                                      extra_args.contains("mask_image") &&
+                                      !extra_args["mask_image"].is_null();
     const bool supports_ref_image_conditioning = sd_ctx_supports_ref_image_conditioning(runtime.sd_ctx);
     const bool may_need_uploaded_init_image    = !has_extra_init_image_override &&
-                                                 (!supports_ref_image_conditioning || !mask_bytes.empty() ||
-                                                  has_extra_mask_image || has_extra_strength_override || has_extra_ref_images_override);
+                                              (!supports_ref_image_conditioning || !mask_bytes.empty() ||
+                                               has_extra_mask_image || has_extra_strength_override || has_extra_ref_images_override);
     SDImageOwner uploaded_image_for_init;
     bool uploaded_image_was_first_reference = false;
     for (auto& bytes : images_bytes) {
@@ -252,7 +252,7 @@ static bool build_openai_edit_request(const httplib::Request& req,
         return false;
     }
 
-    return true;
+    return validate_server_img_gen_request(runtime, request, error_message);
 }
 
 static bool execute_sync_img_gen_request(ServerRuntime& runtime,
@@ -270,6 +270,10 @@ static bool execute_sync_img_gen_request(ServerRuntime& runtime,
             num_results = 0;
         }
         results.adopt(raw_results, num_results);
+        if (!results.empty() && !apply_server_adetailer(runtime, request, img_gen_params, results)) {
+            error_message = "ADetailer failed";
+            return false;
+        }
     }
 
     if (results.empty()) {
