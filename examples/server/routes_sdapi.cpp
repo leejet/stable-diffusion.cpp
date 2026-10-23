@@ -543,7 +543,7 @@ static void preview_callback(int step, int frame_count, sd_image_t* frames, bool
     std::lock_guard<std::mutex> lock(g_preview.mutex);
     g_preview.b64    = std::move(b64);
     g_preview.step   = static_cast<int>(std::min<int64_t>(step < 0 ? -static_cast<int64_t>(step) : step,
-                                                        std::max(0, info.total_steps)));
+                                                          std::max(0, info.total_steps)));
     g_preview.total  = std::max(0, info.total_steps);
     g_preview.job_no = std::max(0, info.sample_pass - 1);
 }

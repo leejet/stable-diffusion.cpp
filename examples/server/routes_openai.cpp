@@ -163,11 +163,11 @@ static bool build_openai_edit_request(const httplib::Request& req,
         int img_h            = 0;
         int resolved_channel = 0;
         uint8_t* raw_pixels  = load_image_from_memory(
-             reinterpret_cast<const char*>(bytes.data()),
-             static_cast<int>(bytes.size()),
-             img_w, img_h, resolved_channel,
-             0, 0,
-             0);
+            reinterpret_cast<const char*>(bytes.data()),
+            static_cast<int>(bytes.size()),
+            img_w, img_h, resolved_channel,
+            0, 0,
+            0);
         if (raw_pixels == nullptr) {
             continue;
         }
@@ -301,12 +301,12 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                                                             : request.output_format == "webp"
                                                                 ? EncodedImageFormat::WEBP
                                                                 : EncodedImageFormat::PNG,
-                                                          results[i].data,
-                                                          results[i].width,
-                                                          results[i].height,
-                                                          results[i].channel,
-                                                          params,
-                                                          request.output_compression);
+                                                            results[i].data,
+                                                            results[i].width,
+                                                            results[i].height,
+                                                            results[i].channel,
+                                                            params,
+                                                            request.output_compression);
                 if (image_bytes.empty()) {
                     LOG_ERROR("write image to mem failed");
                     continue;
@@ -371,12 +371,12 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                                                             request.gen_params.seed + i / images_per_batch)
                                          : "";
                 auto image_bytes   = encode_image_to_vector(request.output_format == "jpeg" ? EncodedImageFormat::JPEG : EncodedImageFormat::PNG,
-                                                          results[i].data,
-                                                          results[i].width,
-                                                          results[i].height,
-                                                          results[i].channel,
-                                                          params,
-                                                          request.output_compression);
+                                                            results[i].data,
+                                                            results[i].width,
+                                                            results[i].height,
+                                                            results[i].channel,
+                                                            params,
+                                                            request.output_compression);
                 json item;
                 item["b64_json"] = base64_encode(image_bytes);
                 out["data"].push_back(item);
