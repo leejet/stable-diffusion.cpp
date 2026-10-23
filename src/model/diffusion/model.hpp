@@ -65,6 +65,7 @@ const std::unordered_map<std::string, RefImageParams> REF_IMAGE_PRESETS = {
     // SigVQ encoder lives; it does its own half-resolution resize.
     {"llada_image", {true, true, Rope::RefIndexMode::FIXED, true, true, -1, RefImageResizeMode::NONE, -1, -1, true}},
     {"cosmos_reference", {false, true, Rope::RefIndexMode::INCREASE, false, false, -1, RefImageResizeMode::NONE, -1, -1}},
+    {"moss_vision", {true, false, Rope::RefIndexMode::INCREASE, false, false, -1, RefImageResizeMode::AREA, -1, -1}},
 };
 
 struct UNetDiffusionExtra {

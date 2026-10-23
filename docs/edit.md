@@ -21,6 +21,7 @@ Depending on the architecture, different models handle reference images differen
 | [**LLaDA-Image**](./llada_image.md#image-editing) | `llada_image` |
 | [**Fibo 2.0 Dev / Edit Turbo**](./fibo2.md#examples) | `fibo2` |
 | **Anima (Community Edit LoRAs)** | `cosmos_reference` |
+| **MOSS-Image (native multimodal support)** | `moss_vision` |
 
 Stable-diffusion.spp also supports basic Unet-based editing models like instruct-pix2pix or CosXL-Edit. This document is not about those.
 
@@ -59,6 +60,7 @@ The `--ref-image-args` argument accepts a comma-separated list of key-value pair
 | `mage_flow` | Mage-Flow-Edit |
 | `krea2_edit` | Specifically for [lbouaraba/krea2edit](https://huggingface.co/conradlocke/krea2-identity-edit). (or similar) |
 | `cosmos_reference` | For Anima |
+| `moss_vision` | For MOSS-Image |
 | `default` | Uses the automatic detection based on model architecture. |
 
 ---
@@ -106,6 +108,7 @@ For a technical overview of how each preset is configured, see the table below.
 | `krea2_ostris_edit`| Yes | `increase` | `area` | `force_ref_timestep_zero = true` |
 | `krea2_edit` | Yes | `increase` | `longest` | `vlm_size = 768` |
 | `cosmos_reference` | No | `fixed` | `none` | `resize_before_vae = false` |
+| `moss_vision` | Yes | `increase` | `area` | |
 
 **Additional Default Notes:**
 - **VLM Input Sizes:** For most presets, `vlm_max_size` and `vlm_min_size` are set to `-1`, meaning the values are model-dependent and handled automatically. In `area` mode they represent pixel area; in `longest_side` mode they represent a side length in pixels.
