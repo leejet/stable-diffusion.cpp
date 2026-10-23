@@ -21,7 +21,6 @@
 #include <windows.h>
 #endif  // _WIN32
 
-#include "core/ggml_extend_backend.h"
 #include "log.h"
 #include "media_io.h"
 #include "resource_owners.hpp"
@@ -1023,12 +1022,27 @@ bool SDContextParams::upscaler_conv_direct() const {
         return diffusion_conv_direct;
     }
 
-    SDBackendAssignment assignment;
-    std::string error;
-    if (!sd_parse_conv_direct_assignment(conv_direct_mode, &assignment, &error)) {
-        return false;
+    std::string default_mode = "auto";
+    std::string upscaler_mode;
+    std::istringstream assignments(conv_direct_mode);
+    std::string part;
+    while (std::getline(assignments, part, ',')) {
+        const size_t first = part.find_first_not_of(" \\t");
+        const size_t last = part.find_last_not_of(" \\t");
+        if (first == std::string::npos) {
+            continue;
+        }
+        part = part.substr(first, last - first + 1);
+
+        const size_t equals = part.find('=');
+        if (equals == std::string::npos) {
+            default_mode = part;
+        } else if (part.substr(0, equals) == "upscaler") {
+            upscaler_mode = part.substr(equals + 1);
+        }
     }
-    return assignment.get(SDBackendModule::UPSCALER) == "on";
+
+    return (upscaler_mode.empty() ? default_mode : upscaler_mode) == "on";
 }
 
 sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
