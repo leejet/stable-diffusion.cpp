@@ -2825,6 +2825,18 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
         return output;
     };
 
+    {
+        std::ostringstream oss;
+        oss << std::setprecision(std::numeric_limits<float>::max_digits10);
+        for (size_t i = 0; i < sigmas.size(); ++i) {
+            if (i != 0) {
+                oss << ",";
+            }
+            oss << sigmas[i];
+        }
+        LOG_DEBUG("sigmas: %s", oss.str().c_str());
+    }
+
     auto x0_opt = sample_k_diffusion(method, denoise, x_t, sigmas, sampler_rng, eta, is_flow_denoiser, extra_sample_args, denoiser);
     if (x0_opt.empty()) {
         LOG_ERROR("Diffusion model sampling failed");
