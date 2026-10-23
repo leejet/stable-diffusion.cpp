@@ -447,10 +447,6 @@ image establishes the generation dimensions if `size` is omitted. Input
 geometry follows `image_preprocess`: references preserve their dimensions by
 default, while init and mask use the generation canvas preset.
 
-When the request starts without preconfigured reference images, the first uploaded image becomes the img2img init image if the loaded model does not support reference-image conditioning, the final reference list is empty, a mask is present, or an explicit numeric `strength` override is provided. Otherwise, only the final reference list is used for image conditioning, without initializing the img2img latent. Requests with preconfigured references retain their existing init-image selection.
-
-Routing uses the reference list and mask after applying `sd_cpp_extra_args`. Both `ref_images: []` and `ref_images: null` clear the reference list; `mask_image: null` clears an uploaded mask. An explicit `init_image` in `sd_cpp_extra_args`, including `null`, takes precedence over the implicit init-image selection.
-
 Reference encoding then follows model presets and `ref_image_args`. To skip
 input geometry for references and disable resizing before VAE encoding, include
 this in `prompt`:
