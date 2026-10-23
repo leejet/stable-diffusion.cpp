@@ -1492,6 +1492,16 @@ namespace WAN {
             stateful_config.overlap                 = 0;
             auto plan                               = make_vae_temporal_tile_plan(input.shape()[2], stateful_config);
 
+            if (sd_version_is_wan(version) && !ae.is_2D && plan.tiles.size() > 1 &&
+                plan.tiles.size() <= 3 && plan.tile_frames > 2 &&
+                plan.tiles.back().end - plan.tiles.back().start == 1) {
+                // Longer plans retain full middle tiles, so balancing their tail cannot shrink the largest decoded output.
+                auto& previous = plan.tiles[plan.tiles.size() - 2];
+                auto& last     = plan.tiles.back();
+                --previous.end;
+                --last.start;
+            }
+
             LOG_VERBOSE("Wan VAE stateful temporal tiling: tile_frames=%d, total latent frames=%lld, tiles=%d",
                         plan.tile_frames,
                         (long long)input.shape()[2],
