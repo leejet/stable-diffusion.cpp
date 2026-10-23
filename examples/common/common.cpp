@@ -1022,23 +1022,30 @@ bool SDContextParams::upscaler_conv_direct() const {
         return diffusion_conv_direct;
     }
 
+    auto trim = [](std::string value) {
+        const size_t first = value.find_first_not_of(" \\t");
+        if (first == std::string::npos) {
+            return std::string();
+        }
+        const size_t last = value.find_last_not_of(" \\t");
+        return value.substr(first, last - first + 1);
+    };
+
     std::string default_mode = "auto";
     std::string upscaler_mode;
     std::istringstream assignments(conv_direct_mode);
     std::string part;
     while (std::getline(assignments, part, ',')) {
-        const size_t first = part.find_first_not_of(" \\t");
-        const size_t last = part.find_last_not_of(" \\t");
-        if (first == std::string::npos) {
+        part = trim(std::move(part));
+        if (part.empty()) {
             continue;
         }
-        part = part.substr(first, last - first + 1);
 
         const size_t equals = part.find('=');
         if (equals == std::string::npos) {
             default_mode = part;
-        } else if (part.substr(0, equals) == "upscaler") {
-            upscaler_mode = part.substr(equals + 1);
+        } else if (trim(part.substr(0, equals)) == "upscaler") {
+            upscaler_mode = trim(part.substr(equals + 1));
         }
     }
 
