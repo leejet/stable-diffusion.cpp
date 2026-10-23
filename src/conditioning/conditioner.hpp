@@ -3089,10 +3089,75 @@ struct LLMEmbedder : public Conditioner {
                 prompt += "<|im_end|>\n<|im_start|>assistant\n";
             }
         } else if (version == VERSION_MOSS_IMAGE) {
+            if (!llm->enable_vision && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
+                LOG_ERROR("MOSS-Image vision conditioning requires Qwen3.5 vision weights; provide --llm_vision or a combined encoder");
+                return {};
+            }
             prompt_template_encode_start_idx = 0;
-            max_length                       = 4096;
-            prompt                           = "<|im_start|>user\n" + conditioner_params.text + "<|im_end|>\n<|im_start|>assistant\n<think>\n";
-            prompt_attn_range                = {0, 0};
+            max_length                       = 0;
+            prompt                           = "<|im_start|>user\n";
+            int64_t vision_tokens            = 0;
+            if (llm->enable_vision && conditioner_params.ref_images != nullptr) {
+                const int factor = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
+                int min_pixels   = conditioner_params.ref_image_params.vlm_min_size;
+                if (min_pixels <= 0) {
+                    min_pixels = 2 * factor;
+                    if (resize_mode == RefImageResizeMode::AREA) {
+                        min_pixels *= min_pixels;
+                    }
+                }
+                int max_pixels = conditioner_params.ref_image_params.vlm_max_size;
+                if (max_pixels <= 0) {
+                    max_pixels = 1024;
+                    if (resize_mode == RefImageResizeMode::AREA) {
+                        max_pixels *= max_pixels;
+                    }
+                }
+                for (size_t i = 0; i < conditioner_params.ref_images->size(); ++i) {
+                    const auto& image = (*conditioner_params.ref_images)[i];
+                    int height        = static_cast<int>(image.shape()[1]);
+                    int width         = static_cast<int>(image.shape()[0]);
+                    int h_bar         = std::max(factor, static_cast<int>(std::round(static_cast<double>(height) / factor)) * factor);
+                    int w_bar         = std::max(factor, static_cast<int>(std::round(static_cast<double>(width) / factor)) * factor);
+                    resize_image_dims(height, width, h_bar, w_bar, factor, min_pixels, max_pixels, resize_mode);
+
+                    LOG_VERBOSE("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
+                    auto resized = image;
+                    if (resized.shape()[0] != w_bar || resized.shape()[1] != h_bar) {
+                        resized = sd::ops::interpolate(resized,
+                                                       {w_bar, h_bar, resized.shape()[2], resized.shape()[3]},
+                                                       sd::ops::InterpolateMode::Bilinear, false, true);
+                    }
+                    const int64_t W = w_bar, H = h_bar, P = W * H;
+                    auto rgb = sd::Tensor<float>({W, H, 3, 1});
+                    for (int64_t p = 0; p < P; ++p) {
+                        float alpha = resized.shape()[2] == 4 ? resized[p + 3 * P] : 1.f;
+                        for (int c = 0; c < 3; ++c) {
+                            float v        = 2.f * (resized[p + c * P] * alpha + 1.f - alpha) - 1.f;
+                            rgb[p + c * P] = std::clamp(v, -1.f, 1.f);
+                        }
+                    }
+                    auto outputs = llm->encode_image_outputs(n_threads, rgb, false);
+                    if (outputs.empty()) {
+                        return {};
+                    }
+                    prompt += (i == 0 ? "" : " ") + std::string("Picture ") + std::to_string(i + 1) + ": <|vision_start|>";
+                    size_t marker_start = prompt.size();
+                    prompt += "<|image_pad|><|vision_end|>";
+                    if (!expand_vision_marker(prompt, marker_start, std::move(outputs),
+                                              static_cast<int>(H) / llm->config.vision.patch_size,
+                                              static_cast<int>(W) / llm->config.vision.patch_size,
+                                              image_embeds, deepstack_image_embeds, image_grids)) {
+                        return {};
+                    }
+                    max_length += (H / factor) * (W / factor);
+                }
+            }
+            max_length += 4096;
+            prompt_attn_range.first = static_cast<int>(prompt.size());
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+            prompt += "<|im_end|>\n<|im_start|>assistant\n<think>\n";
         } else if (sd_version_is_flux3(version)) {
             prompt_template_encode_start_idx = 0;
             max_length                       = 4096;
