@@ -1036,7 +1036,7 @@ bool SDContextParams::upscaler_conv_direct() const {
     std::istringstream assignments(conv_direct_mode);
     std::string part;
     while (std::getline(assignments, part, ',')) {
-        part = trim(std::move(part));
+        part = trim(part);
         if (part.empty()) {
             continue;
         }
