@@ -1,7 +1,7 @@
 # Model Configuration Conventions
 
-This document describes the conventions for model configuration structs and
-weight-based configuration detection.
+This document describes model configuration structs, weight-based configuration
+detection, and the definitions used to integrate models into the runtime.
 
 ## Config Types
 
@@ -132,8 +132,17 @@ To add a model:
    conventions above, or reuse an existing runner.
 3. Add a definition in its integration file, including its component
    factory, traits, geometry, and sampling policy.
-4. Add the family's explicit registration in `src/model_registry.cpp`. A new
-   variant of a registered family only needs an entry in that family's list.
+4. Add the family's explicit registration in `src/model_registry.cpp`. For a new
+   variant of a registered family, add its definition to that family's list.
+5. Add version detection signatures and any required weight-name mappings in
+   `src/model_loader.cpp` and `src/name_conversion.cpp` respectively. Update shared
+   conditioning or runtime code only when existing behavior cannot serve the model.
+
+Use the existing family integration as the starting point for a variant. For a
+new family, `src/model/integrations/moss_image.cpp` is a compact example of a
+conditioner/diffusion factory and its definition. Definitions collect model
+construction and defaults; they do not replace version detection, name conversion,
+or model-specific inference algorithms.
 
 The registry checks for missing, duplicate, and invalid version registrations.
 Explicit references keep integrations reachable in static-library builds. The
@@ -169,18 +178,28 @@ new LLM conditioning behavior still need changes in that shared implementation.
 `vae_kind` is the single source of truth for the VAE family; compatibility
 helpers derive their results from it. `KL`, `FLUX`, and `FLUX2` share the
 `AutoEncoderKL` implementation while retaining their distinct latent formats.
-VAE traits select a shared component implementation, TAE behavior, and pixel-space
-models' FakeVAE. `configure_vae` handles model-specific KL adjustments such as
+The related traits have separate responsibilities:
+
+- `supports_video_generation` describes the model's video generation capability.
+- `video_tae` selects `TinyVideoAutoEncoder` instead of `TinyImageAutoEncoder`.
+  Image models can use a video TAE, so this is independent of video generation.
+- `fake_vae` selects FakeVAE for pixel-space models. It is separate from
+  `vae_kind`, which also controls latent-format compatibility helpers.
+- `vae_format_override` allows PiD's VAE format override.
+
+`configure_vae` handles model-specific KL adjustments such as
 PixArt's scale and SDXL's convolution scale. VAE compatibility traits also drive
 latent transformations and previews through the existing helper functions.
 
 ### Sampling And Geometry
 
-Sampling policy declares prediction, flow shift,
-sampler and scheduler. Weight-derived
-prediction and flow-shift callbacks preserve checkpoint-dependent defaults.
-SD2 retains its runtime v-prediction probe. Explicit prediction settings keep
-precedence over automatic defaults. MOSS's default unconditional skip layer stays
+`ModelSamplingPolicy` groups the defaults first: `default_prediction`,
+`default_flow_shift`, `default_sample_method`, and `default_scheduler`. Set only
+the values that differ from the struct defaults. `prediction_from_weights` and
+`flow_shift_from_weights` preserve checkpoint-dependent defaults during automatic
+prediction selection; `probe_v_prediction` enables SD2's runtime v-prediction
+probe. Explicit prediction settings take precedence over automatic selection.
+MOSS's default unconditional skip layer stays
 in the diffusion engine, with active unconditional SLG taking precedence.
 
 The resolved `prediction_t` selects the denoiser directly. Flux3, MiniMax H3 AV,
@@ -192,9 +211,10 @@ Automatic selection retains each model's default implementation. New prediction
 values are appended before `PREDICTION_COUNT`, preserving existing valid values;
 clients using the automatic-selection sentinel must rebuild with the new header.
 
-Geometry declares the diffusion down factor and latent and output channel counts.
-Reference-image defaults are declared
-with the model.
+`ModelGeometry` declares `diffusion_down_factor`, `latent_channels`, and
+`image_channels`. `ref_image_preset` defaults to `"default"`; set it only for models
+that need another reference-image preset.
+
 The common pipeline executes these policies; specialized video, multimodal,
 cache, and extension algorithms remain in their existing runtime components.
 Model-specific diffusion extra parameters are assembled in the diffusion engine.
