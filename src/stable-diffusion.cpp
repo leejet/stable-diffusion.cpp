@@ -171,10 +171,13 @@ const char* prediction_to_str[] = {
     "sefi_flow",
     "minit2i_flow",
     "sensenova_u1_flow",
+    "flux3_flow",
+    "h3_av_flow",
+    "ming_image_flow",
 };
 
 const char* sd_prediction_name(enum prediction_t prediction) {
-    if (prediction < PREDICTION_COUNT) {
+    if (prediction >= EPS_PRED && prediction < PREDICTION_COUNT) {
         return prediction_to_str[prediction];
     }
     return NONE_STR;
@@ -705,13 +708,6 @@ SD_API bool sd_ctx_supports_video_generation(const sd_ctx_t* sd_ctx) {
     return sd_version_supports_video_generation(sd_ctx->sd->version);
 }
 
-SD_API bool sd_ctx_supports_ref_image_conditioning(const sd_ctx_t* sd_ctx) {
-    if (sd_ctx == nullptr || sd_ctx->sd == nullptr) {
-        return false;
-    }
-    return sd_version_supports_ref_image_conditioning(sd_ctx->sd->version);
-}
-
 SD_API bool sd_ctx_load_control_net(sd_ctx_t* sd_ctx, const char* path) {
     if (sd_ctx == nullptr || sd_ctx->sd == nullptr || path == nullptr) {
         return false;
@@ -737,7 +733,7 @@ const char* sd_get_model_version_name(const sd_ctx_t* sd_ctx) {
     if (sd_ctx == nullptr || sd_ctx->sd == nullptr || sd_ctx->sd->version >= VERSION_COUNT) {
         return "Unknown";
     }
-    return model_version_to_str[sd_ctx->sd->version];
+    return sd_version_name(sd_ctx->sd->version);
 }
 
 enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx) {

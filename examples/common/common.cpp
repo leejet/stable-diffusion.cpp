@@ -818,7 +818,7 @@ ArgOptions SDContextParams::get_options() {
          on_sampler_rng_arg},
         {"",
          "--prediction",
-         "prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow, sefi_flow]",
+         "prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow, sefi_flow, minit2i_flow, sensenova_u1_flow, flux3_flow, h3_av_flow, ming_image_flow]",
          on_prediction_arg},
         {"",
          "--lora-apply-mode",
