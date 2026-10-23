@@ -184,6 +184,8 @@ Notes:
 
 <video src=../assets/wan/Wan2.2_5B_i2v.mp4 controls="controls" muted="muted" type="video/mp4"></video>
 
+TI2V 5B can decode multiple latent frames together when temporal tiling is enabled. For example, `--temporal-tiling --vae-tiling --vae-tile-size 256x256 --extra-tiling-args "temporal_tile_frames=4,temporal_decode_frames=2"` keeps up to four latent frames in each temporal tile and decodes up to two at once, with spatial tiles of 256×256 pixels. `temporal_decode_frames` defaults to `1`, preserving frame-by-frame decoding; other model versions ignore it. Increasing it requires more memory. Adjust the spatial tile size to fit the available memory.
+
 ### Wan2.1 FLF2V 14B
 
 ```
