@@ -3241,6 +3241,9 @@ std::string StableDiffusionGGML::get_default_ref_image_preset(SDVersion version)
 RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_image_args) const {
     RefImageParams params;
     std::string preset_name = get_default_ref_image_preset(version);
+    // Keys whose value was rejected. They are already reported, so per-model "no effect"
+    // warnings must not repeat them.
+    std::set<std::string> rejected_keys;
 
     for (const auto& [key, value] : parse_key_value_args(ref_image_args, "reference image args")) {
         if (key == "preset") {
@@ -3253,6 +3256,7 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
                     valid_list += (valid_list.empty() ? "" : ", ") + name;
                 }
                 LOG_WARN("ignoring invalid reference image preset '%s'. Valid options: [%s]", value.c_str(), valid_list.c_str());
+                rejected_keys.insert(key);
             }
             break;
         }
@@ -3269,10 +3273,12 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
         if (key == "pass_to_vlm") {
             if (!parse_strict_bool(value, params.pass_to_vlm)) {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             }
         } else if (key == "pass_to_dit") {
             if (!parse_strict_bool(value, params.pass_to_dit)) {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             }
         } else if (key == "ref_index_mode") {
             if (value == "fixed") {
@@ -3283,14 +3289,17 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
                 params.ref_index_mode = Rope::RefIndexMode::DECREASE;
             } else {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             }
         } else if (key == "force_ref_timestep_zero") {
             if (!parse_strict_bool(value, params.force_ref_timestep_zero)) {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             }
         } else if (key == "resize_before_vae") {
             if (!parse_strict_bool(value, params.resize_before_vae)) {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             }
         } else if (key == "resize_vae_to_target") {
             if (!parse_strict_bool(value, params.resize_vae_to_target)) {
@@ -3315,6 +3324,7 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
         } else if (key == "vae_input_max_pixels") {
             if (!parse_strict_int(value, params.vae_input_max_pixels)) {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             }
         } else if (key == "vlm_resize_mode") {
             if (value == "longest_side") {
@@ -3325,14 +3335,31 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
                 params.vlm_resize_mode = RefImageResizeMode::NONE;
             } else {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             }
         } else if (key == "vlm_max_size") {
             if (!parse_strict_int(value, params.vlm_max_size)) {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             }
         } else if (key == "vlm_min_size") {
             if (!parse_strict_int(value, params.vlm_min_size)) {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
+            }
+        } else if (key == "ref_image_size") {
+            bool valid = true;
+            if (value == "match") {
+                params.ref_image_size = RefImageSizeMode::MATCH;
+            } else if (value == "max") {
+                params.ref_image_size = RefImageSizeMode::MAX;
+            } else {
+                LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
+                valid = false;
+            }
+            if (valid && !sd_version_is_minimax_h3(version)) {
+                LOG_WARN("ref_image_size is only supported by MiniMax-H3 for now");
             }
         } else if (key != "preset" && key != "vlm_size") {
             LOG_WARN("ignoring unknown reference image arg '%s'", key.c_str());
@@ -3343,6 +3370,7 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
             int vlm_size;
             if (!parse_strict_int(value, vlm_size)) {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             } else {
                 LOG_INFO("vlm_size override: setting both min and max size to %ld", (long)vlm_size);
                 params.vlm_min_size = vlm_size;
@@ -3353,6 +3381,29 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
     }
     if (params.force_ref_timestep_zero && !sd_version_is_krea2(version)) {
         LOG_WARN("force_ref_timestep_zero is only supported by Krea2 architecture for now");
+    }
+    if (sd_version_is_minimax_h3(version)) {
+        // H3 consumes references as VAE latents in its own packed sequence rather than
+        // through the generic conditioner/DiT reference path, so ref_image_size is the
+        // only arg it acts on. Everything else is reported as ineffective rather than
+        // enumerated, so newly added RefImageParams members cannot silently do nothing.
+        static const std::set<std::string> h3_effective_keys = {"ref_image_size"};
+        // Keys that already have their own, more specific warning above.
+        static const std::set<std::string> h3_separately_reported_keys = {
+            "resize_before_vae",
+            "force_ref_timestep_zero",
+        };
+        for (const auto& arg : parse_key_value_args(ref_image_args, "reference image args")) {
+            if (h3_effective_keys.count(arg.first) == 0 &&
+                h3_separately_reported_keys.count(arg.first) == 0 &&
+                rejected_keys.count(arg.first) == 0) {
+                LOG_WARN("reference image arg '%s' has no effect for MiniMax-H3", arg.first.c_str());
+            }
+        }
+
+        if (!params.resize_before_vae) {
+            LOG_WARN("MiniMax-H3 requires 32-pixel-aligned reference images and cannot skip resizing before VAE encoding; ignoring resize_before_vae=false");
+        }
     }
     return params;
 }

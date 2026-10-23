@@ -456,6 +456,7 @@ typedef struct {
     bool circular_x;
     bool circular_y;
     sd_image_preprocess_params_t image_preprocess;
+    const char* ref_image_args;
 } sd_vid_gen_params_t;
 
 typedef struct sd_ctx_t sd_ctx_t;
