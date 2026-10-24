@@ -53,7 +53,14 @@ namespace MOSSImage {
         }
     };
 
-    inline ggml_tensor* situ(ggml_context* c, ggml_tensor* hidden, ggml_tensor* gate) {
+    inline ggml_tensor* situ(GGMLRunnerContext* ctx, ggml_tensor* hidden, ggml_tensor* gate) {
+        auto c = ctx->ggml_ctx;
+#if !defined(SD_USE_UPSTREAM_GGML) && defined(GGML_HAS_SITU)
+        auto out = ggml_glu_split(c, gate, hidden, GGML_GLU_OP_SITU);
+        if (ctx->backend != nullptr && ggml_backend_supports_op(ctx->backend, out)) {
+            return out;
+        }
+#endif
         auto a = ggml_scale(c, ggml_tanh(c, ggml_scale(c, gate, 0.25f)), 4.f);
         a      = ggml_mul(c, a, ggml_sigmoid(c, gate));
         auto b = ggml_scale(c, ggml_tanh(c, ggml_scale(c, hidden, 1.f / 25.f)), 25.f);
@@ -92,7 +99,7 @@ namespace MOSSImage {
             y      = linear("proj", y);
             x      = ggml_add(c, x, y);
             y      = norm("norm2", x);
-            y      = situ(c, linear("ffn_up", y), linear("ffn_gate", y));
+            y      = situ(ctx, linear("ffn_up", y), linear("ffn_gate", y));
             y      = linear("ffn_down", y);
             return ggml_add(c, x, y);
         }
@@ -134,7 +141,16 @@ namespace MOSSImage {
             y            = norm("norm2", x);
             y            = ggml_add(c, ggml_add(c, y, ggml_mul(c, y, part(4))), part(3));
             auto up_gate = linear("proj.ffn_up_gate", y);
-            y            = situ(c, ggml_ext_slice(c, up_gate, 0, 0, config.ffn_dim), ggml_ext_slice(c, up_gate, 0, config.ffn_dim, 2 * config.ffn_dim));
+            y            = nullptr;
+#if !defined(SD_USE_UPSTREAM_GGML) && defined(GGML_HAS_SITU)
+            auto activation = ggml_glu(c, up_gate, GGML_GLU_OP_SITU, true);
+            if (ctx->backend != nullptr && ggml_backend_supports_op(ctx->backend, activation)) {
+                y = activation;
+            }
+#endif
+            if (y == nullptr) {
+                y = situ(ctx, ggml_ext_slice(c, up_gate, 0, 0, config.ffn_dim), ggml_ext_slice(c, up_gate, 0, config.ffn_dim, 2 * config.ffn_dim));
+            }
             y            = linear("proj.ffn_down", y);
             y            = ggml_mul(c, y, part(5));
             return ggml_add(c, x, y);
