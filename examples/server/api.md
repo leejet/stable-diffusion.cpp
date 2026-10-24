@@ -1776,3 +1776,14 @@ Example cancelled job:
 - `400 Bad Request` for an empty body, unsupported model mode, invalid JSON, invalid generation parameters, or an unsupported output format
 - `429 Too Many Requests` when the job queue is full
 - `500 Internal Server Error` for unexpected server exceptions during submission
+
+## Actual generation parameters
+
+Generation responses expose the core `sdcpp.generation/v1` record as
+`generation_info`, independently of `embed_image_metadata`. Native async image
+result items and OpenAI image items contain the parameter snapshot with each
+image's actual seed and without `batch_count`. Native video
+results contain the video request snapshot. SD API `info.generation_info` is an array
+aligned with `info.infotexts` and `info.all_seeds`; the outer `parameters` field
+remains the request echo. See [generation metadata](../../docs/generation_metadata.md)
+for field semantics, postprocessing and container storage.

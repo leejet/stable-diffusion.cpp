@@ -223,12 +223,10 @@ static bool execute_sync_img_gen_request(ServerRuntime& runtime,
 
     {
         std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
-        sd_image_t* raw_results = nullptr;
-        if (!generate_image(runtime.sd_ctx, &img_gen_params, &raw_results, &num_results)) {
-            raw_results = nullptr;
-            num_results = 0;
-        }
-        results.adopt(raw_results, num_results);
+        sd_image_generation_result_t* generated = nullptr;
+        generate_image(runtime.sd_ctx, &img_gen_params, &generated);
+        results.adopt(generated, runtime.ctx_params->lora_model_dir);
+        num_results = results.count();
         if (!results.empty() && !apply_server_adetailer(runtime, request, img_gen_params, results)) {
             error_message = "ADetailer failed";
             return false;
@@ -285,16 +283,14 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             out["data"]          = json::array();
             out["output_format"] = request.output_format;
 
-            int result_count     = results.count();
-            int images_per_batch = request.gen_params.batch_count > 0 ? std::max(1, result_count / request.gen_params.batch_count) : 1;
+            int result_count = results.count();
+
             for (int i = 0; i < result_count; ++i) {
                 if (results[i].data == nullptr) {
                     continue;
                 }
                 std::string params = request.gen_params.embed_image_metadata
-                                         ? get_image_params(*runtime->ctx_params,
-                                                            request.gen_params,
-                                                            request.gen_params.seed + i / images_per_batch)
+                                         ? results.generation_info(i)
                                          : "";
                 auto image_bytes   = encode_image_to_vector(request.output_format == "jpeg"
                                                                 ? EncodedImageFormat::JPEG
@@ -313,7 +309,8 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 }
 
                 json item;
-                item["b64_json"] = base64_encode(image_bytes);
+                item["b64_json"]        = base64_encode(image_bytes);
+                item["generation_info"] = json::parse(results.generation_info(i));
                 out["data"].push_back(item);
             }
 
@@ -359,16 +356,14 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             out["data"]          = json::array();
             out["output_format"] = request.output_format;
 
-            int result_count     = results.count();
-            int images_per_batch = request.gen_params.batch_count > 0 ? std::max(1, result_count / request.gen_params.batch_count) : 1;
+            int result_count = results.count();
+
             for (int i = 0; i < result_count; ++i) {
                 if (results[i].data == nullptr) {
                     continue;
                 }
                 std::string params = request.gen_params.embed_image_metadata
-                                         ? get_image_params(*runtime->ctx_params,
-                                                            request.gen_params,
-                                                            request.gen_params.seed + i / images_per_batch)
+                                         ? results.generation_info(i)
                                          : "";
                 auto image_bytes   = encode_image_to_vector(request.output_format == "jpeg" ? EncodedImageFormat::JPEG : EncodedImageFormat::PNG,
                                                             results[i].data,
@@ -378,7 +373,8 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                                                             params,
                                                             request.output_compression);
                 json item;
-                item["b64_json"] = base64_encode(image_bytes);
+                item["b64_json"]        = base64_encode(image_bytes);
+                item["generation_info"] = json::parse(results.generation_info(i));
                 out["data"].push_back(item);
             }
 
