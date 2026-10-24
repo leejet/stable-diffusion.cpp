@@ -2,6 +2,7 @@
 #define __SD_MODEL_DIFFUSION_MOSS_IMAGE_HPP__
 
 #include <algorithm>
+#include <array>
 #include <cinttypes>
 
 #include "model/common/ggml_block.hpp"
@@ -53,7 +54,14 @@ namespace MOSSImage {
         }
     };
 
-    inline ggml_tensor* situ(ggml_context* c, ggml_tensor* hidden, ggml_tensor* gate) {
+    inline ggml_tensor* situ(GGMLRunnerContext* ctx, ggml_tensor* hidden, ggml_tensor* gate) {
+        auto c = ctx->ggml_ctx;
+#ifndef SD_USE_UPSTREAM_GGML
+        auto out = ggml_glu_split(c, gate, hidden, GGML_GLU_OP_SITU);
+        if (ctx->backend != nullptr && ggml_backend_supports_op(ctx->backend, out)) {
+            return out;
+        }
+#endif
         auto a = ggml_scale(c, ggml_tanh(c, ggml_scale(c, gate, 0.25f)), 4.f);
         a      = ggml_mul(c, a, ggml_sigmoid(c, gate));
         auto b = ggml_scale(c, ggml_tanh(c, ggml_scale(c, hidden, 1.f / 25.f)), 25.f);
@@ -92,7 +100,7 @@ namespace MOSSImage {
             y      = linear("proj", y);
             x      = ggml_add(c, x, y);
             y      = norm("norm2", x);
-            y      = situ(c, linear("ffn_up", y), linear("ffn_gate", y));
+            y      = situ(ctx, linear("ffn_up", y), linear("ffn_gate", y));
             y      = linear("ffn_down", y);
             return ggml_add(c, x, y);
         }
@@ -113,15 +121,20 @@ namespace MOSSImage {
             blocks["proj.ffn_down"]    = std::make_shared<Linear>(config.ffn_dim, config.dim, false);
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* pe, ggml_tensor* mod) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* pe, const std::array<ggml_tensor*, 6>& mod) {
             auto c      = ctx->ggml_ctx;
             auto linear = [&](const char* name, ggml_tensor* h) { return std::dynamic_pointer_cast<Linear>(blocks[name])->forward(ctx, h); };
             auto norm   = [&](const char* name, ggml_tensor* h) { return std::dynamic_pointer_cast<RMSNorm>(blocks[name])->forward(ctx, h); };
-            auto part   = [&](int i) { return ggml_ext_slice(c, mod, 0, i * config.dim, (i + 1) * config.dim); };
+            auto part                = [&](int i) { return mod[i]; };
             auto y      = norm("norm1", x);
             y           = ggml_add(c, ggml_add(c, y, ggml_mul(c, y, part(1))), part(0));
             auto qkv    = linear("proj.qkv", y);
-            auto split  = [&](int i) {
+            const bool use_qkv_views = sd_backend_supports_cuda_mma(ctx->backend);
+            auto split               = [&](int i) {
+                if (use_qkv_views) {
+                    return ggml_view_4d(c, qkv, config.head_dim, config.dim / config.head_dim, x->ne[1], x->ne[2],
+                                                      config.head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * config.dim * qkv->nb[0]);
+                }
                 return ggml_reshape_4d(c, ggml_ext_slice(c, qkv, 0, i * config.dim, (i + 1) * config.dim), config.head_dim, config.dim / config.head_dim, x->ne[1], x->ne[2]);
             };
             auto q       = norm("q_norm", split(0));
@@ -134,7 +147,16 @@ namespace MOSSImage {
             y            = norm("norm2", x);
             y            = ggml_add(c, ggml_add(c, y, ggml_mul(c, y, part(4))), part(3));
             auto up_gate = linear("proj.ffn_up_gate", y);
-            y            = situ(c, ggml_ext_slice(c, up_gate, 0, 0, config.ffn_dim), ggml_ext_slice(c, up_gate, 0, config.ffn_dim, 2 * config.ffn_dim));
+            y            = nullptr;
+#ifndef SD_USE_UPSTREAM_GGML
+            auto activation = ggml_glu(c, up_gate, GGML_GLU_OP_SITU, true);
+            if (ctx->backend != nullptr && ggml_backend_supports_op(ctx->backend, activation)) {
+                y = activation;
+            }
+#endif
+            if (y == nullptr) {
+                y = situ(ctx, ggml_ext_slice(c, up_gate, 0, 0, config.ffn_dim), ggml_ext_slice(c, up_gate, 0, config.ffn_dim, 2 * config.ffn_dim));
+            }
             y            = linear("proj.ffn_down", y);
             y            = ggml_mul(c, y, part(5));
             return ggml_add(c, x, y);
@@ -175,10 +197,17 @@ namespace MOSSImage {
             time      = linear("time_embedding.2", ggml_silu(c, linear("time_embedding.0", time)));
             auto mod  = linear("shared_block_modulation", time);
             auto head = linear("video_head_modulation", time);
+            std::array<ggml_tensor*, 6> parts;
+            for (int i = 0; i < 6; ++i) {
+                parts[i] = ggml_ext_slice(c, mod, 0, i * config.dim, (i + 1) * config.dim);
+                if (ctx->graph != nullptr) {
+                    ggml_build_forward_expand(ctx->graph, parts[i]);
+                }
+            }
             x         = ggml_concat(c, x, text, 1);
             for (int64_t i = 0; i < config.depth; ++i) {
                 if (std::find(skip.begin(), skip.end(), i) == skip.end()) {
-                    x = std::dynamic_pointer_cast<Block>(blocks["layers." + std::to_string(i)])->forward(ctx, x, pe, mod);
+                    x = std::dynamic_pointer_cast<Block>(blocks["layers." + std::to_string(i)])->forward(ctx, x, pe, parts);
                     sd::ggml_graph_cut::mark_graph_cut(x, "moss_image.layers." + std::to_string(i), "x");
                 }
             }
@@ -193,9 +222,20 @@ namespace MOSSImage {
     };
 
     struct MOSSImageRunner : public DiffusionModelRunner {
+        struct PositionCacheEntry {
+            int64_t height      = 0;
+            int64_t width       = 0;
+            int64_t text_tokens = 0;
+            bool circular_x     = false;
+            bool circular_y     = false;
+            std::vector<float> values;
+        };
+
         MOSSImageConfig config;
         Model model;
-        std::vector<float> pe_data, time_data;
+        std::array<PositionCacheEntry, 2> position_cache;
+        size_t next_position_cache_entry = 0;
+        std::vector<float> time_data;
 
         MOSSImageRunner(ggml_backend_t backend, const String2TensorStorage& weights, const std::string& prefix, std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : DiffusionModelRunner(backend, prefix, weight_manager), config(MOSSImageConfig::detect_from_weights(weights, prefix)), model(config) {
@@ -205,6 +245,39 @@ namespace MOSSImage {
         std::string get_desc() override { return "MOSS-Image"; }
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
             model.get_param_tensors(tensors, prefix);
+        }
+
+        const std::vector<float>& position_embedding(int64_t h, int64_t w, int64_t nt) {
+            for (const auto& entry : position_cache) {
+                if (!entry.values.empty() && entry.height == h && entry.width == w && entry.text_tokens == nt &&
+                    entry.circular_x == circular_x_enabled && entry.circular_y == circular_y_enabled) {
+                    return entry.values;
+                }
+            }
+            Rope::Embedding embedding;
+            embedding.positions.append_image(static_cast<int>(h), static_cast<int>(w));
+            embedding.positions.images.back().height_axis = 2;
+            embedding.positions.images.back().width_axis  = 3;
+            embedding.positions.append_tokens(nt);
+            for (int64_t token = 0; token < h * w + nt; ++token) {
+                float pos[4] = {0.f, float(token - h * w), 0.f, 0.f};
+                if (token < h * w) {
+                    pos[1] = float(nt);
+                    pos[2] = float(token / w) - float(h - 1) / 2.f;
+                    pos[3] = float(token % w) - float(w - 1) / 2.f;
+                }
+                embedding.ids.push_back({pos[0], pos[1], pos[2], pos[3]});
+            }
+            embedding.values          = Rope::embed_nd(embedding.ids, 1, 10000.f, std::vector<int>(4, static_cast<int>(config.head_dim / 4)), embedding.layout, &embedding.frequencies);
+            auto& entry               = position_cache[next_position_cache_entry];
+            next_position_cache_entry = (next_position_cache_entry + 1) % position_cache.size();
+            entry.height              = h;
+            entry.width               = w;
+            entry.text_tokens         = nt;
+            entry.circular_x          = circular_x_enabled;
+            entry.circular_y          = circular_y_enabled;
+            entry.values              = finish_rope_pe(std::move(embedding));
+            return entry.values;
         }
 
         sd::Tensor<float> compute(int n_threads, const DiffusionParams& inputs) override {
@@ -224,22 +297,7 @@ namespace MOSSImage {
                 auto text = make_input(*inputs.context);
                 GGML_ASSERT(x->ne[3] == 1 && x->ne[2] == config.channels && text->ne[0] == config.text_dim);
                 int64_t h = x->ne[1], w = x->ne[0], nt = text->ne[1];
-                Rope::Embedding embedding;
-                embedding.positions.append_image(static_cast<int>(h), static_cast<int>(w));
-                embedding.positions.images.back().height_axis = 2;
-                embedding.positions.images.back().width_axis  = 3;
-                embedding.positions.append_tokens(nt);
-                for (int64_t token = 0; token < h * w + nt; ++token) {
-                    float pos[4] = {0.f, float(token - h * w), 0.f, 0.f};
-                    if (token < h * w) {
-                        pos[1] = float(nt);
-                        pos[2] = float(token / w) - float(h - 1) / 2.f;
-                        pos[3] = float(token % w) - float(w - 1) / 2.f;
-                    }
-                    embedding.ids.push_back({pos[0], pos[1], pos[2], pos[3]});
-                }
-                embedding.values = Rope::embed_nd(embedding.ids, 1, 10000.f, std::vector<int>(4, static_cast<int>(config.head_dim / 4)), embedding.layout, &embedding.frequencies);
-                pe_data          = finish_rope_pe(std::move(embedding));
+                const auto& pe_data = position_embedding(h, w, nt);
                 time_data.resize(config.freq_dim);
                 for (int64_t i = 0; i < config.freq_dim / 2; ++i) {
                     double angle                       = inputs.timesteps->values()[0] * std::pow(10000.0, -double(i) / double(config.freq_dim / 2));
@@ -250,7 +308,7 @@ namespace MOSSImage {
                 auto time = ggml_new_tensor_3d(compute_ctx, GGML_TYPE_F32, config.freq_dim, 1, 1);
                 set_backend_tensor_data(pe, pe_data.data());
                 set_backend_tensor_data(time, time_data.data());
-                auto ctx = get_context();
+                auto ctx = get_context(gf);
                 ggml_build_forward_expand(gf, model.forward(&ctx, x, time, text, pe, skip));
                 return gf;
             };
