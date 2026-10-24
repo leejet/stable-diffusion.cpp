@@ -609,19 +609,20 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             }
 
             SDImageOwner current(input.release());
+            std::string generation_info;
             for (int i = 0; i < repeats; ++i) {
-                sd_image_t* out_images = nullptr;
-                int out_count          = 0;
-                if (!upscale(upscaler_ctx.get(), current.get(), (uint32_t)factor, &out_images, &out_count) ||
-                    out_count <= 0 || out_images[0].data == nullptr) {
-                    free_sd_images(out_images, out_count);
+                sd_image_generation_result_t* generated = nullptr;
+                if (!upscale(upscaler_ctx.get(), current.get(), (uint32_t)factor, &generated) ||
+                    !generated || generated->count <= 0 || generated->items[0].image.data == nullptr) {
+                    free_sd_image_generation_result(generated);
                     res.status = 500;
                     res.set_content(R"({"error":"upscale failed"})", "application/json");
                     return;
                 }
-                sd_image_t produced = out_images[0];
-                out_images[0]       = {0, 0, 0, nullptr};
-                free_sd_images(out_images, out_count);
+                generation_info           = merge_generation_info(generation_info, generated->items[0].generation_info);
+                sd_image_t produced       = generated->items[0].image;
+                generated->items[0].image = {};
+                free_sd_image_generation_result(generated);
                 current.reset(produced);
             }
 
@@ -635,7 +636,7 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                                                                result.width,
                                                                result.height,
                                                                result.channel,
-                                                               "",
+                                                               generation_info,
                                                                compression);
             if (image_bytes.empty()) {
                 res.status = 500;
@@ -644,13 +645,14 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             }
 
             json out;
-            out["upscaler"]      = used_name;
-            out["scale"]         = factor;
-            out["repeats"]       = repeats;
-            out["width"]         = result.width;
-            out["height"]        = result.height;
-            out["output_format"] = format;
-            json images          = json::array();
+            out["generation_info"] = json::parse(generation_info);
+            out["upscaler"]        = used_name;
+            out["scale"]           = factor;
+            out["repeats"]         = repeats;
+            out["width"]           = result.width;
+            out["height"]          = result.height;
+            out["output_format"]   = format;
+            json images            = json::array();
             images.push_back({{"index", 0}, {"b64_json", base64_encode(image_bytes)}});
             out["images"] = std::move(images);
             res.set_content(out.dump(), "application/json");

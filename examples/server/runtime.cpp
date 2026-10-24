@@ -136,7 +136,7 @@ bool apply_server_adetailer(ServerRuntime& runtime,
                 continue;
             }
             sd_img_gen_params_t ad_generation_params = params;
-            ad_generation_params.seed                = params.seed + i;
+            ad_generation_params.seed                = generation_seed(results.generation_info(i));
             ad_generation_params.width               = pass.width;
             ad_generation_params.height              = pass.height;
             ad_generation_params.strength            = pass.strength;
@@ -147,24 +147,23 @@ bool apply_server_adetailer(ServerRuntime& runtime,
                 ad_generation_params.sample_params.scheduler = SCHEDULER_COUNT;
             }
 
-            sd_image_t* detailed_images = nullptr;
-            int detailed_count          = 0;
+            sd_image_generation_result_t* detailed = nullptr;
             if (!adetail_image(ad_ctx.get(),
                                runtime.sd_ctx,
                                results[i],
                                &ad_params,
                                &ad_generation_params,
-                               &detailed_images,
-                               &detailed_count) ||
-                detailed_count <= 0 || detailed_images == nullptr || detailed_images[0].data == nullptr) {
-                free_sd_images(detailed_images, detailed_count);
+                               &detailed) ||
+                detailed == nullptr || detailed->count <= 0 || detailed->items[0].image.data == nullptr) {
+                free_sd_image_generation_result(detailed);
                 LOG_ERROR("ADetailer failed for image %d", i + 1);
                 return false;
             }
+            results.append_generation_info(i, detailed->items[0].generation_info, runtime.ctx_params->lora_model_dir);
             free(results[i].data);
-            results[i]         = detailed_images[0];
-            detailed_images[0] = {0, 0, 0, nullptr};
-            free_sd_images(detailed_images, detailed_count);
+            results[i]               = detailed->items[0].image;
+            detailed->items[0].image = {};
+            free_sd_image_generation_result(detailed);
         }
     }
     return true;

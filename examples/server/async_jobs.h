@@ -40,6 +40,7 @@ struct AsyncGenerationJob {
     ImgGenJobRequest img_gen;
     VidGenJobRequest vid_gen;
     std::vector<std::string> result_images_b64;
+    json result_generation_info;
     std::string result_media_b64;
     std::string result_media_mime_type;
     int result_frame_count = 0;
@@ -74,6 +75,7 @@ json make_async_job_json(const AsyncJobManager& manager, const AsyncGenerationJo
 bool execute_img_gen_job(ServerRuntime& runtime,
                          AsyncGenerationJob& job,
                          std::vector<std::string>& output_images,
+                         json& output_info,
                          std::string& error_message);
 bool execute_vid_gen_job(ServerRuntime& runtime,
                          AsyncGenerationJob& job,
@@ -81,5 +83,6 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
                          std::string& output_media_mime_type,
                          int& output_frame_count,
                          int& output_fps,
+                         json& output_info,
                          std::string& error_message);
 void async_job_worker(ServerRuntime& runtime);
