@@ -35,7 +35,3 @@ Pass the external `tokenizer.json` with `--tokenizer`; Qwen3.5 uses a different 
 <img src="../assets/moss/sft.png" />
 
 Use dimensions divisible by 16. The default discrete scheduler uses the upstream time shift of 5. Use `--flow-shift` to override it. The negative CFG branch skips DiT layer 22 (zero-based), matching the upstream pipeline.
-
-## Shared modulation
-
-The model constructs the six shared modulation slices once per forward graph and reuses them across diffusion blocks. Their values and the arithmetic consuming them are unchanged. This application change works with the pinned ggml.
