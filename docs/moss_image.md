@@ -35,7 +35,3 @@ Pass the external `tokenizer.json` with `--tokenizer`; Qwen3.5 uses a different 
 <img src="../assets/moss/sft.png" />
 
 Use dimensions divisible by 16. The default discrete scheduler uses the upstream time shift of 5. Use `--flow-shift` to override it. The negative CFG branch skips DiT layer 22 (zero-based), matching the upstream pipeline.
-
-## CUDA projection layout
-
-On supported CUDA devices, MOSS consumes Q/K views of the combined projection. For eligible 128-wide attention, the shared attention helper combines V layout materialization and FP16 conversion. Existing paths remain for unsupported layouts, head padding and K/V scaling. This application change works with the pinned ggml; matching backend fusions can provide an additional benefit.
