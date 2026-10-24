@@ -121,7 +121,12 @@ namespace MOSSImage {
             auto y      = norm("norm1", x);
             y           = ggml_add(c, ggml_add(c, y, ggml_mul(c, y, part(1))), part(0));
             auto qkv    = linear("proj.qkv", y);
-            auto split  = [&](int i) {
+            const bool use_qkv_views = sd_backend_supports_cuda_mma(ctx->backend);
+            auto split               = [&](int i) {
+                if (use_qkv_views) {
+                    return ggml_view_4d(c, qkv, config.head_dim, config.dim / config.head_dim, x->ne[1], x->ne[2],
+                                                      config.head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * config.dim * qkv->nb[0]);
+                }
                 return ggml_reshape_4d(c, ggml_ext_slice(c, qkv, 0, i * config.dim, (i + 1) * config.dim), config.head_dim, config.dim / config.head_dim, x->ne[1], x->ne[2]);
             };
             auto q       = norm("q_norm", split(0));
