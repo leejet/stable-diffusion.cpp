@@ -1150,8 +1150,8 @@ bool StableDiffusionGGML::build_control_net_runner() {
             return false;
         }
         ModelManager::ResidencyMode residency_mode = backend_manager.params_backend_is_disk(SDBackendModule::DIFFUSION)
-                                                          ? ModelManager::ResidencyMode::Disk
-                                                          : ModelManager::ResidencyMode::ParamBackend;
+                                                         ? ModelManager::ResidencyMode::Disk
+                                                         : ModelManager::ResidencyMode::ParamBackend;
         return model_manager->register_param_tensors(ModelComponent::ControlNet,
                                                      std::move(control_tensors),
                                                      residency_mode,
