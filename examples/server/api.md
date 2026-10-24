@@ -447,10 +447,6 @@ image establishes the generation dimensions if `size` is omitted. Input
 geometry follows `image_preprocess`: references preserve their dimensions by
 default, while init and mask use the generation canvas preset.
 
-When the request starts without preconfigured reference images, the first uploaded image becomes the img2img init image if the loaded model does not support reference-image conditioning, the final reference list is empty, a mask is present, or an explicit numeric `strength` override is provided. Otherwise, only the final reference list is used for image conditioning, without initializing the img2img latent. Requests with preconfigured references retain their existing init-image selection.
-
-Routing uses the reference list and mask after applying `sd_cpp_extra_args`. Both `ref_images: []` and `ref_images: null` clear the reference list; `mask_image: null` clears an uploaded mask. An explicit `init_image` in `sd_cpp_extra_args`, including `null`, takes precedence over the implicit init-image selection.
-
 Reference encoding then follows model presets and `ref_image_args`. To skip
 input geometry for references and disable resizing before VAE encoding, include
 this in `prompt`:
@@ -877,7 +873,7 @@ Shared default fields used by both `img_gen` and `vid_gen`:
 
 `vae_tiling_params.tile_size_w` and `tile_size_h` are in **image pixels**, with `0` selecting the 256-pixel default. Both encode and decode use these sizes without an encoding multiplier. Positive `rel_size_w`/`rel_size_h` values override the corresponding absolute size: values up to 1 are dimension fractions, and values greater than 1 are target tile counts. Set `enabled` to use spatial tiling. Sizes are aligned down to the VAE scale factor and capped at the input dimensions; explicit sizes below the minimum supported tile size are rejected. These fields previously used latent units; see [VAE tiling](../../docs/performance.md#use-vae-tiling-to-reduce-encode-and-decode-memory-usage) for migration and OOM retry behavior.
 
-`vae_tiling_params.extra_tiling_args` accepts a key=value list. Supported video VAEs accept `temporal_tile_frames` (alias `temporal_tile_size`, default `4`) and `temporal_tile_overlap` (default `1`).
+`vae_tiling_params.extra_tiling_args` accepts a key=value list. Supported video VAEs accept `temporal_tile_frames` (alias `temporal_tile_size`, default `4`) and `temporal_tile_overlap` (default `1`). Wan2.2 TI2V 5B uses `temporal_decode_frames` (default `1`) to decode multiple latent frames per forward pass, trading additional memory for throughput; other model versions ignore this option.
 LTX and Wan preserve causal state between temporal tiles. Hunyuan Video and TAEHV use overlap blending. MiniMax H3 keeps its model-specific fixed temporal windows because its latent-to-frame mapping is non-linear.
 
 `img_gen`-specific default fields:
@@ -906,6 +902,7 @@ LTX and Wan preserve causal state between temporal tiles. Hunyuan Video and TAEH
 | --- | --- |
 | `video_frames` | `integer` |
 | `fps` | `integer` |
+| `ref_image_args` | `string` |
 | `moe_boundary` | `number` |
 | `vace_strength` | `number` |
 | `high_noise_sample_params` | `object` |
@@ -1403,7 +1400,7 @@ Compared with `img_gen`, the `vid_gen` request body:
 - `vid_gen` is a single video sequence job, so `batch_count` is not part of the request schema
 - `mask_image`, `control_image`, `control_strength`, `ip_adapter_image`, `ip_adapter_strength`, and `embed_image_metadata` are not part of the request schema
 - `ref_images` is accepted for MiniMax-H3 Ref2VA conditioning; other video model families currently ignore it
-- `vid_gen` adds `end_image`, `control_frames`, `high_noise_sample_params`, `video_frames`, `fps`, `moe_boundary`, and `vace_strength`
+- `vid_gen` adds `end_image`, `control_frames`, `high_noise_sample_params`, `video_frames`, `fps`, `ref_image_args`, `moe_boundary`, and `vace_strength`
 
 Example:
 
@@ -1418,6 +1415,7 @@ Example:
   "seed": -1,
   "video_frames": 33,
   "fps": 16,
+  "ref_image_args": "",
   "moe_boundary": 0.875,
   "vace_strength": 1.0,
 
@@ -1499,6 +1497,7 @@ Example:
 - Images retain request order and correspond to `<Picture 1>`, `<Picture 2>`, and so on in the prompt.
 - For MiniMax-H3, non-empty `ref_images` cannot be combined with `init_image` or `end_image`. A conflicting API request fails during generation; the WebUI checks this before submission.
 - MiniMax-H3 does not support `control_frames`; leave that array empty.
+- `ref_image_args` applies to `vid_gen`; MiniMax-H3 honors `ref_image_size` there (`match` default, `max` for a 2048 px short edge). Only references above the limit are downscaled; each axis is then snapped to the nearest 32 px multiple.
 - Other video model families currently ignore `ref_images`.
 - `features_by_mode.vid_gen` does not currently advertise `ref_images`; its absence is not an indication that MiniMax-H3 reference images are unsupported.
 
@@ -1549,6 +1548,7 @@ Top-level scalar fields:
 | `seed` | `integer` |
 | `video_frames` | `integer` |
 | `fps` | `integer` |
+| `ref_image_args` | `string` |
 | `moe_boundary` | `number` |
 | `vace_strength` | `number` |
 | `preview` | `string` |

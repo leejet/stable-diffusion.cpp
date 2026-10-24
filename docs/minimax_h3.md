@@ -80,8 +80,20 @@ latents condition the diffusion transformer. Paired video and audio references
 share the same timeline. Ref2VA cannot be combined with `--init-img` or
 `--end-img` in one request.
 
-Reference images keep their aspect ratio and are only downscaled when their
-pixel area exceeds the requested generation canvas.
+Reference images keep their aspect ratio and are only downscaled when they
+exceed the configured limit; neither mode scales a reference up. The limit is
+selected by `ref_image_size`. The default, `match`, uses the pixel area of the
+requested generation canvas. Pass `--ref-image-args "ref_image_size=max"` (or
+`ref_image_size` in `sd_vid_gen_params_t.ref_image_args`) to use a 2048 px short
+edge instead, which preserves more identity detail at a higher sampling cost:
+reference latents are attended at every sampling step.
+
+Whichever limit applies, each axis is then snapped to the nearest 32-pixel
+multiple. An axis of at least 16 pixels can therefore grow by up to 16 pixels
+past the scaled size (a 48-pixel axis becomes 64), and references are never
+narrower than 32 pixels.
+`resize_before_vae=false` is not supported here; MiniMax-H3 keeps references on
+the 32-pixel grid and reports a warning.
 
 The C API exposes the same inputs through `ref_images`, `ref_videos`, and
 `ref_audios` in `sd_vid_gen_params_t`. Each `sd_ref_video_t` supplies its own

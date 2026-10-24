@@ -178,6 +178,7 @@ static json make_vid_gen_defaults_json(const SDGenerationParams& defaults, const
         {"seed", defaults.seed},
         {"video_frames", defaults.video_frames},
         {"image_preprocess", defaults.image_preprocess},
+        {"ref_image_args", defaults.ref_image_args},
         {"fps", defaults.fps},
         {"moe_boundary", defaults.moe_boundary},
         {"vace_strength", defaults.vace_strength},
@@ -380,8 +381,8 @@ static json make_capabilities_json(ServerRuntime& runtime) {
     json top_level_defaults       = json::object();
     json top_level_output_formats = json::array();
     json top_level_features       = {
-              {"cancel_queued", true},
-              {"cancel_generating", true},
+        {"cancel_queued", true},
+        {"cancel_generating", true},
     };
     std::string current_mode = "";
     if (supports_img) {
@@ -409,14 +410,14 @@ static json make_capabilities_json(ServerRuntime& runtime) {
     result["defaults"]            = top_level_defaults;
     result["defaults_by_mode"]    = defaults_by_mode;
     result["limits"]              = {
-                     {"min_width", 64},
-                     {"max_width", k_max_generation_dimension},
-                     {"min_height", 64},
-                     {"max_height", k_max_generation_dimension},
-                     {"max_batch_count", 8},
-                     {"max_queue_size", manager.max_pending_jobs},
-                     {"max_upscale_width", k_max_upscale_dimension},
-                     {"max_upscale_height", k_max_upscale_dimension},
+        {"min_width", 64},
+        {"max_width", k_max_generation_dimension},
+        {"min_height", 64},
+        {"max_height", k_max_generation_dimension},
+        {"max_batch_count", 8},
+        {"max_queue_size", manager.max_pending_jobs},
+        {"max_upscale_width", k_max_upscale_dimension},
+        {"max_upscale_height", k_max_upscale_dimension},
     };
     result["samplers"]               = samplers;
     result["schedulers"]             = schedulers;
@@ -519,7 +520,7 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 const bool valid  = value.is_number_unsigned()
                                         ? value.get<uint64_t>() <= static_cast<uint64_t>(std::numeric_limits<int>::max())
                                         : value.is_number_integer() && value.get<int64_t>() >= std::numeric_limits<int>::min() &&
-                                             value.get<int64_t>() <= std::numeric_limits<int>::max();
+                                              value.get<int64_t>() <= std::numeric_limits<int>::max();
                 if (!valid) {
                     res.status = 400;
                     res.set_content(json({{"error", std::string(key) + " must be a 32-bit integer"}}).dump(), "application/json");
@@ -630,12 +631,12 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             auto image_bytes          = encode_image_to_vector(format == "jpeg"   ? EncodedImageFormat::JPEG
                                                                : format == "webp" ? EncodedImageFormat::WEBP
                                                                                   : EncodedImageFormat::PNG,
-                                                      result.data,
-                                                      result.width,
-                                                      result.height,
-                                                      result.channel,
-                                                      "",
-                                                      compression);
+                                                               result.data,
+                                                               result.width,
+                                                               result.height,
+                                                               result.channel,
+                                                               "",
+                                                               compression);
             if (image_bytes.empty()) {
                 res.status = 500;
                 res.set_content(R"({"error":"the result could not be encoded"})", "application/json");

@@ -234,11 +234,11 @@ json make_async_job_json(const AsyncJobManager& manager, const AsyncGenerationJo
                job.status == AsyncJobStatus::Cancelled) {
         result["result"] = nullptr;
         result["error"]  = {
-             {"code",
+            {"code",
              job.error_code.empty()
-                  ? (job.status == AsyncJobStatus::Cancelled ? "cancelled" : "generation_failed")
-                  : job.error_code},
-             {"message", job.error_message},
+                 ? (job.status == AsyncJobStatus::Cancelled ? "cancelled" : "generation_failed")
+                 : job.error_code},
+            {"message", job.error_message},
         };
     } else {
         result["result"] = nullptr;

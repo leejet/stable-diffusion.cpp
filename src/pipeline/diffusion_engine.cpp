@@ -21,6 +21,7 @@
 #include "core/probe/conv_direct.h"
 #include "core/probe/flash_attn.h"
 #include "model.h"
+#include "model_definition.h"
 
 #include "core/rng.hpp"
 #include "core/rng_mt19937.hpp"
@@ -54,70 +55,6 @@
 #include "runtime/latent-preview.h"
 
 #include <atomic>
-
-const char* model_version_to_str[] = {
-    "SD 1.x",
-    "SD 1.x Inpaint",
-    "Instruct-Pix2Pix",
-    "SD 1.x Tiny UNet",
-    "SD 2.x",
-    "SD 2.x Inpaint",
-    "SD 2.x Tiny UNet",
-    "SDXS (512-DS)",
-    "SDXS (09)",
-    "SDXL",
-    "SDXL Inpaint",
-    "SDXL Instruct-Pix2Pix",
-    "SDXL (Vega)",
-    "SDXL (SSD1B)",
-    "SVD",
-    "SD3.x",
-    "Flux",
-    "Flux Fill",
-    "Flux Control",
-    "Flex.2",
-    "Chroma Radiance",
-    "Wan 2.x",
-    "Wan 2.2 I2V",
-    "Wan 2.2 TI2V",
-    "Wan 2.2 S2V",
-    "LingBot Video",
-    "Qwen Image",
-    "Qwen Image Layered",
-    "Qwen Image 2.1",
-    "Hunyuan Video",
-    "Anima",
-    "Flux.2",
-    "Flux.2 klein",
-    "LTXAV",
-    "MiniMax-H3",
-    "HiDream O1",
-    "Z-Image",
-    "Boogu Image",
-    "Ovis Image",
-    "Ernie Image",
-    "Lens",
-    "MiniT2I",
-    "Longcat-Image",
-    "PiD",
-    "Ideogram 4",
-    "SeFi-Image",
-    "Krea2",
-    "Mage Flow",
-    "SenseNova U1.5",
-    "LLaDA-Image",
-    "ESRGAN",
-    "PixArt",
-    "Ming-Image",
-    "Z-Image L2P",
-    "Iris-3B",
-    "Flux.3 Image Klein",
-    "MOSS-Image",
-    "Fibo-2.0",
-};
-
-static_assert(VERSION_COUNT == sizeof(model_version_to_str) / sizeof(model_version_to_str[0]),
-              "\nnumber of elements in model_version_to_str[] != VERSION_COUNT");
 
 void calculate_alphas_cumprod(float* alphas_cumprod,
                               float linear_start = 0.00085f,
@@ -470,7 +407,7 @@ bool StableDiffusionGGML::register_row_split_runner_params(ModelComponent compon
         size_t free_bytes = 0, total_bytes = 0;
         ggml_backend_dev_memory(dev, &free_bytes, &total_bytes);
         int64_t usable_bytes    = std::max<int64_t>((int64_t)free_bytes - compute_headroom_bytes,
-                                                 (int64_t)free_bytes / 8);
+                                                    (int64_t)free_bytes / 8);
         tensor_split[reg_index] = usable_bytes > 0 ? (float)((double)usable_bytes / (1024.0 * 1024.0)) : 1.0f;
     }
 
@@ -574,8 +511,8 @@ bool StableDiffusionGGML::register_layer_split_runner_params(ModelComponent comp
     model->set_runtime_backends(module_backends);
     model->set_graph_cut_layer_split_backend_vram_limits(layer_split_vram_limits_for_backends(module_backends));
     model->set_graph_cut_layer_split_enabled(true);
-    const bool params_follow_runtime = backend_manager.params_backend_follows_runtime(module) ||
-                                       backend_manager.params_backend_is_disk(module);
+    const bool params_follow_runtime      = backend_manager.params_backend_follows_runtime(module) ||
+                                            backend_manager.params_backend_is_disk(module);
     ggml_backend_t initial_params_backend = params_follow_runtime ? module_backends[0] : params_backend_for(module);
     if (initial_params_backend == nullptr) {
         return false;
@@ -1014,7 +951,7 @@ bool StableDiffusionGGML::init(const sd_ctx_params_t* sd_ctx_params) {
         LOG_ERROR("get sd version from file failed: '%s'", SAFE_STR(sd_ctx_params->model_path));
         return false;
     } else {
-        LOG_INFO("Version: %s ", model_version_to_str[version]);
+        LOG_INFO("Version: %s ", sd_version_name(version));
     }
 
     if (auto_fit_enabled) {
@@ -1470,98 +1407,16 @@ bool StableDiffusionGGML::build_denoiser() {
     prediction_t pred_type         = sd_ctx_params->prediction;
 
     if (pred_type == PREDICTION_COUNT) {
-        if (sd_version_is_sd2(version)) {
+        const auto* definition = find_model_definition(version);
+        if (!definition)
+            return false;
+        const auto& policy = definition->sampling;
+        pred_type          = policy.default_prediction;
+        default_flow_shift = policy.flow_shift_from_weights ? policy.flow_shift_from_weights(tensor_storage_map) : policy.default_flow_shift;
+        if (policy.probe_v_prediction) {
             pred_type = is_using_v_parameterization_for_sd2(sd_version_is_inpaint(version)) ? V_PRED : EPS_PRED;
-        } else if (sd_version_is_sdxl(version)) {
-            if (tensor_storage_map.find("edm_vpred.sigma_max") != tensor_storage_map.end()) {
-                // CosXL models
-                // TODO: get sigma_min and sigma_max values from file
-                pred_type = EDM_V_PRED;
-            } else if (tensor_storage_map.find("v_pred") != tensor_storage_map.end()) {
-                pred_type = V_PRED;
-            } else {
-                pred_type = EPS_PRED;
-            }
-        } else if (sd_version_is_sd3(version) ||
-                   sd_version_is_wan(version) ||
-                   sd_version_is_hunyuan_video(version) ||
-                   sd_version_is_lingbot_video(version) ||
-                   sd_version_is_minimax_h3(version) ||
-                   sd_version_is_qwen_image(version) ||
-                   sd_version_is_mage_flow(version) ||
-                   version == VERSION_HIDREAM_O1 ||
-                   sd_version_is_anima(version) ||
-                   sd_version_is_ernie_image(version) ||
-                   sd_version_is_z_image(version) ||
-                   sd_version_is_z_image_l2p(version) ||
-                   version == VERSION_MING_IMAGE ||
-                   sd_version_is_llada_image(version) ||
-                   sd_version_is_boogu_image(version) ||
-                   sd_version_is_pid(version) ||
-                   sd_version_is_ideogram4(version) ||
-                   version == VERSION_IRIS ||
-                   version == VERSION_MOSS_IMAGE ||
-                   version == VERSION_FIBO2) {
-            pred_type = FLOW_PRED;
-            if (sd_version_is_wan(version) || version == VERSION_MOSS_IMAGE) {
-                default_flow_shift = 5.f;
-            } else if (sd_version_is_hunyuan_video(version)) {
-                default_flow_shift = 7.f;
-            } else if (sd_version_is_minimax_h3(version)) {
-                default_flow_shift = 12.f;
-            } else if (sd_version_is_ernie_image(version) || version == VERSION_IRIS) {
-                default_flow_shift = 4.f;
-            } else if (sd_version_is_pid(version)) {
-                default_flow_shift = 1.5f;
-            } else if (sd_version_is_ideogram4(version)) {
-                default_flow_shift = 1.0f;
-            } else if (sd_version_is_boogu_image(version)) {
-                default_flow_shift = 3.16f;
-            } else if (sd_version_is_mage_flow(version)) {
-                default_flow_shift = 6.f;
-            } else if (version == VERSION_MING_IMAGE) {
-                default_flow_shift = INFINITY;
-            } else if (sd_version_is_llada_image(version)) {
-                default_flow_shift = 1.0f;  // unused: LLADA_IMAGE_SCHEDULER builds a fixed grid
-            } else {
-                default_flow_shift = 3.f;
-            }
-        } else if (sd_version_is_flux3(version)) {
-            pred_type          = FLUX_FLOW_PRED;
-            default_flow_shift = 6.93f;
-        } else if (sd_version_is_flux(version) ||
-                   sd_version_is_flux2(version) ||
-                   sd_version_is_longcat(version) ||
-                   sd_version_is_lens(version) ||
-                   sd_version_is_ltxav(version) ||
-                   sd_version_is_krea2(version)) {
-            pred_type = FLUX_FLOW_PRED;
-
-            default_flow_shift = 1.0f;  // TODO: validate
-            for (const auto& [name, tensor_storage] : tensor_storage_map) {
-                if (starts_with(name, "model.diffusion_model.guidance_in.in_layer.weight")) {
-                    default_flow_shift = 1.15f;
-                    break;
-                }
-            }
-            if (sd_version_is_longcat(version)) {
-                default_flow_shift = 3.0f;
-            } else if (sd_version_is_lens(version)) {
-                default_flow_shift = 1.83f;
-            } else if (sd_version_is_ltxav(version)) {
-                default_flow_shift = 2.37f;
-            } else if (sd_version_is_krea2(version)) {
-                default_flow_shift = 1.15f;
-            }
-        } else if (sd_version_is_sefi_image(version)) {
-            pred_type = SEFI_FLOW_PRED;
-        } else if (sd_version_is_minit2i(version)) {
-            pred_type = MINIT2I_FLOW_PRED;
-        } else if (sd_version_is_sensenova_u1(version)) {
-            pred_type          = SENSENOVA_U1_FLOW_PRED;
-            default_flow_shift = 3.f;
-        } else {
-            pred_type = EPS_PRED;
+        } else if (policy.prediction_from_weights) {
+            pred_type = policy.prediction_from_weights(tensor_storage_map);
         }
     }
 
@@ -1578,27 +1433,28 @@ bool StableDiffusionGGML::build_denoiser() {
             denoiser = std::make_shared<EDMVDenoiser>();
             break;
         case FLOW_PRED: {
-            if (sd_version_is_ltxav(version)) {
-                LOG_INFO("running in LTXAV FLOW mode");
-                denoiser = std::make_shared<FluxFlowDenoiser>();
-            } else if (sd_version_is_minimax_h3(version)) {
-                LOG_INFO("running in MiniMax H3 AV FLOW mode");
-                denoiser = std::make_shared<H3AVFlowDenoiser>(default_flow_shift, 3.f, get_latent_channel());
-            } else if (version == VERSION_MING_IMAGE) {
-                denoiser = std::make_shared<MingImageFlowDenoiser>();
-            } else {
-                LOG_INFO("running in FLOW mode");
-                denoiser = std::make_shared<DiscreteFlowDenoiser>();
-            }
+            LOG_INFO("running in FLOW mode");
+            denoiser = std::make_shared<DiscreteFlowDenoiser>();
             break;
         }
         case FLUX_FLOW_PRED: {
             LOG_INFO("running in Flux FLOW mode");
-            if (sd_version_is_flux3(version)) {
-                denoiser = std::make_shared<Flux3FlowDenoiser>();
-            } else {
-                denoiser = std::make_shared<FluxFlowDenoiser>();
-            }
+            denoiser = std::make_shared<FluxFlowDenoiser>();
+            break;
+        }
+        case FLUX3_FLOW_PRED: {
+            LOG_INFO("running in Flux.3 FLOW mode");
+            denoiser = std::make_shared<Flux3FlowDenoiser>();
+            break;
+        }
+        case H3_AV_FLOW_PRED: {
+            LOG_INFO("running in MiniMax H3 AV FLOW mode");
+            denoiser = std::make_shared<H3AVFlowDenoiser>(default_flow_shift, 3.f, get_latent_channel());
+            break;
+        }
+        case MING_IMAGE_FLOW_PRED: {
+            LOG_INFO("running in Ming-Image FLOW mode");
+            denoiser = std::make_shared<MingImageFlowDenoiser>();
             break;
         }
         case SEFI_FLOW_PRED: {
@@ -1737,8 +1593,8 @@ std::shared_ptr<LoraModel> StableDiffusionGGML::load_lora_model(const ModelManag
                                                  ? ModelManager::ResidencyMode::Disk
                                                  : ModelManager::ResidencyMode::ParamBackend;
     auto lora                              = std::make_shared<LoraModel>(lora_log_id(lora_spec), backend_for(module), params_backend_for(module),
-                                            model_manager, lora_spec.file_id, version, mode,
-                                            backend_manager.params_backend_follows_runtime(module));
+                                                                         model_manager, lora_spec.file_id, version, mode,
+                                                                         backend_manager.params_backend_follows_runtime(module));
     LoraModel::filter_t lora_tensor_filter = module_filter;
     if (!lora_spec.tensor_name_prefix_filter.empty()) {
         lora_tensor_filter = [module_filter, prefix = lora_spec.tensor_name_prefix_filter](const std::string& tensor_name) {
@@ -2152,11 +2008,11 @@ void StableDiffusionGGML::preview_image(int step,
                                                : sd::ops::slice(latents, 2, 0, channels)
                                     : latents;
     if (preview_mode == PREVIEW_PROJ) {
-        int patch_sz                     = 1;
-        const float(*latent_rgb_proj)[3] = nullptr;
-        float* latent_rgb_bias           = nullptr;
-        const float* latent_alpha_proj   = nullptr;
-        float latent_alpha_bias          = 1.f;
+        int patch_sz                      = 1;
+        const float (*latent_rgb_proj)[3] = nullptr;
+        float* latent_rgb_bias            = nullptr;
+        const float* latent_alpha_proj    = nullptr;
+        float latent_alpha_bias           = 1.f;
 
         if (channels == 128) {
             if (sd_version_uses_flux2_vae(version)) {
@@ -2438,8 +2294,8 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
     const bool cache_qwen_prefix = version == VERSION_QWEN_IMAGE_2_1 &&
                                    std::none_of(generation_extensions.begin(), generation_extensions.end(),
                                                 [](const auto& extension) { return extension->is_enabled(); });
-    using QwenPrefixInputs = std::tuple<const sd::Tensor<float>*, const sd::Tensor<int32_t>*,
-                                        const std::vector<sd::Tensor<float>>*>;
+    using QwenPrefixInputs       = std::tuple<const sd::Tensor<float>*, const sd::Tensor<int32_t>*,
+                                              const std::vector<sd::Tensor<float>>*>;
     std::vector<QwenPrefixInputs> qwen_prefix_inputs;
 
     RunnerEndOnExit sample_control_runner_end{!control_image.empty() && control_net != nullptr ? control_net.get() : nullptr};
@@ -2740,7 +2596,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                 auto* extra = std::get_if<QwenImage21DiffusionExtra>(&diffusion_params.extra);
                 if (extra != nullptr) {
                     auto key         = std::make_tuple(diffusion_params.context, extra->image_slots,
-                                               diffusion_params.ref_image_params.pass_to_dit ? diffusion_params.ref_latents : nullptr);
+                                                       diffusion_params.ref_image_params.pass_to_dit ? diffusion_params.ref_latents : nullptr);
                     auto entry       = std::find(qwen_prefix_inputs.begin(), qwen_prefix_inputs.end(), key);
                     extra->prefix_id = static_cast<uint64_t>(entry - qwen_prefix_inputs.begin()) + 1;
                     if (entry == qwen_prefix_inputs.end()) {
@@ -2999,63 +2855,15 @@ int StableDiffusionGGML::get_vae_scale_factor() {
 }
 
 int StableDiffusionGGML::get_diffusion_model_down_factor() {
-    int down_factor = 8;  // unet
-    if (sd_version_is_dit(version)) {
-        if (sd_version_is_sensenova_u1(version)) {
-            down_factor = 32;
-        } else if (sd_version_is_z_image_l2p(version) || version == VERSION_IRIS) {
-            down_factor = 16;
-        } else if (version == VERSION_QWEN_IMAGE_2_1 || version == VERSION_MING_IMAGE || sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_minimax_h3(version) || sd_version_is_pixart(version)) {
-            down_factor = 2;
-        } else {
-            down_factor = 1;
-        }
-    }
-    return down_factor;
+    return find_model_definition(version)->geometry.diffusion_down_factor;
 }
 
 int StableDiffusionGGML::get_latent_channel() {
-    int latent_channel = 4;
-    if (sd_version_is_dit(version)) {
-        if (sd_version_is_ltxav(version)) {
-            latent_channel = 128;
-        } else if (sd_version_is_minimax_h3(version)) {
-            latent_channel = 24;
-        } else if (version == VERSION_QWEN_IMAGE_2_1) {
-            latent_channel = 64;
-        } else if (version == VERSION_WAN2_2_TI2V) {
-            latent_channel = 48;
-        } else if (sd_version_is_hunyuan_video(version)) {
-            latent_channel = 32;
-        } else if (version == VERSION_HIDREAM_O1) {
-            latent_channel = 3;
-        } else if (version == VERSION_CHROMA_RADIANCE) {
-            latent_channel = 3;
-        } else if (sd_version_is_minit2i(version)) {
-            latent_channel = 3;
-        } else if (sd_version_is_sensenova_u1(version)) {
-            latent_channel = 3;
-        } else if (sd_version_is_z_image_l2p(version)) {
-            latent_channel = 3;
-        } else if (sd_version_is_pid(version) || version == VERSION_IRIS) {
-            latent_channel = 3;
-        } else if (sd_version_is_sefi_image(version)) {
-            latent_channel = 144;
-        } else if (sd_version_uses_flux2_vae(version)) {
-            latent_channel = 128;
-        } else if (sd_version_is_mage_flow(version)) {
-            latent_channel = 128;
-        } else if (sd_version_is_pixart(version)) {
-            latent_channel = 4;
-        } else {
-            latent_channel = 16;
-        }
-    }
-    return latent_channel;
+    return find_model_definition(version)->geometry.latent_channels;
 }
 
 int StableDiffusionGGML::get_image_channels() const {
-    return version == VERSION_QWEN_IMAGE_LAYERED || version == VERSION_QWEN_IMAGE_2_1 || version == VERSION_MING_IMAGE ? 4 : 3;
+    return find_model_definition(version)->geometry.image_channels;
 }
 
 int StableDiffusionGGML::get_image_seq_len(int h, int w) {
@@ -3207,40 +3015,15 @@ bool StableDiffusionGGML::is_flow_denoiser() {
 }
 
 std::string StableDiffusionGGML::get_default_ref_image_preset(SDVersion version) const {
-    if (version == VERSION_FIBO2) {
-        return "fibo2";
-    } else if (sd_version_is_longcat(version)) {
-        return "longcat";
-    } else if (sd_version_is_flux(version)) {
-        return "flux_kontext";
-    } else if (sd_version_is_flux3(version)) {
-        return "flux2";
-    } else if (sd_version_is_flux2(version) || sd_version_is_sefi_image(version)) {
-        return "flux2";
-    } else if (version == VERSION_QWEN_IMAGE_LAYERED) {
-        return "qwen_layered";
-    } else if (sd_version_is_qwen_image(version)) {
-        return "qwen";
-    } else if (sd_version_is_mage_flow(version)) {
-        return "mage_flow";
-    } else if (sd_version_is_boogu_image(version)) {
-        return "z_image_omni";
-    } else if (sd_version_is_llada_image(version)) {
-        return "llada_image";
-    } else if (sd_version_is_krea2(version)) {
-        // have to make a choice between "krea2_edit" mode (for lbouaraba/krea2edit)
-        // and "krea2_ostris_edit" (for krea2 ostris edit)
-        // since krea2 ostris edit support predates, it should probably be default
-        return "krea2_ostris_edit";
-    } else if (sd_version_is_anima(version)) {
-        return "cosmos_reference";
-    }
-    return "default";
+    return find_model_definition(version)->ref_image_preset;
 }
 
 RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_image_args) const {
     RefImageParams params;
     std::string preset_name = get_default_ref_image_preset(version);
+    // Keys whose value was rejected. They are already reported, so per-model "no effect"
+    // warnings must not repeat them.
+    std::set<std::string> rejected_keys;
 
     for (const auto& [key, value] : parse_key_value_args(ref_image_args, "reference image args")) {
         if (key == "preset") {
@@ -3253,6 +3036,7 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
                     valid_list += (valid_list.empty() ? "" : ", ") + name;
                 }
                 LOG_WARN("ignoring invalid reference image preset '%s'. Valid options: [%s]", value.c_str(), valid_list.c_str());
+                rejected_keys.insert(key);
             }
             break;
         }
@@ -3269,10 +3053,12 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
         if (key == "pass_to_vlm") {
             if (!parse_strict_bool(value, params.pass_to_vlm)) {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             }
         } else if (key == "pass_to_dit") {
             if (!parse_strict_bool(value, params.pass_to_dit)) {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             }
         } else if (key == "ref_index_mode") {
             if (value == "fixed") {
@@ -3283,14 +3069,17 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
                 params.ref_index_mode = Rope::RefIndexMode::DECREASE;
             } else {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             }
         } else if (key == "force_ref_timestep_zero") {
             if (!parse_strict_bool(value, params.force_ref_timestep_zero)) {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             }
         } else if (key == "resize_before_vae") {
             if (!parse_strict_bool(value, params.resize_before_vae)) {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             }
         } else if (key == "resize_vae_to_target") {
             if (!parse_strict_bool(value, params.resize_vae_to_target)) {
@@ -3315,6 +3104,7 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
         } else if (key == "vae_input_max_pixels") {
             if (!parse_strict_int(value, params.vae_input_max_pixels)) {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             }
         } else if (key == "vlm_resize_mode") {
             if (value == "longest_side") {
@@ -3325,14 +3115,31 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
                 params.vlm_resize_mode = RefImageResizeMode::NONE;
             } else {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             }
         } else if (key == "vlm_max_size") {
             if (!parse_strict_int(value, params.vlm_max_size)) {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             }
         } else if (key == "vlm_min_size") {
             if (!parse_strict_int(value, params.vlm_min_size)) {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
+            }
+        } else if (key == "ref_image_size") {
+            bool valid = true;
+            if (value == "match") {
+                params.ref_image_size = RefImageSizeMode::MATCH;
+            } else if (value == "max") {
+                params.ref_image_size = RefImageSizeMode::MAX;
+            } else {
+                LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
+                valid = false;
+            }
+            if (valid && !sd_version_is_minimax_h3(version)) {
+                LOG_WARN("ref_image_size is only supported by MiniMax-H3 for now");
             }
         } else if (key != "preset" && key != "vlm_size") {
             LOG_WARN("ignoring unknown reference image arg '%s'", key.c_str());
@@ -3343,6 +3150,7 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
             int vlm_size;
             if (!parse_strict_int(value, vlm_size)) {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
             } else {
                 LOG_INFO("vlm_size override: setting both min and max size to %ld", (long)vlm_size);
                 params.vlm_min_size = vlm_size;
@@ -3353,6 +3161,29 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
     }
     if (params.force_ref_timestep_zero && !sd_version_is_krea2(version)) {
         LOG_WARN("force_ref_timestep_zero is only supported by Krea2 architecture for now");
+    }
+    if (sd_version_is_minimax_h3(version)) {
+        // H3 consumes references as VAE latents in its own packed sequence rather than
+        // through the generic conditioner/DiT reference path, so ref_image_size is the
+        // only arg it acts on. Everything else is reported as ineffective rather than
+        // enumerated, so newly added RefImageParams members cannot silently do nothing.
+        static const std::set<std::string> h3_effective_keys = {"ref_image_size"};
+        // Keys that already have their own, more specific warning above.
+        static const std::set<std::string> h3_separately_reported_keys = {
+            "resize_before_vae",
+            "force_ref_timestep_zero",
+        };
+        for (const auto& arg : parse_key_value_args(ref_image_args, "reference image args")) {
+            if (h3_effective_keys.count(arg.first) == 0 &&
+                h3_separately_reported_keys.count(arg.first) == 0 &&
+                rejected_keys.count(arg.first) == 0) {
+                LOG_WARN("reference image arg '%s' has no effect for MiniMax-H3", arg.first.c_str());
+            }
+        }
+
+        if (!params.resize_before_vae) {
+            LOG_WARN("MiniMax-H3 requires 32-pixel-aligned reference images and cannot skip resizing before VAE encoding; ignoring resize_before_vae=false");
+        }
     }
     return params;
 }

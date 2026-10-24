@@ -19,7 +19,7 @@ struct ModelSlot {
     const char* id;
     const char* label;
     std::vector<std::string> categories;
-    std::string SDContextParams::*field;
+    std::string SDContextParams::* field;
 };
 
 static const ModelSlot k_model_slots[] = {

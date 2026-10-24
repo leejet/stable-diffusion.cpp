@@ -804,7 +804,7 @@ namespace sd::pipeline {
 
         if (!sd_version_supports_image_generation(sd->version)) {
             LOG_ERROR("%s cannot be run with generate_image(); use generate_video() or --mode vid_gen in the CLI",
-                      model_version_to_str[sd->version]);
+                      sd_version_name(sd->version));
             return false;
         }
 
@@ -939,10 +939,10 @@ namespace sd::pipeline {
                 }
                 LOG_INFO("hires fix: loading model upscaler from '%s'", request.hires.model_path);
                 hires_upscaler                    = std::make_unique<UpscalerGGML>(sd->n_threads,
-                                                                false,
-                                                                request.hires.upscale_tile_size,
-                                                                sd->backend_spec,
-                                                                sd->params_backend_spec);
+                                                                                   false,
+                                                                                   request.hires.upscale_tile_size,
+                                                                                   sd->backend_spec,
+                                                                                   sd->params_backend_spec);
                 const size_t max_graph_vram_bytes = sd->max_graph_vram_bytes_for_module(SDBackendModule::UPSCALER);
                 hires_upscaler->set_max_graph_vram_bytes(max_graph_vram_bytes);
                 if (!hires_upscaler->load_from_file(request.hires.model_path,

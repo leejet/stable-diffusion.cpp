@@ -128,7 +128,8 @@ To disable reference resizing before VAE encoding, use
 `--ref-image-args "resize_before_vae=false"` or the server field
 `"ref_image_args": "resize_before_vae=false"`. This is separate from
 `target=ref,mode=none`, which only skips input geometry. Model constraints
-still apply.
+still apply; MiniMax-H3 requires 32-pixel-aligned references and warns instead
+of honoring the switch.
 
 ## Server requests
 

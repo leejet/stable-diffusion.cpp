@@ -818,7 +818,7 @@ ArgOptions SDContextParams::get_options() {
          on_sampler_rng_arg},
         {"",
          "--prediction",
-         "prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow, sefi_flow]",
+         "prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow, sefi_flow, minit2i_flow, sensenova_u1_flow, flux3_flow, h3_av_flow, ming_image_flow]",
          on_prediction_arg},
         {"",
          "--lora-apply-mode",
@@ -1194,7 +1194,7 @@ ArgOptions SDGenerationParams::get_options() {
          &extra_sample_args},
         {"",
          "--extra-tiling-args",
-         "extra VAE tiling args, key=value list. Supported video VAEs accept temporal_tile_frames/temporal_tile_size (default: 4), temporal_tile_overlap (default: 1)",
+         "extra VAE tiling args, key=value list. Supported video VAEs accept temporal_tile_frames/temporal_tile_size (default: 4), temporal_tile_overlap (default: 1); Wan2.2 TI2V 5B accepts temporal_decode_frames (default: 1)",
          (int)',',
          &extra_tiling_args},
         {"",
@@ -2919,6 +2919,7 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
     params.circular_x                = circular || circular_x;
     params.circular_y                = circular || circular_y;
     params.image_preprocess          = {image_preprocess.c_str()};
+    params.ref_image_args            = ref_image_args.c_str();
     return params;
 }
 

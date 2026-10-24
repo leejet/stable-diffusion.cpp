@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <optional>
+#include <utility>
 
 #include "conditioning/wan_audio.h"
 #include "core/rng.hpp"
@@ -461,9 +462,35 @@ namespace sd::pipeline {
         return window;
     }
 
+    // ComfyUI-compatible reference sizing: per-axis rounding to 32 px keeps the reference
+    // divisible by VAE 16 x patch 2 without padding in the H3 graph. Both modes round rather
+    // than floor: flooring would under-size in-limit references and diverge from the
+    // upstream node, which rounds in both branches.
+    static std::pair<int, int> minimax_h3_reference_size(int source_w,
+                                                         int source_h,
+                                                         int target_w,
+                                                         int target_h,
+                                                         RefImageSizeMode mode) {
+        constexpr double kCanvasMultiple    = 32.0;
+        constexpr double kRefImageShortEdge = 2048.0;
+        double scale                        = 1.0;
+        if (mode == RefImageSizeMode::MAX) {
+            scale = std::min(1.0, kRefImageShortEdge / std::min(source_w, source_h));
+        } else {
+            double source_area = static_cast<double>(source_w) * source_h;
+            double target_area = static_cast<double>(target_w) * target_h;
+            scale              = std::min(1.0, std::sqrt(target_area / source_area));
+        }
+        auto align32 = [kCanvasMultiple](double value) {
+            return std::max(32, static_cast<int>(std::round(value / kCanvasMultiple)) * 32);
+        };
+        return {align32(source_w * scale), align32(source_h * scale)};
+    }
+
     static std::optional<ImageGenerationLatents> prepare_video_generation_latents(StableDiffusionGGML* sd,
                                                                                   const sd_vid_gen_params_t* sd_vid_gen_params,
-                                                                                  GenerationRequest* request) {
+                                                                                  GenerationRequest* request,
+                                                                                  const RefImageParams& ref_image_params) {
         ImageGenerationLatents latents;
         int64_t prepare_start_ms = ggml_time_ms();
 
@@ -576,6 +603,7 @@ namespace sd::pipeline {
                          sd_vid_gen_params->ref_videos_count,
                          sd_vid_gen_params->ref_audios_count);
 
+                int64_t ref_image_tokens = 0;
                 for (int i = 0; i < sd_vid_gen_params->ref_images_count; ++i) {
                     auto image = ensure_image_tensor_channels(
                         sd_image_to_tensor(sd_vid_gen_params->ref_images[i]),
@@ -584,15 +612,18 @@ namespace sd::pipeline {
                         LOG_ERROR("failed to load MiniMax-H3 reference image %d", i + 1);
                         return std::nullopt;
                     }
-                    int source_w       = static_cast<int>(image.shape()[0]);
-                    int source_h       = static_cast<int>(image.shape()[1]);
-                    double source_area = static_cast<double>(source_w) * source_h;
-                    double target_area = static_cast<double>(request->width) * request->height;
-                    double scale       = std::min(1.0, std::sqrt(target_area / source_area));
-                    int width          = std::max(32, static_cast<int>(std::round(source_w * scale / 32.f)) * 32);
-                    int height         = std::max(32, static_cast<int>(std::round(source_h * scale / 32.f)) * 32);
-                    image              = resize_reference(image, width, height);
-                    auto latent        = sd->encode_first_stage(image);
+                    int source_w = static_cast<int>(image.shape()[0]);
+                    int source_h = static_cast<int>(image.shape()[1]);
+                    auto [width, height] =
+                        minimax_h3_reference_size(source_w, source_h, request->width, request->height, ref_image_params.ref_image_size);
+                    LOG_INFO("MiniMax-H3 reference image %d: %dx%d -> %dx%d",
+                             i + 1,
+                             source_w,
+                             source_h,
+                             width,
+                             height);
+                    image       = resize_reference(image, width, height);
+                    auto latent = sd->encode_first_stage(image);
                     if (latent.empty()) {
                         LOG_ERROR("failed to encode MiniMax-H3 reference image %d", i + 1);
                         return std::nullopt;
@@ -602,6 +633,10 @@ namespace sd::pipeline {
                     latents.minimax_reference_blocks.push_back({MiniMaxH3ReferenceKind::IMAGE,
                                                                 video_index,
                                                                 -1});
+                    // The DiT patchifies latents 2 x 2, so the token count is a quarter of the
+                    // latent grid.
+                    ref_image_tokens += static_cast<int64_t>(latents.ref_latents.back().shape()[0] / 2) *
+                                        (latents.ref_latents.back().shape()[1] / 2);
                     MiniMaxH3PresentationItem item;
                     item.kind = MiniMaxH3PresentationKind::IMAGE;
                     item.frames.push_back(std::move(image));
@@ -654,8 +689,8 @@ namespace sd::pipeline {
                         int source_index = std::min(reference.frame_count - 1,
                                                     static_cast<int>(std::floor(frame * source_fps / 24.0)));
                         auto source      = ensure_image_tensor_channels(
-                                 sd_image_to_tensor(reference.frames[source_index]),
-                                 3);
+                            sd_image_to_tensor(reference.frames[source_index]),
+                            3);
                         if (source.empty()) {
                             LOG_ERROR("invalid frame %d in MiniMax-H3 reference video %d",
                                       source_index + 1,
@@ -710,6 +745,18 @@ namespace sd::pipeline {
                     latents.minimax_reference_blocks.push_back({MiniMaxH3ReferenceKind::AUDIO,
                                                                 -1,
                                                                 encoded_index});
+                }
+
+                if (ref_image_tokens > 0) {
+                    int64_t target_tokens = sd->get_image_seq_len(request->width, request->height) / 4 *
+                                            sd->video_frames_to_latent_frames(request->frames);
+                    if (target_tokens > 0 && ref_image_tokens > target_tokens * 4) {
+                        LOG_WARN("MiniMax-H3 reference images add %" PRId64
+                                 " tokens versus %" PRId64
+                                 " for the generated video; sampling cost scales with every attended token",
+                                 ref_image_tokens,
+                                 target_tokens);
+                    }
                 }
             }
 
@@ -771,7 +818,7 @@ namespace sd::pipeline {
                                                                keyframes.shape()[2],
                                                                1,
                                                                1},
-                                                         conditioned_mask);
+                                                              conditioned_mask);
                     latents.denoise_mask    = sd::ops::concat(latents.denoise_mask, keyframe_mask, 2);
                     latents.video_positions = build_ltxv_video_positions(latents.init_latent.shape()[0],
                                                                          latents.init_latent.shape()[1],
@@ -1059,10 +1106,10 @@ namespace sd::pipeline {
                                               inactive.shape()[1],
                                               inactive.shape()[2]});   // [t, h/vae_scale_factor, vae_scale_factor, w/vae_scale_factor, vae_scale_factor]
             mask_context      = mask_context.permute({1, 3, 4, 0, 2})  // [vae_scale_factor, vae_scale_factor, t, h/vae_scale_factor, w/vae_scale_factor]
-                               .reshape({inactive.shape()[0],
-                                         inactive.shape()[1],
-                                         inactive.shape()[2],
-                                         request->vae_scale_factor * request->vae_scale_factor});  // [vae_scale_factor*vae_scale_factor, t, h/vae_scale_factor, w/vae_scale_factor]
+                                    .reshape({inactive.shape()[0],
+                                              inactive.shape()[1],
+                                              inactive.shape()[2],
+                                              request->vae_scale_factor * request->vae_scale_factor});  // [vae_scale_factor*vae_scale_factor, t, h/vae_scale_factor, w/vae_scale_factor]
 
             if (!ref_image_latent.empty()) {
                 vace_context  = sd::ops::concat(ref_image_latent, vace_context, 2);  // [b, 2*c, t+1, h/vae_scale_factor, w/vae_scale_factor]
@@ -1147,7 +1194,8 @@ namespace sd::pipeline {
     static std::optional<ImageGenerationEmbeds> prepare_video_generation_embeds(StableDiffusionGGML* sd,
                                                                                 const sd_vid_gen_params_t* sd_vid_gen_params,
                                                                                 const GenerationRequest& request,
-                                                                                const ImageGenerationLatents& latents) {
+                                                                                const ImageGenerationLatents& latents,
+                                                                                const RefImageParams& ref_image_params) {
         ConditionerRunnerEndOnExit conditioner_runner_end{sd->cond_stage_model.get()};
 
         ImageGenerationEmbeds embeds;
@@ -1157,9 +1205,7 @@ namespace sd::pipeline {
         condition_params.zero_out_masked       = true;
         condition_params.ref_images            = &latents.ref_images;
         condition_params.minimax_h3_references = &latents.minimax_presentation_refs;
-        if (sd_version_is_lingbot_video(sd->version) || sd_version_is_minimax_h3(sd->version)) {
-            condition_params.ref_image_params.vlm_resize_mode = RefImageResizeMode::AREA;
-        }
+        condition_params.ref_image_params      = ref_image_params;
 
         int64_t prepare_start_ms = ggml_time_ms();
         embeds.cond              = sd->get_learned_condition(condition_params);
@@ -1341,9 +1387,9 @@ namespace sd::pipeline {
 
         auto& upsampler                   = scope.runner;
         upsampler                         = std::make_unique<LTXVUpsampler::LatentUpsamplerRunner>(sd->backend_for(SDBackendModule::UPSCALER),
-                                                                           model_manager->loader().get_tensor_storage_map(),
-                                                                           prefix,
-                                                                           model_manager);
+                                                                                                   model_manager->loader().get_tensor_storage_map(),
+                                                                                                   prefix,
+                                                                                                   model_manager);
         const size_t max_graph_vram_bytes = sd->max_graph_vram_bytes_for_module(SDBackendModule::UPSCALER);
         upsampler->set_max_graph_vram_bytes(max_graph_vram_bytes);
         if (upsampler->model == nullptr) {
@@ -1526,6 +1572,7 @@ namespace sd::pipeline {
         img_gen_params.circular_x        = sd_vid_gen_params->circular_x;
         img_gen_params.circular_y        = sd_vid_gen_params->circular_y;
         img_gen_params.image_preprocess  = sd_vid_gen_params->image_preprocess;
+        img_gen_params.ref_image_args    = sd_vid_gen_params->ref_image_args;
 
         sd->animatediff_num_frames = n_frames;
         bool ok                    = generate_image(sd, &img_gen_params, frames_out, num_frames_out);
@@ -1550,7 +1597,7 @@ namespace sd::pipeline {
 
         sd->reset_cancel_flag();
 
-        const RefImageParams ref_image_params;
+        const RefImageParams ref_image_params = sd->resolve_ref_image_params(sd_vid_gen_params->ref_image_args);
 
         int64_t t0            = ggml_time_ms();
         sd->vae_tiling_params = sd_vid_gen_params->vae_tiling_params;
@@ -1589,7 +1636,7 @@ namespace sd::pipeline {
         sd->reset_generation_extensions();
 
         SamplePlan plan(sd, sd_vid_gen_params, request);
-        auto latent_inputs_opt = prepare_video_generation_latents(sd, sd_vid_gen_params, &request);
+        auto latent_inputs_opt = prepare_video_generation_latents(sd, sd_vid_gen_params, &request, ref_image_params);
         if (!latent_inputs_opt.has_value()) {
             return false;
         }
@@ -1598,7 +1645,8 @@ namespace sd::pipeline {
         auto embeds_opt = prepare_video_generation_embeds(sd,
                                                           sd_vid_gen_params,
                                                           request,
-                                                          latents);
+                                                          latents,
+                                                          ref_image_params);
         if (!embeds_opt) {
             return false;
         }
@@ -1821,7 +1869,7 @@ namespace sd::pipeline {
                                         x_t,
                                         std::move(noise),
                                         embeds.cond,
-                                      hires_request.use_uncond ? embeds.uncond : SDCondition(),
+                                        hires_request.use_uncond ? embeds.uncond : SDCondition(),
                                         embeds.img_uncond,
                                         sd::Tensor<float>(),
                                         0.f,
