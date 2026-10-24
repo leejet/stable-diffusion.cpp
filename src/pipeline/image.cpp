@@ -274,9 +274,13 @@ namespace sd::pipeline {
             LOG_INFO("EDIT mode");
         }
 
+        bool skip_vae_encoding = (sd->version == VERSION_HIDREAM_O1) || !(
+            ref_image_params.pass_to_dit || ref_image_params.vlm_use_vae_input ||
+            sd_version_is_unet_edit(sd->version) || sd_version_is_pid(sd->version));
+
         std::vector<sd::Tensor<float>> ref_latents;
         for (size_t i = 0; i < ref_images.size(); i++) {
-            if (sd->version == VERSION_HIDREAM_O1) {
+            if (skip_vae_encoding) {
                 continue;
             }
             sd::Tensor<float> ref_latent;
