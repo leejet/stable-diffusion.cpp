@@ -47,6 +47,10 @@ The attention path reuses K/V tiles across more queries and overlaps complete
 tile loads with computation. Unsupported devices, shapes and layouts retain
 their existing paths. SageAttention is a separate option.
 
+Fused SiTU is compiled only when ggml advertises `GGML_HAS_SITU`; older
+headers keep the original composite activation. Backend capability checks
+still select the fallback when the operation is unavailable on a device.
+
 The following saved measurements use an RTX 3090, MOSS-Image-SFT Q8_0,
 Qwen3.5-9B Q8_0, the FLUX.2 VAE, 1024x1024, 10 Euler steps, CFG 3, flow shift 5,
 seed 42 and automatic VRAM placement. Ordinary Flash Attention is enabled;

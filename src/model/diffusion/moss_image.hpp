@@ -56,7 +56,7 @@ namespace MOSSImage {
 
     inline ggml_tensor* situ(GGMLRunnerContext* ctx, ggml_tensor* hidden, ggml_tensor* gate) {
         auto c = ctx->ggml_ctx;
-#ifndef SD_USE_UPSTREAM_GGML
+#if !defined(SD_USE_UPSTREAM_GGML) && defined(GGML_HAS_SITU)
         auto out = ggml_glu_split(c, gate, hidden, GGML_GLU_OP_SITU);
         if (ctx->backend != nullptr && ggml_backend_supports_op(ctx->backend, out)) {
             return out;
@@ -148,7 +148,7 @@ namespace MOSSImage {
             y            = ggml_add(c, ggml_add(c, y, ggml_mul(c, y, part(4))), part(3));
             auto up_gate = linear("proj.ffn_up_gate", y);
             y            = nullptr;
-#ifndef SD_USE_UPSTREAM_GGML
+#if !defined(SD_USE_UPSTREAM_GGML) && defined(GGML_HAS_SITU)
             auto activation = ggml_glu(c, up_gate, GGML_GLU_OP_SITU, true);
             if (ctx->backend != nullptr && ggml_backend_supports_op(ctx->backend, activation)) {
                 y = activation;
