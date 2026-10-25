@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "sefi-image",
   "name": "SeFi Image 5B RL",
+  "size_multiple": 16,
   "model_url": "https://huggingface.co/SeFi-Image/SeFi-Image-5B-Base",
   "slots": [
     {

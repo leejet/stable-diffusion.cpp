@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "sdxl-inpainting",
   "name": "SDXL Inpainting",
+  "size_multiple": 64,
   "description": "Select an inpainting checkpoint, then supply Init Image and Mask Image.",
   "model_url": "https://huggingface.co/diffusers/stable-diffusion-xl-1.0-inpainting-0.1",
   "slots": [

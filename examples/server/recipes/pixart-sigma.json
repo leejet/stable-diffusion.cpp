@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "pixart-sigma",
   "name": "PixArt Sigma XL 1024",
+  "size_multiple": 16,
   "model_url": "https://huggingface.co/PixArt-alpha/PixArt-Sigma-XL-2-1024-MS",
   "slots": [
     {

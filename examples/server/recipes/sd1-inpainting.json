@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "sd1-inpainting",
   "name": "SD 1.5 Inpainting",
+  "size_multiple": 64,
   "description": "Select an inpainting checkpoint, then supply an input image and mask.",
   "slots": [
     {

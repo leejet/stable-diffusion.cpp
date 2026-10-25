@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "flux2-klein-4b",
   "name": "FLUX.2 Klein 4B",
+  "size_multiple": 16,
   "description": "Supports reference-image editing. The FLUX.2 small decoder is an alternative VAE.",
   "model_url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B",
   "slots": [

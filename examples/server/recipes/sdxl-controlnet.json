@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "sdxl-controlnet",
   "name": "SDXL ControlNet",
+  "size_multiple": 64,
   "description": "Select a compatible SDXL ControlNet and supply a preprocessed control image. Input image and mask are optional for image-to-image or inpainting.",
   "model_url": "https://huggingface.co/diffusers/controlnet-canny-sdxl-1.0",
   "slots": [

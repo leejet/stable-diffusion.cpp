@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "moss-image-base",
   "name": "MOSS Image Base",
+  "size_multiple": 16,
   "description": "Select the MOSS-Image-Base transformer with its matching text encoder and FLUX.2 VAE or TAE.",
   "model_url": "https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base",
   "slots": [

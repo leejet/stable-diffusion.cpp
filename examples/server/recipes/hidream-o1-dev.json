@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "hidream-o1-dev",
   "name": "HiDream O1 Image dev",
+  "size_multiple": 1,
   "description": "Bundled checkpoint; also supports reference-image editing.",
   "model_url": "https://huggingface.co/HiDream-ai/HiDream-O1-Image-Dev",
   "slots": [

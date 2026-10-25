@@ -1499,7 +1499,7 @@ bool load_wav_from_memory(const uint8_t* data,
         const size_t remaining = size - chunk_data_pos;  // safe: chunk_data_pos <= size
         // Chunk sizes come from the payload, so compare against the remaining bytes
         // instead of adding them to offsets (avoids size_t wrap on 32-bit builds).
-        const bool data_fits   = static_cast<size_t>(chunk_size) <= remaining;
+        const bool data_fits = static_cast<size_t>(chunk_size) <= remaining;
 
         if (std::memcmp(data + pos, "fmt ", 4) == 0) {
             if (chunk_size < 16 || !data_fits) {

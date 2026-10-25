@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "sdxl-turbo",
   "name": "SDXL Turbo",
+  "size_multiple": 64,
   "model_url": "https://huggingface.co/stabilityai/sdxl-turbo",
   "slots": [
     {

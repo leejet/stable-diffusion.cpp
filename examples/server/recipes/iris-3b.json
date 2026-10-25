@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "iris-3b",
   "name": "Iris 3B",
+  "size_multiple": 16,
   "description": "Pixel-space model; no VAE is required.",
   "model_url": "https://huggingface.co/speridlabs/iris-3b",
   "slots": [

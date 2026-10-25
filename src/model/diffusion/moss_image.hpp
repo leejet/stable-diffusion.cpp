@@ -185,7 +185,7 @@ namespace MOSSImage {
                     ggml_build_forward_expand(ctx->graph, parts[i]);
                 }
             }
-            x         = ggml_concat(c, x, text, 1);
+            x = ggml_concat(c, x, text, 1);
             for (int64_t i = 0; i < config.depth; ++i) {
                 if (std::find(skip.begin(), skip.end(), i) == skip.end()) {
                     x = std::dynamic_pointer_cast<Block>(blocks["layers." + std::to_string(i)])->forward(ctx, x, pe, parts);

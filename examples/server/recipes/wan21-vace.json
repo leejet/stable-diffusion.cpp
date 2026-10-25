@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "wan21-vace",
   "name": "Wan 2.1 VACE 1.3B / 14B",
+  "size_multiple": 16,
   "description": "Select matching VACE weights. Supports text, reference images and control video through Video Generation.",
   "model_url": "https://huggingface.co/Wan-AI/Wan2.1-VACE-14B",
   "slots": [
@@ -30,6 +31,12 @@
       "tae"
     ]
   ],
+  "video_constraints": {
+    "frame_step": 4,
+    "frame_offset": 1,
+    "frame_rounding": "floor",
+    "min_frames": 1
+  },
   "defaults": {
     "sampling_method": "euler",
     "video_frames": 33,

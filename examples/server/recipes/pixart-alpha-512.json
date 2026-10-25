@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "pixart-alpha-512",
   "name": "PixArt Alpha XL 512",
+  "size_multiple": 16,
   "description": "Use the matching PixArt Alpha transformer and SD 1.x-style VAE. Resolution/aspect-ratio micro-conditioning is not currently applied by the runtime.",
   "model_url": "https://huggingface.co/PixArt-alpha/PixArt-XL-2-512x512",
   "slots": [

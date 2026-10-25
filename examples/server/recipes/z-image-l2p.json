@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "z-image-l2p",
   "name": "Z-Image L2P",
+  "size_multiple": 16,
   "description": "Pixel-space L2P checkpoint with Qwen 3 4B; no VAE is needed. Use dimensions divisible by 16.",
   "model_url": "https://huggingface.co/zhen-nan/L2P",
   "slots": [

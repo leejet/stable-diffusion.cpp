@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "sd2-768-checkpoint",
   "name": "SD 2.1 768",
+  "size_multiple": 64,
   "slots": [
     {
       "id": "model",

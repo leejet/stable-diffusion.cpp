@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "pid-15",
   "name": "PiD 1.5 (Flux / Z-Image VAE)",
+  "size_multiple": 1,
   "description": "Supply a reference image; the first image is used as the source latent. Select a Flux/Z-Image PiD checkpoint and matching Flux VAE.",
   "model_url": "https://huggingface.co/nvidia/PiD",
   "slots": [

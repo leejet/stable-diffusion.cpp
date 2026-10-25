@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "qwen-image-21-turbo",
   "name": "Qwen Image 2.1 Turbo",
+  "size_multiple": 32,
   "description": "Use the standalone Turbo diffusion weights for generation and editing with the fixed 8-step schedule. Select the Qwen Image 2.1 VAE or TAEQI2.1, and supply a vision projector when needed.",
   "model_url": "https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo",
   "slots": [

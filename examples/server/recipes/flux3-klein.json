@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "flux3-klein",
   "name": "FLUX.3 Image Klein",
+  "size_multiple": 16,
   "description": "Supports text-to-image and reference-image editing.",
   "model_url": "https://huggingface.co/black-forest-labs/flux-3-image-klein",
   "slots": [
