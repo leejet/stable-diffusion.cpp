@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <optional>
 
+#include "conditioning/fibo2.hpp"
+#include "conditioning/fibo2_text_images.h"
 #include "core/rng.hpp"
 #include "diffusion_engine.h"
 #include "model/vae/vae.hpp"
@@ -487,6 +489,17 @@ namespace sd::pipeline {
 
         condition_params.ref_image_params = ref_image_params;
 
+        std::vector<sd::Tensor<float>> text_images, empty_text_images;
+        if (sd->version == VERSION_FIBO2 && ref_image_params.render_text_images) {
+            auto texts = Fibo2Conditioner::text_render_entries(request->prompt, static_cast<int>(latents->ref_images.size()));
+            if (!sd::render_fibo2_text_images(texts, ref_image_params.text_render_fonts, text_images)) {
+                return std::nullopt;
+            }
+            if (!text_images.empty()) {
+                condition_params.text_images = &text_images;
+            }
+        }
+
         sd->prepare_generation_extensions(request->pm_params,
                                           request->pulid_params,
                                           condition_params,
@@ -499,6 +512,17 @@ namespace sd::pipeline {
             LOG_ERROR("failed to encode prompt");
             return std::nullopt;
         }
+        if (!text_images.empty() && latents->ref_images.empty()) {
+            condition_params.text_images = &empty_text_images;
+            auto base_condition          = sd->get_learned_condition(condition_params);
+            if (base_condition.empty()) {
+                LOG_ERROR("failed to encode Fibo base prompt");
+                return std::nullopt;
+            }
+            // Fibo's first extra context is the caption-only high-noise condition.
+            cond.extra_c_crossattns.push_back(std::move(base_condition.c_crossattn));
+        }
+        condition_params.text_images = nullptr;
         if (cond.c_concat.empty() && ref_image_params.pass_to_dit) {
             cond.c_concat = latents->concat_latent;  // TODO: optimize
         }

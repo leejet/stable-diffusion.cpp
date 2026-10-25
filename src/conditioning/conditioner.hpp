@@ -138,6 +138,7 @@ struct ConditionerParams {
     const std::vector<sd::Tensor<float>>* ref_images                    = nullptr;  // for qwen image edit
     const std::vector<MiniMaxH3PresentationItem>* minimax_h3_references = nullptr;
     RefImageParams ref_image_params;
+    const std::vector<sd::Tensor<float>>* text_images = nullptr;
 };
 
 struct Conditioner {
