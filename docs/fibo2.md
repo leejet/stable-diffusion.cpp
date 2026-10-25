@@ -50,4 +50,6 @@ The automatic `fibo2` reference preset combines `resize_single_ref_to_target=tru
 
 The vision encoder defaults to `vlm_resize_mode=longest_side,vlm_max_size=768`. Override these with `--ref-image-args`, for example `vlm_max_size=512`, or use `vlm_resize_mode=none` to skip size-based scaling. Vision inputs are still aligned to the encoder's patch grid.
 
-Plain prompts and structured JSON captions are accepted. This integration uses the caption-only text-rendering path (`render_text_images=False`); it does not generate auxiliary glyph images or expand prompts with Bria VGL. Native Fibo mask preprocessing is not connected to `--mask`.
+Plain prompts and structured JSON captions are accepted. This integration uses the caption-only text-rendering path (`render_text_images=False`); it does not generate auxiliary glyph images or expand prompts with Bria VGL.
+
+For native masked editing, pass one reference image with `-r` and a mask of the same source dimensions with `--mask`. White pixels select the region to edit. The mask is made binary at 128 and the selected source pixels are filled with RGB 128 before the reference is cropped or resized for the VAE and vision encoder. This does not use a latent denoising mask. Ordinary `--init-img` image-to-image masking without reference images retains its existing behavior. When both an initial image and a reference are supplied, the mask applies to the reference; the initial image is still used for image-to-image initialization, without a latent mask.

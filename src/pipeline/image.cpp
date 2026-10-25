@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <optional>
 
 #include "core/rng.hpp"
@@ -116,6 +117,49 @@ namespace sd::pipeline {
         GGML_ABORT("cannot convert image tensor from %lld to %d channels",
                    (long long)current_channels,
                    channels);
+    }
+
+    static bool prepare_fibo2_mask(sd_img_gen_params_t& params,
+                                   sd_image_t& masked_reference,
+                                   std::vector<uint8_t>& pixels) {
+        if (params.mask_image.data == nullptr ||
+            (params.ref_images_count == 0 && params.init_image.data != nullptr)) {
+            return true;
+        }
+        if (params.ref_images_count != 1 || params.ref_images == nullptr || params.ref_images[0].data == nullptr) {
+            LOG_ERROR("Fibo masked editing requires exactly one reference image");
+            return false;
+        }
+        const auto& image = params.ref_images[0];
+        const auto& mask  = params.mask_image;
+        if (image.width == 0 || image.height == 0 ||
+            image.width > std::numeric_limits<int>::max() || image.height > std::numeric_limits<int>::max() ||
+            image.channel < 1 || image.channel > 4 || mask.channel < 1 || mask.channel > 4 ||
+            image.width != mask.width || image.height != mask.height) {
+            LOG_ERROR("Fibo mask and reference must be valid images with matching source dimensions");
+            return false;
+        }
+        const uint64_t count = uint64_t(image.width) * image.height;
+        if (count > std::numeric_limits<size_t>::max() / 3) {
+            LOG_ERROR("Fibo masked reference is too large");
+            return false;
+        }
+        pixels.resize(static_cast<size_t>(count) * 3);
+        for (size_t i = 0; i < count; ++i) {
+            const auto* source = image.data + i * image.channel;
+            const auto* value  = mask.data + i * mask.channel;
+            const int gray     = mask.channel < 3
+                                     ? value[0]
+                                     : (19595 * value[0] + 38470 * value[1] + 7471 * value[2] + 32768) >> 16;
+            for (int channel = 0; channel < 3; ++channel) {
+                pixels[i * 3 + channel] = gray >= 128 ? 128 : source[image.channel < 3 ? 0 : channel];
+            }
+        }
+        masked_reference  = {image.width, image.height, 3, pixels.data()};
+        params.ref_images = &masked_reference;
+        // Fibo masks condition the reference before geometry processing, not the denoising latent.
+        params.mask_image = {};
+        return true;
     }
 
     static sd::Tensor<float> encode_z_image_control_latent(StableDiffusionGGML* sd, const sd::Tensor<float>& control_rgb) {
@@ -862,6 +906,10 @@ namespace sd::pipeline {
         const auto info = sd::generation_info(request, *sd_img_gen_params);
         sd::ImagePreprocessor preprocessing(sd_img_gen_params->image_preprocess.rules);
         sd_img_gen_params_t processed_params = *sd_img_gen_params;
+        sd_image_t masked_reference{};
+        std::vector<uint8_t> masked_reference_pixels;
+        if (sd->version == VERSION_FIBO2 && !prepare_fibo2_mask(processed_params, masked_reference, masked_reference_pixels))
+            return false;
         if (!preprocessing.prepare_inputs(processed_params, request.width, request.height))
             return false;
         sd_img_gen_params = &processed_params;
