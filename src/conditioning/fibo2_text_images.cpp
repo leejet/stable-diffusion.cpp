@@ -198,6 +198,7 @@ bool sd::render_fibo2_text_images(const std::vector<std::string>& texts,
     size_t minimum_coverage = max_text_image_pixels;
     if (!text_line({'A', 'g'}, 0, 2, fonts, false, minimum_coverage, minimum))
         return false;
+    size_t remaining_pixels = max_text_image_pixels;
     for (const auto& text : texts) {
         std::vector<utf8proc_int32_t> characters;
         if (!text_characters(text, characters))
@@ -222,12 +223,13 @@ bool sd::render_fibo2_text_images(const std::vector<std::string>& texts,
                                 : std::max(minimum.height, line.height);
             width       = std::max(width, line.width);
             height += line.height + (lines.empty() ? 0 : 4);
-            if ((int64_t(width) + 4) * (int64_t(height) + 4) > int64_t(max_text_image_pixels)) {
-                LOG_ERROR("Fibo text image exceeds the maximum area of %zu pixels", max_text_image_pixels);
+            if ((int64_t(width) + 4) * (int64_t(height) + 4) > int64_t(remaining_pixels)) {
+                LOG_ERROR("Fibo text images exceed the maximum total area of %zu pixels", max_text_image_pixels);
                 return false;
             }
             lines.push_back(std::move(line));
         }
+        remaining_pixels -= size_t(width + 4) * (height + 4);
         auto image = sd::full<float>({width + 4, height + 4, 3, 1}, 1.f);
         int row    = 2;
         for (const auto& line : lines) {
