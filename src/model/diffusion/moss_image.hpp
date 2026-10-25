@@ -2,6 +2,7 @@
 #define __SD_MODEL_DIFFUSION_MOSS_IMAGE_HPP__
 
 #include <algorithm>
+#include <array>
 #include <cinttypes>
 #include "core/pe_cache.h"
 
@@ -114,11 +115,11 @@ namespace MOSSImage {
             blocks["proj.ffn_down"]    = std::make_shared<Linear>(config.ffn_dim, config.dim, false);
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* pe, ggml_tensor* mod) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* pe, const std::array<ggml_tensor*, 6>& mod) {
             auto c      = ctx->ggml_ctx;
             auto linear = [&](const char* name, ggml_tensor* h) { return std::dynamic_pointer_cast<Linear>(blocks[name])->forward(ctx, h); };
             auto norm   = [&](const char* name, ggml_tensor* h) { return std::dynamic_pointer_cast<RMSNorm>(blocks[name])->forward(ctx, h); };
-            auto part   = [&](int i) { return ggml_ext_slice(c, mod, 0, i * config.dim, (i + 1) * config.dim); };
+            auto part   = [&](int i) { return mod[i]; };
             auto y      = norm("norm1", x);
             y           = ggml_add(c, ggml_add(c, y, ggml_mul(c, y, part(1))), part(0));
             auto qkv    = linear("proj.qkv", y);
@@ -176,10 +177,17 @@ namespace MOSSImage {
             time      = linear("time_embedding.2", ggml_silu(c, linear("time_embedding.0", time)));
             auto mod  = linear("shared_block_modulation", time);
             auto head = linear("video_head_modulation", time);
+            std::array<ggml_tensor*, 6> parts;
+            for (int i = 0; i < 6; ++i) {
+                parts[i] = ggml_ext_slice(c, mod, 0, i * config.dim, (i + 1) * config.dim);
+                if (ctx->graph != nullptr) {
+                    ggml_build_forward_expand(ctx->graph, parts[i]);
+                }
+            }
             x         = ggml_concat(c, x, text, 1);
             for (int64_t i = 0; i < config.depth; ++i) {
                 if (std::find(skip.begin(), skip.end(), i) == skip.end()) {
-                    x = std::dynamic_pointer_cast<Block>(blocks["layers." + std::to_string(i)])->forward(ctx, x, pe, mod);
+                    x = std::dynamic_pointer_cast<Block>(blocks["layers." + std::to_string(i)])->forward(ctx, x, pe, parts);
                     sd::ggml_graph_cut::mark_graph_cut(x, "moss_image.layers." + std::to_string(i), "x");
                 }
             }
@@ -255,7 +263,7 @@ namespace MOSSImage {
                 }
                 auto time = ggml_new_tensor_3d(compute_ctx, GGML_TYPE_F32, config.freq_dim, 1, 1);
                 set_backend_tensor_data(time, time_data.data());
-                auto ctx = get_context();
+                auto ctx = get_context(gf);
                 ggml_build_forward_expand(gf, model.forward(&ctx, x, time, text, pe, skip));
                 return gf;
             };
