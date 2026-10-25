@@ -491,7 +491,7 @@ namespace sd::pipeline {
 
         std::vector<sd::Tensor<float>> text_images, empty_text_images;
         if (sd->version == VERSION_FIBO2 && ref_image_params.render_text_images) {
-            auto texts = Fibo2Conditioner::text_render_entries(request->prompt, static_cast<int>(latents->ref_images.size()));
+            auto texts = Fibo2Conditioner::text_render_entries(request->prompt, condition_params.ref_images ? static_cast<int>(condition_params.ref_images->size()) : 0);
             if (!sd::render_fibo2_text_images(texts, ref_image_params.text_render_fonts, text_images)) {
                 return std::nullopt;
             }

@@ -15,6 +15,8 @@
 #include FT_FREETYPE_H
 
 namespace sd {
+    static constexpr size_t max_text_image_pixels = 16777216;
+
     struct FiboTextFonts {
         FT_Library library = nullptr;
         std::vector<std::vector<uint8_t>> data;
@@ -82,6 +84,7 @@ namespace sd {
                           size_t last,
                           const FiboTextFonts& fonts,
                           bool mixed,
+                          size_t& remaining_coverage,
                           FiboTextLine& line) {
         FT_Pos pen            = 0;
         FT_Face previous_face = nullptr;
@@ -105,13 +108,20 @@ namespace sd {
                 LOG_ERROR("Fibo text rendering requires grayscale outline fonts");
                 return false;
             }
+            if (bitmap.width > max_text_image_pixels || bitmap.rows > max_text_image_pixels ||
+                (bitmap.rows && bitmap.width > remaining_coverage / bitmap.rows)) {
+                LOG_ERROR("Fibo text glyph coverage exceeds the maximum area of %zu pixels", max_text_image_pixels);
+                return false;
+            }
+            size_t glyph_pixels = size_t(bitmap.width) * bitmap.rows;
+            remaining_coverage -= glyph_pixels;
             FiboTextGlyph glyph{static_cast<int>((pen + 32) >> 6) + face->glyph->bitmap_left,
                                 -face->glyph->bitmap_top,
                                 static_cast<int>(bitmap.width),
                                 static_cast<int>(bitmap.rows),
                                 {}};
             glyph.run_start = previous_face != face;
-            glyph.coverage.resize(size_t(glyph.width) * glyph.height);
+            glyph.coverage.resize(glyph_pixels);
             for (int y = 0; y < glyph.height; ++y) {
                 int row = bitmap.pitch < 0 ? glyph.height - 1 - y : y;
                 std::copy_n(bitmap.buffer + row * std::abs(bitmap.pitch), glyph.width, glyph.coverage.data() + size_t(y) * glyph.width);
@@ -185,7 +195,8 @@ bool sd::render_fibo2_text_images(const std::vector<std::string>& texts,
         }
     }
     FiboTextLine minimum;
-    if (!text_line({'A', 'g'}, 0, 2, fonts, false, minimum))
+    size_t minimum_coverage = max_text_image_pixels;
+    if (!text_line({'A', 'g'}, 0, 2, fonts, false, minimum_coverage, minimum))
         return false;
     for (const auto& text : texts) {
         std::vector<utf8proc_int32_t> characters;
@@ -195,14 +206,15 @@ bool sd::render_fibo2_text_images(const std::vector<std::string>& texts,
             return ch >= 128 && FT_Get_Char_Index(fonts.faces.front(), ch) == 0;
         });
         std::vector<FiboTextLine> lines;
+        size_t remaining_coverage = max_text_image_pixels;
         int width = 1, height = 0;
         for (size_t first = 0; first < characters.size() || lines.empty(); first += 256) {
             FiboTextLine line;
-            if (!text_line(characters, first, std::min(first + 256, characters.size()), fonts, mixed, line))
+            if (!text_line(characters, first, std::min(first + 256, characters.size()), fonts, mixed, remaining_coverage, line))
                 return false;
             if (characters.empty()) {
                 FiboTextLine space;
-                if (!text_line({' '}, 0, 1, fonts, false, space))
+                if (!text_line({' '}, 0, 1, fonts, false, remaining_coverage, space))
                     return false;
                 line.width = space.width;
             }
@@ -210,8 +222,8 @@ bool sd::render_fibo2_text_images(const std::vector<std::string>& texts,
                                 : std::max(minimum.height, line.height);
             width       = std::max(width, line.width);
             height += line.height + (lines.empty() ? 0 : 4);
-            if ((int64_t(width) + 4) * (int64_t(height) + 4) > 16777216) {
-                LOG_ERROR("Fibo text image exceeds the maximum area of 16777216 pixels");
+            if ((int64_t(width) + 4) * (int64_t(height) + 4) > int64_t(max_text_image_pixels)) {
+                LOG_ERROR("Fibo text image exceeds the maximum area of %zu pixels", max_text_image_pixels);
                 return false;
             }
             lines.push_back(std::move(line));
