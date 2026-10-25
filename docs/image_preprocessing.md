@@ -100,10 +100,13 @@ for individual references, identity images, or video control frames.
 --image-preprocess "target=control-frame,index=2,canny=true"
 ```
 
-Init and mask sources must have the same dimensions. The mask inherits the
-init crop, resize, and padding coordinates, while retaining its own filter,
-padding value, and Canny setting. Conflicting mask geometry is rejected. An
-omitted mask remains absent until the original pipeline creates its default mask.
+If init and mask source dimensions differ, the mask is first center-cropped to
+the init source aspect ratio and resized to the init source dimensions using
+nearest-exact interpolation. The mask then inherits the init crop, resize, and
+padding coordinates, while retaining its own filter, padding value, and Canny
+setting for that transform. Explicit mask geometry is evaluated after this
+alignment; conflicting geometry is rejected. An omitted mask remains absent
+until the original pipeline creates its default mask.
 
 ## Downstream behavior
 

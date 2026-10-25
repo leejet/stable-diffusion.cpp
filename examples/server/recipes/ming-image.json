@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "ming-image",
   "name": "Ming Image 0.1",
+  "size_multiple": 16,
   "model_url": "https://huggingface.co/inclusionAI/Ming-Image-0.1-Design",
   "slots": [
     {

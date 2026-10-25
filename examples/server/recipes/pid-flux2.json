@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "pid-flux2",
   "name": "PiD (Flux.2 VAE)",
+  "size_multiple": 1,
   "description": "Supply a reference image; the first image is used as the source latent. Select a matching Flux.2 PiD checkpoint and VAE.",
   "model_url": "https://huggingface.co/nvidia/PiD",
   "slots": [

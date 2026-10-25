@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "lingbot-video-moe",
   "name": "LingBot Video MoE 30B A3B",
+  "size_multiple": 16,
   "description": "Use Video Generation.",
   "model_url": "https://huggingface.co/robbyant/lingbot-video-moe-30b-a3b",
   "slots": [
@@ -30,6 +31,12 @@
       "tae"
     ]
   ],
+  "video_constraints": {
+    "frame_step": 4,
+    "frame_offset": 1,
+    "frame_rounding": "floor",
+    "min_frames": 1
+  },
   "defaults": {
     "video_frames": 33,
     "cfg_scale": 3,

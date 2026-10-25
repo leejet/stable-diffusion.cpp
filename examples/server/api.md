@@ -244,6 +244,7 @@ the same one-recipe-per-file schema:
   "id": "my-flux",
   "name": "My FLUX",
   "description": "FLUX.1 dev",
+  "size_multiple": 16,
   "model_url": "https://huggingface.co/black-forest-labs/FLUX.1-dev",
   "slots": [
     {"id": "diffusion_model", "required": true},
@@ -259,13 +260,53 @@ the same one-recipe-per-file schema:
 
 IDs contain 1–128 ASCII letters, digits, dots, underscores or hyphens.
 `name`, `schema_version: 1` and `slots` are required; `description` and
-`model_url`, `required_any`, `defaults`, `context`, `features` and `disabled_features` are optional. Each slot requires only `id` and boolean `required`.
+`model_url`, `required_any`, `defaults`, `context`, `features`, `disabled_features`
+and `size_multiple`, `video_constraints` are optional. Each slot requires only `id` and boolean `required`.
 The server supplies the default label and search directories for each slot.
 An optional nonempty `label` overrides the display name, for example
 `{"id": "diffusion_model", "label": "Low-noise diffusion model", "required": true}`.
 Legacy `category` fields remain accepted, but must match one of the slot's
 supported directories; they cannot redefine or restrict its search directories.
 At least one required `model` or `diffusion_model` slot is necessary.
+
+`size_multiple` is a positive integer from 1 to 4096 that declares the width and
+height increment used by the web UI. It defaults to `8` when omitted; the UI also
+uses `8` before a recipe is selected. For example, `"size_multiple": 16` makes
+generated size presets multiples of 16. Exact dimensions that do not match the
+increment require correction before submission. This is recipe metadata, not a
+generation parameter, and does not change the core model's alignment behavior.
+
+`video_constraints` is optional metadata for the web UI's Frames / Duration
+controls. It does not override the runtime's model-specific rules. For example:
+
+```json
+"video_constraints": {
+  "frame_step": 4,
+  "frame_offset": 1,
+  "frame_rounding": "floor",
+  "min_frames": 1
+}
+```
+
+Legal frame counts are `frame_step * n + frame_offset`, with integer `n >= 0`,
+within the inclusive `min_frames` / `max_frames` range. All fields are optional:
+
+| Field | Default | Accepted values |
+| --- | --- | --- |
+| `frame_step` | `1` | Integer 1–4096 |
+| `frame_offset` | `0` | Integer 0 to `frame_step - 1` |
+| `frame_rounding` | `"floor"` | `"floor"` or `"ceil"` |
+| `min_frames` | `1` | Integer 1–4096 |
+| `max_frames` | `4096` | Integer 1–4096, at least `min_frames` |
+| `fixed_fps` | Unset | Integer 1–240; locks the FPS control |
+
+The range must contain at least one legal frame count. Unknown keys are rejected.
+Omitting the object adds no frame alignment in the UI. `defaults.fps` only sets
+the initial FPS; it does not lock it. The UI multiplies requested duration by FPS,
+aligns using the declared rounding direction, then clamps to the legal range.
+Duration stays in the UI; generation requests still send only `video_frames` and
+`fps`. Switching input modes preserves the aligned length. Changing FPS keeps
+frames in Frames mode, and keeps the requested seconds in Duration mode.
 
 `model_url` is an optional HTTPS Hugging Face model repository link, shown beside
 the recipe description. Built-ins link to the model's author/publisher, not repacks.
@@ -1693,15 +1734,26 @@ When omitted, backend defaults apply to these fields:
 
 ### Frame Count Semantics
 
-`video_frames` is the requested target length, but the current core video path internally normalizes the effective frame count to the largest `4n + 1` value that does not exceed the requested count.
+`video_frames` is the requested target length. The core normalizes it according
+to the loaded model:
 
-Examples:
+| Model family | Frame alignment | Fixed FPS |
+| --- | --- | --- |
+| Wan, HunyuanVideo, LingBot | `4n + 1`, round down | Wan 2.2 S2V: 16 |
+| LTX | `8n + 1`, round down | None |
+| MiniMax-H3 | `17n + 5`, round up, minimum 5 | 24 |
+| AnimateDiff | Whole frames, maximum 32 | None |
+
+Wan examples:
 
 - `video_frames = 33` stays `33`
 - `video_frames = 34` becomes `33`
 - `video_frames = 32` becomes `29`
 
-The completed job payload includes the actual decoded `frame_count`.
+At 16 FPS, a 5-second target requests 80 frames and aligns to 77 frames for Wan,
+or approximately 4.813 seconds. Audio-driven generation and temporal upscaling
+can change the final length. Use the completed job's actual decoded `frame_count`
+and `fps` for the final playback duration.
 
 ### Completion Result
 

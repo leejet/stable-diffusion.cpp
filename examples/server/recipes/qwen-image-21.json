@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "qwen-image-21",
   "name": "Qwen Image 2.1",
+  "size_multiple": 32,
   "description": "Supports generation and editing. Select the full Qwen Image 2.1 VAE or TAEQI2.1. Supply a separate vision projector when needed. Select acceleration LoRAs and adjust their settings separately.",
   "model_url": "https://huggingface.co/Qwen/Qwen-Image-2.1",
   "slots": [

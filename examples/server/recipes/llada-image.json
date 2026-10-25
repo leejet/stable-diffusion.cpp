@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "llada-image",
   "name": "LLaDA Image (base)",
+  "size_multiple": 16,
   "description": "Use matching base transformer, text encoder and connectors; do not mix them with Turbo components. Editing needs connectors with SigVQ and 1024x1024 output.",
   "model_url": "https://huggingface.co/inclusionAI/LLaDA-Image",
   "slots": [

@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "wan21-flf2v",
   "name": "Wan 2.1 FLF2V 14B",
+  "size_multiple": 16,
   "description": "Select FLF2V weights and supply both start and end images.",
   "model_url": "https://huggingface.co/Wan-AI/Wan2.1-FLF2V-14B-720P",
   "slots": [
@@ -35,6 +36,12 @@
       "tae"
     ]
   ],
+  "video_constraints": {
+    "frame_step": 4,
+    "frame_offset": 1,
+    "frame_rounding": "floor",
+    "min_frames": 1
+  },
   "defaults": {
     "sampling_method": "euler",
     "flow_shift": 16,

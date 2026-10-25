@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "fibo2-dev",
   "name": "Fibo 2.0 Dev",
+  "size_multiple": 16,
   "description": "Text-to-image generation and native reference-image editing. Select a separate vision projector for editing when it is not bundled in the text encoder.",
   "model_url": "https://huggingface.co/briaai/Fibo-2.0-dev",
   "slots": [

@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "chroma-radiance",
   "name": "Chroma Radiance",
+  "size_multiple": 1,
   "description": "Pixel-space generation without a VAE. Also accepts the x0 and experimental patch-32 variants.",
   "model_url": "https://huggingface.co/lodestones/Chroma1-Radiance",
   "slots": [

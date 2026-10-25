@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "fibo2-edit-turbo",
   "name": "Fibo 2.0 Edit Turbo",
+  "size_multiple": 16,
   "description": "Dedicated reference-image editing checkpoint; supply reference images. Select a separate vision projector when it is not bundled in the text encoder.",
   "model_url": "https://huggingface.co/briaai/Fibo-2.0-edit-turbo",
   "slots": [

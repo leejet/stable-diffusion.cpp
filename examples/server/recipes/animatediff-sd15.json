@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "animatediff-sd15",
   "name": "AnimateDiff SD 1.5",
+  "size_multiple": 64,
   "description": "Use Video Generation with an SD 1.5 checkpoint and compatible motion module.",
   "model_url": "https://huggingface.co/guoyww/animatediff",
   "slots": [
@@ -22,6 +23,13 @@
       "required": false
     }
   ],
+  "video_constraints": {
+    "frame_step": 1,
+    "frame_offset": 0,
+    "frame_rounding": "floor",
+    "min_frames": 1,
+    "max_frames": 32
+  },
   "defaults": {
     "sampling_method": "euler",
     "video_frames": 8,

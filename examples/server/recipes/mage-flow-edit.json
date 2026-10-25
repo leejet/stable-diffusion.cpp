@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "mage-flow-edit",
   "name": "Mage Flow Edit",
+  "size_multiple": 16,
   "description": "Supply reference images. Select a separate vision projector when it is not bundled in the text encoder.",
   "model_url": "https://huggingface.co/microsoft/Mage-Flow-Edit",
   "slots": [

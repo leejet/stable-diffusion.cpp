@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "sensenova-u15",
   "name": "SenseNova U1.5",
+  "size_multiple": 32,
   "description": "Bundled MoT checkpoint.",
   "model_url": "https://huggingface.co/sensenova/SenseNova-U1.5-8B-MoT",
   "slots": [

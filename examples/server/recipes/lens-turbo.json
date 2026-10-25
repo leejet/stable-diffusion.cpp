@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "lens-turbo",
   "name": "LENS Turbo",
+  "size_multiple": 16,
   "model_url": "https://huggingface.co/microsoft/Lens-Turbo",
   "slots": [
     {

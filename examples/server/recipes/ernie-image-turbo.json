@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "ernie-image-turbo",
   "name": "ERNIE Image Turbo",
+  "size_multiple": 16,
   "model_url": "https://huggingface.co/baidu/ERNIE-Image-Turbo",
   "slots": [
     {

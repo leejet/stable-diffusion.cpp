@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "flux2-dev",
   "name": "FLUX.2 dev",
+  "size_multiple": 16,
   "description": "Supports text-to-image and reference-image editing.",
   "model_url": "https://huggingface.co/black-forest-labs/FLUX.2-dev",
   "slots": [

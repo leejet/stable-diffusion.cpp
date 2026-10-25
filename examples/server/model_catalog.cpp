@@ -369,26 +369,57 @@ json model_generation_features(const ServerRuntime& runtime) {
     if (runtime.models->active_recipe.value("source", "") == "command_line")
         return features;
     // Optional components only become usable once selected and loaded.
-    features["ip_adapter"]  = features.value("ip_adapter", false) && !runtime.ctx_params->ip_adapter_path.empty();
-    features["controlnet"]  = features.value("controlnet", false) && !runtime.ctx_params->control_net_path.empty();
-    features["high_noise"]  = features.value("high_noise", false) && !runtime.ctx_params->high_noise_diffusion_model_path.empty();
-    features["preview_tae"] = features.value("preview_tae", false) && !runtime.ctx_params->taesd_path.empty();
-    features["ref_audios"]  = features.value("ref_audios", false) &&
-                             (!runtime.ctx_params->audio_vae_path.empty() || !runtime.ctx_params->audio_encoder_path.empty());
+    features["ip_adapter"]       = features.value("ip_adapter", false) && !runtime.ctx_params->ip_adapter_path.empty();
+    features["controlnet"]       = features.value("controlnet", false) && !runtime.ctx_params->control_net_path.empty();
+    features["high_noise"]       = features.value("high_noise", false) && !runtime.ctx_params->high_noise_diffusion_model_path.empty();
+    features["preview_tae"]      = features.value("preview_tae", false) && !runtime.ctx_params->taesd_path.empty();
+    features["ref_audios"]       = features.value("ref_audios", false) &&
+                                   (!runtime.ctx_params->audio_vae_path.empty() || !runtime.ctx_params->audio_encoder_path.empty());
     features["ref_video_audios"] = features.value("ref_video_audios", false) && !runtime.ctx_params->audio_vae_path.empty();
     if (!runtime.ctx_params->pulid_weights_path.empty())
         features["slg"] = false;
     return features;
 }
 
+static void validate_video_constraints(const json& constraints) {
+    check_keys(constraints, {"frame_step", "frame_offset", "frame_rounding", "min_frames", "max_frames", "fixed_fps"});
+    for (const auto* key : {"frame_step", "frame_offset", "min_frames", "max_frames", "fixed_fps"}) {
+        const int minimum = std::string(key) == "frame_offset" ? 0 : 1;
+        const int maximum = std::string(key) == "fixed_fps" ? 240 : 4096;
+        if (constraints.contains(key) &&
+            (!constraints[key].is_number_integer() || constraints[key] < minimum || constraints[key] > maximum)) {
+            throw std::runtime_error(std::string("video_constraints.") + key + " is outside its integer range");
+        }
+    }
+    const int step    = constraints.value("frame_step", 1);
+    const int offset  = constraints.value("frame_offset", 0);
+    const int minimum = constraints.value("min_frames", 1);
+    const int maximum = constraints.value("max_frames", 4096);
+    if (offset >= step || minimum > maximum ||
+        offset + std::max(0, (minimum - offset + step - 1) / step) * step > maximum) {
+        throw std::runtime_error("video_constraints must describe a nonempty frame range with frame_offset < frame_step");
+    }
+    if (constraints.contains("frame_rounding") &&
+        constraints["frame_rounding"] != "floor" && constraints["frame_rounding"] != "ceil") {
+        throw std::runtime_error("video_constraints.frame_rounding must be floor or ceil");
+    }
+}
+
 static void validate_recipe(const json& recipe) {
-    check_keys(recipe, {"schema_version", "id", "name", "description", "model_url", "slots", "required_any", "defaults", "context", "features", "disabled_features"});
+    check_keys(recipe, {"schema_version", "id", "name", "description", "model_url", "slots", "required_any", "defaults", "context", "features", "disabled_features", "size_multiple", "video_constraints"});
     if (!recipe.at("schema_version").is_number_integer() || recipe.at("schema_version") != 1 ||
         !valid_identifier(recipe.at("id").get<std::string>()) || recipe.at("name").get<std::string>().empty()) {
         throw std::runtime_error("invalid schema_version, id or name");
     }
     if (recipe.contains("description") && !recipe["description"].is_string()) {
         throw std::runtime_error("description must be a string");
+    }
+    if (recipe.contains("size_multiple") &&
+        (!recipe["size_multiple"].is_number_integer() || recipe["size_multiple"] < 1 || recipe["size_multiple"] > 4096)) {
+        throw std::runtime_error("size_multiple must be an integer from 1 to 4096");
+    }
+    if (recipe.contains("video_constraints")) {
+        validate_video_constraints(recipe["video_constraints"]);
     }
     if (recipe.contains("model_url")) {
         const auto url           = recipe.at("model_url").get<std::string>();
@@ -442,6 +473,7 @@ static void validate_recipe(const json& recipe) {
 
 static json normalize_recipe(json recipe) {
     validate_recipe(recipe);
+    recipe["size_multiple"]      = recipe.value("size_multiple", 8);
     recipe["effective_features"] = resolve_recipe_features(recipe);
     for (auto& slot : recipe.at("slots")) {
         const auto& spec   = *find_model_slot(slot.at("id").get<std::string>());
@@ -605,6 +637,7 @@ void initialize_server_models(ServerRuntime& runtime) {
             {"description", "Uses the loaded command-line model and its generation defaults."},
             {"slots", json::array()},
             {"defaults", json::object()},
+            {"size_multiple", 8},
             {"features", features},
         };
         models.active_recipe["effective_features"] = resolve_recipe_features(models.active_recipe);

@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "sd1-checkpoint",
   "name": "SD 1.x",
+  "size_multiple": 64,
   "description": "Supports SD 1.x, compatible LCM checkpoints and layer-count variants. For LCM weights, select LCM sampling and adjust steps/CFG. Tiny SD Diffusers directories must first be converted into a single-file checkpoint.",
   "model_url": "https://huggingface.co/CompVis/stable-diffusion-v1-4",
   "slots": [
