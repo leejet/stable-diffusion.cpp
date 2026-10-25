@@ -690,7 +690,7 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
         }
         v_in       = ggml_permute(ctx, v_in, 0, 2, 1, 3);
         auto v_f16 = ggml_cast(ctx, v_in, GGML_TYPE_F16);
-        if (true) {
+        if (!ggml_backend_supports_op(backend, v_f16)) {
             v_f16 = ggml_cast(ctx, ggml_ext_cont(ctx, v_in), GGML_TYPE_F16);
         }
         v_in = v_f16;
