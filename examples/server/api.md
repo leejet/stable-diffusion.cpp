@@ -183,6 +183,9 @@ Default-enabled features are `img2img`, `mask_image`, `lora`, `vae_tiling`,
 | `clip_skip` | CLIP Skip |
 | `img2img`, `mask_image` | Image initialization/strength and masks |
 | `ref_images` | Reference image inputs |
+| `ref_videos` | Reference videos as frame arrays |
+| `ref_audios` | Standalone reference audio; runtime requires an Audio VAE or Audio Encoder |
+| `ref_video_audios` | Soundtracks paired with reference videos; runtime requires an Audio VAE |
 | `controlnet` | Control image and ControlNet strength |
 | `control_image` | Control image without a separate ControlNet (FLUX Canny/Depth) |
 | `ip_adapter` | IP-Adapter image and strength |

@@ -48,9 +48,7 @@
     "ref_images",
     "ref_videos",
     "ref_audios",
-    "ref_video_audios",
-    "init_image",
-    "end_image"
+    "ref_video_audios"
   ],
   "disabled_features": [
     "img2img",
