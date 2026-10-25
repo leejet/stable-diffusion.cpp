@@ -210,6 +210,10 @@ bool sd::render_fibo2_text_images(const std::vector<std::string>& texts,
                                 : std::max(minimum.height, line.height);
             width       = std::max(width, line.width);
             height += line.height + (lines.empty() ? 0 : 4);
+            if ((int64_t(width) + 4) * (int64_t(height) + 4) > 16777216) {
+                LOG_ERROR("Fibo text image exceeds the maximum area of 16777216 pixels");
+                return false;
+            }
             lines.push_back(std::move(line));
         }
         auto image = sd::full<float>({width + 4, height + 4, 3, 1}, 1.f);
