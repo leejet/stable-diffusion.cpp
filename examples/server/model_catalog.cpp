@@ -291,6 +291,7 @@ static void apply_recipe_context(const json& settings, SDContextParams& params) 
     }
 }
 
+// Known recipe feature names with their defaults; recipes may flip any of these.
 static const std::map<std::string, bool> k_recipe_features = {
     {"img2img", true},
     {"mask_image", true},
@@ -312,6 +313,9 @@ static const std::map<std::string, bool> k_recipe_features = {
     {"init_image", false},
     {"end_image", false},
     {"control_frames", false},
+    {"ref_videos", false},
+    {"ref_audios", false},
+    {"ref_video_audios", false},
     {"vace", false},
     {"high_noise", false},
     {"cache_unet", false},
@@ -369,6 +373,9 @@ json model_generation_features(const ServerRuntime& runtime) {
     features["controlnet"]  = features.value("controlnet", false) && !runtime.ctx_params->control_net_path.empty();
     features["high_noise"]  = features.value("high_noise", false) && !runtime.ctx_params->high_noise_diffusion_model_path.empty();
     features["preview_tae"] = features.value("preview_tae", false) && !runtime.ctx_params->taesd_path.empty();
+    features["ref_audios"]  = features.value("ref_audios", false) &&
+                             (!runtime.ctx_params->audio_vae_path.empty() || !runtime.ctx_params->audio_encoder_path.empty());
+    features["ref_video_audios"] = features.value("ref_video_audios", false) && !runtime.ctx_params->audio_vae_path.empty();
     if (!runtime.ctx_params->pulid_weights_path.empty())
         features["slg"] = false;
     return features;
