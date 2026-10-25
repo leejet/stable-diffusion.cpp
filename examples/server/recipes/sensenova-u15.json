@@ -14,8 +14,8 @@
     "flow_shift": 3.0,
     "cfg_scale": 4,
     "steps": 20,
-    "width": 2048,
-    "height": 2048,
+    "width": 1024,
+    "height": 1024,
     "sampling_method": "euler"
   },
   "features": [

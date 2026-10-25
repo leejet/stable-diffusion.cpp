@@ -36,8 +36,8 @@
   "defaults": {
     "cfg_scale": 1,
     "steps": 12,
-    "width": 2048,
-    "height": 2048,
+    "width": 1024,
+    "height": 1024,
     "sampling_method": "euler"
   },
   "features": [
