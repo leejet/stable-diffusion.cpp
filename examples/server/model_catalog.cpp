@@ -66,6 +66,14 @@ static void clear_model_paths(SDContextParams& params) {
     }
 }
 
+bool component_paths_match(const SDContextParams& a, const SDContextParams& b) {
+    for (const auto& slot : k_model_slots) {
+        if ((a.*slot.field) != (b.*slot.field))
+            return false;
+    }
+    return true;
+}
+
 std::string model_path_key(const fs::path& path) {
 #ifdef _WIN32
     const auto value = path.generic_wstring();
@@ -406,7 +414,7 @@ static void validate_video_constraints(const json& constraints) {
 }
 
 static void validate_recipe(const json& recipe) {
-    check_keys(recipe, {"schema_version", "id", "name", "description", "model_url", "slots", "required_any", "defaults", "context", "features", "disabled_features", "size_multiple", "video_constraints"});
+    check_keys(recipe, {"schema_version", "id", "name", "description", "model_url", "slots", "required_any", "models", "defaults", "context", "features", "disabled_features", "size_multiple", "video_constraints"});
     if (!recipe.at("schema_version").is_number_integer() || recipe.at("schema_version") != 1 ||
         !valid_identifier(recipe.at("id").get<std::string>()) || recipe.at("name").get<std::string>().empty()) {
         throw std::runtime_error("invalid schema_version, id or name");
@@ -448,6 +456,19 @@ static void validate_recipe(const json& recipe) {
     }
     if (!has_required_model) {
         throw std::runtime_error("a required model or diffusion_model slot is needed");
+    }
+    // Optional recipe-local model defaults: slot ID to file ID mappings that
+    // prefill slots a load request does not select itself.
+    if (recipe.contains("models")) {
+        const auto& recipe_models = recipe.at("models");
+        if (!recipe_models.is_object() || recipe_models.size() > 32)
+            throw std::runtime_error("models must be an object of at most 32 slot entries");
+        std::set<std::string> default_ids;
+        for (auto it = recipe_models.begin(); it != recipe_models.end(); ++it) {
+            if (!ids.count(it.key() == "taesd" ? "tae" : it.key()) || !it.value().is_string() || it.value().get<std::string>().empty() ||
+                !default_ids.insert(it.key() == "taesd" ? "tae" : it.key()).second)
+                throw std::runtime_error("unknown or invalid default model: " + it.key());
+        }
     }
     if (recipe.contains("required_any")) {
         const auto& groups = recipe.at("required_any");
@@ -646,10 +667,11 @@ void initialize_server_models(ServerRuntime& runtime) {
     refresh_model_catalog(runtime);
 }
 
-void prepare_model_load(ServerRuntime& runtime, const json& body, SDContextParams& context, SDGenerationParams& defaults, json* loaded_recipe) {
+void prepare_model_load(ServerRuntime& runtime, json& body, SDContextParams& context, SDGenerationParams& defaults, json* loaded_recipe) {
     check_keys(body, {"recipe", "models"});
     const auto recipe_id = body.at("recipe").get<std::string>();
-    auto selection       = body.at("models");
+    // `models` is optional; unselected slots may fall back to recipe defaults below.
+    auto selection       = body.value("models", json::object());
     if (!selection.is_object())
         throw std::runtime_error("models must be an object");
     auto& models = *runtime.models;
@@ -664,6 +686,20 @@ void prepare_model_load(ServerRuntime& runtime, const json& body, SDContextParam
     defaults = models.base_defaults;
     apply_recipe_context(recipe.value("context", json::object()), context);
     apply_recipe_defaults(recipe.value("defaults", json::object()), defaults);
+    // Recipe-provided default models fill any slot the request did not select.
+    // An explicit selection blocks the default for that slot, including an
+    // empty string (a deliberate opt-out of the default). The tae/taesd pair
+    // is one slot: an explicit request selection of either spelling overrides
+    // the recipe default for that slot.
+    if (recipe.contains("models")) {
+        for (auto it = recipe.at("models").begin(); it != recipe.at("models").end(); ++it) {
+            if (selection.contains(it.key()))
+                continue;
+            if ((it.key() == "tae" || it.key() == "taesd") && (selection.contains("tae") || selection.contains("taesd")))
+                continue;
+            selection[it.key()] = it.value();
+        }
+    }
     std::set<std::string> allowed;
     for (const auto& slot : recipe.at("slots")) {
         const auto id = slot.at("id").get<std::string>();
@@ -675,6 +711,9 @@ void prepare_model_load(ServerRuntime& runtime, const json& body, SDContextParam
                 if (selection.contains(id))
                     throw std::runtime_error("specify only one of tae and taesd");
                 selection[id] = selection.at(alias);
+                // Keep only the declared spelling: equivalent loads must resolve
+                // to an identical selection for the idempotent-load comparison.
+                selection.erase(alias);
             }
         }
         const std::string file_id = selection.value(id, std::string());
@@ -698,6 +737,20 @@ void prepare_model_load(ServerRuntime& runtime, const json& body, SDContextParam
         if (!allowed.count(it.key()))
             throw std::runtime_error("unknown model slot: " + it.key());
     }
+    // Omitting an optional slot and sending it as an empty string resolve to
+    // the same context; drop the empty key so equivalent loads compare
+    // identically instead of rebuilding the context. The explicit empty
+    // string already overrode any recipe default during the merge, so its
+    // intent is preserved.
+    for (auto it = selection.begin(); it != selection.end();) {
+        if (!it->is_string() || !it->get<std::string>().empty()) {
+            ++it;
+            continue;
+        }
+        it = selection.erase(it);
+    }
+    // Echo the fully resolved selection (recipe defaults merged in) for status reporting.
+    body["models"] = selection;
     for (const auto& group : recipe.value("required_any", json::array())) {
         if (std::none_of(group.begin(), group.end(), [&](const json& value) {
                 return !selection.value(value.get<std::string>(), std::string()).empty();
