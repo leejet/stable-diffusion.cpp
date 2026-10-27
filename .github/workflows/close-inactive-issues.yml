@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Comment and close inactive issues
-        uses: actions/stale@v10
+        uses: actions/stale@v11
         with:
           days-before-issue-stale: 365
           days-before-issue-close: 0

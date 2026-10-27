@@ -66,17 +66,17 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10.15.1
 
@@ -97,7 +97,7 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
+        uses: prompt/actions-commit-hash@v4
 
       - name: Fetch system info
         id: system-info
@@ -118,7 +118,7 @@ jobs:
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip
           path: |
@@ -130,17 +130,17 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10.15.1
 
@@ -161,7 +161,7 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
+        uses: prompt/actions-commit-hash@v4
 
       - name: Fetch system info
         id: system-info
@@ -182,7 +182,7 @@ jobs:
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-vulkan.zip
           path: |
@@ -225,30 +225,30 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10.15.1
 
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
+        uses: prompt/actions-commit-hash@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to the container registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -256,20 +256,21 @@ jobs:
 
       - name: Extract metadata for Docker
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
       - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@v1.3.1
+        uses: jlumbroso/free-disk-space@v2
         with:
           # this might remove tools that are actually needed,
           # if set to "true" but frees about 6 GB
-          tool-cache: false
+          preinstalled-runtimes: false
+          swap-storage: true
 
       - name: Build and push Docker image
         id: build-push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: ${{ matrix.platform }}
@@ -286,17 +287,17 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10.15.1
 
@@ -317,7 +318,7 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
+        uses: prompt/actions-commit-hash@v4
 
       - name: Fetch system info
         id: system-info
@@ -338,7 +339,7 @@ jobs:
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip
           path: |
@@ -362,24 +363,24 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10.15.1
 
       - name: Install cuda-toolkit
         id: cuda-toolkit
         if: ${{ matrix.build == 'cuda12' }}
-        uses: Jimver/cuda-toolkit@v0.2.22
+        uses: Jimver/cuda-toolkit@v0.2.36
         with:
           cuda: "12.8.1"
           method: "network"
@@ -396,7 +397,9 @@ jobs:
 
       - name: Activate MSVC environment
         id: msvc_dev_cmd
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
 
       - name: Build
         id: cmake_build
@@ -409,7 +412,7 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
+        uses: prompt/actions-commit-hash@v4
 
       - name: Pack artifacts
         id: pack_artifacts
@@ -442,7 +445,7 @@ jobs:
 
       - name: Upload Cuda runtime
         if: ${{ matrix.build == 'cuda12' && (github.event_name == 'push' && github.ref == 'refs/heads/master' || github.event.inputs.create_release == 'true') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sd-cudart-sd-bin-win-cu12-x64.zip
           path: |
@@ -450,7 +453,7 @@ jobs:
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip
           path: |
@@ -464,29 +467,29 @@ jobs:
       gpu_targets: "gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201"
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10.15.1
 
       - name: Cache ROCm Installation
         id: cache-rocm
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: C:\TheRock\build
           key: rocm-wheels-${{ env.ROCM_VERSION }}-${{ runner.os }}
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: windows-rocm-${{ env.ROCM_VERSION }}-x64
           evict-old-files: 1d
@@ -567,7 +570,7 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: pr-mpt/actions-commit-hash@v2
+        uses: prompt/actions-commit-hash@v4
 
       - name: Bundle HIP runtime libraries
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
@@ -588,7 +591,7 @@ jobs:
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip
           path: |
@@ -610,12 +613,12 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: ubuntu-rocm-cmake-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
@@ -688,12 +691,12 @@ jobs:
       # setup-node installs into /opt/hostedtoolcache, which is removed above.
       # Keep Node/pnpm setup after disk cleanup so the server frontend can be embedded.
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10.15.1
 
@@ -722,7 +725,7 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
+        uses: prompt/actions-commit-hash@v4
 
       - name: Prepare artifacts
         id: prepare_artifacts
@@ -751,7 +754,7 @@ jobs:
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm-${{ matrix.ROCM_VERSION }}.zip
           path: |
@@ -773,13 +776,13 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Download artifacts
         id: download-artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: ./artifact
           pattern: sd-*
@@ -792,21 +795,21 @@ jobs:
 
       - name: Get commit hash
         id: commit
-        uses: prompt/actions-commit-hash@v2
+        uses: prompt/actions-commit-hash@v4
 
       - name: Create release
         id: create_release
         if: ${{ github.event_name == 'workflow_dispatch' || github.ref_name == 'master' }}
-        uses: anzz1/action-create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v3
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          target_commitish: ${{ github.sha }}
           tag_name: ${{ format('{0}-{1}-{2}', env.BRANCH_NAME, steps.commit_count.outputs.count, steps.commit.outputs.short) }}
 
       - name: Upload release
         id: upload_release
         if: ${{ github.event_name == 'workflow_dispatch' || github.ref_name == 'master' }}
-        uses: actions/github-script@v3
+        uses: actions/github-script@v9
         with:
           github-token: ${{secrets.GITHUB_TOKEN}}
           script: |
@@ -816,7 +819,7 @@ jobs:
             for (let file of await fs.readdirSync('./artifact')) {
               if (path.extname(file) === '.zip') {
                 console.log('uploadReleaseAsset', file);
-                await github.repos.uploadReleaseAsset({
+                await github.rest.repos.uploadReleaseAsset({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   release_id: release_id,
