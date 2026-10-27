@@ -55,6 +55,9 @@ on:
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -97,7 +100,8 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
+        shell: bash
+        run: echo "short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
       - name: Fetch system info
         id: system-info
@@ -161,7 +165,8 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
+        shell: bash
+        run: echo "short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
       - name: Fetch system info
         id: system-info
@@ -242,7 +247,8 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
+        shell: bash
+        run: echo "short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -317,7 +323,8 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
+        shell: bash
+        run: echo "short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
       - name: Fetch system info
         id: system-info
@@ -394,13 +401,15 @@ jobs:
           Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
           Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
 
-      - name: Activate MSVC environment
-        id: msvc_dev_cmd
-        uses: ilammy/msvc-dev-cmd@v1
-
       - name: Build
         id: cmake_build
+        shell: pwsh
         run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) { throw "Visual Studio C++ tools not found" }
+          & "$vsPath\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+
           mkdir build
           cd build
           cmake .. -DCMAKE_CXX_FLAGS='/bigobj' -G Ninja -DCMAKE_C_COMPILER=cl.exe -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_BUILD_TYPE=Release ${{ matrix.defines }}
@@ -409,7 +418,8 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
+        shell: bash
+        run: echo "short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
       - name: Pack artifacts
         id: pack_artifacts
@@ -567,7 +577,8 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: pr-mpt/actions-commit-hash@v2
+        shell: bash
+        run: echo "short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
       - name: Bundle HIP runtime libraries
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
@@ -722,7 +733,8 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
+        shell: bash
+        run: echo "short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
       - name: Prepare artifacts
         id: prepare_artifacts
@@ -762,6 +774,9 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write
+
     needs:
       - ubuntu-latest-cmake
       - ubuntu-latest-cmake-vulkan
@@ -792,36 +807,47 @@ jobs:
 
       - name: Get commit hash
         id: commit
-        uses: prompt/actions-commit-hash@v2
+        shell: bash
+        run: echo "short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
       - name: Create release
         id: create_release
         if: ${{ github.event_name == 'workflow_dispatch' || github.ref_name == 'master' }}
-        uses: anzz1/action-create-release@v1
+        uses: actions/github-script@v9
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ format('{0}-{1}-{2}', env.BRANCH_NAME, steps.commit_count.outputs.count, steps.commit.outputs.short) }}
         with:
-          tag_name: ${{ format('{0}-{1}-{2}', env.BRANCH_NAME, steps.commit_count.outputs.count, steps.commit.outputs.short) }}
+          script: |
+            const { data: release } = await github.rest.repos.createRelease({
+              ...context.repo,
+              tag_name: process.env.RELEASE_TAG,
+              name: process.env.RELEASE_TAG,
+              target_commitish: context.sha,
+              draft: false,
+              prerelease: false,
+            });
+            core.setOutput('id', release.id);
 
       - name: Upload release
         id: upload_release
         if: ${{ github.event_name == 'workflow_dispatch' || github.ref_name == 'master' }}
-        uses: actions/github-script@v3
+        uses: actions/github-script@v9
+        env:
+          RELEASE_ID: ${{ steps.create_release.outputs.id }}
         with:
-          github-token: ${{secrets.GITHUB_TOKEN}}
           script: |
             const path = require('path');
-            const fs = require('fs');
-            const release_id = '${{ steps.create_release.outputs.id }}';
-            for (let file of await fs.readdirSync('./artifact')) {
+            const fs = require('fs').promises;
+            const release_id = Number(process.env.RELEASE_ID);
+            for (const file of await fs.readdir('./artifact')) {
               if (path.extname(file) === '.zip') {
                 console.log('uploadReleaseAsset', file);
-                await github.repos.uploadReleaseAsset({
+                await github.rest.repos.uploadReleaseAsset({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   release_id: release_id,
                   name: file,
-                  data: await fs.readFileSync(`./artifact/${file}`)
+                  data: await fs.readFile(`./artifact/${file}`)
                 });
               }
             }
