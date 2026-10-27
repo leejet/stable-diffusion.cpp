@@ -1,6 +1,7 @@
 build*/
 docs/
 test/
+tests/
 
 .cache/
 *.swp

@@ -429,6 +429,9 @@ jobs:
             ls .\build\bin
             throw "Can't find stable-diffusion.dll"
           }
+          if ("${{ matrix.build }}" -eq "cuda12") {
+            Copy-Item ggml/src/ggml-cuda/vendors/cutlass/LICENSE.txt (Join-Path (Split-Path -Parent $filePath) 'cutlass.txt')
+          }
           7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip $filePath .\start-server.sh .\start-server.bat
 
       - name: Copy and pack Cuda runtime

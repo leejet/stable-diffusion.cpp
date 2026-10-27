@@ -18,11 +18,25 @@ docker run --rm --init -v /path/to/models:/models -v /path/to/output/:/output -p
 
 ## Building using Docker
 
+Initialize the submodules from the repository root before building. Docker copies
+the local checkout, so its build context must include the submodule contents:
+
 ```shell
+git submodule update --init --recursive
 docker build -f docker/Dockerfile -t sd .
 ```
 
 ## Building variants using Docker
+
+### CUDA (NVIDIA GPU):
+
+```shell
+docker build -f docker/Dockerfile.cuda -t sd-cuda .
+```
+
+To select GPU architectures, pass `--build-arg "CUDA_ARCHITECTURES=89"` (for
+example, RTX 4090). Run the image on a host configured with NVIDIA Container
+Toolkit, using `docker run --rm --gpus all ... sd-cuda [args...]`.
 
 ### Vulkan:
 
