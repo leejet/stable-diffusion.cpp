@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "ltx25-dev",
   "name": "LTX 2.5 dev",
+  "size_multiple": 32,
   "description": "Use the conv video VAE and LTX-specific Gemma 4 with bundled projection. Audio VAE is optional for silent video.",
   "model_url": "https://huggingface.co/Lightricks/LTX-2.5",
   "slots": [
@@ -35,6 +36,12 @@
       "tae"
     ]
   ],
+  "video_constraints": {
+    "frame_step": 8,
+    "frame_offset": 1,
+    "frame_rounding": "floor",
+    "min_frames": 1
+  },
   "defaults": {
     "sampling_method": "euler",
     "fps": 24,

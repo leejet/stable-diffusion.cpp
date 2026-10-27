@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "minimax-h3-ref2va",
   "name": "MiniMax H3 Ref2VA",
+  "size_multiple": 32,
   "description": "Supply image, video or audio references with compatible Ref2VA weights. Audio VAE is optional for silent video.",
   "model_url": "https://huggingface.co/MiniMaxAI/MiniMax-H3",
   "slots": [
@@ -35,6 +36,13 @@
       "tae"
     ]
   ],
+  "video_constraints": {
+    "frame_step": 17,
+    "frame_offset": 5,
+    "frame_rounding": "ceil",
+    "min_frames": 5,
+    "fixed_fps": 24
+  },
   "defaults": {
     "video_frames": 56,
     "fps": 24,
@@ -45,7 +53,10 @@
   },
   "features": [
     "flow_shift",
-    "ref_images"
+    "ref_images",
+    "ref_videos",
+    "ref_audios",
+    "ref_video_audios"
   ],
   "disabled_features": [
     "img2img",

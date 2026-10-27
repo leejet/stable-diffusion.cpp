@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "flux2-klein-base-9b",
   "name": "FLUX.2 Klein Base 9B",
+  "size_multiple": 16,
   "description": "Use the 9B base transformer with Qwen 3 8B. Supports reference-image editing.",
   "model_url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B",
   "slots": [

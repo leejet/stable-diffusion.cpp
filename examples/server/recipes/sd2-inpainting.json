@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "sd2-inpainting",
   "name": "SD 2 Inpainting",
+  "size_multiple": 64,
   "description": "Select an inpainting checkpoint, then supply Init Image and Mask Image.",
   "slots": [
     {

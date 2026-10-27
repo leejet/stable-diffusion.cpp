@@ -2,8 +2,10 @@ set(TARGET sd-cli)
 
 add_executable(${TARGET}
     ../common/common.cpp
+    ../common/generation_metadata.cpp
     ../common/log.cpp
     ../common/media_io.cpp
+    ../common/media_metadata.cpp
     image_metadata.cpp
     main.cpp
 )

@@ -35,8 +35,8 @@
     "flow_shift": 3.0,
     "cfg_scale": 4,
     "steps": 20,
-    "width": 1328,
-    "height": 1328
+    "width": 1024,
+    "height": 1024
   },
   "features": [
     "flow_shift"

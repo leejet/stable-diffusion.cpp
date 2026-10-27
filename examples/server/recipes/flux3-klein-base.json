@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "flux3-klein-base",
   "name": "FLUX.3 Image Klein Base",
+  "size_multiple": 16,
   "model_url": "https://huggingface.co/black-forest-labs/flux-3-image-klein-base",
   "slots": [
     {

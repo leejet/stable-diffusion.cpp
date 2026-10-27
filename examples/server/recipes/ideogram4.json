@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "ideogram4",
   "name": "Ideogram 4",
+  "size_multiple": 16,
   "description": "Select the matching unconditional transformer for classifier-free guidance.",
   "model_url": "https://huggingface.co/ideogram-ai/ideogram-4-fp8",
   "slots": [

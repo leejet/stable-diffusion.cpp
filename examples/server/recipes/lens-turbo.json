@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "lens-turbo",
   "name": "LENS Turbo",
+  "size_multiple": 16,
   "model_url": "https://huggingface.co/microsoft/Lens-Turbo",
   "slots": [
     {
@@ -36,8 +37,8 @@
   "defaults": {
     "cfg_scale": 1,
     "steps": 4,
-    "width": 1440,
-    "height": 1440,
+    "width": 1024,
+    "height": 1024,
     "sampling_method": "euler"
   },
   "features": [

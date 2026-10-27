@@ -5,6 +5,9 @@ Reviewed against model-publisher cards and reference implementations on 2026-10-
 These are starting values, not limits on supported resolutions or generation settings.
 Built-in step defaults above 20 are reduced to 20; the cited sources may recommend more steps.
 Users can still choose a higher step count.
+Except for PiD recipes, built-in dimensions above 1,048,576 pixels (1024 x 1024) are reduced to 1024 x 1024, even when the cited source uses a larger size.
+PiD recipes retain their 2048 x 2048 defaults.
+Users can still choose a higher resolution.
 When several aspect ratios or ranges are published, the selected example or square bucket is noted below.
 A dash means no recipe override: the available primary sources did not establish a fixed value, or the size depends on the input image.
 Ordinary DiT recipes explicitly use Euler; PiD retains its LCM sampling path.
@@ -27,7 +30,7 @@ For community edit adapters and other optional extensions, these are the base-mo
 | `flux1-canny` | 1 | 20 | 1024 × 1024 | [Source](https://huggingface.co/black-forest-labs/FLUX.1-Canny-dev)  |
 | `flux1-depth` | 1 | 20 | 1024 × 1024 | [Source](https://huggingface.co/black-forest-labs/FLUX.1-Depth-dev)  |
 | `flux1-dev` | 1 | 20 | 1024 × 1024 | [Source](https://huggingface.co/black-forest-labs/FLUX.1-dev)  |
-| `flux1-fill` | 1 | 20 | 1232 × 1632 | [Source](https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev)  |
+| `flux1-fill` | 1 | 20 | 1024 × 1024 | [Source](https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev)  |
 | `flux1-kontext` | 1 | 20 | — | [Source](https://raw.githubusercontent.com/huggingface/diffusers/main/src/diffusers/pipelines/flux/pipeline_flux_kontext.py) Output size normally follows the reference image; no fixed size is imposed by this recipe. |
 | `flux1-pulid` | 1 | 20 | 1024 × 1024 | [Source](https://huggingface.co/black-forest-labs/FLUX.1-dev) FLUX.1-dev defaults; identity conditioning is provided by PuLID. |
 | `flux1-schnell` | 1 | 4 | 1024 × 1024 | [Source](https://huggingface.co/black-forest-labs/FLUX.1-schnell)  |
@@ -38,7 +41,7 @@ For community edit adapters and other optional extensions, these are the base-mo
 | `flux2-klein-base-9b` | 4 | 20 | 1024 × 1024 | [Source](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B)  |
 | `flux3-klein` | 1 | 16 | 1024 × 1024 | [Source](https://raw.githubusercontent.com/black-forest-labs/flux-3-image-klein/main/README.md)  |
 | `flux3-klein-base` | 4 | 20 | 1024 × 1024 | [Source](https://raw.githubusercontent.com/black-forest-labs/flux-3-image-klein/main/src/flux3/pipeline.py)  |
-| `hidream-o1-dev` | 1 | 20 | 2048 × 2048 | [Source](https://huggingface.co/HiDream-ai/HiDream-O1-Image-Dev)  |
+| `hidream-o1-dev` | 1 | 20 | 1024 × 1024 | [Source](https://huggingface.co/HiDream-ai/HiDream-O1-Image-Dev)  |
 | `hunyuan-video-15-i2v` | 6 | 20 | 1280 × 720 | [Source](https://huggingface.co/tencent/HunyuanVideo-1.5) 720p base I2V defaults; CFG/step-distilled and 480p checkpoints use different settings. |
 | `hunyuan-video-15-t2v` | 6 | 20 | 1280 × 720 | [Source](https://huggingface.co/tencent/HunyuanVideo-1.5) 720p base T2V defaults; CFG-distilled / 480p checkpoints need their published settings. |
 | `ideogram4` | 7 | 20 | 1024 × 1024 | [Source](https://raw.githubusercontent.com/ideogram-oss/ideogram4/main/docs/inference.md) Constant-guidance pipeline defaults; this recipe does not reproduce the CLI’s per-step guidance schedule. |
@@ -46,10 +49,10 @@ For community edit adapters and other optional extensions, these are the base-mo
 | `iris-3b` | 3 | 20 | 1024 × 1024 | [Source](https://huggingface.co/speridlabs/iris-3b)  |
 | `krea2-raw` | 3.5 | 20 | 1024 × 1024 | [Source](https://huggingface.co/krea/Krea-2-Raw) Base model defaults; edit requires a matching community LoRA with its own settings. |
 | `krea2-raw-edit` | 3.5 | 20 | 1024 × 1024 | [Source](https://huggingface.co/krea/Krea-2-Raw) Base model defaults; edit requires a matching community LoRA with its own settings. |
-| `krea2-turbo` | 1 | 8 | 2048 × 2048 | [Source](https://huggingface.co/krea/Krea-2-Turbo) Official CLI example; edit requires a matching community LoRA. |
-| `krea2-turbo-edit` | 1 | 8 | 2048 × 2048 | [Source](https://huggingface.co/krea/Krea-2-Turbo) Official CLI example; edit requires a matching community LoRA. |
-| `lens` | 5 | 20 | 1440 × 1440 | [Source](https://huggingface.co/microsoft/Lens) Official model card: RL model, default base_resolution 1440. |
-| `lens-turbo` | 1 | 4 | 1440 × 1440 | [Source](https://huggingface.co/microsoft/Lens-Turbo) Official model card: 4-step distilled model, default base_resolution 1440. |
+| `krea2-turbo` | 1 | 8 | 1024 × 1024 | [Source](https://huggingface.co/krea/Krea-2-Turbo) Official CLI example; edit requires a matching community LoRA. |
+| `krea2-turbo-edit` | 1 | 8 | 1024 × 1024 | [Source](https://huggingface.co/krea/Krea-2-Turbo) Official CLI example; edit requires a matching community LoRA. |
+| `lens` | 5 | 20 | 1024 × 1024 | [Source](https://huggingface.co/microsoft/Lens) Official model card: RL model, default base_resolution 1440. |
+| `lens-turbo` | 1 | 4 | 1024 × 1024 | [Source](https://huggingface.co/microsoft/Lens-Turbo) Official model card: 4-step distilled model, default base_resolution 1440. |
 | `lingbot-video-dense` | 3 | 20 | 832 × 480 | [Source](https://huggingface.co/robbyant/lingbot-video-dense-1.3b) Official first-stage inference example; optional refiner is separate. |
 | `lingbot-video-moe` | 3 | 20 | 832 × 480 | [Source](https://huggingface.co/robbyant/lingbot-video-moe-30b-a3b) Official inference example. |
 | `llada-image` | 5 | 20 | 1024 × 1024 | [Source](https://huggingface.co/inclusionAI/LLaDA-Image)  |
@@ -62,7 +65,7 @@ For community edit adapters and other optional extensions, these are the base-mo
 | `mage-flow` | 5 | 20 | 1024 × 1024 | [Source](https://huggingface.co/microsoft/Mage-Flow)  |
 | `mage-flow-edit` | 5 | 20 | 1024 × 1024 | [Source](https://huggingface.co/microsoft/Mage-Flow)  |
 | `mage-flow-turbo` | 1 | 4 | 1024 × 1024 | [Source](https://huggingface.co/microsoft/Mage-Flow)  |
-| `ming-image` | 1 | 12 | 2048 × 2048 | [Source](https://huggingface.co/inclusionAI/Ming-Image-0.1-Design)  |
+| `ming-image` | 1 | 12 | 1024 × 1024 | [Source](https://huggingface.co/inclusionAI/Ming-Image-0.1-Design)  |
 | `minimax-h3-fl2va` | 1 | — | 1344 × 768 | [Source](https://huggingface.co/docs/diffusers/main/en/api/pipelines/minimax_h3) Guidance-distilled; official 768p canvas. No fixed step count is prescribed here; the upstream API counts sigma grid points rather than sd.cpp denoising steps. |
 | `minimax-h3-ref2va` | 1 | — | 1344 × 768 | [Source](https://huggingface.co/docs/diffusers/main/en/api/pipelines/minimax_h3) Guidance-distilled; official 768p canvas. No fixed step count is prescribed here; the upstream API counts sigma grid points rather than sd.cpp denoising steps. |
 | `minit2i` | 2.5 | 20 | 512 × 512 | [Source](https://huggingface.co/MiniT2I/MiniT2I/raw/main/pipeline.py) B/16 example and native model size; L/16 uses CFG 6. |
@@ -81,9 +84,9 @@ For community edit adapters and other optional extensions, these are the base-mo
 | `pixart-alpha-1024` | 4.5 | 20 | 1024 × 1024 | [Source](https://raw.githubusercontent.com/huggingface/diffusers/main/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py)  |
 | `pixart-alpha-512` | 4.5 | 20 | 512 × 512 | [Source](https://raw.githubusercontent.com/huggingface/diffusers/main/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py)  |
 | `pixart-sigma` | 4.5 | 20 | 1024 × 1024 | [Source](https://raw.githubusercontent.com/huggingface/diffusers/main/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_sigma.py)  |
-| `qwen-image` | 4 | 20 | 1328 × 1328 | [Source](https://huggingface.co/Qwen/Qwen-Image) Official square resolution bucket; true_cfg_scale maps to cfg_scale. |
-| `qwen-image-21` | 1 | 20 | 2048 × 2048 | [Source](https://raw.githubusercontent.com/QwenLM/Qwen-Image-2.1/main/README.md) Original checkpoint defaults; select the matching TAEQI2.1 to replace its VAE. |
-| `qwen-image-21-turbo` | 1 | 8 | 2048 × 2048 | [Model card](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo), [fixed sigmas](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo/blob/main/model_index.json). Standalone Turbo weights; the fixed 8-step schedule is applied on model load. |
+| `qwen-image` | 4 | 20 | 1024 × 1024 | [Source](https://huggingface.co/Qwen/Qwen-Image) The source uses a larger square resolution bucket; true_cfg_scale maps to cfg_scale. |
+| `qwen-image-21` | 1 | 20 | 1024 × 1024 | [Source](https://raw.githubusercontent.com/QwenLM/Qwen-Image-2.1/main/README.md) Original checkpoint sampling defaults; select the matching TAEQI2.1 to replace its VAE. |
+| `qwen-image-21-turbo` | 1 | 8 | 1024 × 1024 | [Model card](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo), [fixed sigmas](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo/blob/main/model_index.json). Standalone Turbo weights; the fixed 8-step schedule is applied on model load. |
 | `qwen-image-edit` | 4 | 20 | — | [Source](https://huggingface.co/Qwen/Qwen-Image-Edit) Official editing example; output dimensions follow reference-image aspect ratio. |
 | `qwen-image-edit-2509` | 4 | 20 | — | [Source](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) Official editing example; output dimensions follow reference-image aspect ratio. |
 | `qwen-image-edit-2511` | 4 | 20 | — | [Source](https://huggingface.co/Qwen/Qwen-Image-Edit-2511) Official editing example; output dimensions follow reference-image aspect ratio. |
@@ -107,7 +110,7 @@ For community edit adapters and other optional extensions, these are the base-mo
 | `sdxl-turbo` | 1 | 1 | 512 × 512 | [Source](https://huggingface.co/stabilityai/sdxl-turbo)  |
 | `sdxs` | 1 | 1 | 512 × 512 | [Source](https://huggingface.co/IDKiro/sdxs-512-dreamshaper)  |
 | `sefi-image` | 4 | 20 | — | [Source](https://huggingface.co/SeFi-Image/SeFi-Image-5B-Base) Base/RL family defaults; Turbo checkpoints require 4 steps / CFG 1. |
-| `sensenova-u15` | 4 | 20 | 2048 × 2048 | [Source](https://raw.githubusercontent.com/OpenSenseNova/SenseNova-U1/main/examples/README.md)  |
+| `sensenova-u15` | 4 | 20 | 1024 × 1024 | [Source](https://raw.githubusercontent.com/OpenSenseNova/SenseNova-U1/main/examples/README.md)  |
 | `wan21-flf2v` | 5 | 20 | 1280 × 720 | [Source](https://raw.githubusercontent.com/Wan-Video/Wan2.1/main/generate.py)  |
 | `wan21-i2v` | 5 | 20 | 832 × 480 | [Source](https://raw.githubusercontent.com/Wan-Video/Wan2.1/main/generate.py) 480p base defaults; also accepts compatible SkyReels V2 and single Wan 2.2 I2V experts. |
 | `wan21-t2v` | 5 | 20 | 1280 × 720 | [Source](https://raw.githubusercontent.com/Wan-Video/Wan2.1/main/generate.py) 14B base defaults; single Wan 2.2 experts and acceleration LoRAs need matching settings. |

@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "sdxl-ip-adapter",
   "name": "SDXL IP-Adapter / Plus",
+  "size_multiple": 64,
   "description": "Select matching SDXL ViT-H IP-Adapter or Plus weights and CLIP Vision H, then supply an IP-Adapter image.",
   "model_url": "https://huggingface.co/h94/IP-Adapter",
   "slots": [

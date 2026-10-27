@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "wan22-t2v",
   "name": "Wan 2.2 T2V A14B",
+  "size_multiple": 16,
   "description": "Text-to-video. Use Video Generation after loading. LightX2V acceleration LoRAs must match the T2V low- and high-noise models; configure LoRAs and sampling separately.",
   "model_url": "https://huggingface.co/Wan-AI/Wan2.2-T2V-A14B",
   "slots": [
@@ -35,6 +36,12 @@
       "tae"
     ]
   ],
+  "video_constraints": {
+    "frame_step": 4,
+    "frame_offset": 1,
+    "frame_rounding": "floor",
+    "min_frames": 1
+  },
   "defaults": {
     "sampling_method": "euler",
     "video_frames": 33,

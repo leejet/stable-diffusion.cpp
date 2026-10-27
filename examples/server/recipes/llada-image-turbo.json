@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "llada-image-turbo",
   "name": "LLaDA Image Turbo",
+  "size_multiple": 16,
   "description": "Use matching turbo text encoder and connectors. Editing needs connectors that include the SigVQ encoder.",
   "model_url": "https://huggingface.co/inclusionAI/LLaDA-Image-Turbo",
   "slots": [

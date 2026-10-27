@@ -26,6 +26,7 @@ on:
         "ggml",
         "examples/server/frontend",
         "examples/server/frontend/**",
+        "examples/server/recipes/*.json",
         "start-server.sh",
         "start-server.bat",
       ]
@@ -46,6 +47,7 @@ on:
         "ggml",
         "examples/server/frontend",
         "examples/server/frontend/**",
+        "examples/server/recipes/*.json",
         "start-server.sh",
         "start-server.bat",
       ]

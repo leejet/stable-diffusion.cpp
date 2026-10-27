@@ -31,14 +31,21 @@ rule for edge detection. See
 [Image preprocessing](../../docs/image_preprocessing.md) for input selectors,
 input defaults, downstream model processing, mask alignment, and examples.
 
-Metadata mode inspects PNG/JPEG container metadata without loading any model:
+Metadata mode inspects PNG, JPEG, WebP (including animated WebP), AVI, WebM, and Matroska
+container metadata without loading any model. Use `--image` for both images and videos:
 
 ```bash
 ./bin/sd-cli -M metadata --image ./output.png
 ./bin/sd-cli -M metadata --image ./output.jpg --metadata-format json
+./bin/sd-cli -M metadata --image ./output.webm
+./bin/sd-cli -M metadata --image ./output.avi --metadata-format json
 ./bin/sd-cli -M metadata --image ./output.png --metadata-raw
 ./bin/sd-cli -M metadata --image ./output.png --metadata-all
 ```
 
 For completely black or white images or videos, NaNs, and the `--linear-scale` /
 `--attn-scale` workaround, see [Troubleshooting](../../docs/troubleshooting.md).
+
+Generation outputs embed the core [generation record](../../docs/generation_metadata.md).
+Images retain the native JSON and an additional WebUI-compatible infotext.
+`--disable-image-metadata` omits both from files.

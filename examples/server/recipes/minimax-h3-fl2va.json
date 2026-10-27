@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "minimax-h3-fl2va",
   "name": "MiniMax H3 FL2VA",
+  "size_multiple": 32,
   "description": "Generate video and audio, optionally with start/end images. Supports full and pruned FL2VA weights. Audio VAE is optional for silent video.",
   "model_url": "https://huggingface.co/MiniMaxAI/MiniMax-H3",
   "slots": [
@@ -35,6 +36,13 @@
       "tae"
     ]
   ],
+  "video_constraints": {
+    "frame_step": 17,
+    "frame_offset": 5,
+    "frame_rounding": "ceil",
+    "min_frames": 5,
+    "fixed_fps": 24
+  },
   "defaults": {
     "video_frames": 56,
     "fps": 24,
