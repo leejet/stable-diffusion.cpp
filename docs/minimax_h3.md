@@ -106,3 +106,74 @@ frame rate and optional soundtrack; non-24-fps inputs are resampled internally.
 - MiniMax-H3 runs at 24 fps; another requested value is overridden.
 - The default video flow shift is 12. The audio stream is mapped internally to
   its shift of 3, so the regular samplers can operate on the packed AV latent.
+
+## Notes for VRAM-limited and older GPUs (measured on Tesla V100 32 GB)
+
+Everything below was measured on a single Tesla V100-PCIE-32 GB (sm_70: no
+bf16/fp8/int8 tensor cores, so quantized-attention kernels are out), Windows,
+driver 581.80, CUDA 12.4 toolchain, Q4_K_M DiT with a Q4_K_M Qwen3-VL text
+encoder, at commit `d8fb10c` (2026-09). Treat it as a calibration point for
+other 16-32 GB cards.
+
+### Flags that matter
+
+With the default attention path the packed AV transformer materializes huge
+attention matrices and a 32 GB card OOMs at 1024x576 above 39 frames.
+Diffusion flash attention plus CPU offload and mmap changes that completely:
+
+| Flag | Effect (measured) |
+|---|---|
+| Diffusion flash attention | 1024x576 ceiling on 32 GB: 39 -> 124+ frames |
+| `--offload-to-cpu` | All ~35 GB of weights move to host RAM; idle GPU footprint drops 17.5 GB -> ~10 MiB; sampling at 1024x576x56 only 1.7% slower |
+| `--mmap` | Cold-start end-to-end 1236 s -> 286 s (4.3x) on a 1024x576x39 probe; output bit-identical (PSNR infinite, SSIM 1.0, identical audio SHA256) |
+
+At `d8fb10c` this combination was `--diffusion-fa --offload-to-cpu --mmap`.
+On current master the attention switch is `--flash-attn off,diffusion=on`
+(the old flag still works but warns) and `--auto-fit` is on by default. Do not
+add explicit `--params-backend` assignments on top of offload: an explicit
+params backend disables the automatic placement that makes this combination
+work.
+
+### Measured envelope
+
+Single V100, 8 sampling steps, 24 fps. Upper block: no LoRA, seed 3001.
+Lower block: community Turbo LoRA at multiplier 1.0, seed 4101, CLI.
+
+| Canvas | Frames | Duration | Sampling | Wall clock | Peak VRAM |
+|---|---:|---:|---:|---:|---:|
+| 1024x576 | 39 | 1.63 s | 258 s | 294 s | - |
+| 1024x576 | 56 | 2.33 s | 249 s | 306 s | - |
+| 1024x576 | 124 | 5.17 s | 643 s | 753 s | - |
+| 1280x720 | 39 | 1.63 s | 279 s | 331 s | - |
+| 1280x720 | 124 | 5.17 s | 1221 s | 1390 s | - |
+| 1536x864 | 39 | 1.63 s | 425 s | 496 s | - |
+| 1344x768 + Turbo LoRA | 175 | 7.29 s | - | 47.8 min | 29,486 MiB |
+| 1344x768 + Turbo LoRA | 192 | 7.96 s | - | 54.7 min | 30,925 MiB |
+| 1344x768 + Turbo LoRA | 209 | 8.71 s | - | 60.0 min | 32,206 MiB |
+
+Observations that should transfer to other small GPUs:
+
+- Peak VRAM at 1344x768 grows by ~85 MiB per frame; 209 frames (~8.7 s) is the
+  practical ceiling on 32 GB with everything else offloaded.
+- Throughput is compute-bound: per-step time is independent of step count, and
+  with offload the per-step weight transfer over PCIe accounts for under 4% of
+  the step. Step-count reduction is therefore the only large speed lever - the
+  8-step community Turbo LoRA sampled 1024x576x39 in 261 s versus 649 s at 20
+  steps without it (2.5x).
+- A second V100 does not speed up a single job (layer split runs sequentially
+  and row split is unavailable for the CUDA backend), but running two
+  generations in parallel, one per GPU, measured 1.86x throughput.
+
+### Audio delivery gotcha
+
+The `.webm` written for audio-video outputs muxes the audio track as raw PCM,
+which WebM-profile players drop (#2233). Remux before delivery:
+
+```bash
+ffmpeg -i in.webm -c:v copy -c:a libopus out.webm   # real WebM
+ffmpeg -i in.webm -c:v libx264 -c:a aac out.mp4     # MP4 delivery
+```
+
+A full deployment recipe for V100-class hardware (startup scripts, VRAM and
+duration tables, measured pitfalls, LoRA conversion tools) is maintained at
+[noahark/minimax-h3-v100-deploy](https://github.com/noahark/minimax-h3-v100-deploy).
