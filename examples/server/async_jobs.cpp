@@ -11,6 +11,7 @@
 #include "common/log.h"
 #include "common/media_io.h"
 #include "common/resource_owners.hpp"
+#include "model_catalog.h"
 
 class JobCancellationMonitor {
     std::mutex mutex_;
@@ -398,12 +399,20 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
 
 void async_job_worker(ServerRuntime& runtime) {
     AsyncJobManager& manager = *runtime.async_job_manager;
+    const bool sleep_enabled = runtime.svr_params->sleep_idle_seconds >= 0;
 
     while (true) {
         std::shared_ptr<AsyncGenerationJob> job;
+        bool idle_timeout = false;
         {
             std::unique_lock<std::mutex> lock(manager.mutex);
-            manager.cv.wait(lock, [&]() { return manager.stop || !manager.queue.empty(); });
+            auto has_work = [&]() { return manager.stop || !manager.queue.empty(); };
+            if (sleep_enabled) {
+                // Polling every second lets the idle window end while no job is queued.
+                idle_timeout = !manager.cv.wait_for(lock, std::chrono::seconds(1), has_work);
+            } else {
+                manager.cv.wait(lock, has_work);
+            }
 
             if (manager.stop && manager.queue.empty()) {
                 break;
@@ -427,6 +436,18 @@ void async_job_worker(ServerRuntime& runtime) {
             job->started_at = unix_timestamp_now_ms();
         }
 
+        if (!job) {
+            if (idle_timeout) {
+                enter_sleep_if_idle(runtime);
+            }
+            continue;
+        }
+
+        touch_task_timer(runtime);
+        if (runtime.sd_ctx == nullptr && model_status(runtime).value("state", std::string()) == "sleeping") {
+            wake_from_sleep(runtime);
+        }
+
         std::vector<std::string> output_images;
         json output_info;
         std::string output_media_b64;
@@ -434,22 +455,30 @@ void async_job_worker(ServerRuntime& runtime) {
         int output_frame_count = 0;
         int output_fps         = 0;
         std::string error_message;
-        bool ok = false;
+        bool ok                = false;
 
-        if (job->kind == AsyncJobKind::ImgGen) {
-            ok = execute_img_gen_job(runtime, *job, output_images, output_info, error_message);
-        } else if (job->kind == AsyncJobKind::VidGen) {
-            ok = execute_vid_gen_job(runtime,
-                                     *job,
-                                     output_media_b64,
-                                     output_media_mime_type,
-                                     output_frame_count,
-                                     output_fps,
-                                     output_info,
-                                     error_message);
+        if (runtime.sd_ctx != nullptr) {
+            if (job->kind == AsyncJobKind::ImgGen) {
+                ok = execute_img_gen_job(runtime, *job, output_images, output_info, error_message);
+            } else if (job->kind == AsyncJobKind::VidGen) {
+                ok = execute_vid_gen_job(runtime,
+                                         *job,
+                                         output_media_b64,
+                                         output_media_mime_type,
+                                         output_frame_count,
+                                         output_fps,
+                                         output_info,
+                                         error_message);
+            } else {
+                error_message = "unsupported job kind";
+            }
         } else {
-            error_message = "unsupported job kind";
+            error_message = "no model is loaded";
         }
+
+        // Completion restarts the idle window so a long-running job cannot leave
+        // the timer already expired when the worker resumes polling.
+        touch_task_timer(runtime);
 
         {
             std::lock_guard<std::mutex> lock(manager.mutex);

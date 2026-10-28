@@ -1,6 +1,7 @@
 #include "routes.h"
 
 #include "async_jobs.h"
+#include "common/log.h"
 #include "model_catalog.h"
 
 static void model_error(httplib::Response& res, int status, const std::string& code, const std::string& message) {
@@ -11,14 +12,24 @@ static void model_error(httplib::Response& res, int status, const std::string& c
 httplib::Server::Handler RuntimeRoutes::protect(httplib::Server::Handler handler) {
     ServerRuntime* runtime = &runtime_;
     return [runtime, handler](const httplib::Request& req, httplib::Response& res) {
+        const bool generation = req.path == "/sdcpp/v1/img_gen" || req.path == "/sdcpp/v1/vid_gen" ||
+                                req.path == "/sdapi/v1/txt2img" || req.path == "/sdapi/v1/img2img" ||
+                                req.path == "/v1/images/generations" || req.path == "/v1/images/edits";
+        if (generation) {
+            // Generation requests count as tasks for the idle-sleep timer, and one
+            // reloads the context first while it waits in the sleeping state.
+            touch_task_timer(*runtime);
+            if (model_status(*runtime).value("state", std::string()) == "sleeping" && !wake_from_sleep(*runtime)) {
+                model_error(res, 422, "model_load_failed",
+                            model_status(*runtime).value("error", std::string("Failed to reload the model after sleeping")));
+                return;
+            }
+        }
         std::shared_lock<std::shared_mutex> lock(runtime->models->runtime_mutex, std::try_to_lock);
         if (!lock.owns_lock()) {
             model_error(res, 503, "model_loading", "Model is loading or unloading");
             return;
         }
-        const bool generation = req.path == "/sdcpp/v1/img_gen" || req.path == "/sdcpp/v1/vid_gen" ||
-                                req.path == "/sdapi/v1/txt2img" || req.path == "/sdapi/v1/img2img" ||
-                                req.path == "/v1/images/generations" || req.path == "/v1/images/edits";
         if (generation && !runtime->sd_ctx) {
             model_error(res, 503, "model_not_loaded", "No model is loaded");
             return;
@@ -51,6 +62,77 @@ static void set_model_status(ServerRuntime& runtime, const char* state, const js
         }
     }
     models.status = {{"state", state}, {"recipe", recipe}, {"models", selection}, {"error", error}, {"revision", revision}, {"load_elapsed_seconds", elapsed}};
+}
+
+void touch_task_timer(ServerRuntime& runtime) {
+    std::lock_guard<std::mutex> lock(runtime.models->status_mutex);
+    runtime.models->last_task_at = std::chrono::steady_clock::now();
+}
+
+void enter_sleep_if_idle(ServerRuntime& runtime) {
+    auto& models = *runtime.models;
+    if (runtime.sd_ctx == nullptr) {
+        return;
+    }
+    // A failed exclusive lock means a request still holds the context.
+    std::unique_lock<std::shared_mutex> lock(models.runtime_mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return;
+    }
+    if (count_pending_jobs(*runtime.async_job_manager) != 0) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> status_lock(models.status_mutex);
+        if (models.status.value("state", std::string()) != "ready") {
+            return;
+        }
+        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - models.last_task_at).count();
+        if (elapsed < runtime.svr_params->sleep_idle_seconds) {
+            return;
+        }
+        // Mutate in place so the preserved model selection and CLI origin survive
+        // the sleep and can drive the reload.
+        models.status["state"] = "sleeping";
+    }
+    runtime.sd_ctx = nullptr;
+    models.context.reset();
+    LOG_INFO("sd-server: released the model context after %d seconds of inactivity; the next generation request reloads it",
+             runtime.svr_params->sleep_idle_seconds);
+}
+
+bool wake_from_sleep(ServerRuntime& runtime) {
+    auto& models = *runtime.models;
+    std::unique_lock<std::shared_mutex> lock(models.runtime_mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> status_lock(models.status_mutex);
+        if (models.status.value("state", std::string()) != "sleeping") {
+            return true;
+        }
+    }
+    LOG_INFO("sd-server: reloading the model after sleeping");
+    bool reloaded = false;
+    try {
+        auto params = runtime.ctx_params->to_sd_ctx_params_t();
+        models.context.reset(new_sd_ctx(&params));
+        if (models.context) {
+            runtime.sd_ctx = models.context.get();
+            reloaded       = true;
+        }
+    } catch (const std::exception&) {
+    }
+    std::lock_guard<std::mutex> status_lock(models.status_mutex);
+    if (reloaded) {
+        models.last_task_at    = std::chrono::steady_clock::now();
+        models.status["state"] = "ready";
+    } else {
+        models.status["state"] = "error";
+        models.status["error"] = "Failed to reload the model after sleeping";
+    }
+    return reloaded;
 }
 
 static void change_model(ServerRuntime& runtime, const httplib::Request& req, httplib::Response& res, bool unload) {
@@ -121,6 +203,9 @@ static void change_model(ServerRuntime& runtime, const httplib::Request& req, ht
             models.active_recipe = std::move(loaded_recipe);
         }
         set_model_status(runtime, unload ? "empty" : "ready", recipe, selection);
+        // A completed model operation restarts the idle window so a freshly loaded
+        // context cannot sleep before it has served a full idle period.
+        touch_task_timer(runtime);
         res.set_content(model_status(runtime).dump(), "application/json");
     } catch (const std::exception& e) {
         runtime.sd_ctx = nullptr;

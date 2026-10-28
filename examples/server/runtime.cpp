@@ -351,6 +351,10 @@ ArgOptions SDSvrParams::get_options() {
 
     options.int_options = {
         {"", "--listen-port", "server listen port (default: 1234)", &listen_port},
+        {"", "--sleep-idle-seconds",
+         "number of seconds of inactivity after which the loaded model context is released to free "
+         "memory; the next generation request reloads it (default: -1; -1 = disabled)",
+         &sleep_idle_seconds},
     };
 
     options.bool_options = {
@@ -392,6 +396,11 @@ bool SDSvrParams::validate() {
         LOG_ERROR("error: serve_html_path file does not exist: %s", serve_html_path.c_str());
         return false;
     }
+
+    if (sleep_idle_seconds == 0 || sleep_idle_seconds < -1) {
+        LOG_ERROR("error: sleep_idle_seconds must be -1 (disabled) or a positive number of seconds");
+        return false;
+    }
     return true;
 }
 
@@ -409,6 +418,7 @@ std::string SDSvrParams::to_string() const {
         << "  listen_ip: " << listen_ip << ",\n"
         << "  listen_port: \"" << listen_port << "\",\n"
         << "  serve_html_path: \"" << serve_html_path << "\",\n"
+        << "  sleep_idle_seconds: " << sleep_idle_seconds << ",\n"
         << "}";
     return oss.str();
 }
