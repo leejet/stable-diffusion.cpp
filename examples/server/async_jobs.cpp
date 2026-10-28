@@ -446,18 +446,6 @@ void async_job_worker(ServerRuntime& runtime) {
             wake_from_sleep(runtime);
         }
 
-        if (!job) {
-            if (idle_timeout) {
-                enter_sleep_if_idle(runtime);
-            }
-            continue;
-        }
-
-        touch_task_timer(runtime);
-        if (runtime.sd_ctx == nullptr && model_status(runtime).value("state", std::string()) == "sleeping") {
-            wake_from_sleep(runtime);
-        }
-
         std::vector<std::string> output_images;
         json output_info;
         std::string output_media_b64;

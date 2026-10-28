@@ -20,9 +20,16 @@ httplib::Server::Handler RuntimeRoutes::protect(httplib::Server::Handler handler
             // reloads the context first while it waits in the sleeping state.
             touch_task_timer(*runtime);
             if (model_status(*runtime).value("state", std::string()) == "sleeping" && !wake_from_sleep(*runtime)) {
-                model_error(res, 422, "model_load_failed",
-                            model_status(*runtime).value("error", std::string("Failed to reload the model after sleeping")));
-                return;
+                const json status = model_status(*runtime);
+                if (status.value("state", std::string()) == "error") {
+                    model_error(res, 422, "model_load_failed",
+                                status.contains("error") && status["error"].is_string()
+                                    ? status["error"].get<std::string>()
+                                    : "Failed to reload the model after sleeping");
+                    return;
+                }
+                // Other states fall through to the shared-lock checks below, where a
+                // missing context reports 503 model_not_loaded.
             }
         }
         std::shared_lock<std::shared_mutex> lock(runtime->models->runtime_mutex, std::try_to_lock);
@@ -71,16 +78,17 @@ void touch_task_timer(ServerRuntime& runtime) {
 
 void enter_sleep_if_idle(ServerRuntime& runtime) {
     auto& models = *runtime.models;
-    if (runtime.sd_ctx == nullptr) {
-        return;
-    }
-    // A failed exclusive lock means a request still holds the context.
+    // Take the exclusive lock before reading sd_ctx; a failed try-lock means a
+    // request still uses the context.
     std::unique_lock<std::shared_mutex> lock(models.runtime_mutex, std::try_to_lock);
-    if (!lock.owns_lock()) {
+    if (!lock.owns_lock() || runtime.sd_ctx == nullptr) {
         return;
     }
-    if (count_pending_jobs(*runtime.async_job_manager) != 0) {
-        return;
+    {
+        std::lock_guard<std::mutex> jobs_lock(runtime.async_job_manager->mutex);
+        if (count_pending_jobs(*runtime.async_job_manager) != 0) {
+            return;
+        }
     }
     {
         std::lock_guard<std::mutex> status_lock(models.status_mutex);
