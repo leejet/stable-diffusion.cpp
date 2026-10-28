@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <cstring>
 
 #include "model/common/ggml_block.hpp"
 #include "model/common/rope.hpp"
@@ -53,12 +54,31 @@ namespace MOSSImage {
         }
     };
 
+#ifndef SD_USE_UPSTREAM_GGML
+    inline ggml_glu_op situ_op() {
+        // Older pinned headers can lack the optional SiTU enumerator.
+        static const auto op = [] {
+            for (int i = 0; i < GGML_GLU_OP_COUNT; ++i) {
+                auto candidate = static_cast<ggml_glu_op>(i);
+                if (std::strcmp(ggml_glu_op_name(candidate), "SITU") == 0) {
+                    return candidate;
+                }
+            }
+            return GGML_GLU_OP_COUNT;
+        }();
+        return op;
+    }
+#endif
+
     inline ggml_tensor* situ(GGMLRunnerContext* ctx, ggml_tensor* hidden, ggml_tensor* gate) {
         auto c = ctx->ggml_ctx;
 #ifndef SD_USE_UPSTREAM_GGML
-        auto out = ggml_glu_split(c, gate, hidden, GGML_GLU_OP_SITU);
-        if (ctx->backend != nullptr && ggml_backend_supports_op(ctx->backend, out)) {
-            return out;
+        const auto op = situ_op();
+        if (ctx->backend != nullptr && op != GGML_GLU_OP_COUNT) {
+            auto out = ggml_glu_split(c, gate, hidden, op);
+            if (ggml_backend_supports_op(ctx->backend, out)) {
+                return out;
+            }
         }
 #endif
         auto a = ggml_scale(c, ggml_tanh(c, ggml_scale(c, gate, 0.25f)), 4.f);
@@ -143,9 +163,12 @@ namespace MOSSImage {
             auto up_gate = linear("proj.ffn_up_gate", y);
             y            = nullptr;
 #ifndef SD_USE_UPSTREAM_GGML
-            auto activation = ggml_glu(c, up_gate, GGML_GLU_OP_SITU, true);
-            if (ctx->backend != nullptr && ggml_backend_supports_op(ctx->backend, activation)) {
-                y = activation;
+            const auto op = situ_op();
+            if (ctx->backend != nullptr && op != GGML_GLU_OP_COUNT) {
+                auto activation = ggml_glu(c, up_gate, op, true);
+                if (ggml_backend_supports_op(ctx->backend, activation)) {
+                    y = activation;
+                }
             }
 #endif
             if (y == nullptr) {

@@ -35,3 +35,8 @@ Pass the external `tokenizer.json` with `--tokenizer`; Qwen3.5 uses a different 
 <img src="../assets/moss/sft.png" />
 
 Use dimensions divisible by 16. The default discrete scheduler uses the upstream time shift of 5. Use `--flow-shift` to override it. The negative CFG branch skips DiT layer 22 (zero-based), matching the upstream pipeline.
+
+MOSS uses native SiTU when ggml lists the operation and the selected backend
+supports it. Older pinned ggml revisions, upstream builds and unsupported
+backends retain the composite activation. No per-operator availability macro
+or submodule update is required.
