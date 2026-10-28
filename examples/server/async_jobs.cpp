@@ -13,6 +13,7 @@
 #include "common/log.h"
 #include "common/media_io.h"
 #include "common/resource_owners.hpp"
+#include "model_catalog.h"
 
 class JobCancellationMonitor {
     std::mutex mutex_;
@@ -409,7 +410,7 @@ void async_job_worker(ServerRuntime& runtime) {
             std::unique_lock<std::mutex> lock(manager.mutex);
             auto has_work = [&]() { return manager.stop || !manager.queue.empty(); };
             if (sleep_enabled) {
-                // Polling while idle lets an inactive period unload the context.
+                // Polling every second lets the idle window end while no job is queued.
                 idle_timeout = !manager.cv.wait_for(lock, std::chrono::seconds(1), has_work);
             } else {
                 manager.cv.wait(lock, has_work);
@@ -431,6 +432,18 @@ void async_job_worker(ServerRuntime& runtime) {
                     job->started_at = unix_timestamp_now_ms();
                 }
             }
+        }
+
+        if (!job) {
+            if (idle_timeout) {
+                enter_sleep_if_idle(runtime);
+            }
+            continue;
+        }
+
+        touch_task_timer(runtime);
+        if (runtime.sd_ctx == nullptr && model_status(runtime).value("state", std::string()) == "sleeping") {
+            wake_from_sleep(runtime);
         }
 
         if (!job) {
@@ -472,6 +485,10 @@ void async_job_worker(ServerRuntime& runtime) {
         } else {
             error_message = "no model is loaded";
         }
+
+        // Completion restarts the idle window so a long-running job cannot leave
+        // the timer already expired when the worker resumes polling.
+        touch_task_timer(runtime);
 
         {
             std::lock_guard<std::mutex> lock(manager.mutex);
