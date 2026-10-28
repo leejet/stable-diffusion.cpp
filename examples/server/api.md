@@ -79,6 +79,15 @@ with `code: "model_loading"`. These errors retain the existing string-valued
 available during loading. Model lists are empty when no model is loaded;
 `/v1/models` retains the `sd-cpp-local` ID when ready.
 
+With `--sleep-idle-seconds N` the server releases the active context after
+N seconds without a generation request or queued job and reports `state:
+sleeping`; the model then holds no GPU or system memory. The next generation
+request reloads the same recipe and selection before serving, waiting for the
+reload; a reload failure returns HTTP 422 (`model_load_failed`) and moves the
+status to `state: error`. Explicit load/unload while sleeping replaces the
+sleeping selection. Status, recipe, file catalog and model management
+endpoints, and job polling/cancellation remain available while sleeping.
+
 | Method | Endpoint | Response / behavior |
 | --- | --- | --- |
 | GET | `/sdcpp/v1/recipes` | `{recipes: [...], errors: [...]}` |
@@ -137,7 +146,7 @@ failure returns HTTP 422 (`model_load_failed`) and leaves no active context.
 The load HTTP request waits for completion; a separate client can poll status
 while it runs. Refreshing the catalog never modifies an already loaded context.
 
-Status uses `state: empty | loading | ready | error`, `recipe` (ID or null),
+Status uses `state: empty | loading | ready | sleeping | error`, `recipe` (ID or null),
 `models` (slot-to-file-ID mapping), and `error` (string or null). A monotonically
 increasing `revision` identifies runtime transitions within this server process.
 Command-line preloading keeps `origin: command_line` and `recipe: null` for

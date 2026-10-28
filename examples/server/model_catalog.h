@@ -39,6 +39,7 @@ struct ServerModels {
     std::map<std::string, json> recipes;
     std::map<std::string, ModelFile> files;
     std::chrono::steady_clock::time_point load_started_at;
+    std::chrono::steady_clock::time_point last_task_at;
     json active_recipe  = nullptr;
     json catalog_errors = json::array();
     json status         = {{"state", "empty"}, {"recipe", nullptr}, {"models", json::object()}, {"error", nullptr}, {"load_elapsed_seconds", nullptr}};
@@ -47,6 +48,12 @@ struct ServerModels {
 void refresh_model_catalog(ServerRuntime& runtime);
 json model_status(ServerRuntime& runtime);
 void initialize_server_models(ServerRuntime& runtime);
+
+// Idle sleeping: after `sleep_idle_seconds` without a generation task, the active context is
+// released and the model status reports `sleeping`; the next generation request reloads it.
+void touch_task_timer(ServerRuntime& runtime);
+void enter_sleep_if_idle(ServerRuntime& runtime);
+bool wake_from_sleep(ServerRuntime& runtime);
 
 json resolve_recipe_features(const json& recipe);
 json model_generation_features(const ServerRuntime& runtime);

@@ -1,6 +1,7 @@
 #include "routes.h"
 
 #include "async_jobs.h"
+#include "common/log.h"
 #include "model_catalog.h"
 
 static void model_error(httplib::Response& res, int status, const std::string& code, const std::string& message) {
@@ -11,14 +12,24 @@ static void model_error(httplib::Response& res, int status, const std::string& c
 httplib::Server::Handler RuntimeRoutes::protect(httplib::Server::Handler handler) {
     ServerRuntime* runtime = &runtime_;
     return [runtime, handler](const httplib::Request& req, httplib::Response& res) {
+        const bool generation = req.path == "/sdcpp/v1/img_gen" || req.path == "/sdcpp/v1/vid_gen" ||
+                                req.path == "/sdapi/v1/txt2img" || req.path == "/sdapi/v1/img2img" ||
+                                req.path == "/v1/images/generations" || req.path == "/v1/images/edits";
+        if (generation) {
+            // A generation request counts as a task for the idle-sleep timer, and reloads the
+            // context first when the server is waiting in the sleeping state.
+            touch_task_timer(*runtime);
+            if (model_status(*runtime).value("state", std::string()) == "sleeping" && !wake_from_sleep(*runtime)) {
+                model_error(res, 422, "model_load_failed",
+                            model_status(*runtime).value("error", "failed to reload model after sleeping"));
+                return;
+            }
+        }
         std::shared_lock<std::shared_mutex> lock(runtime->models->runtime_mutex, std::try_to_lock);
         if (!lock.owns_lock()) {
             model_error(res, 503, "model_loading", "Model is loading or unloading");
             return;
         }
-        const bool generation = req.path == "/sdcpp/v1/img_gen" || req.path == "/sdcpp/v1/vid_gen" ||
-                                req.path == "/sdapi/v1/txt2img" || req.path == "/sdapi/v1/img2img" ||
-                                req.path == "/v1/images/generations" || req.path == "/v1/images/edits";
         if (generation && !runtime->sd_ctx) {
             model_error(res, 503, "model_not_loaded", "No model is loaded");
             return;
@@ -53,6 +64,84 @@ static void set_model_status(ServerRuntime& runtime, const char* state, const js
     models.status = {{"state", state}, {"recipe", recipe}, {"models", selection}, {"error", error}, {"revision", revision}, {"load_elapsed_seconds", elapsed}};
 }
 
+void touch_task_timer(ServerRuntime& runtime) {
+    std::lock_guard<std::mutex> lock(runtime.models->status_mutex);
+    runtime.models->last_task_at = std::chrono::steady_clock::now();
+}
+
+void enter_sleep_if_idle(ServerRuntime& runtime) {
+    auto& models = *runtime.models;
+    if (runtime.svr_params->sleep_idle_seconds < 0) {
+        return;
+    }
+    std::unique_lock<std::shared_mutex> lock(models.runtime_mutex, std::try_to_lock);
+    if (!lock.owns_lock() || runtime.sd_ctx == nullptr) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> jobs_lock(runtime.async_job_manager->mutex);
+        if (count_pending_jobs(*runtime.async_job_manager) != 0) {
+            return;
+        }
+    }
+    std::lock_guard<std::mutex> status_lock(models.status_mutex);
+    const auto idle = std::chrono::seconds(runtime.svr_params->sleep_idle_seconds);
+    if (models.status.value("state", std::string()) != "ready" ||
+        std::chrono::steady_clock::now() - models.last_task_at < idle) {
+        return;
+    }
+    LOG_INFO("%s", "server is entering sleeping state");
+    runtime.sd_ctx                        = nullptr;
+    models.context.reset();
+    models.last_task_at                   = std::chrono::steady_clock::now();
+    models.status["state"]                = "sleeping";
+    models.status["error"]                = nullptr;
+    models.status["load_elapsed_seconds"] = nullptr;
+    models.status["revision"]             = models.status.value("revision", uint64_t(0)) + 1;
+}
+
+bool wake_from_sleep(ServerRuntime& runtime) {
+    auto& models = *runtime.models;
+    std::unique_lock<std::shared_mutex> lock(models.runtime_mutex);
+    if (runtime.sd_ctx != nullptr) {
+        return true;
+    }
+    {
+        std::lock_guard<std::mutex> status_lock(models.status_mutex);
+        if (models.status.value("state", std::string()) != "sleeping") {
+            return false;
+        }
+        models.status["state"]                = "loading";
+        models.status["error"]                = nullptr;
+        models.status["load_elapsed_seconds"] = 0.0;
+        models.status["revision"]             = models.status.value("revision", uint64_t(0)) + 1;
+        models.load_started_at                = std::chrono::steady_clock::now();
+    }
+    LOG_INFO("%s", "server is exiting sleeping state");
+
+    bool ok         = false;
+    std::string error = "failed to reload model after sleeping";
+    try {
+        auto params = runtime.ctx_params->to_sd_ctx_params_t();
+        models.context.reset(new_sd_ctx(&params));
+        ok = models.context != nullptr;
+    } catch (const std::exception& e) {
+        error = e.what();
+    }
+    std::lock_guard<std::mutex> status_lock(models.status_mutex);
+    if (ok) {
+        runtime.sd_ctx                              = models.context.get();
+        models.last_task_at                         = std::chrono::steady_clock::now();
+        models.status["state"]                      = "ready";
+        models.status["load_elapsed_seconds"]       = std::chrono::duration<double>(std::chrono::steady_clock::now() - models.load_started_at).count();
+    } else {
+        models.status["state"] = "error";
+        models.status["error"] = error;
+    }
+    models.status["revision"] = models.status.value("revision", uint64_t(0)) + 1;
+    return ok;
+}
+
 static void change_model(ServerRuntime& runtime, const httplib::Request& req, httplib::Response& res, bool unload) {
     auto& models = *runtime.models;
     std::unique_lock<std::shared_mutex> lock(models.runtime_mutex, std::try_to_lock);
@@ -69,6 +158,8 @@ static void change_model(ServerRuntime& runtime, const httplib::Request& req, ht
             return;
         }
     }
+    // A manual model operation counts as activity for the idle-sleep timer.
+    touch_task_timer(runtime);
 
     json body;
     json loaded_recipe;

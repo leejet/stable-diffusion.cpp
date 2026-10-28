@@ -240,6 +240,15 @@ the error. Backend and memory options supplied at startup apply to subsequent
 loads. Recipe defaults apply to new loads; explicitly supplied generation
 request parameters take precedence.
 
+Pass `--sleep-idle-seconds <seconds>` to release the loaded context
+automatically after that many seconds without a generation request or job.
+`GET /sdcpp/v1/models/status` then reports `state: sleeping`, and the model
+no longer occupies GPU or system memory. The next generation request reloads
+the same recipe and selection before running. Status, recipe, file catalog,
+load and unload endpoints, and job polling remain available while sleeping.
+The default -1 disables automatic sleeping; the value must be -1 or a
+positive number of seconds.
+
 See [the API reference](api.md#model-management) for recipe fields, supported
 slots, management endpoints, and compatibility behavior.
 
