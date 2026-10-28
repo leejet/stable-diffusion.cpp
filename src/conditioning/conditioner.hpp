@@ -3089,15 +3089,14 @@ struct LLMEmbedder : public Conditioner {
                 prompt += "<|im_end|>\n<|im_start|>assistant\n";
             }
         } else if (version == VERSION_MOSS_IMAGE) {
-            if (!llm->enable_vision && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
-                LOG_ERROR("MOSS-Image vision conditioning requires Qwen3.5 vision weights; provide --llm_vision or a combined encoder");
-                return {};
-            }
             prompt_template_encode_start_idx = 0;
             max_length                       = 0;
             prompt                           = "<|im_start|>user\n";
-            int64_t vision_tokens            = 0;
-            if (llm->enable_vision && conditioner_params.ref_images != nullptr) {
+            if (conditioner_params.ref_image_params.pass_to_vlm && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
+                if (!llm->enable_vision) {
+                    LOG_ERROR("MOSS-Image vision conditioning requires Qwen3.5 vision weights; provide --llm_vision or a combined encoder");
+                    return {};
+                }
                 const int factor = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
                 int min_pixels   = conditioner_params.ref_image_params.vlm_min_size;
                 if (min_pixels <= 0) {
