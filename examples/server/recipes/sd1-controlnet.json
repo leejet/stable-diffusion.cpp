@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "sd1-controlnet",
   "name": "SD 1.5 ControlNet",
+  "size_multiple": 64,
   "description": "Supply a control image; input image and mask are optional for image-to-image or inpainting.",
   "model_url": "https://huggingface.co/lllyasviel/control_v11p_sd15_canny",
   "slots": [

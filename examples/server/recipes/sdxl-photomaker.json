@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "sdxl-photomaker",
   "name": "SDXL PhotoMaker",
+  "size_multiple": 64,
   "description": "Select PhotoMaker v1 and supply identity images. Include the img trigger in the prompt.",
   "model_url": "https://huggingface.co/TencentARC/PhotoMaker",
   "slots": [

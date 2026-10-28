@@ -462,46 +462,27 @@ static bool build_sdapi_img_gen_request(const json& j,
            validate_server_img_gen_request(runtime, request, error_message);
 }
 
-static nlohmann::json prepare_info_field(const SDContextParams& ctx_params,
-                                         const SDGenerationParams& gen_params,
-                                         bool img2img) {
-    nlohmann::json jsoninfo = nlohmann::json::object();
-    jsoninfo["prompt"]      = gen_params.prompt;
-    if (!gen_params.negative_prompt.empty()) {
-        jsoninfo["negative_prompt"] = gen_params.negative_prompt;
-    }
-    jsoninfo["seed"]         = gen_params.seed;
-    jsoninfo["cfg_scale"]    = gen_params.sample_params.guidance.txt_cfg;
-    jsoninfo["width"]        = gen_params.get_resolved_width();
-    jsoninfo["height"]       = gen_params.get_resolved_height();
-    jsoninfo["steps"]        = gen_params.sample_params.sample_steps;
-    jsoninfo["sampler_name"] = sd_sample_method_name(gen_params.sample_params.sample_method);
-    if (gen_params.clip_skip != -1) {
-        jsoninfo["clip_skip"] = gen_params.clip_skip;
-    }
-    if (gen_params.sample_params.scheduler != scheduler_t::SCHEDULER_COUNT) {
-        jsoninfo["extra_generation_params"]                  = nlohmann::json::object();
-        jsoninfo["extra_generation_params"]["Schedule type"] = sd_scheduler_name(gen_params.sample_params.scheduler);
-    }
-    if (img2img) {
-        jsoninfo["denoising_strength"] = gen_params.strength;
-    }
-    // not clear what should happen if we have both model and diffusion_model
-    if (!ctx_params.diffusion_model_path.empty()) {
-        jsoninfo["sd_model_name"] = sd_basename(ctx_params.diffusion_model_path);
-    } else if (!ctx_params.model_path.empty()) {
-        jsoninfo["sd_model_name"] = sd_basename(ctx_params.model_path);
-    }
-    if (!ctx_params.vae_path.empty()) {
-        jsoninfo["sd_vae_name"] = sd_basename(ctx_params.vae_path);
-    }
-    jsoninfo["version"] = "stable-diffusion.cpp";
-
-    jsoninfo["infotexts"]            = nlohmann::json::array();
-    jsoninfo["all_prompts"]          = nlohmann::json::array();
-    jsoninfo["all_negative_prompts"] = nlohmann::json::array();
-    jsoninfo["all_seeds"]            = nlohmann::json::array();
-    return jsoninfo;
+static nlohmann::json prepare_info_field(const std::string& generation_info) {
+    const auto info       = nlohmann::json::parse(generation_info);
+    const auto& sampling  = info.at("sample_params");
+    nlohmann::json result = {{"prompt", info.at("prompt")},
+                             {"negative_prompt", info.at("negative_prompt")},
+                             {"seed", generation_seed(generation_info)},
+                             {"cfg_scale", sampling.at("guidance").at("txt_cfg")},
+                             {"width", info.at("width")},
+                             {"height", info.at("height")},
+                             {"steps", sampling.contains("custom_sigmas") ? json(sampling.at("custom_sigmas").size() - 1) : sampling.at("sample_steps")},
+                             {"sampler_name", sampling.at("sample_method")},
+                             {"version", "stable-diffusion.cpp"}};
+    if (info.contains("clip_skip"))
+        result["clip_skip"] = info.at("clip_skip");
+    if (info.contains("strength"))
+        result["denoising_strength"] = info.at("strength");
+    if (sampling.contains("scheduler"))
+        result["extra_generation_params"]["Schedule type"] = sampling.at("scheduler");
+    for (const auto* key : {"infotexts", "all_prompts", "all_negative_prompts", "all_seeds", "generation_info"})
+        result[key] = nlohmann::json::array();
+    return result;
 }
 
 struct SDAPIPreviewState {
@@ -621,12 +602,10 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 std::lock_guard<std::mutex> lock(*runtime->sd_ctx_mutex);
                 const bool detailing = request.adetailer_enabled && !runtime->default_gen_params->ad_model_path.empty();
                 SDAPIPreviewGuard preview_guard(id_task, img_gen_params, img2img ? "img2img" : "txt2img", detailing);
-                sd_image_t* raw_results = nullptr;
-                if (!generate_image(runtime->sd_ctx, &img_gen_params, &raw_results, &num_results)) {
-                    raw_results = nullptr;
-                    num_results = 0;
-                }
-                results.adopt(raw_results, num_results);
+                sd_image_generation_result_t* generated = nullptr;
+                generate_image(runtime->sd_ctx, &img_gen_params, &generated);
+                results.adopt(generated, runtime->ctx_params->lora_model_dir);
+                num_results = results.count();
                 if (detailing && !results.empty())
                     preview_guard.begin_detailing();
                 if (!results.empty() && !apply_server_adetailer(*runtime, request, img_gen_params, results)) {
@@ -645,9 +624,8 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             json out;
             out["images"]     = json::array();
             out["parameters"] = j;
-            json jsoninfo     = prepare_info_field(*runtime->ctx_params, request.gen_params, img2img);
+            json jsoninfo     = prepare_info_field(results.generation_info(0));
 
-            int images_per_batch = request.gen_params.batch_count > 0 ? std::max(1, num_results / request.gen_params.batch_count) : 1;
             for (int i = 0; i < num_results; ++i) {
                 if (results[i].data == nullptr) {
                     continue;
@@ -655,16 +633,14 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
                 bool embed_meta = request.gen_params.embed_image_metadata;
 
-                std::string params = get_image_params(*runtime->ctx_params,
-                                                      request.gen_params,
-                                                      request.gen_params.seed + i / images_per_batch);
+                std::string params = generation_info_to_webui(results.generation_info(i));
 
                 auto image_bytes = encode_image_to_vector(EncodedImageFormat::PNG,
                                                           results[i].data,
                                                           results[i].width,
                                                           results[i].height,
                                                           results[i].channel,
-                                                          embed_meta ? params : "");
+                                                          embed_meta ? results.generation_info(i) : "");
 
                 if (image_bytes.empty()) {
                     LOG_ERROR("write image to mem failed");
@@ -673,10 +649,12 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
                 out["images"].push_back(base64_encode(image_bytes));
 
-                jsoninfo["infotexts"][i]            = params;
-                jsoninfo["all_seeds"][i]            = request.gen_params.seed + i;
-                jsoninfo["all_prompts"][i]          = request.gen_params.prompt;
-                jsoninfo["all_negative_prompts"][i] = request.gen_params.negative_prompt;
+                const auto actual = json::parse(results.generation_info(i));
+                jsoninfo["infotexts"].push_back(params);
+                jsoninfo["all_seeds"].push_back(generation_seed(results.generation_info(i)));
+                jsoninfo["generation_info"].push_back(actual);
+                jsoninfo["all_prompts"].push_back(actual["prompt"]);
+                jsoninfo["all_negative_prompts"].push_back(actual["negative_prompt"]);
             }
 
             // not a mistake: it is supposed to be a string in json format

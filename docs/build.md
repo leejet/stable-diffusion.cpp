@@ -2,18 +2,23 @@
 
 ## Get the Code
 
-```
+```shell
 git clone --recursive https://github.com/leejet/stable-diffusion.cpp
 cd stable-diffusion.cpp
 ```
 
-- If you have already cloned the repository, you can use the following command to update the repository to the latest code.
+If you already cloned the repository without submodules, initialize them from the repository root:
 
+```shell
+git submodule update --init --recursive
 ```
+
+To update an existing checkout and its submodules:
+
+```shell
 cd stable-diffusion.cpp
 git pull origin master
-git submodule init
-git submodule update
+git submodule update --init --recursive
 ```
 
 ## Selecting a GGML source tree
@@ -101,6 +106,25 @@ mkdir build && cd build
 cmake .. -DSD_CUDA=ON
 cmake --build . --config Release
 ```
+
+CUDA builds with the bundled patched GGML use the CUTLASS submodule by default
+for eligible INT8 GEMM and CuTe attention operations. If its headers are missing,
+CMake stops with an initialization hint; it does not download them automatically.
+Run `git submodule update --init --recursive` from the repository root before
+configuring.
+
+To build with the existing CUDA implementations without CUTLASS, configure from
+the repository root with:
+
+```shell
+cmake -S . -B build -DSD_CUDA=ON -DGGML_CUDA_CUTLASS_PATH:PATH=
+cmake --build build --config Release
+```
+
+Alternatively, set `GGML_CUDA_CUTLASS_PATH` to another local CUTLASS source
+directory (tested with 3.9.2). Existing CMake caches retain their configured path;
+pass `-UGGML_CUDA_CUTLASS_PATH` when reconfiguring to restore the bundled default.
+Non-CUDA builds do not require CUTLASS.
 
 ## Build with HipBLAS
 

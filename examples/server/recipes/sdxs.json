@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "sdxs",
   "name": "SDXS",
+  "size_multiple": 64,
   "model_url": "https://huggingface.co/IDKiro/sdxs-512-dreamshaper",
   "slots": [
     {

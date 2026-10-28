@@ -247,6 +247,9 @@ namespace sd::model_builders {
         const auto& tensor_storage_map = ctx.tensor_storage_map;
         const auto version             = ctx.version;
         const auto& weight_manager     = ctx.weight_manager;
+        if (sd_version_is_z_image(version)) {
+            return true;
+        }
         if (!ensure_backend_pair(ctx.backends, SDBackendModule::CONTROL_NET)) {
             return false;
         }

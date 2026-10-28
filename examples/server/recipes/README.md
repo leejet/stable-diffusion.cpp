@@ -77,3 +77,35 @@ These are built-in catalog rules. Users may keep personal presets in
 `<model-dir>/recipes/`; they need not add those presets to the built-in list.
 See [the recipe schema and feature reference](../api.md#user-recipe-format)
 for supported fields.
+
+## Output dimension alignment
+
+Set `size_multiple` when the runtime's output dimension alignment differs from
+the default of `8`. Match `GenerationRequest::align_image_size` in
+[`src/pipeline/request.cpp`](../../../src/pipeline/request.cpp): the VAE scale
+factor multiplied by the model definition's `diffusion_down_factor`. The scale
+comes from [`VAE::get_scale_factor`](../../../src/model/vae/vae.hpp), with the
+PiD override in [`diffusion_engine.cpp`](../../../src/pipeline/diffusion_engine.cpp);
+model geometry is defined under [`src/model/integrations`](../../../src/model/integrations/).
+
+Use the runtime's output alignment, not the nominal patch size: some models pad
+patches internally and crop their output back to the requested size. Pixel-space
+models with an alignment of `1` explicitly use `size_multiple: 1`. MiniT2I also
+has this alignment, but its separate fixed `512 × 512` output restriction still
+applies. Reference-image preprocessing constraints are independent of this field.
+
+## Video length constraints
+
+Video recipes declare `video_constraints` to match `align_video_frames` in
+[`diffusion_engine.cpp`](../../../src/pipeline/diffusion_engine.cpp) and the FPS
+and AnimateDiff overrides in
+[`request.cpp`](../../../src/pipeline/request.cpp). Wan, HunyuanVideo and LingBot
+round down to `4n + 1`; LTX rounds down to `8n + 1`. MiniMax-H3 rounds up to
+`17n + 5`, with at least 5 frames and fixed 24 FPS. AnimateDiff accepts whole
+frames up to 32. Wan 2.2 S2V fixes FPS at 16.
+
+Declare fixed FPS only where the runtime enforces it; recommended FPS belongs
+in `defaults.fps`. These constraints guide UI conversion and estimates, not
+runtime behavior. Audio-driven output and temporal upscaling may still change
+the final frame count. See the [recipe schema](../api.md#user-recipe-format)
+for field defaults and validation rules.

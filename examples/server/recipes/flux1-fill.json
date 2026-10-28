@@ -39,8 +39,8 @@
     "scheduler": "flux",
     "cfg_scale": 1,
     "steps": 20,
-    "width": 1232,
-    "height": 1632
+    "width": 1024,
+    "height": 1024
   },
   "features": [
     "clip_skip",

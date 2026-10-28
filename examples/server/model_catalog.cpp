@@ -66,6 +66,14 @@ static void clear_model_paths(SDContextParams& params) {
     }
 }
 
+bool component_paths_match(const SDContextParams& a, const SDContextParams& b) {
+    for (const auto& slot : k_model_slots) {
+        if ((a.*slot.field) != (b.*slot.field))
+            return false;
+    }
+    return true;
+}
+
 std::string model_path_key(const fs::path& path) {
 #ifdef _WIN32
     const auto value = path.generic_wstring();
@@ -291,6 +299,7 @@ static void apply_recipe_context(const json& settings, SDContextParams& params) 
     }
 }
 
+// Known recipe feature names with their defaults; recipes may flip any of these.
 static const std::map<std::string, bool> k_recipe_features = {
     {"img2img", true},
     {"mask_image", true},
@@ -312,6 +321,9 @@ static const std::map<std::string, bool> k_recipe_features = {
     {"init_image", false},
     {"end_image", false},
     {"control_frames", false},
+    {"ref_videos", false},
+    {"ref_audios", false},
+    {"ref_video_audios", false},
     {"vace", false},
     {"high_noise", false},
     {"cache_unet", false},
@@ -365,23 +377,57 @@ json model_generation_features(const ServerRuntime& runtime) {
     if (runtime.models->active_recipe.value("source", "") == "command_line")
         return features;
     // Optional components only become usable once selected and loaded.
-    features["ip_adapter"]  = features.value("ip_adapter", false) && !runtime.ctx_params->ip_adapter_path.empty();
-    features["controlnet"]  = features.value("controlnet", false) && !runtime.ctx_params->control_net_path.empty();
-    features["high_noise"]  = features.value("high_noise", false) && !runtime.ctx_params->high_noise_diffusion_model_path.empty();
-    features["preview_tae"] = features.value("preview_tae", false) && !runtime.ctx_params->taesd_path.empty();
+    features["ip_adapter"]       = features.value("ip_adapter", false) && !runtime.ctx_params->ip_adapter_path.empty();
+    features["controlnet"]       = features.value("controlnet", false) && !runtime.ctx_params->control_net_path.empty();
+    features["high_noise"]       = features.value("high_noise", false) && !runtime.ctx_params->high_noise_diffusion_model_path.empty();
+    features["preview_tae"]      = features.value("preview_tae", false) && !runtime.ctx_params->taesd_path.empty();
+    features["ref_audios"]       = features.value("ref_audios", false) &&
+                                   (!runtime.ctx_params->audio_vae_path.empty() || !runtime.ctx_params->audio_encoder_path.empty());
+    features["ref_video_audios"] = features.value("ref_video_audios", false) && !runtime.ctx_params->audio_vae_path.empty();
     if (!runtime.ctx_params->pulid_weights_path.empty())
         features["slg"] = false;
     return features;
 }
 
+static void validate_video_constraints(const json& constraints) {
+    check_keys(constraints, {"frame_step", "frame_offset", "frame_rounding", "min_frames", "max_frames", "fixed_fps"});
+    for (const auto* key : {"frame_step", "frame_offset", "min_frames", "max_frames", "fixed_fps"}) {
+        const int minimum = std::string(key) == "frame_offset" ? 0 : 1;
+        const int maximum = std::string(key) == "fixed_fps" ? 240 : 4096;
+        if (constraints.contains(key) &&
+            (!constraints[key].is_number_integer() || constraints[key] < minimum || constraints[key] > maximum)) {
+            throw std::runtime_error(std::string("video_constraints.") + key + " is outside its integer range");
+        }
+    }
+    const int step    = constraints.value("frame_step", 1);
+    const int offset  = constraints.value("frame_offset", 0);
+    const int minimum = constraints.value("min_frames", 1);
+    const int maximum = constraints.value("max_frames", 4096);
+    if (offset >= step || minimum > maximum ||
+        offset + std::max(0, (minimum - offset + step - 1) / step) * step > maximum) {
+        throw std::runtime_error("video_constraints must describe a nonempty frame range with frame_offset < frame_step");
+    }
+    if (constraints.contains("frame_rounding") &&
+        constraints["frame_rounding"] != "floor" && constraints["frame_rounding"] != "ceil") {
+        throw std::runtime_error("video_constraints.frame_rounding must be floor or ceil");
+    }
+}
+
 static void validate_recipe(const json& recipe) {
-    check_keys(recipe, {"schema_version", "id", "name", "description", "model_url", "slots", "required_any", "defaults", "context", "features", "disabled_features"});
+    check_keys(recipe, {"schema_version", "id", "name", "description", "model_url", "slots", "required_any", "models", "defaults", "context", "features", "disabled_features", "size_multiple", "video_constraints"});
     if (!recipe.at("schema_version").is_number_integer() || recipe.at("schema_version") != 1 ||
         !valid_identifier(recipe.at("id").get<std::string>()) || recipe.at("name").get<std::string>().empty()) {
         throw std::runtime_error("invalid schema_version, id or name");
     }
     if (recipe.contains("description") && !recipe["description"].is_string()) {
         throw std::runtime_error("description must be a string");
+    }
+    if (recipe.contains("size_multiple") &&
+        (!recipe["size_multiple"].is_number_integer() || recipe["size_multiple"] < 1 || recipe["size_multiple"] > 4096)) {
+        throw std::runtime_error("size_multiple must be an integer from 1 to 4096");
+    }
+    if (recipe.contains("video_constraints")) {
+        validate_video_constraints(recipe["video_constraints"]);
     }
     if (recipe.contains("model_url")) {
         const auto url           = recipe.at("model_url").get<std::string>();
@@ -411,6 +457,19 @@ static void validate_recipe(const json& recipe) {
     if (!has_required_model) {
         throw std::runtime_error("a required model or diffusion_model slot is needed");
     }
+    // Optional recipe-local model defaults: slot ID to file ID mappings that
+    // prefill slots a load request does not select itself.
+    if (recipe.contains("models")) {
+        const auto& recipe_models = recipe.at("models");
+        if (!recipe_models.is_object() || recipe_models.size() > 32)
+            throw std::runtime_error("models must be an object of at most 32 slot entries");
+        std::set<std::string> default_ids;
+        for (auto it = recipe_models.begin(); it != recipe_models.end(); ++it) {
+            if (!ids.count(it.key() == "taesd" ? "tae" : it.key()) || !it.value().is_string() || it.value().get<std::string>().empty() ||
+                !default_ids.insert(it.key() == "taesd" ? "tae" : it.key()).second)
+                throw std::runtime_error("unknown or invalid default model: " + it.key());
+        }
+    }
     if (recipe.contains("required_any")) {
         const auto& groups = recipe.at("required_any");
         if (!groups.is_array() || groups.size() > 32)
@@ -435,6 +494,7 @@ static void validate_recipe(const json& recipe) {
 
 static json normalize_recipe(json recipe) {
     validate_recipe(recipe);
+    recipe["size_multiple"]      = recipe.value("size_multiple", 8);
     recipe["effective_features"] = resolve_recipe_features(recipe);
     for (auto& slot : recipe.at("slots")) {
         const auto& spec   = *find_model_slot(slot.at("id").get<std::string>());
@@ -598,6 +658,7 @@ void initialize_server_models(ServerRuntime& runtime) {
             {"description", "Uses the loaded command-line model and its generation defaults."},
             {"slots", json::array()},
             {"defaults", json::object()},
+            {"size_multiple", 8},
             {"features", features},
         };
         models.active_recipe["effective_features"] = resolve_recipe_features(models.active_recipe);
@@ -606,10 +667,11 @@ void initialize_server_models(ServerRuntime& runtime) {
     refresh_model_catalog(runtime);
 }
 
-void prepare_model_load(ServerRuntime& runtime, const json& body, SDContextParams& context, SDGenerationParams& defaults, json* loaded_recipe) {
+void prepare_model_load(ServerRuntime& runtime, json& body, SDContextParams& context, SDGenerationParams& defaults, json* loaded_recipe) {
     check_keys(body, {"recipe", "models"});
     const auto recipe_id = body.at("recipe").get<std::string>();
-    auto selection       = body.at("models");
+    // `models` is optional; unselected slots may fall back to recipe defaults below.
+    auto selection       = body.value("models", json::object());
     if (!selection.is_object())
         throw std::runtime_error("models must be an object");
     auto& models = *runtime.models;
@@ -624,6 +686,20 @@ void prepare_model_load(ServerRuntime& runtime, const json& body, SDContextParam
     defaults = models.base_defaults;
     apply_recipe_context(recipe.value("context", json::object()), context);
     apply_recipe_defaults(recipe.value("defaults", json::object()), defaults);
+    // Recipe-provided default models fill any slot the request did not select.
+    // An explicit selection blocks the default for that slot, including an
+    // empty string (a deliberate opt-out of the default). The tae/taesd pair
+    // is one slot: an explicit request selection of either spelling overrides
+    // the recipe default for that slot.
+    if (recipe.contains("models")) {
+        for (auto it = recipe.at("models").begin(); it != recipe.at("models").end(); ++it) {
+            if (selection.contains(it.key()))
+                continue;
+            if ((it.key() == "tae" || it.key() == "taesd") && (selection.contains("tae") || selection.contains("taesd")))
+                continue;
+            selection[it.key()] = it.value();
+        }
+    }
     std::set<std::string> allowed;
     for (const auto& slot : recipe.at("slots")) {
         const auto id = slot.at("id").get<std::string>();
@@ -635,6 +711,9 @@ void prepare_model_load(ServerRuntime& runtime, const json& body, SDContextParam
                 if (selection.contains(id))
                     throw std::runtime_error("specify only one of tae and taesd");
                 selection[id] = selection.at(alias);
+                // Keep only the declared spelling: equivalent loads must resolve
+                // to an identical selection for the idempotent-load comparison.
+                selection.erase(alias);
             }
         }
         const std::string file_id = selection.value(id, std::string());
@@ -658,6 +737,20 @@ void prepare_model_load(ServerRuntime& runtime, const json& body, SDContextParam
         if (!allowed.count(it.key()))
             throw std::runtime_error("unknown model slot: " + it.key());
     }
+    // Omitting an optional slot and sending it as an empty string resolve to
+    // the same context; drop the empty key so equivalent loads compare
+    // identically instead of rebuilding the context. The explicit empty
+    // string already overrode any recipe default during the merge, so its
+    // intent is preserved.
+    for (auto it = selection.begin(); it != selection.end();) {
+        if (!it->is_string() || !it->get<std::string>().empty()) {
+            ++it;
+            continue;
+        }
+        it = selection.erase(it);
+    }
+    // Echo the fully resolved selection (recipe defaults merged in) for status reporting.
+    body["models"] = selection;
     for (const auto& group : recipe.value("required_any", json::array())) {
         if (std::none_of(group.begin(), group.end(), [&](const json& value) {
                 return !selection.value(value.get<std::string>(), std::string()).empty();

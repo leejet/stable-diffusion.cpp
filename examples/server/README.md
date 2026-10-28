@@ -89,8 +89,8 @@ FLUX 1/2/3, Chroma, Qwen Image and editing variants; Z-Image, Anima, ERNIE,
 LENS, PiD and other supported image families; AnimateDiff, Wan, LTX,
 HunyuanVideo, LingBot Video and MiniMax-H3. Model-specific text encoder
 labels identify the expected encoder family and size. Loading a video model enables **Video Generation**; I2V also requires a
-start image. The Models panel can be collapsed and remembers its open state.
-Its header shows elapsed loading time from the status API and keeps the final
+start image. The model button below the prompt opens model and recipe selection.
+Its status summary shows elapsed loading time from the status API and keeps the final
 time after success or failure, including after a page refresh.
 Built-ins are embedded in the
 binary from [recipes/](recipes/), with one JSON file per recipe. Adding or

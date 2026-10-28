@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "minit2i",
   "name": "MiniT2I",
+  "size_multiple": 1,
   "description": "Pixel-space model; no VAE is required.",
   "model_url": "https://huggingface.co/MiniT2I/MiniT2I",
   "slots": [

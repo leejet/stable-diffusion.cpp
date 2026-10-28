@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "mage-flow-turbo",
   "name": "Mage Flow Turbo",
+  "size_multiple": 16,
   "model_url": "https://huggingface.co/microsoft/Mage-Flow-Turbo",
   "slots": [
     {

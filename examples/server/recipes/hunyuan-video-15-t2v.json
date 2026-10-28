@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "hunyuan-video-15-t2v",
   "name": "HunyuanVideo 1.5 T2V",
+  "size_multiple": 16,
   "description": "Select HunyuanVideo 1.5 T2V weights and use Video Generation. Use the separate I2V recipe for I2V weights.",
   "model_url": "https://huggingface.co/tencent/HunyuanVideo-1.5",
   "slots": [
@@ -36,6 +37,12 @@
       "tae"
     ]
   ],
+  "video_constraints": {
+    "frame_step": 4,
+    "frame_offset": 1,
+    "frame_rounding": "floor",
+    "min_frames": 1
+  },
   "defaults": {
     "sampling_method": "euler",
     "video_frames": 33,

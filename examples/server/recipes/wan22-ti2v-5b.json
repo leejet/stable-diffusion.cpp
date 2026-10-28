@@ -2,6 +2,7 @@
   "schema_version": 1,
   "id": "wan22-ti2v-5b",
   "name": "Wan 2.2 TI2V 5B",
+  "size_multiple": 32,
   "description": "Use Wan 2.2 VAE. Supports text, start-image and start/end-image conditioning.",
   "model_url": "https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B",
   "slots": [
@@ -30,6 +31,12 @@
       "tae"
     ]
   ],
+  "video_constraints": {
+    "frame_step": 4,
+    "frame_offset": 1,
+    "frame_rounding": "floor",
+    "min_frames": 1
+  },
   "defaults": {
     "sampling_method": "euler",
     "video_frames": 33,
