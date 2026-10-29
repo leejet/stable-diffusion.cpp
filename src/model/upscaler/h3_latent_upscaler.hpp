@@ -235,12 +235,12 @@ namespace H3VUpsampler {
             // AdaLN: emb_out = emb_layers(SiLU(emb)) -> split [scale, shift]
             ggml_tensor* emb_silu = ggml_silu_inplace(ctx->ggml_ctx, emb);
             ggml_tensor* emb_out  = emb_layers->forward(ctx, emb_silu);
-            ggml_tensor* emb_1d   = ggml_reshape_1d(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, emb_out));
+            ggml_tensor* emb_1d   = ggml_reshape_1d(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, emb_out), 2 * channels);
             ggml_tensor* scale    = ggml_reshape_4d(ctx->ggml_ctx, ggml_ext_slice(ctx->ggml_ctx, emb_1d, 0, 0, channels), 1, 1, 1, channels);
             ggml_tensor* shift    = ggml_reshape_4d(ctx->ggml_ctx, ggml_ext_slice(ctx->ggml_ctx, emb_1d, 0, channels, 2 * channels), 1, 1, 1, channels);
-            ggml_tensor* one      = ggml_new_tensor_1d(ctx->ggml_ctx, GGML_TYPE_F32, 1);
-            ggml_set_f32_1d(ctx->ggml_ctx, one, 0, 1.0f);
-            ggml_tensor* gain     = ggml_add(ctx->ggml_ctx, scale, one);
+            // 1 + scale as a graph op; a host-filled constant tensor would have to be
+            // allocated and bound outside the graph context.
+            ggml_tensor* gain     = ggml_scale_bias(ctx->ggml_ctx, scale, 1.f, 1.f);
 
             // out_norm * (1 + scale) + shift, then SiLU -> out_layers
             h             = out_norm->forward(ctx, h);
@@ -302,8 +302,10 @@ namespace H3VUpsampler {
         void init_params(ggml_context* ctx,
                          const String2TensorStorage& tensor_storage_map,
                          const std::string& prefix) override {
-            blocks["embed.0"] = std::shared_ptr<GGMLBlock>(new Linear(1, embed_dim, true));
-            blocks["embed.2"] = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, true));
+            // Child names are relative to the "embed" block prefix, so these bind as
+            // embed.0.* / embed.2.* to match the checkpoint.
+            blocks["0"] = std::shared_ptr<GGMLBlock>(new Linear(1, embed_dim, true));
+            blocks["2"] = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, true));
         }
 
     public:
@@ -311,8 +313,8 @@ namespace H3VUpsampler {
             : embed_dim(embed_dim) {}
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* scale_input) {
-            auto l0 = std::dynamic_pointer_cast<Linear>(blocks["embed.0"]);
-            auto l2 = std::dynamic_pointer_cast<Linear>(blocks["embed.2"]);
+            auto l0 = std::dynamic_pointer_cast<Linear>(blocks["0"]);
+            auto l2 = std::dynamic_pointer_cast<Linear>(blocks["2"]);
             ggml_tensor* h = l0->forward(ctx, ggml_reshape_2d(ctx->ggml_ctx, scale_input, 1, 1));
             h              = ggml_silu_inplace(ctx->ggml_ctx, h);
             h              = l2->forward(ctx, h);
@@ -498,12 +500,13 @@ namespace H3VUpsampler {
             }
 
             const size_t expected_dim = static_cast<size_t>(x.dim());
+            // scale - 1 as one host tensor bound as a graph input for both stages.
+            const sd::Tensor<float> scale_tensor = sd::Tensor<float>::from_vector({scale - 1.0f});
             // Stage A: conv_in + in-block chain at the original spatial size.
-            auto get_graph_a = [this, &x, scale]() -> ggml_cgraph* {
+            auto get_graph_a = [this, &x, &scale_tensor]() -> ggml_cgraph* {
                 ggml_cgraph* gf          = new_graph_custom(H3_UPSAMPLER_GRAPH_SIZE);
                 ggml_tensor* x_t         = make_input(x);
-                ggml_tensor* scale_input = ggml_new_tensor_1d(gf->ctx, GGML_TYPE_F32, 1);
-                ggml_set_f32_1d(gf->ctx, scale_input, 0, scale - 1.0f);
+                ggml_tensor* scale_input = make_input(scale_tensor);
                 auto runner_ctx          = get_context(gf);
                 ggml_tensor* out         = model->forward_stage_a(&runner_ctx, x_t, scale_input);
                 ggml_build_forward_expand(gf, out);
@@ -529,11 +532,10 @@ namespace H3VUpsampler {
             }
 
             // Stage B: out-block chain + conv_out at the target spatial size.
-            auto get_graph_b = [this, &mid_up, scale]() -> ggml_cgraph* {
+            auto get_graph_b = [this, &mid_up, &scale_tensor]() -> ggml_cgraph* {
                 ggml_cgraph* gf          = new_graph_custom(H3_UPSAMPLER_GRAPH_SIZE);
                 ggml_tensor* m_t         = make_input(mid_up);
-                ggml_tensor* scale_input = ggml_new_tensor_1d(gf->ctx, GGML_TYPE_F32, 1);
-                ggml_set_f32_1d(gf->ctx, scale_input, 0, scale - 1.0f);
+                ggml_tensor* scale_input = make_input(scale_tensor);
                 auto runner_ctx          = get_context(gf);
                 ggml_tensor* out         = model->forward_stage_b(&runner_ctx, m_t, scale_input);
                 ggml_build_forward_expand(gf, out);
