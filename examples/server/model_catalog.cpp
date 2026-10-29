@@ -671,7 +671,7 @@ void prepare_model_load(ServerRuntime& runtime, json& body, SDContextParams& con
     check_keys(body, {"recipe", "models"});
     const auto recipe_id = body.at("recipe").get<std::string>();
     // `models` is optional; unselected slots may fall back to recipe defaults below.
-    auto selection       = body.value("models", json::object());
+    auto selection = body.value("models", json::object());
     if (!selection.is_object())
         throw std::runtime_error("models must be an object");
     auto& models = *runtime.models;
