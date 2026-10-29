@@ -99,6 +99,54 @@ The C API exposes the same inputs through `ref_images`, `ref_videos`, and
 `ref_audios` in `sd_vid_gen_params_t`. Each `sd_ref_video_t` supplies its own
 frame rate and optional soundtrack; non-24-fps inputs are resampled internally.
 
+## Latent hires second pass (two-stage sampling)
+
+MiniMax-H3 supports `--hires` with two interchangeable second-stage upscalers:
+
+- an interpolating latent upscaler (`Latent`, `Latent (nearest)`,
+  `Latent (bicubic)`, ...): after the first pass finishes, the packed AV latent
+  is resampled in latent space to `--hires-width` x `--hires-height` and
+  refined by a second sampling pass;
+- a model-backed upscaler (`--hires-upscaler <name>` + `--hires-upscalers-dir`):
+  a H3-shaped learned latent upscaler checkpoint runs between the passes,
+  like the LTX spatial upsampler. This is the sd.cpp equivalent of the
+  two-sampler workflows used for H3 in node-based frontends (e.g. the
+  community 3D-conv latent upscaler from
+  [LBH-123-AI/Minimax_h3_latent_Upscaler](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler)).
+
+Draft at a low megapixel count (e.g. 0.4 MP) and refine at a higher one
+(e.g. 0.8 MP) instead of paying for the full resolution in every step:
+
+```sh
+.\bin\Release\sd-cli.exe -M vid_gen --diffusion-model  ..\models\diffusion_models\minimax_h3_fl2va-Q4_K_M.gguf --vae ..\models\vae\minimax_h3_video_vae_fp16.safetensors --audio-vae ..\models\vae\minimax_h3_audio_vae_fp32.safetensors --llm ..\models\text_encoders\qwen3vl_32b_minimax_h3-Q4_K_M.gguf -p "a lovely cat" --cfg-scale 1.0 -v -W 864 -H 480 --diffusion-fa --offload-to-cpu --rng cpu --video-frames 56 --hires --hires-upscaler "Latent (bicubic)" --hires-width 1216 --hires-height 672 --hires-steps 4 --hires-denoising-strength 0.4
+```
+
+or with the learned upscaler:
+
+```sh
+.\bin\Release\sd-cli.exe -M vid_gen ... --hires --hires-upscalers-dir ..\models\latent_upscale_models --hires-upscaler h3-latent-upscaler-3d --hires-width 1216 --hires-height 672 --hires-steps 4 --hires-denoising-strength 0.4
+```
+
+Notes for this mode:
+
+- The frame count is never changed by the second stage, so the packed audio
+  latent length stays valid and the generated soundtrack is preserved.
+- Width and height still have to be multiples of 32; the hires target is
+  aligned like any other resolution. The learned upscaler additionally wants
+  an even latent size on both axes, which 32-pixel targets provide.
+- `--hires-sigmas` can replace `--hires-denoising-strength` when the second
+  stage should resume from an explicit sigma schedule, which is how most
+  two-stage H3 workflows split the sampler.
+- Keyframe conditioning (`--init-img` / `--end-img`) is not available together
+  with hires yet: those latents are encoded at the first stage resolution and
+  would have to be re-encoded for the hires canvas. Use T2VA or Ref2VA.
+- The second stage runs at the larger latent, so it is the memory-hungry half;
+  combine it with quantization, `--vae-tiling` and `--offload-to-cpu` on
+  small cards.
+- The learned upscaler is scale-conditional: the target-to-source ratio is
+  fed into the network as an embedding, 1.2-2.0x is the trained domain, and
+  downscaling is rejected.
+
 ## Shape and runtime notes
 
 - Width and height are aligned upward to a multiple of 32.

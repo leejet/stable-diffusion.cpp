@@ -12,6 +12,7 @@
 #include "core/rng_philox.hpp"
 #include "diffusion_engine.h"
 #include "model/diffusion/minimax_h3.hpp"
+#include "model/upscaler/h3_latent_upscaler.hpp"
 #include "model/upscaler/ltx_latent_upscaler.hpp"
 #include "model/vae/audio_vae.hpp"
 #include "model/vae/vae.hpp"
@@ -1317,6 +1318,280 @@ namespace sd::pipeline {
         return result_images;
     }
 
+    // Video models without a dedicated latent upsampler checkpoint (MiniMax-H3)
+    // resample the packed [w, h, f, c] latent itself with an interpolating kernel.
+    static bool hires_upscaler_is_latent_interpolation(enum sd_hires_upscaler_t upscaler) {
+        switch (upscaler) {
+            case SD_HIRES_UPSCALER_LATENT:
+            case SD_HIRES_UPSCALER_LATENT_NEAREST:
+            case SD_HIRES_UPSCALER_LATENT_NEAREST_EXACT:
+            case SD_HIRES_UPSCALER_LATENT_ANTIALIASED:
+            case SD_HIRES_UPSCALER_LATENT_BICUBIC:
+            case SD_HIRES_UPSCALER_LATENT_BICUBIC_ANTIALIASED:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    static sd::ops::InterpolateMode hires_latent_interpolate_mode(enum sd_hires_upscaler_t upscaler,
+                                                                  bool* antialias) {
+        if (antialias != nullptr) {
+            *antialias = false;
+        }
+        switch (upscaler) {
+            case SD_HIRES_UPSCALER_LATENT_NEAREST:
+                return sd::ops::InterpolateMode::Nearest;
+            case SD_HIRES_UPSCALER_LATENT_NEAREST_EXACT:
+                return sd::ops::InterpolateMode::NearestExact;
+            case SD_HIRES_UPSCALER_LATENT_BICUBIC:
+                return sd::ops::InterpolateMode::Bicubic;
+            case SD_HIRES_UPSCALER_LATENT_BICUBIC_ANTIALIASED:
+                if (antialias != nullptr) {
+                    *antialias = true;
+                }
+                return sd::ops::InterpolateMode::Bicubic;
+            case SD_HIRES_UPSCALER_LATENT_ANTIALIASED:
+                if (antialias != nullptr) {
+                    *antialias = true;
+                }
+                return sd::ops::InterpolateMode::Bilinear;
+            default:
+                // SD_HIRES_UPSCALER_LATENT
+                return sd::ops::InterpolateMode::Bilinear;
+        }
+    }
+
+    // Per-channel H3 video-latent (de)normalization, as applied by the community
+    // learned upscaler around its network.
+    static sd::Tensor<float> h3_normalize_video_latent(const sd::Tensor<float>& x) {
+        if (x.empty() || x.shape()[3] < H3VUpsampler::H3LatentStats::kChannels) {
+            // Defensive no-op: the learned runner validates the channel count before this runs.
+            return x;
+        }
+        sd::Tensor<float> y = x;
+        const int64_t c = H3VUpsampler::H3LatentStats::kChannels;
+        const float* mean = H3VUpsampler::H3LatentStats::kMean;
+        const float* std_ = H3VUpsampler::H3LatentStats::kStd;
+        for (int64_t i = 0; i < y.numel(); ++i) {
+            const int64_t channel = i % c;
+            y.data()[i] = (y.data()[i] - mean[channel]) / std_[channel];
+        }
+        return y;
+    }
+
+    static sd::Tensor<float> h3_denormalize_video_latent(const sd::Tensor<float>& x) {
+        if (x.empty() || x.shape()[3] < H3VUpsampler::H3LatentStats::kChannels) {
+            return x;
+        }
+        sd::Tensor<float> y = x;
+        const int64_t c = H3VUpsampler::H3LatentStats::kChannels;
+        const float* mean = H3VUpsampler::H3LatentStats::kMean;
+        const float* std_ = H3VUpsampler::H3LatentStats::kStd;
+        for (int64_t i = 0; i < y.numel(); ++i) {
+            const int64_t channel = i % c;
+            y.data()[i] = y.data()[i] * std_[channel] + mean[channel];
+        }
+        return y;
+    }
+
+    // Spatial-only latent upscale that keeps the video time axis untouched, so the
+    // packed audio latent length stays valid. Used as the hires second stage for
+    // video models that have no latent upsampler checkpoint (currently MiniMax-H3).
+    static sd::Tensor<float> upscale_spatial_video_latent(StableDiffusionGGML* sd,
+                                                          const GenerationRequest& request,
+                                                          const sd::Tensor<float>& packed_latent,
+                                                          int audio_length) {
+        if (sd == nullptr || packed_latent.empty()) {
+            return {};
+        }
+        if (packed_latent.dim() != 4 && packed_latent.dim() != 5) {
+            LOG_ERROR("video latent spatial upscale expects a 4D or 5D latent");
+            return {};
+        }
+        int64_t target_width  = request.hires.target_width / request.vae_scale_factor;
+        int64_t target_height = request.hires.target_height / request.vae_scale_factor;
+        if (target_width <= 0 || target_height <= 0) {
+            LOG_ERROR("video latent spatial upscale target must be positive: %dx%d",
+                      request.hires.target_width,
+                      request.hires.target_height);
+            return {};
+        }
+
+        int latent_channels            = sd->get_latent_channel();
+        sd::Tensor<float> video_latent = packed_latent;
+        sd::Tensor<float> audio_latent;
+        if (packed_latent.shape()[3] > latent_channels) {
+            video_latent = sd::ops::slice(packed_latent, 3, 0, latent_channels);
+            audio_latent = sd_version_is_minimax_h3(sd->version)
+                               ? unpack_minimax_h3_audio_latent(packed_latent, audio_length, latent_channels)
+                               : unpack_ltxav_audio_latent(packed_latent, audio_length, latent_channels);
+            if (audio_latent.empty()) {
+                LOG_ERROR("failed to unpack audio latent before spatial latent upscale");
+                return {};
+            }
+        }
+
+        bool antialias                = false;
+        auto mode                    = hires_latent_interpolate_mode(request.hires.upscaler, &antialias);
+        std::vector<int64_t> target_shape = video_latent.shape();
+        target_shape[0]                   = target_width;
+        target_shape[1]                   = target_height;
+
+        LOG_INFO("video latent %s spatial upscale: %" PRId64 "x%" PRId64 "x%" PRId64 "x%" PRId64 " -> %" PRId64 "x%" PRId64 "x%" PRId64 "x%" PRId64,
+                 sd_hires_upscaler_name(request.hires.upscaler),
+                 (int64_t)video_latent.shape()[0],
+                 (int64_t)video_latent.shape()[1],
+                 (int64_t)video_latent.shape()[2],
+                 (int64_t)video_latent.shape()[3],
+                 target_shape[0],
+                 target_shape[1],
+                 target_shape[2],
+                 target_shape[3]);
+
+        sd::Tensor<float> upscaled = sd::ops::interpolate(video_latent, target_shape, mode, false, antialias);
+        if (upscaled.empty()) {
+            LOG_ERROR("video latent spatial upscale failed");
+            return {};
+        }
+        if (audio_latent.empty()) {
+            return upscaled;
+        }
+        // The audio latent is re-packed for the new spatial size; its own length
+        // is unchanged because no frame was added or dropped.
+        return pack_ltxav_audio_and_video_latents(upscaled, audio_latent);
+    }
+
+    // Model-backed H3 hires second stage: run the H3-shaped learned latent upscaler
+    // (e.g. the community 3D-conv checkpoint) between the low-resolution pass and
+    // the high-resolution refine pass. Audio is unpacked around the network and
+    // re-packed for the new spatial size.
+    sd::Tensor<float> upscale_h3_learned_video_latent(StableDiffusionGGML* sd,
+                                                      const char* model_path,
+                                                      const sd::Tensor<float>& packed_latent,
+                                                      int audio_length,
+                                                      int64_t target_width,
+                                                      int64_t target_height) {
+        if (sd == nullptr || sd->model_manager == nullptr || packed_latent.empty()) {
+            return {};
+        }
+        if (strlen(SAFE_STR(model_path)) == 0) {
+            LOG_ERROR("H3 learned latent upscale requires a hires model path");
+            return {};
+        }
+        if (!sd->ensure_backend_pair(SDBackendModule::UPSCALER)) {
+            return {};
+        }
+
+        int latent_channels            = sd->get_latent_channel();
+        sd::Tensor<float> video_latent = packed_latent;
+        sd::Tensor<float> audio_latent;
+        if (packed_latent.shape()[3] > latent_channels) {
+            video_latent = sd::ops::slice(packed_latent, 3, 0, latent_channels);
+            audio_latent = unpack_minimax_h3_audio_latent(packed_latent, audio_length, latent_channels);
+            if (audio_latent.empty()) {
+                LOG_ERROR("failed to unpack H3 audio latent before learned latent upscale");
+                return {};
+            }
+        }
+
+        LOG_INFO("H3 learned latent spatial upscale: latent %dx%dx%dx%d -> %" PRId64 "x%" PRId64 " model output",
+                 (int)video_latent.shape()[0],
+                 (int)video_latent.shape()[1],
+                 (int)video_latent.shape()[2],
+                 (int)video_latent.shape()[3],
+                 target_width,
+                 target_height);
+
+        sd::Tensor<float> normalized = h3_normalize_video_latent(video_latent);
+        if (sd->first_stage_model) {
+            sd->first_stage_model->runner_end();
+        }
+        if (normalized.empty()) {
+            LOG_ERROR("H3 latent normalization failed before learned spatial upscale");
+            return {};
+        }
+
+        auto model_manager = sd->model_manager;
+        struct UpsamplerScope {
+            ModelManager& manager;
+            ModelLoader::FileId owned_source = 0;
+            std::unique_ptr<H3VUpsampler::H3LatentUpscalerRunner> runner;
+            std::vector<ggml_tensor*> params;
+
+            ~UpsamplerScope() {
+                if (runner) {
+                    runner->runner_end();
+                }
+                GGML_ASSERT(manager.unregister_param_tensors(params));
+                if (owned_source != 0) {
+                    GGML_ASSERT(manager.del_file(owned_source));
+                }
+            }
+        } scope{*model_manager};
+
+        const std::string prefix        = "h3_latent_upscaler";
+        ModelLoader candidate           = model_manager->loader();
+        ModelLoader::FileId source_file = 0;
+        if (!candidate.add_file(model_path, prefix + ".", &source_file)) {
+            LOG_ERROR("init H3 latent upsampler model loader from file failed: '%s'", model_path);
+            return {};
+        }
+        const bool owns_source = model_manager->loader().file_revision(source_file) == 0;
+        if (!model_manager->set_loader(std::move(candidate))) {
+            return {};
+        }
+        scope.owned_source = owns_source ? source_file : 0;
+
+        auto& upsampler                 = scope.runner;
+        upsampler                       = std::make_unique<H3VUpsampler::H3LatentUpscalerRunner>(sd->backend_for(SDBackendModule::UPSCALER),
+                                                                                                 model_manager->loader().get_tensor_storage_map(),
+                                                                                                 prefix,
+                                                                                                 model_manager);
+        const size_t max_graph_vram_bytes = sd->max_graph_vram_bytes_for_module(SDBackendModule::UPSCALER);
+        upsampler->set_max_graph_vram_bytes(max_graph_vram_bytes);
+        if (upsampler->model == nullptr) {
+            LOG_ERROR("init H3 latent upsampler from metadata failed");
+            return {};
+        }
+
+        std::map<std::string, ggml_tensor*> tensors;
+        upsampler->get_param_tensors(tensors);
+        for (const auto& entry : tensors) {
+            scope.params.push_back(entry.second);
+        }
+        if (!model_manager->register_param_tensors(ModelComponent::LatentUpsampler,
+                                                   std::move(tensors),
+                                                   ModelManager::ResidencyMode::ParamBackend,
+                                                   sd->backend_for(SDBackendModule::UPSCALER),
+                                                   sd->params_backend_for(SDBackendModule::UPSCALER)) ||
+            !model_manager->validate_registered_tensors()) {
+            LOG_ERROR("register H3 latent upsampler tensors with model manager failed");
+            return {};
+        }
+
+        sd::Tensor<float> upscaled = upsampler->compute(sd->n_threads, normalized, target_width, target_height);
+        upsampler->runner_end();
+        if (upscaled.empty()) {
+            LOG_ERROR("H3 learned latent spatial upscale failed");
+            return {};
+        }
+
+        upscaled = h3_denormalize_video_latent(upscaled);
+        if (sd->first_stage_model) {
+            sd->first_stage_model->runner_end();
+        }
+        if (upscaled.empty()) {
+            LOG_ERROR("H3 latent denormalization failed after learned spatial upscale");
+            return {};
+        }
+
+        if (!audio_latent.empty()) {
+            upscaled = pack_ltxav_audio_and_video_latents(upscaled, audio_latent);
+        }
+        return upscaled;
+    }
+
     sd::Tensor<float> upscale_ltx_spatial_video_latent(StableDiffusionGGML* sd,
                                                        const char* model_path,
                                                        const sd::Tensor<float>& packed_latent,
@@ -1630,17 +1905,45 @@ namespace sd::pipeline {
         bool latent_upscale_enabled     = request.hires.enabled;
         GenerationRequest hires_request = request;
         if (latent_upscale_enabled) {
-            if (!sd_version_is_ltxav(sd->version)) {
-                LOG_ERROR("LTX latent spatial upscale is only supported for LTX video models");
+            const bool is_ltxav = sd_version_is_ltxav(sd->version);
+            const bool is_h3    = sd_version_is_minimax_h3(sd->version);
+            if (!is_ltxav && !is_h3) {
+                LOG_ERROR("video latent spatial upscale is only supported for LTX and MiniMax-H3 video models");
                 return false;
             }
-            if (request.hires.upscaler != SD_HIRES_UPSCALER_MODEL) {
-                LOG_ERROR("LTX latent spatial upscale currently requires hires upscaler MODEL");
-                return false;
-            }
-            if (strlen(SAFE_STR(request.hires.model_path)) == 0) {
-                LOG_ERROR("LTX latent spatial upscale is enabled but hires model path was not provided");
-                return false;
+            if (is_ltxav) {
+                if (request.hires.upscaler != SD_HIRES_UPSCALER_MODEL) {
+                    LOG_ERROR("LTX latent spatial upscale currently requires hires upscaler MODEL");
+                    return false;
+                }
+                if (strlen(SAFE_STR(request.hires.model_path)) == 0) {
+                    LOG_ERROR("LTX latent spatial upscale is enabled but hires model path was not provided");
+                    return false;
+                }
+            } else {
+                // MiniMax-H3 ships no official latent upsampler checkpoint, so the second
+                // stage either resamples the packed latent with a latent interpolator or,
+                // when a model-backed upscaler is selected, runs a H3-shaped learned
+                // upscaler checkpoint from --hires-upscalers-dir.
+                const bool model_upscaler = request.hires.upscaler == SD_HIRES_UPSCALER_MODEL;
+                if (model_upscaler) {
+                    if (strlen(SAFE_STR(request.hires.model_path)) == 0) {
+                        LOG_ERROR("MiniMax-H3 learned hires upscaler is enabled but hires model path was not provided");
+                        return false;
+                    }
+                } else if (!hires_upscaler_is_latent_interpolation(request.hires.upscaler)) {
+                    LOG_ERROR("MiniMax-H3 hires requires an interpolating latent upscaler (e.g. \"Latent\" or \"Latent (bicubic)\") or a MODEL upscaler checkpoint");
+                    return false;
+                }
+                if (sd_vid_gen_params->init_image.data != nullptr ||
+                    sd_vid_gen_params->end_image.data != nullptr) {
+                    LOG_ERROR("MiniMax-H3 hires does not support --init-img/--end-img keyframes yet; use T2VA or Ref2VA");
+                    return false;
+                }
+                if (request.hires.target_width <= 0 || request.hires.target_height <= 0) {
+                    LOG_ERROR("MiniMax-H3 hires requires a positive hires target size");
+                    return false;
+                }
             }
         }
 
@@ -1668,7 +1971,7 @@ namespace sd::pipeline {
         }
         ImageGenerationEmbeds embeds = std::move(*embeds_opt);
         if (latent_upscale_enabled) {
-            LOG_INFO("generate_video %dx%dx%d -> LTX latent spatial upscale",
+            LOG_INFO("generate_video %dx%dx%d -> video latent spatial upscale",
                      request.width,
                      request.height,
                      request.frames);
@@ -1780,16 +2083,31 @@ namespace sd::pipeline {
                 LOG_ERROR("cancelling generation before latent upscale");
                 return false;
             }
-            int64_t upscale_start             = ggml_time_ms();
-            sd::Tensor<float> upscaled_latent = upscale_ltx_spatial_video_latent(sd,
-                                                                                 request.hires.model_path,
-                                                                                 final_latent,
-                                                                                 latents.audio_length);
-            int64_t upscale_end               = ggml_time_ms();
+            int64_t upscale_start = ggml_time_ms();
+            sd::Tensor<float> upscaled_latent;
+            if (sd_version_is_ltxav(sd->version)) {
+                upscaled_latent = upscale_ltx_spatial_video_latent(sd,
+                                                                    request.hires.model_path,
+                                                                    final_latent,
+                                                                    latents.audio_length);
+            } else if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL) {
+                upscaled_latent = upscale_h3_learned_video_latent(sd,
+                                                                  request.hires.model_path,
+                                                                  final_latent,
+                                                                  latents.audio_length,
+                                                                  request.hires.target_width / request.vae_scale_factor,
+                                                                  request.hires.target_height / request.vae_scale_factor);
+            } else {
+                upscaled_latent = upscale_spatial_video_latent(sd,
+                                                               request,
+                                                               final_latent,
+                                                               latents.audio_length);
+            }
+            int64_t upscale_end = ggml_time_ms();
             if (upscaled_latent.empty()) {
                 return false;
             }
-            LOG_INFO("LTX latent spatial upscale completed, taking %.2fs",
+            LOG_INFO("video latent spatial upscale completed, taking %.2fs",
                      (upscale_end - upscale_start) * 1.0f / 1000);
 
             x_t                        = std::move(upscaled_latent);
@@ -1798,7 +2116,7 @@ namespace sd::pipeline {
             int upscaled_latent_frames = static_cast<int>(x_t.shape()[2]);
             int upscaled_frames        = sd->latent_frames_to_video_frames(upscaled_latent_frames);
             if (upscaled_frames != hires_request.frames) {
-                LOG_INFO("LTX latent upsampler output latent frames %d, frames %d -> %d",
+                LOG_INFO("video latent upsampler output latent frames %d, frames %d -> %d",
                          upscaled_latent_frames,
                          hires_request.frames,
                          upscaled_frames);
@@ -1829,7 +2147,8 @@ namespace sd::pipeline {
                     latents.audio_length = target_audio_length;
                 }
             }
-            if ((request.hires.target_width > 0 || request.hires.target_height > 0) &&
+            if (sd_version_is_ltxav(sd->version) &&
+                (request.hires.target_width > 0 || request.hires.target_height > 0) &&
                 (request.hires.target_width != hires_request.width || request.hires.target_height != hires_request.height)) {
                 LOG_WARN("LTX latent spatial upsampler output is %dx%d; ignoring hires target %dx%d",
                          hires_request.width,
@@ -1843,13 +2162,26 @@ namespace sd::pipeline {
                 LOG_ERROR("cancelling generation before latent upscale refine");
                 return false;
             }
-            if (!apply_ltxv_refine_image_conditioning(sd,
-                                                      sd_vid_gen_params,
-                                                      hires_request,
-                                                      latents,
-                                                      &x_t,
-                                                      &hires_denoise_mask,
-                                                      &hires_video_positions)) {
+            if (sd_version_is_ltxav(sd->version) &&
+                !apply_ltxv_refine_image_conditioning(sd,
+                                                       sd_vid_gen_params,
+                                                       hires_request,
+                                                       latents,
+                                                       &x_t,
+                                                       &hires_denoise_mask,
+                                                       &hires_video_positions)) {
+                return false;
+            }
+            // TODO(keyframes): MiniMax-H3 keyframe latents are encoded at the first
+            // stage resolution. Supporting --init-img/--end-img hires requires
+            // re-encoding them at hires_request.width/height and replacing the
+            // matching entries of embeds.cond/uncond.c_ref_images, so the hires
+            // stage rejects them for now (see the guard before sampling).
+            if (sd_version_is_minimax_h3(sd->version) &&
+                !latents.denoise_mask.empty() &&
+                (latents.denoise_mask.shape()[0] != x_t.shape()[0] ||
+                 latents.denoise_mask.shape()[1] != x_t.shape()[1])) {
+                LOG_ERROR("MiniMax-H3 hires cannot rescale an existing video denoise mask");
                 return false;
             }
             noise = sd::Tensor<float>::randn_like(x_t, sd->rng);
@@ -1872,7 +2204,7 @@ namespace sd::pipeline {
                                           hires_sample_method);
 
             LOG_VERBOSE("sample(latent upscale) %dx%dx%d", W, H, T);
-            LOG_INFO("LTX latent spatial upscale refine: scheduler_steps=%d, denoising_strength=%.2f, sampler=%s, sigma_sched_size=%zu%s",
+            LOG_INFO("video latent spatial upscale refine: scheduler_steps=%d, denoising_strength=%.2f, sampler=%s, sigma_sched_size=%zu%s",
                      hires_scheduler_steps,
                      request.hires.denoising_strength,
                      sampling_methods_str[hires_sample_method],
