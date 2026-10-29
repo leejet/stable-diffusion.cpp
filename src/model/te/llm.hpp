@@ -387,6 +387,7 @@ namespace LLM {
                 config.num_heads = 16;
             }
             if (arch == LLMArch::QWEN3_5) {
+                config.vision.arch  = LLMVisionArch::QWEN3_VL;
                 config.qwen35_gguf  = tensor_storage_map.count(prefix + ".model.layers.0.linear_attn.A") > 0;
                 config.rms_norm_add = !config.qwen35_gguf;
                 for (const auto& [name, tensor] : tensor_storage_map) {
@@ -1801,7 +1802,7 @@ namespace LLM {
                                   1.f,
                                   32.f,
                                   1.f);
-            } else if (arch == LLMArch::LLADA2_MOE || arch == LLMArch::QWEN3_5) {
+            } else if (arch == LLMArch::LLADA2_MOE) {
                 // LLaDA2 slices the head (query[..., :rotary_dim]) instead of zero-padding
                 // inv_freq like gemma does, so rotate_half pairs i with i + rotary_dim/2 and the
                 // frequencies use rotary_dim as the exponent denominator. Passing n_dims =
@@ -1833,6 +1834,12 @@ namespace LLM {
                                                1.f,
                                                32.f,
                                                1.f);
+            } else if (arch == LLMArch::QWEN3_5) {
+                int sections[4] = {11, 11, 10, 0};
+                int rotary_dim  = rope_pairs * 2;
+                q               = ggml_rope_multi(ctx->ggml_ctx, q, input_pos, nullptr, rotary_dim, sections, GGML_ROPE_TYPE_IMROPE, 262144, rope_thetas[0], 1.f, 0.f, 1.f, 32.f, 1.f);
+                k               = ggml_rope_multi(ctx->ggml_ctx, k, input_pos, nullptr, rotary_dim, sections, GGML_ROPE_TYPE_IMROPE, 262144, rope_thetas[0], 1.f, 0.f, 1.f, 32.f, 1.f);
+
             } else if (arch == LLMArch::QWEN3_VL) {
                 int sections[4] = {24, 20, 20, 0};
                 q               = ggml_rope_multi(ctx->ggml_ctx, q, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_IMROPE, 262144, 5000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
@@ -2517,7 +2524,6 @@ namespace LLM {
             if (config.arch == LLMArch::MISTRAL_SMALL_3_2 ||
                 config.arch == LLMArch::MINISTRAL_3_3B ||
                 config.arch == LLMArch::QWEN3 ||
-                config.arch == LLMArch::QWEN3_5 ||
                 config.arch == LLMArch::GEMMA3_12B ||
                 config.arch == LLMArch::GEMMA4_12B ||
                 config.arch == LLMArch::GEMMA2_2B ||
@@ -2535,7 +2541,7 @@ namespace LLM {
                     input_pos_vec[2 * n_tokens + i] = i;
                     input_pos_vec[3 * n_tokens + i] = 0;
                 }
-                if (config.arch == LLMArch::QWEN3_VL && !image_grids.empty()) {
+                if ((config.arch == LLMArch::QWEN3_VL || config.arch == LLMArch::QWEN3_5) && !image_grids.empty()) {
                     int offset = 0;
                     for (const auto& grid : image_grids) {
                         int end      = grid.index + grid.size;
