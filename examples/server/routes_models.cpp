@@ -16,9 +16,25 @@ httplib::Server::Handler RuntimeRoutes::protect(httplib::Server::Handler handler
                                 req.path == "/sdapi/v1/txt2img" || req.path == "/sdapi/v1/img2img" ||
                                 req.path == "/v1/images/generations" || req.path == "/v1/images/edits";
         if (generation) {
-            // A sleeping context is reloaded before the request runs; wake_from_sleep
-            // restarts the idle window itself when the reload succeeds.
-            if (model_status(*runtime).value("state", std::string()) == "sleeping" && !wake_from_sleep(*runtime)) {
+            // Request arrival counts as task activity for the idle-sleep timer.
+            touch_task_timer(*runtime);
+        }
+        std::shared_lock<std::shared_mutex> lock(runtime->models->runtime_mutex, std::try_to_lock);
+        if (!lock.owns_lock()) {
+            model_error(res, 503, "model_loading", "Model is loading or unloading");
+            return;
+        }
+        if (generation && model_status(*runtime).value("state", std::string()) == "sleeping") {
+            // wake_from_sleep needs exclusive access, so drop the shared lock
+            // and reacquire it before checking the context below.
+            lock.unlock();
+            const bool woken = wake_from_sleep(*runtime);
+            lock = std::shared_lock<std::shared_mutex>(runtime->models->runtime_mutex, std::try_to_lock);
+            if (!lock.owns_lock()) {
+                model_error(res, 503, "model_loading", "Model is loading or unloading");
+                return;
+            }
+            if (!woken) {
                 const json status = model_status(*runtime);
                 if (status.value("state", std::string()) == "error") {
                     model_error(res, 422, "model_load_failed",
@@ -27,14 +43,7 @@ httplib::Server::Handler RuntimeRoutes::protect(httplib::Server::Handler handler
                                     : "Failed to reload the model after sleeping");
                     return;
                 }
-                // Other states fall through to the shared-lock checks below, where a
-                // missing context reports 503 model_not_loaded.
             }
-        }
-        std::shared_lock<std::shared_mutex> lock(runtime->models->runtime_mutex, std::try_to_lock);
-        if (!lock.owns_lock()) {
-            model_error(res, 503, "model_loading", "Model is loading or unloading");
-            return;
         }
         if (generation && !runtime->sd_ctx) {
             model_error(res, 503, "model_not_loaded", "No model is loaded");
