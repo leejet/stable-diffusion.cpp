@@ -135,21 +135,11 @@ ggml_tensor* ggml_ext_silu_act(ggml_context* ctx, ggml_tensor* x, bool gate_firs
     // x: [ne3, ne2, ne1, ne0]
     // return: [ne3, ne2, ne1, ne0/2]
 
-    auto x_vec = ggml_ext_chunk(ctx, x, 2, 0, false);
-    ggml_tensor* gate;
-    if (gate_first) {
-        gate = x_vec[0];
-        x    = x_vec[1];
-    } else {
-        x    = x_vec[0];
-        gate = x_vec[1];
+    GGML_ASSERT(x->ne[0] % 2 == 0);
+    if (!ggml_is_contiguous_1(x)) {
+        x = ggml_cont(ctx, x);
     }
-    gate = ggml_cont(ctx, gate);
-    gate = ggml_silu_inplace(ctx, gate);
-
-    x = ggml_mul(ctx, x, gate);  // [ne3, ne2, ne1, ne0/2]
-
-    return x;
+    return gate_first ? ggml_swiglu(ctx, x) : ggml_swiglu_swapped(ctx, x);
 }
 
 ggml_tensor* ggml_ext_group_norm_32(ggml_context* ctx,
