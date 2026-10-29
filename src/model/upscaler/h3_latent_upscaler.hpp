@@ -461,9 +461,11 @@ namespace H3VUpsampler {
             }
         }
 
-        // x: normalized H3 video latent [W, H, T, C] (or 5D batch 1); returns the
-        // denormalized upscaled latent at the target spatial size. The scale-1
-        // embedding input is a graph leaf so both stage graphs carry it.
+        // x: H3 video latent [W, H, T, C] (or 5D batch 1) in the normalized domain
+        // the checkpoint expects. Returns the upscaled latent at the target spatial
+        // size, still in that domain; the caller applies the per-channel (de)normalization
+        // around this call. The scale-1 embedding input is a graph leaf so both stage
+        // graphs carry it.
         sd::Tensor<float> compute(const int n_threads,
                                   const sd::Tensor<float>& x,
                                   int64_t target_w,

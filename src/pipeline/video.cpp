@@ -1428,6 +1428,14 @@ namespace sd::pipeline {
                       request.hires.target_height);
             return {};
         }
+        // Nothing to do at 1x. This matters for the learned upscaler: the network is not
+        // an identity mapping at scale 1, so running it would alter a latent the caller
+        // asked to keep at the draft size. Matches the reference node, which returns the
+        // input latent unchanged when the target size equals the input size.
+        if (packed_latent.shape()[0] == target_width && packed_latent.shape()[1] == target_height) {
+            LOG_DEBUG("video latent spatial upscale: target equals the draft latent size, skipping");
+            return packed_latent;
+        }
 
         int latent_channels            = sd->get_latent_channel();
         sd::Tensor<float> video_latent = packed_latent;
@@ -1489,6 +1497,13 @@ namespace sd::pipeline {
         if (strlen(SAFE_STR(model_path)) == 0) {
             LOG_ERROR("H3 learned latent upscale requires a hires model path");
             return {};
+        }
+        // The network is not an identity mapping at scale 1, so a target equal to the
+        // draft latent size must skip it instead of resampling through the model. The
+        // reference node returns the input latent unchanged in this case.
+        if (packed_latent.shape()[0] == target_width && packed_latent.shape()[1] == target_height) {
+            LOG_DEBUG("H3 learned latent upscale: target equals the draft latent size, skipping");
+            return packed_latent;
         }
         if (!sd->ensure_backend_pair(SDBackendModule::UPSCALER)) {
             return {};
