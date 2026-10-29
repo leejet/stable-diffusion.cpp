@@ -1362,37 +1362,48 @@ namespace sd::pipeline {
         }
     }
 
-    // Per-channel H3 video-latent (de)normalization, as applied by the community
-    // learned upscaler around its network.
-    static sd::Tensor<float> h3_normalize_video_latent(const sd::Tensor<float>& x) {
-        if (x.empty() || x.shape()[3] < H3VUpsampler::H3LatentStats::kChannels) {
+    // Per-channel affine transform over the H3 video latent, as applied by the
+    // community learned upscaler around its network. sd::Tensor keeps the channel
+    // axis (shape[3]) as the slowest-varying dimension, so each channel occupies a
+    // contiguous run of numel()/channels values.
+    static sd::Tensor<float> h3_apply_channel_affine(const sd::Tensor<float>& x,
+                                                     const float* scale,
+                                                     const float* bias) {
+        const int64_t c = H3VUpsampler::H3LatentStats::kChannels;
+        if (x.empty() || x.dim() < 4 || x.shape()[3] != c) {
             // Defensive no-op: the learned runner validates the channel count before this runs.
             return x;
         }
-        sd::Tensor<float> y = x;
-        const int64_t c = H3VUpsampler::H3LatentStats::kChannels;
-        const float* mean = H3VUpsampler::H3LatentStats::kMean;
-        const float* std_ = H3VUpsampler::H3LatentStats::kStd;
-        for (int64_t i = 0; i < y.numel(); ++i) {
-            const int64_t channel = i % c;
-            y.data()[i] = (y.data()[i] - mean[channel]) / std_[channel];
+        const int64_t spatial = x.numel() / c;
+        sd::Tensor<float> y   = x;
+        for (int64_t channel = 0; channel < c; ++channel) {
+            const float s = scale[channel];
+            const float b = bias[channel];
+            float* p      = y.data() + channel * spatial;
+            for (int64_t i = 0; i < spatial; ++i) {
+                p[i] = p[i] * s + b;
+            }
         }
         return y;
     }
 
+    static sd::Tensor<float> h3_normalize_video_latent(const sd::Tensor<float>& x) {
+        constexpr int64_t c = H3VUpsampler::H3LatentStats::kChannels;
+        float scale[c];
+        float bias[c];
+        for (int64_t i = 0; i < c; ++i) {
+            const float mean = H3VUpsampler::H3LatentStats::kMean[i];
+            const float std_ = H3VUpsampler::H3LatentStats::kStd[i];
+            scale[i]         = 1.f / std_;
+            bias[i]          = -mean / std_;
+        }
+        return h3_apply_channel_affine(x, scale, bias);
+    }
+
     static sd::Tensor<float> h3_denormalize_video_latent(const sd::Tensor<float>& x) {
-        if (x.empty() || x.shape()[3] < H3VUpsampler::H3LatentStats::kChannels) {
-            return x;
-        }
-        sd::Tensor<float> y = x;
-        const int64_t c = H3VUpsampler::H3LatentStats::kChannels;
-        const float* mean = H3VUpsampler::H3LatentStats::kMean;
-        const float* std_ = H3VUpsampler::H3LatentStats::kStd;
-        for (int64_t i = 0; i < y.numel(); ++i) {
-            const int64_t channel = i % c;
-            y.data()[i] = y.data()[i] * std_[channel] + mean[channel];
-        }
-        return y;
+        return h3_apply_channel_affine(x,
+                                       H3VUpsampler::H3LatentStats::kStd,
+                                       H3VUpsampler::H3LatentStats::kMean);
     }
 
     // Spatial-only latent upscale that keeps the video time axis untouched, so the
