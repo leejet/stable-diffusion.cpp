@@ -232,8 +232,11 @@ namespace H3VUpsampler {
             h             = ggml_silu_inplace(ctx->ggml_ctx, h);
             h             = in_layers->forward(ctx, h);
 
-            // AdaLN: emb_out = emb_layers(SiLU(emb)) -> split [scale, shift]
-            ggml_tensor* emb_silu = ggml_silu_inplace(ctx->ggml_ctx, emb);
+            // AdaLN: emb_out = emb_layers(SiLU(emb)) -> split [scale, shift].
+            // emb is shared by every residual block of the stage, so the activation has
+            // to be out-of-place: an in-place SiLU would leave the buffer activated and
+            // the following blocks would re-activate an already activated embedding.
+            ggml_tensor* emb_silu = ggml_silu(ctx->ggml_ctx, emb);
             ggml_tensor* emb_out  = emb_layers->forward(ctx, emb_silu);
             ggml_tensor* emb_1d   = ggml_reshape_1d(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, emb_out), 2 * channels);
             ggml_tensor* scale    = ggml_reshape_4d(ctx->ggml_ctx, ggml_ext_slice(ctx->ggml_ctx, emb_1d, 0, 0, channels), 1, 1, 1, channels);
@@ -315,10 +318,11 @@ namespace H3VUpsampler {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* scale_input) {
             auto l0 = std::dynamic_pointer_cast<Linear>(blocks["0"]);
             auto l2 = std::dynamic_pointer_cast<Linear>(blocks["2"]);
+            // Sequential(Linear, SiLU, Linear): the reference checkpoint ends at the
+            // second linear layer, each residual block activates the embedding itself.
             ggml_tensor* h = l0->forward(ctx, ggml_reshape_2d(ctx->ggml_ctx, scale_input, 1, 1));
             h              = ggml_silu_inplace(ctx->ggml_ctx, h);
-            h              = l2->forward(ctx, h);
-            return ggml_silu_inplace(ctx->ggml_ctx, h);
+            return l2->forward(ctx, h);
         }
     };
 
