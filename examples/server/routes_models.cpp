@@ -16,9 +16,8 @@ httplib::Server::Handler RuntimeRoutes::protect(httplib::Server::Handler handler
                                 req.path == "/sdapi/v1/txt2img" || req.path == "/sdapi/v1/img2img" ||
                                 req.path == "/v1/images/generations" || req.path == "/v1/images/edits";
         if (generation) {
-            // Generation requests count as tasks for the idle-sleep timer, and one
-            // reloads the context first while it waits in the sleeping state.
-            touch_task_timer(*runtime);
+            // A sleeping context is reloaded before the request runs; wake_from_sleep
+            // restarts the idle window itself when the reload succeeds.
             if (model_status(*runtime).value("state", std::string()) == "sleeping" && !wake_from_sleep(*runtime)) {
                 const json status = model_status(*runtime);
                 if (status.value("state", std::string()) == "error") {
@@ -42,6 +41,10 @@ httplib::Server::Handler RuntimeRoutes::protect(httplib::Server::Handler handler
             return;
         }
         handler(req, res);
+        if (generation) {
+            // Completed synchronous generation restarts the idle window.
+            touch_task_timer(*runtime);
+        }
     };
 }
 
@@ -99,6 +102,7 @@ void enter_sleep_if_idle(ServerRuntime& runtime) {
         if (elapsed < runtime.svr_params->sleep_idle_seconds) {
             return;
         }
+        models.status["revision"] = models.status.value("revision", uint64_t(0)) + 1;
         // Mutate in place so the preserved model selection and CLI origin survive
         // the sleep and can drive the reload.
         models.status["state"] = "sleeping";
@@ -133,6 +137,7 @@ bool wake_from_sleep(ServerRuntime& runtime) {
     } catch (const std::exception&) {
     }
     std::lock_guard<std::mutex> status_lock(models.status_mutex);
+    models.status["revision"] = models.status.value("revision", uint64_t(0)) + 1;
     if (reloaded) {
         models.last_task_at    = std::chrono::steady_clock::now();
         models.status["state"] = "ready";
