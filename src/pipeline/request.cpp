@@ -522,7 +522,7 @@ namespace sd::pipeline {
         if (scheduler_steps_out != nullptr) {
             *scheduler_steps_out = scheduler_steps;
         }
-        return std::vector<float>(sigmas.begin() + scheduler_steps - std::min(effective_steps, scheduler_steps),
+        return std::vector<float>(sigmas.begin() + std::max(0, scheduler_steps - effective_steps),
                                   sigmas.end());
     }
 
