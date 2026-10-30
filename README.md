@@ -45,6 +45,7 @@ Devices with less than 16 GB of memory have not been validated. If memory is ins
 | 2026-09-17 | Added support for Z-Image Turbo and FLUX.2 Klein 4B. |
 | 2026-09-20 | Added Hexagon NPU support for FLUX.2 Klein 9B. |
 | 2026-09-21 | Added Hexagon NPU support for Krea 2 Turbo and Qwen Image 2.1. |
+| 2026-10-31 | Added Hexagon NPU support for FLUX.3 Image Klein. |
 
 ## Hexagon NPU
 

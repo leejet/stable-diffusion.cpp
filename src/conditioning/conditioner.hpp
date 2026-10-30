@@ -1779,6 +1779,7 @@ struct LLMEmbedder : public Conditioner {
         } else if (sd_version_is_pid(version)) {
             arch = LLM::LLMArch::GEMMA2_2B;
         } else if (version == VERSION_QWEN_IMAGE_2_1 ||
+                   sd_version_is_flux3(version) ||
                    sd_version_is_lingbot_video(version) ||
                    sd_version_is_ideogram4(version) ||
                    sd_version_is_boogu_image(version) ||
@@ -1941,6 +1942,9 @@ struct LLMEmbedder : public Conditioner {
             weights.insert(weights.end(), curr_tokens.size(), curr_weight);
         }
 
+        if (sd_version_is_flux3(version)) {
+            min_length = std::min(max_length, ((tokens.size() + 79) / 80) * 80);
+        }
         std::vector<float> mask;
         tokenizer->pad_tokens(tokens, &weights, &mask, min_length, max_length);
 
@@ -1988,6 +1992,15 @@ struct LLMEmbedder : public Conditioner {
             }
         }
 
+        sd::Tensor<int32_t> position_ids;
+        if (sd_version_is_flux3(version)) {
+            position_ids = sd::Tensor<int32_t>::zeros({static_cast<int64_t>(tokens.size() * 4)});
+            for (size_t axis = 0; axis < 4; ++axis) {
+                for (size_t i = 0; i < tokens.size(); ++i) {
+                    position_ids[axis * tokens.size() + i] = mask[i] == 0.f ? 1 : static_cast<int32_t>(i);
+                }
+            }
+        }
         auto hidden_states = llm->compute(n_threads,
                                           input_ids,
                                           attention_mask,
@@ -1996,7 +2009,8 @@ struct LLMEmbedder : public Conditioner {
                                           false,
                                           false,
                                           deepstack_image_embeds,
-                                          image_grids);
+                                          image_grids,
+                                          position_ids);
         GGML_ASSERT(!hidden_states.empty());
         hidden_states = apply_token_weights(std::move(hidden_states), weights);
         GGML_ASSERT(hidden_states.shape()[1] > prompt_template_encode_start_idx);
@@ -2716,6 +2730,15 @@ struct LLMEmbedder : public Conditioner {
 
                 prompt += "<|im_end|>\n<|im_start|>assistant\n";
             }
+        } else if (sd_version_is_flux3(version)) {
+            prompt_template_encode_start_idx = 0;
+            max_length                       = 4096;
+            out_layers                       = {4, 8, 12, 16, 20, 24, 28, 32};
+            prompt                           = "<|im_start|>user\n";
+            prompt_attn_range.first          = static_cast<int>(prompt.size());
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+            prompt += "<|im_end|>\n<|im_start|>assistant\n";
         } else if (version == VERSION_FLUX2_KLEIN) {
             prompt_template_encode_start_idx = 0;
             min_length                       = 512;
