@@ -247,6 +247,9 @@ These are backend-level defaults. GGML still chooses the actual kernel based on
 weight type, shape, and hardware; enabling direct convolution does not guarantee
 that every operation uses implicit GEMM. The CUDA-family implicit GEMM paths
 require F16 weights and can use ordinary direct kernels for other cases.
+For 3D convolution, a supported direct kernel is also used as a fallback when
+the im2col decomposition is unsupported for the actual tensor sizes, including
+when an intermediate reshape or matrix multiplication exceeds backend limits.
 This option does not change the separately created image upscaler context.
 
 Repeating `--conv-direct` replaces the previous assignment string. Existing
