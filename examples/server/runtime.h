@@ -24,6 +24,7 @@ struct SDSvrParams {
     int listen_port       = 1234;
     std::string serve_html_path;
     std::vector<std::string> model_dirs;
+    int sleep_idle_seconds   = -1;
     bool normal_exit         = false;
     sd_log_level_t log_level = SD_LOG_INFO;
     bool color               = false;
