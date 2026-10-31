@@ -313,7 +313,64 @@ CUDA VMM so native scratch addresses remain valid for the backend lifetime;
 legacy scratch pools retain the existing fragment path. HIP and MUSA do not yet
 provide this plan executor. sd.cpp's CUDA registrations opt in to reusable replay.
 
-Remaining CUDA fusion rules and Vulkan INT8/ConvRot implementations still need
-to be externalized. Vulkan execution services and kernels also remain pending.
+## Vulkan execution services
+
+`ggml-ext-vulkan.h` exposes `ggml_ext_vulkan_v1` through the Vulkan backend
+registry. The versioned function table reports device limits and subgroup
+capabilities, resolves tensor/workspace byte ranges, dispatches application
+SPIR-V, and copies nonoverlapping buffer ranges. Extensions do not include
+private ggml Vulkan headers or own backend command buffers and descriptors.
+
+Shaders use the `main` entry point, consecutive storage-buffer bindings starting
+at zero, and consecutive 32-bit specialization constants. Dispatch accepts actual
+workgroup counts. The backend validates ranges and dispatch limits, caches the
+complete shader/configuration per device, and releases pipelines with that
+device. Push constants and specialization values are copied; the backend does
+not retain application execution state. Pipeline creation occurs on execution,
+never during host-only plan preparation.
+
+Bindings identify either a tensor or a backend buffer, with a byte offset and
+optional byte count. `buffer_info` returns an opaque storage identity and byte
+range for alias checks. Vulkan descriptor offsets are rounded down to the
+device's required alignment; shaders must add the returned `shader_offset`.
+Workspace bindings follow the same rules. Invalid or foreign-device ranges are
+rejected before recording commands. Kernel bounds and shader capability
+requirements remain the extension's responsibility.
+
+Dispatch and copy use the backend's existing compute command context, descriptor
+pool, transfer waits, and memory barriers. They preserve ordering with native
+fragments and invalidate cached converted operands after writes. Normal backend
+synchronization completes queued work before host access or resource release.
+Vulkan copy ranges must be equal in size, nonoverlapping, and aligned to four
+bytes. There is no per-dispatch host wait or extension-owned queue.
+
+Scheduled Vulkan plans share submission counters and FLOP thresholds across
+native fragments and extension callbacks. Native scratch is initialized once
+per plan invocation, with its offsets retained across fragments. Fragment
+boundaries do not force a
+queue submission, and the final pending commands are submitted when the plan
+returns. Extension dispatches and copies count toward the device's node limit.
+Every callback still executes on every invocation; this batching neither
+captures device replay nor retains plan state across scheduler rebuilds.
+Callback errors propagate without retry. Evaluation callbacks, direct backend
+calls, synchronous devices, serialized diagnostics, and timestamp profiling
+retain fragment execution.
+
+`src/core/vulkan/rope.cpp` registers custom and builtin RoPE implementations,
+plus `RMSNorm -> Mul -> RoPE` and `RMSNorm -> Mul -> RoPE -> Scale -> FP16 Copy`
+fusion. These kernels retain the original strides, partial-rotation behavior,
+128-channel subgroup reduction, and separate arithmetic rounding. Their SPIR-V
+is generated from application shaders with the native RoPE compilation policy;
+SPIR-V optimization is disabled because it changes the reduction results.
+Safe graph-delay rules bring independent producers ahead of fusion candidates.
+External intermediate consumers retain ordinary operators, and overlapping
+outputs use plan workspace. `GGML_VK_DISABLE_FUSION` is honored.
+
+The corresponding Vulkan shader sources and native fusion rules have been
+removed from ggml. Existing builtin RoPE graphs use the registered override;
+unsupported cases retain scheduler fallback to another supported backend.
+
+Remaining model-specific CUDA paths and Vulkan INT8/ConvRot implementations still
+need auditing or migration.
 This implementation does not yet externalize all model-specific kernels or add
 dynamic dtypes.
