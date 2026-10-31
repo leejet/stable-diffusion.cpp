@@ -37,6 +37,8 @@ struct RefImageParams {
     bool vae_center_crop               = false;
     bool vlm_use_vae_input             = false;
     RefImageSizeMode ref_image_size    = RefImageSizeMode::MATCH;
+    bool render_text_images            = false;
+    std::vector<std::string> text_render_fonts;
 };
 
 const std::unordered_map<std::string, RefImageParams> REF_IMAGE_PRESETS = {
