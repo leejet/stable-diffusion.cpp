@@ -51,6 +51,16 @@ bool sd_ggml_sage_attn_describe(const ggml_tensor* node, SDSageAttentionParams* 
 // Q/K: contiguous F32 [D, tokens, heads, batch], V: contiguous F16 in the same layout.
 // Output: F32 [D, query heads, query tokens, batch]. CUDA-only, unmasked inference.
 ggml_tensor* ggml_sage_attn(ggml_context* ctx, ggml_tensor* q, ggml_tensor* k, ggml_tensor* v, float scale, ggml_sage_attn_mode mode);
+
+struct SDSolAttentionParams {
+    float scale;
+    float tau;
+};
+
+ggml_ext_op_t sd_ggml_sol_attn_op();
+bool sd_ggml_sol_attn_describe(const ggml_tensor* node, SDSolAttentionParams* params);
+// Noncausal Sol-Attn: contiguous F32 Q/K/V [128, tokens, heads, batch], output [128, heads, tokens, batch].
+ggml_tensor* ggml_sol_attn(ggml_context* ctx, ggml_tensor* q, ggml_tensor* k, ggml_tensor* v, float scale, float tau);
 #endif
 
 #endif

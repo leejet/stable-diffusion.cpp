@@ -277,6 +277,58 @@ ggml_tensor* ggml_sage_attn(ggml_context* ctx, ggml_tensor* q, ggml_tensor* k, g
     return ggml_ext_op_create(ctx, sd_ggml_sage_attn_op(), inputs, 3, &params);
 }
 
+static bool sol_attn_infer(ggml_tensor* const* inputs, int count, const void* attributes, ggml_ext_tensor_desc* out) {
+    if (count != 3 || !attributes)
+        return false;
+    SDSolAttentionParams params;
+    std::memcpy(&params, attributes, sizeof(params));
+    if (!std::isfinite(params.scale) || params.scale <= 0.f || !std::isfinite(params.tau))
+        return false;
+    const auto* q = inputs[0];
+    if (!q || q->ne[0] != 128)
+        return false;
+    for (int i = 0; i < count; ++i) {
+        const auto* t = inputs[i];
+        if (!t || t->type != GGML_TYPE_F32 || !ggml_is_contiguous(t) || !ggml_are_same_shape(q, t))
+            return false;
+    }
+    int64_t elements = 1;
+    for (int d = 0; d < GGML_MAX_DIMS; ++d) {
+        if (q->ne[d] <= 0 || q->ne[d] > INT64_MAX / int64_t(sizeof(float)) / elements)
+            return false;
+        elements *= q->ne[d];
+    }
+    *out = {GGML_TYPE_F32, {q->ne[0], q->ne[2], q->ne[1], q->ne[3]}};
+    return true;
+}
+
+ggml_ext_op_t sd_ggml_sol_attn_op() {
+    static const auto op = [] {
+        const ggml_ext_op_desc desc = {GGML_EXT_ABI_VERSION, "sd.sol_attn.v1", sizeof(SDSolAttentionParams), sol_attn_infer};
+        auto result                 = ggml_ext_register_op(&desc);
+        GGML_ASSERT(result);
+        return result;
+    }();
+    return op;
+}
+
+bool sd_ggml_sol_attn_describe(const ggml_tensor* node, SDSolAttentionParams* params) {
+    if (!node || ggml_ext_op_get(node) != sd_ggml_sol_attn_op() || node->src[3] || !ggml_is_contiguous(node))
+        return false;
+    ggml_ext_tensor_desc output;
+    const auto* attributes = ggml_ext_op_attributes(node);
+    if (!sol_attn_infer(node->src, 3, attributes, &output) || node->type != output.type || std::memcmp(node->ne, output.ne, sizeof(output.ne)))
+        return false;
+    std::memcpy(params, attributes, sizeof(*params));
+    return true;
+}
+
+ggml_tensor* ggml_sol_attn(ggml_context* ctx, ggml_tensor* q, ggml_tensor* k, ggml_tensor* v, float scale, float tau) {
+    ggml_tensor* inputs[]             = {q, k, v};
+    const SDSolAttentionParams params = {scale, tau};
+    return ggml_ext_op_create(ctx, sd_ggml_sol_attn_op(), inputs, 3, &params);
+}
+
 void sd_ggml_register_extensions(ggml_backend_t backend) {
     if (!backend) {
         return;

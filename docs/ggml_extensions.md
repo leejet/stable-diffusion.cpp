@@ -399,8 +399,8 @@ The corresponding Vulkan shader sources and native fusion rules have been
 removed from ggml. Unsupported custom nodes retain scheduler fallback to
 another supported backend.
 
-Remaining model-specific CUDA paths still need auditing or migration. This
-implementation does not add dynamic dtypes.
+RoPE Apply, INT8/ConvRot, CuTe attention, SageAttention, and Sol-Attn use
+application-owned implementations. This interface does not add dynamic dtypes.
 
 `src/core/vulkan/int8.cpp` owns Vulkan INT8 GEMM, ConvRot, and their fusion rules.
 The Vulkan compute metadata service exposes shared-memory limits, subgroup
@@ -429,3 +429,37 @@ the application's compiled CUDA target as well as the physical device.
 CPU, HIP, MUSA, and Vulkan do not implement this NVIDIA-specific kernel. Existing
 model-level capability checks retain flash/default attention for unsupported
 layers; a custom Sage node itself does not silently change algorithms.
+
+## Sol-Attn
+
+The existing `ggml_sol_attn` entry point now lives in the common sd.cpp extension
+files and constructs `sd.sol_attn.v1`. It accepts contiguous F32 Q/K/V tensors
+with shape `[128, tokens, heads, batch]`, a positive finite scale, and finite tau.
+The output remains F32 `[128, heads, tokens, batch]`. No current sd.cpp model or
+CLI path calls this entry point; the migration preserves its low-level behavior.
+
+`src/core/cuda/sol_attention.cu` owns packing, block summaries, threshold
+selection, and the BF16 tensor-core kernel. Temporary storage is separate
+scheduler workspace, so the output allocation contains only the output tensor.
+The kernel uses the public backend stream service and direct CUDA/PTX operations.
+Registration requires CUDA 12 or newer, an SM80-or-newer device, and an application
+kernel compiled for SM80 or newer. CPU, HIP, MUSA, and Vulkan do not advertise
+support. ggml no longer contains a Sol-Attn opcode, constructor, allocation rule,
+or backend kernel.
+
+## Public graph access
+
+`ggml-graph.h` exposes leaf enumeration, append-only leaf construction, recorded
+use counts, mapped inference-graph copying, use-count copying for segments, and
+backend execution of a node range. Mapped copies retain node order and consumer
+counts from the original graph, including consumers outside a graph view. The
+caller owns tensor copies and remaps their storage and edges; invalid mappings
+leave the destination graph unchanged. Range execution uses already allocated
+tensors and retains the original graph's consumer counts.
+
+Workspace measurement, graph cuts, and evaluation callbacks use these APIs.
+Normal sd.cpp builds require only ggml's public headers. Compatibility with an
+upstream ggml lacking this header is isolated in `src/core/ggml_compat.cpp`; that
+optional build still requires matching upstream private headers. The compatibility
+layer also retains the workaround for old Metal backends wrapping failed host
+mappings. The patched Metal backend returns null directly when mapping fails.

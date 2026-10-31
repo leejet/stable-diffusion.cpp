@@ -18,9 +18,8 @@
 #include <hip/hip_runtime_api.h>
 #endif
 
+#include "core/ggml_compat.h"
 #include "core/util.h"
-#include "ggml-backend-impl.h"
-#include "ggml-impl.h"
 #include "stable-diffusion.h"
 
 static std::string trim_copy(const std::string& value) {
@@ -451,24 +450,6 @@ bool sd_backend_is_cpu(ggml_backend_t backend) {
     return dev != nullptr && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
 }
 
-ggml_backend_buffer_t sd_backend_dev_buffer_from_host_ptr(ggml_backend_dev_t device,
-                                                          void* ptr,
-                                                          size_t size,
-                                                          size_t max_tensor_size) {
-    ggml_backend_buffer_t buffer = ggml_backend_dev_buffer_from_host_ptr(device, ptr, size, max_tensor_size);
-    if (buffer != nullptr && buffer->context == nullptr) {
-        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(device);
-        if (reg != nullptr && std::strcmp(ggml_backend_reg_name(reg), "Metal") == 0) {
-            // Metal can wrap a failed mapping in a non-null buffer. Its free callback also
-            // dereferences the missing context, so only release the outer buffer.
-            buffer->iface.free_buffer = nullptr;
-            ggml_backend_buffer_free(buffer);
-            return nullptr;
-        }
-    }
-    return buffer;
-}
-
 static int cuda_compiled_arch(ggml_backend_t backend) {
 #ifdef SD_USE_CUDA
     if (!sd_backend_is(backend, "CUDA")) {
@@ -644,23 +625,6 @@ void sd_backend_clear_buffer_cache(ggml_backend_t backend) {
     }
 }
 
-static ggml_cgraph sd_ggml_graph_view(ggml_cgraph* cgraph0, int i0, int i1) {
-    ggml_cgraph cgraph = {
-        /*.size             =*/0,
-        /*.n_nodes          =*/i1 - i0,
-        /*.n_leafs          =*/0,
-        /*.nodes            =*/cgraph0->nodes + i0,
-        /*.grads            =*/nullptr,
-        /*.grad_accs        =*/nullptr,
-        /*.leafs            =*/nullptr,
-        /*.use_counts       =*/cgraph0->use_counts,
-        /*.visited_hash_set =*/cgraph0->visited_hash_set,
-        /*.order            =*/cgraph0->order,
-        /*.uid              =*/0,
-    };
-    return cgraph;
-}
-
 ggml_status sd_backend_graph_compute_with_eval_callback(ggml_backend_t backend,
                                                         ggml_cgraph* gf,
                                                         sd_graph_eval_callback_t callback_eval,
@@ -683,8 +647,7 @@ ggml_status sd_backend_graph_compute_with_eval_callback(ggml_backend_t backend,
             need = callback_eval(t, true, callback_eval_user_data);
         }
 
-        ggml_cgraph gv = sd_ggml_graph_view(gf, j0, j1 + 1);
-        status         = ggml_backend_graph_compute_async(backend, &gv);
+        status = ggml_backend_graph_compute_async_range(backend, gf, j0, j1 + 1);
         if (status != GGML_STATUS_SUCCESS) {
             break;
         }
