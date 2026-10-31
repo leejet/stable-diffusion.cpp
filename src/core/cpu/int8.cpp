@@ -168,20 +168,12 @@ namespace sd_cpu {
         d.prepare              = i8_prepare;
         d.execute              = i8_execute;
         GGML_ASSERT(ggml_ext_register_kernel(device, &d));
-        d.name      = "sd.linear_i8.cpu.override.v1";
-        d.op        = GGML_OP_MUL_MAT;
-        d.custom_op = nullptr;
-        GGML_ASSERT(ggml_ext_register_kernel(device, &d));
         d.name      = "sd.quantize_i8_convrot.cpu.v1";
         d.op        = GGML_OP_CUSTOM;
         d.custom_op = sd_ggml_convrot_op();
         d.supports  = convrot_supports;
         d.prepare   = convrot_prepare;
         d.execute   = convrot_execute;
-        GGML_ASSERT(ggml_ext_register_kernel(device, &d));
-        d.name      = "sd.quantize_i8_convrot.cpu.override.v1";
-        d.op        = GGML_OP_QUANTIZE_I8_CONVROT;
-        d.custom_op = nullptr;
         GGML_ASSERT(ggml_ext_register_kernel(device, &d));
     }
 

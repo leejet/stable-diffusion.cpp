@@ -1,0 +1,149 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+
+layout(constant_id = 0) const uint K = 4096;
+layout(constant_id = 1) const bool AFFINE = false;
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+layout(binding = 0) readonly buffer X { float data_x[]; };
+layout(binding = 1) readonly buffer M { float data_m[]; };
+layout(binding = 2) readonly buffer H { float data_h[]; };
+layout(binding = 3) writeonly buffer D { uint data_d[]; };
+layout(binding = 4) writeonly buffer S { float data_s[]; };
+#ifdef RMS_AFFINE
+layout(binding = 5) readonly buffer W { float data_w[]; };
+#endif
+layout(push_constant) uniform parameter {
+    uint rows;
+    uint x_offset;
+    uint m_offset;
+    uint h_offset;
+    float eps;
+    uint k;
+    uint w_offset;
+} p;
+shared float values[K];
+shared vec2 sums[512];
+
+uint quantize(float value, float inv_scale) {
+    return uint(clamp(int(roundEven(value * inv_scale)), -127, 127)) & 0xffu;
+}
+
+#ifdef RMS_AFFINE
+// Keep RMS arithmetic outside the scope of precise on the quantized output.
+float rms_row(uint row, uint tid) {
+    float sum = 0.0;
+    [[unroll]] for (uint col = tid, iter = 0; iter < 12; col += 512, ++iter) {
+        float x = 0.0;
+        if (col < p.k) {
+            x = data_x[p.x_offset + row * K + col];
+            values[col] = x;
+        }
+        sum += x * x;
+    }
+    sums[tid].x = sum;
+    barrier();
+    [[unroll]] for (uint stride = 256; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            sum += sums[tid + stride].x;
+            sums[tid].x = sum;
+        }
+        barrier();
+    }
+    return inversesqrt(sums[0].x / p.k + p.eps);
+}
+
+float rms_weight(float scale, float value, float weight) {
+    return scale * value * weight;
+}
+#endif
+
+void main() {
+    const uint tid = gl_LocalInvocationID.x;
+    for (uint row = gl_WorkGroupID.x; row < p.rows; row += gl_NumWorkGroups.x) {
+#ifdef RMS_AFFINE
+        float inv_std = rms_row(row, tid);
+        float mean = 0.0;
+#else
+        vec2 sum = vec2(0.0);
+        [[unroll]] for (uint col = tid; col < K; col += 512) {
+            const float x = data_x[p.x_offset + row * K + col];
+            values[col] = x;
+            if (!AFFINE) {
+                sum.x += x;
+                sum.y = fma(x, x, sum.y);
+            }
+        }
+        float mean = 0.0;
+        float inv_std = 1.0;
+        if (!AFFINE) {
+            sums[tid] = sum;
+            barrier();
+            [[unroll]] for (uint stride = 256; stride > 0; stride >>= 1) {
+                if (tid < stride) sums[tid] += sums[tid + stride];
+                barrier();
+            }
+            mean = sums[0].x / p.k;
+            // Match NORM's contraction even when precise propagates from the quantized output.
+            const float variance = fma(-mean, mean, sums[0].y / p.k);
+            inv_std = inversesqrt(variance + p.eps);
+        }
+#endif
+        [[unroll]] for (uint col = tid; col < K; col += 512) {
+            precise float value;
+#ifdef RMS_AFFINE
+            values[col] = rms_weight(inv_std, values[col], data_w[p.w_offset + col]);
+#endif
+            if (AFFINE) {
+                precise float modulated = values[col] * data_m[p.m_offset + col];
+                value = values[col] + modulated;
+                value += data_h[p.h_offset + col];
+            } else {
+                value = (values[col] - mean) * inv_std;
+                value *= data_m[p.m_offset + col];
+            }
+            values[col] = value * (1.0 / 16.0);
+        }
+        barrier();
+        [[unroll]] for (uint stride = 1; stride < 256; stride *= 4) {
+            for (uint i = tid; i < K / 4; i += 512) {
+                const uint group = i / 64;
+                const uint lane = i % 64;
+                const uint base = group * 256 + (lane / stride) * 4 * stride + lane % stride;
+                const float a = values[base];
+                const float b = values[base + stride];
+                const float c = values[base + 2 * stride];
+                const float d = values[base + 3 * stride];
+                values[base] = a + b + c - d;
+                values[base + stride] = a + b - c + d;
+                values[base + 2 * stride] = a - b + c + d;
+                values[base + 3 * stride] = -a + b + c + d;
+            }
+            barrier();
+        }
+        float maximum = 0.0;
+        [[unroll]] for (uint col = tid; col < K; col += 512) {
+            maximum = max(maximum, abs(values[col]));
+        }
+        sums[tid].x = maximum;
+        barrier();
+        [[unroll]] for (uint stride = 256; stride > 0; stride >>= 1) {
+            if (tid < stride) {
+                sums[tid].x = max(sums[tid].x, sums[tid + stride].x);
+            }
+            barrier();
+        }
+        const float scale = sums[0].x / 127.0;
+        const float inv_scale = scale == 0.0 ? 0.0 : 1.0 / scale;
+        if (tid == 0) {
+            data_s[row] = scale;
+        }
+        for (uint i = tid; i < K / 4; i += 512) {
+            data_d[row * (K / 4) + i] = quantize(values[i * 4], inv_scale)
+                | (quantize(values[i * 4 + 1], inv_scale) << 8)
+                | (quantize(values[i * 4 + 2], inv_scale) << 16)
+                | (quantize(values[i * 4 + 3], inv_scale) << 24);
+        }
+        barrier();
+    }
+}

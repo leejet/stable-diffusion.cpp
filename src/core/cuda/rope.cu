@@ -257,7 +257,7 @@ namespace SD_CUDA_NAMESPACE {
                     if (j >= 2) {
                         const auto* mat  = ggml_graph_node(graph, j - 2);
                         const auto* view = ggml_graph_node(graph, j - 1);
-                        if (mat->op == GGML_OP_MUL_MAT && mat->src[0]->type == GGML_TYPE_I8 &&
+                        if (ggml_ext_op_get(mat) == sd_ggml_i8_op() &&
                             view->op == GGML_OP_RESHAPE && view->src[0] == mat && norm->src[0] == view &&
                             ggml_ext_graph_delay(graph, j - 2, 3, i))
                             break;

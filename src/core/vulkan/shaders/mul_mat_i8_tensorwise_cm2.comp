@@ -1,0 +1,153 @@
+#version 460
+
+#extension GL_EXT_shader_8bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_NV_cooperative_matrix2 : require
+#extension GL_KHR_memory_scope_semantics : require
+
+layout(constant_id = 0) const uint BN = 128;
+layout(constant_id = 1) const uint ALIGNMENT = 0;
+layout(constant_id = 2) const bool SWIGLU = false;
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+layout(constant_id = 3) const uint BM = 128;
+layout(constant_id = 4) const uint BK = 64;
+
+layout(push_constant) uniform parameter
+{
+    uint n;
+    uint rows;
+    uint k;
+    uint has_bias;
+    uint row_offset;
+    float output_scale;
+    uint group_cols;
+} p;
+
+layout(binding = 0, std430) readonly buffer W { int8_t data_w[]; };
+layout(binding = 1, std430) readonly buffer A { int8_t data_a[]; };
+layout(binding = 2, std430) readonly buffer WS { float data_ws[]; };
+layout(binding = 3, std430) readonly buffer AS { float data_as[]; };
+layout(binding = 4, std430) readonly buffer B { float data_b[]; };
+// Store FP32 bit patterns without changing the integer accumulator fragment layout.
+layout(binding = 5, std430) writeonly buffer D { int32_t data_d[]; };
+#ifdef SPLIT_SWIGLU
+layout(binding = 6, std430) readonly buffer UW { int8_t data_uw[]; };
+layout(binding = 7, std430) readonly buffer US { float data_us[]; };
+#endif
+#ifdef RESIDUAL
+layout(binding = 6, std430) readonly buffer G { float data_g[]; };
+layout(binding = 7, std430) readonly buffer R { float data_r[]; };
+#endif
+int32_t dequantize(const in uint row, const in uint col, const in int32_t acc,
+                const in uint row_base, const in uint col_base) {
+    const uint r = row_base + col;
+    const uint c = col_base + row;
+    if (ALIGNMENT != 1 && (r >= p.rows || c >= p.n)) {
+        return 0;
+    }
+    precise float value = float(acc) * data_as[r] * data_ws[c];
+    if (p.has_bias != 0) {
+        value += data_b[c];
+    }
+#ifdef RESIDUAL
+    value *= p.output_scale;
+    value *= data_g[c];
+    value += data_r[r * p.n + c];
+#endif
+    return floatBitsToInt(value);
+}
+
+int32_t dequantize_swiglu(const in uint row, const in uint col, const in int32_t gate_acc, const in int32_t up_acc, const in uint row_base, const in uint col_base) {
+    const uint r = row_base + col;
+    const uint c = col_base + row;
+    if (ALIGNMENT != 1 && (r >= p.rows || c >= p.n / 2)) {
+        return 0;
+    }
+    precise float gate = float(gate_acc) * data_as[r] * data_ws[c];
+#ifdef SPLIT_SWIGLU
+    precise float up = float(up_acc) * data_as[r] * data_us[c];
+#else
+    precise float up = float(up_acc) * data_as[r] * data_ws[c + p.n / 2];
+#endif
+    return floatBitsToInt(gate / (1.0 + exp(-gate)) * up);
+}
+
+void main() {
+    const uint k_size = p.k & ~255u;
+    tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> a_layout = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
+    tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> w_layout = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
+    tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> d_layout = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
+    a_layout = setTensorLayoutDimensionNV(a_layout, p.rows, k_size);
+    w_layout = setTensorLayoutDimensionNV(w_layout, p.n, k_size);
+    d_layout = setTensorLayoutDimensionNV(d_layout, p.rows, SWIGLU ? p.n / 2 : p.n);
+    tensorViewNV<2, false, 1, 0> transpose = createTensorViewNV(2, false, 1, 0);
+    // Keep a weight panel in L2 while visiting the activation tiles.
+    const uint col_tiles = gl_NumWorkGroups.x;
+    const uint row_tiles = gl_NumWorkGroups.y;
+    const uint group_cols = clamp(p.group_cols, 1u, col_tiles);
+    const uint linear = gl_WorkGroupID.y * col_tiles + gl_WorkGroupID.x;
+    const uint group = linear / (group_cols * row_tiles);
+    const uint first_col = group * group_cols;
+    const uint cols = min(col_tiles - first_col, group_cols);
+    const uint within_group = linear - group * group_cols * row_tiles;
+    const uint row = p.row_offset + (within_group / cols) * BN;
+    const uint col = (first_col + within_group % cols) * BM;
+    coopmat<int32_t, gl_ScopeWorkgroup, BM, BN, gl_MatrixUseAccumulator> sum = coopmat<int32_t, gl_ScopeWorkgroup, BM, BN, gl_MatrixUseAccumulator>(0);
+    coopmat<int32_t, gl_ScopeWorkgroup, BM, BN, gl_MatrixUseAccumulator> sum_up = coopmat<int32_t, gl_ScopeWorkgroup, BM, BN, gl_MatrixUseAccumulator>(0);
+    if (ALIGNMENT != 0) {
+        tensorLayoutNV<2> a_full = createTensorLayoutNV(2);
+        tensorLayoutNV<2> w_full = createTensorLayoutNV(2);
+        a_full = setTensorLayoutDimensionNV(a_full, p.rows, k_size);
+        w_full = setTensorLayoutDimensionNV(w_full, p.n, k_size);
+        for (uint k = 0; k < p.k; k += BK) {
+            coopmat<int8_t, gl_ScopeWorkgroup, BM, BK, gl_MatrixUseA> w;
+            coopmat<int8_t, gl_ScopeWorkgroup, BK, BN, gl_MatrixUseB> a;
+            coopMatLoadTensorNV(w, data_w, 0, sliceTensorLayoutNV(w_full, col, BM, k, BK));
+            if (ALIGNMENT == 1) {
+                coopMatLoadTensorNV(a, data_a, 0, sliceTensorLayoutNV(a_full, row, BN, k, BK), transpose);
+            } else {
+                coopMatLoadTensorNV(a, data_a, 0, sliceTensorLayoutNV(a_layout, row, BN, k, BK), transpose);
+            }
+            sum = coopMatMulAdd(w, a, sum);
+            if (SWIGLU) {
+#ifdef SPLIT_SWIGLU
+                coopMatLoadTensorNV(w, data_uw, 0, sliceTensorLayoutNV(w_full, col, BM, k, BK));
+#else
+                coopMatLoadTensorNV(w, data_w, 0, sliceTensorLayoutNV(w_full, col + p.n / 2, BM, k, BK));
+#endif
+                sum_up = coopMatMulAdd(w, a, sum_up);
+            }
+        }
+    } else {
+        for (uint k = 0; k < p.k; k += BK) {
+            coopmat<int8_t, gl_ScopeWorkgroup, BM, BK, gl_MatrixUseA> w;
+            coopmat<int8_t, gl_ScopeWorkgroup, BK, BN, gl_MatrixUseB> a;
+            coopMatLoadTensorNV(w, data_w, 0, sliceTensorLayoutNV(w_layout, col, BM, k, BK));
+            coopMatLoadTensorNV(a, data_a, 0, sliceTensorLayoutNV(a_layout, row, BN, k, BK), transpose);
+            sum = coopMatMulAdd(w, a, sum);
+            if (SWIGLU) {
+#ifdef SPLIT_SWIGLU
+                coopMatLoadTensorNV(w, data_uw, 0, sliceTensorLayoutNV(w_layout, col, BM, k, BK));
+#else
+                coopMatLoadTensorNV(w, data_w, 0, sliceTensorLayoutNV(w_layout, col + p.n / 2, BM, k, BK));
+#endif
+                sum_up = coopMatMulAdd(w, a, sum_up);
+            }
+        }
+    }
+    if (SWIGLU) {
+        coopMatPerElementNV(sum, sum, dequantize_swiglu, sum_up, row, col);
+    } else {
+        coopMatPerElementNV(sum, sum, dequantize, row, col);
+    }
+    // The aligned dispatch contains only complete tiles and a 128-aligned output width.
+    if (ALIGNMENT == 1) {
+        tensorLayoutNV<2> d_full = createTensorLayoutNV(2);
+        d_full = setTensorLayoutDimensionNV(d_full, p.rows, (SWIGLU ? p.n / 2 : p.n) & ~127u);
+        coopMatStoreTensorNV(sum, data_d, 0, sliceTensorLayoutNV(d_full, row, BN, col, BM), transpose);
+    } else {
+        coopMatStoreTensorNV(sum, data_d, 0, sliceTensorLayoutNV(d_layout, row, BN, col, BM), transpose);
+    }
+}

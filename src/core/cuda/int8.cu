@@ -462,8 +462,8 @@ namespace SD_CUDA_NAMESPACE {
                 p->scales = reserve(total, op.input->type == GGML_TYPE_F32 ? size_t(p->rows) * sizeof(float) : 0);
 #ifdef SD_CUDA_I8_CUTLASS
                 size_t gemm_bytes = 0;
-                // Custom GEMM previously used cuBLAS; retain that path when I32 accumulation can overflow.
-                if (op.weight_scale && !op.bias && (nodes[0]->op == GGML_OP_MUL_MAT || p->k <= INT_MAX / 16384) &&
+                // Retain cuBLAS when I32 accumulation can overflow.
+                if (op.weight_scale && !op.bias && p->k <= INT_MAX / 16384 &&
                     aligned(op.weight, 16) && aligned(op.weight_scale, 16) && aligned(dst, 16) &&
                     (op.input->type == GGML_TYPE_F32 || (aligned(op.input, 16) && aligned(op.input_scale, 16))) &&
                     (p->kind != CONCAT || ggml_nbytes(dst->src[0]) % 16 == 0)) {
@@ -723,28 +723,16 @@ namespace SD_CUDA_NAMESPACE {
         desc.execute              = sd_i8_cuda::execute;
         desc.destroy              = sd_i8_cuda::destroy;
         GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
-        desc.name      = "sd.linear_i8." SD_CUDA_NAME ".override.v1";
-        desc.op        = GGML_OP_MUL_MAT;
-        desc.custom_op = nullptr;
-        GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
         desc.name     = "sd.linear_i8.epilogue." SD_CUDA_NAME ".v1";
         desc.priority = 240;
         desc.supports = nullptr;
         desc.match    = sd_i8_cuda::match;
-        GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
-        desc.name      = "sd.linear_i8.epilogue." SD_CUDA_NAME ".custom.v1";
-        desc.op        = GGML_OP_CUSTOM;
-        desc.custom_op = sd_ggml_i8_op();
         GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
         desc.priority  = 100;
         desc.match     = nullptr;
         desc.name      = "sd.quantize_i8_convrot." SD_CUDA_NAME ".v1";
         desc.custom_op = sd_ggml_convrot_op();
         desc.supports  = sd_i8_cuda::convrot_supports;
-        GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
-        desc.name      = "sd.quantize_i8_convrot." SD_CUDA_NAME ".override.v1";
-        desc.op        = GGML_OP_QUANTIZE_I8_CONVROT;
-        desc.custom_op = nullptr;
         GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
     }
 

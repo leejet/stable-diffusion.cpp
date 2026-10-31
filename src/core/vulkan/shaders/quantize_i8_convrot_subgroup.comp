@@ -1,0 +1,117 @@
+#version 450
+
+#extension GL_EXT_shader_8bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_EXT_control_flow_attributes : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(push_constant) uniform parameter { uint k; uint rows; } p;
+layout(binding = 0, std430) readonly buffer A { float data_a[]; };
+layout(binding = 1, std430) writeonly buffer D { int8_t data_d[]; };
+layout(binding = 2, std430) writeonly buffer S { float data_s[]; };
+#if defined(SWIGLU) || defined(SIGMOID_MUL)
+layout(binding = 3, std430) readonly buffer B { float data_b[]; };
+#endif
+shared float maxima[8];
+#ifdef SINGLE_PASS
+#ifdef STATIC_K
+const uint K = STATIC_K;
+#else
+layout(constant_id = 0) const uint K = 4096;
+#endif
+#endif
+
+vec4 rotate(float a, float b, float c, float d) {
+    precise vec4 r = vec4(a + b + c - d, a + b - c + d,
+                         a - b + c + d, -a + b + c + d);
+    return r;
+}
+
+void transform_group(uint row, uint group, out float v[8]) {
+    const uint lane = gl_SubgroupInvocationID;
+    const uint base = row * p.k + group * 256;
+    [[unroll]] for (uint j = 0; j < 8; ++j) {
+        float value = data_a[base + lane + j * 32];
+#ifdef SWIGLU
+        precise float activated = value / (1.0 + exp(-value)) * data_b[base + lane + j * 32];
+        value = activated;
+#endif
+#ifdef SIGMOID_MUL
+        precise float gate = 1.0 / (1.0 + exp(-value));
+        precise float activated = data_b[base + lane + j * 32] * gate;
+        value = activated;
+#endif
+        v[j] = value * (1.0 / 16.0);
+    }
+    [[unroll]] for (uint stride = 1; stride <= 4; stride *= 4) {
+        const uint first = lane & ~(3u * stride);
+        [[unroll]] for (uint j = 0; j < 8; ++j) {
+            vec4 r = rotate(subgroupShuffle(v[j], first), subgroupShuffle(v[j], first + stride),
+                            subgroupShuffle(v[j], first + 2 * stride), subgroupShuffle(v[j], first + 3 * stride));
+            v[j] = r[(lane / stride) & 3u];
+        }
+    }
+    [[unroll]] for (uint j = 0; j < 8; j += 2) {
+        vec4 r = rotate(subgroupShuffle(v[j], lane & 15u), subgroupShuffle(v[j], (lane & 15u) + 16),
+                        subgroupShuffle(v[j + 1], lane & 15u), subgroupShuffle(v[j + 1], (lane & 15u) + 16));
+        v[j] = r[lane / 16];
+        v[j + 1] = r[2 + lane / 16];
+    }
+    [[unroll]] for (uint j = 0; j < 2; ++j) {
+        vec4 r = rotate(v[j], v[j + 2], v[j + 4], v[j + 6]);
+        v[j] = r.x; v[j + 2] = r.y; v[j + 4] = r.z; v[j + 6] = r.w;
+    }
+}
+
+void main() {
+    for (uint row = gl_WorkGroupID.x; row < p.rows; row += gl_NumWorkGroups.x) {
+        float local_max = 0.0;
+#ifdef SINGLE_PASS
+        float values[((K + 2047) / 2048) * 8];
+        [[unroll]] for (uint g = 0; g < (K + 2047) / 2048; ++g) {
+            if (gl_SubgroupID + g * 8 >= K / 256) continue;
+            float v[8]; transform_group(row, gl_SubgroupID + g * 8, v);
+            [[unroll]] for (uint j = 0; j < 8; ++j) {
+                values[g * 8 + j] = v[j];
+                local_max = max(local_max, abs(v[j]));
+            }
+        }
+#else
+        for (uint group = gl_SubgroupID; group < p.k / 256; group += 8) {
+            float v[8]; transform_group(row, group, v);
+            [[unroll]] for (uint j = 0; j < 8; ++j) local_max = max(local_max, abs(v[j]));
+        }
+#endif
+        local_max = subgroupMax(local_max);
+        if (gl_SubgroupInvocationID == 0) maxima[gl_SubgroupID] = local_max;
+        barrier();
+        if (gl_LocalInvocationID.x == 0) {
+            float row_max = 0.0;
+            for (uint j = 0; j < 8; ++j) row_max = max(row_max, maxima[j]);
+            maxima[0] = row_max;
+            data_s[row] = row_max / 127.0;
+        }
+        barrier();
+        const float row_scale = maxima[0] / 127.0;
+        const float inv_scale = row_scale == 0.0 ? 0.0 : 1.0 / row_scale;
+#ifdef SINGLE_PASS
+        [[unroll]] for (uint g = 0; g < (K + 2047) / 2048; ++g) {
+            if (gl_SubgroupID + g * 8 >= K / 256) continue;
+            [[unroll]] for (uint j = 0; j < 8; ++j) {
+                data_d[row * p.k + (gl_SubgroupID + g * 8) * 256 + gl_SubgroupInvocationID + j * 32] = int8_t(clamp(int(roundEven(values[g * 8 + j] * inv_scale)), -127, 127));
+            }
+        }
+#else
+        for (uint group = gl_SubgroupID; group < p.k / 256; group += 8) {
+            float v[8]; transform_group(row, group, v);
+            [[unroll]] for (uint j = 0; j < 8; ++j) {
+                data_d[row * p.k + group * 256 + gl_SubgroupInvocationID + j * 32] = int8_t(clamp(int(roundEven(v[j] * inv_scale)), -127, 127));
+            }
+        }
+#endif
+        barrier();
+    }
+}

@@ -161,14 +161,7 @@ bool sd_ggml_i8_describe(const ggml_tensor* node, SDI8Operation* op) {
     if (!node || node->type != GGML_TYPE_F32 || !ggml_is_contiguous(node))
         return false;
     *op = {node->src[0], node->src[1], nullptr, nullptr, nullptr, 0, false};
-    if (node->op == GGML_OP_MUL_MAT) {
-        op->weight_scale = node->src[2];
-        op->bias         = node->src[3];
-        op->group_size   = node->op_params[2];
-        op->packed       = node->op_params[4] > 0;
-        if (op->packed)
-            op->group_size = node->op_params[4];
-    } else if (ggml_ext_op_get(node) == sd_ggml_i8_op()) {
+    if (ggml_ext_op_get(node) == sd_ggml_i8_op()) {
         I8Attributes attr;
         std::memcpy(&attr, ggml_ext_op_attributes(node), sizeof(attr));
         if (attr.flags & ~15 || std::memcmp(attr.shape, node->ne + 1, sizeof(attr.shape)))
@@ -191,16 +184,23 @@ bool sd_ggml_i8_describe(const ggml_tensor* node, SDI8Operation* op) {
 bool sd_ggml_convrot_describe(const ggml_tensor* node, int* group) {
     if (!node || !node->src[0] || !ggml_is_contiguous(node))
         return false;
-    if (node->op == GGML_OP_QUANTIZE_I8_CONVROT)
-        *group = node->op_params[0];
-    else if (ggml_ext_op_get(node) == sd_ggml_convrot_op())
+    if (ggml_ext_op_get(node) == sd_ggml_convrot_op())
         std::memcpy(group, ggml_ext_op_attributes(node), sizeof(int32_t));
     else
         return false;
     ggml_ext_tensor_desc output;
     return convrot_infer(node->src, 1, group, &output) && output.type == node->type && !std::memcmp(output.ne, node->ne, sizeof(output.ne));
 }
-static ggml_tensor* i8_create(ggml_context* ctx, ggml_tensor* w, ggml_tensor* x, ggml_tensor* xs, ggml_tensor* ws, ggml_tensor* bias, int group, const ggml_tensor* logical) {
+ggml_tensor* ggml_mul_mat_i8_tensorwise(ggml_context* ctx, ggml_tensor* w, ggml_tensor* x, ggml_tensor* ws, ggml_tensor* bias, int group, ggml_tensor* xs) {
+    if (!w || !x)
+        return nullptr;
+    const auto* logical = x;
+    if (x->type == GGML_TYPE_I8 && !xs) {
+        int packed_group;
+        if (!sd_ggml_convrot_describe(x, &packed_group) || packed_group != group)
+            return nullptr;
+        logical = x->src[0];
+    }
     I8Attributes attr      = {{logical->ne[1], logical->ne[2], logical->ne[3]}, group, logical != x ? I8_PACKED : 0};
     ggml_tensor* inputs[5] = {w, x};
     int count              = 2;
@@ -218,24 +218,7 @@ static ggml_tensor* i8_create(ggml_context* ctx, ggml_tensor* w, ggml_tensor* x,
     }
     return ggml_ext_op_create(ctx, sd_ggml_i8_op(), inputs, count, &attr);
 }
-ggml_tensor* sd_ggml_mul_mat_i8(ggml_context* ctx, ggml_tensor* w, ggml_tensor* x, ggml_tensor* xs, ggml_tensor* ws, ggml_tensor* bias) {
-    if (!w || !x || !xs || x->type != GGML_TYPE_I8)
-        return nullptr;
-    return i8_create(ctx, w, x, xs, ws, bias, 0, x);
-}
-ggml_tensor* sd_ggml_linear_i8(ggml_context* ctx, ggml_tensor* w, ggml_tensor* x, ggml_tensor* ws, ggml_tensor* bias, int group) {
-    if (!w || !x)
-        return nullptr;
-    const auto* logical = x;
-    if (x->type == GGML_TYPE_I8) {
-        int packed_group;
-        if (!sd_ggml_convrot_describe(x, &packed_group) || packed_group != group)
-            return nullptr;
-        logical = x->src[0];
-    }
-    return i8_create(ctx, w, x, nullptr, ws, bias, group, logical);
-}
-ggml_tensor* sd_ggml_quantize_i8_convrot(ggml_context* ctx, ggml_tensor* x, int group) {
+ggml_tensor* ggml_quantize_i8_convrot(ggml_context* ctx, ggml_tensor* x, int group) {
     int32_t attr = group;
     return ggml_ext_op_create(ctx, sd_ggml_convrot_op(), &x, 1, &attr);
 }

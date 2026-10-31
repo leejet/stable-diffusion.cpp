@@ -190,22 +190,27 @@ and matchers now live in sd.cpp. `GGML_CUDA_FORCE_CUBLAS` disables these epilogu
 
 `src/core/ggml_extensions.cpp` defines `sd.linear_i8.v1` and
 `sd.quantize_i8_convrot.v1`. `src/core/cpu/int8.cpp` supplies their CPU
-implementations and overrides of the old builtins. The CPU kernels use the
+implementations. The CPU kernels use the
 configured thread pool and scheduler workspace; the old CPU INT8 GEMM and ConvRot
 implementations have been removed from ggml.
-Custom nodes execute on CPU or CUDA when supported. Model code retains builtin
-nodes while the existing CUDA and Vulkan fusion rules are being migrated.
+Model code keeps calling `ggml_ext_linear_i8_tensorwise`,
+`ggml_mul_mat_i8_tensorwise`, and `ggml_quantize_i8_convrot`. The latter two
+constructors are declared and implemented in sd.cpp and create custom nodes.
+Their former ggml declarations, implementations, ConvRot opcode, and native
+backend paths have been removed. CPU, CUDA/HIP/MUSA, and Vulkan register kernels
+and fusion rules through the extension interfaces.
 
-For already quantized activations, `sd_ggml_mul_mat_i8` accepts ordinary I8 weight
-and activation tensors, a separate F32 activation scale tensor with one value per
-row, optional F32 weight scales with one value per output channel, and optional
-bias. It computes `float(int32_dot(W, X)) * X_scale * W_scale + bias`, in that
+For already quantized activations, `ggml_mul_mat_i8_tensorwise` accepts ordinary
+I8 weight and activation tensors. Its optional final `input_scale` parameter is a
+separate F32 tensor with one value per activation row. Weight scales have one
+value per output channel; weight scales and bias can be null. Existing calls
+omit `input_scale` and retain their original argument order. It computes `float(int32_dot(W, X)) * X_scale * W_scale + bias`, in that
 order. All scales are explicit graph dependencies; there is no quantized-tensor
 wrapper. Shapes use ggml's low-to-high dimension order. Call
 `sd_ggml_register_extensions` before scheduling these custom nodes.
 
-`sd_ggml_linear_i8` also accepts F32 activations (quantized into temporary
-workspace) or the output of `sd_ggml_quantize_i8_convrot`. ConvRot keeps the existing
+`ggml_mul_mat_i8_tensorwise` also accepts F32 activations (quantized into temporary
+workspace) or the output of `ggml_quantize_i8_convrot`. ConvRot keeps the existing
 packed I8 activation rows, padded to a multiple of four rows, followed by F32 row
 scales. Weight scales remain separate. CPU ConvRot groups are 1, 4, 16, 64, or 256.
 Unsupported layouts and malformed scale shapes are rejected. Separate CPU quantize
@@ -217,7 +222,6 @@ ConvRot, and rescaling kernels. F32 inputs are quantized into workspace; ordinar
 I8 inputs retain separate scale tensors and use a padded temporary only when
 needed by cuBLAS. Packed ConvRot inputs are consumed directly. Large ConvRot rows
 use multiple kernels when they exceed shared memory. Aliasing outputs use scratch.
-The registrations also intercept builtin INT8 GEMM and standalone ConvRot nodes.
 CUDA GEMM requires Turing or newer, contiguous tensors, K/N divisible by four,
 float-aligned inputs, and row counts that fit a padded signed 32-bit dimension;
 CUDA ConvRot uses groups of 256.
@@ -227,7 +231,7 @@ When CUTLASS is configured, `src/core/cuda/i8_gemm.cu` supplies dense and SwiGLU
 INT8 GEMM kernels on Ampere or newer. It preserves the native tile selection,
 small-row policy, Stream-K scheduling, Ada column bands, and separate scaling
 order. The same extension matches `GEMM -> SwiGLU [-> ConvRot]` and row
-concatenation for builtin and custom GEMM nodes. Weight scales remain explicit
+concatenation for custom GEMM nodes. Weight scales remain explicit
 inputs, including the gate/up scale permutation recorded on every SwiGLU launch.
 Plans reserve bounded Stream-K workspace, cache occupancy on first execution,
 and initialize barriers on every launch, so CUDA Graph replay observes updated
@@ -248,7 +252,7 @@ implementations remain CUDA-specific.
 
 `src/core/cuda/i8_gated_residual.cu` implements
 `INT8 GEMM -> [Scale] -> Mul(gate) -> Add(residual) -> [Concat]` as a registered
-CUDA fusion, for both builtin GEMM and custom I8 nodes with separate activation
+CUDA fusion, for packed ConvRot inputs and ordinary I8 nodes with separate activation
 scales. The corresponding native CUDA fusion rules and CUTLASS residual epilogue
 have been removed from ggml. Its optimizer moves independent gate producers ahead
 of GEMM and optional scaling through `ggml_ext_graph_delay`, before fusion matching.
@@ -267,7 +271,7 @@ disable settings are honored.
 `src/core/cuda/convrot.cu` registers CUDA fusion for `Scale -> ConvRot`,
 `Norm -> Mul -> ConvRot`, `RMSNorm -> Mul(weight) -> Mul(modulation) -> Add ->
 Add(shift) -> ConvRot`, `SwiGLU -> ConvRot`, and `SiLU/Sigmoid -> Mul -> ConvRot`.
-Both builtin and custom ConvRot outputs are accepted. SwiGLU accepts packed,
+ConvRot outputs are custom nodes. SwiGLU accepts packed,
 swapped, or separate gate/up inputs. Independent modulation and up-branch
 producers are moved ahead of their consumers through the safe graph-delay API.
 Reordering keeps an owning producer together with in-place consumers, such as
@@ -399,3 +403,12 @@ Remaining model-specific CUDA paths and Vulkan INT8/ConvRot implementations stil
 need auditing or migration.
 This implementation does not yet externalize all model-specific kernels or add
 dynamic dtypes.
+
+`src/core/vulkan/int8.cpp` owns Vulkan INT8 GEMM, ConvRot, and their fusion rules.
+The Vulkan compute metadata service exposes shared-memory limits, subgroup
+arithmetic, and cooperative-matrix properties; shape selection stays in sd.cpp.
+Shader variants preserve the former tiling and compilation policy, including
+SwiGLU, residual, row-concatenation, and modulation paths. Kernels use public
+Vulkan dispatch, buffer, copy, and workspace services without private backend
+headers. Vulkan currently handles packed group-256 activations with separate
+weight scales; unsupported custom nodes fall back to CPU.

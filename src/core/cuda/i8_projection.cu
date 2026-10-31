@@ -1,5 +1,6 @@
 #include "core/cuda/i8_projection.h"
 #include "core/cuda/rope.h"
+#include "core/ggml_extensions.h"
 
 #include <cuda_fp16.h>
 #include <cutlass/gemm/device/gemm_universal_adapter.h>
@@ -188,10 +189,13 @@ static bool aligned(const ggml_tensor* tensor) {
 }
 
 static bool projection_supports(ggml_backend_dev_t device, const ggml_tensor* mat, const ggml_tensor* view) {
-    const auto* w  = mat->src[0];
-    const auto* x  = mat->src[1];
-    const auto* ws = mat->src[2];
-    if (mat->op != GGML_OP_MUL_MAT || mat->type != GGML_TYPE_F32 || mat->op_params[4] <= 0 || !w || !x || !ws || mat->src[3] ||
+    SDI8Operation op;
+    if (!sd_ggml_i8_describe(mat, &op) || !op.packed || !op.weight_scale || op.bias)
+        return false;
+    const auto* w  = op.weight;
+    const auto* x  = op.input;
+    const auto* ws = op.weight_scale;
+    if (mat->type != GGML_TYPE_F32 ||
         w->type != GGML_TYPE_I8 || x->type != GGML_TYPE_I8 || ws->type != GGML_TYPE_F32 ||
         w->ne[2] != 1 || w->ne[3] != 1 || mat->ne[0] != w->ne[1] || ggml_nelements(ws) != mat->ne[0] ||
         !ggml_is_contiguous(mat) || !ggml_is_contiguous(w) || !ggml_is_contiguous(x) || !ggml_is_contiguous(ws) ||
@@ -379,7 +383,8 @@ void sd_ggml_register_cuda_i8_projection(ggml_backend_dev_t device) {
     ggml_ext_kernel_desc desc = {};
     desc.abi_version          = GGML_EXT_ABI_VERSION;
     desc.name                 = "sd.i8_projection.cuda.v1";
-    desc.op                   = GGML_OP_MUL_MAT;
+    desc.op                   = GGML_OP_CUSTOM;
+    desc.custom_op            = sd_ggml_i8_op();
     desc.priority             = 350;
     desc.match                = projection_match;
     desc.prepare              = projection_prepare;
