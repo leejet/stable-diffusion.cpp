@@ -2,7 +2,6 @@
 
 #ifndef SD_USE_UPSTREAM_GGML
 #include "core/cpu/registration.h"
-#include "ggml-cpu.h"
 #include "ggml-ext.h"
 
 #include <algorithm>
@@ -335,7 +334,8 @@ void sd_ggml_register_extensions(ggml_backend_t backend) {
         return;
     }
     auto device    = ggml_backend_get_device(backend);
-    const bool cpu = ggml_backend_is_cpu(backend);
+    auto reg       = ggml_backend_dev_backend_reg(device);
+    const bool cpu = ggml_backend_reg_get_proc_address(reg, "ggml_ext_cpu_parallel_v1") != nullptr;
     static std::mutex mutex;
     static std::unordered_set<ggml_backend_dev_t> registered;
     std::lock_guard<std::mutex> lock(mutex);

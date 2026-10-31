@@ -1,4 +1,4 @@
-#include "backend.h"
+#include "runtime.h"
 
 #ifdef SD_CUDA_CUTE_ATTENTION
 void sd_ggml_register_cuda_i8_gated_residual(ggml_backend_dev_t device);

@@ -1,8 +1,8 @@
 #include <climits>
 #include <cstdlib>
 #include <cstring>
-#include "backend.h"
 #include "ggml-ext.h"
+#include "runtime.h"
 
 namespace SD_CUDA_NAMESPACE {
     namespace sd_affine_cuda {
@@ -129,7 +129,7 @@ namespace SD_CUDA_NAMESPACE {
             ggml_ext_gpu_context context;
             if (!cuda_context(execution->backend, &context))
                 return GGML_STATUS_FAILED;
-            auto stream          = static_cast<cudaStream_t>(context.stream);
+            auto stream          = static_cast<CUDAStream>(context.stream);
             const auto* node     = nodes[0];
             const auto* a        = node->src[0];
             const auto* b        = node->op == GGML_OP_CONT ? nullptr : node->src[1];
@@ -154,10 +154,10 @@ namespace SD_CUDA_NAMESPACE {
                 scale_permute<<<blocks, 256, 0, stream>>>(static_cast<const float*>(a->data), static_cast<half2*>(output),
                                                           a->ne[0], a->ne[2], a->ne[1], ggml_nelements(dst), a->nb[1] / 4, a->nb[2] / 4, a->nb[3] / 4, param(nodes[1], 0));
             }
-            auto error = cudaGetLastError();
-            if (error == cudaSuccess && alias)
-                error = cudaMemcpyAsync(dst->data, output, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, stream);
-            return error == cudaSuccess ? GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
+            auto error = cuda_last_error();
+            if (error == cuda_success && alias)
+                error = cuda_copy_async(dst->data, output, ggml_nbytes(dst), stream);
+            return error == cuda_success ? GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
         }
     }
 

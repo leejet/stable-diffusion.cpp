@@ -7,17 +7,26 @@
 struct SDI8CudaGemmPlan;
 #endif
 
+#include "runtime.h"
+#if defined(SD_CUDA_VENDOR_HIP)
+#include <hipblas/hipblas.h>
+#elif !defined(SD_CUDA_VENDOR_MUSA)
+#include <cublas_v2.h>
+#endif
 #include <algorithm>
 #include <climits>
 #include <mutex>
 #include <unordered_map>
-#include "backend.h"
 
 namespace SD_CUDA_NAMESPACE {
     namespace sd_i8_cuda {
-        using sd_convrot::convrot_h4_cuda;
-        using sd_convrot::warp_reduce_max;
-
+        template <int Width = 32>
+        static __device__ __forceinline__ float warp_reduce_max(float value) {
+#pragma unroll
+            for (int offset = Width / 2; offset > 0; offset >>= 1)
+                value = fmaxf(value, cuda_shuffle_xor(value, offset, Width));
+            return value;
+        }
         static __global__ void quantize_rowwise_i8_cuda(const float* src, int8_t* dst, float* scales, int64_t k, int64_t rows) {
             const int64_t row = blockIdx.x;
             const int tid     = threadIdx.x;
@@ -60,6 +69,13 @@ namespace SD_CUDA_NAMESPACE {
                 dst_row[i] = (int8_t)value;
             }
         }
+        static __device__ __forceinline__ float convrot_h4_cuda(float a, float b, float c, float d, int index) {
+            a = index == 3 ? -a : a;
+            b = index == 2 ? -b : b;
+            c = index == 1 ? -c : c;
+            d = index == 0 ? -d : d;
+            return __fadd_rn(__fadd_rn(__fadd_rn(a, b), c), d);
+        }
         static __global__ void quantize_convrot(const float* src, int8_t* dst, float* scales, int64_t k, int64_t rows, int64_t dst_stride) {
             constexpr int group_size = 256;
             const int64_t row        = blockIdx.x;
@@ -86,19 +102,19 @@ namespace SD_CUDA_NAMESPACE {
                         const int base = lane & ~(3 * stride);
 #pragma unroll
                         for (int j = 0; j < 8; ++j) {
-                            const float a = __shfl_sync(0xffffffff, v[j], base, 32);
-                            const float b = __shfl_sync(0xffffffff, v[j], base + stride, 32);
-                            const float c = __shfl_sync(0xffffffff, v[j], base + 2 * stride, 32);
-                            const float d = __shfl_sync(0xffffffff, v[j], base + 3 * stride, 32);
+                            const float a = cuda_shuffle(v[j], base, 32);
+                            const float b = cuda_shuffle(v[j], base + stride, 32);
+                            const float c = cuda_shuffle(v[j], base + 2 * stride, 32);
+                            const float d = cuda_shuffle(v[j], base + 3 * stride, 32);
                             v[j]          = convrot_h4_cuda(a, b, c, d, (lane / stride) % 4);
                         }
                     }
 #pragma unroll
                     for (int j = 0; j < 8; j += 2) {
-                        const float a = __shfl_sync(0xffffffff, v[j], lane % 16, 32);
-                        const float b = __shfl_sync(0xffffffff, v[j], lane % 16 + 16, 32);
-                        const float c = __shfl_sync(0xffffffff, v[j + 1], lane % 16, 32);
-                        const float d = __shfl_sync(0xffffffff, v[j + 1], lane % 16 + 16, 32);
+                        const float a = cuda_shuffle(v[j], lane % 16, 32);
+                        const float b = cuda_shuffle(v[j], lane % 16 + 16, 32);
+                        const float c = cuda_shuffle(v[j + 1], lane % 16, 32);
+                        const float d = cuda_shuffle(v[j + 1], lane % 16 + 16, 32);
                         v[j]          = convrot_h4_cuda(a, b, c, d, lane / 16);
                         v[j + 1]      = convrot_h4_cuda(a, b, c, d, 2 + lane / 16);
                     }
@@ -483,10 +499,10 @@ namespace SD_CUDA_NAMESPACE {
             const auto x = reinterpret_cast<uintptr_t>(a->data), y = reinterpret_cast<uintptr_t>(b->data);
             return x <= y ? y - x < ggml_nbytes(a) : x - y < ggml_nbytes(b);
         }
-        static cudaError_t convrot_launch(const Plan& p, cudaStream_t stream, const float* src, int8_t* dst, float* scales, float* partial) {
+        static CUDAError convrot_launch(const Plan& p, CUDAStream stream, const float* src, int8_t* dst, float* scales, float* partial) {
             if (p.padded > p.rows) {
-                auto error = cudaMemsetAsync(dst + p.k * p.rows, 0, size_t(p.k) * (p.padded - p.rows), stream);
-                if (error != cudaSuccess)
+                auto error = cuda_memset_async(dst + p.k * p.rows, 0, size_t(p.k) * (p.padded - p.rows), stream);
+                if (error != cuda_success)
                     return error;
             }
             const size_t shared = size_t(p.k) * sizeof(float);
@@ -496,11 +512,9 @@ namespace SD_CUDA_NAMESPACE {
                 {
                     std::lock_guard<std::mutex> lock(mutex);
                     if (!configured[p.device.device]) {
-#if !defined(SD_CUDA_VENDOR_HIP)
-                        auto error = cudaFuncSetAttribute(quantize_convrot, cudaFuncAttributeMaxDynamicSharedMemorySize, int(p.device.shared_memory - 128));
-                        if (error != cudaSuccess)
+                        auto error = cuda_set_shared_memory(quantize_convrot, int(p.device.shared_memory - 128));
+                        if (error != cuda_success)
                             return error;
-#endif
                         configured[p.device.device] = true;
                     }
                 }
@@ -513,7 +527,7 @@ namespace SD_CUDA_NAMESPACE {
                 reduce_convrot_row_amax_i8_cuda<<<unsigned(p.rows), 256, 0, stream>>>(partial, scales, groups, p.rows);
                 convrot_group_quantize_i8_cuda<<<unsigned(total_groups), 64, 0, stream>>>(src, dst, scales, p.k, groups, total_groups, p.k);
             }
-            return cudaGetLastError();
+            return cuda_last_error();
         }
         template <bool Dequantize>
         static __global__ void swiglu(const float* src, const float* xs, const float* ws, float* dst, int64_t n, int64_t rows) {
@@ -535,7 +549,7 @@ namespace SD_CUDA_NAMESPACE {
             dst[i] = __fmul_rn(gate / (1.f + expf(-gate)), up);
         }
         template <bool Swiglu, bool Dequantize, bool Rotated>
-        static cudaError_t quantize_epilogue(const Plan& p, const float* src, const float* xs, const float* ws, int8_t* output, cudaStream_t stream) {
+        static CUDAError quantize_epilogue(const Plan& p, const float* src, const float* xs, const float* ws, int8_t* output, CUDAStream stream) {
             const int64_t hidden = p.n / 2;
             auto kernel          = sd_convrot::quantize<Swiglu, Dequantize, false, false, Rotated>;
             static std::mutex mutex;
@@ -543,17 +557,15 @@ namespace SD_CUDA_NAMESPACE {
             {
                 std::lock_guard<std::mutex> lock(mutex);
                 if (!initialized[p.device.device]) {
-#if !defined(SD_CUDA_VENDOR_HIP)
-                    auto error = cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, int(p.device.shared_memory - 128));
-                    if (error != cudaSuccess)
+                    auto error = cuda_set_shared_memory(kernel, int(p.device.shared_memory - 128));
+                    if (error != cuda_success)
                         return error;
-#endif
                     initialized[p.device.device] = true;
                 }
             }
             if (p.padded > p.rows) {
-                auto error = cudaMemsetAsync(output + hidden * p.rows, 0, size_t(hidden) * (p.padded - p.rows), stream);
-                if (error != cudaSuccess)
+                auto error = cuda_memset_async(output + hidden * p.rows, 0, size_t(hidden) * (p.padded - p.rows), stream);
+                if (error != cuda_success)
                     return error;
             }
             const int threads = Rotated && !Swiglu && !Dequantize ? (hidden <= 1024 ? 128 : hidden <= 8192 ? 256
@@ -562,7 +574,7 @@ namespace SD_CUDA_NAMESPACE {
             kernel<<<unsigned(p.rows), threads, size_t(hidden) * sizeof(float), stream>>>(src, output,
                                                                                           reinterpret_cast<float*>(output + hidden * p.padded), hidden, p.rows, hidden,
                                                                                           Swiglu ? src + hidden : nullptr, Swiglu ? p.n : hidden, Swiglu ? p.n : hidden, xs, ws, nullptr, 0.f, 1.f, 0.f, nullptr, nullptr);
-            return cudaGetLastError();
+            return cuda_last_error();
         }
         static ggml_status execute(const ggml_ext_execution_context* execution, ggml_tensor* const* nodes, int count, void* state, void*) {
             const auto& p = *static_cast<const Plan*>(state);
@@ -570,7 +582,7 @@ namespace SD_CUDA_NAMESPACE {
             ggml_ext_gpu_context context;
             if (!cuda_context(execution->backend, &context) || context.device != p.device.device)
                 return GGML_STATUS_FAILED;
-            auto stream   = static_cast<cudaStream_t>(context.stream);
+            auto stream   = static_cast<CUDAStream>(context.stream);
             auto* scratch = static_cast<char*>(ggml_backend_buffer_get_base(execution->workspace));
             auto* dst     = nodes[count - 1];
             SDI8Operation op;
@@ -588,7 +600,7 @@ namespace SD_CUDA_NAMESPACE {
             if (p.gemm && p.kind == SWIGLU_QUANTIZE)
                 alias = false;
             void* output    = alias ? scratch + p.output : dst->data;
-            cudaError_t error = cudaSuccess;
+            CUDAError error = cuda_success;
             if (!mat) {
                 auto* quant  = static_cast<int8_t*>(output);
                 auto* scales = reinterpret_cast<float*>(quant + p.k * p.padded);
@@ -603,8 +615,8 @@ namespace SD_CUDA_NAMESPACE {
                         error = convrot_launch(p, stream, static_cast<const float*>(op.input->data), quant, temporary_scales, reinterpret_cast<float*>(scratch + p.partial));
                     else {
                         if (p.padded > p.rows)
-                            error = cudaMemsetAsync(quant + p.k * p.rows, 0, size_t(p.k) * (p.padded - p.rows), stream);
-                        if (error == cudaSuccess)
+                            error = cuda_memset_async(quant + p.k * p.rows, 0, size_t(p.k) * (p.padded - p.rows), stream);
+                        if (error == cuda_success)
                             quantize_rowwise_i8_cuda<<<unsigned(p.rows), 256, 0, stream>>>(static_cast<const float*>(op.input->data), quant, temporary_scales, p.k, p.rows);
                     }
                 } else {
@@ -613,12 +625,12 @@ namespace SD_CUDA_NAMESPACE {
                     if (op.packed || p.rows == p.padded)
                         quant = data;
                     else {
-                        error = cudaMemcpyAsync(quant, data, size_t(p.k) * p.rows, cudaMemcpyDeviceToDevice, stream);
-                        if (error == cudaSuccess)
-                            error = cudaMemsetAsync(quant + p.k * p.rows, 0, size_t(p.k) * (p.padded - p.rows), stream);
+                        error = cuda_copy_async(quant, data, size_t(p.k) * p.rows, stream);
+                        if (error == cuda_success)
+                            error = cuda_memset_async(quant + p.k * p.rows, 0, size_t(p.k) * (p.padded - p.rows), stream);
                     }
                 }
-                if (error != cudaSuccess || cudaGetLastError() != cudaSuccess)
+                if (error != cuda_success || cuda_last_error() != cuda_success)
                     return GGML_STATUS_FAILED;
                 const auto* ws          = op.weight_scale ? static_cast<const float*>(op.weight_scale->data) : nullptr;
                 const auto* bias        = op.bias ? static_cast<const float*>(op.bias->data) : nullptr;
@@ -643,11 +655,24 @@ namespace SD_CUDA_NAMESPACE {
                     return GGML_STATUS_FAILED;
 #else
                     const int32_t alpha = 1, beta = 0;
+#if defined(SD_CUDA_VENDOR_HIP)
+#if HIP_VERSION >= 60500000
+                    constexpr auto compute_type = HIPBLAS_COMPUTE_32I;
+#else
+                    constexpr auto compute_type = HIPBLAS_R_32I;
+#endif
+                    const auto status           = hipblasGemmEx(static_cast<hipblasHandle_t>(handle), HIPBLAS_OP_T, HIPBLAS_OP_N,
+                                                                int(p.n), int(p.padded), int(p.k), &alpha,
+                                                                op.weight->data, HIPBLAS_R_8I, int(p.k), quant, HIPBLAS_R_8I, int(p.k),
+                                                                &beta, accum, HIPBLAS_R_32I, int(p.n), compute_type, HIPBLAS_GEMM_DEFAULT);
+                    if (status != HIPBLAS_STATUS_SUCCESS)
+#else
                     const auto status = cublasGemmEx(static_cast<cublasHandle_t>(handle), CUBLAS_OP_T, CUBLAS_OP_N,
                                                      int(p.n), int(p.padded), int(p.k), &alpha,
                                                      op.weight->data, CUDA_R_8I, int(p.k), quant, CUDA_R_8I, int(p.k),
                                                      &beta, accum, CUDA_R_32I, int(p.n), CUBLAS_COMPUTE_32I, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
                     if (status != CUBLAS_STATUS_SUCCESS)
+#endif
                         return GGML_STATUS_FAILED;
 #endif
                 }
@@ -665,7 +690,7 @@ namespace SD_CUDA_NAMESPACE {
                         swiglu<false><<<blocks, 256, 0, stream>>>(values, scales, ws, static_cast<float*>(output), p.n, p.rows);
                     else
                         swiglu<true><<<blocks, 256, 0, stream>>>(values, scales, ws, static_cast<float*>(output), p.n, p.rows);
-                    error = cudaGetLastError();
+                    error = cuda_last_error();
                 } else if (!p.gemm) {
                     const unsigned gy = unsigned(std::min<int64_t>(p.rows, 65535)), gz = unsigned((p.rows + 65534) / 65535);
                     if ((reinterpret_cast<uintptr_t>(ws) | reinterpret_cast<uintptr_t>(bias) | reinterpret_cast<uintptr_t>(gemm_output)) % 16 == 0) {
@@ -674,14 +699,14 @@ namespace SD_CUDA_NAMESPACE {
                     } else {
                         dequantize_i32_rows_cuda<<<dim3(unsigned((p.n + 255) / 256), gy, gz), 256, 0, stream>>>(accum, scales, ws, bias, gemm_output, p.n, p.rows);
                     }
-                    error = cudaGetLastError();
+                    error = cuda_last_error();
                 }
-                if (error == cudaSuccess && prefix)
-                    error = cudaMemcpyAsync(output, dst->src[0]->data, prefix, cudaMemcpyDeviceToDevice, stream);
+                if (error == cuda_success && prefix)
+                    error = cuda_copy_async(output, dst->src[0]->data, prefix, stream);
             }
-            if (error == cudaSuccess && alias)
-                error = cudaMemcpyAsync(dst->data, output, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, stream);
-            return error == cudaSuccess ? GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
+            if (error == cuda_success && alias)
+                error = cuda_copy_async(dst->data, output, ggml_nbytes(dst), stream);
+            return error == cuda_success ? GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
         }
 
     }

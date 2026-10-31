@@ -7,11 +7,71 @@
 #include <cstdlib>
 #include <cstring>
 #include <cutlass/epilogue/threadblock/fusion/visitors.hpp>
-#include "backend.h"
+#include <mutex>
+#include <unordered_map>
 #include "core/ggml_extensions.h"
-#include "i8_gemm.cuh"
 
 namespace sd_i8_gated {
+    struct BandedStreamK : cutlass::gemm::threadblock::ThreadblockSwizzleStreamK {
+        using Base = cutlass::gemm::threadblock::ThreadblockSwizzleStreamK;
+        using Base::Base;
+
+        CUTLASS_DEVICE cutlass::gemm::GemmCoord get_tile_offset(int index) const {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 890
+            const auto shape = tiled_shape();
+            if (problem_size.m() >= 4096 && problem_size.n() >= 16384 && shape.m() >= shape.n()) {
+                // Column bands retain weight tiles in Ada's L2 across successive row tiles.
+                constexpr int band_width = 16;
+                if (index >= shape.m() * shape.n()) {
+                    return {shape.m(), shape.n(), get_batch_idx()};
+                }
+                const int band   = index / (shape.m() * band_width);
+                const int width  = min(band_width, shape.n() - band * band_width);
+                const int within = index - band * shape.m() * band_width;
+                return {within / width, band * band_width + within % width, get_batch_idx()};
+            }
+#endif
+            return Base::get_tile_offset(index);
+        }
+    };
+
+    template <int M, int N, int WM>
+    struct TileConfig {
+        using Tile = cutlass::gemm::GemmShape<M, N, 64>;
+        using Warp = cutlass::gemm::GemmShape<WM, 64, 64>;
+    };
+
+    enum Tile {
+        TILE_128_256,
+        TILE_128_128,
+        TILE_64_128,
+        TILE_16_128,
+    };
+
+    static bool small_rows_enabled(int64_t rows, int64_t n, int64_t k) {
+        static const char* setting = std::getenv("GGML_CUDA_I8_SMALL_ROWS");
+        return setting ? std::atoi(setting) != 0 : rows < 32 && n >= 4096 && k >= 4096;
+    }
+
+    static Tile select_tile(int64_t rows, int64_t n, int nsm) {
+        if (rows < 32) {
+            return TILE_16_128;
+        }
+        const int64_t columns = (n + 127) / 128;
+        if (((rows + 15) / 16) * columns <= nsm) {
+            return TILE_16_128;
+        }
+        if (((rows + 63) / 64) * columns <= nsm) {
+            return TILE_64_128;
+        }
+        const int64_t wide_tiles   = ((rows + 127) / 128) * ((n + 255) / 256);
+        const int64_t square_tiles = ((rows + 127) / 128) * columns;
+        // A narrower tile costs more per output element, but can waste less of the last wave.
+        const double wide_cost   = double((wide_tiles + nsm - 1) / nsm) / wide_tiles;
+        const double square_cost = 1.08 * double((square_tiles + nsm - 1) / nsm) / square_tiles;
+        return wide_cost <= square_cost ? TILE_128_256 : TILE_128_128;
+    }
+
     template <class T>
     struct MulRound {
         CUTLASS_DEVICE T operator()(const T& a, const T& b) const {
@@ -40,7 +100,7 @@ namespace sd_i8_gated {
     struct KernelTypes {
         using Tile         = typename Config::Tile;
         using Warp         = typename Config::Warp;
-        using Swizzle      = std::conditional_t<stream_k, sd_i8_cutlass::BandedStreamK, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>>;
+        using Swizzle      = std::conditional_t<stream_k, BandedStreamK, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>>;
         using Map          = cutlass::epilogue::threadblock::OutputTileThreadLayout<Tile, Warp, float, 4, 1>;
         using Col          = cutlass::epilogue::threadblock::VisitorColBroadcast<Map, float, cute::Stride<cute::_1, cute::_0, int>>;
         using Row          = cutlass::epilogue::threadblock::VisitorRowBroadcast<Map, float, cute::Stride<cute::_0, cute::_1, int>>;
@@ -84,6 +144,35 @@ namespace sd_i8_gated {
         using Gemm = cutlass::gemm::device::GemmUniversalAdapter<Kernel>;
     };
 
+    struct DeviceInfo {
+        int ordinal        = -1;
+        int major          = 0;
+        int sms            = 0;
+        int threads_per_sm = 0;
+        size_t shared      = 0;
+    };
+    static DeviceInfo device_info(ggml_backend_dev_t device) {
+        static std::mutex mutex;
+        static std::unordered_map<ggml_backend_dev_t, DeviceInfo> cache;
+        std::lock_guard<std::mutex> lock(mutex);
+        auto found = cache.find(device);
+        if (found != cache.end())
+            return found->second;
+        DeviceInfo info;
+        auto reg             = ggml_backend_dev_backend_reg(device);
+        auto query           = reinterpret_cast<ggml_ext_cuda_device_fn>(ggml_backend_reg_get_proc_address(reg, "ggml_ext_cuda_device_v1"));
+        int ordinal          = query ? query(device) : -1;
+        cudaDeviceProp props = {};
+        if (ordinal >= 0 && cudaGetDeviceProperties(&props, ordinal) == cudaSuccess)
+            info = {ordinal, props.major, props.multiProcessorCount, props.maxThreadsPerMultiProcessor, size_t(props.sharedMemPerBlockOptin)};
+        cache.emplace(device, info);
+        return info;
+    }
+    static float param_f32(const ggml_tensor* tensor, int index) {
+        float value;
+        std::memcpy(&value, tensor->op_params + index, sizeof(value));
+        return value;
+    }
     static bool aligned(const ggml_tensor* tensor) {
         if (!tensor)
             return false;
@@ -111,7 +200,7 @@ namespace sd_i8_gated {
         op.gate           = mul->src[1];
         op.residual       = add->src[0] == mul ? add->src[1] : add->src[0];
         op.prefix         = concat ? nodes[count - 1]->src[0] : nullptr;
-        op.scale          = nodes[1]->op == GGML_OP_SCALE ? ggml_get_op_params_f32(nodes[1], 0) : 1.f;
+        op.scale          = nodes[1]->op == GGML_OP_SCALE ? param_f32(nodes[1], 0) : 1.f;
         op.rows           = ggml_nrows(nodes[0]);
         op.n              = nodes[0]->ne[0];
         op.k              = op.mat.weight->ne[0];
@@ -136,7 +225,7 @@ namespace sd_i8_gated {
         return {cutlass::gemm::GemmUniversalMode::kGemm, {int(op.rows), int(op.n), int(op.k)}, 1, epilogue, x, w, nullptr, nullptr, op.rows * op.k, op.n * op.k, 0, 0, op.k, op.k, 0, 0};
     }
     struct Plan {
-        ggml_ext_gpu_device_info device;
+        DeviceInfo device;
         size_t kernel_workspace                                                     = 0;
         size_t output_offset                                                        = 0;
         int occupancy                                                               = 0;
@@ -159,7 +248,7 @@ namespace sd_i8_gated {
                 return GGML_STATUS_FAILED;
             plan.occupancy = occupancy;
         }
-        typename Kernel::Params params(args, plan.device.nsm, plan.occupancy);
+        typename Kernel::Params params(args, plan.device.sms, plan.occupancy);
         if (params.get_workspace_size() > plan.kernel_workspace || params.init_workspace(scratch, stream) != cutlass::Status::kSuccess)
             return GGML_STATUS_FAILED;
         cutlass::arch::synclog_setup();
@@ -170,15 +259,15 @@ namespace sd_i8_gated {
     static bool configure(const Operation& op, Plan& plan) {
         using Types  = KernelTypes<Config, Scaled, StreamK>;
         using Kernel = typename Types::Kernel;
-        if (sizeof(typename Kernel::SharedStorage) > plan.device.shared_memory)
+        if (sizeof(typename Kernel::SharedStorage) > plan.device.shared)
             return false;
         auto args = arguments<Types>(op, nullptr, true);
         if (Kernel::can_implement(args) != cutlass::Status::kSuccess)
             return false;
         size_t workspace = 0;
         // Bound every possible occupancy without setting a CUDA device or initializing a kernel during graph measurement.
-        for (int occupancy = 1; occupancy <= plan.device.max_threads_per_sm / Kernel::kThreadCount; ++occupancy) {
-            typename Kernel::Params params(args, plan.device.nsm, occupancy);
+        for (int occupancy = 1; occupancy <= plan.device.threads_per_sm / Kernel::kThreadCount; ++occupancy) {
+            typename Kernel::Params params(args, plan.device.sms, occupancy);
             const auto grid = params.get_grid_dims();
             if (grid.y > 65535 || grid.z > 65535)
                 return false;
@@ -196,23 +285,23 @@ namespace sd_i8_gated {
         return op.rows >= 8192 ? configure<Config, false, true>(op, plan) : configure<Config, false, false>(op, plan);
     }
     static bool configure(const Operation& op, Plan& plan) {
-        auto try_tile = [&](sd_i8_cutlass::Tile tile) {
+        auto try_tile = [&](Tile tile) {
             switch (tile) {
-                case sd_i8_cutlass::TILE_128_256:
-                    return configure<sd_i8_cutlass::TileConfig<128, 256, 64>>(op, plan);
-                case sd_i8_cutlass::TILE_128_128:
-                    return configure<sd_i8_cutlass::TileConfig<128, 128, 64>>(op, plan);
-                case sd_i8_cutlass::TILE_64_128:
-                    return configure<sd_i8_cutlass::TileConfig<64, 128, 32>>(op, plan);
-                case sd_i8_cutlass::TILE_16_128:
-                    return configure<sd_i8_cutlass::TileConfig<16, 128, 16>>(op, plan);
+                case TILE_128_256:
+                    return configure<TileConfig<128, 256, 64>>(op, plan);
+                case TILE_128_128:
+                    return configure<TileConfig<128, 128, 64>>(op, plan);
+                case TILE_64_128:
+                    return configure<TileConfig<64, 128, 32>>(op, plan);
+                case TILE_16_128:
+                    return configure<TileConfig<16, 128, 16>>(op, plan);
             }
             return false;
         };
-        const auto tile = sd_i8_cutlass::select_tile(op.rows, op.n, plan.device.nsm);
+        const auto tile = select_tile(op.rows, op.n, plan.device.sms);
         if (try_tile(tile))
             return true;
-        for (auto fallback : {sd_i8_cutlass::TILE_128_256, sd_i8_cutlass::TILE_128_128, sd_i8_cutlass::TILE_64_128, sd_i8_cutlass::TILE_16_128})
+        for (auto fallback : {TILE_128_256, TILE_128_128, TILE_64_128, TILE_16_128})
             if (fallback != tile && try_tile(fallback))
                 return true;
         return false;
@@ -268,7 +357,7 @@ namespace sd_i8_gated {
         if (!sd_ggml_i8_describe(nodes[0], &mat) || mat.input->type != GGML_TYPE_I8 || !mat.weight_scale || mat.bias)
             return 0;
         const int64_t rows = ggml_nrows(nodes[0]), n = nodes[0]->ne[0], k = mat.weight->ne[0];
-        if (rows < (sd_i8_cutlass::small_rows_enabled(rows, n, k) ? 1 : 128) || rows > INT_MAX || n > INT_MAX || k > INT_MAX || n % 128 || k % 64 ||
+        if (rows < (small_rows_enabled(rows, n, k) ? 1 : 128) || rows > INT_MAX || n > INT_MAX || k > INT_MAX || n % 128 || k % 64 ||
             ((rows + 15) / 16) > INT_MAX / ((n + 127) / 128))
             return 0;
         for (const auto* t : {mat.weight, mat.input, mat.weight_scale, mat.packed ? mat.weight_scale : mat.input_scale})
@@ -276,7 +365,7 @@ namespace sd_i8_gated {
                 return 0;
         const bool scaled = nodes[1]->op == GGML_OP_SCALE;
         int count         = scaled ? 4 : 3;
-        if (available < count || (scaled && (nodes[1]->src[0] != nodes[0] || ggml_get_op_params_f32(nodes[1], 1) != 0.f)))
+        if (available < count || (scaled && (nodes[1]->src[0] != nodes[0] || param_f32(nodes[1], 1) != 0.f)))
             return 0;
         const auto* mul = nodes[count - 2];
         const auto* add = nodes[count - 1];
@@ -302,8 +391,8 @@ namespace sd_i8_gated {
             if (nodes[i] == gate || nodes[i] == residual || nodes[i] == prefix)
                 return 0;
         Plan plan;
-        plan.device = sd_cuda::cuda_device_info(device);
-        if (plan.device.cc < 800 || plan.device.nsm <= 0)
+        plan.device = device_info(device);
+        if (plan.device.major < 8 || plan.device.sms <= 0)
             return 0;
         return configure(describe(nodes, count), plan) ? count : 0;
 #endif
@@ -311,7 +400,7 @@ namespace sd_i8_gated {
     static ggml_status prepare(ggml_backend_t backend, ggml_tensor* const* nodes, int count, void** state, size_t* workspace, void*) {
         auto* plan   = new Plan;
         *state       = plan;
-        plan->device = sd_cuda::cuda_device_info(ggml_backend_get_device(backend));
+        plan->device = device_info(ggml_backend_get_device(backend));
         if (!configure(describe(nodes, count), *plan))
             return GGML_STATUS_FAILED;
         *workspace = plan->output_offset + ggml_nbytes(nodes[count - 1]);
@@ -330,8 +419,10 @@ namespace sd_i8_gated {
         auto& plan    = *static_cast<Plan*>(state);
         const auto op = describe(nodes, count);
         auto* dst     = nodes[count - 1];
-        ggml_ext_gpu_context context;
-        if (!sd_cuda::cuda_context(execution->backend, &context) || context.device != plan.device.device)
+        auto reg      = ggml_backend_dev_backend_reg(ggml_backend_get_device(execution->backend));
+        auto query    = reinterpret_cast<ggml_ext_cuda_context_fn>(ggml_backend_reg_get_proc_address(reg, "ggml_ext_cuda_context_v1"));
+        ggml_ext_cuda_context context;
+        if (!query || !query(execution->backend, &context) || context.device != plan.device.ordinal)
             return GGML_STATUS_FAILED;
         auto stream   = static_cast<cudaStream_t>(context.stream);
         auto* scratch = static_cast<char*>(ggml_backend_buffer_get_base(execution->workspace));

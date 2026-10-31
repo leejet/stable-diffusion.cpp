@@ -1,28 +1,28 @@
 #ifndef __SD_CORE_CUDA_CONVROT_KERNEL_H__
 #define __SD_CORE_CUDA_CONVROT_KERNEL_H__
 #include <cstdint>
-#include "backend.h"
+#include "runtime.h"
 namespace SD_CUDA_NAMESPACE {
     namespace sd_convrot {
         static __device__ __forceinline__ float warp_reduce_sum(float x) {
 #pragma unroll
             for (int offset = 16; offset > 0; offset >>= 1)
-                x += __shfl_xor_sync(0xffffffff, x, offset, 32);
+                x += cuda_shuffle_xor(x, offset, 32);
             return x;
         }
         static __device__ __forceinline__ float2 warp_reduce_sum(float2 x) {
 #pragma unroll
             for (int offset = 16; offset > 0; offset >>= 1) {
-                x.x += __shfl_xor_sync(0xffffffff, x.x, offset, 32);
-                x.y += __shfl_xor_sync(0xffffffff, x.y, offset, 32);
+                x.x += cuda_shuffle_xor(x.x, offset, 32);
+                x.y += cuda_shuffle_xor(x.y, offset, 32);
             }
             return x;
         }
-        template <int Width = 32>
+        template <int Width>
         static __device__ __forceinline__ float warp_reduce_max(float x) {
 #pragma unroll
             for (int offset = Width / 2; offset > 0; offset >>= 1)
-                x = fmaxf(x, __shfl_xor_sync(0xffffffff, x, offset, Width));
+                x = fmaxf(x, cuda_shuffle_xor(x, offset, Width));
             return x;
         }
         static __device__ float2 block_sum(float2 x, float2* shared) {
@@ -130,19 +130,19 @@ namespace SD_CUDA_NAMESPACE {
                         const int base = lane & ~(3 * stride);
 #pragma unroll
                         for (int j = 0; j < 8; ++j) {
-                            const float a = __shfl_sync(0xffffffff, v[j], base, 32);
-                            const float b = __shfl_sync(0xffffffff, v[j], base + stride, 32);
-                            const float c = __shfl_sync(0xffffffff, v[j], base + 2 * stride, 32);
-                            const float d = __shfl_sync(0xffffffff, v[j], base + 3 * stride, 32);
+                            const float a = cuda_shuffle(v[j], base, 32);
+                            const float b = cuda_shuffle(v[j], base + stride, 32);
+                            const float c = cuda_shuffle(v[j], base + 2 * stride, 32);
+                            const float d = cuda_shuffle(v[j], base + 3 * stride, 32);
                             v[j]          = convrot_h4_cuda(a, b, c, d, (lane / stride) % 4);
                         }
                     }
 #pragma unroll
                     for (int j = 0; j < 8; j += 2) {
-                        const float a = __shfl_sync(0xffffffff, v[j], lane % 16, 32);
-                        const float b = __shfl_sync(0xffffffff, v[j], lane % 16 + 16, 32);
-                        const float c = __shfl_sync(0xffffffff, v[j + 1], lane % 16, 32);
-                        const float d = __shfl_sync(0xffffffff, v[j + 1], lane % 16 + 16, 32);
+                        const float a = cuda_shuffle(v[j], lane % 16, 32);
+                        const float b = cuda_shuffle(v[j], lane % 16 + 16, 32);
+                        const float c = cuda_shuffle(v[j + 1], lane % 16, 32);
+                        const float d = cuda_shuffle(v[j + 1], lane % 16 + 16, 32);
                         v[j]          = convrot_h4_cuda(a, b, c, d, lane / 16);
                         v[j + 1]      = convrot_h4_cuda(a, b, c, d, 2 + lane / 16);
                     }

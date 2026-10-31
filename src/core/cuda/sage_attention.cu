@@ -1,5 +1,5 @@
-#include "backend.h"
 #include "core/ggml_extensions.h"
+#include "runtime.h"
 
 #if __CUDACC_VER_MAJOR__ >= 12
 
@@ -353,8 +353,9 @@ namespace sd_cuda {
         if (info.device < 0)
             return;
         int previous;
+        cudaDeviceProp properties;
         cudaFuncAttributes attributes;
-        if (cudaGetDevice(&previous) != cudaSuccess ||
+        if (cudaGetDeviceProperties(&properties, info.device) != cudaSuccess || cudaGetDevice(&previous) != cudaSuccess ||
             cudaSetDevice(info.device) != cudaSuccess)
             return;
         const auto error = cudaFuncGetAttributes(&attributes, sage_output);
@@ -363,7 +364,7 @@ namespace sd_cuda {
         // PTX compiled for an older target retains that target's instruction guards after JIT.
         static std::map<int, SageDevice> devices;
         auto& data                = devices[info.device];
-        data                      = {info.cc / 10, std::min(attributes.binaryVersion, attributes.ptxVersion)};
+        data                      = {properties.major * 10 + properties.minor, std::min(attributes.binaryVersion, attributes.ptxVersion)};
         ggml_ext_kernel_desc desc = {};
         desc.abi_version          = GGML_EXT_ABI_VERSION;
         desc.name                 = "sd.sage_attn.cuda.v1";

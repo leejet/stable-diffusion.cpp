@@ -3,9 +3,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
-#include "backend.h"
 #include "convrot_kernel.h"
 #include "core/ggml_extensions.h"
+#include "runtime.h"
 
 namespace SD_CUDA_NAMESPACE {
     namespace sd_convrot {
@@ -13,6 +13,11 @@ namespace SD_CUDA_NAMESPACE {
         static bool fusion_disabled() {
             static const bool disabled = [] { const char* v = std::getenv("GGML_CUDA_DISABLE_FUSION"); return v && std::atoi(v) != 0; }();
             return disabled;
+        }
+        static float param_f32(const ggml_tensor* tensor, int index) {
+            float value;
+            std::memcpy(&value, tensor->op_params + index, sizeof(value));
+            return value;
         }
         static bool f32(const ggml_tensor* tensor) {
             return tensor && tensor->type == GGML_TYPE_F32 && ggml_is_contiguous(tensor);
@@ -52,12 +57,12 @@ namespace SD_CUDA_NAMESPACE {
             op.up_stride = op.k;
             if (count == 2 && first->op == GGML_OP_SCALE && value == first) {
                 op.kind  = SCALE;
-                op.scale = ggml_get_op_params_f32(first, 0);
-                op.bias  = ggml_get_op_params_f32(first, 1);
+                op.scale = param_f32(first, 0);
+                op.bias  = param_f32(first, 1);
             } else if (count == 3 && first->op == GGML_OP_NORM && nodes[1]->op == GGML_OP_MUL && nodes[1]->src[0] == first && value == nodes[1]) {
                 op.kind       = NORM;
                 op.modulation = nodes[1]->src[1];
-                op.eps        = ggml_get_op_params_f32(first, 0);
+                op.eps        = param_f32(first, 0);
                 if (op.k < 1024 || !vector(op.modulation, op.k))
                     return false;
             } else if (count == 6 && first->op == GGML_OP_RMS_NORM && nodes[1]->op == GGML_OP_MUL && nodes[1]->src[0] == first &&
@@ -68,7 +73,7 @@ namespace SD_CUDA_NAMESPACE {
                 op.weight     = nodes[1]->src[1];
                 op.modulation = nodes[2]->src[1];
                 op.shift      = nodes[4]->src[1];
-                op.eps        = ggml_get_op_params_f32(first, 0);
+                op.eps        = param_f32(first, 0);
                 if (op.k < 1024 || !vector(op.weight, op.k) || !vector(op.modulation, op.k) || !vector(op.shift, op.k))
                     return false;
             } else if (count == 2 && first->op == GGML_OP_GLU && ggml_get_glu_op(first) == GGML_GLU_OP_SWIGLU && value == first) {
@@ -206,16 +211,15 @@ namespace SD_CUDA_NAMESPACE {
             return x <= y ? y - x < ggml_nbytes(a) : x - y < ggml_nbytes(b);
         }
         template <bool Swiglu = false, bool Normalize = false, bool Scaled = false, bool Sigmoid = false, bool RMS = false>
-        static cudaError_t launch(Plan& p, const Operation& op, int8_t* output, cudaStream_t stream) {
+        static CUDAError launch(Plan& p, const Operation& op, int8_t* output, CUDAStream stream) {
             constexpr bool warp = Scaled || RMS;
             constexpr int extra = Normalize ? 384 : RMS ? 256
                                                         : 128;
             if (!p.configured) {
-#if !defined(SD_CUDA_VENDOR_HIP)
-                auto status = cudaFuncSetAttribute(quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS>, cudaFuncAttributeMaxDynamicSharedMemorySize, int(p.device.shared_memory - extra));
-                if (status != cudaSuccess)
+                auto status = cuda_set_shared_memory(quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS>,
+                                                     int(p.device.shared_memory - extra));
+                if (status != cuda_success)
                     return status;
-#endif
                 p.configured = true;
             }
             const int threads    = Normalize ? 1024 : RMS                               ? (op.k <= 1024 ? 128 : op.k <= 6144 ? 256
@@ -228,7 +232,7 @@ namespace SD_CUDA_NAMESPACE {
             quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS><<<unsigned(op.rows), threads, size_t(op.k) * sizeof(float), stream>>>(
                 data(op.input) + op.gate_offset, output, reinterpret_cast<float*>(output + op.k * padded), op.k, op.rows, op.k,
                 op.up ? data(op.up) + op.up_offset : nullptr, op.stride, op.up_stride, nullptr, nullptr, data(op.modulation), op.eps, op.scale, op.bias, data(op.weight), data(op.shift));
-            return cudaGetLastError();
+            return cuda_last_error();
         }
         static ggml_status execute(const ggml_ext_execution_context* execution, ggml_tensor* const* nodes, int count, void* state, void*) {
             auto& plan     = *static_cast<Plan*>(state);
@@ -237,15 +241,15 @@ namespace SD_CUDA_NAMESPACE {
             ggml_ext_gpu_context context;
             if (!cuda_context(execution->backend, &context) || context.device != plan.device.device)
                 return GGML_STATUS_FAILED;
-            auto stream = static_cast<cudaStream_t>(context.stream);
+            auto stream = static_cast<CUDAStream>(context.stream);
             bool alias  = false;
             for (const auto* input : {op.input, op.up, op.modulation, op.weight, op.shift})
                 alias |= overlaps(dst, input);
             auto* output         = static_cast<int8_t*>(alias ? ggml_backend_buffer_get_base(execution->workspace) : dst->data);
             const int64_t padded = (op.rows + 3) / 4 * 4;
-            if (padded > op.rows && cudaMemsetAsync(output + op.k * op.rows, 0, size_t(op.k) * (padded - op.rows), stream) != cudaSuccess)
+            if (padded > op.rows && cuda_memset_async(output + op.k * op.rows, 0, size_t(op.k) * (padded - op.rows), stream) != cuda_success)
                 return GGML_STATUS_FAILED;
-            cudaError_t error;
+            CUDAError error;
             switch (op.kind) {
                 case SCALE:
                     error = launch<false, false, true>(plan, op, output, stream);
@@ -266,7 +270,7 @@ namespace SD_CUDA_NAMESPACE {
                 default:
                     return GGML_STATUS_FAILED;
             }
-            if (error != cudaSuccess || (alias && cudaMemcpyAsync(dst->data, output, size_t(op.k) * padded + op.rows * sizeof(float), cudaMemcpyDeviceToDevice, stream) != cudaSuccess))
+            if (error != cuda_success || (alias && cuda_copy_async(dst->data, output, size_t(op.k) * padded + op.rows * sizeof(float), stream) != cuda_success))
                 return GGML_STATUS_FAILED;
             return GGML_STATUS_SUCCESS;
         }

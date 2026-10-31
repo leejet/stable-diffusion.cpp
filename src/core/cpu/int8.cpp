@@ -101,18 +101,24 @@ namespace sd_cpu {
         return GGML_STATUS_SUCCESS;
     }
     static void destroy(void*, void*) {}
+    static ggml_ext_cpu_parallel_fn parallel(ggml_backend_t backend) {
+        return reinterpret_cast<ggml_ext_cpu_parallel_fn>(ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)), "ggml_ext_cpu_parallel_v1"));
+    }
     static ggml_status i8_execute(const ggml_ext_execution_context* context, ggml_tensor* const* nodes, int, void*, void*) {
         auto* dst     = nodes[0];
         I8Execution e = {};
         if (!sd_ggml_i8_describe(dst, &e.op))
             return GGML_STATUS_FAILED;
         e.rows   = ggml_nrows(dst);
+        auto run = parallel(context->backend);
+        if (!run)
+            return GGML_STATUS_FAILED;
         char* scratch           = static_cast<char*>(ggml_backend_buffer_get_base(context->workspace));
         const size_t quant_size = quant_workspace(dst, e.op);
         if (e.op.input->type == GGML_TYPE_F32) {
             e.quant     = reinterpret_cast<int8_t*>(scratch);
             e.scales    = reinterpret_cast<float*>(scratch + (size_t(ggml_nelements(e.op.input)) + 3) / 4 * 4);
-            auto status = parallel(context->backend, dst, quantize, &e);
+            auto status = run(context->backend, dst, quantize, &e);
             if (status != GGML_STATUS_SUCCESS)
                 return status;
         } else {
@@ -123,7 +129,7 @@ namespace sd_cpu {
         for (auto* input : dst->src)
             alias |= overlaps(dst, input);
         e.output    = alias ? reinterpret_cast<float*>(scratch + quant_size) : static_cast<float*>(dst->data);
-        auto status = parallel(context->backend, dst, multiply, &e);
+        auto status = run(context->backend, dst, multiply, &e);
         if (status == GGML_STATUS_SUCCESS && alias)
             std::memcpy(dst->data, e.output, ggml_nbytes(dst));
         return status;
@@ -133,13 +139,16 @@ namespace sd_cpu {
         I8Execution e = {};
         if (!sd_ggml_convrot_describe(dst, &e.op.group_size))
             return GGML_STATUS_FAILED;
+        auto run = parallel(context->backend);
+        if (!run)
+            return GGML_STATUS_FAILED;
         e.op.input      = dst->src[0];
         e.rows          = ggml_nrows(e.op.input);
         bool alias      = overlaps(dst, e.op.input);
         e.quant         = static_cast<int8_t*>(alias ? ggml_backend_buffer_get_base(context->workspace) : dst->data);
         const int64_t k = dst->ne[0], padded = (e.rows + 3) / 4 * 4;
         e.scales    = reinterpret_cast<float*>(e.quant + k * padded);
-        auto status = parallel(context->backend, dst, quantize, &e);
+        auto status = run(context->backend, dst, quantize, &e);
         if (status == GGML_STATUS_SUCCESS) {
             std::memset(e.quant + k * e.rows, 0, k * (padded - e.rows));
             if (alias)

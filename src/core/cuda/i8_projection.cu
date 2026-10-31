@@ -1,4 +1,3 @@
-#include "backend.h"
 #include "core/cuda/i8_projection.h"
 #include "core/cuda/rope.h"
 #include "core/ggml_extensions.h"
@@ -11,7 +10,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <cutlass/epilogue/threadblock/fusion/visitors.hpp>
+#include <mutex>
 #include <type_traits>
+#include <unordered_map>
 
 static __device__ __forceinline__ float warp_sum8(float value) {
 #pragma unroll
@@ -149,16 +150,32 @@ struct ProjectionKernel {
     using Gemm = cutlass::gemm::device::GemmUniversalAdapter<Kernel>;
 };
 
+static float param_f32(const ggml_tensor* tensor, int index) {
+    float result;
+    std::memcpy(&result, tensor->op_params + index, sizeof(result));
+    return result;
+}
 
 static bool device_supports(ggml_backend_dev_t device) {
 #ifdef SD_CUDA_FORCE_CUBLAS
     (void)device;
     return false;
 #else
-    const auto info      = sd_cuda::cuda_device_info(device);
+    static std::mutex mutex;
+    static std::unordered_map<ggml_backend_dev_t, bool> cache;
+    std::lock_guard<std::mutex> lock(mutex);
+    auto found = cache.find(device);
+    if (found != cache.end())
+        return found->second;
+    auto reg             = ggml_backend_dev_backend_reg(device);
+    auto query           = reinterpret_cast<ggml_ext_cuda_device_fn>(ggml_backend_reg_get_proc_address(reg, "ggml_ext_cuda_device_v1"));
+    int ordinal          = query ? query(device) : -1;
+    cudaDeviceProp props = {};
     size_t shared        = std::max({sizeof(typename ProjectionKernel<float>::Kernel::SharedStorage),
                                      sizeof(typename ProjectionKernel<half>::Kernel::SharedStorage), sizeof(typename ProjectionKernel<half, false>::Kernel::SharedStorage)});
-    return info.device >= 0 && info.cc >= 800 && info.shared_memory >= shared;
+    bool supported       = ordinal >= 0 && cudaGetDeviceProperties(&props, ordinal) == cudaSuccess && props.major >= 8 && props.sharedMemPerBlockOptin >= shared;
+    cache.emplace(device, supported);
+    return supported;
 #endif
 }
 
@@ -222,7 +239,7 @@ static cudaError_t projection_launch(cudaStream_t stream, const ggml_tensor* mat
         reinterpret_cast<uintptr_t>(output) % 8)
         return cudaErrorInvalidValue;
     typename P::EVT::Arguments evt = {{{{}, {xs, 0.f, {}}, {}}, {ws, 0.f, {}}, {}},
-                                      {{address_space, {n, cute::_1{}, int64_t(rows) * n}}, nw, pe, RMS ? ggml_get_op_params_f32(norm, 0) : 0.f, scale, view->ne[2], static_cast<half*>(output), prefix_tokens}};
+                                      {{address_space, {n, cute::_1{}, int64_t(rows) * n}}, nw, pe, RMS ? param_f32(norm, 0) : 0.f, scale, view->ne[2], static_cast<half*>(output), prefix_tokens}};
     typename Gemm::Arguments args(cutlass::gemm::GemmUniversalMode::kGemm, {rows, n, k}, 1, evt, x, w, nullptr, nullptr,
                                   int64_t(rows) * k, int64_t(n) * k, 0, 0, k, k, 0, 0);
     Gemm gemm;
@@ -284,7 +301,7 @@ static int projection_match(ggml_backend_dev_t device, const ggml_cgraph* graph,
             const auto* rope  = node_at(graph, first + 4);
             const auto* scale = node_at(graph, first + 5);
             const auto* copy  = node_at(graph, first + 6);
-            if (scale->op == GGML_OP_SCALE && scale->src[0] == rope && ggml_get_op_params_f32(scale, 1) == 0.f && copy->op == GGML_OP_CPY && copy->src[0] == scale &&
+            if (scale->op == GGML_OP_SCALE && scale->src[0] == rope && param_f32(scale, 1) == 0.f && copy->op == GGML_OP_CPY && copy->src[0] == scale &&
                 copy->type == GGML_TYPE_F16 && ggml_are_same_shape(rope, scale) && ggml_are_same_shape(rope, copy) && ggml_is_contiguous(copy))
                 return 7;
         }
@@ -330,8 +347,10 @@ static ggml_status projection_execute(const ggml_ext_execution_context* executio
     const auto* concat = nodes[key ? count == 7 ? 5 : 4 : 2];
     const bool joined  = concat->op == GGML_OP_CONCAT;
     auto* dst          = nodes[count - 1];
-    ggml_ext_gpu_context context;
-    if (!sd_cuda::cuda_context(execution->backend, &context))
+    auto reg           = ggml_backend_dev_backend_reg(ggml_backend_get_device(execution->backend));
+    auto query         = reinterpret_cast<ggml_ext_cuda_context_fn>(ggml_backend_reg_get_proc_address(reg, "ggml_ext_cuda_context_v1"));
+    ggml_ext_cuda_context context;
+    if (!query || !query(execution->backend, &context))
         return GGML_STATUS_FAILED;
     auto stream = static_cast<cudaStream_t>(context.stream);
     bool alias  = reinterpret_cast<uintptr_t>(dst->data) % (dst->type == GGML_TYPE_F32 ? 16 : 8) != 0;
@@ -340,7 +359,7 @@ static ggml_status projection_execute(const ggml_ext_execution_context* executio
             alias |= overlaps(dst, input);
     void* output   = alias ? ggml_backend_buffer_get_base(execution->workspace) : dst->data;
     int64_t prefix = joined ? concat->src[0]->ne[key ? 1 : 2] : 0;
-    float scale    = key && count == 7 && !joined ? ggml_get_op_params_f32(nodes[5], 0) : 1.f;
+    float scale    = key && count == 7 && !joined ? param_f32(nodes[5], 0) : 1.f;
     cudaError_t error;
     if (dst->type == GGML_TYPE_F32)
         error = projection_launch<float>(stream, mat, view, nodes[2], nodes[3], nodes[4], output, scale, 0);

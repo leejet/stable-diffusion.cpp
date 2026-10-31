@@ -103,12 +103,16 @@ namespace sd_cpu {
     }
 
     static ggml_status rope_execute(const ggml_ext_execution_context* context, ggml_tensor* const* nodes, int count, void*, void*) {
+        auto device = ggml_backend_get_device(context->backend);
+        auto reg    = ggml_backend_dev_backend_reg(device);
+        auto run    = reinterpret_cast<ggml_ext_cpu_parallel_fn>(ggml_backend_reg_get_proc_address(reg, "ggml_ext_cpu_parallel_v1"));
+        GGML_ASSERT(run);
         RopeExecution execution = {nodes[count - 1], nullptr, nullptr};
         if (count == 3) {
             execution.norm   = nodes[0];
             execution.weight = nodes[1]->src[0] == nodes[0] ? nodes[1]->src[1] : nodes[1]->src[0];
         }
-        return parallel(context->backend, nodes[count - 1], rope_compute, &execution);
+        return run(context->backend, nodes[count - 1], rope_compute, &execution);
     }
 
     void register_rope(ggml_backend_dev_t device) {

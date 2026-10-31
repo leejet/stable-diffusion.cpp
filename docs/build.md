@@ -32,9 +32,10 @@ cmake -S . -B build-upstream -DSD_USE_UPSTREAM_GGML=ON -DSD_GGML_SOURCE_DIR=../g
 cmake --build build-upstream --config Release
 ```
 
-Both patched and upstream builds use the selected library and matching private
-headers for backend integration. Backend options such as `-DSD_CUDA=ON` apply
-to the selected tree as usual.
+Upstream compatibility mode uses the selected library and matching private
+headers. The patched GGML build uses public headers, including `ggml-ext.h` and
+`ggml-graph.h`. Backend options such as `-DSD_CUDA=ON` apply to the selected tree
+as usual.
 
 `SD_USE_UPSTREAM_GGML` defaults to `OFF`, which enables the patched GGML
 extensions. Set it to `ON` when using upstream GGML; it selects the compatibility
@@ -52,9 +53,8 @@ quantization types remain available, subject to backend operator support.
 
 `SD_USE_SYSTEM_GGML=ON` instead links an installed GGML CMake package, located
 with `ggml_DIR` or `CMAKE_PREFIX_PATH`. An installed patched package must include
-the extension and graph APIs. Set `SD_GGML_SOURCE_DIR` to its matching source
-tree for private backend headers, including CUDA/HIP/MUSA vendor headers.
-The installed library must use the same ABI settings as sd.cpp,
+the extension and graph APIs; its source tree is not required for private
+headers. The installed library must use the same ABI settings as sd.cpp,
 including `GGML_MAX_NAME`. For an upstream package, also set
 `SD_USE_UPSTREAM_GGML=ON` and point `SD_GGML_SOURCE_DIR` to its matching source
 tree for the compatibility layer's private headers.
