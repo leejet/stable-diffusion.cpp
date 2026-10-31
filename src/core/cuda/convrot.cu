@@ -315,6 +315,6 @@ void sd_ggml_register_cuda_convrot(ggml_backend_dev_t device) {
         desc.prepare              = sd_convrot::prepare;
         desc.execute              = sd_convrot::execute;
         desc.destroy              = sd_convrot::destroy;
-        GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
+        GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
     }
 }

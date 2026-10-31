@@ -325,16 +325,16 @@ void sd_ggml_register_cuda_rope(ggml_backend_dev_t device) {
     desc.prepare              = rope_prepare;
     desc.destroy              = rope_destroy;
     desc.execute              = rope_execute;
-    GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
+    GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
     desc.name      = "sd.rope_apply.cuda.override.v1";
     desc.op        = GGML_OP_ROPE_APPLY;
     desc.custom_op = nullptr;
-    GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
+    GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
     desc.name     = "sd.rms_norm_mul_rope.cuda.v1";
     desc.op       = GGML_OP_RMS_NORM;
     desc.priority = 250;
     desc.supports = nullptr;
     desc.match    = rope_match;
     desc.optimize = rope_optimize;
-    GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
+    GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
 }

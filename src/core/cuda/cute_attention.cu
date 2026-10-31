@@ -773,16 +773,16 @@ void sd_ggml_register_cuda_attention(ggml_backend_dev_t device) {
     desc.prepare              = attention_prepare;
     desc.execute              = attention_execute;
     desc.destroy              = attention_destroy;
-    GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
+    GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
     desc.name      = "sd.rms_rope_cute_attention.cuda.v1";
     desc.op        = GGML_OP_RMS_NORM;
     desc.priority  = 300;
     desc.supports  = nullptr;
     desc.preferred = nullptr;
     desc.optimize  = nullptr;
-    GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
+    GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
     desc.name     = "sd.i8_rope_cute_attention.cuda.v1";
     desc.op       = GGML_OP_MUL_MAT;
     desc.priority = 400;
-    GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
+    GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
 }

@@ -456,10 +456,10 @@ void sd_ggml_register_cuda_i8_gated_residual(ggml_backend_dev_t device) {
     desc.prepare              = sd_i8_gated::prepare;
     desc.execute              = sd_i8_gated::execute;
     desc.destroy              = sd_i8_gated::destroy;
-    GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
+    GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
     desc.name      = "sd.custom_i8_gated_residual.cuda.v1";
     desc.op        = GGML_OP_CUSTOM;
     desc.custom_op = sd_ggml_i8_op();
     desc.optimize  = nullptr;
-    GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
+    GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
 }

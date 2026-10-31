@@ -385,5 +385,5 @@ void sd_ggml_register_cuda_i8_projection(ggml_backend_dev_t device) {
     desc.prepare              = projection_prepare;
     desc.execute              = projection_execute;
     desc.destroy              = projection_destroy;
-    GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
+    GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
 }

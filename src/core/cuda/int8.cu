@@ -559,9 +559,9 @@ void sd_ggml_register_cuda_i8(ggml_backend_dev_t device) {
     desc.prepare              = sd_i8_cuda::prepare;
     desc.execute              = sd_i8_cuda::execute;
     desc.destroy              = sd_i8_cuda::destroy;
-    GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
+    GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
     desc.name      = "sd.quantize_i8_convrot.cuda.v1";
     desc.custom_op = sd_ggml_convrot_op();
     desc.supports  = sd_i8_cuda::convrot_supports;
-    GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
+    GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
 }

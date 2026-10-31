@@ -236,11 +236,47 @@ ConvRot extension leaves that chain together to preserve its existing fusion.
 Standalone builtin ConvRot and its native GEMM integration are still pending
 migration.
 
-CUDA extension kernels currently execute between native graph fragments. Native
-fragments retain CUDA Graph caching, but the extension execution plan is not
-captured as a whole. Moving small fusions out of native fragments can therefore
-increase host submission overhead even when kernel counts and GPU work stay the
-same. Whole-plan CUDA Graph capture remains pending.
+CUDA kernels can opt into device replay with `ggml_ext_register_kernel_ex` and
+`GGML_EXT_KERNEL_CAPTURE_SAFE`. The original registration function retains its
+per-execution callback behavior, and the descriptor ABI is unchanged. Opting in
+means the callback enqueues replayable device work: it has no required
+per-execution host side effects or decisions based on tensor contents, and any
+private streams rejoin the borrowed stream. Lazy setup must complete during the
+first ordinary execution. Tensor metadata, attributes, and host plan parameters
+remain frozen until scheduler reallocation; tensor contents may change normally.
+
+When every selected extension opts in, the CUDA backend can capture the whole
+scheduled plan, including its native fragments, into one CUDA Graph. The first
+execution warms up kernels and library state while retaining native fragment
+caches. The next stable execution captures
+and launches the graph; later calls replay it. Changing a tensor address or the
+execution stream invalidates the capture and repeats warmup, even when the graph
+UID is unchanged. Capture failures propagate without retrying partially executed
+work. An enclosing stream capture records the plan directly instead of starting
+a nested capture.
+
+`GGML_EXT_KERNEL_REPLAY_REUSABLE` additionally permits reuse across scheduler
+plan rebuilds and requires `CAPTURE_SAFE`. Recorded work must depend only on
+complete tensor metadata, addresses, the device and immutable registration data.
+Captured resources must belong to the backend or the supplied workspace, never
+per-plan host state. Workspace contents must be initialized by recorded device
+work on each execution. Prepare/destroy still run for every rebuilt host plan.
+The backend cache retains only the executor and workspace; it compares graph
+structure, tensor metadata/addresses, selected kernels and workspace requirements
+exactly, without dereferencing old graph objects. A new metadata arena can reuse
+an equivalent capture. Each backend retains at most 16 retired plans and 256 MiB
+of their workspaces, evicting the oldest entries first. Larger workspaces retain
+plan-local capture only. Backend destruction synchronizes and releases the cache.
+This allows sd.cpp's per-step scheduler rebuilds to retain device replay.
+
+Mixed plans containing an extension without the flag retain ordinary dispatch.
+Evaluation callbacks, multiple pipeline copies, and direct backend graph calls
+also retain their previous behavior. `GGML_CUDA_DISABLE_GRAPHS` disables whole-plan
+capture as well as native CUDA Graph caching. Native operations that cannot be
+captured retain the existing fragment execution path. Whole-plan replay requires
+CUDA VMM so native scratch addresses remain valid for the backend lifetime;
+legacy scratch pools retain the existing fragment path. HIP and MUSA do not yet
+provide this plan executor. sd.cpp's CUDA registrations opt in to reusable replay.
 
 The builtin CUDA/Vulkan INT8 GEMM, standalone ConvRot quantization, and remaining fusion rules
 still need to be externalized. Vulkan execution services and kernels also remain pending.
