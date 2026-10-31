@@ -136,13 +136,15 @@ in `cpu/registration.cpp`. CUDA-style and Vulkan implementations live in their
 respective backend directories.
 
 `src/core/cpu/rope.cpp` registers the CPU implementation of
-`sd.rope_apply.v1`, an override for existing `GGML_OP_ROPE_APPLY` nodes, and a
+`sd.rope_apply.v1` and a
 `RMSNorm -> Mul -> RoPE` fusion. The fusion accepts a one-dimensional weight
 vector. Both interleaved and split-half RoPE, partial rotation, and strided input
 rows are supported. Model construction uses the custom operator on CPU, CUDA,
-HIP, MUSA, and Vulkan, and retains existing backend implementations elsewhere.
+HIP, MUSA, and Vulkan. Other backends can use the scheduler's CPU fallback.
+The former `ggml_rope_apply` API, builtin opcode, and CPU implementation have
+been removed from ggml.
 
-`src/core/cuda/rope.cu` supplies standalone CUDA RoPE, the same builtin override,
+`src/core/cuda/rope.cu` supplies standalone CUDA RoPE
 and `RMSNorm -> Mul -> RoPE [-> Scale -> FP16 Copy]` fusion. CuTe attention shares
 its RMSNorm/RoPE kernel. Partial rotation and arbitrary float-aligned input and
 position-encoding strides are supported by the standalone kernel; RMSNorm fusion
@@ -180,7 +182,7 @@ Independent affine operands, including broadcasted constants, are computed befor
 their normalization/projection
 chain when graph dependencies allow it. The attention optimizer can then move
 the complete five-node projection when safe.
-These rules accept both builtin and custom RoPE nodes. They preserve the original
+These rules accept custom RoPE nodes. They preserve the original
 large-matrix selection thresholds, full interleaved head dimension 128, packed
 activation layout, and separate weight scales. External consumers prevent fusion;
 aliasing terminal copies use scheduler workspace. The CUDA projection kernels
@@ -379,7 +381,7 @@ Callback errors propagate without retry. Evaluation callbacks, direct backend
 calls, synchronous devices, serialized diagnostics, and timestamp profiling
 retain fragment execution.
 
-`src/core/vulkan/rope.cpp` registers custom and builtin RoPE implementations,
+`src/core/vulkan/rope.cpp` registers the custom RoPE implementation,
 plus `RMSNorm -> Mul -> RoPE` and `RMSNorm -> Mul -> RoPE -> Scale -> FP16 Copy`
 fusion. These kernels retain the original strides, partial-rotation behavior,
 128-channel subgroup reduction, and separate arithmetic rounding. Their SPIR-V
@@ -390,8 +392,8 @@ External intermediate consumers retain ordinary operators, and overlapping
 outputs use plan workspace. `GGML_VK_DISABLE_FUSION` is honored.
 
 The corresponding Vulkan shader sources and native fusion rules have been
-removed from ggml. Existing builtin RoPE graphs use the registered override;
-unsupported cases retain scheduler fallback to another supported backend.
+removed from ggml. Unsupported custom nodes retain scheduler fallback to
+another supported backend.
 
 Remaining model-specific CUDA paths and Vulkan INT8/ConvRot implementations still
 need auditing or migration.

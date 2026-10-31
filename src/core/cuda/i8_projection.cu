@@ -211,7 +211,7 @@ bool sd_cuda_i8_rope_supports(ggml_backend_dev_t device, const ggml_tensor* mat,
         !sd_cuda::rope_fusion_supports(norm, mul, rope) || rope->src[1]->ne[2] != 64 || !aligned(mul->src[1]) || !aligned(rope->src[1]))
         return false;
     int32_t interleaved;
-    std::memcpy(&interleaved, ggml_ext_op_get(rope) ? ggml_ext_op_attributes(rope) : rope->op_params, sizeof(interleaved));
+    std::memcpy(&interleaved, ggml_ext_op_attributes(rope), sizeof(interleaved));
     return interleaved != 0;
 }
 

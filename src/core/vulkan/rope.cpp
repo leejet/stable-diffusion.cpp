@@ -32,7 +32,7 @@ namespace sd_vulkan_rope {
         return value;
     }
     static bool is_rope(const ggml_tensor* node) {
-        return node && (node->op == GGML_OP_ROPE_APPLY || ggml_ext_op_get(node) == sd_ggml_rope_op());
+        return node && ggml_ext_op_get(node) == sd_ggml_rope_op();
     }
     static bool aligned(const ggml_tensor* tensor, size_t alignment) {
         size_t offset = 0;
@@ -166,7 +166,7 @@ namespace sd_vulkan_rope {
         pc.x_offset   = buffers[0].shader_offset / 4;
         pc.pe_offset  = buffers[1].shader_offset / 4;
         pc.dst_offset = buffers[2].shader_offset / uint32_t(ggml_type_size(output->type));
-        std::memcpy(&pc.interleaved, ggml_ext_op_get(rope) ? ggml_ext_op_attributes(rope) : rope->op_params, 4);
+        std::memcpy(&pc.interleaved, ggml_ext_op_attributes(rope), 4);
         uint32_t groups[3]                = {1, 1, 1};
         ggml_ext_vulkan_pipeline pipeline = {};
         pipeline.name                     = "sd.rope_apply.vulkan";
@@ -213,15 +213,12 @@ void sd_ggml_register_vulkan_rope(ggml_backend_dev_t device) {
     desc.execute              = sd_vulkan_rope::execute;
     desc.destroy              = sd_vulkan_rope::destroy;
     GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
-    desc.name      = "sd.rope_apply.vulkan.override.v1";
-    desc.op        = GGML_OP_ROPE_APPLY;
+    desc.name      = "sd.rms_rope_apply.vulkan.v1";
+    desc.op        = GGML_OP_RMS_NORM;
     desc.custom_op = nullptr;
-    GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
-    desc.name     = "sd.rms_rope_apply.vulkan.v1";
-    desc.op       = GGML_OP_RMS_NORM;
-    desc.priority = 200;
-    desc.supports = nullptr;
-    desc.match    = sd_vulkan_rope::match;
-    desc.optimize = sd_vulkan_rope::optimize;
+    desc.priority  = 200;
+    desc.supports  = nullptr;
+    desc.match     = sd_vulkan_rope::match;
+    desc.optimize  = sd_vulkan_rope::optimize;
     GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
 }

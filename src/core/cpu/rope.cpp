@@ -23,7 +23,7 @@ namespace sd_cpu {
         const auto* x         = execution.norm ? execution.norm->src[0] : rope->src[0];
         const auto* pe        = rope->src[1];
         int32_t interleaved;
-        std::memcpy(&interleaved, ggml_ext_op_get(rope) ? ggml_ext_op_attributes(rope) : rope->op_params, sizeof(interleaved));
+        std::memcpy(&interleaved, ggml_ext_op_attributes(rope), sizeof(interleaved));
         float eps = 0.0f;
         if (execution.norm) {
             std::memcpy(&eps, execution.norm->op_params, sizeof(eps));
@@ -90,7 +90,7 @@ namespace sd_cpu {
         if (norm->op != GGML_OP_RMS_NORM || norm->type != GGML_TYPE_F32 || !norm->src[0] ||
             norm->src[0]->type != GGML_TYPE_F32 || norm->src[0]->nb[0] != sizeof(float) ||
             mul->op != GGML_OP_MUL || mul->type != GGML_TYPE_F32 || rope->src[0] != mul ||
-            (rope->op != GGML_OP_ROPE_APPLY && ggml_ext_op_get(rope) != sd_ggml_rope_op()) ||
+            ggml_ext_op_get(rope) != sd_ggml_rope_op() ||
             !sd_ggml_rope_describe(rope) || !ggml_are_same_shape(norm, mul)) {
             return 0;
         }
@@ -126,16 +126,12 @@ namespace sd_cpu {
         desc.execute              = rope_execute;
         GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
 
-        desc.name      = "sd.rope_apply.cpu.override.v1";
-        desc.op        = GGML_OP_ROPE_APPLY;
+        desc.name      = "sd.rms_norm_mul_rope.cpu.v1";
+        desc.op        = GGML_OP_RMS_NORM;
         desc.custom_op = nullptr;
-        GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
-
-        desc.name     = "sd.rms_norm_mul_rope.cpu.v1";
-        desc.op       = GGML_OP_RMS_NORM;
-        desc.priority = 200;
-        desc.supports = nullptr;
-        desc.match    = rope_fusion_match;
+        desc.priority  = 200;
+        desc.supports  = nullptr;
+        desc.match     = rope_fusion_match;
         GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
     }
 

@@ -10,6 +10,12 @@ void sd_ggml_register_extensions(ggml_backend_t backend);
 
 ggml_ext_op_t sd_ggml_rope_op();
 bool sd_ggml_rope_describe(const ggml_tensor* node);
+// Apply precomputed rotary matrices, with shapes in ne[] order:
+// a: F32 [head_dim, heads, tokens, batch], pe: F32 [2, 2, rot_dim/2, tokens].
+// pe stores [[cos, -sin], [sin, cos]] for each pair and token, shared across heads/batches.
+// Returns contiguous F32 [head_dim, tokens, heads*batch]. Input strides are preserved.
+// Interleaved pairs are (2*i, 2*i+1); otherwise pairs are (i, i+rot_dim/2).
+// Channels from rot_dim to head_dim are copied unchanged.
 ggml_tensor* sd_ggml_rope_apply(ggml_context* ctx, ggml_backend_t backend, ggml_tensor* x, ggml_tensor* pe, bool interleaved);
 
 struct SDI8Operation {

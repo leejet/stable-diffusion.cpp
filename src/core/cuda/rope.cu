@@ -132,7 +132,7 @@ namespace SD_CUDA_NAMESPACE {
 
     static bool rope_interleaved(const ggml_tensor* rope) {
         int32_t value;
-        std::memcpy(&value, ggml_ext_op_get(rope) ? ggml_ext_op_attributes(rope) : rope->op_params, sizeof(value));
+        std::memcpy(&value, ggml_ext_op_attributes(rope), sizeof(value));
         return value != 0;
     }
 
@@ -143,7 +143,7 @@ namespace SD_CUDA_NAMESPACE {
     }
 
     static bool rope_is_node(const ggml_tensor* node) {
-        return node && (node->op == GGML_OP_ROPE_APPLY || ggml_ext_op_get(node) == sd_ggml_rope_op());
+        return node && ggml_ext_op_get(node) == sd_ggml_rope_op();
     }
 
     static bool rope_supports(ggml_backend_dev_t, const ggml_tensor* rope, void*) {
@@ -324,16 +324,13 @@ namespace SD_CUDA_NAMESPACE {
         desc.destroy              = rope_destroy;
         desc.execute              = rope_execute;
         GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
-        desc.name      = "sd.rope_apply." SD_CUDA_NAME ".override.v1";
-        desc.op        = GGML_OP_ROPE_APPLY;
+        desc.name      = "sd.rms_norm_mul_rope." SD_CUDA_NAME ".v1";
+        desc.op        = GGML_OP_RMS_NORM;
         desc.custom_op = nullptr;
-        GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
-        desc.name     = "sd.rms_norm_mul_rope." SD_CUDA_NAME ".v1";
-        desc.op       = GGML_OP_RMS_NORM;
-        desc.priority = 250;
-        desc.supports = nullptr;
-        desc.match    = rope_match;
-        desc.optimize = rope_optimize;
+        desc.priority  = 250;
+        desc.supports  = nullptr;
+        desc.match     = rope_match;
+        desc.optimize  = rope_optimize;
         GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
     }
 

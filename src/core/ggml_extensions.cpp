@@ -265,19 +265,9 @@ void sd_ggml_register_extensions(ggml_backend_t backend) {
 
 ggml_tensor* sd_ggml_rope_apply(ggml_context* ctx, ggml_backend_t backend, ggml_tensor* x, ggml_tensor* pe, bool interleaved) {
     sd_ggml_register_extensions(backend);
-    if (backend) {
-        auto reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
-        if (ggml_backend_reg_get_proc_address(reg, "ggml_ext_cpu_parallel_v1")
-#ifdef SD_BACKEND_EXTENSIONS
-            || ggml_backend_reg_get_proc_address(reg, "ggml_ext_gpu_context_v1") || ggml_backend_reg_get_proc_address(reg, "ggml_ext_vulkan_v1")
-#endif
-        ) {
-            ggml_tensor* inputs[] = {x, pe};
-            int32_t attributes    = interleaved ? 1 : 0;
-            return ggml_ext_op_create(ctx, sd_ggml_rope_op(), inputs, 2, &attributes);
-        }
-    }
-    return ggml_rope_apply(ctx, x, pe, interleaved);
+    ggml_tensor* inputs[] = {x, pe};
+    int32_t attributes    = interleaved ? 1 : 0;
+    return ggml_ext_op_create(ctx, sd_ggml_rope_op(), inputs, 2, &attributes);
 }
 
 #else
