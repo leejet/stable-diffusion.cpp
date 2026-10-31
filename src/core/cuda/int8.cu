@@ -1,6 +1,6 @@
 #include <cstdlib>
 #include "convrot_kernel.h"
-#include "core/int8_ops.h"
+#include "core/ggml_extensions.h"
 #ifdef SD_CUDA_I8_CUTLASS
 #include "core/cuda/i8_gemm.h"
 #else

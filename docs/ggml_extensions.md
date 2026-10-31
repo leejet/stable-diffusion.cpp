@@ -129,7 +129,13 @@ the command recording services described below.
 
 ## sd.cpp integration
 
-`src/core/ggml_extensions.cpp` registers the CPU implementation of
+`src/core/ggml_extensions.cpp` and `.h` contain the shared operator schemas,
+validation, graph construction helpers, and backend registration entry point.
+CPU kernels and fusion rules live in `src/core/cpu/`, with registration collected
+in `cpu/registration.cpp`. CUDA-style and Vulkan implementations live in their
+respective backend directories.
+
+`src/core/cpu/rope.cpp` registers the CPU implementation of
 `sd.rope_apply.v1`, an override for existing `GGML_OP_ROPE_APPLY` nodes, and a
 `RMSNorm -> Mul -> RoPE` fusion. The fusion accepts a one-dimensional weight
 vector. Both interleaved and split-half RoPE, partial rotation, and strided input
@@ -180,10 +186,11 @@ activation layout, and separate weight scales. External consumers prevent fusion
 aliasing terminal copies use scheduler workspace. The CUDA projection kernels
 and matchers now live in sd.cpp. `GGML_CUDA_FORCE_CUBLAS` disables these epilogues.
 
-`src/core/int8_ops.cpp` defines `sd.linear_i8.v1` and
-`sd.quantize_i8_convrot.v1`, with CPU implementations and overrides of the old
-builtins. The CPU kernels use the configured thread pool and scheduler workspace;
-the old CPU INT8 GEMM and ConvRot implementations have been removed from ggml.
+`src/core/ggml_extensions.cpp` defines `sd.linear_i8.v1` and
+`sd.quantize_i8_convrot.v1`. `src/core/cpu/int8.cpp` supplies their CPU
+implementations and overrides of the old builtins. The CPU kernels use the
+configured thread pool and scheduler workspace; the old CPU INT8 GEMM and ConvRot
+implementations have been removed from ggml.
 Custom nodes execute on CPU or CUDA when supported. Model code retains builtin
 nodes while the existing CUDA and Vulkan fusion rules are being migrated.
 

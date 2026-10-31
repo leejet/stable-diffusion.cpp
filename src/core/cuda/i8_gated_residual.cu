@@ -9,7 +9,7 @@
 #include <cutlass/epilogue/threadblock/fusion/visitors.hpp>
 #include <mutex>
 #include <unordered_map>
-#include "core/int8_ops.h"
+#include "core/ggml_extensions.h"
 
 namespace sd_i8_gated {
     struct BandedStreamK : cutlass::gemm::threadblock::ThreadblockSwizzleStreamK {

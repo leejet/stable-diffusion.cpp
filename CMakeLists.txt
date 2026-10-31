@@ -225,6 +225,8 @@ file(GLOB SD_LIB_SOURCES CONFIGURE_DEPENDS
     "src/core/*.h"
     "src/core/*.cpp"
     "src/core/*.hpp"
+    "src/core/cpu/*.h"
+    "src/core/cpu/*.cpp"
     "src/core/probe/*.h"
     "src/core/probe/*.cpp"
     "src/extensions/*.h"

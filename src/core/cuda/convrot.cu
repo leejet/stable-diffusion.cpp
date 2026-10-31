@@ -4,7 +4,7 @@
 #include <cstring>
 #include <string>
 #include "convrot_kernel.h"
-#include "core/int8_ops.h"
+#include "core/ggml_extensions.h"
 #include "runtime.h"
 
 namespace SD_CUDA_NAMESPACE {
