@@ -343,14 +343,19 @@ if (SD_CUDA)
     # Keep the driver stub on downstream link lines when no driver is installed.
     target_link_libraries(${SD_LIB} PUBLIC CUDA::cuda_driver)
     set_property(SOURCE src/core/ggml_extend_backend.cpp APPEND PROPERTY COMPILE_DEFINITIONS SD_USE_CUDA)
-    if (NOT SD_USE_UPSTREAM_GGML AND GGML_CUDA_CUTLASS_PATH)
+    if (NOT SD_USE_UPSTREAM_GGML)
         enable_language(CUDA)
-        target_sources(${SD_LIB} PRIVATE src/core/cuda/cute_attention.cu)
-        set_source_files_properties(src/core/cuda/cute_attention.cu PROPERTIES
-            INCLUDE_DIRECTORIES "${GGML_CUDA_CUTLASS_PATH}/include"
-            COMPILE_OPTIONS "--use_fast_math;--extended-lambda;--expt-relaxed-constexpr")
-        if (MSVC)
-            set_property(SOURCE src/core/cuda/cute_attention.cu APPEND PROPERTY COMPILE_OPTIONS -Xcompiler=/Zc:preprocessor,/Zc:__cplusplus)
+        target_sources(${SD_LIB} PRIVATE src/core/cuda/rope.cu)
+        set_source_files_properties(src/core/cuda/rope.cu PROPERTIES COMPILE_OPTIONS "--use_fast_math")
+        if (GGML_CUDA_CUTLASS_PATH)
+            target_sources(${SD_LIB} PRIVATE src/core/cuda/cute_attention.cu)
+            set_source_files_properties(src/core/cuda/cute_attention.cu PROPERTIES
+                INCLUDE_DIRECTORIES "${GGML_CUDA_CUTLASS_PATH}/include"
+                COMPILE_OPTIONS "--use_fast_math;--extended-lambda;--expt-relaxed-constexpr")
+            if (MSVC)
+                set_property(SOURCE src/core/cuda/cute_attention.cu APPEND PROPERTY COMPILE_OPTIONS -Xcompiler=/Zc:preprocessor,/Zc:__cplusplus)
+            endif()
+            set_property(SOURCE src/core/ggml_extensions.cpp APPEND PROPERTY COMPILE_DEFINITIONS SD_CUDA_CUTE_ATTENTION)
         endif()
         set_target_properties(${SD_LIB} PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON)
         target_link_libraries(${SD_LIB} PRIVATE CUDA::cudart)

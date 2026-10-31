@@ -9,6 +9,9 @@
 #include <unordered_set>
 
 #ifdef SD_CUDA_EXTENSIONS
+void sd_ggml_register_cuda_rope(ggml_backend_dev_t device);
+#endif
+#ifdef SD_CUDA_CUTE_ATTENTION
 void sd_ggml_register_cuda_attention(ggml_backend_dev_t device);
 #endif
 
@@ -31,7 +34,7 @@ static bool rope_infer(ggml_tensor* const* inputs, int count, const void*, ggml_
     return true;
 }
 
-static ggml_ext_op_t rope_op() {
+ggml_ext_op_t sd_ggml_rope_op() {
     static const ggml_ext_op_t op = [] {
         const ggml_ext_op_desc desc = {GGML_EXT_ABI_VERSION, "sd.rope_apply.v1", sizeof(int32_t), rope_infer};
         auto result                 = ggml_ext_register_op(&desc);
@@ -130,7 +133,7 @@ static int rope_fusion_match(ggml_backend_dev_t device, const ggml_cgraph* graph
     if (norm->op != GGML_OP_RMS_NORM || norm->type != GGML_TYPE_F32 || !norm->src[0] ||
         norm->src[0]->type != GGML_TYPE_F32 || norm->src[0]->nb[0] != sizeof(float) ||
         mul->op != GGML_OP_MUL || mul->type != GGML_TYPE_F32 || rope->src[0] != mul ||
-        (rope->op != GGML_OP_ROPE_APPLY && ggml_ext_op_get(rope) != rope_op()) ||
+        (rope->op != GGML_OP_ROPE_APPLY && ggml_ext_op_get(rope) != sd_ggml_rope_op()) ||
         !rope_supports(device, rope, nullptr) || !ggml_are_same_shape(norm, mul)) {
         return 0;
     }
@@ -174,6 +177,9 @@ void sd_ggml_register_extensions(ggml_backend_t backend) {
     }
     if (cuda) {
 #ifdef SD_CUDA_EXTENSIONS
+        sd_ggml_register_cuda_rope(device);
+#endif
+#ifdef SD_CUDA_CUTE_ATTENTION
         sd_ggml_register_cuda_attention(device);
 #endif
         return;
@@ -182,7 +188,7 @@ void sd_ggml_register_extensions(ggml_backend_t backend) {
     desc.abi_version          = GGML_EXT_ABI_VERSION;
     desc.name                 = "sd.rope_apply.cpu.v1";
     desc.op                   = GGML_OP_CUSTOM;
-    desc.custom_op            = rope_op();
+    desc.custom_op            = sd_ggml_rope_op();
     desc.priority             = 100;
     desc.supports             = rope_supports;
     desc.execute              = rope_execute;
@@ -205,10 +211,14 @@ ggml_tensor* sd_ggml_rope_apply(ggml_context* ctx, ggml_backend_t backend, ggml_
     sd_ggml_register_extensions(backend);
     if (backend) {
         auto reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
-        if (ggml_backend_reg_get_proc_address(reg, "ggml_ext_cpu_parallel_v1")) {
+        if (ggml_backend_reg_get_proc_address(reg, "ggml_ext_cpu_parallel_v1")
+#ifdef SD_CUDA_EXTENSIONS
+            || ggml_backend_reg_get_proc_address(reg, "ggml_ext_cuda_context_v1")
+#endif
+        ) {
             ggml_tensor* inputs[] = {x, pe};
             int32_t attributes    = interleaved ? 1 : 0;
-            return ggml_ext_op_create(ctx, rope_op(), inputs, 2, &attributes);
+            return ggml_ext_op_create(ctx, sd_ggml_rope_op(), inputs, 2, &attributes);
         }
     }
     return ggml_rope_apply(ctx, x, pe, interleaved);

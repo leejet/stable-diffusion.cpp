@@ -44,13 +44,9 @@
 #include <mutex>
 #include <type_traits>
 #include <unordered_map>
+#include "core/cuda/rope.h"
 #include "ggml-ext.h"
 
-static __device__ __forceinline__ float sd_warp_sum(float v) {
-    for (int mask = 16; mask > 0; mask >>= 1)
-        v = __fadd_rn(v, __shfl_xor_sync(0xffffffff, v, mask));
-    return v;
-}
 static __device__ __forceinline__ float sd_warp_max(float v) {
     for (int mask = 16; mask > 0; mask >>= 1)
         v = fmaxf(v, __shfl_xor_sync(0xffffffff, v, mask));
@@ -349,75 +345,6 @@ namespace sd_fattn_cute {
     }
 }
 
-template <int D, bool interleaved, typename T>
-static __global__ void rms_norm_mul_rope_apply_fused(
-    const float* x,
-    const float* weight,
-    const float* pe,
-    T* dst,
-    int64_t heads,
-    int64_t tokens,
-    int64_t rows,
-    int64_t nb1,
-    int64_t nb2,
-    int64_t nb3,
-    int rot_half,
-    float eps,
-    float output_scale) {
-    const int lane    = threadIdx.x;
-    const int64_t row = int64_t(blockIdx.x) * blockDim.y + threadIdx.y;
-    if (row >= rows) {
-        return;
-    }
-    const int64_t head  = row % heads;
-    const int64_t token = (row / heads) % tokens;
-    const int64_t batch = row / (heads * tokens);
-    const float* x_row  = x + head * nb1 + token * nb2 + batch * nb3;
-    float v[D / 32], sums[8] = {};
-#pragma unroll
-    for (int j = 0; j < D / 32; ++j) {
-        v[j]    = x_row[j * 32 + lane];
-        sums[j] = sd_warp_sum(__fmul_rn(v[j], v[j]));
-    }
-    // Preserve the 256-thread RMSNorm kernel's reduction tree, including inactive warps.
-    const float sum = __fadd_rn(
-        __fadd_rn(__fadd_rn(sums[0], sums[4]), __fadd_rn(sums[2], sums[6])),
-        __fadd_rn(__fadd_rn(sums[1], sums[5]), __fadd_rn(sums[3], sums[7])));
-    const float scale = rsqrtf(sum / float(D) + eps);
-    T* out            = dst + ((batch * heads + head) * tokens + token) * D;
-#pragma unroll
-    for (int j = 0; j < D / 32; ++j) {
-        const int col     = j * 32 + lane;
-        const float value = __fmul_rn(__fmul_rn(scale, v[j]), weight[col]);
-        float rotated     = value;
-        if constexpr (interleaved) {
-            const float other = __shfl_xor_sync(0xffffffff, value, 1, 32);
-            if (col < 2 * rot_half) {
-                const float* m      = pe + 4 * (token * rot_half + col / 2);
-                const float4 matrix = make_float4(m[0], m[1], m[2], m[3]);
-                rotated             = lane % 2 == 0
-                                          ? __fadd_rn(__fmul_rn(value, matrix.x), __fmul_rn(other, matrix.y))
-                                          : __fadd_rn(__fmul_rn(other, matrix.z), __fmul_rn(value, matrix.w));
-            }
-        } else {
-            if (col < 2 * rot_half) {
-                const int partner   = col < rot_half ? col + rot_half : col - rot_half;
-                const float other   = __fmul_rn(__fmul_rn(scale, x_row[partner]), weight[partner]);
-                const float* m      = pe + 4 * (token * rot_half + col % rot_half);
-                const float4 matrix = make_float4(m[0], m[1], m[2], m[3]);
-                rotated             = col < rot_half
-                                          ? __fsub_rn(__fmul_rn(value, matrix.x), __fmul_rn(other, matrix.z))
-                                          : __fadd_rn(__fmul_rn(other, matrix.z), __fmul_rn(value, matrix.x));
-            }
-        }
-        if constexpr (std::is_same<T, half>::value) {
-            out[col] = __float2half_rn(__fmul_rn(rotated, output_scale));
-        } else {
-            out[col] = rotated;
-        }
-    }
-}
-
 static __device__ __forceinline__ float convrot_h4_cuda(float a, float b, float c, float d, int index) {
     a = index == 3 ? -a : a;
     b = index == 2 ? -b : b;
@@ -610,21 +537,6 @@ static bool fusion_enabled() {
     return !disabled;
 }
 
-static bool query_fusion(const ggml_tensor* norm, const ggml_tensor* mul, const ggml_tensor* rope) {
-    if (norm->op != GGML_OP_RMS_NORM || mul->op != GGML_OP_MUL || rope->op != GGML_OP_ROPE_APPLY ||
-        mul->src[0] != norm || rope->src[0] != mul)
-        return false;
-    const auto* x      = norm->src[0];
-    const auto* weight = mul->src[1];
-    const auto* pe     = rope->src[1];
-    return x && weight && pe && x->ne[0] >= 32 && x->ne[0] <= 256 && x->ne[0] % 32 == 0 &&
-           x->type == GGML_TYPE_F32 && weight->type == GGML_TYPE_F32 && pe->type == GGML_TYPE_F32 &&
-           norm->type == GGML_TYPE_F32 && mul->type == GGML_TYPE_F32 && rope->type == GGML_TYPE_F32 &&
-           ggml_are_same_shape(norm, mul) && weight->ne[0] == x->ne[0] && ggml_nelements(weight) == x->ne[0] &&
-           pe->ne[0] == 2 && pe->ne[1] == 2 && pe->ne[2] > 0 && pe->ne[2] <= x->ne[0] / 2 && pe->ne[3] == x->ne[2] &&
-           x->nb[0] == sizeof(float) && ggml_is_contiguous(weight) && ggml_is_contiguous(pe) && ggml_is_contiguous(rope);
-}
-
 static const ggml_tensor* graph_node(const ggml_cgraph* graph, int index) {
     return ggml_graph_node(const_cast<ggml_cgraph*>(graph), index);
 }
@@ -668,7 +580,7 @@ static int attention_match(ggml_backend_dev_t device, const ggml_cgraph* graph, 
     int offset = 0;
     if (graph_node(graph, first)->op == GGML_OP_RMS_NORM) {
         if (first + 3 >= ggml_graph_n_nodes(const_cast<ggml_cgraph*>(graph)) ||
-            !query_fusion(graph_node(graph, first), graph_node(graph, first + 1), graph_node(graph, first + 2)) ||
+            !sd_cuda_rope_fusion_supports(graph_node(graph, first), graph_node(graph, first + 1), graph_node(graph, first + 2)) ||
             graph_node(graph, first + 3)->src[0] != graph_node(graph, first + 2))
             return 0;
         offset = 3;
@@ -688,7 +600,7 @@ static void attention_optimize(ggml_backend_dev_t device, ggml_cgraph* graph, vo
             continue;
         for (int j = i - 3; j >= 0 && j >= i - 32; --j) {
             if (attn->src[0] == graph_node(graph, j + 2) &&
-                query_fusion(graph_node(graph, j), graph_node(graph, j + 1), graph_node(graph, j + 2))) {
+                sd_cuda_rope_fusion_supports(graph_node(graph, j), graph_node(graph, j + 1), graph_node(graph, j + 2))) {
                 ggml_ext_graph_delay(graph, j, 3, i);
                 break;
             }
@@ -741,30 +653,6 @@ static cudaError_t attention_launch(const ggml_ext_cuda_context& context, const 
     return p.dim == D ? attention_launch<D, true>(context, p, batches) : attention_launch<D, false>(context, p, batches);
 }
 
-template <bool Interleaved>
-static void query_launch(cudaStream_t stream, ggml_tensor* const* nodes, half* output, float scale) {
-    const auto* x      = nodes[0]->src[0];
-    const auto* pe     = nodes[2]->src[1];
-    const int64_t rows = ggml_nrows(x);
-#define SD_QUERY(D)                                                                                                                     \
-    case D:                                                                                                                             \
-        rms_norm_mul_rope_apply_fused<D, Interleaved, half><<<(rows + 3) / 4, dim3(32, 4), 0, stream>>>(                                \
-            static_cast<const float*>(x->data), static_cast<const float*>(nodes[1]->src[1]->data), static_cast<const float*>(pe->data), \
-            output, x->ne[1], x->ne[2], rows, x->nb[1] / 4, x->nb[2] / 4, x->nb[3] / 4, int(pe->ne[2]), param_f32(nodes[0], 0), scale); \
-        break
-    switch (x->ne[0]) {
-        SD_QUERY(32);
-        SD_QUERY(64);
-        SD_QUERY(96);
-        SD_QUERY(128);
-        SD_QUERY(160);
-        SD_QUERY(192);
-        SD_QUERY(224);
-        SD_QUERY(256);
-    }
-#undef SD_QUERY
-}
-
 static ggml_status attention_execute(const ggml_ext_execution_context* execution, ggml_tensor* const* nodes, int count, void* state, void*) {
     const auto& plan = *static_cast<AttentionPlan*>(state);
     const auto* attn = nodes[plan.index];
@@ -784,10 +672,8 @@ static ggml_status attention_execute(const ggml_ext_execution_context* execution
         const auto* src   = attn->src[i];
         const float scale = i == 0 ? param_f32(attn, 0) : 1.0f;
         if (i == 0 && plan.index == 3) {
-            if (nodes[2]->op_params[0])
-                query_launch<true>(stream, nodes, work[0], scale);
-            else
-                query_launch<false>(stream, nodes, work[0], scale);
+            if (sd_cuda_rms_rope_launch(stream, nodes, work[0], true, scale) != cudaSuccess)
+                return GGML_STATUS_FAILED;
         } else if (i != 0 && src->type == GGML_TYPE_F16 && ggml_is_contiguous(src) && uintptr_t(src->data) % 16 == 0) {
             inputs[i] = static_cast<const half*>(src->data);
         } else {

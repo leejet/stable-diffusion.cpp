@@ -67,7 +67,11 @@ compute flags, external uses, output flags, and views; the initial implementatio
 accepts a conservative set of pure operators with only the final node exposed
 as the fused output. The rule remains responsible for mathematical equivalence,
 dtype, shape, layout, and hardware constraints. Internal views are accepted when
-their storage belongs to the fused subgraph; the final output must own storage.
+their storage belongs to the fused subgraph. The final output must own storage,
+except for a terminal `CPY`, which retains its original destination and write
+semantics. The extension must handle input/output storage overlap, including
+allocator reuse, with scratch space when necessary. Other in-place writes are
+not eligible for extension fusion.
 
 An optional `optimize` callback runs before matching and allocation. Use
 `ggml_ext_graph_delay` to move a producer range after independent nodes. The
@@ -111,8 +115,17 @@ recording service is not implemented yet.
 `sd.rope_apply.v1`, an override for existing `GGML_OP_ROPE_APPLY` nodes, and a
 `RMSNorm -> Mul -> RoPE` fusion. The fusion accepts a one-dimensional weight
 vector. Both interleaved and split-half RoPE, partial rotation, and strided input
-rows are supported. Model construction uses the custom operator on CPU and
-retains existing backend implementations elsewhere.
+rows are supported. Model construction uses the custom operator on CPU and CUDA
+and retains existing backend implementations elsewhere.
+
+`src/core/cuda/rope.cu` supplies standalone CUDA RoPE, the same builtin override,
+and `RMSNorm -> Mul -> RoPE [-> Scale -> FP16 Copy]` fusion. CuTe attention shares
+its RMSNorm/RoPE kernel. Partial rotation and arbitrary float-aligned input and
+position-encoding strides are supported by the standalone kernel; RMSNorm fusion
+requires contiguous position encoding and weights. Copy fusion uses workspace
+when the destination overlaps an input. These registrations do not require
+CUTLASS. The old CUDA RoPE dispatch is removed; HIP and MUSA retain their existing
+implementations.
 
 `SD_USE_UPSTREAM_GGML` excludes these registrations. The stable-diffusion public C
 API is unchanged. INT8 ConvRot retains its existing packed activation layout and
@@ -130,6 +143,9 @@ variables are honored.
 The combined INT8 GEMM epilogue feeding FP16 Q directly into attention still needs
 to be externalized. The current extension can fuse RMSNorm/RoPE with attention,
 while other INT8 GEMM and standalone projection fusions retain their native
-implementations. Vulkan execution services and kernels also remain pending.
+implementations. Native INT8 projection matchers do not recognize custom RoPE
+yet, so those graphs currently run GEMM followed by the external RoPE/attention
+path. Restoring their combined epilogues is part of the remaining migration.
+Vulkan execution services and kernels also remain pending.
 This implementation does not yet externalize all model-specific kernels or add
 dynamic dtypes.
