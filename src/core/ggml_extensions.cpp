@@ -12,6 +12,7 @@
 void sd_ggml_register_cuda_rope(ggml_backend_dev_t device);
 #endif
 #ifdef SD_CUDA_CUTE_ATTENTION
+void sd_ggml_register_cuda_i8_projection(ggml_backend_dev_t device);
 void sd_ggml_register_cuda_attention(ggml_backend_dev_t device);
 #endif
 
@@ -180,6 +181,7 @@ void sd_ggml_register_extensions(ggml_backend_t backend) {
         sd_ggml_register_cuda_rope(device);
 #endif
 #ifdef SD_CUDA_CUTE_ATTENTION
+        sd_ggml_register_cuda_i8_projection(device);
         sd_ggml_register_cuda_attention(device);
 #endif
         return;

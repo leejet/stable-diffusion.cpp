@@ -235,6 +235,40 @@ static int rope_match(ggml_backend_dev_t, const ggml_cgraph* graph, int first, v
     return 3;
 }
 
+static void rope_optimize(ggml_backend_dev_t, ggml_cgraph* graph, void*) {
+    static const bool disabled = [] {
+        const char* value = std::getenv("GGML_CUDA_DISABLE_FUSION");
+        return value && std::atoi(value) != 0;
+    }();
+    if (disabled)
+        return;
+    const int total = ggml_graph_n_nodes(graph);
+    for (int i = 2; i + 1 < total; ++i) {
+        const auto* mul  = ggml_graph_node(graph, i);
+        const auto* rope = ggml_graph_node(graph, i + 1);
+        if (mul->op != GGML_OP_MUL || !sd_cuda_rope_is_node(rope) || rope->src[0] != mul ||
+            !mul->src[0] || mul->src[0]->op != GGML_OP_RMS_NORM)
+            continue;
+        const auto* norm = mul->src[0];
+        for (int j = i - 1; j >= 0 && j >= i - 64; --j) {
+            if (ggml_graph_node(graph, j) != norm)
+                continue;
+            if (j + 1 < i) {
+                if (j >= 2) {
+                    const auto* mat  = ggml_graph_node(graph, j - 2);
+                    const auto* view = ggml_graph_node(graph, j - 1);
+                    if (mat->op == GGML_OP_MUL_MAT && mat->src[0]->type == GGML_TYPE_I8 &&
+                        view->op == GGML_OP_RESHAPE && view->src[0] == mat && norm->src[0] == view &&
+                        ggml_ext_graph_delay(graph, j - 2, 3, i))
+                        break;
+                }
+                ggml_ext_graph_delay(graph, j, 1, i);
+            }
+            break;
+        }
+    }
+}
+
 static ggml_status rope_prepare(ggml_backend_t, ggml_tensor* const* nodes, int count, void**, size_t* workspace, void*) {
     *workspace = ggml_nbytes(nodes[count - 1]);
     return GGML_STATUS_SUCCESS;
@@ -298,8 +332,9 @@ void sd_ggml_register_cuda_rope(ggml_backend_dev_t device) {
     GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
     desc.name     = "sd.rms_norm_mul_rope.cuda.v1";
     desc.op       = GGML_OP_RMS_NORM;
-    desc.priority = 200;
+    desc.priority = 250;
     desc.supports = nullptr;
     desc.match    = rope_match;
+    desc.optimize = rope_optimize;
     GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
 }

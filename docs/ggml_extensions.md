@@ -67,16 +67,20 @@ compute flags, external uses, output flags, and views; the initial implementatio
 accepts a conservative set of pure operators with only the final node exposed
 as the fused output. The rule remains responsible for mathematical equivalence,
 dtype, shape, layout, and hardware constraints. Internal views are accepted when
-their storage belongs to the fused subgraph. The final output must own storage,
-except for a terminal `CPY`, which retains its original destination and write
+their storage belongs to the fused subgraph. In-place intermediates are accepted
+only when their storage owner is an earlier node in the same match. External
+consumers and output flags still prevent eliminating those results. The final
+output must own storage, except for a terminal `CPY`, which retains its original destination and write
 semantics. The extension must handle input/output storage overlap, including
 allocator reuse, with scratch space when necessary. Other in-place writes are
-not eligible for extension fusion.
+not eligible for extension fusion when they target storage outside the match.
 
 An optional `optimize` callback runs before matching and allocation. Use
 `ggml_ext_graph_delay` to move a producer range after independent nodes. The
 helper rejects dependencies, unknown side effects, and writes that alias moved
-inputs or outputs. It can cross independent copies, including dtype conversions.
+inputs or outputs. It can cross independent copies and known in-place operators
+when their storage does not alias the moved inputs or outputs. Owning dtype
+conversions can also be moved or crossed.
 Reordering must preserve edges and tensor metadata. Fusion legality is checked
 again after reordering.
 
@@ -140,12 +144,21 @@ CUDA stream, and scheduler-owned workspace; they do not use ggml's CUDA pool or
 private conversion helpers. The existing CUDA fusion and CuTe disable environment
 variables are honored.
 
-The combined INT8 GEMM epilogue feeding FP16 Q directly into attention still needs
-to be externalized. The current extension can fuse RMSNorm/RoPE with attention,
-while other INT8 GEMM and standalone projection fusions retain their native
-implementations. Native INT8 projection matchers do not recognize custom RoPE
-yet, so those graphs currently run GEMM followed by the external RoPE/attention
-path. Restoring their combined epilogues is part of the remaining migration.
-Vulkan execution services and kernels also remain pending.
+`src/core/cuda/i8_projection.cu` supplies the INT8 GEMM projection epilogues:
+`GEMM -> Reshape -> RMSNorm -> Mul -> RoPE`, optional scaling and FP16 copy,
+and K/V prefix concatenation with FP16 output. CuTe can consume a directly
+produced FP16 Q without materializing the FP32 GEMM or RoPE intermediates.
+Independent affine operands, including broadcasted constants, are computed before
+their normalization/projection
+chain when graph dependencies allow it. The attention optimizer can then move
+the complete five-node projection when safe.
+These rules accept both builtin and custom RoPE nodes. They preserve the original
+large-matrix selection thresholds, full interleaved head dimension 128, packed
+activation layout, and separate weight scales. External consumers prevent fusion;
+aliasing terminal copies use scheduler workspace. The CUDA projection kernels
+and matchers now live in sd.cpp. `GGML_CUDA_FORCE_CUBLAS` disables these epilogues.
+
+Ordinary INT8 GEMM, ConvRot quantization, and their other fusion rules still need
+to be externalized. Vulkan execution services and kernels also remain pending.
 This implementation does not yet externalize all model-specific kernels or add
 dynamic dtypes.

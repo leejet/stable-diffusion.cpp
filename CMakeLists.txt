@@ -348,12 +348,15 @@ if (SD_CUDA)
         target_sources(${SD_LIB} PRIVATE src/core/cuda/rope.cu)
         set_source_files_properties(src/core/cuda/rope.cu PROPERTIES COMPILE_OPTIONS "--use_fast_math")
         if (GGML_CUDA_CUTLASS_PATH)
-            target_sources(${SD_LIB} PRIVATE src/core/cuda/cute_attention.cu)
-            set_source_files_properties(src/core/cuda/cute_attention.cu PROPERTIES
+            target_sources(${SD_LIB} PRIVATE src/core/cuda/cute_attention.cu src/core/cuda/i8_projection.cu)
+            set_source_files_properties(src/core/cuda/cute_attention.cu src/core/cuda/i8_projection.cu PROPERTIES
                 INCLUDE_DIRECTORIES "${GGML_CUDA_CUTLASS_PATH}/include"
                 COMPILE_OPTIONS "--use_fast_math;--extended-lambda;--expt-relaxed-constexpr")
             if (MSVC)
-                set_property(SOURCE src/core/cuda/cute_attention.cu APPEND PROPERTY COMPILE_OPTIONS -Xcompiler=/Zc:preprocessor,/Zc:__cplusplus)
+                set_property(SOURCE src/core/cuda/cute_attention.cu src/core/cuda/i8_projection.cu APPEND PROPERTY COMPILE_OPTIONS -Xcompiler=/Zc:preprocessor,/Zc:__cplusplus)
+            endif()
+            if (GGML_CUDA_FORCE_CUBLAS)
+                set_property(SOURCE src/core/cuda/i8_projection.cu APPEND PROPERTY COMPILE_DEFINITIONS SD_CUDA_FORCE_CUBLAS)
             endif()
             set_property(SOURCE src/core/ggml_extensions.cpp APPEND PROPERTY COMPILE_DEFINITIONS SD_CUDA_CUTE_ATTENTION)
         endif()

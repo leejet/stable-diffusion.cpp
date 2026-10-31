@@ -44,6 +44,7 @@
 #include <mutex>
 #include <type_traits>
 #include <unordered_map>
+#include "core/cuda/i8_projection.h"
 #include "core/cuda/rope.h"
 #include "ggml-ext.h"
 
@@ -578,7 +579,14 @@ static int attention_match(ggml_backend_dev_t device, const ggml_cgraph* graph, 
     if (!fusion_enabled())
         return 0;
     int offset = 0;
-    if (graph_node(graph, first)->op == GGML_OP_RMS_NORM) {
+    if (graph_node(graph, first)->op == GGML_OP_MUL_MAT) {
+        if (first + 5 >= ggml_graph_n_nodes(const_cast<ggml_cgraph*>(graph)) ||
+            !sd_cuda_i8_rope_supports(device, graph_node(graph, first), graph_node(graph, first + 1),
+                                      graph_node(graph, first + 2), graph_node(graph, first + 3), graph_node(graph, first + 4)) ||
+            graph_node(graph, first + 5)->src[0] != graph_node(graph, first + 4))
+            return 0;
+        offset = 5;
+    } else if (graph_node(graph, first)->op == GGML_OP_RMS_NORM) {
         if (first + 3 >= ggml_graph_n_nodes(const_cast<ggml_cgraph*>(graph)) ||
             !sd_cuda_rope_fusion_supports(graph_node(graph, first), graph_node(graph, first + 1), graph_node(graph, first + 2)) ||
             graph_node(graph, first + 3)->src[0] != graph_node(graph, first + 2))
@@ -601,6 +609,9 @@ static void attention_optimize(ggml_backend_dev_t device, ggml_cgraph* graph, vo
         for (int j = i - 3; j >= 0 && j >= i - 32; --j) {
             if (attn->src[0] == graph_node(graph, j + 2) &&
                 sd_cuda_rope_fusion_supports(graph_node(graph, j), graph_node(graph, j + 1), graph_node(graph, j + 2))) {
+                if (j >= 2 && sd_cuda_i8_rope_supports(device, graph_node(graph, j - 2), graph_node(graph, j - 1), graph_node(graph, j), graph_node(graph, j + 1), graph_node(graph, j + 2)) &&
+                    ggml_ext_graph_delay(graph, j - 2, 5, i))
+                    break;
                 ggml_ext_graph_delay(graph, j, 3, i);
                 break;
             }
@@ -616,7 +627,8 @@ struct AttentionPlan {
 static ggml_status attention_prepare(ggml_backend_t, ggml_tensor* const* nodes, int count, void** state, size_t* workspace_size, void*) {
     auto* plan  = new AttentionPlan{};
     *state      = plan;
-    plan->index = nodes[0]->op == GGML_OP_RMS_NORM ? 3 : 0;
+    plan->index = nodes[0]->op == GGML_OP_MUL_MAT ? 5 : nodes[0]->op == GGML_OP_RMS_NORM ? 3
+                                                                                         : 0;
     GGML_ASSERT(plan->index < count);
     const auto* attn = nodes[plan->index];
     size_t size      = 0;
@@ -671,7 +683,10 @@ static ggml_status attention_execute(const ggml_ext_execution_context* execution
     for (int i = 0; i < 3; ++i) {
         const auto* src   = attn->src[i];
         const float scale = i == 0 ? param_f32(attn, 0) : 1.0f;
-        if (i == 0 && plan.index == 3) {
+        if (i == 0 && plan.index == 5) {
+            if (sd_cuda_i8_rope_launch(stream, nodes, work[0], scale) != cudaSuccess)
+                return GGML_STATUS_FAILED;
+        } else if (i == 0 && plan.index == 3) {
             if (sd_cuda_rms_rope_launch(stream, nodes, work[0], true, scale) != cudaSuccess)
                 return GGML_STATUS_FAILED;
         } else if (i != 0 && src->type == GGML_TYPE_F16 && ggml_is_contiguous(src) && uintptr_t(src->data) % 16 == 0) {
@@ -765,5 +780,9 @@ void sd_ggml_register_cuda_attention(ggml_backend_dev_t device) {
     desc.supports  = nullptr;
     desc.preferred = nullptr;
     desc.optimize  = nullptr;
+    GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
+    desc.name     = "sd.i8_rope_cute_attention.cuda.v1";
+    desc.op       = GGML_OP_MUL_MAT;
+    desc.priority = 400;
     GGML_ASSERT(ggml_ext_register_kernel(device, &desc));
 }
