@@ -34,6 +34,23 @@ bool sd_ggml_i8_describe(const ggml_tensor* node, SDI8Operation* operation);
 bool sd_ggml_convrot_describe(const ggml_tensor* node, int* group_size);
 ggml_tensor* ggml_mul_mat_i8_tensorwise(ggml_context* ctx, ggml_tensor* weight, ggml_tensor* input, ggml_tensor* weight_scale, ggml_tensor* bias, int group_size, ggml_tensor* input_scale = nullptr);
 ggml_tensor* ggml_quantize_i8_convrot(ggml_context* ctx, ggml_tensor* input, int group_size);
+
+enum ggml_sage_attn_mode {
+    GGML_SAGE_ATTN_AUTO = 0,
+    GGML_SAGE_ATTN_2,
+    GGML_SAGE_ATTN_2_PLUS_PLUS,
+};
+
+struct SDSageAttentionParams {
+    float scale;
+    ggml_sage_attn_mode mode;
+};
+
+ggml_ext_op_t sd_ggml_sage_attn_op();
+bool sd_ggml_sage_attn_describe(const ggml_tensor* node, SDSageAttentionParams* params);
+// Q/K: contiguous F32 [D, tokens, heads, batch], V: contiguous F16 in the same layout.
+// Output: F32 [D, query heads, query tokens, batch]. CUDA-only, unmasked inference.
+ggml_tensor* ggml_sage_attn(ggml_context* ctx, ggml_tensor* q, ggml_tensor* k, ggml_tensor* v, float scale, ggml_sage_attn_mode mode);
 #endif
 
 #endif

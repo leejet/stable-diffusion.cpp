@@ -399,10 +399,8 @@ The corresponding Vulkan shader sources and native fusion rules have been
 removed from ggml. Unsupported custom nodes retain scheduler fallback to
 another supported backend.
 
-Remaining model-specific CUDA paths and Vulkan INT8/ConvRot implementations still
-need auditing or migration.
-This implementation does not yet externalize all model-specific kernels or add
-dynamic dtypes.
+Remaining model-specific CUDA paths still need auditing or migration. This
+implementation does not add dynamic dtypes.
 
 `src/core/vulkan/int8.cpp` owns Vulkan INT8 GEMM, ConvRot, and their fusion rules.
 The Vulkan compute metadata service exposes shared-memory limits, subgroup
@@ -412,3 +410,22 @@ SwiGLU, residual, row-concatenation, and modulation paths. Kernels use public
 Vulkan dispatch, buffer, copy, and workspace services without private backend
 headers. Vulkan currently handles packed group-256 activations with separate
 weight scales; unsupported custom nodes fall back to CPU.
+
+## SageAttention
+
+The existing `ggml_sage_attn` entry point is declared and implemented in sd.cpp's
+common extension files. It constructs `sd.sage_attn.v1` with explicit Q/K/V inputs
+and scale/mode attributes. ggml has no Sage-specific opcode, allocation rule, or
+backend dispatch branch.
+
+`src/core/cuda/sage_attention.cu` and its `sageattention/` device headers own the
+CUDA implementation. Quantization and temporary attention output use scheduler
+workspace, rather than an oversized output tensor. The implementation obtains
+the backend stream through the public GPU service and converts the final FP16
+output with a local CUDA kernel. It retains the SM80 compatibility path and the
+SageAttention2/2++ toolkit and architecture requirements. Capability checks use
+the application's compiled CUDA target as well as the physical device.
+
+CPU, HIP, MUSA, and Vulkan do not implement this NVIDIA-specific kernel. Existing
+model-level capability checks retain flash/default attention for unsupported
+layers; a custom Sage node itself does not silently change algorithms.

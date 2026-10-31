@@ -5,6 +5,7 @@
 #include "ggml-ext.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <mutex>
 #include <unordered_set>
@@ -221,6 +222,59 @@ ggml_tensor* ggml_mul_mat_i8_tensorwise(ggml_context* ctx, ggml_tensor* w, ggml_
 ggml_tensor* ggml_quantize_i8_convrot(ggml_context* ctx, ggml_tensor* x, int group) {
     int32_t attr = group;
     return ggml_ext_op_create(ctx, sd_ggml_convrot_op(), &x, 1, &attr);
+}
+
+static bool sage_attn_infer(ggml_tensor* const* inputs, int count, const void* attributes, ggml_ext_tensor_desc* out) {
+    if (count != 3 || !attributes)
+        return false;
+    SDSageAttentionParams params;
+    std::memcpy(&params, attributes, sizeof(params));
+    if (!std::isfinite(params.scale) || params.scale <= 0.f || params.mode < GGML_SAGE_ATTN_AUTO || params.mode > GGML_SAGE_ATTN_2_PLUS_PLUS)
+        return false;
+    for (int i = 0; i < count; ++i) {
+        const auto* t = inputs[i];
+        if (!t || !ggml_is_contiguous(t) || t->type != (i == 2 ? GGML_TYPE_F16 : GGML_TYPE_F32))
+            return false;
+        int64_t elements = 1;
+        for (int d = 0; d < GGML_MAX_DIMS; ++d) {
+            if (t->ne[d] <= 0 || t->ne[d] > INT64_MAX / int64_t(sizeof(float)) / elements)
+                return false;
+            elements *= t->ne[d];
+        }
+    }
+    const auto* q = inputs[0];
+    const auto* k = inputs[1];
+    if (q->ne[0] != k->ne[0] || !ggml_are_same_shape(k, inputs[2]) || q->ne[2] % k->ne[2] != 0 || q->ne[3] != k->ne[3])
+        return false;
+    *out = {GGML_TYPE_F32, {q->ne[0], q->ne[2], q->ne[1], q->ne[3]}};
+    return true;
+}
+
+ggml_ext_op_t sd_ggml_sage_attn_op() {
+    static const auto op = [] {
+        const ggml_ext_op_desc desc = {GGML_EXT_ABI_VERSION, "sd.sage_attn.v1", sizeof(SDSageAttentionParams), sage_attn_infer};
+        auto result                 = ggml_ext_register_op(&desc);
+        GGML_ASSERT(result);
+        return result;
+    }();
+    return op;
+}
+
+bool sd_ggml_sage_attn_describe(const ggml_tensor* node, SDSageAttentionParams* params) {
+    if (!node || ggml_ext_op_get(node) != sd_ggml_sage_attn_op() || node->src[3] || !ggml_is_contiguous(node))
+        return false;
+    ggml_ext_tensor_desc output;
+    const auto* attributes = ggml_ext_op_attributes(node);
+    if (!sage_attn_infer(node->src, 3, attributes, &output) || node->type != output.type || std::memcmp(node->ne, output.ne, sizeof(output.ne)))
+        return false;
+    std::memcpy(params, attributes, sizeof(*params));
+    return true;
+}
+
+ggml_tensor* ggml_sage_attn(ggml_context* ctx, ggml_tensor* q, ggml_tensor* k, ggml_tensor* v, float scale, ggml_sage_attn_mode mode) {
+    ggml_tensor* inputs[]              = {q, k, v};
+    const SDSageAttentionParams params = {scale, mode};
+    return ggml_ext_op_create(ctx, sd_ggml_sage_attn_op(), inputs, 3, &params);
 }
 
 void sd_ggml_register_extensions(ggml_backend_t backend) {
