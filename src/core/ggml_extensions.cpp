@@ -10,6 +10,7 @@
 #include <unordered_set>
 
 #ifdef SD_CUDA_EXTENSIONS
+void sd_ggml_register_cuda_affine(ggml_backend_dev_t device);
 void sd_ggml_register_cuda_i8(ggml_backend_dev_t device);
 void sd_ggml_register_cuda_convrot(ggml_backend_dev_t device);
 void sd_ggml_register_cuda_rope(ggml_backend_dev_t device);
@@ -182,6 +183,7 @@ void sd_ggml_register_extensions(ggml_backend_t backend) {
     }
     if (cuda) {
 #ifdef SD_CUDA_EXTENSIONS
+        sd_ggml_register_cuda_affine(device);
         sd_ggml_register_cuda_i8(device);
         sd_ggml_register_cuda_convrot(device);
         sd_ggml_register_cuda_rope(device);

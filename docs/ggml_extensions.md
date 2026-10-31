@@ -70,8 +70,11 @@ dtype, shape, layout, and hardware constraints. Internal views are accepted when
 their storage belongs to the fused subgraph. In-place intermediates are accepted
 only when their storage owner is an earlier node in the same match. External
 consumers and output flags still prevent eliminating those results. The final
-output must own storage, except for a terminal `CPY`, which retains its original destination and write
-semantics. The extension must handle input/output storage overlap, including
+output must own storage, use a terminal `CPY`, or write back to an earlier owning
+node within the match. Internal writeback must cover exactly the owner's full
+shape, type, strides and storage offset, without external consumers of that
+owner. Output flags propagated to that owner are retained. Terminal `CPY` keeps
+its original destination and write semantics. The extension must handle input/output storage overlap, including
 allocator reuse, with scratch space when necessary. Other in-place writes are
 not eligible for extension fusion when they target storage outside the match.
 
@@ -255,6 +258,18 @@ ordinary execution. These fusions do not require CUTLASS and honor
 The corresponding scale, normalization, and unary-activation fusion rules in
 ggml now only serve HIP. CUDA GEMM/SwiGLU/ConvRot chains are selected by the
 application INT8 extension before the standalone activation fusion.
+
+`src/core/cuda/affine.cu` registers FP32 `Mul(gate) -> Add(residual)`,
+`Concat -> [Permute] -> FP16 Copy`, and `Contiguous -> Scale -> Permute -> FP16
+Copy` fusions. Gate multiplication and residual addition retain separate FP32
+rounding. Copy layouts and alignment requirements match the original CUDA
+kernels; unsupported layouts, external intermediate consumers, self-residual
+Add inputs, and fusion disabling retain ordinary operators. Internal in-place
+Add outputs are accepted when they overwrite the complete fused Mul allocation. Exact in-place residual
+or input addresses are safe for the pointwise kernel; partial overlap, broadcast
+gate overlap, and FP16 copy overlap use scheduler workspace. These registrations
+require no CUTLASS and support reusable CUDA Graph replay. Their former native
+fusion implementations now only serve HIP/MUSA.
 
 CUDA kernels can opt into device replay with `ggml_ext_register_kernel_ex` and
 `GGML_EXT_KERNEL_CAPTURE_SAFE`. The original registration function retains its
