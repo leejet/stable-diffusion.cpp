@@ -647,7 +647,7 @@ ggml_status sd_backend_graph_compute_with_eval_callback(ggml_backend_t backend,
             need = callback_eval(t, true, callback_eval_user_data);
         }
 
-        status = ggml_backend_graph_compute_async_range(backend, gf, j0, j1 + 1);
+        status = sd_ggml_backend_graph_compute_async_range(backend, gf, j0, j1 + 1);
         if (status != GGML_STATUS_SUCCESS) {
             break;
         }

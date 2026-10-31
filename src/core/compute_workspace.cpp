@@ -69,7 +69,7 @@ namespace sd {
 
     bool ComputeWorkspace::allocate(ggml_cgraph* graph, const AssignNodes& assign_nodes) {
         GGML_ASSERT(!active_);
-        const size_t capacity = static_cast<size_t>(ggml_graph_n_nodes(graph) + ggml_graph_n_leafs(graph)) + 8;
+        const size_t capacity = static_cast<size_t>(ggml_graph_n_nodes(graph) + sd_ggml_graph_n_leafs(graph)) + 8;
         if (scheduler_ == nullptr || capacity > scheduler_capacity_) {
             release();
             scheduler_          = make_scheduler(capacity);
@@ -104,8 +104,8 @@ namespace sd {
         for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
             visit(ggml_graph_node(graph, i));
         }
-        for (int i = 0; i < ggml_graph_n_leafs(graph); ++i) {
-            visit(ggml_graph_leaf(graph, i));
+        for (int i = 0; i < sd_ggml_graph_n_leafs(graph); ++i) {
+            visit(sd_ggml_graph_leaf(graph, i));
         }
         for (size_t i = 0; i < tensors.size(); ++i) {
             visit(tensors[i]->view_src);
@@ -121,7 +121,7 @@ namespace sd {
                 key.insert(key.end(), bytes, bytes + sizeof(value));
             };
             append(ggml_graph_n_nodes(graph));
-            append(ggml_graph_n_leafs(graph));
+            append(sd_ggml_graph_n_leafs(graph));
             for (auto tensor : tensors) {
                 append(tensor);
                 append(tensor->type);
@@ -150,7 +150,7 @@ namespace sd {
                     const auto alignment_offset = reinterpret_cast<uintptr_t>(tensor->data) % ggml_backend_get_alignment(external);
                     append(alignment_offset);
                 }
-                const int32_t uses = ggml_graph_use_count(graph, tensor);
+                const int32_t uses = sd_ggml_graph_use_count(graph, tensor);
                 append(uses);
             }
             // Match the full allocation metadata, including topology and external placement.
@@ -197,7 +197,7 @@ namespace sd {
             const auto found   = mapped.find(tensor);
             return found == mapped.end() ? nullptr : found->second;
         };
-        GGML_ASSERT(ggml_graph_cpy_mapped(graph, copy_graph, map_tensor, &copies));
+        GGML_ASSERT(sd_ggml_graph_cpy_mapped(graph, copy_graph, map_tensor, &copies));
         Measurement result;
         auto scheduler = make_scheduler(graph_size);
         if (scheduler != nullptr) {

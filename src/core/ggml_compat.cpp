@@ -1,8 +1,6 @@
 #include "core/ggml_compat.h"
 #include "core/ggml_extend_backend.h"
 
-#ifdef SD_GGML_GRAPH_COMPAT
-// Upstream ggml still requires its private graph layout for these operations.
 #include "ggml-impl.h"
 
 #include <unordered_map>
@@ -10,11 +8,11 @@
 #include <utility>
 #include <vector>
 
-int ggml_graph_n_leafs(const ggml_cgraph* graph) {
+int sd_ggml_graph_n_leafs(const ggml_cgraph* graph) {
     return graph->n_leafs;
 }
 
-ggml_tensor* ggml_graph_leaf(const ggml_cgraph* graph, int index) {
+ggml_tensor* sd_ggml_graph_leaf(const ggml_cgraph* graph, int index) {
     if (index < 0) {
         index += graph->n_leafs;
     }
@@ -22,12 +20,12 @@ ggml_tensor* ggml_graph_leaf(const ggml_cgraph* graph, int index) {
     return graph->leafs[index];
 }
 
-void ggml_graph_add_leaf(ggml_cgraph* graph, ggml_tensor* tensor) {
+void sd_ggml_graph_add_leaf(ggml_cgraph* graph, ggml_tensor* tensor) {
     GGML_ASSERT(tensor && graph->n_leafs < graph->size);
     graph->leafs[graph->n_leafs++] = tensor;
 }
 
-int32_t ggml_graph_use_count(const ggml_cgraph* graph, const ggml_tensor* tensor) {
+int32_t sd_ggml_graph_use_count(const ggml_cgraph* graph, const ggml_tensor* tensor) {
     if (!graph || !tensor || !graph->visited_hash_set.size) {
         return 0;
     }
@@ -37,7 +35,7 @@ int32_t ggml_graph_use_count(const ggml_cgraph* graph, const ggml_tensor* tensor
                : 0;
 }
 
-bool ggml_graph_cpy_mapped(const ggml_cgraph* src, ggml_cgraph* dst, ggml_graph_tensor_map_fn map, void* user_data) {
+bool sd_ggml_graph_cpy_mapped(const ggml_cgraph* src, ggml_cgraph* dst, sd_ggml_graph_tensor_map_fn map, void* user_data) {
     if (!src || !dst || src == dst || !map || dst->grads || dst->grad_accs ||
         src->n_nodes > dst->size || src->n_leafs > dst->size) {
         return false;
@@ -104,7 +102,7 @@ bool ggml_graph_cpy_mapped(const ggml_cgraph* src, ggml_cgraph* dst, ggml_graph_
         ggml_graph_add_node(dst, tensor);
     }
     for (auto* tensor : leafs) {
-        ggml_graph_add_leaf(dst, tensor);
+        sd_ggml_graph_add_leaf(dst, tensor);
     }
     for (const auto& entry : counts) {
         const size_t index     = ggml_hash_insert(&dst->visited_hash_set, entry.first);
@@ -113,7 +111,7 @@ bool ggml_graph_cpy_mapped(const ggml_cgraph* src, ggml_cgraph* dst, ggml_graph_
     return true;
 }
 
-bool ggml_graph_cpy_use_counts(const ggml_cgraph* src, ggml_cgraph* dst) {
+bool sd_ggml_graph_cpy_use_counts(const ggml_cgraph* src, ggml_cgraph* dst) {
     if (!src || !dst || !src->visited_hash_set.size || !dst->visited_hash_set.size) {
         return false;
     }
@@ -152,7 +150,7 @@ bool ggml_graph_cpy_use_counts(const ggml_cgraph* src, ggml_cgraph* dst) {
     return true;
 }
 
-ggml_status ggml_backend_graph_compute_async_range(ggml_backend_t backend, ggml_cgraph* graph, int first, int last) {
+ggml_status sd_ggml_backend_graph_compute_async_range(ggml_backend_t backend, ggml_cgraph* graph, int first, int last) {
     if (!backend || !graph || first < 0 || last < first || last > graph->n_nodes) {
         return GGML_STATUS_FAILED;
     }
@@ -162,8 +160,6 @@ ggml_status ggml_backend_graph_compute_async_range(ggml_backend_t backend, ggml_
     auto view = ggml_graph_view(graph, first, last);
     return ggml_backend_graph_compute_async(backend, &view);
 }
-#endif
-
 #ifdef SD_USE_UPSTREAM_GGML
 #include "ggml-backend-impl.h"
 #endif

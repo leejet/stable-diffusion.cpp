@@ -448,22 +448,18 @@ kernel compiled for SM80 or newer. CPU, HIP, MUSA, and Vulkan do not advertise
 support. ggml no longer contains a Sol-Attn opcode, constructor, allocation rule,
 or backend kernel.
 
-## Public graph access
+## Internal graph access
 
-`ggml-graph.h` exposes leaf enumeration, append-only leaf construction, recorded
-use counts, mapped inference-graph copying, use-count copying for segments, and
-backend execution of a node range. Mapped copies retain node order and consumer
-counts from the original graph, including consumers outside a graph view. The
-caller owns tensor copies and remaps their storage and edges; invalid mappings
-leave the destination graph unchanged. Range execution uses already allocated
-tensors and retains the original graph's consumer counts.
+`src/core/ggml_compat.cpp` uses `ggml-impl.h` for leaf enumeration, graph copying,
+use-count preservation and range execution. Patched and upstream builds share
+this implementation; ggml does not expose a separate public graph API for these
+application helpers. Mapped copies retain node order and consumer counts,
+including consumers outside a graph view. Invalid mappings leave the destination
+unchanged. Workspace measurement, graph cuts and evaluation callbacks use these
+helpers.
 
-Workspace measurement, graph cuts, and evaluation callbacks use these APIs.
-Backend extensions require matching private headers. Compatibility with an
-upstream ggml lacking this header is isolated in `src/core/ggml_compat.cpp`; that
-optional build still requires matching upstream private headers. The compatibility
-layer also retains the workaround for old Metal backends wrapping failed host
-mappings. The patched Metal backend returns null directly when mapping fails.
+The compatibility layer also retains the workaround for old Metal backends
+wrapping failed host mappings. The patched Metal backend returns null directly.
 
 Vulkan command recording services are declared in the private
 `ggml/src/ggml-ext-vulkan.h`. Pipeline ownership, submission and synchronization
