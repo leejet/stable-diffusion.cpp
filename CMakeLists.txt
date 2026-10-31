@@ -346,12 +346,13 @@ if (SD_CUDA)
     target_link_libraries(${SD_LIB} PUBLIC CUDA::cuda_driver)
     set_property(SOURCE src/core/ggml_extend_backend.cpp APPEND PROPERTY COMPILE_DEFINITIONS SD_USE_CUDA)
     if (NOT SD_USE_UPSTREAM_GGML)
+        include(cmake/cutlass.cmake)
         enable_language(CUDA)
         set_target_properties(${SD_LIB} PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON)
-        if (GGML_CUDA_CUTLASS_PATH)
+        if (SD_CUDA_CUTLASS_PATH)
             target_sources(${SD_LIB} PRIVATE src/core/cuda/cute_attention.cu src/core/cuda/i8_projection.cu src/core/cuda/i8_gated_residual.cu src/core/cuda/i8_gemm.cu)
             set_source_files_properties(src/core/cuda/cute_attention.cu src/core/cuda/i8_projection.cu src/core/cuda/i8_gated_residual.cu src/core/cuda/i8_gemm.cu PROPERTIES
-                INCLUDE_DIRECTORIES "${GGML_CUDA_CUTLASS_PATH}/include"
+                INCLUDE_DIRECTORIES "${SD_CUDA_CUTLASS_PATH}/include"
                 COMPILE_OPTIONS "--use_fast_math;--extended-lambda;--expt-relaxed-constexpr")
             if (MSVC)
                 set_property(SOURCE src/core/cuda/cute_attention.cu src/core/cuda/i8_projection.cu src/core/cuda/i8_gated_residual.cu src/core/cuda/i8_gemm.cu APPEND PROPERTY COMPILE_OPTIONS -Xcompiler=/Zc:preprocessor,/Zc:__cplusplus)
