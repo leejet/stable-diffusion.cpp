@@ -108,6 +108,11 @@ Services are discovered through `ggml_backend_reg_get_proc_address`:
 | `ggml_ext_cpu_parallel_v1` | Run an application callback on the CPU backend's configured thread pool, with its abort callback. |
 | `ggml_ext_cuda_context_v1` | Borrow the current CUDA device and stream, ordered with native work. |
 | `ggml_ext_cuda_device_v1` | Get the physical CUDA ordinal for capability checks before backend creation, including virtual ggml devices. |
+| `ggml_ext_cuda_blas_v1` | Borrow the current stream's cuBLAS handle during execution, with host scalar pointers. |
+
+The borrowed cuBLAS handle remains owned by the backend. Extensions must not retain
+or destroy it, or change its stream, pointer mode, math mode, or workspace. This
+service is exposed by the CUDA backend, not HIP/MUSA.
 
 Workspace is a backend buffer. Its base is a CUDA device pointer on CUDA; callers
 must use the representation appropriate to their backend. A Vulkan command
@@ -162,8 +167,8 @@ and matchers now live in sd.cpp. `GGML_CUDA_FORCE_CUBLAS` disables these epilogu
 `sd.quantize_i8_convrot.v1`, with CPU implementations and overrides of the old
 builtins. The CPU kernels use the configured thread pool and scheduler workspace;
 the old CPU INT8 GEMM and ConvRot implementations have been removed from ggml.
-Custom nodes currently execute on CPU; model code retains builtin nodes so the
-existing CUDA and Vulkan implementations can still be selected.
+Custom nodes execute on CPU or CUDA when supported. Model code retains builtin
+nodes while the existing CUDA and Vulkan fusion rules are being migrated.
 
 For already quantized activations, `sd_ggml_mul_mat_i8` accepts ordinary I8 weight
 and activation tensors, a separate F32 activation scale tensor with one value per
@@ -180,7 +185,18 @@ scales. Weight scales remain separate. CPU ConvRot groups are 1, 4, 16, 64, or 2
 Unsupported layouts and malformed scale shapes are rejected. Separate CPU quantize
 and GEMM phases propagate cancellation, and overlapping outputs use workspace.
 
-Ordinary CUDA/Vulkan INT8 GEMM, ConvRot quantization, and their other fusion rules
+`src/core/cuda/int8.cu` implements the same custom schemas on CUDA. It uses the
+borrowed cuBLAS handle for I8-by-I8-to-I32 GEMM and application-owned quantization,
+ConvRot, and rescaling kernels. F32 inputs are quantized into workspace; ordinary
+I8 inputs retain separate scale tensors and use a padded temporary only when
+needed by cuBLAS. Packed ConvRot inputs are consumed directly. Large ConvRot rows
+use multiple kernels when they exceed shared memory. Aliasing outputs use scratch.
+These registrations do not require CUTLASS and do not intercept builtin nodes yet.
+CUDA GEMM requires Turing or newer, contiguous tensors, K/N divisible by four,
+float-aligned inputs, and at most 65535 rows; CUDA ConvRot uses groups of 256.
+Unsupported custom nodes can fall back to CPU through the scheduler.
+
+The builtin CUDA/Vulkan INT8 GEMM, ConvRot quantization, and their other fusion rules
 still need to be externalized. Vulkan execution services and kernels also remain pending.
 This implementation does not yet externalize all model-specific kernels or add
 dynamic dtypes.
