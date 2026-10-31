@@ -5,95 +5,11 @@
 #include <climits>
 #include <cstdlib>
 #include <cutlass/epilogue/threadblock/fusion/visitors.hpp>
-#include <mutex>
-#include <unordered_map>
+#include "backend.h"
+#include "i8_gemm.cuh"
 #include "i8_gemm.h"
 
 namespace sd_i8_cutlass {
-    struct BandedStreamK : cutlass::gemm::threadblock::ThreadblockSwizzleStreamK {
-        using Base = cutlass::gemm::threadblock::ThreadblockSwizzleStreamK;
-        using Base::Base;
-
-        CUTLASS_DEVICE cutlass::gemm::GemmCoord get_tile_offset(int index) const {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 890
-            const auto shape = tiled_shape();
-            if (problem_size.m() >= 4096 && problem_size.n() >= 16384 && shape.m() >= shape.n()) {
-                // Column bands retain weight tiles in Ada's L2 across successive row tiles.
-                constexpr int band_width = 16;
-                if (index >= shape.m() * shape.n()) {
-                    return {shape.m(), shape.n(), get_batch_idx()};
-                }
-                const int band   = index / (shape.m() * band_width);
-                const int width  = min(band_width, shape.n() - band * band_width);
-                const int within = index - band * shape.m() * band_width;
-                return {within / width, band * band_width + within % width, get_batch_idx()};
-            }
-#endif
-            return Base::get_tile_offset(index);
-        }
-    };
-
-    template <int M, int N, int WM>
-    struct TileConfig {
-        using Tile = cutlass::gemm::GemmShape<M, N, 64>;
-        using Warp = cutlass::gemm::GemmShape<WM, 64, 64>;
-    };
-
-    enum Tile {
-        TILE_128_256,
-        TILE_128_128,
-        TILE_64_128,
-        TILE_16_128,
-    };
-
-    static bool small_rows_enabled(int64_t rows, int64_t n, int64_t k) {
-        static const char* setting = std::getenv("GGML_CUDA_I8_SMALL_ROWS");
-        return setting ? std::atoi(setting) != 0 : rows < 32 && n >= 4096 && k >= 4096;
-    }
-
-    static Tile select_tile(int64_t rows, int64_t n, int nsm) {
-        if (rows < 32) {
-            return TILE_16_128;
-        }
-        const int64_t columns = (n + 127) / 128;
-        if (((rows + 15) / 16) * columns <= nsm) {
-            return TILE_16_128;
-        }
-        if (((rows + 63) / 64) * columns <= nsm) {
-            return TILE_64_128;
-        }
-        const int64_t wide_tiles   = ((rows + 127) / 128) * ((n + 255) / 256);
-        const int64_t square_tiles = ((rows + 127) / 128) * columns;
-        // A narrower tile costs more per output element, but can waste less of the last wave.
-        const double wide_cost   = double((wide_tiles + nsm - 1) / nsm) / wide_tiles;
-        const double square_cost = 1.08 * double((square_tiles + nsm - 1) / nsm) / square_tiles;
-        return wide_cost <= square_cost ? TILE_128_256 : TILE_128_128;
-    }
-
-    struct DeviceInfo {
-        int ordinal        = -1;
-        int major          = 0;
-        int sms            = 0;
-        int threads_per_sm = 0;
-        size_t shared      = 0;
-    };
-    static DeviceInfo device_info(ggml_backend_dev_t device) {
-        static std::mutex mutex;
-        static std::unordered_map<ggml_backend_dev_t, DeviceInfo> cache;
-        std::lock_guard<std::mutex> lock(mutex);
-        auto found = cache.find(device);
-        if (found != cache.end())
-            return found->second;
-        DeviceInfo info;
-        auto reg             = ggml_backend_dev_backend_reg(device);
-        auto query           = reinterpret_cast<ggml_ext_cuda_device_fn>(ggml_backend_reg_get_proc_address(reg, "ggml_ext_cuda_device_v1"));
-        int ordinal          = query ? query(device) : -1;
-        cudaDeviceProp props = {};
-        if (ordinal >= 0 && cudaGetDeviceProperties(&props, ordinal) == cudaSuccess)
-            info = {ordinal, props.major, props.multiProcessorCount, props.maxThreadsPerMultiProcessor, size_t(props.sharedMemPerBlockOptin)};
-        cache.emplace(device, info);
-        return info;
-    }
     // The iterator pairs gate/up columns while reading the original checkpoint layout.
     struct WeightLayout : cutlass::layout::PermuteBase {
         int stride, half_n;
@@ -202,7 +118,7 @@ namespace sd_i8_cutlass {
         using Gemm            = cutlass::gemm::device::GemmUniversalAdapter<Kernel>;
     };
     struct Plan {
-        DeviceInfo device;
+        ggml_ext_gpu_device_info device;
         int64_t rows, n, k;
         bool swiglu;
         size_t kernel_bytes = 0, scratch_offset = 0;
@@ -235,7 +151,7 @@ namespace sd_i8_cutlass {
                 p.occupancy <= 0)
                 return GGML_STATUS_FAILED;
         }
-        typename Kernel::Params params(args, p.device.sms, p.occupancy);
+        typename Kernel::Params params(args, p.device.nsm, p.occupancy);
         if (params.get_workspace_size() > p.kernel_bytes)
             return GGML_STATUS_FAILED;
         if (p.swiglu) {
@@ -252,14 +168,14 @@ namespace sd_i8_cutlass {
     template <class Types>
     static bool configure_kernel(Plan& p) {
         using Kernel = typename Types::Kernel;
-        if (sizeof(typename Kernel::SharedStorage) > p.device.shared)
+        if (sizeof(typename Kernel::SharedStorage) > p.device.shared_memory)
             return false;
         auto args = arguments<Types>(p, nullptr, nullptr, nullptr, nullptr, nullptr);
         if (Kernel::can_implement(args) != cutlass::Status::kSuccess)
             return false;
         size_t bytes = 0;
-        for (int occupancy = 1; occupancy <= p.device.threads_per_sm / Kernel::kThreadCount; ++occupancy) {
-            typename Kernel::Params params(args, p.device.sms, occupancy);
+        for (int occupancy = 1; occupancy <= p.device.max_threads_per_sm / Kernel::kThreadCount; ++occupancy) {
+            typename Kernel::Params params(args, p.device.nsm, occupancy);
             const auto grid = params.get_grid_dims();
             if (grid.y > 65535 || grid.z > 65535)
                 return false;
@@ -290,7 +206,7 @@ namespace sd_i8_cutlass {
             }
             return false;
         };
-        const auto tile = select_tile(p.rows, p.n, p.device.sms);
+        const auto tile = select_tile(p.rows, p.n, p.device.nsm);
         if (try_tile(tile))
             return true;
         for (auto fallback : {TILE_128_256, TILE_128_128, TILE_64_128, TILE_16_128})
@@ -304,8 +220,8 @@ SDI8CudaGemmPlan* sd_cuda_i8_gemm_prepare(ggml_backend_dev_t device, int64_t row
 #ifdef SD_CUDA_FORCE_CUBLAS
     return nullptr;
 #else
-    const auto info = sd_i8_cutlass::device_info(device);
-    if (info.major < 8 || rows < (sd_i8_cutlass::small_rows_enabled(rows, n, k) ? 1 : 128) ||
+    const auto info = sd_cuda::cuda_device_info(device);
+    if (info.device < 0 || info.cc < 800 || rows < (sd_i8_cutlass::small_rows_enabled(rows, n, k) ? 1 : 128) ||
         rows > INT_MAX || n < 1 || n > INT_MAX || k < 1 || k > INT_MAX || k % 64 || n % (swiglu ? 256 : 128))
         return nullptr;
     auto* p   = new SDI8CudaGemmPlan;

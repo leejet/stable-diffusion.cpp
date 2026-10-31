@@ -1,3 +1,4 @@
+#include "backend.h"
 /*
  * Adapted from FlashAttention v2.8.3:
  * https://github.com/Dao-AILab/flash-attention/tree/v2.8.3/csrc/flash_attn/src
@@ -460,51 +461,23 @@ static __global__ void copy_from_half(const half* src, float* dst, int64_t count
         dst[i] = scaled ? __fmaf_rn(__half2float(src[i]), scale, bias) : __half2float(src[i]);
 }
 
-static float param_f32(const ggml_tensor* node, int index) {
-    float value;
-    std::memcpy(&value, reinterpret_cast<const char*>(node->op_params) + index * sizeof(value), sizeof(value));
-    return value;
-}
 
 static int padded_dim(int64_t dim) {
     return dim == 80 || dim == 96 || dim == 112 ? int(dim) : int((dim + 63) / 64 * 64);
 }
 
-struct CUDADevice {
-    int ordinal;
-    cudaDeviceProp properties;
-};
-
-static const CUDADevice* cuda_device(ggml_backend_dev_t device) {
-    static std::mutex mutex;
-    static std::unordered_map<ggml_backend_dev_t, CUDADevice> devices;
-    std::lock_guard<std::mutex> lock(mutex);
-    auto found = devices.find(device);
-    if (found != devices.end())
-        return &found->second;
-    auto reg   = ggml_backend_dev_backend_reg(device);
-    auto query = reinterpret_cast<ggml_ext_cuda_device_fn>(ggml_backend_reg_get_proc_address(reg, "ggml_ext_cuda_device_v1"));
-    if (!query)
-        return nullptr;
-    CUDADevice info = {};
-    info.ordinal    = query(device);
-    if (info.ordinal < 0 || cudaGetDeviceProperties(&info.properties, info.ordinal) != cudaSuccess)
-        return nullptr;
-    return &devices.emplace(device, info).first->second;
-}
-
 static bool attention_supports(ggml_backend_dev_t device, const ggml_tensor* node, void*) {
     static const bool disabled = std::getenv("GGML_CUDA_DISABLE_CUTE_FATTN") || std::getenv("GGML_CUDA_DISABLE_CUTLASS_FATTN");
-    const auto* info           = cuda_device(device);
+    const auto info            = sd_cuda::cuda_device_info(device);
     const auto* q              = node->src[0];
     const auto* k              = node->src[1];
     const auto* v              = node->src[2];
-    if (disabled || !info || info->properties.major < 8 || !q || !k || !v ||
+    if (disabled || info.device < 0 || info.cc < 800 || !q || !k || !v ||
         q->type != GGML_TYPE_F32 || node->type != GGML_TYPE_F32 ||
         q->ne[0] < 32 || q->ne[0] > 256 || q->ne[0] % 8 ||
-        size_t(192 * padded_dim(q->ne[0]) * sizeof(half)) > info->properties.sharedMemPerBlockOptin ||
+        size_t(192 * padded_dim(q->ne[0]) * sizeof(half)) > info.shared_memory ||
         q->ne[1] < 1 || k->ne[1] < 1 || k->ne[2] < 1 ||
-        node->src[3] || node->src[4] || param_f32(node, 1) != 0.0f || param_f32(node, 2) != 0.0f ||
+        node->src[3] || node->src[4] || ggml_get_op_params_f32(node, 1) != 0.0f || ggml_get_op_params_f32(node, 2) != 0.0f ||
         q->ne[2] % k->ne[2] || q->ne[3] != k->ne[3] || !ggml_are_same_shape(k, v) ||
         q->nb[0] != sizeof(float) || !ggml_is_contiguous(node) ||
         (k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_F32) ||
@@ -562,7 +535,7 @@ static int output_fusion(ggml_backend_dev_t device, const ggml_cgraph* graph, in
             scaled = true;
         } else if (sd_ggml_convrot_describe(node, &convrot_group)) {
             if (convrot_group == 256 && previous->ne[0] % 256 == 0 &&
-                size_t(previous->ne[0]) * sizeof(float) + 128 <= cuda_device(device)->properties.sharedMemPerBlockOptin)
+                size_t(previous->ne[0]) * sizeof(float) + 128 <= sd_cuda::cuda_device_info(device).shared_memory)
                 return count + 1;
             break;
         } else
@@ -644,7 +617,7 @@ static ggml_status attention_prepare(ggml_backend_t, ggml_tensor* const* nodes, 
 }
 
 template <int D, bool FullDim>
-static cudaError_t attention_launch(const ggml_ext_cuda_context& context, const sd_fattn_cute::Params& p, int64_t batches) {
+static cudaError_t attention_launch(const ggml_ext_gpu_context& context, const sd_fattn_cute::Params& p, int64_t batches) {
     auto kernel                = sd_fattn_cute::kernel<64, 64, D, FullDim>;
     constexpr int shared_bytes = sd_fattn_cute::Traits<64, 64, D>::SharedBytes;
     static std::mutex mutex;
@@ -663,7 +636,7 @@ static cudaError_t attention_launch(const ggml_ext_cuda_context& context, const 
 }
 
 template <int D>
-static cudaError_t attention_launch(const ggml_ext_cuda_context& context, const sd_fattn_cute::Params& p, int64_t batches) {
+static cudaError_t attention_launch(const ggml_ext_gpu_context& context, const sd_fattn_cute::Params& p, int64_t batches) {
     return p.dim == D ? attention_launch<D, true>(context, p, batches) : attention_launch<D, false>(context, p, batches);
 }
 
@@ -671,10 +644,8 @@ static ggml_status attention_execute(const ggml_ext_execution_context* execution
     const auto& plan = *static_cast<AttentionPlan*>(state);
     const auto* attn = nodes[plan.index];
     auto device      = ggml_backend_get_device(execution->backend);
-    auto reg         = ggml_backend_dev_backend_reg(device);
-    auto query       = reinterpret_cast<ggml_ext_cuda_context_fn>(ggml_backend_reg_get_proc_address(reg, "ggml_ext_cuda_context_v1"));
-    ggml_ext_cuda_context context;
-    if (!query || !query(execution->backend, &context))
+    ggml_ext_gpu_context context;
+    if (!sd_cuda::cuda_context(execution->backend, &context))
         return GGML_STATUS_FAILED;
     auto stream = static_cast<cudaStream_t>(context.stream);
     auto* base  = static_cast<char*>(ggml_backend_buffer_get_base(execution->workspace));
@@ -684,7 +655,7 @@ static ggml_status attention_execute(const ggml_ext_execution_context* execution
     const half* inputs[3] = {work[0], work[1], work[2]};
     for (int i = 0; i < 3; ++i) {
         const auto* src   = attn->src[i];
-        const float scale = i == 0 ? param_f32(attn, 0) : 1.0f;
+        const float scale = i == 0 ? ggml_get_op_params_f32(attn, 0) : 1.0f;
         if (i == 0 && plan.index == 5) {
             if (sd_cuda_i8_rope_launch(stream, nodes, work[0], scale) != cudaSuccess)
                 return GGML_STATUS_FAILED;
@@ -735,8 +706,8 @@ static ggml_status attention_execute(const ggml_ext_execution_context* execution
     float scale = 1.0f, bias = 0.0f;
     for (int i = plan.index + 1; i < count; ++i) {
         if (nodes[i]->op == GGML_OP_SCALE) {
-            scale = param_f32(nodes[i], 0);
-            bias  = param_f32(nodes[i], 1);
+            scale = ggml_get_op_params_f32(nodes[i], 0);
+            bias  = ggml_get_op_params_f32(nodes[i], 1);
         }
     }
     auto* dst = nodes[count - 1];
@@ -747,7 +718,7 @@ static ggml_status attention_execute(const ggml_ext_execution_context* execution
         if (rows != padded_rows && cudaMemsetAsync(packed + width * rows, 0, width * (padded_rows - rows), stream) != cudaSuccess)
             return GGML_STATUS_FAILED;
         if (cudaFuncSetAttribute(quantize_attention, cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                 int(cuda_device(device)->properties.sharedMemPerBlockOptin - 128)) != cudaSuccess)
+                                 int(sd_cuda::cuda_device_info(device).shared_memory - 128)) != cudaSuccess)
             return GGML_STATUS_FAILED;
         quantize_attention<<<rows, 256, width * sizeof(float), stream>>>(work[3], packed,
                                                                          reinterpret_cast<float*>(packed + width * padded_rows), width, rows, scale, bias);
@@ -762,7 +733,7 @@ static void attention_destroy(void* state, void*) {
 }
 
 void sd_ggml_register_cuda_attention(ggml_backend_dev_t device) {
-    if (!cuda_device(device))
+    if (sd_cuda::cuda_device_info(device).device < 0)
         return;
     ggml_ext_kernel_desc desc = {};
     desc.abi_version          = GGML_EXT_ABI_VERSION;

@@ -9,7 +9,7 @@
 namespace SD_CUDA_NAMESPACE {
     static __device__ __forceinline__ float sd_warp_sum(float v) {
         for (int mask = 16; mask > 0; mask >>= 1)
-            v = __fadd_rn(v, cuda_shuffle_xor(v, mask));
+            v = __fadd_rn(v, __shfl_xor_sync(0xffffffff, v, mask, 32));
         return v;
     }
     template <int D, bool interleaved, typename T>
@@ -54,7 +54,7 @@ namespace SD_CUDA_NAMESPACE {
             const float value = __fmul_rn(__fmul_rn(scale, v[j]), weight[col]);
             float rotated     = value;
             if constexpr (interleaved) {
-                const float other = cuda_shuffle_xor(value, 1, 32);
+                const float other = __shfl_xor_sync(0xffffffff, value, 1, 32);
                 if (col < 2 * rot_half) {
                     const float* m      = pe + 4 * (token * rot_half + col / 2);
                     const float4 matrix = make_float4(m[0], m[1], m[2], m[3]);
@@ -136,11 +136,6 @@ namespace SD_CUDA_NAMESPACE {
         return value != 0;
     }
 
-    static float param_f32(const ggml_tensor* node, int index) {
-        float value;
-        std::memcpy(&value, node->op_params + index, sizeof(value));
-        return value;
-    }
 
     static bool rope_is_node(const ggml_tensor* node) {
         return node && ggml_ext_op_get(node) == sd_ggml_rope_op();
@@ -179,7 +174,7 @@ namespace SD_CUDA_NAMESPACE {
     }
 
     template <typename T, bool Interleaved>
-    static CUDAError rms_rope_launch(CUDAStream stream, ggml_tensor* const* nodes, T* output, float scale) {
+    static cudaError_t rms_rope_launch(cudaStream_t stream, ggml_tensor* const* nodes, T* output, float scale) {
         const auto* x      = nodes[0]->src[0];
         const auto* pe     = nodes[2]->src[1];
         const int64_t rows = ggml_nrows(x);
@@ -188,7 +183,7 @@ namespace SD_CUDA_NAMESPACE {
         rms_norm_mul_rope_apply_fused<D, Interleaved, T><<<static_cast<unsigned int>((rows + 3) / 4), dim3(32, 4), 0, stream>>>( \
             static_cast<const float*>(x->data), static_cast<const float*>(nodes[1]->src[1]->data),                               \
             static_cast<const float*>(pe->data), output, x->ne[1], x->ne[2], rows,                                               \
-            x->nb[1] / 4, x->nb[2] / 4, x->nb[3] / 4, int(pe->ne[2]), param_f32(nodes[0], 0), scale);                            \
+            x->nb[1] / 4, x->nb[2] / 4, x->nb[3] / 4, int(pe->ne[2]), ggml_get_op_params_f32(nodes[0], 0), scale);               \
         break
         switch (x->ne[0]) {
             SD_ROPE(32);
@@ -200,13 +195,13 @@ namespace SD_CUDA_NAMESPACE {
             SD_ROPE(224);
             SD_ROPE(256);
             default:
-                return cuda_invalid_value;
+                return cudaErrorInvalidValue;
         }
 #undef SD_ROPE
-        return cuda_last_error();
+        return cudaGetLastError();
     }
 
-    CUDAError rms_rope_launch(CUDAStream stream, ggml_tensor* const* nodes, void* output, bool fp16, float scale) {
+    cudaError_t rms_rope_launch(cudaStream_t stream, ggml_tensor* const* nodes, void* output, bool fp16, float scale) {
         if (fp16) {
             return rope_interleaved(nodes[2]) ? rms_rope_launch<half, true>(stream, nodes, static_cast<half*>(output), scale)
                                               : rms_rope_launch<half, false>(stream, nodes, static_cast<half*>(output), scale);
@@ -228,7 +223,7 @@ namespace SD_CUDA_NAMESPACE {
             const auto* scale = ggml_graph_node(g, first + 3);
             const auto* copy  = ggml_graph_node(g, first + 4);
             if (scale->op == GGML_OP_SCALE && copy->op == GGML_OP_CPY && scale->src[0] == rope && copy->src[0] == scale &&
-                scale->type == GGML_TYPE_F32 && copy->type == GGML_TYPE_F16 && param_f32(scale, 1) == 0.f &&
+                scale->type == GGML_TYPE_F32 && copy->type == GGML_TYPE_F16 && ggml_get_op_params_f32(scale, 1) == 0.f &&
                 ggml_are_same_shape(rope, scale) && ggml_are_same_shape(rope, copy) && ggml_is_contiguous(copy))
                 return 5;
         }
@@ -285,15 +280,15 @@ namespace SD_CUDA_NAMESPACE {
         ggml_ext_gpu_context context;
         if (!cuda_context(execution->backend, &context))
             return GGML_STATUS_FAILED;
-        auto stream      = static_cast<CUDAStream>(context.stream);
+        auto stream      = static_cast<cudaStream_t>(context.stream);
         const auto* rope = nodes[count == 1 ? 0 : 2];
         const auto* x    = count == 1 ? rope->src[0] : nodes[0]->src[0];
         auto* dst        = nodes[count - 1];
         const bool alias = overlaps(dst, x) || overlaps(dst, rope->src[1]) || (count > 1 && overlaps(dst, nodes[1]->src[1]));
         void* output     = alias ? ggml_backend_buffer_get_base(execution->workspace) : dst->data;
-        CUDAError error;
+        cudaError_t error;
         if (count > 1) {
-            error = rms_rope_launch(stream, nodes, output, count == 5, count == 5 ? param_f32(nodes[3], 0) : 1.f);
+            error = rms_rope_launch(stream, nodes, output, count == 5, count == 5 ? ggml_get_op_params_f32(nodes[3], 0) : 1.f);
         } else {
             RopeApplyStrides strides;
             const auto* pe = rope->src[1];
@@ -305,11 +300,11 @@ namespace SD_CUDA_NAMESPACE {
             auto kernel         = rope_interleaved(rope) ? rope_apply_f32<true> : rope_apply_f32<false>;
             kernel<<<static_cast<unsigned int>((pairs + 255) / 256), 256, 0, stream>>>(static_cast<const float*>(x->data), static_cast<const float*>(pe->data),
                                                                                        static_cast<float*>(output), x->ne[0] / 2, pe->ne[2], x->ne[1], x->ne[2], pairs, strides);
-            error = cuda_last_error();
+            error = cudaGetLastError();
         }
-        if (error == cuda_success && alias)
-            error = cuda_copy_async(dst->data, output, ggml_nbytes(dst), stream);
-        return error == cuda_success ? GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
+        if (error == cudaSuccess && alias)
+            error = cudaMemcpyAsync(dst->data, output, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, stream);
+        return error == cudaSuccess ? GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
     }
 
     void register_rope(ggml_backend_dev_t device) {

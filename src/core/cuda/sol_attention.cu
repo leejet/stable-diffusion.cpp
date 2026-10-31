@@ -1,7 +1,7 @@
 // Sol-Attn diagonal-threshold algorithm:
 // https://github.com/NVlabs/Sana/tree/sol-engine/techniques/sparse_backends/sol_attn
+#include "backend.h"
 #include "core/ggml_extensions.h"
-#include "runtime.h"
 
 #if __CUDACC_VER_MAJOR__ >= 12
 
@@ -379,9 +379,8 @@ namespace sd_cuda {
         if (info.device < 0)
             return;
         int previous;
-        cudaDeviceProp properties;
         cudaFuncAttributes attributes;
-        if (cudaGetDeviceProperties(&properties, info.device) != cudaSuccess || properties.major < 8 ||
+        if (info.cc < 800 ||
             cudaGetDevice(&previous) != cudaSuccess || cudaSetDevice(info.device) != cudaSuccess)
             return;
         const auto error = cudaFuncGetAttributes(&attributes, sol_forward);

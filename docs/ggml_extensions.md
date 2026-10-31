@@ -104,22 +104,21 @@ and backend `graph_plan_*` interfaces do not dispatch these extensions.
 
 ## Backend services
 
-Services are discovered through `ggml_backend_reg_get_proc_address`:
+GPU services are private backend integration details declared in
+`ggml/src/ggml-ext-gpu.h` and discovered through
+`ggml_backend_reg_get_proc_address`. They are not installed public API.
+CPU callbacks use the native CPU backend entry point and its configured thread
+pool directly from `src/core/cpu/registration.cpp`.
 
 | Service | Purpose |
 | --- | --- |
-| `ggml_ext_cpu_parallel_v1` | Run an application callback on the CPU backend's configured thread pool, with its abort callback. |
-| `ggml_ext_cuda_context_v1` | Borrow the current CUDA device and stream, ordered with native work. |
-| `ggml_ext_cuda_device_v1` | Get the physical CUDA ordinal for capability checks before backend creation, including virtual ggml devices. |
-| `ggml_ext_cuda_blas_v1` | Borrow the current stream's cuBLAS handle during execution, with host scalar pointers. |
-| `ggml_ext_gpu_device_v1` | Query CUDA/HIP/MUSA runtime kind, physical ordinal, shared-memory limit, warp size, and INT8 BLAS capability. |
+| `ggml_ext_gpu_device_v1` | Query CUDA/HIP/MUSA runtime kind, physical ordinal, shared-memory limit, warp size, INT8 BLAS capability, compute capability and SM limits from the existing device cache. |
 | `ggml_ext_gpu_context_v1` | Borrow the matching runtime's device and execution stream. |
 | `ggml_ext_gpu_blas_v1` | Borrow the matching cuBLAS, hipBLAS, or muBLAS handle on that stream. |
 
 The borrowed cuBLAS handle remains owned by the backend. Extensions must not retain
-or destroy it, or change its stream, pointer mode, math mode, or workspace. This
-CUDA-specific BLAS service is retained for existing callers; the runtime-aware
-services support CUDA, HIP, and MUSA with the same ownership rules. Extensions
+or destroy it, or change its stream, pointer mode, math mode, or workspace. The
+same services support CUDA, HIP, and MUSA with the same ownership rules. Extensions
 call vendor runtime and BLAS APIs directly. These services do not execute GEMM,
 quantization, or model fusion on the application's behalf.
 
@@ -154,9 +153,11 @@ CUTLASS. The old CUDA/HIP/MUSA RoPE dispatch is removed.
 
 Shared CUDA-style kernels live in `src/core/cuda/` and are compiled separately
 for each enabled runtime. `SD_CUDA_NAMESPACE` expands to `sd_cuda`, `sd_hip`, or
-`sd_musa`, so implementations can coexist. `runtime.h` handles the small runtime
-differences, including logical 32-lane shuffles on HIP. The application defines
-and launches its kernels directly; it includes only public ggml headers.
+`sd_musa`, so implementations can coexist. Both sd.cpp and ggml use the same
+existing `ggml/src/ggml-cuda/vendors/{cuda,hip,musa}.h` headers for runtime and BLAS API
+compatibility. Kernels call CUDA-style APIs directly; `backend.h` only selects
+the vendor/namespace and queries ggml's private device and stream services.
+CUDA-only PTX/CUTLASS kernels remain restricted to NVIDIA builds.
 CMake generates the registration table from enabled backend options. The shared
 entry point uses one `SD_BACKEND_EXTENSIONS` macro; backend registrars verify the
 device kind, and disabled backends add no symbol references.
@@ -169,7 +170,7 @@ separate weight scale tensor.
 CUTLASS headers are configured. It registers an override of `FLASH_ATTN_EXT`,
 with the existing sequence-length preference and native fallback. It also
 registers Q preparation (`RMSNorm -> Mul -> RoPE`), output scaling, and packed
-ConvRot output fusion. These kernels use only the public extension API, borrowed
+ConvRot output fusion. These kernels use the extension registration API, borrowed
 CUDA stream, and scheduler-owned workspace; they do not use ggml's CUDA pool or
 private conversion helpers. The existing CUDA fusion and CuTe disable environment
 variables are honored.
@@ -406,9 +407,9 @@ application-owned implementations. This interface does not add dynamic dtypes.
 The Vulkan compute metadata service exposes shared-memory limits, subgroup
 arithmetic, and cooperative-matrix properties; shape selection stays in sd.cpp.
 Shader variants preserve the former tiling and compilation policy, including
-SwiGLU, residual, row-concatenation, and modulation paths. Kernels use public
-Vulkan dispatch, buffer, copy, and workspace services without private backend
-headers. Vulkan currently handles packed group-256 activations with separate
+SwiGLU, residual, row-concatenation, and modulation paths. Kernels include the
+private Vulkan service header for dispatch, buffer, copy and workspace access.
+Vulkan currently handles packed group-256 activations with separate
 weight scales; unsupported custom nodes fall back to CPU.
 
 ## SageAttention
@@ -421,7 +422,7 @@ backend dispatch branch.
 `src/core/cuda/sage_attention.cu` and its `sageattention/` device headers own the
 CUDA implementation. Quantization and temporary attention output use scheduler
 workspace, rather than an oversized output tensor. The implementation obtains
-the backend stream through the public GPU service and converts the final FP16
+the backend stream through the private GPU service and converts the final FP16
 output with a local CUDA kernel. It retains the SM80 compatibility path and the
 SageAttention2/2++ toolkit and architecture requirements. Capability checks use
 the application's compiled CUDA target as well as the physical device.
@@ -441,7 +442,7 @@ CLI path calls this entry point; the migration preserves its low-level behavior.
 `src/core/cuda/sol_attention.cu` owns packing, block summaries, threshold
 selection, and the BF16 tensor-core kernel. Temporary storage is separate
 scheduler workspace, so the output allocation contains only the output tensor.
-The kernel uses the public backend stream service and direct CUDA/PTX operations.
+The kernel uses the private backend stream service and direct CUDA/PTX operations.
 Registration requires CUDA 12 or newer, an SM80-or-newer device, and an application
 kernel compiled for SM80 or newer. CPU, HIP, MUSA, and Vulkan do not advertise
 support. ggml no longer contains a Sol-Attn opcode, constructor, allocation rule,
@@ -458,8 +459,18 @@ leave the destination graph unchanged. Range execution uses already allocated
 tensors and retains the original graph's consumer counts.
 
 Workspace measurement, graph cuts, and evaluation callbacks use these APIs.
-Normal sd.cpp builds require only ggml's public headers. Compatibility with an
+Backend extensions require matching private headers. Compatibility with an
 upstream ggml lacking this header is isolated in `src/core/ggml_compat.cpp`; that
 optional build still requires matching upstream private headers. The compatibility
 layer also retains the workaround for old Metal backends wrapping failed host
 mappings. The patched Metal backend returns null directly when mapping fails.
+
+Vulkan command recording services are declared in the private
+`ggml/src/ggml-ext-vulkan.h`. Pipeline ownership, submission and synchronization
+remain inside the backend, where they share the native execution machinery.
+
+CUTLASS is pinned by sd.cpp at `thirdparty/cutlass` and configured through
+`SD_CUDA_CUTLASS_PATH`. ggml itself has no CUTLASS dependency or configuration.
+CUDA/HIP/MUSA extensions include the existing vendor headers directly from the
+ggml source tree. They are not installed as a public ggml API. System ggml builds
+must also provide the matching `SD_GGML_SOURCE_DIR`.
