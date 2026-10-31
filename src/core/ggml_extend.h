@@ -6,6 +6,7 @@
 
 #include "ggml-backend.h"
 #include "ggml.h"
+#include "core/ggml_extensions.h"
 
 #define EPS 1e-05f
 

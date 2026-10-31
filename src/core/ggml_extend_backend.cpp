@@ -1,4 +1,5 @@
 #include "core/ggml_extend_backend.h"
+#include "core/ggml_extensions.h"
 
 #include <algorithm>
 #include <cctype>
@@ -596,7 +597,9 @@ bool sd_backend_supports_conv_implicit_gemm(ggml_backend_t backend, bool conv3d)
 
 ggml_backend_t sd_backend_cpu_init() {
     ggml_backend_load_all_once();
-    return ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+    auto backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+    sd_ggml_register_extensions(backend);
+    return backend;
 }
 
 bool sd_backend_cpu_set_n_threads(ggml_backend_t backend, int n_threads) {
@@ -1207,6 +1210,7 @@ ggml_backend_t SDBackendManager::init_cached_backend(const std::string& name) {
     }
 
     SDBackendHandle handle(backend);
+    sd_ggml_register_extensions(backend);
     backends_.emplace(actual_key, std::move(handle));
     return backend;
 }
