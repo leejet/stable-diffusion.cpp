@@ -11,6 +11,7 @@
 
 #ifdef SD_CUDA_EXTENSIONS
 void sd_ggml_register_cuda_i8(ggml_backend_dev_t device);
+void sd_ggml_register_cuda_convrot(ggml_backend_dev_t device);
 void sd_ggml_register_cuda_rope(ggml_backend_dev_t device);
 #endif
 #ifdef SD_CUDA_CUTE_ATTENTION
@@ -182,6 +183,7 @@ void sd_ggml_register_extensions(ggml_backend_t backend) {
     if (cuda) {
 #ifdef SD_CUDA_EXTENSIONS
         sd_ggml_register_cuda_i8(device);
+        sd_ggml_register_cuda_convrot(device);
         sd_ggml_register_cuda_rope(device);
 #endif
 #ifdef SD_CUDA_CUTE_ATTENTION

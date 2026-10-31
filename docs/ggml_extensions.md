@@ -214,7 +214,35 @@ for an exact in-place residual without concatenation. External consumers and
 unsupported layouts retain ordinary operator execution. Fusion and force-cuBLAS
 disable settings are honored.
 
-The builtin CUDA/Vulkan INT8 GEMM, ConvRot quantization, and remaining fusion rules
+`src/core/cuda/convrot.cu` registers CUDA fusion for `Scale -> ConvRot`,
+`Norm -> Mul -> ConvRot`, `RMSNorm -> Mul(weight) -> Mul(modulation) -> Add ->
+Add(shift) -> ConvRot`, `SwiGLU -> ConvRot`, and `SiLU/Sigmoid -> Mul -> ConvRot`.
+Both builtin and custom ConvRot outputs are accepted. SwiGLU accepts packed,
+swapped, or separate gate/up inputs. Independent modulation and up-branch
+producers are moved ahead of their consumers through the safe graph-delay API.
+Reordering keeps an owning producer together with in-place consumers, such as
+Krea2's RMSNorm weight multiplication, so the alias checks can preserve their
+storage relationship.
+The application kernel preserves the original reduction order, thread selection,
+ConvRot row padding, and separate scale tail. Prepared plans cache operation
+metadata, use the borrowed CUDA stream, and reserve scheduler workspace for
+overlapping outputs. Long rows or external intermediate consumers retain
+ordinary execution. These fusions do not require CUTLASS and honor
+`GGML_CUDA_DISABLE_FUSION`.
+
+The corresponding scale, normalization, and unary-activation rules in ggml now
+only serve HIP. CUDA retains the native INT8 GEMM/SwiGLU epilogue chain; the
+ConvRot extension leaves that chain together to preserve its existing fusion.
+Standalone builtin ConvRot and its native GEMM integration are still pending
+migration.
+
+CUDA extension kernels currently execute between native graph fragments. Native
+fragments retain CUDA Graph caching, but the extension execution plan is not
+captured as a whole. Moving small fusions out of native fragments can therefore
+increase host submission overhead even when kernel counts and GPU work stay the
+same. Whole-plan CUDA Graph capture remains pending.
+
+The builtin CUDA/Vulkan INT8 GEMM, standalone ConvRot quantization, and remaining fusion rules
 still need to be externalized. Vulkan execution services and kernels also remain pending.
 This implementation does not yet externalize all model-specific kernels or add
 dynamic dtypes.
