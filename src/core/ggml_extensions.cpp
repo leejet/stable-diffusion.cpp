@@ -1,6 +1,7 @@
 #include "core/ggml_extensions.h"
 
 #ifndef SD_USE_UPSTREAM_GGML
+#include "core/int8_ops.h"
 #include "ggml-ext.h"
 
 #include <cmath>
@@ -186,6 +187,7 @@ void sd_ggml_register_extensions(ggml_backend_t backend) {
 #endif
         return;
     }
+    sd_ggml_register_cpu_i8(device);
     ggml_ext_kernel_desc desc = {};
     desc.abi_version          = GGML_EXT_ABI_VERSION;
     desc.name                 = "sd.rope_apply.cpu.v1";

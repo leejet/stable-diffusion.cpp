@@ -158,7 +158,29 @@ activation layout, and separate weight scales. External consumers prevent fusion
 aliasing terminal copies use scheduler workspace. The CUDA projection kernels
 and matchers now live in sd.cpp. `GGML_CUDA_FORCE_CUBLAS` disables these epilogues.
 
-Ordinary INT8 GEMM, ConvRot quantization, and their other fusion rules still need
-to be externalized. Vulkan execution services and kernels also remain pending.
+`src/core/int8_ops.cpp` defines `sd.linear_i8.v1` and
+`sd.quantize_i8_convrot.v1`, with CPU implementations and overrides of the old
+builtins. The CPU kernels use the configured thread pool and scheduler workspace;
+the old CPU INT8 GEMM and ConvRot implementations have been removed from ggml.
+Custom nodes currently execute on CPU; model code retains builtin nodes so the
+existing CUDA and Vulkan implementations can still be selected.
+
+For already quantized activations, `sd_ggml_mul_mat_i8` accepts ordinary I8 weight
+and activation tensors, a separate F32 activation scale tensor with one value per
+row, optional F32 weight scales with one value per output channel, and optional
+bias. It computes `float(int32_dot(W, X)) * X_scale * W_scale + bias`, in that
+order. All scales are explicit graph dependencies; there is no quantized-tensor
+wrapper. Shapes use ggml's low-to-high dimension order. Call
+`sd_ggml_register_extensions` before scheduling these custom nodes.
+
+`sd_ggml_linear_i8` also accepts F32 activations (quantized into temporary
+workspace) or the output of `sd_ggml_quantize_i8_convrot`. ConvRot keeps the existing
+packed I8 activation rows, padded to a multiple of four rows, followed by F32 row
+scales. Weight scales remain separate. CPU ConvRot groups are 1, 4, 16, 64, or 256.
+Unsupported layouts and malformed scale shapes are rejected. Separate CPU quantize
+and GEMM phases propagate cancellation, and overlapping outputs use workspace.
+
+Ordinary CUDA/Vulkan INT8 GEMM, ConvRot quantization, and their other fusion rules
+still need to be externalized. Vulkan execution services and kernels also remain pending.
 This implementation does not yet externalize all model-specific kernels or add
 dynamic dtypes.
