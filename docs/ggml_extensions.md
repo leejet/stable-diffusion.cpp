@@ -36,6 +36,10 @@ operator. Callbacks inspect metadata only and must not recursively call the
 public capability query for the same device and operator. A fusion-only
 registration does not claim single-node support.
 
+`ggml_ext_dev_supports_native_op` queries the original device implementation
+without extension dispatch. Fusion policies can use it to select a supported
+extension even when their performance preference normally favors native kernels.
+
 `prepare` creates optional host-side plan state and reports workspace bytes.
 It can run during memory measurement, before tensor addresses are assigned, and
 must not launch work or allocate device buffers. Workspace is allocated by ggml
@@ -43,6 +47,12 @@ before execution and included in scheduler memory estimates and buffer-size
 reports. `execute` receives the backend, workspace buffer, and current tensor
 addresses. `destroy` releases prepared state. A preparation or execution error
 is propagated; execution never retries a native implementation after launch.
+
+Workspace is scratch storage shared by sequential extension steps in a plan;
+its capacity is the maximum request, not the sum across nodes. Contents are not
+preserved between calls. Queue work in backend execution order, and finish any
+private-stream use before subsequent backend work can access the workspace.
+Persistent state belongs in `prepare`/`destroy` state or explicit tensor inputs.
 
 Overriding a built-in operator preserves its numerical and aliasing contract,
 including allocator reuse of input storage. Explicit views/in-place nodes are
@@ -56,7 +66,15 @@ The scheduler freezes this selection before allocating tensors. ggml checks
 compute flags, external uses, output flags, and views; the initial implementation
 accepts a conservative set of pure operators with only the final node exposed
 as the fused output. The rule remains responsible for mathematical equivalence,
-dtype, shape, layout, and hardware constraints.
+dtype, shape, layout, and hardware constraints. Internal views are accepted when
+their storage belongs to the fused subgraph; the final output must own storage.
+
+An optional `optimize` callback runs before matching and allocation. Use
+`ggml_ext_graph_delay` to move a producer range after independent nodes. The
+helper rejects dependencies, unknown side effects, and writes that alias moved
+inputs or outputs. It can cross independent copies, including dtype conversions.
+Reordering must preserve edges and tensor metadata. Fusion legality is checked
+again after reordering.
 
 External inputs stay allocated through the final node. Native graph optimization
 and execution operate on the remaining contiguous ranges, so native fusion cannot
@@ -100,8 +118,18 @@ retains existing backend implementations elsewhere.
 API is unchanged. INT8 ConvRot retains its existing packed activation layout and
 separate weight scale tensor.
 
-CuTe Flash Attention still resides in ggml, including its existing fusion paths.
-Migrating it requires moving its pool/conversion dependencies onto the extension
-workspace and CUDA service, then registering its selection and fusion rules in
-sd.cpp. This initial implementation establishes and validates the mechanism;
-it does not yet externalize all model-specific kernels or add dynamic dtypes.
+`src/core/cuda/cute_attention.cu` supplies CuTe Flash Attention on CUDA when
+CUTLASS headers are configured. It registers an override of `FLASH_ATTN_EXT`,
+with the existing sequence-length preference and native fallback. It also
+registers Q preparation (`RMSNorm -> Mul -> RoPE`), output scaling, and packed
+ConvRot output fusion. These kernels use only the public extension API, borrowed
+CUDA stream, and scheduler-owned workspace; they do not use ggml's CUDA pool or
+private conversion helpers. The existing CUDA fusion and CuTe disable environment
+variables are honored.
+
+The combined INT8 GEMM epilogue feeding FP16 Q directly into attention still needs
+to be externalized. The current extension can fuse RMSNorm/RoPE with attention,
+while other INT8 GEMM and standalone projection fusions retain their native
+implementations. Vulkan execution services and kernels also remain pending.
+This implementation does not yet externalize all model-specific kernels or add
+dynamic dtypes.

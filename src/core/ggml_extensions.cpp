@@ -8,6 +8,10 @@
 #include <mutex>
 #include <unordered_set>
 
+#ifdef SD_CUDA_EXTENSIONS
+void sd_ggml_register_cuda_attention(ggml_backend_dev_t device);
+#endif
+
 static bool rope_infer(ggml_tensor* const* inputs, int count, const void*, ggml_ext_tensor_desc* out) {
     if (count != 2) {
         return false;
@@ -155,15 +159,23 @@ void sd_ggml_register_extensions(ggml_backend_t backend) {
     if (!backend) {
         return;
     }
-    auto device = ggml_backend_get_device(backend);
-    auto reg    = ggml_backend_dev_backend_reg(device);
-    if (!ggml_backend_reg_get_proc_address(reg, "ggml_ext_cpu_parallel_v1")) {
+    auto device     = ggml_backend_get_device(backend);
+    auto reg        = ggml_backend_dev_backend_reg(device);
+    const bool cpu  = ggml_backend_reg_get_proc_address(reg, "ggml_ext_cpu_parallel_v1") != nullptr;
+    const bool cuda = ggml_backend_reg_get_proc_address(reg, "ggml_ext_cuda_context_v1") != nullptr;
+    if (!cpu && !cuda) {
         return;
     }
     static std::mutex mutex;
     static std::unordered_set<ggml_backend_dev_t> registered;
     std::lock_guard<std::mutex> lock(mutex);
     if (!registered.insert(device).second) {
+        return;
+    }
+    if (cuda) {
+#ifdef SD_CUDA_EXTENSIONS
+        sd_ggml_register_cuda_attention(device);
+#endif
         return;
     }
     ggml_ext_kernel_desc desc = {};
