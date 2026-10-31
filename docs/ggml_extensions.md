@@ -196,7 +196,25 @@ CUDA GEMM requires Turing or newer, contiguous tensors, K/N divisible by four,
 float-aligned inputs, and at most 65535 rows; CUDA ConvRot uses groups of 256.
 Unsupported custom nodes can fall back to CPU through the scheduler.
 
-The builtin CUDA/Vulkan INT8 GEMM, ConvRot quantization, and their other fusion rules
+`src/core/cuda/i8_gated_residual.cu` implements
+`INT8 GEMM -> [Scale] -> Mul(gate) -> Add(residual) -> [Concat]` as a registered
+CUDA fusion, for both builtin GEMM and custom I8 nodes with separate activation
+scales. The corresponding native CUDA fusion rules and CUTLASS residual epilogue
+have been removed from ggml. Its optimizer moves independent gate producers ahead
+of GEMM and optional scaling through `ggml_ext_graph_delay`, before fusion matching.
+The former native INT8 affine reorder rule has also moved into this extension.
+It preserves the original tile selection, small-row
+threshold, Stream-K scheduling, Ada column bands, and separate FP32 rounding of
+gate multiplication and residual addition. The plan bounds Stream-K workspace
+over possible occupancy values using host metadata; execution verifies the
+actual requirement against that bound. Device occupancy is cached on first
+execution; each launch rebuilds parameters for the current tensor addresses and
+initializes its Stream-K barriers. Overlapping outputs use scratch, except
+for an exact in-place residual without concatenation. External consumers and
+unsupported layouts retain ordinary operator execution. Fusion and force-cuBLAS
+disable settings are honored.
+
+The builtin CUDA/Vulkan INT8 GEMM, ConvRot quantization, and remaining fusion rules
 still need to be externalized. Vulkan execution services and kernels also remain pending.
 This implementation does not yet externalize all model-specific kernels or add
 dynamic dtypes.
