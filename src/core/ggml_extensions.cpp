@@ -9,19 +9,8 @@
 #include <mutex>
 #include <unordered_set>
 
-#ifdef SD_VULKAN_EXTENSIONS
-void sd_ggml_register_vulkan_rope(ggml_backend_dev_t device);
-#endif
-#ifdef SD_CUDA_EXTENSIONS
-void sd_ggml_register_cuda_affine(ggml_backend_dev_t device);
-void sd_ggml_register_cuda_i8(ggml_backend_dev_t device);
-void sd_ggml_register_cuda_convrot(ggml_backend_dev_t device);
-void sd_ggml_register_cuda_rope(ggml_backend_dev_t device);
-#endif
-#ifdef SD_CUDA_CUTE_ATTENTION
-void sd_ggml_register_cuda_i8_gated_residual(ggml_backend_dev_t device);
-void sd_ggml_register_cuda_i8_projection(ggml_backend_dev_t device);
-void sd_ggml_register_cuda_attention(ggml_backend_dev_t device);
+#ifdef SD_BACKEND_EXTENSIONS
+#include "sd_backend_extensions.h"
 #endif
 
 static bool rope_infer(ggml_tensor* const* inputs, int count, const void*, ggml_ext_tensor_desc* out) {
@@ -171,37 +160,19 @@ void sd_ggml_register_extensions(ggml_backend_t backend) {
     if (!backend) {
         return;
     }
-    auto device       = ggml_backend_get_device(backend);
-    auto reg          = ggml_backend_dev_backend_reg(device);
-    const bool cpu    = ggml_backend_reg_get_proc_address(reg, "ggml_ext_cpu_parallel_v1") != nullptr;
-    const bool cuda   = ggml_backend_reg_get_proc_address(reg, "ggml_ext_cuda_context_v1") != nullptr;
-    const bool vulkan = ggml_backend_reg_get_proc_address(reg, "ggml_ext_vulkan_v1") != nullptr;
-    if (!cpu && !cuda && !vulkan) {
-        return;
-    }
+    auto device    = ggml_backend_get_device(backend);
+    auto reg       = ggml_backend_dev_backend_reg(device);
+    const bool cpu = ggml_backend_reg_get_proc_address(reg, "ggml_ext_cpu_parallel_v1") != nullptr;
     static std::mutex mutex;
     static std::unordered_set<ggml_backend_dev_t> registered;
     std::lock_guard<std::mutex> lock(mutex);
     if (!registered.insert(device).second) {
         return;
     }
-    if (vulkan) {
-#ifdef SD_VULKAN_EXTENSIONS
-        sd_ggml_register_vulkan_rope(device);
-#endif
-        return;
-    }
-    if (cuda) {
-#ifdef SD_CUDA_EXTENSIONS
-        sd_ggml_register_cuda_affine(device);
-        sd_ggml_register_cuda_i8(device);
-        sd_ggml_register_cuda_convrot(device);
-        sd_ggml_register_cuda_rope(device);
-#endif
-#ifdef SD_CUDA_CUTE_ATTENTION
-        sd_ggml_register_cuda_i8_projection(device);
-        sd_ggml_register_cuda_i8_gated_residual(device);
-        sd_ggml_register_cuda_attention(device);
+    if (!cpu) {
+#ifdef SD_BACKEND_EXTENSIONS
+        for (auto register_backend : sd_backend_extensions)
+            register_backend(device);
 #endif
         return;
     }
@@ -234,11 +205,8 @@ ggml_tensor* sd_ggml_rope_apply(ggml_context* ctx, ggml_backend_t backend, ggml_
     if (backend) {
         auto reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
         if (ggml_backend_reg_get_proc_address(reg, "ggml_ext_cpu_parallel_v1")
-#ifdef SD_CUDA_EXTENSIONS
-            || ggml_backend_reg_get_proc_address(reg, "ggml_ext_cuda_context_v1")
-#endif
-#ifdef SD_VULKAN_EXTENSIONS
-            || ggml_backend_reg_get_proc_address(reg, "ggml_ext_vulkan_v1")
+#ifdef SD_BACKEND_EXTENSIONS
+            || ggml_backend_reg_get_proc_address(reg, "ggml_ext_gpu_context_v1") || ggml_backend_reg_get_proc_address(reg, "ggml_ext_vulkan_v1")
 #endif
         ) {
             ggml_tensor* inputs[] = {x, pe};

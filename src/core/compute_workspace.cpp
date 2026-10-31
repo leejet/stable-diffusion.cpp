@@ -147,6 +147,9 @@ namespace sd {
                         append(usage);
                         append(type);
                     }
+                } else {
+                    const auto alignment_offset = reinterpret_cast<uintptr_t>(tensor->data) % ggml_backend_get_alignment(external);
+                    append(alignment_offset);
                 }
                 const size_t index = ggml_hash_find(&graph->visited_hash_set, tensor);
                 const int32_t uses = index != GGML_HASHSET_FULL && ggml_bitset_get(graph->visited_hash_set.used, index)
@@ -187,7 +190,8 @@ namespace sd {
                     ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
                 }
                 copy->buffer = buffer;
-                copy->data   = reinterpret_cast<void*>(static_cast<uintptr_t>(1));
+                // Capability checks inspect alignment even before weights are resident.
+                copy->data   = source->data ? source->data : reinterpret_cast<void*>(ggml_backend_get_alignment(external));
                 copy->extra  = nullptr;
             }
         }

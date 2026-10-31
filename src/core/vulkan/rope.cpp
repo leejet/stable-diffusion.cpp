@@ -200,6 +200,8 @@ namespace sd_vulkan_rope {
 }
 
 void sd_ggml_register_vulkan_rope(ggml_backend_dev_t device) {
+    if (!sd_vulkan_rope::api(device))
+        return;
     ggml_ext_kernel_desc desc = {};
     desc.abi_version          = GGML_EXT_ABI_VERSION;
     desc.name                 = "sd.rope_apply.vulkan.v1";

@@ -112,14 +112,20 @@ Services are discovered through `ggml_backend_reg_get_proc_address`:
 | `ggml_ext_cuda_context_v1` | Borrow the current CUDA device and stream, ordered with native work. |
 | `ggml_ext_cuda_device_v1` | Get the physical CUDA ordinal for capability checks before backend creation, including virtual ggml devices. |
 | `ggml_ext_cuda_blas_v1` | Borrow the current stream's cuBLAS handle during execution, with host scalar pointers. |
+| `ggml_ext_gpu_device_v1` | Query CUDA/HIP/MUSA runtime kind, physical ordinal, shared-memory limit, warp size, and INT8 BLAS capability. |
+| `ggml_ext_gpu_context_v1` | Borrow the matching runtime's device and execution stream. |
+| `ggml_ext_gpu_blas_v1` | Borrow the matching cuBLAS, hipBLAS, or muBLAS handle on that stream. |
 
 The borrowed cuBLAS handle remains owned by the backend. Extensions must not retain
 or destroy it, or change its stream, pointer mode, math mode, or workspace. This
-service is exposed by the CUDA backend, not HIP/MUSA.
+CUDA-specific BLAS service is retained for existing callers; the runtime-aware
+services support CUDA, HIP, and MUSA with the same ownership rules. Extensions
+call vendor runtime and BLAS APIs directly. These services do not execute GEMM,
+quantization, or model fusion on the application's behalf.
 
 Workspace is a backend buffer. Its base is a CUDA device pointer on CUDA; callers
-must use the representation appropriate to their backend. A Vulkan command
-recording service is not implemented yet.
+must use the representation appropriate to their backend. Vulkan extensions use
+the command recording services described below.
 
 ## sd.cpp integration
 
@@ -127,8 +133,8 @@ recording service is not implemented yet.
 `sd.rope_apply.v1`, an override for existing `GGML_OP_ROPE_APPLY` nodes, and a
 `RMSNorm -> Mul -> RoPE` fusion. The fusion accepts a one-dimensional weight
 vector. Both interleaved and split-half RoPE, partial rotation, and strided input
-rows are supported. Model construction uses the custom operator on CPU and CUDA
-and retains existing backend implementations elsewhere.
+rows are supported. Model construction uses the custom operator on CPU, CUDA,
+HIP, MUSA, and Vulkan, and retains existing backend implementations elsewhere.
 
 `src/core/cuda/rope.cu` supplies standalone CUDA RoPE, the same builtin override,
 and `RMSNorm -> Mul -> RoPE [-> Scale -> FP16 Copy]` fusion. CuTe attention shares
@@ -136,8 +142,16 @@ its RMSNorm/RoPE kernel. Partial rotation and arbitrary float-aligned input and
 position-encoding strides are supported by the standalone kernel; RMSNorm fusion
 requires contiguous position encoding and weights. Copy fusion uses workspace
 when the destination overlaps an input. These registrations do not require
-CUTLASS. The old CUDA RoPE dispatch is removed; HIP and MUSA retain their existing
-implementations.
+CUTLASS. The old CUDA/HIP/MUSA RoPE dispatch is removed.
+
+Shared CUDA-style kernels live in `src/core/cuda/` and are compiled separately
+for each enabled runtime. `SD_CUDA_NAMESPACE` expands to `sd_cuda`, `sd_hip`, or
+`sd_musa`, so implementations can coexist. `runtime.h` handles the small runtime
+differences, including logical 32-lane shuffles on HIP. The application defines
+and launches its kernels directly; it includes only public ggml headers.
+CMake generates the registration table from enabled backend options. The shared
+entry point uses one `SD_BACKEND_EXTENSIONS` macro; backend registrars verify the
+device kind, and disabled backends add no symbol references.
 
 `SD_USE_UPSTREAM_GGML` excludes these registrations. The stable-diffusion public C
 API is unchanged. INT8 ConvRot retains its existing packed activation layout and
@@ -216,10 +230,12 @@ Custom I8 nodes also retain cuBLAS when the reduction could overflow I32, to
 preserve their previous accumulation behavior. Fusion disable and force-cuBLAS
 settings are honored. No CUTLASS headers are needed for the cuBLAS path.
 
-The native CUDA CUTLASS GEMM implementation and its SwiGLU/row-concat matchers
-have been removed from ggml. Native cuBLAS GEMM and standalone ConvRot remain
-compatibility implementations for callers without these registrations. HIP
-retains its native INT8/activation fusion paths.
+The native CUDA/HIP INT8 GEMM, standalone ConvRot, and associated fusion paths
+have been removed from ggml. The shared application implementation calls cuBLAS
+or hipBLAS directly. HIP retains the existing architecture eligibility policy;
+MUSA does not advertise INT8 BLAS support and uses scheduler fallback for GEMM.
+Standalone ConvRot kernels are compiled for all three runtimes. CUTLASS
+implementations remain CUDA-specific.
 
 `src/core/cuda/i8_gated_residual.cu` implements
 `INT8 GEMM -> [Scale] -> Mul(gate) -> Add(residual) -> [Concat]` as a registered
@@ -255,8 +271,8 @@ overlapping outputs. Long rows or external intermediate consumers retain
 ordinary execution. These fusions do not require CUTLASS and honor
 `GGML_CUDA_DISABLE_FUSION`.
 
-The corresponding scale, normalization, and unary-activation fusion rules in
-ggml now only serve HIP. CUDA GEMM/SwiGLU/ConvRot chains are selected by the
+The corresponding scale, normalization, and unary-activation fusion rules have
+been removed from ggml for CUDA and HIP. GEMM/SwiGLU/ConvRot chains are selected by the
 application INT8 extension before the standalone activation fusion.
 
 `src/core/cuda/affine.cu` registers FP32 `Mul(gate) -> Add(residual)`,
@@ -268,8 +284,8 @@ Add inputs, and fusion disabling retain ordinary operators. Internal in-place
 Add outputs are accepted when they overwrite the complete fused Mul allocation. Exact in-place residual
 or input addresses are safe for the pointwise kernel; partial overlap, broadcast
 gate overlap, and FP16 copy overlap use scheduler workspace. These registrations
-require no CUTLASS and support reusable CUDA Graph replay. Their former native
-fusion implementations now only serve HIP/MUSA.
+require no CUTLASS, compile for CUDA/HIP/MUSA, and support reusable CUDA Graph
+replay. Their former native fusion implementations have been removed from ggml.
 
 CUDA kernels can opt into device replay with `ggml_ext_register_kernel_ex` and
 `GGML_EXT_KERNEL_CAPTURE_SAFE`. The original registration function retains its
