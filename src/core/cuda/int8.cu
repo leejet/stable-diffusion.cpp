@@ -1,4 +1,7 @@
+#include <cstdlib>
+#include "convrot_kernel.h"
 #include "core/int8_ops.h"
+#include "i8_gemm.h"
 
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
@@ -301,7 +304,7 @@ namespace sd_i8_cuda {
         int64_t n,
         int64_t rows) {
         const int64_t output = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
-        const int64_t row    = blockIdx.y;
+        const int64_t row    = blockIdx.y + int64_t(blockIdx.z) * 65535;
         if (output < n && row < rows) {
             const int64_t index          = row * n + output;
             const float activation_scale = scales[row];
@@ -322,14 +325,16 @@ namespace sd_i8_cuda {
         const float4* weight_scales,
         const float4* bias,
         float4* dst,
-        int64_t n4) {
+        int64_t n4,
+        int64_t rows) {
         const int64_t output = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
-        if (output >= n4) {
+        const int64_t row    = blockIdx.y + int64_t(blockIdx.z) * 65535;
+        if (output >= n4 || row >= rows) {
             return;
         }
-        const int64_t index = (int64_t)blockIdx.y * n4 + output;
+        const int64_t index = row * n4 + output;
         const int4 v        = src[index];
-        const float scale   = scales[blockIdx.y];
+        const float scale   = scales[row];
         float4 value        = make_float4(v.x * scale, v.y * scale, v.z * scale, v.w * scale);
         if (weight_scales != nullptr) {
             const float4 w = weight_scales[output];
@@ -371,7 +376,7 @@ namespace sd_i8_cuda {
         cache.emplace(device, info);
         return info;
     }
-    static bool aligned(const ggml_tensor* tensor) {
+    static bool aligned(const ggml_tensor* tensor, size_t alignment = 4) {
         if (!tensor)
             return true;
         size_t offset = 0;
@@ -379,14 +384,14 @@ namespace sd_i8_cuda {
             offset += tensor->view_offs;
             tensor = tensor->view_src;
         }
-        return (reinterpret_cast<uintptr_t>(tensor->data) + offset) % 4 == 0;
+        return (reinterpret_cast<uintptr_t>(tensor->data) + offset) % alignment == 0;
     }
     static bool supports(ggml_backend_dev_t device, const ggml_tensor* node, void*) {
         SDI8Operation op;
         if (!sd_ggml_i8_describe(node, &op) || !aligned(node))
             return false;
         const int64_t k = op.weight->ne[0], n = op.weight->ne[1], rows = ggml_nrows(node);
-        if (k > INT_MAX || n > INT_MAX || rows > 65535 || k % 4 || n % 4 || (op.group_size && (op.group_size != 256 || rows > INT_MAX / (k / 256))))
+        if (k > INT_MAX || n > INT_MAX || rows > INT_MAX - 3 || k % 4 || n % 4 || (op.input->type == GGML_TYPE_F32 && op.group_size && (op.group_size != 256 || rows > INT_MAX / (k / 256))))
             return false;
         for (auto* input : node->src)
             if (!aligned(input))
@@ -402,41 +407,105 @@ namespace sd_i8_cuda {
         const int64_t k = node->ne[0], rows = ggml_nrows(node->src[0]);
         return k <= INT_MAX && rows <= INT_MAX && rows <= INT_MAX / (k / 256) && device_info(device).ordinal >= 0;
     }
+    enum Kind { MAT,
+                QUANTIZE,
+                SWIGLU,
+                SWIGLU_QUANTIZE,
+                CONCAT };
+    static bool fusion_disabled() {
+        static const bool disabled = [] { const char* v = std::getenv("GGML_CUDA_DISABLE_FUSION"); return v && std::atoi(v) != 0; }();
+        return disabled;
+    }
+    static int match(ggml_backend_dev_t device, const ggml_cgraph* graph, int first, void*) {
+        auto* g = const_cast<ggml_cgraph*>(graph);
+        if (fusion_disabled() || first + 1 >= ggml_graph_n_nodes(g))
+            return 0;
+        const auto* mat = ggml_graph_node(g, first);
+        SDI8Operation op;
+        if (!supports(device, mat, nullptr) || !sd_ggml_i8_describe(mat, &op) || !op.weight_scale || op.bias)
+            return 0;
+        const auto* next = ggml_graph_node(g, first + 1);
+        if (next->op == GGML_OP_CONCAT && next->src[1] == mat && next->src[0] != mat && next->op_params[0] == 1 &&
+            next->type == GGML_TYPE_F32 && mat->ne[2] == 1 && mat->ne[3] == 1 &&
+            next->ne[2] == 1 && next->ne[3] == 1 && ggml_is_contiguous(next) && ggml_is_contiguous(next->src[0]))
+            return 2;
+        if (next->op != GGML_OP_GLU || ggml_get_glu_op(next) != GGML_GLU_OP_SWIGLU || next->op_params[1] != 0 ||
+            next->src[0] != mat || next->src[1] || next->type != GGML_TYPE_F32 || !ggml_is_contiguous(next) ||
+            ggml_nelements(next) > int64_t(INT_MAX) * 256)
+            return 0;
+        if (first + 2 < ggml_graph_n_nodes(g)) {
+            const auto* quant = ggml_graph_node(g, first + 2);
+            if (quant->src[0] == next && convrot_supports(device, quant, nullptr) &&
+                size_t(next->ne[0]) * sizeof(float) + 128 <= device_info(device).shared)
+                return 3;
+        }
+        return 2;
+    }
     struct Plan {
         DeviceInfo device;
+        Kind kind;
         int64_t k, n, rows, padded;
-        size_t quant, scales, accum, partial, output;
+        size_t quant, scales, accum, partial, output, gemm_offset;
+        SDI8CudaGemmPlan* gemm = nullptr;
+        bool fast_swiglu       = false;
     };
     static size_t reserve(size_t& total, size_t bytes) {
         const size_t offset = total;
         total += (bytes + 255) / 256 * 256;
         return offset;
     }
-    static ggml_status prepare(ggml_backend_t backend, ggml_tensor* const* nodes, int, void** state, size_t* workspace, void*) {
-        const auto* dst = nodes[0];
+    static ggml_status prepare(ggml_backend_t backend, ggml_tensor* const* nodes, int count, void** state, size_t* workspace, void*) {
+        const auto* dst = nodes[count - 1];
         SDI8Operation op;
-        const bool mat = sd_ggml_i8_describe(dst, &op);
+        const bool mat = sd_ggml_i8_describe(nodes[0], &op);
         auto* p        = new Plan{};
         *state         = p;
-        p->device      = device_info(ggml_backend_get_device(backend));
+        auto device    = ggml_backend_get_device(backend);
+        p->device      = device_info(device);
+        p->kind        = !mat ? QUANTIZE : count == 3              ? SWIGLU_QUANTIZE
+                                       : count == 1                ? MAT
+                                       : dst->op == GGML_OP_CONCAT ? CONCAT
+                                                                   : SWIGLU;
         p->k           = mat ? op.weight->ne[0] : dst->ne[0];
-        p->n           = mat ? dst->ne[0] : 0;
-        p->rows        = mat ? ggml_nrows(dst) : ggml_nrows(dst->src[0]);
+        p->n           = mat ? nodes[0]->ne[0] : 0;
+        p->rows        = mat ? ggml_nrows(nodes[0]) : ggml_nrows(dst->src[0]);
         p->padded      = (p->rows + 3) / 4 * 4;
         size_t total   = 0;
         if (mat) {
             p->quant  = reserve(total, op.input->type == GGML_TYPE_F32 || (!op.packed && p->rows != p->padded) ? size_t(p->k) * p->padded : 0);
             p->scales = reserve(total, op.input->type == GGML_TYPE_F32 ? size_t(p->rows) * sizeof(float) : 0);
-            p->accum  = reserve(total, size_t(p->n) * p->padded * sizeof(int32_t));
+#ifdef SD_CUDA_I8_CUTLASS
+            size_t gemm_bytes = 0;
+            // Custom GEMM previously used cuBLAS; retain that path when I32 accumulation can overflow.
+            if (op.weight_scale && !op.bias && (nodes[0]->op == GGML_OP_MUL_MAT || p->k <= INT_MAX / 16384) &&
+                aligned(op.weight, 16) && aligned(op.weight_scale, 16) && aligned(dst, 16) &&
+                (op.input->type == GGML_TYPE_F32 || (aligned(op.input, 16) && aligned(op.input_scale, 16))) &&
+                (p->kind != CONCAT || ggml_nbytes(dst->src[0]) % 16 == 0)) {
+                if (p->kind == SWIGLU || p->kind == SWIGLU_QUANTIZE) {
+                    p->gemm        = sd_cuda_i8_gemm_prepare(device, p->rows, p->n, p->k, true, &gemm_bytes);
+                    p->fast_swiglu = p->gemm != nullptr;
+                }
+                if (!p->gemm)
+                    p->gemm = sd_cuda_i8_gemm_prepare(device, p->rows, p->n, p->k, false, &gemm_bytes);
+            }
+            p->gemm_offset = reserve(total, gemm_bytes);
+#endif
+            const bool intermediate = !p->gemm || p->kind == SWIGLU_QUANTIZE || (p->kind == SWIGLU && !p->fast_swiglu);
+            p->accum                = reserve(total, intermediate ? size_t(p->fast_swiglu ? p->n / 2 : p->n) * p->padded * sizeof(float) : 0);
         }
         const bool large_rotation = (!mat || (op.input->type == GGML_TYPE_F32 && op.group_size == 256)) && size_t(p->k) * sizeof(float) + 128 > p->device.shared;
         p->partial                = reserve(total, large_rotation ? size_t(p->rows) * (p->k / 256) * sizeof(float) : 0);
-        p->output                 = reserve(total, ggml_nbytes(dst));
+        p->output                 = reserve(total, p->gemm && p->kind == SWIGLU_QUANTIZE ? 0 : ggml_nbytes(dst));
         *workspace                = total;
         return GGML_STATUS_SUCCESS;
     }
     static void destroy(void* state, void*) {
-        delete static_cast<Plan*>(state);
+        auto* p = static_cast<Plan*>(state);
+#ifdef SD_CUDA_I8_CUTLASS
+        if (p)
+            sd_cuda_i8_gemm_free(p->gemm);
+#endif
+        delete p;
     }
     static bool overlaps(const ggml_tensor* a, const ggml_tensor* b) {
         if (!b)
@@ -474,7 +543,54 @@ namespace sd_i8_cuda {
         }
         return cudaGetLastError();
     }
-    static ggml_status execute(const ggml_ext_execution_context* execution, ggml_tensor* const* nodes, int, void* state, void*) {
+    template <bool Dequantize>
+    static __global__ void swiglu(const float* src, const float* xs, const float* ws, float* dst, int64_t n, int64_t rows) {
+        const int64_t i    = int64_t(blockIdx.x) * blockDim.x + threadIdx.x;
+        const int64_t half = n / 2;
+        if (i >= rows * half)
+            return;
+        const int64_t row = i / half, col = i % half;
+        float gate, up;
+        if constexpr (Dequantize) {
+            gate = float(reinterpret_cast<const int32_t*>(src)[row * n + col]) * xs[row];
+            up   = float(reinterpret_cast<const int32_t*>(src)[row * n + half + col]) * xs[row];
+            gate *= ws[col];
+            up *= ws[half + col];
+        } else {
+            gate = src[row * n + col];
+            up   = src[row * n + half + col];
+        }
+        dst[i] = __fmul_rn(gate / (1.f + expf(-gate)), up);
+    }
+    template <bool Swiglu, bool Dequantize, bool Rotated>
+    static cudaError_t quantize_epilogue(const Plan& p, const float* src, const float* xs, const float* ws, int8_t* output, cudaStream_t stream) {
+        const int64_t hidden = p.n / 2;
+        auto kernel          = sd_convrot::quantize<Swiglu, Dequantize, false, false, Rotated>;
+        static std::mutex mutex;
+        static std::unordered_map<int, bool> initialized;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (!initialized[p.device.ordinal]) {
+                auto error = cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, int(p.device.shared - 128));
+                if (error != cudaSuccess)
+                    return error;
+                initialized[p.device.ordinal] = true;
+            }
+        }
+        if (p.padded > p.rows) {
+            auto error = cudaMemsetAsync(output + hidden * p.rows, 0, size_t(hidden) * (p.padded - p.rows), stream);
+            if (error != cudaSuccess)
+                return error;
+        }
+        const int threads = Rotated && !Swiglu && !Dequantize ? (hidden <= 1024 ? 128 : hidden <= 8192 ? 256
+                                                                                                       : 1024)
+                                                              : 256;
+        kernel<<<unsigned(p.rows), threads, size_t(hidden) * sizeof(float), stream>>>(src, output,
+                                                                                      reinterpret_cast<float*>(output + hidden * p.padded), hidden, p.rows, hidden,
+                                                                                      Swiglu ? src + hidden : nullptr, Swiglu ? p.n : hidden, Swiglu ? p.n : hidden, xs, ws, nullptr, 0.f, 1.f, 0.f, nullptr, nullptr);
+        return cudaGetLastError();
+    }
+    static ggml_status execute(const ggml_ext_execution_context* execution, ggml_tensor* const* nodes, int count, void* state, void*) {
         const auto& p = *static_cast<const Plan*>(state);
         auto reg      = ggml_backend_dev_backend_reg(ggml_backend_get_device(execution->backend));
         auto query    = reinterpret_cast<ggml_ext_cuda_context_fn>(ggml_backend_reg_get_proc_address(reg, "ggml_ext_cuda_context_v1"));
@@ -483,12 +599,21 @@ namespace sd_i8_cuda {
             return GGML_STATUS_FAILED;
         auto stream   = static_cast<cudaStream_t>(context.stream);
         auto* scratch = static_cast<char*>(ggml_backend_buffer_get_base(execution->workspace));
-        auto* dst     = nodes[0];
+        auto* dst     = nodes[count - 1];
         SDI8Operation op;
-        const bool mat = sd_ggml_i8_describe(dst, &op);
+        const bool mat = sd_ggml_i8_describe(nodes[0], &op);
         bool alias     = false;
-        for (auto* input : dst->src)
-            alias |= overlaps(dst, input);
+        for (int i = 0; i < count; ++i)
+            for (auto* input : nodes[i]->src) {
+                bool internal = false;
+                for (int j = 0; j < count; ++j)
+                    internal |= input == nodes[j];
+                if (!internal)
+                    alias |= overlaps(dst, input);
+            }
+        // CUTLASS quantization epilogues read only the workspace intermediate after GEMM completes.
+        if (p.gemm && p.kind == SWIGLU_QUANTIZE)
+            alias = false;
         void* output      = alias ? scratch + p.output : dst->data;
         cudaError_t error = cudaSuccess;
         if (!mat) {
@@ -496,10 +621,6 @@ namespace sd_i8_cuda {
             auto* scales = reinterpret_cast<float*>(quant + p.k * p.padded);
             error        = convrot_launch(p, stream, static_cast<const float*>(dst->src[0]->data), quant, scales, reinterpret_cast<float*>(scratch + p.partial));
         } else {
-            auto blas_query = reinterpret_cast<ggml_ext_cuda_blas_fn>(ggml_backend_reg_get_proc_address(reg, "ggml_ext_cuda_blas_v1"));
-            auto handle     = blas_query ? static_cast<cublasHandle_t>(blas_query(execution->backend)) : nullptr;
-            if (!handle)
-                return GGML_STATUS_FAILED;
             auto* quant = reinterpret_cast<int8_t*>(scratch + p.quant);
             const float* scales;
             if (op.input->type == GGML_TYPE_F32) {
@@ -526,26 +647,64 @@ namespace sd_i8_cuda {
             }
             if (error != cudaSuccess || cudaGetLastError() != cudaSuccess)
                 return GGML_STATUS_FAILED;
-            auto* accum         = reinterpret_cast<int32_t*>(scratch + p.accum);
-            const int32_t alpha = 1, beta = 0;
-            if (cublasGemmEx(handle, CUBLAS_OP_T, CUBLAS_OP_N, int(p.n), int(p.padded), int(p.k), &alpha,
-                             op.weight->data, CUDA_R_8I, int(p.k), quant, CUDA_R_8I, int(p.k), &beta, accum, CUDA_R_32I, int(p.n), CUBLAS_COMPUTE_32I, CUBLAS_GEMM_DEFAULT_TENSOR_OP) != CUBLAS_STATUS_SUCCESS)
-                return GGML_STATUS_FAILED;
-            const auto* ws   = op.weight_scale ? static_cast<const float*>(op.weight_scale->data) : nullptr;
-            const auto* bias = op.bias ? static_cast<const float*>(op.bias->data) : nullptr;
-            if ((reinterpret_cast<uintptr_t>(ws) | reinterpret_cast<uintptr_t>(bias) | reinterpret_cast<uintptr_t>(output)) % 16 == 0) {
-                const dim3 grid(unsigned((p.n + 1023) / 1024), unsigned(p.rows));
-                dequantize_i32_rows_vec4_cuda<<<grid, 256, 0, stream>>>(reinterpret_cast<const int4*>(accum), scales, reinterpret_cast<const float4*>(ws), reinterpret_cast<const float4*>(bias), static_cast<float4*>(output), p.n / 4);
-            } else {
-                const dim3 grid(unsigned((p.n + 255) / 256), unsigned(p.rows));
-                dequantize_i32_rows_cuda<<<grid, 256, 0, stream>>>(accum, scales, ws, bias, static_cast<float*>(output), p.n, p.rows);
+            const auto* ws          = op.weight_scale ? static_cast<const float*>(op.weight_scale->data) : nullptr;
+            const auto* bias        = op.bias ? static_cast<const float*>(op.bias->data) : nullptr;
+            const size_t prefix     = p.kind == CONCAT ? ggml_nbytes(dst->src[0]) : 0;
+            auto* gemm_output       = reinterpret_cast<float*>(static_cast<char*>(output) + prefix);
+            auto* accum             = reinterpret_cast<int32_t*>(scratch + p.accum);
+            const bool intermediate = p.kind == SWIGLU_QUANTIZE || (p.kind == SWIGLU && !p.fast_swiglu);
+#ifdef SD_CUDA_I8_CUTLASS
+            if (p.gemm) {
+                auto status = sd_cuda_i8_gemm_execute(p.gemm, quant, static_cast<const int8_t*>(op.weight->data), scales, ws,
+                                                      intermediate ? reinterpret_cast<float*>(accum) : gemm_output, scratch + p.gemm_offset, stream);
+                if (status != GGML_STATUS_SUCCESS)
+                    return status;
+            } else
+#endif
+            {
+                auto blas_query = reinterpret_cast<ggml_ext_cuda_blas_fn>(ggml_backend_reg_get_proc_address(reg, "ggml_ext_cuda_blas_v1"));
+                auto handle     = blas_query ? static_cast<cublasHandle_t>(blas_query(execution->backend)) : nullptr;
+                if (!handle)
+                    return GGML_STATUS_FAILED;
+                const int32_t alpha = 1, beta = 0;
+                if (cublasGemmEx(handle, CUBLAS_OP_T, CUBLAS_OP_N, int(p.n), int(p.padded), int(p.k), &alpha,
+                                 op.weight->data, CUDA_R_8I, int(p.k), quant, CUDA_R_8I, int(p.k), &beta, accum, CUDA_R_32I,
+                                 int(p.n), CUBLAS_COMPUTE_32I, CUBLAS_GEMM_DEFAULT_TENSOR_OP) != CUBLAS_STATUS_SUCCESS)
+                    return GGML_STATUS_FAILED;
             }
-            error = cudaGetLastError();
+            const auto* values = reinterpret_cast<const float*>(accum);
+            if (p.kind == SWIGLU_QUANTIZE) {
+                if (p.fast_swiglu)
+                    error = quantize_epilogue<false, false, true>(p, values, nullptr, nullptr, static_cast<int8_t*>(output), stream);
+                else if (p.gemm)
+                    error = quantize_epilogue<true, false, false>(p, values, nullptr, nullptr, static_cast<int8_t*>(output), stream);
+                else
+                    error = quantize_epilogue<true, true, false>(p, values, scales, ws, static_cast<int8_t*>(output), stream);
+            } else if (p.kind == SWIGLU && !p.fast_swiglu) {
+                const unsigned blocks = unsigned((p.rows * (p.n / 2) + 255) / 256);
+                if (p.gemm)
+                    swiglu<false><<<blocks, 256, 0, stream>>>(values, scales, ws, static_cast<float*>(output), p.n, p.rows);
+                else
+                    swiglu<true><<<blocks, 256, 0, stream>>>(values, scales, ws, static_cast<float*>(output), p.n, p.rows);
+                error = cudaGetLastError();
+            } else if (!p.gemm) {
+                const unsigned gy = unsigned(std::min<int64_t>(p.rows, 65535)), gz = unsigned((p.rows + 65534) / 65535);
+                if ((reinterpret_cast<uintptr_t>(ws) | reinterpret_cast<uintptr_t>(bias) | reinterpret_cast<uintptr_t>(gemm_output)) % 16 == 0) {
+                    dequantize_i32_rows_vec4_cuda<<<dim3(unsigned((p.n + 1023) / 1024), gy, gz), 256, 0, stream>>>(
+                        reinterpret_cast<const int4*>(accum), scales, reinterpret_cast<const float4*>(ws), reinterpret_cast<const float4*>(bias), reinterpret_cast<float4*>(gemm_output), p.n / 4, p.rows);
+                } else {
+                    dequantize_i32_rows_cuda<<<dim3(unsigned((p.n + 255) / 256), gy, gz), 256, 0, stream>>>(accum, scales, ws, bias, gemm_output, p.n, p.rows);
+                }
+                error = cudaGetLastError();
+            }
+            if (error == cudaSuccess && prefix)
+                error = cudaMemcpyAsync(output, dst->src[0]->data, prefix, cudaMemcpyDeviceToDevice, stream);
         }
         if (error == cudaSuccess && alias)
             error = cudaMemcpyAsync(dst->data, output, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, stream);
         return error == cudaSuccess ? GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
     }
+
 }
 
 void sd_ggml_register_cuda_i8(ggml_backend_dev_t device) {
@@ -560,8 +719,27 @@ void sd_ggml_register_cuda_i8(ggml_backend_dev_t device) {
     desc.execute              = sd_i8_cuda::execute;
     desc.destroy              = sd_i8_cuda::destroy;
     GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
+    desc.name      = "sd.linear_i8.cuda.override.v1";
+    desc.op        = GGML_OP_MUL_MAT;
+    desc.custom_op = nullptr;
+    GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
+    desc.name     = "sd.linear_i8.epilogue.cuda.v1";
+    desc.priority = 240;
+    desc.supports = nullptr;
+    desc.match    = sd_i8_cuda::match;
+    GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
+    desc.name      = "sd.linear_i8.epilogue.cuda.custom.v1";
+    desc.op        = GGML_OP_CUSTOM;
+    desc.custom_op = sd_ggml_i8_op();
+    GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
+    desc.priority  = 100;
+    desc.match     = nullptr;
     desc.name      = "sd.quantize_i8_convrot.cuda.v1";
     desc.custom_op = sd_ggml_convrot_op();
     desc.supports  = sd_i8_cuda::convrot_supports;
+    GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
+    desc.name      = "sd.quantize_i8_convrot.cuda.override.v1";
+    desc.op        = GGML_OP_QUANTIZE_I8_CONVROT;
+    desc.custom_op = nullptr;
     GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
 }

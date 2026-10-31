@@ -145,11 +145,6 @@ namespace sd_convrot {
         ggml_tensor* nodes[6];
         for (int j = 0; j < count; ++j)
             nodes[j] = ggml_graph_node(g, first + j);
-        // Native INT8 epilogues consume GEMM and GLU together; splitting them loses that fusion.
-        if (node->op == GGML_OP_GLU && nodes[count - 1]->op == GGML_OP_QUANTIZE_I8_CONVROT &&
-            node->src[0]->op == GGML_OP_MUL_MAT && node->src[0]->src[0]->type == GGML_TYPE_I8 &&
-            node->src[0]->src[2] && !node->src[0]->src[3])
-            return 0;
         Operation op;
         return describe(nodes, count, op) && supported(op, device_info(device)) ? count : 0;
     }

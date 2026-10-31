@@ -191,10 +191,32 @@ ConvRot, and rescaling kernels. F32 inputs are quantized into workspace; ordinar
 I8 inputs retain separate scale tensors and use a padded temporary only when
 needed by cuBLAS. Packed ConvRot inputs are consumed directly. Large ConvRot rows
 use multiple kernels when they exceed shared memory. Aliasing outputs use scratch.
-These registrations do not require CUTLASS and do not intercept builtin nodes yet.
+The registrations also intercept builtin INT8 GEMM and standalone ConvRot nodes.
 CUDA GEMM requires Turing or newer, contiguous tensors, K/N divisible by four,
-float-aligned inputs, and at most 65535 rows; CUDA ConvRot uses groups of 256.
+float-aligned inputs, and row counts that fit a padded signed 32-bit dimension;
+CUDA ConvRot uses groups of 256.
 Unsupported custom nodes can fall back to CPU through the scheduler.
+
+When CUTLASS is configured, `src/core/cuda/i8_gemm.cu` supplies dense and SwiGLU
+INT8 GEMM kernels on Ampere or newer. It preserves the native tile selection,
+small-row policy, Stream-K scheduling, Ada column bands, and separate scaling
+order. The same extension matches `GEMM -> SwiGLU [-> ConvRot]` and row
+concatenation for builtin and custom GEMM nodes. Weight scales remain explicit
+inputs, including the gate/up scale permutation recorded on every SwiGLU launch.
+Plans reserve bounded Stream-K workspace, cache occupancy on first execution,
+and initialize barriers on every launch, so CUDA Graph replay observes updated
+inputs and scales. External consumers retain ordinary execution; overlapping
+outputs use workspace. The CUTLASS SwiGLU/ConvRot chain can write its packed
+output directly after GEMM, because quantization reads only its workspace
+intermediate. Shapes or alignments unsuitable for CUTLASS use cuBLAS.
+Custom I8 nodes also retain cuBLAS when the reduction could overflow I32, to
+preserve their previous accumulation behavior. Fusion disable and force-cuBLAS
+settings are honored. No CUTLASS headers are needed for the cuBLAS path.
+
+The native CUDA CUTLASS GEMM implementation and its SwiGLU/row-concat matchers
+have been removed from ggml. Native cuBLAS GEMM and standalone ConvRot remain
+compatibility implementations for callers without these registrations. HIP
+retains its native INT8/activation fusion paths.
 
 `src/core/cuda/i8_gated_residual.cu` implements
 `INT8 GEMM -> [Scale] -> Mul(gate) -> Add(residual) -> [Concat]` as a registered
@@ -230,11 +252,9 @@ overlapping outputs. Long rows or external intermediate consumers retain
 ordinary execution. These fusions do not require CUTLASS and honor
 `GGML_CUDA_DISABLE_FUSION`.
 
-The corresponding scale, normalization, and unary-activation rules in ggml now
-only serve HIP. CUDA retains the native INT8 GEMM/SwiGLU epilogue chain; the
-ConvRot extension leaves that chain together to preserve its existing fusion.
-Standalone builtin ConvRot and its native GEMM integration are still pending
-migration.
+The corresponding scale, normalization, and unary-activation fusion rules in
+ggml now only serve HIP. CUDA GEMM/SwiGLU/ConvRot chains are selected by the
+application INT8 extension before the standalone activation fusion.
 
 CUDA kernels can opt into device replay with `ggml_ext_register_kernel_ex` and
 `GGML_EXT_KERNEL_CAPTURE_SAFE`. The original registration function retains its
@@ -278,7 +298,7 @@ CUDA VMM so native scratch addresses remain valid for the backend lifetime;
 legacy scratch pools retain the existing fragment path. HIP and MUSA do not yet
 provide this plan executor. sd.cpp's CUDA registrations opt in to reusable replay.
 
-The builtin CUDA/Vulkan INT8 GEMM, standalone ConvRot quantization, and remaining fusion rules
-still need to be externalized. Vulkan execution services and kernels also remain pending.
+Remaining CUDA fusion rules and Vulkan INT8/ConvRot implementations still need
+to be externalized. Vulkan execution services and kernels also remain pending.
 This implementation does not yet externalize all model-specific kernels or add
 dynamic dtypes.
