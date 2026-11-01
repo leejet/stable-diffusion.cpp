@@ -2378,8 +2378,20 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
         LOG_VERBOSE("using guidance schedule: %s", schedule_str.c_str());
     }
 
+    SDCondition base_text_condition;
+    bool has_text_images = version == VERSION_FIBO2 && !cond.extra_c_crossattns.empty();
+    if (has_text_images) {
+        GGML_ASSERT(cond.extra_c_crossattns.size() == 1 && !cond.extra_c_crossattns.front().empty());
+        base_text_condition             = cond;
+        base_text_condition.c_crossattn = cond.extra_c_crossattns.front();
+        base_text_condition.extra_c_crossattns.clear();
+        // Forecasts across the text-image conditioning switch are not interchangeable.
+        if (cache_params) {
+            LOG_INFO("disabling step caches for Fibo text-image conditioning");
+        }
+    }
     sd_sample::SampleCacheRuntime cache_runtime = sd_sample::init_sample_cache_runtime(version,
-                                                                                       cache_params,
+                                                                                       has_text_images ? nullptr : cache_params,
                                                                                        denoiser.get(),
                                                                                        sigmas);
 
@@ -2711,7 +2723,8 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
             return output;
         };
 
-        const SDCondition* positive_condition      = &cond;
+        const SDCondition& step_condition          = has_text_images && sigma > 0.9f ? base_text_condition : cond;
+        const SDCondition* positive_condition      = &step_condition;
         const sd::Tensor<float>* c_concat_override = nullptr;
         for (const auto& extension : generation_extensions) {
             const SDCondition& next_condition = extension->before_condition(step, *positive_condition);
@@ -2836,7 +2849,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
             LOG_VERBOSE("Skipping layers at step %d\n", step);
             if (!step_cache.is_step_skipped()) {
                 guidance_input.predict_skip_layer = [&]() -> sd::Tensor<float> {
-                    return run_condition(cond,
+                    return run_condition(step_condition,
                                          cond.c_concat.empty() ? nullptr : &cond.c_concat,
                                          &skip_layer_guidance.layers());
                 };
@@ -3185,6 +3198,13 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
                 rejected_keys.insert(key);
             }
+        } else if (key == "render_text_images") {
+            if (!parse_strict_bool(value, params.render_text_images)) {
+                LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
+            }
+        } else if (key == "text_render_fonts") {
+            params.text_render_fonts = split_string(value, '|');
         } else if (key == "ref_image_size") {
             bool valid = true;
             if (value == "match") {

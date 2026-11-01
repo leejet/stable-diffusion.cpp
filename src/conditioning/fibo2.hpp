@@ -77,8 +77,37 @@ struct Fibo2Conditioner : public LLMEmbedder {
         return {caption, instruction};
     }
 
-    static std::string format_prompt(const std::string& text, int num_images) {
+    static std::vector<std::string> text_render_entries(const std::string& text, int num_images) {
         auto [caption, instruction] = parse_prompt(text);
+        std::vector<std::string> texts;
+        if (!caption.is_object() || (num_images > 0 && instruction.is_null())) {
+            return texts;
+        }
+        auto entries = caption.find("text_render");
+        if (entries != caption.end() && entries->is_array()) {
+            for (const auto& entry : *entries) {
+                if (entry.is_object() && entry.contains("text") && entry["text"].is_string() &&
+                    !entry["text"].get_ref<const std::string&>().empty()) {
+                    texts.push_back(entry["text"].get<std::string>());
+                }
+            }
+        }
+        return texts;
+    }
+
+    static std::string format_prompt(const std::string& text, int num_images, const std::vector<sd::Tensor<float>>* text_images = nullptr) {
+        auto [caption, instruction] = parse_prompt(text);
+        if (text_images && caption.is_object() && (num_images == 0 || !instruction.is_null())) {
+            auto entries = caption.find("text_render");
+            if (entries != caption.end() && entries->is_array()) {
+                for (auto& entry : *entries) {
+                    if (entry.is_object() && entry.contains("text") && entry["text"].is_string() &&
+                        !entry["text"].get_ref<const std::string&>().empty()) {
+                        entry["image_tokens"] = text_images->empty() ? "" : "<|vision_start|><|image_pad|><|vision_end|>";
+                    }
+                }
+            }
+        }
         if (num_images > 0) {
             if (instruction.is_null()) {
                 caption     = nullptr;
@@ -134,25 +163,37 @@ struct Fibo2Conditioner : public LLMEmbedder {
 
     SDCondition get_learned_condition(int n_threads, const ConditionerParams& p) override {
         int image_count = p.ref_images ? static_cast<int>(p.ref_images->size()) : 0;
-        if (image_count && !llm->enable_vision) {
-            LOG_ERROR("Fibo 2.0 editing requires vision weights");
+        int text_image_count = p.text_images ? static_cast<int>(p.text_images->size()) : 0;
+        if ((image_count || text_image_count) && !llm->enable_vision) {
+            LOG_ERROR("Fibo 2.0 image conditioning requires vision weights");
             return {};
         }
-        std::string prompt = "<|im_start|>user\n" + format_prompt(p.text, image_count) + "<|im_end|>\n<|im_start|>assistant\n";
+        std::string prompt = "<|im_start|>user\n" + format_prompt(p.text, image_count, p.text_images) + "<|im_end|>\n<|im_start|>assistant\n";
         std::vector<std::pair<int, sd::Tensor<float>>> images;
         LLM::DeepStackImageEmbeds deepstack;
         std::vector<LLM::ImageGrid> grids;
         size_t marker_start = 0;
-        for (int i = 0; i < image_count; ++i) {
-            const auto& image = (*p.ref_images)[i];
+        for (int i = 0; i < image_count + text_image_count; ++i) {
+            const auto& image = i < image_count ? (*p.ref_images)[i] : (*p.text_images)[i - image_count];
             int factor        = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
             int height = static_cast<int>(image.shape()[1]), width = static_cast<int>(image.shape()[0]);
             int h = std::max(factor, static_cast<int>(std::round(static_cast<double>(height) / factor)) * factor);
             int w = std::max(factor, static_cast<int>(std::round(static_cast<double>(width) / factor)) * factor);
-            resize_image_dims(height, width, h, w, factor,
-                              p.ref_image_params.vlm_min_size,
-                              p.ref_image_params.vlm_max_size,
-                              p.ref_image_params.vlm_resize_mode);
+            if (i < image_count) {
+                resize_image_dims(height, width, h, w, factor,
+                                  p.ref_image_params.vlm_min_size,
+                                  p.ref_image_params.vlm_max_size,
+                                  p.ref_image_params.vlm_resize_mode);
+            } else {
+                if (static_cast<double>(std::max(height, width)) / std::min(height, width) > 200) {
+                    LOG_ERROR("Fibo text image aspect ratio exceeds the Qwen3-VL limit of 200");
+                    return {};
+                }
+                // Text images use Qwen3-VL's processor area limits, not the editing reference size.
+                h = static_cast<int>(std::nearbyint(static_cast<double>(height) / factor)) * factor;
+                w = static_cast<int>(std::nearbyint(static_cast<double>(width) / factor)) * factor;
+                resize_image_dims(height, width, h, w, factor, 65536, 16777216, RefImageResizeMode::AREA);
+            }
             auto pixels = sd::ops::interpolate(image, {w, h, image.shape()[2], image.shape()[3]}, sd::ops::InterpolateMode::Bicubic, false, true);
             auto rgb    = sd::Tensor<float>({w, h, 3, 1});
             for (int64_t pixel = 0; pixel < int64_t(w) * h; ++pixel) {
