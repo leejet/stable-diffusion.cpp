@@ -20,6 +20,7 @@
 #include <cuda_pipeline_primitives.h>
 
 #include "cp_async.cuh"
+#include "math.cuh"
 #include "mma.cuh"
 #include "permuted_smem.cuh"
 #include "numeric_conversion.cuh"
