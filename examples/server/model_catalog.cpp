@@ -642,6 +642,7 @@ json model_status(ServerRuntime& runtime) {
 
 void initialize_server_models(ServerRuntime& runtime) {
     auto& models        = *runtime.models;
+    models.last_task_at = std::chrono::steady_clock::now();
     models.base_context = *runtime.ctx_params;
     clear_model_paths(models.base_context);
     models.base_defaults = *runtime.default_gen_params;

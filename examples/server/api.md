@@ -78,6 +78,19 @@ with `code: "model_loading"`. These errors retain the existing string-valued
 `error` field. Job polling/cancellation, catalog queries and model status remain
 available during loading. Model lists are empty when no model is loaded;
 `/v1/models` retains the `sd-cpp-local` ID when ready.
+When the server is sleeping (`--sleep-idle-seconds`), status reports `state:
+sleeping` with the context released and the loaded selection preserved; the next
+generation request reloads it before running, or returns HTTP 422
+(`model_load_failed`) if the reload fails.
+
+With `--sleep-idle-seconds N` the server releases the active context after
+N seconds without a generation request or queued job and reports `state:
+sleeping`; the model then holds no GPU or system memory. The next generation
+request reloads the same recipe and selection before serving, waiting for the
+reload; a reload failure returns HTTP 422 (`model_load_failed`) and moves the
+status to `state: error`. Explicit load/unload while sleeping replaces the
+sleeping selection. Status, recipe, file catalog and model management
+endpoints, and job polling/cancellation remain available while sleeping.
 
 | Method | Endpoint | Response / behavior |
 | --- | --- | --- |
@@ -137,9 +150,11 @@ failure returns HTTP 422 (`model_load_failed`) and leaves no active context.
 The load HTTP request waits for completion; a separate client can poll status
 while it runs. Refreshing the catalog never modifies an already loaded context.
 
-Status uses `state: empty | loading | ready | error`, `recipe` (ID or null),
+Status uses `state: empty | loading | ready | sleeping | error`, `recipe` (ID or null),
 `models` (slot-to-file-ID mapping), and `error` (string or null). A monotonically
 increasing `revision` identifies runtime transitions within this server process.
+`state: sleeping` appears only when `--sleep-idle-seconds` is configured; the
+context is released while the loaded selection stays preserved for the reload.
 Command-line preloading keeps `origin: command_line` and `recipe: null` for
 compatibility, and adds `runtime_recipe`: a read-only `@command-line` recipe
 with all feature declarations enabled. It is only available while that context
