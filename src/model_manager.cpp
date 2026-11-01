@@ -2009,7 +2009,7 @@ bool ModelManager::ensure_compute_backend_capacity(
     revert_demotions();
 
     auto capacity = check_capacity(request, required_states);
-    if (capacity.fits()) {
+    if (!capacity.requires_reclamation && capacity.fits()) {
         return true;
     }
     if (sd_backend_is(compute_backend, "Vulkan") &&
@@ -2021,7 +2021,7 @@ bool ModelManager::ensure_compute_backend_capacity(
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
         for (;;) {
             capacity = check_capacity(request, required_states);
-            if (capacity.fits()) {
+            if (!capacity.requires_reclamation && capacity.fits()) {
                 return true;
             }
             if (capacity.required_budget_bytes > capacity.available_budget_bytes ||
