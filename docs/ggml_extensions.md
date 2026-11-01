@@ -135,14 +135,16 @@ CPU kernels and fusion rules live in `src/core/cpu/`, with registration collecte
 in `cpu/registration.cpp`. CUDA-style and Vulkan implementations live in their
 respective backend directories.
 
-`ggml_ext_modulate(ctx, x, shift, scale)` emits `sd.modulate.v1` for F32 inputs.
+`ggml_ext_modulate(ctx, x, shift, scale)` emits `sd.modulate.v1` for F32 inputs
+when the runner context uses CPU, CUDA/HIP/MUSA, or Vulkan.
 Its explicit inputs are `x`, `scale`, and optional `shift`; it computes
 `(x + x * scale) + shift` with separate FP32 multiply/add rounding. The output
 is contiguous and out of place. Inputs may be strided and use ggml's
 dimension-wise repetition rules. Callers prepare token, batch, or frame layouts
 before constructing the operation; normalization and residual gates remain
 separate operations. CPU, CUDA/HIP/MUSA, and Vulkan have standalone kernels.
-Upstream ggml builds and other input types retain the original MUL/ADD graph.
+Other backends (including Metal, SYCL, and OpenCL), upstream ggml builds, and
+other input types retain the original MUL/ADD graph.
 
 ConvRot fusion matches the Modulate node directly, including scale-only
 modulation, instead of recognizing its former MUL/ADD/ADD decomposition.
