@@ -53,7 +53,7 @@ RUN apt-get update && \
     apt-get clean
 
 COPY --from=build /sd.cpp/build/bin /sd.cpp/bin
-COPY --from=build /sd.cpp/ggml/src/ggml-cuda/vendors/cutlass/LICENSE.txt /sd.cpp/bin/cutlass.txt
+COPY --from=build /sd.cpp/thirdparty/cutlass/LICENSE.txt /sd.cpp/bin/cutlass.txt
 RUN printf '#!/bin/sh\nexec /sd.cpp/bin/sd-cli "$@"\n' > /sd-cli && \
     printf '#!/bin/sh\nexec /sd.cpp/bin/sd-server "$@"\n' > /sd-server && \
     chmod +x /sd-cli /sd-server
