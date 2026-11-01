@@ -135,7 +135,10 @@ regardless of argument order, even with `--auto-fit on`.
 
 Auto-fit preserves explicit `--backend` assignments, including per-module
 assignments and device lists. For modules without a runtime assignment, it chooses
-the GPU with the largest available memory budget (the first device on a tie).
+the discrete GPU with the largest positive memory budget (the first device on a
+tie), falling back to integrated GPUs when no discrete GPU has a positive budget.
+An integrated GPU's shared system memory does not give it priority over a discrete
+GPU. Explicit assignments such as `--backend Vulkan1` still select that device.
 It then derives parameter placements from the model metadata, each module's
 compute devices, and the remaining memory budgets. The chosen backend
 specifications are printed.
