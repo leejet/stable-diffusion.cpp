@@ -1,0 +1,12 @@
+if(NOT WIN32 AND NOT CMAKE_CXX_COMPILER MATCHES "hipcc")
+    if(NOT CMAKE_HIP_ARCHITECTURES)
+        if(GPU_TARGETS)
+            set(CMAKE_HIP_ARCHITECTURES ${GPU_TARGETS})
+        elseif(AMDGPU_TARGETS)
+            set(CMAKE_HIP_ARCHITECTURES ${AMDGPU_TARGETS})
+        endif()
+    endif()
+    # HIP objects are linked by the parent target, so initialize its link rules here.
+    enable_language(HIP)
+    set_property(TARGET ${SD_LIB} PROPERTY HIP_ARCHITECTURES "${CMAKE_HIP_ARCHITECTURES}")
+endif()

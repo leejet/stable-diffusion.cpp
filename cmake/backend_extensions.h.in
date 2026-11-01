@@ -1,0 +1,13 @@
+#ifndef __SD_BACKEND_EXTENSIONS_H__
+#define __SD_BACKEND_EXTENSIONS_H__
+
+#include "core/cuda/registration.h"
+
+void sd_ggml_register_vulkan_rope(ggml_backend_dev_t device);
+void sd_ggml_register_vulkan_i8(ggml_backend_dev_t device);
+
+static void (*const sd_backend_extensions[])(ggml_backend_dev_t) = {
+    @SD_BACKEND_REGISTRATIONS@
+};
+
+#endif

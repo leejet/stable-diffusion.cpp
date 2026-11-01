@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "core/ggml_extensions.h"
 #include "ggml-backend.h"
 #include "ggml.h"
 
