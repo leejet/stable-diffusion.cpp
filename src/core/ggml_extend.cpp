@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
 
 ggml_tensor* ggml_ext_mul_n_mode(ggml_context* ctx, ggml_tensor* a, ggml_tensor* b, int mode) {
     // reshape A
@@ -153,6 +154,26 @@ static bool ggml_ext_is_padded_1d(const ggml_tensor* x) {
     return x->nb[0] == ggml_type_size(x->type) &&
            x->nb[2] == x->nb[1] * x->ne[1] &&
            x->nb[3] == x->nb[2] * x->ne[2];
+}
+
+ggml_tensor* ggml_ext_modulate(GGMLRunnerContext* ctx,
+                               ggml_tensor* x,
+                               ggml_tensor* shift,
+                               ggml_tensor* scale) {
+#ifndef SD_USE_UPSTREAM_GGML
+    if (x->type == GGML_TYPE_F32 && scale->type == GGML_TYPE_F32 && (!shift || shift->type == GGML_TYPE_F32) &&
+        (sd_backend_is_cpu(ctx->backend) || sd_backend_is(ctx->backend, "CUDA") ||
+         sd_backend_is(ctx->backend, "ROCm") || sd_backend_is(ctx->backend, "MUSA") || sd_backend_is(ctx->backend, "Vulkan"))) {
+        ggml_tensor* inputs[] = {x, scale, shift};
+        return ggml_ext_op_create(ctx->ggml_ctx, sd_ggml_modulate_op(), inputs, shift ? 3 : 2, nullptr);
+    }
+#endif
+    // Preserve separate multiply/add nodes for rounding and backend fusion matching.
+    x = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, x, scale));
+    if (shift != nullptr) {
+        x = ggml_add(ctx->ggml_ctx, x, shift);
+    }
+    return x;
 }
 
 ggml_tensor* ggml_ext_scale(ggml_context* ctx,

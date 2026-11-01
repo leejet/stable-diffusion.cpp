@@ -40,7 +40,7 @@ namespace SD_CUDA_NAMESPACE {
             return __fadd_rn(__fadd_rn(__fadd_rn(a, b), c), d);
         }
 
-        template <bool swiglu, bool dequantize = false, bool normalize = false, bool scaled = false, bool warp_rotation = false, typename T = float, bool sigmoid_gate = false, bool rms_modulation = false>
+        template <bool swiglu, bool dequantize = false, bool normalize = false, bool scaled = false, bool warp_rotation = false, typename T = float, bool sigmoid_gate = false, bool rms_modulation = false, bool modulate = false>
         __global__ void quantize(
             const T* src,
             int8_t* dst,
@@ -103,7 +103,12 @@ namespace SD_CUDA_NAMESPACE {
                             float value = src_row[i];
                             if constexpr (rms_modulation) {
                                 value = __fmul_rn(__fmul_rn(value, rms_scale), rms_weight[i]);
-                                value = __fadd_rn(__fadd_rn(value, __fmul_rn(value, modulation[i])), rms_shift[i]);
+                            }
+                            if constexpr (rms_modulation || modulate) {
+                                value = __fadd_rn(value, __fmul_rn(value, modulation[i]));
+                                if (rms_shift) {
+                                    value = __fadd_rn(value, rms_shift[i]);
+                                }
                             }
                             if constexpr (scaled) {
                                 value = __fmaf_rn(value, input_scale, input_bias);

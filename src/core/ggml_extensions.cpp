@@ -15,6 +15,83 @@
 #include "sd_backend_extensions.h"
 #endif
 
+static bool modulate_infer(ggml_tensor* const* inputs, int count, const void*, ggml_ext_tensor_desc* out) {
+    if (count != 2 && count != 3) {
+        return false;
+    }
+    const auto* x = inputs[0];
+    for (int i = 0; i < count; ++i) {
+        const auto* t = inputs[i];
+        if (!t || t->type != GGML_TYPE_F32) {
+            return false;
+        }
+        for (int d = 0; d < GGML_MAX_DIMS; ++d) {
+            if (t->ne[d] <= 0 || x->ne[d] % t->ne[d] != 0 || t->nb[d] % sizeof(float)) {
+                return false;
+            }
+        }
+    }
+    out->type = GGML_TYPE_F32;
+    std::memcpy(out->ne, x->ne, sizeof(out->ne));
+    return true;
+}
+
+ggml_ext_op_t sd_ggml_modulate_op() {
+    static const auto op = [] {
+        const ggml_ext_op_desc desc = {GGML_EXT_ABI_VERSION, "sd.modulate.v1", 0, modulate_infer};
+        auto result                 = ggml_ext_register_op(&desc);
+        GGML_ASSERT(result);
+        return result;
+    }();
+    return op;
+}
+
+bool sd_ggml_modulate_describe(const ggml_tensor* node) {
+    if (!node || ggml_ext_op_get(node) != sd_ggml_modulate_op() || !ggml_is_contiguous(node) || node->src[3]) {
+        return false;
+    }
+    ggml_ext_tensor_desc out;
+    return modulate_infer(node->src, node->src[2] ? 3 : 2, nullptr, &out) &&
+           node->type == out.type && std::memcmp(node->ne, out.ne, sizeof(out.ne)) == 0;
+}
+
+size_t sd_ggml_modulate_workspace_size(const ggml_tensor* node) {
+    // Owning custom outputs cannot reuse live input storage. Segment outputs may
+    // already be allocated, so reserve scratch only if their ranges can overlap.
+    if (!node->data && !node->view_src) {
+        return 0;
+    }
+    if (node->view_src || !node->buffer) {
+        return ggml_nbytes(node);
+    }
+    for (const auto* input : node->src) {
+        if (!input) {
+            continue;
+        }
+        const size_t bytes = ggml_nbytes(input);
+        size_t offset      = 0;
+        while (!input->data && input->view_src) {
+            offset += input->view_offs;
+            input = input->view_src;
+        }
+        if (!input->data) {
+            continue;
+        }
+        if (!input->buffer) {
+            return ggml_nbytes(node);
+        }
+        if (node->buffer != input->buffer) {
+            continue;
+        }
+        const auto dst = reinterpret_cast<uintptr_t>(node->data);
+        const auto src = reinterpret_cast<uintptr_t>(input->data) + offset;
+        if (dst < src + bytes && src < dst + ggml_nbytes(node)) {
+            return ggml_nbytes(node);
+        }
+    }
+    return 0;
+}
+
 static bool rope_infer(ggml_tensor* const* inputs, int count, const void*, ggml_ext_tensor_desc* out) {
     if (count != 2) {
         return false;

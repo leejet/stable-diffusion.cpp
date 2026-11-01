@@ -165,22 +165,15 @@ namespace sd_vulkan_i8 {
         const ggml_tensor* nodes[4]{};
 
         const ggml_tensor* mod = nullptr;
-        const bool affine      = quant->src[0]->op == GGML_OP_ADD;
-        const int count        = affine ? 4 : 3;
+        const bool affine      = sd_ggml_modulate_describe(quant->src[0]);
+        const int count        = affine ? 2 : 3;
         if (affine) {
-            const ggml_tensor* shift = quant->src[0];
-            const ggml_tensor* add   = shift->src[0];
-            if (add->op != GGML_OP_ADD || add->src[1]->op != GGML_OP_MUL || add->src[1]->src[0] != add->src[0]) {
-                return 0;
-            }
-            nodes[0]                  = add->src[1];
-            nodes[1]                  = add;
-            nodes[2]                  = shift;
-            nodes[3]                  = quant;
+            nodes[0]                  = quant->src[0];
+            nodes[1]                  = quant;
             mod                       = nodes[0]->src[1];
-            const ggml_tensor* vector = shift->src[1];
-            if (vector->type != GGML_TYPE_F32 || !ggml_is_contiguous(vector) ||
-                vector->ne[0] != add->ne[0] || ggml_nelements(vector) != add->ne[0]) {
+            const ggml_tensor* vector = nodes[0]->src[2];
+            if (vector && (vector->type != GGML_TYPE_F32 || !ggml_is_contiguous(vector) ||
+                           vector->ne[0] != nodes[0]->ne[0] || ggml_nelements(vector) != nodes[0]->ne[0])) {
                 return 0;
             }
         } else {
@@ -215,7 +208,7 @@ namespace sd_vulkan_i8 {
     }
 
     static int match_rms_modulate_convrot(const Device& device, const ggml_cgraph* graph, int q, int* indices) {
-        if (!can_modulate(device, 5376, true) || match_modulate_convrot(device, graph, q, indices + 2) != 4) {
+        if (!can_modulate(device, 5376, true) || match_modulate_convrot(device, graph, q, indices + 2) != 2) {
             return 0;
         }
         const auto weighted = node(graph, indices[2])->src[0];
@@ -236,27 +229,27 @@ namespace sd_vulkan_i8 {
             }
         }
 
-        return next < 0 ? 6 : 0;
+        return next < 0 ? 4 : 0;
     }
 
     static int can_fuse_modulate_convrot(const Device& device, const ggml_cgraph* graph, int i) {
         const ggml_op op = node(graph, i)->op;
         if (op == GGML_OP_RMS_NORM) {
-            int indices[6];
-            if (match_rms_modulate_convrot(device, graph, i + 5, indices) != 6) {
+            int indices[4];
+            if (match_rms_modulate_convrot(device, graph, i + 3, indices) != 4) {
                 return 0;
             }
-            for (int j = 0; j < 6; ++j) {
+            for (int j = 0; j < 4; ++j) {
                 if (indices[j] != i + j) {
                     return 0;
                 }
             }
-            return 6;
+            return 4;
         }
-        if (op != GGML_OP_NORM && op != GGML_OP_MUL) {
+        if (op != GGML_OP_NORM && !sd_ggml_modulate_describe(node(graph, i))) {
             return 0;
         }
-        const int count = op == GGML_OP_NORM ? 3 : 4;
+        const int count = op == GGML_OP_NORM ? 3 : 2;
         int indices[4];
         if (match_modulate_convrot(device, graph, i + count - 1, indices) != count) {
             return 0;
@@ -491,23 +484,24 @@ namespace sd_vulkan_i8 {
     static ggml_status quantize(const ggml_ext_execution_context* e, const Device& d, ggml_tensor* const* nodes, int count) {
         const auto* output                          = nodes[count - 1];
         const auto* first                           = nodes[0];
-        const bool modulate                         = count > 1 && (first->op == GGML_OP_NORM || first->op == GGML_OP_MUL || first->op == GGML_OP_RMS_NORM);
+        const bool modulate                         = count > 1 && (first->op == GGML_OP_NORM || sd_ggml_modulate_describe(first) || first->op == GGML_OP_RMS_NORM);
         const bool rms                              = modulate && first->op == GGML_OP_RMS_NORM;
-        const bool affine                           = modulate && (rms || first->op == GGML_OP_MUL);
+        const bool affine                           = modulate && (rms || sd_ggml_modulate_describe(first));
         const bool sigmoid                          = count > 1 && first->op == GGML_OP_UNARY;
         const auto* x                               = count == 1 ? output->src[0] : first->src[0];
         const auto* up                              = count == 1 || modulate ? nullptr : sigmoid ? nodes[1]->src[0]
                                                                                                  : first->src[1];
         const int extra                             = rms ? 2 : 0;
         const auto* mod                             = modulate ? nodes[extra + (affine ? 0 : 1)]->src[1] : nullptr;
-        const auto* shift                           = modulate ? (affine ? nodes[extra + 2]->src[1] : mod) : nullptr;
+        const auto* shift                           = modulate ? (affine ? nodes[extra]->src[2] : mod) : nullptr;
         const auto* weight                          = rms ? nodes[1]->src[1] : x;
         std::vector<ggml_ext_vulkan_binding> inputs = {{x}};
         if (up)
             inputs.push_back({up});
         if (modulate) {
             inputs.push_back({mod});
-            inputs.push_back({shift});
+            if (shift)
+                inputs.push_back({shift});
             if (rms)
                 inputs.push_back({weight});
         }
@@ -521,7 +515,7 @@ namespace sd_vulkan_i8 {
         const uint32_t groups[] = {std::min(rows, d.info.max_group_count[0]), 1, 1};
         ggml_status status;
         if (modulate) {
-            std::vector<ggml_ext_vulkan_binding> bindings = {{x}, {mod}, {shift}, packed, scales};
+            std::vector<ggml_ext_vulkan_binding> bindings = {{x}, {mod}, {shift ? shift : mod}, packed, scales};
             if (rms)
                 bindings.push_back({weight});
             ModulateParameters pc = {rows, 0, 0, 0, affine && !rms ? 0.f : param_f32(first, 0), k, 0};
@@ -534,9 +528,9 @@ namespace sd_vulkan_i8 {
                     *offsets[i] = info.shader_offset / 4;
                 }
             auto pipeline              = rms ? SD_VK_PIPELINE(rms_modulate_convrot, 6, ModulateParameters) : SD_VK_PIPELINE(modulate_convrot, 5, ModulateParameters);
-            const uint32_t constants[] = {k, uint32_t(affine)};
+            const uint32_t constants[] = {k, uint32_t(affine), uint32_t(shift != nullptr)};
             pipeline.constants         = constants;
-            pipeline.constant_count    = 2;
+            pipeline.constant_count    = 3;
             status                     = d.api->dispatch(e->backend, &pipeline, bindings.data(), &pc, groups);
         } else {
             ggml_ext_vulkan_binding bindings[] = {{x}, packed, scales, {up}};
@@ -788,6 +782,9 @@ void sd_ggml_register_vulkan_i8(ggml_backend_dev_t device) {
     d.custom_op = sd_ggml_i8_op();
     GGML_ASSERT(ggml_ext_register_kernel(device, &d));
     d.optimize  = nullptr;
+    d.name      = "sd.modulate_convrot.vulkan.v1";
+    d.custom_op = sd_ggml_modulate_op();
+    GGML_ASSERT(ggml_ext_register_kernel(device, &d));
     d.custom_op = nullptr;
     const struct {
         ggml_op op;
@@ -795,7 +792,6 @@ void sd_ggml_register_vulkan_i8(ggml_backend_dev_t device) {
     } fusions[] = {
         {GGML_OP_NORM, "sd.norm_convrot.vulkan.v1"},
         {GGML_OP_RMS_NORM, "sd.rms_modulate_convrot.vulkan.v1"},
-        {GGML_OP_MUL, "sd.modulate_convrot.vulkan.v1"},
         {GGML_OP_GLU, "sd.swiglu_convrot.vulkan.v1"},
         {GGML_OP_UNARY, "sd.sigmoid_convrot.vulkan.v1"}};
     for (const auto& fusion : fusions) {

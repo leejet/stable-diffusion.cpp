@@ -135,6 +135,25 @@ CPU kernels and fusion rules live in `src/core/cpu/`, with registration collecte
 in `cpu/registration.cpp`. CUDA-style and Vulkan implementations live in their
 respective backend directories.
 
+`ggml_ext_modulate(ctx, x, shift, scale)` emits `sd.modulate.v1` for F32 inputs
+when the runner context uses CPU, CUDA/HIP/MUSA, or Vulkan.
+Its explicit inputs are `x`, `scale`, and optional `shift`; it computes
+`(x + x * scale) + shift` with separate FP32 multiply/add rounding. The output
+is contiguous and out of place. Inputs may be strided and use ggml's
+dimension-wise repetition rules. Callers prepare token, batch, or frame layouts
+before constructing the operation; normalization and residual gates remain
+separate operations. CPU, CUDA/HIP/MUSA, and Vulkan have standalone kernels.
+Other backends (including Metal, SYCL, and OpenCL), upstream ggml builds, and
+other input types retain the original MUL/ADD graph.
+
+ConvRot fusion matches the Modulate node directly, including scale-only
+modulation, instead of recognizing its former MUL/ADD/ADD decomposition.
+CUDA accepts contiguous per-channel parameters for `Modulate -> ConvRot` and
+`RMSNorm -> Mul(weight) -> Modulate -> ConvRot`. Vulkan limits the first fusion
+to widths 4096/6144/5376 and the RMSNorm fusion to width 5376.
+Other layouts execute the standalone operation followed by ConvRot. The
+gated-residual MUL/ADD fusion remains available for residual branches.
+
 `src/core/cpu/rope.cpp` registers the CPU implementation of
 `sd.rope_apply.v1` and a
 `RMSNorm -> Mul -> RoPE` fusion. The fusion accepts a one-dimensional weight
@@ -269,8 +288,9 @@ unsupported layouts retain ordinary operator execution. Fusion and force-cuBLAS
 disable settings are honored.
 
 `src/core/cuda/convrot.cu` registers CUDA fusion for `Scale -> ConvRot`,
-`Norm -> Mul -> ConvRot`, `RMSNorm -> Mul(weight) -> Mul(modulation) -> Add ->
-Add(shift) -> ConvRot`, `SwiGLU -> ConvRot`, and `SiLU/Sigmoid -> Mul -> ConvRot`.
+`Norm -> Mul -> ConvRot`, `Modulate -> ConvRot`,
+`RMSNorm -> Mul(weight) -> Modulate -> ConvRot`, `SwiGLU -> ConvRot`, and
+`SiLU/Sigmoid -> Mul -> ConvRot`.
 ConvRot outputs are custom nodes. SwiGLU accepts packed,
 swapped, or separate gate/up inputs. Independent modulation and up-branch
 producers are moved ahead of their consumers through the safe graph-delay API.

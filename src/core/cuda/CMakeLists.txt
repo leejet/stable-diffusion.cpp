@@ -2,7 +2,7 @@ cmake_policy(SET CMP0079 NEW)
 
 function(sd_cuda_sources VENDOR LANGUAGE)
     set(SOURCES)
-    foreach(OP rope int8 convrot affine registration)
+    foreach(OP rope int8 convrot affine modulate registration)
         set(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/${OP}_${VENDOR}.cu")
         string(TOUPPER "${VENDOR}" UPPER_VENDOR)
         file(GENERATE OUTPUT "${SOURCE}" CONTENT "#define SD_CUDA_VENDOR_${UPPER_VENDOR} 1\n#include \"core/cuda/${OP}.cu\"\n")

@@ -8,6 +8,10 @@ void sd_ggml_register_extensions(ggml_backend_t backend);
 #ifndef SD_USE_UPSTREAM_GGML
 #include "ggml-ext.h"
 
+ggml_ext_op_t sd_ggml_modulate_op();
+bool sd_ggml_modulate_describe(const ggml_tensor* node);
+size_t sd_ggml_modulate_workspace_size(const ggml_tensor* node);
+
 ggml_ext_op_t sd_ggml_rope_op();
 bool sd_ggml_rope_describe(const ggml_tensor* node);
 // Apply precomputed rotary matrices, with shapes in ne[] order:

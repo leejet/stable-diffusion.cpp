@@ -1,0 +1,39 @@
+#version 450
+
+layout(local_size_x = 256) in;
+layout(binding = 0) readonly buffer X { float x[]; };
+layout(binding = 1) readonly buffer S { float scale[]; };
+layout(binding = 2) readonly buffer H { float shift[]; };
+layout(binding = 3) writeonly buffer D { float dst[]; };
+layout(push_constant) uniform Parameters {
+    uint ne[4], scale_ne[4], shift_ne[4];
+    uint x_stride[4], scale_stride[4], shift_stride[4];
+    uint offsets[4];
+    uint count, has_shift;
+} p;
+
+void main() {
+    uint group = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    if (group >= (p.count + 255) / 256) {
+        return;
+    }
+    uint i = group * 256 + gl_LocalInvocationID.x;
+    if (i >= p.count) {
+        return;
+    }
+    uint index = i;
+    uint xi = p.offsets[0], si = p.offsets[1], hi = p.offsets[2];
+    for (uint d = 0; d < 4; ++d) {
+        uint coord = index % p.ne[d];
+        index /= p.ne[d];
+        xi += coord * p.x_stride[d];
+        si += (coord % p.scale_ne[d]) * p.scale_stride[d];
+        hi += (coord % p.shift_ne[d]) * p.shift_stride[d];
+    }
+    precise float product = x[xi] * scale[si];
+    precise float value   = x[xi] + product;
+    if (p.has_shift != 0) {
+        value += shift[hi];
+    }
+    dst[p.offsets[3] + i] = value;
+}

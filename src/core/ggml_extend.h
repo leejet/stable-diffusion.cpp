@@ -8,6 +8,8 @@
 #include "ggml-backend.h"
 #include "ggml.h"
 
+struct GGMLRunnerContext;
+
 #define EPS 1e-05f
 
 static_assert(GGML_MAX_NAME >= 160, "GGML_MAX_NAME must be at least 160");
@@ -57,6 +59,13 @@ ggml_tensor* ggml_ext_scale(ggml_context* ctx,
                             ggml_tensor* x,
                             float factor,
                             bool inplace = false);
+
+// scale and optional shift must already be broadcastable to x in ggml layout.
+// Computes (x + x * scale) + shift; F32 uses sd.modulate.v1 when supported by ctx->backend.
+ggml_tensor* ggml_ext_modulate(GGMLRunnerContext* ctx,
+                               ggml_tensor* x,
+                               ggml_tensor* shift,
+                               ggml_tensor* scale);
 
 ggml_tensor* ggml_ext_gelu(ggml_context* ctx,
                            ggml_tensor* x,
