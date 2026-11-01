@@ -187,8 +187,8 @@ namespace sd {
                 }
                 copy->buffer = buffer;
                 // Capability checks inspect alignment even before weights are resident.
-                copy->data   = source->data ? source->data : reinterpret_cast<void*>(ggml_backend_get_alignment(external));
-                copy->extra  = nullptr;
+                copy->data  = source->data ? source->data : reinterpret_cast<void*>(ggml_backend_get_alignment(external));
+                copy->extra = nullptr;
             }
         }
         auto copy_graph = ggml_new_graph_custom(context, graph_size, false);

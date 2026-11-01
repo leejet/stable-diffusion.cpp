@@ -661,10 +661,10 @@ namespace SD_CUDA_NAMESPACE {
 #else
                     constexpr auto compute_type = HIPBLAS_R_32I;
 #endif
-                    const auto status           = hipblasGemmEx(static_cast<hipblasHandle_t>(handle), HIPBLAS_OP_T, HIPBLAS_OP_N,
-                                                                int(p.n), int(p.padded), int(p.k), &alpha,
-                                                                op.weight->data, HIPBLAS_R_8I, int(p.k), quant, HIPBLAS_R_8I, int(p.k),
-                                                                &beta, accum, HIPBLAS_R_32I, int(p.n), compute_type, HIPBLAS_GEMM_DEFAULT);
+                    const auto status = hipblasGemmEx(static_cast<hipblasHandle_t>(handle), HIPBLAS_OP_T, HIPBLAS_OP_N,
+                                                      int(p.n), int(p.padded), int(p.k), &alpha,
+                                                      op.weight->data, HIPBLAS_R_8I, int(p.k), quant, HIPBLAS_R_8I, int(p.k),
+                                                      &beta, accum, HIPBLAS_R_32I, int(p.n), compute_type, HIPBLAS_GEMM_DEFAULT);
                     if (status != HIPBLAS_STATUS_SUCCESS)
 #else
                     const auto status = cublasGemmEx(static_cast<cublasHandle_t>(handle), CUBLAS_OP_T, CUBLAS_OP_N,

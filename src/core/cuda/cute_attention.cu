@@ -209,8 +209,8 @@ namespace sd_fattn_cute {
         using Element                    = cutlass::half_t;
         static constexpr int Threads     = Warps * 32;
         using Mma                        = TiledMMA<MMA_Atom<SM80_16x8x16_F32F16F16F32_TN>,
-                             Layout<Shape<Int<Warps>, _1, _1>>,
-                             Tile<Int<16 * Warps>, _16, _16>>;
+                                                    Layout<Shape<Int<Warps>, _1, _1>>,
+                                                    Tile<Int<16 * Warps>, _16, _16>>;
         static constexpr int SmemWidth   = D % 64 == 0 ? 64 : D % 32 == 0 ? 32
                                                                           : 16;
         static constexpr int SwizzleBits = SmemWidth == 64 ? 3 : SmemWidth == 32 ? 2
@@ -449,7 +449,7 @@ static __global__ void copy_to_half(const char* src, half* dst, int64_t count, i
     if (i < count) {
         const int64_t row = i / dim;
         const auto* p     = reinterpret_cast<const T*>(src + (row % rows) * nb1 +
-                                                   ((row / rows) % heads) * nb2 + (row / (rows * heads)) * nb3);
+                                                       ((row / rows) % heads) * nb2 + (row / (rows * heads)) * nb3);
         dst[i]            = __float2half_rn(float(p[i % dim]) * scale);
     }
 }
@@ -784,9 +784,9 @@ void sd_ggml_register_cuda_attention(ggml_backend_dev_t device) {
     desc.preferred = nullptr;
     desc.optimize  = nullptr;
     GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
-    desc.name     = "sd.i8_rope_cute_attention.cuda.v1";
+    desc.name      = "sd.i8_rope_cute_attention.cuda.v1";
     desc.op        = GGML_OP_CUSTOM;
     desc.custom_op = sd_ggml_i8_op();
-    desc.priority = 400;
+    desc.priority  = 400;
     GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
 }

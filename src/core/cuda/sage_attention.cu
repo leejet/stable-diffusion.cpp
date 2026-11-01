@@ -287,9 +287,9 @@ namespace sd_cuda {
 
         constexpr size_t shared_bytes = (128 + 64 + 64 * 2) * D;
         auto kernel                   = sageattention::qk_int_sv_f16_attn_kernel<128, 64, 32, 64, D,
-                                                               sageattention::DataType::kInt8, sageattention::QuantGranularity::kPerWarp,
-                                                               sageattention::QuantGranularity::kPerWarp, float, false, half,
-                                                               sageattention::ComputeUnit::kTensorCore, sageattention::MaskMode::kNone, false, false>;
+                                                                                 sageattention::DataType::kInt8, sageattention::QuantGranularity::kPerWarp,
+                                                                                 sageattention::QuantGranularity::kPerWarp, float, false, half,
+                                                                                 sageattention::ComputeUnit::kTensorCore, sageattention::MaskMode::kNone, false, false>;
         kernel<<<dim3(GGML_PAD(lq, 128) / 128, hq, batch), dim3(32, 4), shared_bytes, stream>>>(
             qi, ki, static_cast<half*>(v->data), out, nullptr, qs, ks, nullptr,
             lq, lk, hq / hk,

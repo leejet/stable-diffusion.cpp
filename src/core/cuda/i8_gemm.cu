@@ -197,8 +197,8 @@ namespace sd_i8_cutlass {
         using GemmBase        = typename cutlass::gemm::kernel::DefaultGemmUniversal<int8_t, cutlass::layout::RowMajor, cutlass::ComplexTransform::kNone, 16, int8_t, cutlass::layout::ColumnMajor, cutlass::ComplexTransform::kNone, 16, float, cutlass::layout::RowMajor, int, cutlass::arch::OpClassTensorOp, cutlass::arch::Sm80, Tile, Warp, cutlass::gemm::GemmShape<16, 8, 32>, cutlass::epilogue::thread::LinearCombination<float, 4, int, float>, Swizzle, 4, cutlass::arch::OpMultiplyAddSaturate, cutlass::gemm::SharedMemoryClearOption::kNone, false, false, false, cutlass::layout::NoPermute, cutlass::layout::NoPermute, WeightLayout>::GemmKernel;
         using VisitorEpilogue = cutlass::epilogue::threadblock::EpilogueWithVisitorCallbacks<typename GemmBase::Epilogue, Epilogue, 1>;
         using Kernel          = std::conditional_t<StreamK,
-                                          cutlass::gemm::kernel::GemmWithEpilogueVisitorStreamk<typename GemmBase::Mma, VisitorEpilogue, Swizzle>,
-                                          cutlass::gemm::kernel::GemmWithEpilogueVisitor<typename GemmBase::Mma, VisitorEpilogue, Swizzle>>;
+                                                   cutlass::gemm::kernel::GemmWithEpilogueVisitorStreamk<typename GemmBase::Mma, VisitorEpilogue, Swizzle>,
+                                                   cutlass::gemm::kernel::GemmWithEpilogueVisitor<typename GemmBase::Mma, VisitorEpilogue, Swizzle>>;
         using Gemm            = cutlass::gemm::device::GemmUniversalAdapter<Kernel>;
     };
     struct Plan {

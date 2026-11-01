@@ -613,7 +613,7 @@ namespace sd_vulkan_i8 {
         auto destination                   = concat ? range(dst, ggml_nbytes(concat->src[0]), ggml_nbytes(tail)) : dst;
         ggml_ext_vulkan_binding bindings[] = {{op.weight}, {op.input, nullptr, 0, scale_offset}, {op.weight_scale}, {op.input, nullptr, scale_offset, size_t(rows) * 4}, {op.bias ? op.bias : op.weight_scale}, destination, {up_mat ? up.weight : gate}, {up_mat ? up.weight_scale : residual}};
         auto dispatch                      = [&](ggml_ext_vulkan_pipeline pipeline, uint32_t tile_cols, uint32_t tile_rows,
-                            std::initializer_list<uint32_t> constants, uint32_t row_offset, uint32_t dispatch_rows) {
+                                                 std::initializer_list<uint32_t> constants, uint32_t row_offset, uint32_t dispatch_rows) {
             if (!dispatch_rows)
                 return GGML_STATUS_SUCCESS;
             const uint32_t cols     = glu ? uint32_t(glu->ne[0]) : n;

@@ -129,15 +129,15 @@ namespace SD_CUDA_NAMESPACE {
             ggml_ext_gpu_context context;
             if (!cuda_context(execution->backend, &context))
                 return GGML_STATUS_FAILED;
-            auto stream          = static_cast<CUDAStream>(context.stream);
-            const auto* node     = nodes[0];
-            const auto* a        = node->src[0];
-            const auto* b        = node->op == GGML_OP_CONT ? nullptr : node->src[1];
-            auto* dst            = nodes[count - 1];
-            const auto* residual = node->op == GGML_OP_MUL ? (dst->src[0] == node ? dst->src[1] : dst->src[0]) : nullptr;
-            const bool gate      = residual != nullptr;
-            const bool alias     = (overlaps(dst, a) && !(gate && dst->data == a->data)) || (b && overlaps(dst, b)) ||
-                               (residual && overlaps(dst, residual) && dst->data != residual->data);
+            auto stream           = static_cast<CUDAStream>(context.stream);
+            const auto* node      = nodes[0];
+            const auto* a         = node->src[0];
+            const auto* b         = node->op == GGML_OP_CONT ? nullptr : node->src[1];
+            auto* dst             = nodes[count - 1];
+            const auto* residual  = node->op == GGML_OP_MUL ? (dst->src[0] == node ? dst->src[1] : dst->src[0]) : nullptr;
+            const bool gate       = residual != nullptr;
+            const bool alias      = (overlaps(dst, a) && !(gate && dst->data == a->data)) || (b && overlaps(dst, b)) ||
+                                    (residual && overlaps(dst, residual) && dst->data != residual->data);
             void* output          = alias ? ggml_backend_buffer_get_base(execution->workspace) : dst->data;
             const int64_t count4  = ggml_nelements(dst) / 4;
             const unsigned blocks = unsigned((count4 + 255) / 256);

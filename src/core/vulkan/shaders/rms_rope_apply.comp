@@ -5,16 +5,26 @@
 #extension GL_EXT_control_flow_attributes : require
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
-layout(binding = 0) readonly buffer X { float data_x[]; };
-layout(binding = 1) readonly buffer PE { float data_pe[]; };
+layout(binding = 0) readonly buffer X {
+    float data_x[];
+};
+layout(binding = 1) readonly buffer PE {
+    float data_pe[];
+};
 #ifdef CAST_F16
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
-layout(binding = 2) writeonly buffer D { float16_t data_d[]; };
+layout(binding = 2) writeonly buffer D {
+    float16_t data_d[];
+};
 #else
-layout(binding = 2) writeonly buffer D { float data_d[]; };
+layout(binding = 2) writeonly buffer D {
+    float data_d[];
+};
 #endif
-layout(binding = 3) readonly buffer W { float data_w[]; };
+layout(binding = 3) readonly buffer W {
+    float data_w[];
+};
 
 layout(push_constant) uniform parameter {
     uint half_dim;
@@ -31,10 +41,11 @@ layout(push_constant) uniform parameter {
     float eps;
     uint w_offset;
     float output_scale;
-} pc;
+}
+pc;
 
 float shuffle_channel(vec4 values, uint channel) {
-    const uint lane = channel & 31u;
+    const uint lane     = channel & 31u;
     const vec4 shuffled = vec4(subgroupShuffle(values.x, lane), subgroupShuffle(values.y, lane),
                                subgroupShuffle(values.z, lane), subgroupShuffle(values.w, lane));
     return shuffled[channel / 32];
@@ -45,43 +56,43 @@ void main() {
     if (head >= pc.heads) {
         return;
     }
-    const uint lane = gl_SubgroupInvocationID;
+    const uint lane    = gl_SubgroupInvocationID;
     const uint batches = pc.pairs / (64 * pc.heads * pc.tokens);
     for (uint batch = gl_WorkGroupID.z; batch < batches; batch += gl_NumWorkGroups.z) {
         for (uint token = gl_WorkGroupID.y; token < pc.tokens; token += gl_NumWorkGroups.y) {
-            const uint base = pc.x_offset + head * pc.x_stride[1] + token * pc.x_stride[2] + batch * pc.x_stride[3];
-            vec4 x = vec4(data_x[base + lane], data_x[base + lane + 32],
-                          data_x[base + lane + 64], data_x[base + lane + 96]);
+            const uint base      = pc.x_offset + head * pc.x_stride[1] + token * pc.x_stride[2] + batch * pc.x_stride[3];
+            vec4 x               = vec4(data_x[base + lane], data_x[base + lane + 32],
+                                        data_x[base + lane + 64], data_x[base + lane + 96]);
             precise vec4 squares = x * x;
-            precise float sum = (squares.x + squares.z) + (squares.y + squares.w);
+            precise float sum    = (squares.x + squares.z) + (squares.y + squares.w);
             [[unroll]] for (uint stride = 16; stride > 0; stride >>= 1) {
                 sum += subgroupShuffle(sum, lane ^ stride);
             }
-            sum = subgroupShuffle(sum, 0);
-            const float scale = inversesqrt(sum / 128.0 + pc.eps);
+            sum                   = subgroupShuffle(sum, 0);
+            const float scale     = inversesqrt(sum / 128.0 + pc.eps);
             precise vec4 weighted = scale * x;
             [[unroll]] for (uint i = 0; i < 4; ++i) {
                 weighted[i] *= data_w[pc.w_offset + lane + i * 32];
             }
             [[unroll]] for (uint i = 0; i < 4; ++i) {
-                const uint col = lane + i * 32;
+                const uint col      = lane + i * 32;
                 precise float value = weighted[i];
                 if (pc.interleaved != 0) {
                     const float a = subgroupShuffle(value, lane & ~1u);
                     const float b = subgroupShuffle(value, lane | 1u);
                     if (col / 2 < pc.rot_half) {
                         const uint matrix = pc.pe_offset + (col / 2) * pc.pe_stride[2] + token * pc.pe_stride[3] + (col & 1u) * pc.pe_stride[1];
-                        value = a * data_pe[matrix] + b * data_pe[matrix + pc.pe_stride[0]];
+                        value             = a * data_pe[matrix] + b * data_pe[matrix + pc.pe_stride[0]];
                     }
                 } else {
                     const uint pair = col % pc.rot_half;
-                    const float a = shuffle_channel(weighted, pair);
-                    const float b = shuffle_channel(weighted, pair + pc.rot_half);
+                    const float a   = shuffle_channel(weighted, pair);
+                    const float b   = shuffle_channel(weighted, pair + pc.rot_half);
                     if (col < 2 * pc.rot_half) {
                         const uint matrix = pc.pe_offset + pair * pc.pe_stride[2] + token * pc.pe_stride[3];
-                        const float c = data_pe[matrix];
-                        const float s = data_pe[matrix + pc.pe_stride[1]];
-                        value = col < pc.rot_half ? a * c - b * s : a * s + b * c;
+                        const float c     = data_pe[matrix];
+                        const float s     = data_pe[matrix + pc.pe_stride[1]];
+                        value             = col < pc.rot_half ? a * c - b * s : a * s + b * c;
                     }
                 }
 #ifdef CAST_F16
