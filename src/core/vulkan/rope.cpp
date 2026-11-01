@@ -122,7 +122,9 @@ namespace sd_vulkan_rope {
         }
     }
     static ggml_status prepare(ggml_backend_t, ggml_tensor* const* nodes, int count, void**, size_t* bytes, void*) {
-        *bytes = ggml_nbytes(nodes[count - 1]);
+        const auto* output = nodes[count - 1];
+        // RoPE outputs and owning casts cannot reuse allocator input storage.
+        *bytes = output->data || output->view_src ? ggml_nbytes(output) : 0;
         return GGML_STATUS_SUCCESS;
     }
     static void destroy(void*, void*) {}

@@ -33,7 +33,7 @@ namespace sageattention {
 #define S_FP8_OFFSET_EXP 6680.8477f
 #define S_FP8_OFFSET_EXP_INV 0.0022326917f
 
-#define SAGE_DIV_CEIL(M, N) (((M) + (N)-1) / (N))
+#define SAGE_DIV_CEIL(M, N) (((M) + (N) - 1) / (N))
 
     enum class MaskMode {
         kNone   = 0,

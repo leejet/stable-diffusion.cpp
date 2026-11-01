@@ -463,7 +463,7 @@ namespace sd_vulkan_i8 {
     static bool overlap(const ggml_ext_vulkan_buffer_info& a, const ggml_ext_vulkan_buffer_info& b) {
         return a.storage == b.storage && a.offset < b.offset + b.size && b.offset < a.offset + a.size;
     }
-    static bool output_binding(const ggml_ext_execution_context* e, const Device& d, const ggml_tensor* output, const std::vector<ggml_ext_vulkan_binding>& inputs, ggml_ext_vulkan_binding& binding, bool& alias) {
+    static bool output_binding(const ggml_ext_execution_context* e, const Device& d, const ggml_tensor* output, const std::vector<ggml_ext_vulkan_binding>& inputs, ggml_ext_vulkan_binding& binding, bool& alias, const ggml_tensor* residual = nullptr) {
         binding = {output};
         alias   = false;
         ggml_ext_vulkan_buffer_info dst, src;
@@ -472,6 +472,9 @@ namespace sd_vulkan_i8 {
         for (const auto& input : inputs) {
             if (!d.api->buffer_info(e->backend, &input, &src))
                 return false;
+            // The residual epilogue reads each element before writing that same element.
+            if (residual && input.tensor == residual && dst.storage == src.storage && dst.offset == src.offset && dst.size == src.size)
+                continue;
             alias |= overlap(dst, src);
         }
         if (alias)
@@ -608,7 +611,7 @@ namespace sd_vulkan_i8 {
             inputs.push_back({concat->src[0]});
         ggml_ext_vulkan_binding dst;
         bool alias;
-        if (!output_binding(e, d, output, inputs, dst, alias))
+        if (!output_binding(e, d, output, inputs, dst, alias, concat ? nullptr : residual))
             return GGML_STATUS_FAILED;
         auto destination                   = concat ? range(dst, ggml_nbytes(concat->src[0]), ggml_nbytes(tail)) : dst;
         ggml_ext_vulkan_binding bindings[] = {{op.weight}, {op.input, nullptr, 0, scale_offset}, {op.weight_scale}, {op.input, nullptr, scale_offset, size_t(rows) * 4}, {op.bias ? op.bias : op.weight_scale}, destination, {up_mat ? up.weight : gate}, {up_mat ? up.weight_scale : residual}};
@@ -709,8 +712,40 @@ namespace sd_vulkan_i8 {
             }
         }
     }
+    static bool may_alias(const ggml_tensor* output, const ggml_tensor* input) {
+        size_t offset     = 0;
+        const size_t size = ggml_nbytes(input);
+        while (!input->data && input->view_src) {
+            offset += input->view_offs;
+            input = input->view_src;
+        }
+        // Unallocated inputs get allocator storage, separate from a preallocated output.
+        if (!input->data)
+            return false;
+        if (!input->buffer)
+            return true;
+        if (output->buffer != input->buffer)
+            return false;
+        const auto dst = reinterpret_cast<uintptr_t>(output->data);
+        const auto src = reinterpret_cast<uintptr_t>(input->data) + offset;
+        return dst < src + size && src < dst + ggml_nbytes(output);
+    }
     static ggml_status prepare(ggml_backend_t, ggml_tensor* const* nodes, int count, void**, size_t* bytes, void*) {
-        *bytes = ggml_nbytes(nodes[count - 1]);
+        const auto* output = nodes[count - 1];
+        // Fresh outputs cannot alias external inputs except the residual's elementwise reuse.
+        const bool fresh = !output->data && !output->view_src &&
+                           (output->op == GGML_OP_CUSTOM || output->op == GGML_OP_GLU || output->op == GGML_OP_CONCAT ||
+                            (output->op == GGML_OP_ADD && count > 1));
+        *bytes           = fresh ? 0 : ggml_nbytes(output);
+        if (output->data && output->buffer && !output->view_src) {
+            bool alias = false;
+            for (int i = 0; i < count; ++i)
+                for (const auto* src : nodes[i]->src)
+                    if (src && std::find(nodes, nodes + count, src) == nodes + count)
+                        alias |= may_alias(output, src);
+            if (!alias)
+                *bytes = 0;
+        }
         return GGML_STATUS_SUCCESS;
     }
     static void destroy(void*, void*) {}
