@@ -1,0 +1,254 @@
+# syntax=docker/dockerfile:1
+#
+# Self-contained, reproducible CUDA image built from Debian 13 (trixie).
+# Every artifact is hash-pinned: base by digest, apt by immutable snapshot (InRelease sha256), Node tarball and NVIDIA .debs by sha256.
+# No giant CUDA/cuDNN images; only the modular packages (nvcc/cudart/cublas) the ggml CUDA backend actually links are installed, so nothing above the unavoidable cuBLAS payload is fetched.
+#
+# Build (requires BuildKit, default in Docker >= 23):
+#   docker build -f docker/Dockerfile.cuda-slim -t stable-diffusion.cpp:cuda-slim .
+# Run (host NVIDIA driver + nvidia-container-toolkit required). Mount a folder with your model files at /models and pass the model path via --model:
+#   docker run --rm --gpus all -v "$PWD/models:/models" -p 80:80 stable-diffusion.cpp:cuda-slim --model /models/sd_xl_base_1.0.safetensors
+#   docker run --rm --gpus all -v "$PWD/models:/models" --entrypoint sd-cli stable-diffusion.cpp:cuda-slim -m /models/sd_xl_base_1.0.safetensors
+#
+# CUDA-gated ARGs (rebuild to change the compiled architectures / variants):
+#   docker build --build-arg CUDA_ARCHITECTURES="89;120" -f docker/Dockerfile.cuda-slim -t stable-diffusion.cpp:cuda-slim .
+
+##########
+# Builder
+##########
+FROM docker.io/library/debian:13.4-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b AS builder
+
+COPY <<-EOF /etc/apt/sources.list.d/debian.sources
+	Types: deb
+	URIs: http://snapshot.debian.org/archive/debian/20260421T000000Z
+	Suites: trixie trixie-updates
+	Components: main
+	Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+	Types: deb
+	URIs: http://snapshot.debian.org/archive/debian-security/20260421T000000Z
+	Suites: trixie-security
+	Components: main
+	Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+
+# Debian toolchain, pinned to the immutable snapshot (InRelease hashes below).
+# gcc/g++-13 = the CUDA 13.3-supported host compiler; build-essential also satisfies cuda-nvcc's own Depends before the .debs are installed.
+RUN --mount=type=cache,target=/var/cache/apt/archives,sharing=locked <<-EOF
+	set -e
+	rm -f /var/cache/apt/archives/lock
+	rm -f /etc/apt/sources.list
+	echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until
+	apt-get update
+	echo "15c884d9b15ba5d0737d7d728e89d5e02963e178dfe766ed28ac901f751ed80f  /var/lib/apt/lists/snapshot.debian.org_archive_debian-security_20260421T000000Z_dists_trixie-security_InRelease
+afbe76555f36895eb644ebbf627fea7621c1299bea5af23cafc9e4d4527d8001  /var/lib/apt/lists/snapshot.debian.org_archive_debian_20260421T000000Z_dists_trixie-updates_InRelease
+7592e4ccb4658a58bfe485d3356b3c983bf8ccff7fca1f6091e4d4296284ed18  /var/lib/apt/lists/snapshot.debian.org_archive_debian_20260421T000000Z_dists_trixie_InRelease" | sha256sum -c
+	apt-get install -y --no-install-recommends build-essential ca-certificates curl git cmake g++-13
+	rm -rf /var/lib/apt/lists/*
+EOF
+
+# Node 22 LTS (needed to build the server frontend). Pinned by sha256; >10MB so it is cached.
+RUN --mount=type=cache,target=/tmp/dl,sharing=locked <<-EOF
+	set -e
+	export PATH=/opt/node/bin:$PATH
+	if [ ! -s /tmp/dl/node.tar.xz ]; then
+		curl -fsSL --retry 10 --retry-delay 5 -o /tmp/dl/node.tar.xz 'https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-x64.tar.xz'
+	fi
+	echo 'd60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307  /tmp/dl/node.tar.xz' | sha256sum -c
+	if [ ! -d /opt/node ]; then
+		tar -xJf /tmp/dl/node.tar.xz -C /tmp/dl
+		mv /tmp/dl/node-v22.23.2-linux-x64 /opt/node
+	fi
+	node --version
+	npm install -g pnpm@10.15.1
+EOF
+ENV PATH=/opt/node/bin:$PATH
+
+# Modular NVIDIA CUDA 13.3 debs (dev toolchain for ggml's CUDA backend).
+# Manifest is `<sha256>  <url>` in dpkg dependency order; downloading and sha256-checking every artifact makes the fetch resumable and pinned.
+COPY <<-EOF /cuda.lock
+	7fb49a9a684e97f48374c230b7a548cee61f62ff925d09238f038aba601dbdb2  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cccl-13-3_13.3.3.4.1-1_amd64.deb
+	145419ba2fc00ce07fc254aa28780aa9c8a7a5be3b57852919d9baf16db00c20  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-crt-13-3_13.3.73-1_amd64.deb
+	d3c825bfd40d6be5293854ea140cffdd66e66845be6595fc76e03c1240085ce8  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-cudart-13-3_13.3.29-1_amd64.deb
+	600e5cf3685d0afae85970ba02451358068b7b56c954999b9149900ec5d940d9  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-cudart-dev-13-3_13.3.29-1_amd64.deb
+	db20e2e39cfa3a570581df1534de3a31810e9db5b8454b7605a333c07c677d90  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-culibos-dev-13-3_13.3.33-1_amd64.deb
+	9ff314357a66e7602d0fe9a354052f60f7571138e9d4e1e98f3dd06cd899e021  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-driver-dev-13-3_13.3.29-1_amd64.deb
+	b0691b6c6e700ee023aa1cbc7a72dd0afaaacbb2dc788eff0b1aa5033ef57639  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-nvcc-13-3_13.3.73-1_amd64.deb
+	c71420541f81628f551cb26ab91ca4dfb2458f118d11c538ccf3dcc548e6abcf  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-toolkit-13-3-config-common_13.3.29-1_all.deb
+	7177da13bf1d6e33ad591b7f79602665f2af3aaf1bc9306809b830c1650218a6  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-toolkit-13-config-common_13.3.29-1_all.deb
+	a0ed2214ecf40c980a5a215fde943255da103c32695b004ad7efc7df622a5e30  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-toolkit-config-common_13.3.29-1_all.deb
+	42ce8b29846fabcc224e46b80efc805c6d5a4bf7f3bc3f1480fe3feecd00d70a  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/libcublas-13-3_13.6.0.2-1_amd64.deb
+	043ba517dd5b64973e4a12c340d6e1085122ac931a4e68ae960201d6142ac6f5  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/libcublas-dev-13-3_13.6.0.2-1_amd64.deb
+	1e381ce2834f15512c95729a0e49e540c899c6a08d90d6da009461430b85b48e  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/libnvptxcompiler-13-3_13.3.73-1_amd64.deb
+	ec1330e0fb4d4e789609bc273f38dcbb577fd5d8726601d237b6f78075ba80f1  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/libnvvm-13-3_13.3.73-1_amd64.deb
+EOF
+
+# Download, verify and install exactly the set in /cuda.lock (not a glob: the
+# cache mount is shared with the runtime stage). dpkg resolves install order.
+RUN --mount=type=cache,target=/tmp/cuda,sharing=locked <<-EOF
+	set -e
+	cd /tmp/cuda
+	pkgs=
+	while read -r sha url; do
+		[ -n "$sha" ] || continue
+		fn=${url##*/}
+		if [ ! -s "$fn" ]; then
+			curl -fsSL --retry 10 --retry-delay 5 -o "$fn" "$url"
+		fi
+		echo "$sha  /tmp/cuda/$fn" | sha256sum -c
+		pkgs="$pkgs $fn"
+	done < /cuda.lock
+	# shellcheck disable=SC2086
+	dpkg -i $pkgs
+	rm /cuda.lock
+	/usr/local/cuda/bin/nvcc --version
+EOF
+ENV CUDACXX=/usr/local/cuda/bin/nvcc
+
+WORKDIR /sd.cpp
+
+# Copy only the C++ build inputs so the heavy compile below is not invalidated by web-UI source edits.
+# The web UI (examples/server/frontend) is copied in a later, separate layer and served from disk at runtime.
+# NOTE: if new C++ server source files are added, the server globs below must be extended to match them.
+# NOTE: a trailing-slash dest copies *directory* contents into that dir, flattening them
+# and letting a copied file (e.g. thirdparty/CMakeLists.txt) collide with the root file.
+# Directory sources must get their own dest path (no trailing slash) to keep the layout.
+COPY CMakeLists.txt /sd.cpp/CMakeLists.txt
+COPY cmake /sd.cpp/cmake
+COPY ggml /sd.cpp/ggml
+COPY include /sd.cpp/include
+COPY src /sd.cpp/src
+COPY thirdparty /sd.cpp/thirdparty
+COPY examples/CMakeLists.txt /sd.cpp/examples/CMakeLists.txt
+COPY examples/common /sd.cpp/examples/common
+COPY examples/cli /sd.cpp/examples/cli
+COPY examples/server/CMakeLists.txt /sd.cpp/examples/server/CMakeLists.txt
+COPY examples/server/*.cpp /sd.cpp/examples/server/
+COPY examples/server/*.h /sd.cpp/examples/server/
+
+ARG CUDA_ARCHITECTURES=""
+ARG GGML_CUDA_FA_ALL_QUANTS=""
+ARG GGML_CUDA_ENABLE_DYNAMIC_CPU_BACKENDS=ON
+
+# Heavy compile: every CUDA kernel and C++ object, plus sd-cli and sd-server (UI is served from disk at runtime, so SD_SERVER_BUILD_FRONTEND stays OFF).
+# Any change that is not in the web UI keeps this layer cached, so a UI-only edit does not recompile CUDA/C++.
+RUN <<-EOF
+	set -e
+	set -- \
+		-DSD_CUDA=ON \
+		-DGGML_NATIVE=OFF \
+		-DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-13 \
+		-DSD_SERVER_BUILD_FRONTEND=OFF
+	if [ "${GGML_CUDA_ENABLE_DYNAMIC_CPU_BACKENDS}" = "ON" ]; then
+		rpath='$ORIGIN'
+		set -- "$@" \
+			-DSD_BUILD_SHARED_LIBS=ON \
+			-DGGML_NATIVE=OFF \
+			-DSD_BUILD_SHARED_GGML_LIB=ON \
+			-DGGML_BACKEND_DL=ON \
+			-DGGML_CPU_ALL_VARIANTS=ON \
+			-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+			"-DCMAKE_INSTALL_RPATH=$rpath"
+	fi
+	if [ -n "${CUDA_ARCHITECTURES}" ]; then
+		set -- "$@" "-DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES}"
+	fi
+	if [ -n "${GGML_CUDA_FA_ALL_QUANTS}" ]; then
+		set -- "$@" "-DGGML_CUDA_FA_ALL_QUANTS=${GGML_CUDA_FA_ALL_QUANTS}"
+	fi
+	cmake . -B ./build "$@"
+	cmake --build ./build --config Release -j$(nproc)
+	# Fail here (in the builder) rather than later at a cross-stage COPY --from=builder,
+	# so a missing/moved binary output is diagnosed where it is produced.
+	test -x /sd.cpp/build/bin/sd-cli
+	test -x /sd.cpp/build/bin/sd-server
+EOF
+
+# Web UI dependencies only invalidates when the manifest/lockfile changes
+WORKDIR /sd.cpp/examples/server/frontend
+COPY examples/server/frontend/package.json examples/server/frontend/pnpm-lock.yaml /sd.cpp/examples/server/frontend/
+RUN --mount=type=cache,target=/root/.local/share/pnpm,sharing=locked pnpm install
+
+# Web UI source (only what the build needs: Vite/tsconfig, the entry HTML, and src/).
+# NOTE: if new files are added to the frontend build, extend the lists below.
+COPY examples/server/frontend/vite.config.js examples/server/frontend/tsconfig.json examples/server/frontend/index.html /sd.cpp/examples/server/frontend/
+COPY examples/server/frontend/src /sd.cpp/examples/server/frontend/src
+
+# Build the UI (uses the deps installed above), producing dist/index.html.
+RUN --mount=type=cache,target=/root/.local/share/pnpm,sharing=locked pnpm run build
+
+##########
+# Runtime
+##########
+FROM docker.io/library/debian:13.4-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b
+
+COPY <<-EOF /etc/apt/sources.list.d/debian.sources
+	Types: deb
+	URIs: http://snapshot.debian.org/archive/debian/20260421T000000Z
+	Suites: trixie trixie-updates
+	Components: main
+	Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+	Types: deb
+	URIs: http://snapshot.debian.org/archive/debian-security/20260421T000000Z
+	Suites: trixie-security
+	Components: main
+	Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+
+# libgomp1 = OpenMP runtime for the ggml CPU backends; ca-certificates/curl = TLS for the pinned NVIDIA runtime debs fetched next.
+RUN --mount=type=cache,target=/var/cache/apt/archives,sharing=locked <<-EOF
+	set -e
+	rm -f /var/cache/apt/archives/lock
+	rm -f /etc/apt/sources.list
+	echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until
+	apt-get update
+	echo "15c884d9b15ba5d0737d7d728e89d5e02963e178dfe766ed28ac901f751ed80f  /var/lib/apt/lists/snapshot.debian.org_archive_debian-security_20260421T000000Z_dists_trixie-security_InRelease
+afbe76555f36895eb644ebbf627fea7621c1299bea5af23cafc9e4d4527d8001  /var/lib/apt/lists/snapshot.debian.org_archive_debian_20260421T000000Z_dists_trixie-updates_InRelease
+7592e4ccb4658a58bfe485d3356b3c983bf8ccff7fca1f6091e4d4296284ed18  /var/lib/apt/lists/snapshot.debian.org_archive_debian_20260421T000000Z_dists_trixie_InRelease" | sha256sum -c
+	apt-get install -y --no-install-recommends libgomp1 tini ca-certificates curl
+	rm -rf /var/lib/apt/lists/*
+EOF
+
+# CUDA runtime libs only (cudart + cuBLAS); no cuDNN, no toolkit.
+COPY <<-EOF /cuda.lock
+	d3c825bfd40d6be5293854ea140cffdd66e66845be6595fc76e03c1240085ce8  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-cudart-13-3_13.3.29-1_amd64.deb
+	c71420541f81628f551cb26ab91ca4dfb2458f118d11c538ccf3dcc548e6abcf  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-toolkit-13-3-config-common_13.3.29-1_all.deb
+	7177da13bf1d6e33ad591b7f79602665f2af3aaf1bc9306809b830c1650218a6  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-toolkit-13-config-common_13.3.29-1_all.deb
+	a0ed2214ecf40c980a5a215fde943255da103c32695b004ad7efc7df622a5e30  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-toolkit-config-common_13.3.29-1_all.deb
+	42ce8b29846fabcc224e46b80efc805c6d5a4bf7f3bc3f1480fe3feecd00d70a  https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/libcublas-13-3_13.6.0.2-1_amd64.deb
+EOF
+
+RUN --mount=type=cache,target=/tmp/cuda,sharing=locked <<-EOF
+	set -e
+	cd /tmp/cuda
+	pkgs=
+	while read -r sha url; do
+		[ -n "$sha" ] || continue
+		fn=${url##*/}
+		if [ ! -s "$fn" ]; then
+			curl -fsSL --retry 10 --retry-delay 5 -o "$fn" "$url"
+		fi
+		echo "$sha  /tmp/cuda/$fn" | sha256sum -c
+		pkgs="$pkgs $fn"
+	done < /cuda.lock
+	# shellcheck disable=SC2086
+	dpkg -i $pkgs
+	rm /cuda.lock
+	apt-get purge -y curl ca-certificates
+	apt-get autoremove -y
+	apt-get clean
+	rm -rf /var/lib/apt/lists/*
+EOF
+
+COPY --from=builder /sd.cpp/build/bin /sd.cpp/bin
+
+# Web UI built in the builder stage; served from disk at runtime so the UI and
+# the C++ binaries are built independently and never baked into the binary.
+COPY --from=builder /sd.cpp/examples/server/frontend/dist/index.html /sd.cpp/ui/index.html
+
+ENV PATH=/sd.cpp/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /sd.cpp
+EXPOSE 80
+VOLUME [ "/models" ]
+ENTRYPOINT [ "tini", "--", "sd-server", "--listen-ip", "0.0.0.0", "--listen-port", "80", "--serve-html-path", "/sd.cpp/ui/index.html" ]
