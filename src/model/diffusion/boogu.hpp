@@ -130,7 +130,7 @@ namespace Boogu {
 
     __STATIC_INLINE__ ggml_tensor* scale_modulate(ggml_context* ctx, ggml_tensor* x, ggml_tensor* scale) {
         scale = ggml_reshape_3d(ctx, scale, scale->ne[0], 1, scale->ne[1]);
-        return ggml_add(ctx, x, ggml_mul(ctx, x, scale));
+        return ggml_ext_modulate(ctx, x, nullptr, scale);
     }
 
     __STATIC_INLINE__ ggml_tensor* gate_residual(ggml_context* ctx, ggml_tensor* residual, ggml_tensor* x, ggml_tensor* gate) {

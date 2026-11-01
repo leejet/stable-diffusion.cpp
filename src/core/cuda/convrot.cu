@@ -27,6 +27,7 @@ namespace SD_CUDA_NAMESPACE {
         }
         enum Kind { SCALE,
                     NORM,
+                    MOD,
                     RMS_MOD,
                     SWIGLU,
                     SILU,
@@ -65,16 +66,20 @@ namespace SD_CUDA_NAMESPACE {
                 op.eps        = param_f32(first, 0);
                 if (op.k < 1024 || !vector(op.modulation, op.k))
                     return false;
-            } else if (count == 6 && first->op == GGML_OP_RMS_NORM && nodes[1]->op == GGML_OP_MUL && nodes[1]->src[0] == first &&
-                       nodes[2]->op == GGML_OP_MUL && nodes[2]->src[0] == nodes[1] &&
-                       nodes[3]->op == GGML_OP_ADD && nodes[3]->src[0] == nodes[1] && nodes[3]->src[1] == nodes[2] &&
-                       nodes[4]->op == GGML_OP_ADD && nodes[4]->src[0] == nodes[3] && value == nodes[4]) {
+            } else if (count == 2 && sd_ggml_modulate_describe(first) && value == first) {
+                op.kind       = MOD;
+                op.modulation = first->src[1];
+                op.shift      = first->src[2];
+                if (!vector(op.modulation, op.k) || (op.shift && !vector(op.shift, op.k)))
+                    return false;
+            } else if (count == 4 && first->op == GGML_OP_RMS_NORM && nodes[1]->op == GGML_OP_MUL && nodes[1]->src[0] == first &&
+                       sd_ggml_modulate_describe(nodes[2]) && nodes[2]->src[0] == nodes[1] && value == nodes[2]) {
                 op.kind       = RMS_MOD;
                 op.weight     = nodes[1]->src[1];
                 op.modulation = nodes[2]->src[1];
-                op.shift      = nodes[4]->src[1];
+                op.shift      = nodes[2]->src[2];
                 op.eps        = param_f32(first, 0);
-                if (op.k < 1024 || !vector(op.weight, op.k) || !vector(op.modulation, op.k) || !vector(op.shift, op.k))
+                if (op.k < 1024 || !vector(op.weight, op.k) || !vector(op.modulation, op.k) || (op.shift && !vector(op.shift, op.k)))
                     return false;
             } else if (count == 2 && first->op == GGML_OP_GLU && ggml_get_glu_op(first) == GGML_GLU_OP_SWIGLU && value == first) {
                 op.kind = SWIGLU;
@@ -119,7 +124,7 @@ namespace SD_CUDA_NAMESPACE {
             auto* g             = const_cast<ggml_cgraph*>(graph);
             const int available = ggml_graph_n_nodes(g) - first;
             const auto* node    = ggml_graph_node(g, first);
-            const int count     = node->op == GGML_OP_RMS_NORM ? 6 : node->op == GGML_OP_NORM || node->op == GGML_OP_UNARY ? 3
+            const int count     = node->op == GGML_OP_RMS_NORM ? 4 : node->op == GGML_OP_NORM || node->op == GGML_OP_UNARY ? 3
                                                                                                                            : 2;
             if (available < count)
                 return 0;
@@ -132,7 +137,7 @@ namespace SD_CUDA_NAMESPACE {
         static void optimize(ggml_backend_dev_t device, ggml_cgraph* graph, void*) {
             if (fusion_disabled())
                 return;
-            for (int i = 2; i < ggml_graph_n_nodes(graph); ++i) {
+            for (int i = 1; i < ggml_graph_n_nodes(graph); ++i) {
                 auto* quant = ggml_graph_node(graph, i);
                 int group;
                 if (!sd_ggml_convrot_describe(quant, &group) || group != 256)
@@ -140,17 +145,18 @@ namespace SD_CUDA_NAMESPACE {
                 ggml_tensor* chain[6] = {};
                 int count             = 0;
                 auto* value           = quant->src[0];
-                if (value->op == GGML_OP_ADD && value->src[0]->op == GGML_OP_ADD) {
-                    auto* add    = value->src[0];
-                    auto* weight = add->src[0];
-                    if (weight->op == GGML_OP_MUL) {
+                if (sd_ggml_modulate_describe(value)) {
+                    auto* weight = value->src[0];
+                    if (weight->op == GGML_OP_MUL && weight->src[0]->op == GGML_OP_RMS_NORM) {
                         chain[0] = weight->src[0];
                         chain[1] = weight;
-                        chain[2] = add->src[1];
-                        chain[3] = add;
-                        chain[4] = value;
-                        chain[5] = quant;
-                        count    = 6;
+                        chain[2] = value;
+                        chain[3] = quant;
+                        count    = 4;
+                    } else {
+                        chain[0] = value;
+                        chain[1] = quant;
+                        count    = 2;
                     }
                 } else if (value->op == GGML_OP_MUL) {
                     for (int src = 0; src < 2; ++src)
@@ -210,13 +216,13 @@ namespace SD_CUDA_NAMESPACE {
             const auto x = reinterpret_cast<uintptr_t>(a->data), y = reinterpret_cast<uintptr_t>(b->data);
             return x <= y ? y - x < ggml_nbytes(a) : x - y < ggml_nbytes(b);
         }
-        template <bool Swiglu = false, bool Normalize = false, bool Scaled = false, bool Sigmoid = false, bool RMS = false>
+        template <bool Swiglu = false, bool Normalize = false, bool Scaled = false, bool Sigmoid = false, bool RMS = false, bool Modulate = false>
         static CUDAError launch(Plan& p, const Operation& op, int8_t* output, CUDAStream stream) {
-            constexpr bool warp = Scaled || RMS;
+            constexpr bool warp = Scaled || RMS || Modulate;
             constexpr int extra = Normalize ? 384 : RMS ? 256
                                                         : 128;
             if (!p.configured) {
-                auto status = cuda_set_shared_memory(quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS>,
+                auto status = cuda_set_shared_memory(quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS, Modulate>,
                                                      int(p.device.shared_memory - extra));
                 if (status != cuda_success)
                     return status;
@@ -229,7 +235,7 @@ namespace SD_CUDA_NAMESPACE {
                                                                                         : 256;
             const int64_t padded = (op.rows + 3) / 4 * 4;
             auto data            = [](const ggml_tensor* t) { return t ? static_cast<const float*>(t->data) : nullptr; };
-            quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS><<<unsigned(op.rows), threads, size_t(op.k) * sizeof(float), stream>>>(
+            quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS, Modulate><<<unsigned(op.rows), threads, size_t(op.k) * sizeof(float), stream>>>(
                 data(op.input) + op.gate_offset, output, reinterpret_cast<float*>(output + op.k * padded), op.k, op.rows, op.k,
                 op.up ? data(op.up) + op.up_offset : nullptr, op.stride, op.up_stride, nullptr, nullptr, data(op.modulation), op.eps, op.scale, op.bias, data(op.weight), data(op.shift));
             return cuda_last_error();
@@ -260,6 +266,9 @@ namespace SD_CUDA_NAMESPACE {
                 case RMS_MOD:
                     error = launch<false, false, false, false, true>(plan, op, output, stream);
                     break;
+                case MOD:
+                    error = launch<false, false, false, false, false, true>(plan, op, output, stream);
+                    break;
                 case SWIGLU:
                 case SILU:
                     error = launch<true>(plan, op, output, stream);
@@ -277,12 +286,13 @@ namespace SD_CUDA_NAMESPACE {
     }
 
     void register_convrot(ggml_backend_dev_t device) {
-        for (auto op : {GGML_OP_SCALE, GGML_OP_NORM, GGML_OP_RMS_NORM, GGML_OP_GLU, GGML_OP_UNARY}) {
+        for (auto op : {GGML_OP_SCALE, GGML_OP_NORM, GGML_OP_RMS_NORM, GGML_OP_GLU, GGML_OP_UNARY, GGML_OP_CUSTOM}) {
             ggml_ext_kernel_desc desc = {};
             desc.abi_version          = GGML_EXT_ABI_VERSION;
             const std::string name    = std::string("sd.convrot_fusion.") + ggml_op_name(op) + "." SD_CUDA_NAME ".v1";
             desc.name                 = name.c_str();
             desc.op                   = op;
+            desc.custom_op            = op == GGML_OP_CUSTOM ? sd_ggml_modulate_op() : nullptr;
             desc.priority             = 225;
             desc.optimize             = op == GGML_OP_SCALE ? sd_convrot::optimize : nullptr;
             desc.match                = sd_convrot::match;

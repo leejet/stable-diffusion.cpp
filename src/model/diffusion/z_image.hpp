@@ -303,8 +303,7 @@ namespace ZImage {
         if (scale->ne[1] != x->ne[1]) {
             scale = ggml_reshape_3d(ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
         }
-        x = ggml_add(ctx, x, ggml_mul(ctx, x, scale));
-        return x;
+        return ggml_ext_modulate(ctx, x, nullptr, scale);
     }
 
     struct JointTransformerBlock : public GGMLBlock {

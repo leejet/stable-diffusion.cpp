@@ -105,7 +105,7 @@ namespace Ideogram4 {
 
     __STATIC_INLINE__ ggml_tensor* modulate(ggml_context* ctx, ggml_tensor* x, ggml_tensor* scale) {
         scale = to_token_modulation(ctx, scale);
-        return ggml_add(ctx, x, ggml_mul(ctx, x, scale));
+        return ggml_ext_modulate(ctx, x, nullptr, scale);
     }
 
     __STATIC_INLINE__ ggml_tensor* patchify(ggml_context* ctx, ggml_tensor* x, const Ideogram4Config& config) {

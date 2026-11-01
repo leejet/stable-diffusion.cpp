@@ -425,9 +425,7 @@ namespace Flux {
             scale = ggml_reshape_3d(ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
             shift = ggml_reshape_3d(ctx, shift, shift->ne[0], 1, shift->ne[1]);  // [N, 1, C]
         }
-        x = ggml_add(ctx, x, ggml_mul(ctx, x, scale));
-        x = ggml_add(ctx, x, shift);
-        return x;
+        return ggml_ext_modulate(ctx, x, shift, scale);
     }
 
     struct DoubleStreamBlock : public GGMLBlock {

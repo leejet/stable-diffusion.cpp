@@ -4,6 +4,7 @@
 
 layout(constant_id = 0) const uint K      = 4096;
 layout(constant_id = 1) const bool AFFINE = false;
+layout(constant_id = 2) const bool HAS_SHIFT = true;
 layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
 layout(binding = 0) readonly buffer X {
     float data_x[];
@@ -111,7 +112,9 @@ void main() {
             if (AFFINE) {
                 precise float modulated = values[col] * data_m[p.m_offset + col];
                 value                   = values[col] + modulated;
-                value += data_h[p.h_offset + col];
+                if (HAS_SHIFT) {
+                    value += data_h[p.h_offset + col];
+                }
             } else {
                 value = (values[col] - mean) * inv_std;
                 value *= data_m[p.m_offset + col];

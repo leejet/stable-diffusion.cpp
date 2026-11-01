@@ -155,6 +155,24 @@ static bool ggml_ext_is_padded_1d(const ggml_tensor* x) {
            x->nb[3] == x->nb[2] * x->ne[2];
 }
 
+ggml_tensor* ggml_ext_modulate(ggml_context* ctx,
+                               ggml_tensor* x,
+                               ggml_tensor* shift,
+                               ggml_tensor* scale) {
+#ifndef SD_USE_UPSTREAM_GGML
+    if (x->type == GGML_TYPE_F32 && scale->type == GGML_TYPE_F32 && (!shift || shift->type == GGML_TYPE_F32)) {
+        ggml_tensor* inputs[] = {x, scale, shift};
+        return ggml_ext_op_create(ctx, sd_ggml_modulate_op(), inputs, shift ? 3 : 2, nullptr);
+    }
+#endif
+    // Preserve separate multiply/add nodes for rounding and backend fusion matching.
+    x = ggml_add(ctx, x, ggml_mul(ctx, x, scale));
+    if (shift != nullptr) {
+        x = ggml_add(ctx, x, shift);
+    }
+    return x;
+}
+
 ggml_tensor* ggml_ext_scale(ggml_context* ctx,
                             ggml_tensor* x,
                             float factor,

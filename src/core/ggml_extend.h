@@ -58,6 +58,13 @@ ggml_tensor* ggml_ext_scale(ggml_context* ctx,
                             float factor,
                             bool inplace = false);
 
+// scale and optional shift must already be broadcastable to x in ggml layout.
+// Computes (x + x * scale) + shift; F32 uses sd.modulate.v1 on patched ggml.
+ggml_tensor* ggml_ext_modulate(ggml_context* ctx,
+                               ggml_tensor* x,
+                               ggml_tensor* shift,
+                               ggml_tensor* scale);
+
 ggml_tensor* ggml_ext_gelu(ggml_context* ctx,
                            ggml_tensor* x,
                            bool inplace = false);

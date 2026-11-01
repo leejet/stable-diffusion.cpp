@@ -48,6 +48,7 @@ endfunction()
 # Preserve the native compilation policy: optimization changes RoPE reductions
 # and is disabled for KHR cooperative matrix shaders.
 sd_vulkan_shader(rope_apply rope_apply ON)
+sd_vulkan_shader(modulate modulate ON -O)
 sd_vulkan_shader(rms_rope_apply rms_rope_apply ON)
 sd_vulkan_shader(rms_rope_cast rms_rope_apply ON -DCAST_F16)
 sd_vulkan_shader(quantize_i8_convrot quantize_i8_convrot ${SD_VK_DOT} -O)
@@ -65,5 +66,5 @@ sd_vulkan_shader(mul_mat_i8_swiglu_split_cm2 mul_mat_i8_tensorwise_cm2 ${SD_VK_C
 sd_vulkan_shader(mul_mat_i8_residual_cm2 mul_mat_i8_tensorwise_cm2 ${SD_VK_CM2} -O -DRESIDUAL=1)
 add_custom_target(sd-vulkan-shaders DEPENDS ${SD_VULKAN_HEADERS})
 add_dependencies(${SD_LIB} sd-vulkan-shaders)
-target_sources(${SD_LIB} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/rope.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/int8.cpp")
+target_sources(${SD_LIB} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/rope.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/int8.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/modulate.cpp")
 target_include_directories(${SD_LIB} PRIVATE "${SD_VULKAN_GENERATED}")

@@ -415,9 +415,7 @@ namespace MiniMaxH3 {
                 inputs.push_back(ggml_ext_slice(ctx->ggml_ctx, x, 1, segment.start, segment.end, false));
             }
             auto modulate = [&](ggml_tensor* value, const std::vector<ggml_tensor*>& row, int shift, int scale) {
-                return ggml_add(ctx->ggml_ctx,
-                                ggml_add(ctx->ggml_ctx, value, ggml_mul(ctx->ggml_ctx, value, row[scale])),
-                                row[shift]);
+                return ggml_ext_modulate(ctx->ggml_ctx, value, row[shift], row[scale]);
             };
             ggml_tensor* qkv = nullptr;
             for (size_t i = 0; i < segments.size(); ++i) {
