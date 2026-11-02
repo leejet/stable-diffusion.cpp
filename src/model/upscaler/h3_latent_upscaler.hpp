@@ -200,7 +200,7 @@ namespace H3VUpsampler {
 
         void init_params(ggml_context* ctx,
                          const String2TensorStorage& tensor_storage_map,
-                         const std::string& prefix) override {
+                         const std::string prefix) override {
             auto make_conv = [&](const std::string& name) {
                 blocks[name] = std::shared_ptr<GGMLBlock>(new Conv3d(channels,
                                                                       channels,
@@ -255,8 +255,90 @@ namespace H3VUpsampler {
         }
     };
 
-    // Temporal conv: GN -> SiLU -> depthwise Conv3d (k,1,1) shipped as a full
-    // block-diagonal Conv3d -> pointwise Conv3d (zero-init at training) + identity.
+    // Depthwise convolution over the time axis only.
+    //
+    // The reference implementation declares this as Conv3d(C, C, (k,1,1), groups=C),
+    // so the checkpoint stores a genuine depthwise kernel: PyTorch [C, 1, k, 1, 1],
+    // which the safetensors loader folds to [1, 1, k, C] (2,560 values at C=512).
+    // sdcpp's Conv3d is dense-only and would expect C*C*k values (512x more), so it
+    // cannot host this weight. Expanding the kernel to a block-diagonal dense one
+    // would also inflate the conv cost by the same 512x, which for a 3D conv on an
+    // iGPU is not affordable. Implement it directly instead: k shifted
+    // multiply-adds along T, all elementwise, so every backend supports it and the
+    // FLOP count stays at the depthwise level.
+    class H3TemporalDWConv3d : public UnaryBlock {
+    protected:
+        int64_t channels;
+        int kernel;
+        bool has_bias;
+        std::string prefix;
+
+        void init_params(ggml_context* ctx,
+                         const String2TensorStorage& tensor_storage_map,
+                         const std::string prefix) override {
+            this->prefix     = prefix;
+            params["weight"] = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, 1, kernel, channels);
+            if (has_bias) {
+                params["bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, channels);
+            }
+        }
+
+    public:
+        H3TemporalDWConv3d(int64_t channels, int kernel, bool has_bias = true)
+            : channels(channels),
+              kernel(kernel),
+              has_bias(has_bias) {}
+
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
+            ggml_tensor* w = params["weight"];
+            if (ctx->weight_adapter) {
+                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
+            }
+            // Activations in this network are F32 (conv outputs are F32); the kernel
+            // is stored as F16, so match the activation type before multiplying.
+            ggml_tensor* w32 = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_F32);
+            ggml_tensor* xa  = x;
+            if (xa->type != GGML_TYPE_F32) {
+                xa = ggml_cast(ctx->ggml_ctx, xa, GGML_TYPE_F32);
+            }
+
+            const int64_t T = xa->ne[2];
+            const int pad   = kernel / 2;
+
+            // Zero-pad both ends of T. ggml_pad only pads the end of each dimension,
+            // so build a [W, H, pad, C] zero tensor from a zeroed slice of the input
+            // and concatenate it on both sides.
+            ggml_tensor* xp = xa;
+            if (pad > 0) {
+                ggml_tensor* zero = ggml_scale(ctx->ggml_ctx, ggml_ext_slice(ctx->ggml_ctx, xa, 2, 0, 1), 0.0f);
+                ggml_tensor* lead = zero;
+                for (int i = 1; i < pad; ++i) {
+                    lead = ggml_concat(ctx->ggml_ctx, lead, zero, 2);
+                }
+                xp = ggml_concat(ctx->ggml_ctx, lead, xa, 2);
+                xp = ggml_concat(ctx->ggml_ctx, xp, lead, 2);
+            }
+
+            ggml_tensor* acc = nullptr;
+            for (int j = 0; j < kernel; ++j) {
+                ggml_tensor* xs  = ggml_ext_slice(ctx->ggml_ctx, xp, 2, j, j + T);
+                ggml_tensor* wj  = ggml_ext_slice(ctx->ggml_ctx, w32, 2, j, j + 1);  // [1, 1, 1, C]
+                ggml_tensor* term = ggml_mul(ctx->ggml_ctx, xs, wj);
+                acc = acc == nullptr ? term : ggml_add(ctx->ggml_ctx, acc, term);
+            }
+            if (has_bias) {
+                ggml_tensor* b = params["bias"];
+                if (ctx->weight_adapter) {
+                    b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
+                }
+                acc = ggml_add(ctx->ggml_ctx, acc, ggml_reshape_4d(ctx->ggml_ctx, b, 1, 1, 1, channels));
+            }
+            return acc;
+        }
+    };
+
+    // Temporal conv: GN -> SiLU -> depthwise Conv3d (k,1,1) -> pointwise Conv3d
+    // (zero-init at training) + identity.
     class H3TemporalConv : public GGMLBlock {
     protected:
         int64_t channels;
@@ -264,13 +346,8 @@ namespace H3VUpsampler {
 
         void init_params(ggml_context* ctx,
                          const String2TensorStorage& tensor_storage_map,
-                         const std::string& prefix) override {
-            const int pad = temporal_kernel / 2;
-            blocks["dwconv"] = std::shared_ptr<GGMLBlock>(new Conv3d(channels,
-                                                                      channels,
-                                                                      {temporal_kernel, 1, 1},
-                                                                      {1, 1, 1},
-                                                                      {pad, 0, 0}));
+                         const std::string prefix) override {
+            blocks["dwconv"] = std::shared_ptr<GGMLBlock>(new H3TemporalDWConv3d(channels, temporal_kernel));
             blocks["pwconv"] = std::shared_ptr<GGMLBlock>(new Conv3d(channels,
                                                                       channels,
                                                                       {1, 1, 1},
@@ -285,7 +362,7 @@ namespace H3VUpsampler {
               temporal_kernel(temporal_kernel) {}
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
-            auto dwconv = std::dynamic_pointer_cast<Conv3d>(blocks["dwconv"]);
+            auto dwconv = std::dynamic_pointer_cast<H3TemporalDWConv3d>(blocks["dwconv"]);
             auto pwconv = std::dynamic_pointer_cast<Conv3d>(blocks["pwconv"]);
             auto norm   = std::dynamic_pointer_cast<LTXVUpsampler::VideoGroupNorm>(blocks["norm"]);
 
@@ -304,7 +381,7 @@ namespace H3VUpsampler {
 
         void init_params(ggml_context* ctx,
                          const String2TensorStorage& tensor_storage_map,
-                         const std::string& prefix) override {
+                         const std::string prefix) override {
             // Child names are relative to the "embed" block prefix, so these bind as
             // embed.0.* / embed.2.* to match the checkpoint.
             blocks["0"] = std::shared_ptr<GGMLBlock>(new Linear(1, embed_dim, true));
