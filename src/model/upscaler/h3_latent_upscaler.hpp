@@ -161,8 +161,13 @@ namespace H3VUpsampler {
                 for (int idx : idxs) {
                     const TensorStorage* dw = find_weight(std::string(stage) + "." + std::to_string(idx) + ".dwconv.weight");
                     if (dw != nullptr) {
-                        // Expanded full-conv layout: PyTorch 5D [C, C, k, 1, 1] or sdcpp 4D [k, 1, 1, C*C].
-                        return static_cast<int>(dw->n_dims == 5 ? dw->ne[2] : dw->ne[0]);
+                        // The temporal extent is ne[2] in both layouts that can reach here:
+                        // an unfolded PyTorch 5D kernel [OC, IC, kD, kH, kW] keeps kD at
+                        // index 2, and the loader's folded form [OC*IC, kD, kH, kW] followed
+                        // by reverse_ne becomes [kW, kH, kD, OC*IC], which also puts kD at
+                        // index 2. Reading ne[0] instead picked up the spatial extent (1) and
+                        // silently collapsed the depthwise kernel to a 1-tap convolution.
+                        return static_cast<int>(dw->ne[2]);
                     }
                 }
                 return 0;
