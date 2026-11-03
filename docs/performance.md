@@ -159,6 +159,25 @@ allocator/scheduler capacity. Compatible gallocr reservations are reused across
 graphs; idle workspaces can be reclaimed under pressure and are freed at runner
 completion. Cross-graph caches survive individual graphs, but cut buffers do not.
 
+On discrete Vulkan devices, runners reuse released device buffers of the same
+size to reduce allocation overhead during segmented execution. This idle buffer
+cache is limited to 1 GiB per device and is reclaimed before allocating a new
+size or at runner completion. It is outside the managed `--max-vram` budget,
+so physical VRAM usage can be higher. Set `GGML_VK_REUSE_BUFFERS=0` to disable
+it. Unified-memory and host-memory modes do not use this cache.
+
+Discrete NVIDIA and non-GCN AMD Vulkan devices use a separate transfer queue by
+default when available and graphics queue use is disabled, so weight prefetch can overlap compute. Set
+`GGML_VK_ASYNC_USE_TRANSFER_QUEUE=0` to disable it.
+
+On discrete NVIDIA devices, allocation chunks can grow up to 4 GiB, bounded by the device's buffer and allocation
+limits, to reduce fragmentation within large graph workspaces. Other devices
+retain the 1 GiB default. `GGML_VK_SUBALLOCATION_BLOCK_SIZE` overrides this limit
+in bytes on any vendor; for example, `1073741824` selects 1 GiB and `4294967296`
+selects 4 GiB, subject to device limits. This is a soft chunk limit, not a reservation
+or a change to `--max-vram`: a single oversized tensor or exhausting the allocator's
+chunk count can require a larger allocation, which may fail.
+
 The recommended shape for "biggest model my card can host" is:
 
 ```shell

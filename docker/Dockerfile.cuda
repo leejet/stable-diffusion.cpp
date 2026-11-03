@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 ARG CUDA_VERSION=12.6.3
 ARG UBUNTU_VERSION=24.04
 
@@ -25,8 +27,15 @@ ARG CUDA_ARCHITECTURES=""
 ARG GGML_CUDA_FA_ALL_QUANTS=""
 ARG GGML_CUDA_ENABLE_DYNAMIC_CPU_BACKENDS=ON
 
+ENV CCACHE_DIR=/root/.cache/ccache \
+    CCACHE_MAXSIZE=2G \
+    CCACHE_COMPILERCHECK=content
+
 RUN set -- \
-        -DSD_CUDA=ON; \
+        -DSD_CUDA=ON \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache; \
     if [ "${GGML_CUDA_ENABLE_DYNAMIC_CPU_BACKENDS}" = "ON" ]; then \
         set -- "$@" \
             -DSD_BUILD_SHARED_LIBS=ON \
@@ -44,7 +53,11 @@ RUN set -- \
         set -- "$@" "-DGGML_CUDA_FA_ALL_QUANTS=${GGML_CUDA_FA_ALL_QUANTS}"; \
     fi; \
     cmake . -B ./build "$@"
-RUN cmake --build ./build --config Release -j$(nproc)
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    ccache --zero-stats && \
+    cmake --build ./build --config Release -j$(nproc) && \
+    ccache --cleanup && \
+    ccache --show-stats
 
 FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} AS runtime
 
@@ -53,7 +66,7 @@ RUN apt-get update && \
     apt-get clean
 
 COPY --from=build /sd.cpp/build/bin /sd.cpp/bin
-COPY --from=build /sd.cpp/ggml/src/ggml-cuda/vendors/cutlass/LICENSE.txt /sd.cpp/bin/cutlass.txt
+COPY --from=build /sd.cpp/thirdparty/cutlass/LICENSE.txt /sd.cpp/bin/cutlass.txt
 RUN printf '#!/bin/sh\nexec /sd.cpp/bin/sd-cli "$@"\n' > /sd-cli && \
     printf '#!/bin/sh\nexec /sd.cpp/bin/sd-server "$@"\n' > /sd-server && \
     chmod +x /sd-cli /sd-server

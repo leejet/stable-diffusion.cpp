@@ -2,7 +2,11 @@
 
 sd.cpp can load and execute ComfyUI `int8_tensorwise` safetensors with `convrot` metadata directly. The stored INT8 weights are not converted to another weight type at load time.
 
-This requires the INT8 tensorwise/convrot extensions in the patched GGML.
+This uses sd.cpp's INT8 tensorwise/convrot operators through the patched GGML
+extension API. Schemas and graph builders live in sd.cpp, alongside the
+backend kernels and fusion rules; GGML supplies generic dispatch and workspace
+services. See [operator extensions](ggml_extensions.md) for the implementation
+and the preserved INT8 API entry points.
 Builds with `SD_USE_UPSTREAM_GGML=ON` reject these files during loading.
 
 ## Checkpoint format
@@ -89,13 +93,14 @@ The packed runtime activation tensor contains the I8 activation rows and their f
 ## Backend support
 
 - CPU provides the portable regular Hadamard, activation quantization, INT8 matrix multiplication, and scale restoration implementations.
-- NVIDIA CUDA devices with compute capability 7.5 or newer use the native accelerated path. For H256, CUDA fuses the rotation, row-wise maximum reduction, and activation quantization. It uses cuBLAS for I8 x I8 to I32 GEMM and a CUDA kernel for scale restoration and bias addition.
+- NVIDIA CUDA devices with compute capability 7.5 or newer use the native accelerated path. For H256, CUDA fuses the rotation, row-wise maximum reduction, and activation quantization. Eligible shapes use the CUTLASS INT8 implementation when enabled; other supported shapes use cuBLAS for I8 x I8 to I32 GEMM and a CUDA kernel for scale restoration and bias addition.
 - AMD HIP devices in the CDNA, RDNA3 (including RDNA3.5), and RDNA4 families use the same INT8/H256 kernels with hipBLAS for I8 x I8 to I32 GEMM. Other AMD architectures fall back to CPU for INT8 matrix multiplication.
-- Vulkan provides native H256 activation quantization and INT8 matrix multiplication when the build and device support accelerated packed INT8 dot products. Unsupported configurations and GPU backends without these kernels use the backend scheduler to fall back to CPU.
+- MUSA shares the CUDA-style H256 activation kernels. INT8 GEMM falls back to CPU because the MUSA backend does not advertise INT8 BLAS support.
+- Vulkan provides H256 activation quantization and INT8 matrix multiplication when the build and device support accelerated packed INT8 dot products. Unsupported configurations and GPU backends without these kernels use the backend scheduler to fall back to CPU.
 
 LoRA adapters are applied at runtime without modifying the INT8 weights. The INT8 convrot path computes the base linear output, while LoRA, LoHa, LoKr, and raw weight-difference adapters compute their output corrections from the original, unrotated activation and add them to the base output. `--lora-apply-mode auto` selects this path for models containing INT8 tensorwise weights. If `immediately` is requested, sd.cpp falls back to runtime application because merging an adapter would require dequantizing and rotating its weight update, then recalculating the per-row scales and requantizing the result.
 
-The dedicated CUDA and HIP convrot activation paths currently require a group size of `256`; other supported group sizes use CPU execution.
+The shared CUDA/HIP/MUSA convrot activation paths currently require a group size of `256`; other supported group sizes use CPU execution.
 
 ## Example
 

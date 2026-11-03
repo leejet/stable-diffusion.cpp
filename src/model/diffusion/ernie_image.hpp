@@ -204,9 +204,8 @@ namespace ErnieImage {
             auto linear_fc2 = std::dynamic_pointer_cast<Linear>(blocks["linear_fc2"]);
 
             auto gate = gate_proj->forward(ctx, x);
-            gate      = ggml_ext_gelu(ctx->ggml_ctx, gate);
             x         = up_proj->forward(ctx, x);
-            x         = ggml_mul(ctx->ggml_ctx, x, gate);
+            x         = ggml_geglu_split(ctx->ggml_ctx, gate, x);
             x         = linear_fc2->forward(ctx, x);
             return x;
         }
@@ -247,13 +246,13 @@ namespace ErnieImage {
 
             auto residual = x;
             x             = adaLN_sa_ln->forward(ctx, x);
-            x             = Flux::modulate(ctx->ggml_ctx, x, shift_msa, scale_msa, true);
+            x             = Flux::modulate(ctx, x, shift_msa, scale_msa, true);
             auto attn_out = self_attention->forward(ctx, x, pe, attention_mask);
             x             = ggml_add(ctx->ggml_ctx, residual, ggml_mul(ctx->ggml_ctx, attn_out, gate_msa));
 
             residual = x;
             x        = adaLN_mlp_ln->forward(ctx, x);
-            x        = Flux::modulate(ctx->ggml_ctx, x, shift_mlp, scale_mlp, true);
+            x        = Flux::modulate(ctx, x, shift_mlp, scale_mlp, true);
             x        = ggml_add(ctx->ggml_ctx, residual, ggml_mul(ctx->ggml_ctx, mlp->forward(ctx, x), gate_mlp));
             return x;
         }
@@ -275,7 +274,7 @@ namespace ErnieImage {
             auto shift = mods[1];
 
             x = norm->forward(ctx, x);
-            x = Flux::modulate(ctx->ggml_ctx, x, shift, scale);
+            x = Flux::modulate(ctx, x, shift, scale);
             return x;
         }
     };
