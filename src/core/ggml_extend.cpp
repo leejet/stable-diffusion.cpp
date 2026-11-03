@@ -144,6 +144,27 @@ ggml_tensor* ggml_ext_silu_act(ggml_context* ctx, ggml_tensor* x, bool gate_firs
     return gate_first ? ggml_swiglu(ctx, x) : ggml_swiglu_swapped(ctx, x);
 }
 
+ggml_tensor* ggml_ext_situ(GGMLRunnerContext* ctx, ggml_tensor* hidden, ggml_tensor* gate) {
+#ifndef SD_USE_UPSTREAM_GGML
+    if (ctx->backend != nullptr) {
+        auto out = gate ? ggml_glu_split(ctx->ggml_ctx, gate, hidden, GGML_GLU_OP_SITU)
+                        : ggml_glu(ctx->ggml_ctx, hidden, GGML_GLU_OP_SITU, true);
+        if (ggml_backend_supports_op(ctx->backend, out)) {
+            return out;
+        }
+    }
+#endif
+    if (!gate) {
+        const auto dim = hidden->ne[0] / 2;
+        gate           = ggml_ext_slice(ctx->ggml_ctx, hidden, 0, dim, 2 * dim);
+        hidden         = ggml_ext_slice(ctx->ggml_ctx, hidden, 0, 0, dim);
+    }
+    auto a = ggml_scale(ctx->ggml_ctx, ggml_tanh(ctx->ggml_ctx, ggml_scale(ctx->ggml_ctx, gate, 0.25f)), 4.f);
+    a      = ggml_mul(ctx->ggml_ctx, a, ggml_sigmoid(ctx->ggml_ctx, gate));
+    auto b = ggml_scale(ctx->ggml_ctx, ggml_tanh(ctx->ggml_ctx, ggml_scale(ctx->ggml_ctx, hidden, 1.f / 25.f)), 25.f);
+    return ggml_mul(ctx->ggml_ctx, a, b);
+}
+
 ggml_tensor* ggml_ext_group_norm_32(ggml_context* ctx,
                                     ggml_tensor* a) {
     const float eps = 1e-6f;  // default eps parameter
