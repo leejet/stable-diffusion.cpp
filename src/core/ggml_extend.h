@@ -52,6 +52,9 @@ std::vector<ggml_tensor*> ggml_ext_chunk(ggml_context* ctx,
 
 ggml_tensor* ggml_ext_silu_act(ggml_context* ctx, ggml_tensor* x, bool gate_first = true);
 
+// Without gate, hidden contains [hidden, gate] packed along ne[0].
+ggml_tensor* ggml_ext_situ(GGMLRunnerContext* ctx, ggml_tensor* hidden, ggml_tensor* gate = nullptr);
+
 ggml_tensor* ggml_ext_group_norm_32(ggml_context* ctx,
                                     ggml_tensor* a);
 

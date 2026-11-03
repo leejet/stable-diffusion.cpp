@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cinttypes>
+
 #include "core/pe_cache.h"
 
 #include "model/common/ggml_block.hpp"
@@ -55,13 +56,6 @@ namespace MOSSImage {
         }
     };
 
-    inline ggml_tensor* situ(ggml_context* c, ggml_tensor* hidden, ggml_tensor* gate) {
-        auto a = ggml_scale(c, ggml_tanh(c, ggml_scale(c, gate, 0.25f)), 4.f);
-        a      = ggml_mul(c, a, ggml_sigmoid(c, gate));
-        auto b = ggml_scale(c, ggml_tanh(c, ggml_scale(c, hidden, 1.f / 25.f)), 25.f);
-        return ggml_mul(c, a, b);
-    }
-
     struct TextBlock : public GGMLBlock {
         MOSSImageConfig config;
 
@@ -95,7 +89,7 @@ namespace MOSSImage {
             y      = linear("proj", y);
             x      = ggml_add(c, x, y);
             y      = norm("norm2", x);
-            y      = situ(c, linear("ffn_up", y), linear("ffn_gate", y));
+            y      = ggml_ext_situ(ctx, linear("ffn_up", y), linear("ffn_gate", y));
             y      = linear("ffn_down", y);
             return ggml_add(c, x, y);
         }
@@ -138,7 +132,7 @@ namespace MOSSImage {
             y            = norm("norm2", x);
             y            = ggml_add(c, ggml_add(c, y, ggml_mul(c, y, part(4))), part(3));
             auto up_gate = linear("proj.ffn_up_gate", y);
-            y            = situ(c, ggml_ext_slice(c, up_gate, 0, 0, config.ffn_dim), ggml_ext_slice(c, up_gate, 0, config.ffn_dim, 2 * config.ffn_dim));
+            y            = ggml_ext_situ(ctx, up_gate);
             y            = linear("proj.ffn_down", y);
             y            = ggml_mul(c, y, part(5));
             return ggml_add(c, x, y);
