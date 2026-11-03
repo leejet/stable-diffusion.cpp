@@ -51,6 +51,14 @@ void initialize_server_models(ServerRuntime& runtime);
 json resolve_recipe_features(const json& recipe);
 json model_generation_features(const ServerRuntime& runtime);
 
-void prepare_model_load(ServerRuntime& runtime, const json& body, SDContextParams& context, SDGenerationParams& defaults, json* loaded_recipe = nullptr);
+// Resolves the load request into context/generation params. `body` is updated
+// so `models` reflects the fully resolved selection (recipe defaults merged in),
+// letting the caller report exactly which components got loaded.
+void prepare_model_load(ServerRuntime& runtime, json& body, SDContextParams& context, SDGenerationParams& defaults, json* loaded_recipe = nullptr);
+
+// True when both parameter sets resolve to the same component files. File IDs
+// stay stable if a model directory symlink is retargeted inside the configured
+// root, so the idempotent-load check compares the resolved paths too.
+bool component_paths_match(const SDContextParams& a, const SDContextParams& b);
 
 #endif

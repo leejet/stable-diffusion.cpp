@@ -84,8 +84,26 @@ static void change_model(ServerRuntime& runtime, const httplib::Request& req, ht
         }
     }
 
+    // Idempotent load: if this exact recipe and resolved selection are already
+    // active, report the current status instead of tearing down the context.
+    // Comparing full recipe objects (not just the id) also reloads when the
+    // catalog was refreshed with modified recipe metadata for the same id.
+    // Comparing resolved component paths catches the same file IDs resolving
+    // to different files (e.g. a model directory symlink retargeted inside
+    // the configured root since the catalog was last scanned).
+    if (!unload) {
+        json current = model_status(runtime);
+        if (current.value("state", "") == "ready" && current.value("recipe", json(nullptr)) == body.at("recipe") &&
+            current.value("models", json::object()) == body.at("models") && models.active_recipe == loaded_recipe &&
+            component_paths_match(*runtime.ctx_params, context)) {
+            current["already_loaded"] = true;
+            res.set_content(current.dump(), "application/json");
+            return;
+        }
+    }
+
     const json recipe    = unload ? json(nullptr) : body.at("recipe");
-    const json selection = unload ? json::object() : body.at("models");
+    const json selection = unload ? json::object() : body.value("models", json::object());
     set_model_status(runtime, "loading", recipe, selection);
     try {
         runtime.sd_ctx = nullptr;

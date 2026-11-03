@@ -2,18 +2,23 @@
 
 ## Get the Code
 
-```
+```shell
 git clone --recursive https://github.com/leejet/stable-diffusion.cpp
 cd stable-diffusion.cpp
 ```
 
-- If you have already cloned the repository, you can use the following command to update the repository to the latest code.
+If you already cloned the repository without submodules, initialize them from the repository root:
 
+```shell
+git submodule update --init --recursive
 ```
+
+To update an existing checkout and its submodules:
+
+```shell
 cd stable-diffusion.cpp
 git pull origin master
-git submodule init
-git submodule update
+git submodule update --init --recursive
 ```
 
 ## Selecting a GGML source tree
@@ -27,8 +32,10 @@ cmake -S . -B build-upstream -DSD_USE_UPSTREAM_GGML=ON -DSD_GGML_SOURCE_DIR=../g
 cmake --build build-upstream --config Release
 ```
 
-The selected source tree supplies both the library and its private headers.
-Backend options such as `-DSD_CUDA=ON` apply to the selected tree as usual.
+Upstream compatibility mode uses the selected library and matching private
+headers. The patched GGML build uses public headers, including `ggml-ext.h` and
+`ggml-graph.h`. Backend options such as `-DSD_CUDA=ON` apply to the selected tree
+as usual.
 
 `SD_USE_UPSTREAM_GGML` defaults to `OFF`, which enables the patched GGML
 extensions. Set it to `ON` when using upstream GGML; it selects the compatibility
@@ -45,10 +52,12 @@ creating an inference context. Ordinary floating-point and shared GGML
 quantization types remain available, subject to backend operator support.
 
 `SD_USE_SYSTEM_GGML=ON` instead links an installed GGML CMake package, located
-with `ggml_DIR` or `CMAKE_PREFIX_PATH`. In that mode, `SD_GGML_SOURCE_DIR` must
-point to the matching source tree for private headers. The installed library
-must use the same ABI settings as sd.cpp, including `GGML_MAX_NAME`.
-Set `SD_USE_UPSTREAM_GGML=ON` as well if the installed package is upstream GGML.
+with `ggml_DIR` or `CMAKE_PREFIX_PATH`. An installed patched package must include
+the extension and graph APIs; its source tree is not required for private
+headers. The installed library must use the same ABI settings as sd.cpp,
+including `GGML_MAX_NAME`. For an upstream package, also set
+`SD_USE_UPSTREAM_GGML=ON` and point `SD_GGML_SOURCE_DIR` to its matching source
+tree for the compatibility layer's private headers.
 
 ## WebP and WebM Support in Examples
 
@@ -90,8 +99,8 @@ cmake --build . --config Release
 
 ## Build with CUDA
 
-Native SageAttention is included when using CUDA with patched GGML
-(`SD_USE_UPSTREAM_GGML=OFF`).
+The sd.cpp SageAttention extension is included when using CUDA with patched
+GGML (`SD_USE_UPSTREAM_GGML=OFF`).
 See [SageAttention](sage_attention.md) for GPU requirements and `--sage-attn` usage.
 
 This provides GPU acceleration using NVIDIA GPU. Make sure to have the CUDA toolkit installed. You can download it from your Linux distro's package manager (e.g. `apt install nvidia-cuda-toolkit`) or from here: [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads). Recommended to have at least 4 GB of VRAM.
@@ -101,6 +110,28 @@ mkdir build && cd build
 cmake .. -DSD_CUDA=ON
 cmake --build . --config Release
 ```
+
+CUDA extensions use sd.cpp's `thirdparty/cutlass` submodule by default
+for eligible INT8 GEMM and CuTe attention operations. If its headers are missing,
+CMake stops with an initialization hint; it does not download them automatically.
+Run `git submodule update --init --recursive` from the repository root before
+configuring.
+
+To build with the existing CUDA implementations without CUTLASS, configure from
+the repository root with:
+
+```shell
+cmake -S . -B build -DSD_CUDA=ON -DSD_CUDA_CUTLASS_PATH:PATH=
+cmake --build build --config Release
+```
+
+Alternatively, set `SD_CUDA_CUTLASS_PATH` to another local CUTLASS source
+directory (tested with 3.9.2). Existing CMake caches retain their configured path;
+pass `-USD_CUDA_CUTLASS_PATH` when reconfiguring to restore the bundled default.
+Existing `GGML_CUDA_CUTLASS_PATH` caches are migrated on first configuration:
+the old bundled path becomes `thirdparty/cutlass`, while custom paths and an
+empty disabled value are preserved. An explicitly set `SD_CUDA_CUTLASS_PATH`
+takes precedence. Non-CUDA builds do not require CUTLASS.
 
 ## Build with HipBLAS
 

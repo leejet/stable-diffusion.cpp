@@ -85,7 +85,7 @@ available during loading. Model lists are empty when no model is loaded;
 | GET | `/sdcpp/v1/model-files` | `{files: [{id, name, category, root, relative_path}], errors: [...]}` |
 | POST | `/sdcpp/v1/models/refresh` | Rescan recipes and files; return `{errors: [...]}` |
 | GET | `/sdcpp/v1/models/status` | Current state, recipe, selection, error, loading time and optional revision |
-| POST | `/sdcpp/v1/models/load` | Load the submitted recipe and selection; return status after completion |
+| POST | `/sdcpp/v1/models/load` | Load the submitted recipe and selection; return status after completion. A load is a no-op returning the current status with `already_loaded: true` only when the state is ready and the fully resolved selection, the complete recipe object, and the resolved component paths all match the active model; a catalog refresh with modified recipe metadata or a retargeted model path therefore reloads even with an unchanged recipe ID and selection |
 | POST | `/sdcpp/v1/models/unload` | Release the active context; return empty status |
 
 Load request:
@@ -268,6 +268,14 @@ An optional nonempty `label` overrides the display name, for example
 Legacy `category` fields remain accepted, but must match one of the slot's
 supported directories; they cannot redefine or restrict its search directories.
 At least one required `model` or `diffusion_model` slot is necessary.
+
+An optional top-level `models` object maps slot IDs to file IDs, providing
+recipe-local defaults for component selection. A load request may omit
+`models` entirely and load with the recipe's defaults. Selections sent in the
+request always override recipe defaults, slot by slot. An empty string
+disables a slot's recipe default (omitting the slot selects it); the empty
+key is then normalized out of the reported selection, so for slots without a
+recipe default an empty selection loads identically to an omitted one.
 
 `size_multiple` is a positive integer from 1 to 4096 that declares the width and
 height increment used by the web UI. It defaults to `8` when omitted; the UI also
