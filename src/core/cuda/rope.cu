@@ -169,7 +169,7 @@ namespace SD_CUDA_NAMESPACE {
             return false;
         const auto* x      = norm->src[0];
         const auto* weight = mul->src[1];
-        return x && weight && x->ne[0] >= 32 && x->ne[0] <= 256 && x->ne[0] % 32 == 0 &&
+        return x && weight && weight != norm && x->ne[0] >= 32 && x->ne[0] <= 256 && x->ne[0] % 32 == 0 &&
                x->type == GGML_TYPE_F32 && weight->type == GGML_TYPE_F32 && norm->type == GGML_TYPE_F32 &&
                ggml_are_same_shape(norm, mul) && ggml_are_same_shape(x, norm) &&
                weight->ne[0] == x->ne[0] && ggml_nelements(weight) == x->ne[0] &&
@@ -232,6 +232,13 @@ namespace SD_CUDA_NAMESPACE {
                 ggml_are_same_shape(rope, scale) && ggml_are_same_shape(rope, copy) && ggml_is_contiguous(copy))
                 return 5;
         }
+        if (first + 3 < ggml_graph_n_nodes(g)) {
+            const auto* rope = ggml_graph_node(g, first + 2);
+            const auto* copy = ggml_graph_node(g, first + 3);
+            if (copy->op == GGML_OP_CPY && copy->src[0] == rope && copy->type == GGML_TYPE_F16 &&
+                ggml_are_same_shape(rope, copy) && ggml_is_contiguous(copy))
+                return 4;
+        }
         return 3;
     }
 
@@ -293,7 +300,7 @@ namespace SD_CUDA_NAMESPACE {
         void* output     = alias ? ggml_backend_buffer_get_base(execution->workspace) : dst->data;
         CUDAError error;
         if (count > 1) {
-            error = rms_rope_launch(stream, nodes, output, count == 5, count == 5 ? param_f32(nodes[3], 0) : 1.f);
+            error = rms_rope_launch(stream, nodes, output, count > 3, count == 5 ? param_f32(nodes[3], 0) : 1.f);
         } else {
             RopeApplyStrides strides;
             const auto* pe = rope->src[1];
