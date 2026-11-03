@@ -122,7 +122,7 @@ namespace SD_CUDA_NAMESPACE {
         static __global__ void pack_swiglu(const float* gate, const float* up, CUDABFloat16* dst, int64_t size, float scale) {
             const int64_t i = int64_t(blockIdx.x) * blockDim.x + threadIdx.x;
             if (i < size) {
-                dst[i] = __float2bfloat16_rn(swiglu(gate[i], up[i], scale));
+                dst[i] = __float2bfloat16(swiglu(gate[i], up[i], scale));
             }
         }
 
@@ -130,8 +130,8 @@ namespace SD_CUDA_NAMESPACE {
             const int64_t i = int64_t(blockIdx.x) * blockDim.x + threadIdx.x;
             if (i < size) {
                 const float4 x = gate[i], y = up[i];
-                dst[2 * i]     = __floats2bfloat162_rn(swiglu(x.x, y.x, scale), swiglu(x.y, y.y, scale));
-                dst[2 * i + 1] = __floats2bfloat162_rn(swiglu(x.z, y.z, scale), swiglu(x.w, y.w, scale));
+                dst[2 * i]     = __float22bfloat162_rn(make_float2(swiglu(x.x, y.x, scale), swiglu(x.y, y.y, scale)));
+                dst[2 * i + 1] = __float22bfloat162_rn(make_float2(swiglu(x.z, y.z, scale), swiglu(x.w, y.w, scale)));
             }
         }
 
