@@ -1318,8 +1318,6 @@ namespace sd::pipeline {
         return result_images;
     }
 
-    // Video models without a dedicated latent upsampler checkpoint (MiniMax-H3)
-    // resample the packed [w, h, f, c] latent itself with an interpolating kernel.
     static bool hires_upscaler_is_latent_interpolation(enum sd_hires_upscaler_t upscaler) {
         switch (upscaler) {
             case SD_HIRES_UPSCALER_LATENT:
@@ -1357,14 +1355,10 @@ namespace sd::pipeline {
                 }
                 return sd::ops::InterpolateMode::Bilinear;
             default:
-                // SD_HIRES_UPSCALER_LATENT
                 return sd::ops::InterpolateMode::Bilinear;
         }
     }
 
-    // Spatial-only latent upscale that keeps the video time axis untouched, so the
-    // packed audio latent length stays valid. Used as the hires second stage for
-    // video models that have no latent upsampler checkpoint (currently MiniMax-H3).
     static sd::Tensor<float> upscale_spatial_video_latent(StableDiffusionGGML* sd,
                                                           const GenerationRequest& request,
                                                           const sd::Tensor<float>& packed_latent,
@@ -1384,10 +1378,6 @@ namespace sd::pipeline {
                       request.hires.target_height);
             return {};
         }
-        // Nothing to do at 1x. This matters for the learned upscaler: the network is not
-        // an identity mapping at scale 1, so running it would alter a latent the caller
-        // asked to keep at the draft size. Matches the reference node, which returns the
-        // input latent unchanged when the target size equals the input size.
         if (packed_latent.shape()[0] == target_width && packed_latent.shape()[1] == target_height) {
             LOG_DEBUG("video latent spatial upscale: target equals the draft latent size, skipping");
             return packed_latent;
@@ -1407,8 +1397,8 @@ namespace sd::pipeline {
             }
         }
 
-        bool antialias                = false;
-        auto mode                    = hires_latent_interpolate_mode(request.hires.upscaler, &antialias);
+        bool antialias                    = false;
+        auto mode                         = hires_latent_interpolate_mode(request.hires.upscaler, &antialias);
         std::vector<int64_t> target_shape = video_latent.shape();
         target_shape[0]                   = target_width;
         target_shape[1]                   = target_height;
@@ -1432,15 +1422,9 @@ namespace sd::pipeline {
         if (audio_latent.empty()) {
             return upscaled;
         }
-        // The audio latent is re-packed for the new spatial size; its own length
-        // is unchanged because no frame was added or dropped.
         return pack_ltxav_audio_and_video_latents(upscaled, audio_latent);
     }
 
-    // Model-backed H3 hires second stage: run the H3-shaped learned latent upscaler
-    // (e.g. the community 3D-conv checkpoint) between the low-resolution pass and
-    // the high-resolution refine pass. Audio is unpacked around the network and
-    // re-packed for the new spatial size.
     sd::Tensor<float> upscale_h3_learned_video_latent(StableDiffusionGGML* sd,
                                                       const char* model_path,
                                                       const sd::Tensor<float>& packed_latent,
@@ -1454,9 +1438,7 @@ namespace sd::pipeline {
             LOG_ERROR("H3 learned latent upscale requires a hires model path");
             return {};
         }
-        // The network is not an identity mapping at scale 1, so a target equal to the
-        // draft latent size must skip it instead of resampling through the model. The
-        // reference node returns the input latent unchanged in this case.
+        // The learned network is not an identity mapping at scale 1.
         if (packed_latent.shape()[0] == target_width && packed_latent.shape()[1] == target_height) {
             LOG_DEBUG("H3 learned latent upscale: target equals the draft latent size, skipping");
             return packed_latent;
@@ -1520,11 +1502,11 @@ namespace sd::pipeline {
         }
         scope.owned_source = owns_source ? source_file : 0;
 
-        auto& upsampler                 = scope.runner;
-        upsampler                       = std::make_unique<H3VUpsampler::H3LatentUpscalerRunner>(sd->backend_for(SDBackendModule::UPSCALER),
-                                                                                                 model_manager->loader().get_tensor_storage_map(),
-                                                                                                 prefix,
-                                                                                                 model_manager);
+        auto& upsampler                   = scope.runner;
+        upsampler                         = std::make_unique<H3VUpsampler::H3LatentUpscalerRunner>(sd->backend_for(SDBackendModule::UPSCALER),
+                                                                                                   model_manager->loader().get_tensor_storage_map(),
+                                                                                                   prefix,
+                                                                                                   model_manager);
         const size_t max_graph_vram_bytes = sd->max_graph_vram_bytes_for_module(SDBackendModule::UPSCALER);
         upsampler->set_max_graph_vram_bytes(max_graph_vram_bytes);
         if (upsampler->model == nullptr) {
@@ -1889,10 +1871,6 @@ namespace sd::pipeline {
                     return false;
                 }
             } else {
-                // MiniMax-H3 ships no official latent upsampler checkpoint, so the second
-                // stage either resamples the packed latent with a latent interpolator or,
-                // when a model-backed upscaler is selected, runs a H3-shaped learned
-                // upscaler checkpoint from --hires-upscalers-dir.
                 const bool model_upscaler = request.hires.upscaler == SD_HIRES_UPSCALER_MODEL;
                 if (model_upscaler) {
                     if (strlen(SAFE_STR(request.hires.model_path)) == 0) {
@@ -2055,9 +2033,9 @@ namespace sd::pipeline {
             sd::Tensor<float> upscaled_latent;
             if (sd_version_is_ltxav(sd->version)) {
                 upscaled_latent = upscale_ltx_spatial_video_latent(sd,
-                                                                    request.hires.model_path,
-                                                                    final_latent,
-                                                                    latents.audio_length);
+                                                                   request.hires.model_path,
+                                                                   final_latent,
+                                                                   latents.audio_length);
             } else if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL) {
                 upscaled_latent = upscale_h3_learned_video_latent(sd,
                                                                   request.hires.model_path,
@@ -2132,19 +2110,15 @@ namespace sd::pipeline {
             }
             if (sd_version_is_ltxav(sd->version) &&
                 !apply_ltxv_refine_image_conditioning(sd,
-                                                       sd_vid_gen_params,
-                                                       hires_request,
-                                                       latents,
-                                                       &x_t,
-                                                       &hires_denoise_mask,
-                                                       &hires_video_positions)) {
+                                                      sd_vid_gen_params,
+                                                      hires_request,
+                                                      latents,
+                                                      &x_t,
+                                                      &hires_denoise_mask,
+                                                      &hires_video_positions)) {
                 return false;
             }
-            // TODO(keyframes): MiniMax-H3 keyframe latents are encoded at the first
-            // stage resolution. Supporting --init-img/--end-img hires requires
-            // re-encoding them at hires_request.width/height and replacing the
-            // matching entries of embeds.cond/uncond.c_ref_images, so the hires
-            // stage rejects them for now (see the guard before sampling).
+            // H3 keyframe conditioning must be re-encoded at the hires resolution.
             if (sd_version_is_minimax_h3(sd->version) &&
                 !latents.denoise_mask.empty() &&
                 (latents.denoise_mask.shape()[0] != x_t.shape()[0] ||

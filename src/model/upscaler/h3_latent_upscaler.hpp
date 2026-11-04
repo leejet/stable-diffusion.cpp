@@ -20,25 +20,8 @@
 #include "model/upscaler/ltx_latent_upscaler.hpp"
 #include "model_loader.h"
 
-// MiniMax-H3 learned latent upscaler (H3-shaped 3D-conv LatentResizer).
 // Ported from the community ComfyUI node LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler
-// (MIT) with checkpoint LBH-123-AI/Minimax_h3_latent_Upscaler (Apache-2.0):
-//
-//   h = conv_in(x)                            Conv3d 24 -> 512, k3
-//   for N in checkpoint module-list order:
-//        h = in_blocks.N(h, emb)              ResBlock (AdaLN) or TemporalConv
-//   m = spatial_bilinear(h, target_hw)        time axis untouched
-//   for N in checkpoint module-list order:
-//        g = out_blocks.N(g, emb)
-//   y = conv_out(silu(norm_out(g)))
-//
-// The runner accepts and returns normalized H3 diffusion latents. The checkpoint
-// was trained with a second normalization using the VAE statistics, applied before
-// the network and inverted afterwards; this is separate from VAE encode/decode.
-// Depthwise temporal convs (kernel (k,1,1)) are shipped as full block-diagonal
-// Conv3d weights by the converter script, so only stock Conv3d ops are required.
-// The middle spatial resample runs on the host between the two GPU graphs; the
-// time axis is never resampled, so the packed audio latent length stays valid.
+// (MIT) with checkpoint LBH-123-AI/Minimax_h3_latent_Upscaler (Apache-2.0).
 
 namespace H3VUpsampler {
     constexpr int H3_UPSAMPLER_GRAPH_SIZE = 8192;
@@ -48,13 +31,12 @@ namespace H3VUpsampler {
         int64_t mid_channels = 512;
         int embed_dim        = 64;
         int temporal_kernel  = 5;
-        // Ordered module-list indices in checkpoint order (res and temporal blocks
-        // are interleaved in a single list in the state dict).
+        // Residual and temporal blocks share interleaved checkpoint indices.
         std::vector<int> in_res, in_temporal, out_res, out_temporal;
-        bool valid         = false;
+        bool valid = false;
 
         static H3LatentUpscalerConfig detect_from_weights(const String2TensorStorage& tensor_storage_map,
-                                                         const std::string& prefix = "") {
+                                                          const std::string& prefix = "") {
             H3LatentUpscalerConfig config;
             std::string base = prefix;
             if (!base.empty()) {
@@ -73,8 +55,7 @@ namespace H3VUpsampler {
                 LOG_ERROR("h3 latent upsampler: 'conv_in.weight' not found under prefix '%s'", prefix.c_str());
                 return config;
             }
-            // Conv weights are either PyTorch 5D [OC, IC, k, k, k] or sdcpp 4D [k, k, k, OC*IC];
-            // the biases are 1D in both layouts, so read channel counts from the biases.
+            // Bias shapes preserve channel counts when the loader folds 5D conv weights.
             const TensorStorage* conv_in_bias = find_weight("conv_in.bias");
             if (conv_in_bias != nullptr) {
                 config.mid_channels = conv_in_bias->ne[0];
@@ -102,9 +83,9 @@ namespace H3VUpsampler {
                 if (!starts_with(name, base)) {
                     continue;
                 }
-                const std::string rel  = name.substr(base.size());
-                const bool is_in       = starts_with(rel, "in_blocks.");
-                const bool is_out      = starts_with(rel, "out_blocks.");
+                const std::string rel = name.substr(base.size());
+                const bool is_in      = starts_with(rel, "in_blocks.");
+                const bool is_out     = starts_with(rel, "out_blocks.");
                 if (!is_in && !is_out) {
                     continue;
                 }
@@ -143,12 +124,7 @@ namespace H3VUpsampler {
                 for (int idx : idxs) {
                     const TensorStorage* dw = find_weight(std::string(stage) + "." + std::to_string(idx) + ".dwconv.weight");
                     if (dw != nullptr) {
-                        // The temporal extent is ne[2] in both layouts that can reach here:
-                        // an unfolded PyTorch 5D kernel [OC, IC, kD, kH, kW] keeps kD at
-                        // index 2, and the loader's folded form [OC*IC, kD, kH, kW] followed
-                        // by reverse_ne becomes [kW, kH, kD, OC*IC], which also puts kD at
-                        // index 2. Reading ne[0] instead picked up the spatial extent (1) and
-                        // silently collapsed the depthwise kernel to a 1-tap convolution.
+                        // kD stays at ne[2] in both [OC, IC, kD, kH, kW] and [kW, kH, kD, OC*IC].
                         return static_cast<int>(dw->ne[2]);
                     }
                 }
@@ -159,7 +135,7 @@ namespace H3VUpsampler {
             if (k_out > 0) {
                 config.temporal_kernel = k_out;
             } else {
-                config.temporal_kernel = 1;  // no temporal convs in the checkpoint
+                config.temporal_kernel = 1;
             }
 
             config.valid = true;
@@ -177,9 +153,6 @@ namespace H3VUpsampler {
         }
     };
 
-    // H3 res block: in_layers (GN -> SiLU -> Conv3d k3); AdaLN modulation
-    // out_norm(h) * (1 + scale) + shift from the scale-embedding MLP; out_layers
-    // (SiLU -> zero-init Conv3d k3); identity skip.
     class H3ResBlock : public GGMLBlock {
     protected:
         int64_t channels;
@@ -190,10 +163,10 @@ namespace H3VUpsampler {
                          const std::string prefix) override {
             auto make_conv = [&](const std::string& name) {
                 blocks[name] = std::shared_ptr<GGMLBlock>(new Conv3d(channels,
-                                                                      channels,
-                                                                      {3, 3, 3},
-                                                                      {1, 1, 1},
-                                                                      {1, 1, 1}));
+                                                                     channels,
+                                                                     {3, 3, 3},
+                                                                     {1, 1, 1},
+                                                                     {1, 1, 1}));
             };
             make_conv("in_layers.2");
             make_conv("out_layers.2");
@@ -214,45 +187,29 @@ namespace H3VUpsampler {
             auto out_norm   = std::dynamic_pointer_cast<LTXVUpsampler::VideoGroupNorm>(blocks["out_norm"]);
             auto emb_layers = std::dynamic_pointer_cast<Linear>(blocks["emb_layers.1"]);
 
-            // in_layers: GN -> SiLU -> Conv3d (in_norm is the GroupNorm, in_layers is the Conv3d)
             ggml_tensor* h = in_norm->forward(ctx, x);
-            h             = ggml_silu_inplace(ctx->ggml_ctx, h);
-            h             = in_layers->forward(ctx, h);
+            h              = ggml_silu_inplace(ctx->ggml_ctx, h);
+            h              = in_layers->forward(ctx, h);
 
-            // AdaLN: emb_out = emb_layers(SiLU(emb)) -> split [scale, shift].
-            // emb is shared by every residual block of the stage, so the activation has
-            // to be out-of-place: an in-place SiLU would leave the buffer activated and
-            // the following blocks would re-activate an already activated embedding.
+            // Keep emb intact: every residual block uses the same embedding.
             ggml_tensor* emb_silu = ggml_silu(ctx->ggml_ctx, emb);
             ggml_tensor* emb_out  = emb_layers->forward(ctx, emb_silu);
             ggml_tensor* emb_1d   = ggml_reshape_1d(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, emb_out), 2 * channels);
             ggml_tensor* scale    = ggml_reshape_4d(ctx->ggml_ctx, ggml_ext_slice(ctx->ggml_ctx, emb_1d, 0, 0, channels), 1, 1, 1, channels);
             ggml_tensor* shift    = ggml_reshape_4d(ctx->ggml_ctx, ggml_ext_slice(ctx->ggml_ctx, emb_1d, 0, channels, 2 * channels), 1, 1, 1, channels);
-            // 1 + scale as a graph op; a host-filled constant tensor would have to be
-            // allocated and bound outside the graph context.
             ggml_tensor* gain     = ggml_scale_bias(ctx->ggml_ctx, scale, 1.f, 1.f);
 
-            // out_norm * (1 + scale) + shift, then SiLU -> out_layers
-            h             = out_norm->forward(ctx, h);
-            h             = ggml_mul_inplace(ctx->ggml_ctx, h, gain);
-            h             = ggml_add_inplace(ctx->ggml_ctx, h, shift);
-            h             = ggml_silu_inplace(ctx->ggml_ctx, h);
-            h             = out_layers->forward(ctx, h);
-            return ggml_add(ctx->ggml_ctx, h, x);  // identity skip
+            h = out_norm->forward(ctx, h);
+            h = ggml_mul_inplace(ctx->ggml_ctx, h, gain);
+            h = ggml_add_inplace(ctx->ggml_ctx, h, shift);
+            h = ggml_silu_inplace(ctx->ggml_ctx, h);
+            h = out_layers->forward(ctx, h);
+            return ggml_add(ctx->ggml_ctx, h, x);
         }
     };
 
-    // Depthwise convolution over the time axis only.
-    //
-    // The reference implementation declares this as Conv3d(C, C, (k,1,1), groups=C),
-    // so the checkpoint stores a genuine depthwise kernel: PyTorch [C, 1, k, 1, 1],
-    // which the safetensors loader folds to [1, 1, k, C] (2,560 values at C=512).
-    // sdcpp's Conv3d is dense-only and would expect C*C*k values (512x more), so it
-    // cannot host this weight. Expanding the kernel to a block-diagonal dense one
-    // would also inflate the conv cost by the same 512x, which for a 3D conv on an
-    // iGPU is not affordable. Implement it directly instead: k shifted
-    // multiply-adds along T, all elementwise, so every backend supports it and the
-    // FLOP count stays at the depthwise level.
+    // Shifted multiply-adds preserve depthwise weights [1, 1, k, C] without
+    // expanding them into the dense kernels required by Conv3d.
     class H3TemporalDWConv3d : public UnaryBlock {
     protected:
         int64_t channels;
@@ -281,8 +238,6 @@ namespace H3VUpsampler {
             if (ctx->weight_adapter) {
                 w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
             }
-            // Activations in this network are F32 (conv outputs are F32); the kernel
-            // is stored as F16, so match the activation type before multiplying.
             ggml_tensor* w32 = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_F32);
             ggml_tensor* xa  = x;
             if (xa->type != GGML_TYPE_F32) {
@@ -292,9 +247,7 @@ namespace H3VUpsampler {
             const int64_t T = xa->ne[2];
             const int pad   = kernel / 2;
 
-            // Zero-pad both ends of T. ggml_pad only pads the end of each dimension,
-            // so build a [W, H, pad, C] zero tensor from a zeroed slice of the input
-            // and concatenate it on both sides.
+            // ggml_pad only pads the end; concatenate zeros for symmetric padding.
             ggml_tensor* xp = xa;
             if (pad > 0) {
                 ggml_tensor* zero = ggml_scale(ctx->ggml_ctx, ggml_ext_slice(ctx->ggml_ctx, xa, 2, 0, 1), 0.0f);
@@ -308,10 +261,10 @@ namespace H3VUpsampler {
 
             ggml_tensor* acc = nullptr;
             for (int j = 0; j < kernel; ++j) {
-                ggml_tensor* xs  = ggml_ext_slice(ctx->ggml_ctx, xp, 2, j, j + T);
-                ggml_tensor* wj  = ggml_ext_slice(ctx->ggml_ctx, w32, 2, j, j + 1);  // [1, 1, 1, C]
+                ggml_tensor* xs   = ggml_ext_slice(ctx->ggml_ctx, xp, 2, j, j + T);
+                ggml_tensor* wj   = ggml_ext_slice(ctx->ggml_ctx, w32, 2, j, j + 1);  // [1, 1, 1, C]
                 ggml_tensor* term = ggml_mul(ctx->ggml_ctx, xs, wj);
-                acc = acc == nullptr ? term : ggml_add(ctx->ggml_ctx, acc, term);
+                acc               = acc == nullptr ? term : ggml_add(ctx->ggml_ctx, acc, term);
             }
             if (has_bias) {
                 ggml_tensor* b = params["bias"];
@@ -324,8 +277,6 @@ namespace H3VUpsampler {
         }
     };
 
-    // Temporal conv: GN -> SiLU -> depthwise Conv3d (k,1,1) -> pointwise Conv3d
-    // (zero-init at training) + identity.
     class H3TemporalConv : public GGMLBlock {
     protected:
         int64_t channels;
@@ -336,11 +287,11 @@ namespace H3VUpsampler {
                          const std::string prefix) override {
             blocks["dwconv"] = std::shared_ptr<GGMLBlock>(new H3TemporalDWConv3d(channels, temporal_kernel));
             blocks["pwconv"] = std::shared_ptr<GGMLBlock>(new Conv3d(channels,
-                                                                      channels,
-                                                                      {1, 1, 1},
-                                                                      {1, 1, 1},
-                                                                      {0, 0, 0}));
-            blocks["norm"] = std::shared_ptr<GGMLBlock>(new LTXVUpsampler::VideoGroupNorm(32, channels));
+                                                                     channels,
+                                                                     {1, 1, 1},
+                                                                     {1, 1, 1},
+                                                                     {0, 0, 0}));
+            blocks["norm"]   = std::shared_ptr<GGMLBlock>(new LTXVUpsampler::VideoGroupNorm(32, channels));
         }
 
     public:
@@ -354,14 +305,13 @@ namespace H3VUpsampler {
             auto norm   = std::dynamic_pointer_cast<LTXVUpsampler::VideoGroupNorm>(blocks["norm"]);
 
             ggml_tensor* h = norm->forward(ctx, x);
-            h             = ggml_silu_inplace(ctx->ggml_ctx, h);
-            h             = dwconv->forward(ctx, h);
-            h             = pwconv->forward(ctx, h);
+            h              = ggml_silu_inplace(ctx->ggml_ctx, h);
+            h              = dwconv->forward(ctx, h);
+            h              = pwconv->forward(ctx, h);
             return ggml_add(ctx->ggml_ctx, h, x);
         }
     };
 
-    // Scale-embedding MLP: Linear(1 -> E) -> SiLU -> Linear(E -> E).
     class H3Embed : public GGMLBlock {
     protected:
         int embed_dim;
@@ -369,8 +319,6 @@ namespace H3VUpsampler {
         void init_params(ggml_context* ctx,
                          const String2TensorStorage& tensor_storage_map,
                          const std::string prefix) override {
-            // Child names are relative to the "embed" block prefix, so these bind as
-            // embed.0.* / embed.2.* to match the checkpoint.
             blocks["0"] = std::shared_ptr<GGMLBlock>(new Linear(1, embed_dim, true));
             blocks["2"] = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, true));
         }
@@ -380,10 +328,8 @@ namespace H3VUpsampler {
             : embed_dim(embed_dim) {}
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* scale_input) {
-            auto l0 = std::dynamic_pointer_cast<Linear>(blocks["0"]);
-            auto l2 = std::dynamic_pointer_cast<Linear>(blocks["2"]);
-            // Sequential(Linear, SiLU, Linear): the reference checkpoint ends at the
-            // second linear layer, each residual block activates the embedding itself.
+            auto l0        = std::dynamic_pointer_cast<Linear>(blocks["0"]);
+            auto l2        = std::dynamic_pointer_cast<Linear>(blocks["2"]);
             ggml_tensor* h = l0->forward(ctx, ggml_reshape_2d(ctx->ggml_ctx, scale_input, 1, 1));
             h              = ggml_silu_inplace(ctx->ggml_ctx, h);
             return l2->forward(ctx, h);
@@ -398,19 +344,19 @@ namespace H3VUpsampler {
             : config(std::move(config_)) {
             for (int idx : config.in_res) {
                 blocks["in_blocks." + std::to_string(idx)] = std::shared_ptr<GGMLBlock>(new H3ResBlock(config.mid_channels,
-                                                                                                     config.embed_dim));
+                                                                                                       config.embed_dim));
             }
             for (int idx : config.in_temporal) {
                 blocks["in_blocks." + std::to_string(idx)] = std::shared_ptr<GGMLBlock>(new H3TemporalConv(config.mid_channels,
-                                                                                                         config.temporal_kernel));
+                                                                                                           config.temporal_kernel));
             }
             for (int idx : config.out_res) {
                 blocks["out_blocks." + std::to_string(idx)] = std::shared_ptr<GGMLBlock>(new H3ResBlock(config.mid_channels,
-                                                                                                      config.embed_dim));
+                                                                                                        config.embed_dim));
             }
             for (int idx : config.out_temporal) {
                 blocks["out_blocks." + std::to_string(idx)] = std::shared_ptr<GGMLBlock>(new H3TemporalConv(config.mid_channels,
-                                                                                                          config.temporal_kernel));
+                                                                                                            config.temporal_kernel));
             }
             blocks["conv_in"]  = std::shared_ptr<GGMLBlock>(new Conv3d(config.in_channels,
                                                                        config.mid_channels,
@@ -419,14 +365,13 @@ namespace H3VUpsampler {
                                                                        {1, 1, 1}));
             blocks["norm_out"] = std::shared_ptr<GGMLBlock>(new LTXVUpsampler::VideoGroupNorm(32, config.mid_channels));
             blocks["conv_out"] = std::shared_ptr<GGMLBlock>(new Conv3d(config.mid_channels,
-                                                                        config.in_channels,
-                                                                        {3, 3, 3},
-                                                                        {1, 1, 1},
-                                                                        {1, 1, 1}));
+                                                                       config.in_channels,
+                                                                       {3, 3, 3},
+                                                                       {1, 1, 1},
+                                                                       {1, 1, 1}));
             blocks["embed"]    = std::shared_ptr<GGMLBlock>(new H3Embed(config.embed_dim));
         }
 
-        // Stage A: conv_in + in-block chain at the original spatial size.
         ggml_tensor* forward_stage_a(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* scale_input) {
             auto conv_in = std::dynamic_pointer_cast<Conv3d>(blocks["conv_in"]);
             auto embed   = std::dynamic_pointer_cast<H3Embed>(blocks["embed"]);
@@ -449,14 +394,13 @@ namespace H3VUpsampler {
                     h          = block->forward(ctx, h);
                 } else {
                     auto block = std::dynamic_pointer_cast<H3ResBlock>(blocks["in_blocks." + std::to_string(i)]);
-                    h         = block->forward(ctx, h, emb);
+                    h          = block->forward(ctx, h, emb);
                 }
                 sd::ggml_graph_cut::mark_graph_cut(h, "h3_latent_upscaler.in_blocks." + std::to_string(i), "x");
             }
             return h;
         }
 
-        // Stage B: out-block chain + norm_out + SiLU + conv_out at the target spatial size.
         ggml_tensor* forward_stage_b(GGMLRunnerContext* ctx, ggml_tensor* m, ggml_tensor* scale_input) {
             auto conv_out = std::dynamic_pointer_cast<Conv3d>(blocks["conv_out"]);
             auto norm_out = std::dynamic_pointer_cast<LTXVUpsampler::VideoGroupNorm>(blocks["norm_out"]);
@@ -478,14 +422,14 @@ namespace H3VUpsampler {
                     g          = block->forward(ctx, g);
                 } else {
                     auto block = std::dynamic_pointer_cast<H3ResBlock>(blocks["out_blocks." + std::to_string(i)]);
-                    g         = block->forward(ctx, g, emb);
+                    g          = block->forward(ctx, g, emb);
                 }
                 sd::ggml_graph_cut::mark_graph_cut(g, "h3_latent_upscaler.out_blocks." + std::to_string(i), "x");
             }
 
-            g        = norm_out->forward(ctx, g);
-            g        = ggml_silu_inplace(ctx->ggml_ctx, g);
-            g        = conv_out->forward(ctx, g);
+            g = norm_out->forward(ctx, g);
+            g = ggml_silu_inplace(ctx->ggml_ctx, g);
+            g = conv_out->forward(ctx, g);
             sd::ggml_graph_cut::mark_graph_cut(g, "h3_latent_upscaler.conv_out", "x");
             return g;
         }
@@ -556,8 +500,6 @@ namespace H3VUpsampler {
                           target_h);
                 return {};
             }
-            // Non-isotropic targets: the single scale-embedding input uses the mean of the
-            // width/height scale factors.
             const float scale = (static_cast<float>(target_w) / static_cast<float>(in_w) +
                                  static_cast<float>(target_h) / static_cast<float>(in_h)) /
                                 2.0f;
@@ -581,11 +523,11 @@ namespace H3VUpsampler {
                                             0.7996809482574463f, 0.44988900423049927f, 0.7197399735450745f, 0.6936293244361877f,
                                             2.961095094680786f, 2.7694199085235596f, 3.0496184825897217f, 2.1088054180145264f,
                                             3.276226282119751f, 3.1627357006073f, 2.2816812992095947f, 2.6127843856811523f});
-            const sd::Tensor<float> normalized = (x - mean) / stddev;
-            // scale - 1 as one host tensor bound as a graph input for both stages.
+            // Training applies the VAE normalization a second time to diffusion latents.
+            // Undo only this extra transform after the network.
+            const sd::Tensor<float> normalized   = (x - mean) / stddev;
             const sd::Tensor<float> scale_tensor = sd::Tensor<float>::from_vector({scale - 1.0f});
-            // Stage A: conv_in + in-block chain at the original spatial size.
-            auto get_graph_a = [this, &normalized, &scale_tensor]() -> ggml_cgraph* {
+            auto get_graph_a                     = [this, &normalized, &scale_tensor]() -> ggml_cgraph* {
                 ggml_cgraph* gf          = new_graph_custom(H3_UPSAMPLER_GRAPH_SIZE);
                 ggml_tensor* x_t         = make_input(normalized);
                 ggml_tensor* scale_input = make_input(scale_tensor);
@@ -602,18 +544,16 @@ namespace H3VUpsampler {
             }
             sd::Tensor<float> mid = std::move(*mid_opt);
 
-            // Middle spatial resample on the host; the time axis is never touched.
             std::vector<int64_t> mid_shape = mid.shape();
             mid_shape[0]                   = target_w;
             mid_shape[1]                   = target_h;
-            sd::Tensor<float> mid_up = sd::ops::interpolate(mid, mid_shape, sd::ops::InterpolateMode::Bilinear, false, false);
+            sd::Tensor<float> mid_up       = sd::ops::interpolate(mid, mid_shape, sd::ops::InterpolateMode::Bilinear, false, false);
             if (mid_up.empty()) {
                 LOG_ERROR("H3 latent upsampler middle spatial interpolate failed: %" PRId64 "x%" PRId64 " -> %" PRId64 "x%" PRId64,
                           in_w, in_h, target_w, target_h);
                 return {};
             }
 
-            // Stage B: out-block chain + conv_out at the target spatial size.
             auto get_graph_b = [this, &mid_up, &scale_tensor]() -> ggml_cgraph* {
                 ggml_cgraph* gf          = new_graph_custom(H3_UPSAMPLER_GRAPH_SIZE);
                 ggml_tensor* m_t         = make_input(mid_up);
