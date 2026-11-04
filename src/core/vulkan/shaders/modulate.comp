@@ -1,16 +1,25 @@
 #version 450
 
 layout(local_size_x = 256) in;
-layout(binding = 0) readonly buffer X { float x[]; };
-layout(binding = 1) readonly buffer S { float scale[]; };
-layout(binding = 2) readonly buffer H { float shift[]; };
-layout(binding = 3) writeonly buffer D { float dst[]; };
+layout(binding = 0) readonly buffer X {
+    float x[];
+};
+layout(binding = 1) readonly buffer S {
+    float scale[];
+};
+layout(binding = 2) readonly buffer H {
+    float shift[];
+};
+layout(binding = 3) writeonly buffer D {
+    float dst[];
+};
 layout(push_constant) uniform Parameters {
     uint ne[4], scale_ne[4], shift_ne[4];
     uint x_stride[4], scale_stride[4], shift_stride[4];
     uint offsets[4];
     uint count, has_shift;
-} p;
+}
+p;
 
 void main() {
     uint group = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
