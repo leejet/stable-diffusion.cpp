@@ -129,6 +129,9 @@ or with the learned upscaler:
 
 Notes for this mode:
 
+- The learned upscaler expects a second normalization of the diffusion latent,
+  matching its training convention. The runner applies and reverses this extra
+  transform internally; callers should pass the usual H3 diffusion latents.
 - The frame count is never changed by the second stage, so the packed audio
   latent length stays valid and the generated soundtrack is preserved.
 - Width and height still have to be multiples of 32; the hires target is

@@ -32,9 +32,9 @@
 //        g = out_blocks.N(g, emb)
 //   y = conv_out(silu(norm_out(g)))
 //
-// The network uses normalized H3 diffusion latents for both input and output.
-// sd.cpp's sampler already uses this domain, so no additional VAE mean/std
-// conversion is needed around the network.
+// The runner accepts and returns normalized H3 diffusion latents. The checkpoint
+// was trained with a second normalization using the VAE statistics, applied before
+// the network and inverted afterwards; this is separate from VAE encode/decode.
 // Depthwise temporal convs (kernel (k,1,1)) are shipped as full block-diagonal
 // Conv3d weights by the converter script, so only stock Conv3d ops are required.
 // The middle spatial resample runs on the host between the two GPU graphs; the
@@ -543,8 +543,8 @@ namespace H3VUpsampler {
                 LOG_ERROR("H3 latent upsampler currently supports batch size 1, got batch=%lld", (long long)x.shape()[4]);
                 return {};
             }
-            if (x.shape()[3] != config.in_channels) {
-                LOG_ERROR("H3 latent upsampler expected %" PRId64 " channels, got %lld", config.in_channels, (long long)x.shape()[3]);
+            if (config.in_channels != 24 || x.shape()[3] != config.in_channels) {
+                LOG_ERROR("H3 latent upsampler requires 24 channels, got model=%" PRId64 " input=%lld", config.in_channels, (long long)x.shape()[3]);
                 return {};
             }
             const int64_t in_w = x.shape()[0];
@@ -567,12 +567,27 @@ namespace H3VUpsampler {
             }
 
             const size_t expected_dim = static_cast<size_t>(x.dim());
+            const sd::Tensor<float> mean({1, 1, 1, 24},
+                                         {0.858090341091156f, -0.9606591463088989f, 1.0661640167236328f, -0.5090325474739075f,
+                                          -0.2727581858634949f, -1.3675414323806763f, -0.2553254961967468f, -0.26907554268836975f,
+                                          -0.5376840829849243f, -0.0464097298681736f, 0.6657370328903198f, 0.19690127670764923f,
+                                          -0.5460608005523682f, -0.4035342037677765f, -0.23683024942874908f, 0.25928452610969543f,
+                                          -0.30133944749832153f, 0.211341992020607f, -1.1206848621368408f, 0.3581933379173279f,
+                                          -0.04225143790245056f, 0.2604829967021942f, 0.22864092886447906f, 0.7056031823158264f});
+            const sd::Tensor<float> stddev({1, 1, 1, 24},
+                                           {1.2223774194717407f, 1.2767263650894165f, 1.6831774711608887f, 1.7549455165863037f,
+                                            1.5636216402053833f, 2.194143533706665f, 0.9653137922286987f, 1.0569885969161987f,
+                                            0.841948926448822f, 0.7729952931404114f, 1.8955937623977661f, 0.946841835975647f,
+                                            0.7996809482574463f, 0.44988900423049927f, 0.7197399735450745f, 0.6936293244361877f,
+                                            2.961095094680786f, 2.7694199085235596f, 3.0496184825897217f, 2.1088054180145264f,
+                                            3.276226282119751f, 3.1627357006073f, 2.2816812992095947f, 2.6127843856811523f});
+            const sd::Tensor<float> normalized = (x - mean) / stddev;
             // scale - 1 as one host tensor bound as a graph input for both stages.
             const sd::Tensor<float> scale_tensor = sd::Tensor<float>::from_vector({scale - 1.0f});
             // Stage A: conv_in + in-block chain at the original spatial size.
-            auto get_graph_a = [this, &x, &scale_tensor]() -> ggml_cgraph* {
+            auto get_graph_a = [this, &normalized, &scale_tensor]() -> ggml_cgraph* {
                 ggml_cgraph* gf          = new_graph_custom(H3_UPSAMPLER_GRAPH_SIZE);
-                ggml_tensor* x_t         = make_input(x);
+                ggml_tensor* x_t         = make_input(normalized);
                 ggml_tensor* scale_input = make_input(scale_tensor);
                 auto runner_ctx          = get_context(gf);
                 ggml_tensor* out         = model->forward_stage_a(&runner_ctx, x_t, scale_input);
@@ -620,7 +635,7 @@ namespace H3VUpsampler {
                           out.shape()[0], out.shape()[1], out.shape()[2], target_w, target_h, T);
                 return {};
             }
-            return restore_trailing_singleton_dims(std::move(out), expected_dim);
+            return restore_trailing_singleton_dims(out * stddev + mean, expected_dim);
         }
     };
 
