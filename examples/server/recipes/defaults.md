@@ -71,6 +71,7 @@ For community edit adapters and other optional extensions, these are the base-mo
 | `minit2i` | 2.5 | 20 | 512 × 512 | [Source](https://huggingface.co/MiniT2I/MiniT2I/raw/main/pipeline.py) B/16 example and native model size; L/16 uses CFG 6. |
 | `moss-image-base` | 3 | 20 | 1024 × 1024 | [Source](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base)  |
 | `moss-image-sft` | 3 | 20 | 1024 × 1024 | [Source](https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT)  |
+| `p-h3-image` | 1 | 8 | 1024 × 1024 | [Runtime guide](../../../docs/p_h3_image.md) Fixed P-H3 sigma schedule; upstream 2912 × 2912 reduced to the catalog default. |
 | `nitrosd-realism` | 1 | 1 | 1024 × 1024 | [Source](https://huggingface.co/ChenDY/NitroFusion)  |
 | `ovis-image` | 5 | 20 | 1024 × 1024 | [Source](https://huggingface.co/ATH-MaaS/Ovis-Image-7B)  |
 | `pid` | 1 | 4 | 2048 × 2048 | [Source](https://huggingface.co/nvidia/PiD) Standalone PiD decoding at 2K; guidance is handled by the upstream generator. |

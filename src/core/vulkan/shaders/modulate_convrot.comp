@@ -2,8 +2,8 @@
 
 #extension GL_EXT_control_flow_attributes : require
 
-layout(constant_id = 0) const uint K      = 4096;
-layout(constant_id = 1) const bool AFFINE = false;
+layout(constant_id = 0) const uint K         = 4096;
+layout(constant_id = 1) const bool AFFINE    = false;
 layout(constant_id = 2) const bool HAS_SHIFT = true;
 layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
 layout(binding = 0) readonly buffer X {

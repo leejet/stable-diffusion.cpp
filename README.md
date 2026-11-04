@@ -59,6 +59,7 @@ API and command-line option may change frequently.***
     - [Z-Image](./docs/z_image.md)
     - [Z-Image L2P](./docs/z_image_l2p.md)
     - [MiniT2I](./docs/minit2i.md)
+    - [P-H3-Image](./docs/p_h3_image.md)
     - [SenseNova U1.5](./docs/sensenova_u1.md)
     - [Ovis-Image](./docs/ovis_image.md)
     - [Anima](./docs/anima.md)
