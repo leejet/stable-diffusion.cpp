@@ -72,7 +72,7 @@ namespace sd_vulkan_rope {
             return false;
         const auto* x      = norm->src[0];
         const auto* weight = mul->src[1];
-        return x && weight && x->type == GGML_TYPE_F32 && x->ne[0] == 128 && x->nb[0] == 4 &&
+        return x && weight && weight != norm && x->type == GGML_TYPE_F32 && x->ne[0] == 128 && x->nb[0] == 4 &&
                norm->type == GGML_TYPE_F32 && mul->type == GGML_TYPE_F32 && ggml_are_same_shape(x, norm) && ggml_are_same_shape(norm, mul) &&
                weight->type == GGML_TYPE_F32 && weight->ne[0] == 128 && ggml_nelements(weight) == 128 &&
                ggml_is_contiguous(weight) && bounded(weight, info) && bounded(x, info) && (x->ne[1] + 3) / 4 <= info.max_group_count[0];
@@ -81,32 +81,35 @@ namespace sd_vulkan_rope {
         ggml_ext_vulkan_device_info info;
         api(device)->device_info(device, &info);
         // Workspace writeback uses Vulkan's four-byte copy granularity.
-        return info.float16 && scale->op == GGML_OP_SCALE && scale->src[0] == rope && scale->type == GGML_TYPE_F32 &&
-               param(scale, 1) == 0.f && copy->op == GGML_OP_CPY && copy->src[0] == scale && copy->type == GGML_TYPE_F16 &&
-               ggml_is_contiguous(copy) && aligned(copy, 4) && ggml_are_same_shape(scale, copy);
+        return info.float16 && (!scale || (scale->op == GGML_OP_SCALE && scale->src[0] == rope && scale->type == GGML_TYPE_F32 && param(scale, 1) == 0.f)) &&
+               copy->op == GGML_OP_CPY && copy->src[0] == (scale ? scale : rope) && copy->type == GGML_TYPE_F16 &&
+               ggml_is_contiguous(copy) && aligned(copy, 4) && ggml_are_same_shape(rope, copy);
     }
     static int match(ggml_backend_dev_t device, const ggml_cgraph* graph, int first, void*) {
         auto* g = const_cast<ggml_cgraph*>(graph);
         if (first + 2 >= ggml_graph_n_nodes(g) || !fused_supports(device, ggml_graph_node(g, first), ggml_graph_node(g, first + 1), ggml_graph_node(g, first + 2)))
             return 0;
-        return first + 4 < ggml_graph_n_nodes(g) && cast_supports(device, ggml_graph_node(g, first + 2), ggml_graph_node(g, first + 3), ggml_graph_node(g, first + 4)) ? 5 : 3;
+        if (first + 4 < ggml_graph_n_nodes(g) && cast_supports(device, ggml_graph_node(g, first + 2), ggml_graph_node(g, first + 3), ggml_graph_node(g, first + 4)))
+            return 5;
+        return first + 3 < ggml_graph_n_nodes(g) && cast_supports(device, ggml_graph_node(g, first + 2), nullptr, ggml_graph_node(g, first + 3)) ? 4 : 3;
     }
     static void optimize(ggml_backend_dev_t device, ggml_cgraph* graph, void*) {
         for (int last = 2; last < ggml_graph_n_nodes(graph); ++last) {
             const auto* output = ggml_graph_node(graph, last);
-            const auto* scale  = output->op == GGML_OP_CPY ? output->src[0] : nullptr;
-            const auto* rope   = scale && scale->op == GGML_OP_SCALE ? scale->src[0] : output;
+            const auto* source = output->op == GGML_OP_CPY ? output->src[0] : nullptr;
+            const auto* scale  = source && source->op == GGML_OP_SCALE ? source : nullptr;
+            const auto* rope   = source ? (scale ? scale->src[0] : source) : output;
             if (!is_rope(rope))
                 continue;
             const auto* mul  = rope->src[0];
             const auto* norm = mul->src[0];
             if (!norm || !fused_supports(device, norm, mul, rope))
                 continue;
-            const int count = output == rope ? 3 : cast_supports(device, rope, scale, output) ? 5
+            const int count = output == rope ? 3 : cast_supports(device, rope, scale, output) ? (scale ? 5 : 4)
                                                                                               : 0;
             if (!count)
                 continue;
-            const ggml_tensor* nodes[] = {norm, mul, rope, scale, output};
+            const ggml_tensor* nodes[] = {norm, mul, rope, scale ? scale : output, output};
             int indices[5], next = count - 1;
             for (int i = last; i >= std::max(0, last - 64) && next >= 0; --i)
                 if (ggml_graph_node(graph, i) == nodes[next])
@@ -170,6 +173,7 @@ namespace sd_vulkan_rope {
         pc.dst_offset = buffers[2].shader_offset / uint32_t(ggml_type_size(output->type));
         std::memcpy(&pc.interleaved, ggml_ext_op_attributes(rope), 4);
         uint32_t groups[3]                = {1, 1, 1};
+        const uint32_t apply_output_scale = count == 5;
         ggml_ext_vulkan_pipeline pipeline = {};
         pipeline.name                     = "sd.rope_apply.vulkan";
         pipeline.spirv                    = sd_vulkan_shaders::rope_apply;
@@ -181,9 +185,13 @@ namespace sd_vulkan_rope {
             groups[0]               = std::min(n_groups, info.max_group_count[0]);
             groups[1]               = (n_groups + groups[0] - 1) / groups[0];
         } else {
-            pipeline.name                   = count == 5 ? "sd.rms_rope_cast.vulkan" : "sd.rms_rope_apply.vulkan";
-            pipeline.spirv                  = count == 5 ? sd_vulkan_shaders::rms_rope_cast : sd_vulkan_shaders::rms_rope_apply;
-            pipeline.spirv_size             = count == 5 ? sizeof(sd_vulkan_shaders::rms_rope_cast) : sizeof(sd_vulkan_shaders::rms_rope_apply);
+            pipeline.name       = count > 3 ? "sd.rms_rope_cast.vulkan" : "sd.rms_rope_apply.vulkan";
+            pipeline.spirv      = count > 3 ? sd_vulkan_shaders::rms_rope_cast : sd_vulkan_shaders::rms_rope_apply;
+            pipeline.spirv_size = count > 3 ? sizeof(sd_vulkan_shaders::rms_rope_cast) : sizeof(sd_vulkan_shaders::rms_rope_apply);
+            if (count > 3) {
+                pipeline.constants      = &apply_output_scale;
+                pipeline.constant_count = 1;
+            }
             pipeline.push_constant_size     = sizeof(FusedParameters);
             pipeline.full_subgroups         = true;
             pipeline.required_subgroup_size = info.subgroup_size_control ? 32 : 0;
