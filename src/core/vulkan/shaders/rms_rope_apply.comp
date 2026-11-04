@@ -12,6 +12,7 @@ layout(binding = 1) readonly buffer PE {
     float data_pe[];
 };
 #ifdef CAST_F16
+layout(constant_id = 0) const bool apply_output_scale = false;
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 layout(binding = 2) writeonly buffer D {
@@ -96,8 +97,10 @@ void main() {
                     }
                 }
 #ifdef CAST_F16
-                value *= pc.output_scale;
-                value += 0.0;
+                if (apply_output_scale) {
+                    value *= pc.output_scale;
+                    value += 0.0;
+                }
                 data_d[pc.dst_offset + ((batch * pc.heads + head) * pc.tokens + token) * 128 + col] = float16_t(value);
 #else
                 data_d[pc.dst_offset + ((batch * pc.heads + head) * pc.tokens + token) * 128 + col] = value;

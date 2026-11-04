@@ -1,0 +1,136 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : enable
+#define BLOCK_SIZE 512
+#define FLOAT_TYPE float
+#define D_TYPE float
+layout(local_size_x = BLOCK_SIZE) in;
+layout(binding = 0) readonly buffer X {
+    float data_a[];
+};
+layout(binding = 1) readonly buffer W {
+    float data_b[];
+};
+layout(binding = 2) writeonly buffer D {
+    float data_d[];
+};
+layout(binding = 3) readonly buffer S {
+    float data_c[];
+};
+layout(binding = 4) readonly buffer H {
+    float data_e[];
+};
+layout(constant_id = 0) const bool has_shift   = true;
+layout(constant_id = 1) const bool do_multiply = true;
+layout(push_constant) uniform Parameters {
+    uint ne[4], stride[4], offsets[5];
+    float eps;
+    uint ne10;
+}
+p;
+shared float sumsh[BLOCK_SIZE];
+shared float modulation_input[BLOCK_SIZE];
+uint get_aoffset() {
+    return p.offsets[0];
+}
+uint get_boffset() {
+    return p.offsets[1];
+}
+uint get_doffset() {
+    return p.offsets[2];
+}
+uint src1_idx(uint a, uint b, uint c, uint d) {
+    return 0;
+}
+uint fastmod(uint a, uint b) {
+    return a % b;
+}
+float modulate(float value, uint col) {
+    // Keep precise modulation from changing the native normalization's FMA contraction.
+    modulation_input[gl_LocalInvocationIndex] = value;
+    memoryBarrierShared();
+    float weighted        = modulation_input[gl_LocalInvocationIndex];
+    precise float product = weighted * data_c[p.offsets[3] + col];
+    precise float result  = weighted + product;
+    if (has_shift)
+        result += data_e[p.offsets[4] + col];
+    return result;
+}
+void rms_norm(uint num_iters) {
+    const uint ncols     = p.ne[0];
+    const uint nrows     = gl_NumWorkGroups.x;
+    const uint nchannels = p.ne[2];
+    const uint nsamples  = p.ne[3];
+
+    const uint row = gl_WorkGroupID.x;
+    const uint tid = gl_LocalInvocationID.x;
+
+    const uint stride_row     = p.stride[1];
+    const uint stride_channel = p.stride[2];
+    const uint stride_sample  = p.stride[3];
+
+    // grid.y/z are clamped to the device workgroup limit, iterate over the excess channels/samples
+    for (uint samp = gl_WorkGroupID.z; samp < nsamples; samp += gl_NumWorkGroups.z) {
+        for (uint channel = gl_WorkGroupID.y; channel < nchannels; channel += gl_NumWorkGroups.y) {
+            barrier();
+
+            uint a_offset  = samp * stride_sample + channel * stride_channel + row * stride_row + get_aoffset();
+            uint b_offset  = src1_idx(0, row, channel, samp) + get_boffset();
+            uint d_offset  = ((samp * nchannels + channel) * nrows + row) * ncols + get_doffset();
+            FLOAT_TYPE sum = FLOAT_TYPE(0.0f);  // partial sum for thread in warp
+
+            [[unroll]] for (uint col = tid, idx = 0; idx < num_iters; col += BLOCK_SIZE, ++idx) {
+                FLOAT_TYPE xi = FLOAT_TYPE(0);
+                if (col < ncols) {
+                    xi = FLOAT_TYPE(data_a[a_offset + col]);
+                }
+                sum += xi * xi;
+            }
+
+            sumsh[tid] = sum;
+            // sum up partial sums and write back result
+            barrier();
+            [[unroll]] for (int s = BLOCK_SIZE / 2; s > 0; s >>= 1) {
+                if (tid < s) {
+                    sum += sumsh[tid + s];
+                    sumsh[tid] = sum;
+                }
+                barrier();
+            }
+            sum = sumsh[0];
+
+            const FLOAT_TYPE mean  = sum / FLOAT_TYPE(ncols);
+            const FLOAT_TYPE scale = inversesqrt(mean + FLOAT_TYPE(p.eps));
+
+            if (do_multiply) {
+                if (ncols > p.ne10) {
+                    [[unroll]] for (uint col = tid, idx = 0; idx < num_iters; col += BLOCK_SIZE, ++idx) {
+                        if (col >= ncols) {
+                            continue;
+                        }
+                        FLOAT_TYPE value       = scale * FLOAT_TYPE(data_a[a_offset + col]) * FLOAT_TYPE(data_b[b_offset + fastmod(col, p.ne10)]);
+                        data_d[d_offset + col] = modulate(value, col);
+                    }
+                } else {
+                    [[unroll]] for (uint col = tid, idx = 0; idx < num_iters; col += BLOCK_SIZE, ++idx) {
+                        if (col >= ncols) {
+                            continue;
+                        }
+                        FLOAT_TYPE value       = scale * FLOAT_TYPE(data_a[a_offset + col]) * FLOAT_TYPE(data_b[b_offset + col]);
+                        data_d[d_offset + col] = modulate(value, col);
+                    }
+                }
+            } else {
+                [[unroll]] for (uint col = tid, idx = 0; idx < num_iters; col += BLOCK_SIZE, ++idx) {
+                    if (col >= ncols) {
+                        continue;
+                    }
+                    data_d[d_offset + col] = D_TYPE(scale * FLOAT_TYPE(data_a[a_offset + col]));
+                }
+            }
+        }
+    }
+}
+
+void main() {
+    rms_norm(8);
+}
