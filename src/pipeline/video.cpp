@@ -1362,50 +1362,6 @@ namespace sd::pipeline {
         }
     }
 
-    // Per-channel affine transform over the H3 video latent, as applied by the
-    // community learned upscaler around its network. sd::Tensor keeps the channel
-    // axis (shape[3]) as the slowest-varying dimension, so each channel occupies a
-    // contiguous run of numel()/channels values.
-    static sd::Tensor<float> h3_apply_channel_affine(const sd::Tensor<float>& x,
-                                                     const float* scale,
-                                                     const float* bias) {
-        const int64_t c = H3VUpsampler::H3LatentStats::kChannels;
-        if (x.empty() || x.dim() < 4 || x.shape()[3] != c) {
-            // Defensive no-op: the learned runner validates the channel count before this runs.
-            return x;
-        }
-        const int64_t spatial = x.numel() / c;
-        sd::Tensor<float> y   = x;
-        for (int64_t channel = 0; channel < c; ++channel) {
-            const float s = scale[channel];
-            const float b = bias[channel];
-            float* p      = y.data() + channel * spatial;
-            for (int64_t i = 0; i < spatial; ++i) {
-                p[i] = p[i] * s + b;
-            }
-        }
-        return y;
-    }
-
-    static sd::Tensor<float> h3_normalize_video_latent(const sd::Tensor<float>& x) {
-        constexpr int64_t c = H3VUpsampler::H3LatentStats::kChannels;
-        float scale[c];
-        float bias[c];
-        for (int64_t i = 0; i < c; ++i) {
-            const float mean = H3VUpsampler::H3LatentStats::kMean[i];
-            const float std_ = H3VUpsampler::H3LatentStats::kStd[i];
-            scale[i]         = 1.f / std_;
-            bias[i]          = -mean / std_;
-        }
-        return h3_apply_channel_affine(x, scale, bias);
-    }
-
-    static sd::Tensor<float> h3_denormalize_video_latent(const sd::Tensor<float>& x) {
-        return h3_apply_channel_affine(x,
-                                       H3VUpsampler::H3LatentStats::kStd,
-                                       H3VUpsampler::H3LatentStats::kMean);
-    }
-
     // Spatial-only latent upscale that keeps the video time axis untouched, so the
     // packed audio latent length stays valid. Used as the hires second stage for
     // video models that have no latent upsampler checkpoint (currently MiniMax-H3).
@@ -1529,13 +1485,8 @@ namespace sd::pipeline {
                  target_width,
                  target_height);
 
-        sd::Tensor<float> normalized = h3_normalize_video_latent(video_latent);
         if (sd->first_stage_model) {
             sd->first_stage_model->runner_end();
-        }
-        if (normalized.empty()) {
-            LOG_ERROR("H3 latent normalization failed before learned spatial upscale");
-            return {};
         }
 
         auto model_manager = sd->model_manager;
@@ -1596,19 +1547,10 @@ namespace sd::pipeline {
             return {};
         }
 
-        sd::Tensor<float> upscaled = upsampler->compute(sd->n_threads, normalized, target_width, target_height);
+        sd::Tensor<float> upscaled = upsampler->compute(sd->n_threads, video_latent, target_width, target_height);
         upsampler->runner_end();
         if (upscaled.empty()) {
             LOG_ERROR("H3 learned latent spatial upscale failed");
-            return {};
-        }
-
-        upscaled = h3_denormalize_video_latent(upscaled);
-        if (sd->first_stage_model) {
-            sd->first_stage_model->runner_end();
-        }
-        if (upscaled.empty()) {
-            LOG_ERROR("H3 latent denormalization failed after learned spatial upscale");
             return {};
         }
 

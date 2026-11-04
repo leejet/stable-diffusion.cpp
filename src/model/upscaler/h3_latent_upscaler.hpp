@@ -32,8 +32,9 @@
 //        g = out_blocks.N(g, emb)
 //   y = conv_out(silu(norm_out(g)))
 //
-// The per-channel latent (de)normalization of the community model is applied on the
-// host around the two GPU stages, mirroring the LTX flow's un_normalize/normalize.
+// The network uses normalized H3 diffusion latents for both input and output.
+// sd.cpp's sampler already uses this domain, so no additional VAE mean/std
+// conversion is needed around the network.
 // Depthwise temporal convs (kernel (k,1,1)) are shipped as full block-diagonal
 // Conv3d weights by the converter script, so only stock Conv3d ops are required.
 // The middle spatial resample runs on the host between the two GPU graphs; the
@@ -41,25 +42,6 @@
 
 namespace H3VUpsampler {
     constexpr int H3_UPSAMPLER_GRAPH_SIZE = 8192;
-
-    // Per-channel H3 video-latent statistics (24 channels) from the community checkpoint.
-    struct H3LatentStats {
-        static constexpr int kChannels   = 24;
-        static constexpr float kMean[24] = {
-            0.858090341091156f, -0.9606591463088989f, 1.0661640167236328f, -0.5090325474739075f,
-            -0.2727581858634949f, -1.3675414323806763f, -0.2553254961967468f, -0.26907554268836975f,
-            -0.5376840829849243f, -0.0464097298681736f, 0.6657370328903198f, 0.19690127670764923f,
-            -0.5460608005523682f, -0.4035342037677765f, -0.23683024942874908f, 0.25928452610969543f,
-            -0.30133944749832153f, 0.211341992020607f, -1.1206848621368408f, 0.3581933379173279f,
-            -0.04225143790245056f, 0.2604829967021942f, 0.22864092886447906f, 0.7056031823158264f};
-        static constexpr float kStd[24] = {
-            1.2223774194717407f, 1.2767263650894165f, 1.6831774711608887f, 1.7549455165863037f,
-            1.5636216402053833f, 2.194143533706665f, 0.9653137922286987f, 1.0569885969161987f,
-            0.841948926448822f, 0.7729952931404114f, 1.8955937623977661f, 0.946841835975647f,
-            0.7996809482574463f, 0.44988900423049927f, 0.7197399735450745f, 0.6936293244361877f,
-            2.961095094680786f, 2.7694199085235596f, 3.0496184825897217f, 2.1088054180145264f,
-            3.276226282119751f, 3.1627357006073f, 2.2816812992095947f, 2.6127843856811523f};
-    };
 
     struct H3LatentUpscalerConfig {
         int64_t in_channels  = 24;
@@ -543,11 +525,8 @@ namespace H3VUpsampler {
             }
         }
 
-        // x: H3 video latent [W, H, T, C] (or 5D batch 1) in the normalized domain
-        // the checkpoint expects. Returns the upscaled latent at the target spatial
-        // size, still in that domain; the caller applies the per-channel (de)normalization
-        // around this call. The scale-1 embedding input is a graph leaf so both stage
-        // graphs carry it.
+        // x: H3 diffusion latent [W, H, T, C] (or 5D batch 1). The output stays
+        // in the same normalized domain for the next sampling pass.
         sd::Tensor<float> compute(const int n_threads,
                                   const sd::Tensor<float>& x,
                                   int64_t target_w,
