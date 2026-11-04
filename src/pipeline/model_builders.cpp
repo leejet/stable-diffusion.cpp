@@ -110,7 +110,7 @@ namespace sd::model_builders {
         return false;
     }
 
-    bool build_vae_runners(const Context& ctx, const VAEOptions& options, VAERunners& runners) {
+    bool build_vae_runners(const Context& ctx, const VAEOptions& options, VAERunners& runners) try {
         const auto* sd_ctx_params      = &ctx.params;
         const auto& tensor_storage_map = ctx.tensor_storage_map;
         const auto version             = ctx.version;
@@ -247,6 +247,9 @@ namespace sd::model_builders {
         }
         runners = std::move(result);
         return true;
+    } catch (const std::exception& error) {
+        LOG_ERROR("failed to build VAE runners: %s", error.what());
+        return false;
     }
 
     bool build_control_net_runner(const Context& ctx, std::shared_ptr<ControlNet>& runner) {
