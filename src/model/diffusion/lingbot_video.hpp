@@ -231,9 +231,8 @@ namespace LingBotVideo {
             auto down_proj = std::dynamic_pointer_cast<Linear>(blocks["down_proj"]);
 
             auto gate = gate_proj->forward(ctx, x);
-            gate      = ggml_silu_inplace(ctx->ggml_ctx, gate);
             auto up   = up_proj->forward(ctx, x);
-            x         = ggml_mul(ctx->ggml_ctx, gate, up);
+            x         = ggml_swiglu_split(ctx->ggml_ctx, gate, up);
             x         = down_proj->forward(ctx, x);
             return x;
         }
@@ -406,9 +405,8 @@ namespace LingBotVideo {
 
             x         = ggml_reshape_3d(ctx->ggml_ctx, x, hidden_size, 1, n_token_total);
             auto gate = expert_linear(ctx, "experts.w1", x, selected_experts);
-            gate      = ggml_silu_inplace(ctx->ggml_ctx, gate);
             auto up   = expert_linear(ctx, "experts.w3", x, selected_experts);
-            auto act  = ggml_mul(ctx->ggml_ctx, gate, up);
+            auto act  = ggml_swiglu_split(ctx->ggml_ctx, gate, up);
             auto out  = expert_linear(ctx, "experts.w2", act, selected_experts);
             out       = ggml_mul(ctx->ggml_ctx, out, weights);
 
@@ -487,12 +485,12 @@ namespace LingBotVideo {
             auto scale_mlp = mods[4];
             auto gate_mlp  = ggml_tanh(ctx->ggml_ctx, mods[5]);
 
-            auto attn_in  = Flux::modulate(ctx->ggml_ctx, norm1->forward(ctx, x), shift_msa, scale_msa, true);
+            auto attn_in  = Flux::modulate(ctx, norm1->forward(ctx, x), shift_msa, scale_msa, true);
             auto attn_out = attn->forward(ctx, attn_in, pe, attention_mask);
             attn_out      = norm_post_attn->forward(ctx, attn_out);
             x             = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, gate_msa, attn_out));
 
-            auto ffn_in  = Flux::modulate(ctx->ggml_ctx, norm2->forward(ctx, x), shift_mlp, scale_mlp, true);
+            auto ffn_in  = Flux::modulate(ctx, norm2->forward(ctx, x), shift_mlp, scale_mlp, true);
             auto ffn_out = ffn->forward(ctx, ffn_in);
             ffn_out      = norm_post_ffn->forward(ctx, ffn_out);
             x            = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, gate_mlp, ffn_out));
@@ -589,7 +587,7 @@ namespace LingBotVideo {
                                              2,
                                              0);
             hidden_states   = norm_out->forward(ctx, hidden_states);
-            hidden_states   = Flux::modulate(ctx->ggml_ctx, hidden_states, final_mods[0], final_mods[1], true);
+            hidden_states   = Flux::modulate(ctx, hidden_states, final_mods[0], final_mods[1], true);
             hidden_states   = proj_out->forward(ctx, hidden_states);
             hidden_states   = ggml_ext_slice(ctx->ggml_ctx, hidden_states, 1, 0, n_img);
 

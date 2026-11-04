@@ -16,6 +16,7 @@ on:
         ".github/workflows/**",
         ".dockerignore",
         "docker/Dockerfile*",
+        "scripts/ci-cuda-cache.sh",
         "**/CMakeLists.txt",
         "**/Makefile",
         "**/*.h",
@@ -23,6 +24,7 @@ on:
         "**/*.c",
         "**/*.cpp",
         "**/*.cu",
+        "**/*.cuh",
         "ggml",
         "examples/server/frontend",
         "examples/server/frontend/**",
@@ -37,6 +39,7 @@ on:
         ".github/workflows/**",
         ".dockerignore",
         "docker/Dockerfile*",
+        "scripts/ci-cuda-cache.sh",
         "**/CMakeLists.txt",
         "**/Makefile",
         "**/*.h",
@@ -44,6 +47,7 @@ on:
         "**/*.c",
         "**/*.cpp",
         "**/*.cu",
+        "**/*.cuh",
         "ggml",
         "examples/server/frontend",
         "examples/server/frontend/**",
@@ -251,6 +255,7 @@ jobs:
         run: echo "short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
+        id: buildx
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to the container registry
@@ -273,6 +278,21 @@ jobs:
           # if set to "true" but frees about 6 GB
           tool-cache: false
 
+      - name: Cache CUDA compilation
+        if: matrix.variant == 'cuda'
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/cuda-ccache
+          key: cuda-ccache-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('docker/Dockerfile.cuda') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            cuda-ccache-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('docker/Dockerfile.cuda') }}-
+
+      - name: Restore CUDA compiler cache mount
+        if: matrix.variant == 'cuda'
+        env:
+          CUDA_CACHE_BUILDER: ${{ steps.buildx.outputs.name }}
+        run: bash scripts/ci-cuda-cache.sh restore
+
       - name: Build and push Docker image
         id: build-push
         uses: docker/build-push-action@v7
@@ -285,6 +305,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           build-args: ${{ matrix.build-args }}
+
+      - name: Export CUDA compiler cache mount
+        if: matrix.variant == 'cuda'
+        env:
+          CUDA_CACHE_BUILDER: ${{ steps.buildx.outputs.name }}
+        run: bash scripts/ci-cuda-cache.sh save
 
   macOS-latest-cmake:
     runs-on: macos-latest
@@ -363,7 +389,7 @@ jobs:
           - build: "cpu"
             defines: "-DGGML_NATIVE=OFF -DSD_BUILD_SHARED_LIBS=ON -DSD_BUILD_SHARED_GGML_LIB=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON"
           - build: "cuda12"
-            defines: "-DSD_CUDA=ON -DSD_BUILD_SHARED_LIBS=ON -DCMAKE_CUDA_ARCHITECTURES='61;70;75;80;86;89;90;100;120' -DCMAKE_CUDA_FLAGS='-Xcudafe \"--diag_suppress=177\" -Xcudafe \"--diag_suppress=550\"' -DGGML_NATIVE=OFF -DSD_BUILD_SHARED_GGML_LIB=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON"
+            defines: "-DSD_CUDA=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache -DSD_BUILD_SHARED_LIBS=ON -DCMAKE_CUDA_ARCHITECTURES='61;70;75;80;86;89;90;100;120' -DCMAKE_CUDA_FLAGS='-Xcudafe \"--diag_suppress=177\" -Xcudafe \"--diag_suppress=550\"' -DGGML_NATIVE=OFF -DSD_BUILD_SHARED_GGML_LIB=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON"
           - build: "vulkan"
             defines: "-DSD_VULKAN=ON -DSD_BUILD_SHARED_LIBS=ON -DGGML_NATIVE=OFF -DSD_BUILD_SHARED_GGML_LIB=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON"
     steps:
@@ -391,6 +417,15 @@ jobs:
           cuda: "12.8.1"
           method: "network"
           sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "thrust", "visual_studio_integration"]'
+
+      - name: Cache CUDA compilation
+        if: matrix.build == 'cuda12'
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          variant: ccache
+          install: binary
+          key: windows-cuda-12.8.1-x64
+          max-size: "2G"
 
       - name: Install Vulkan SDK
         id: get_vulkan
@@ -440,7 +475,7 @@ jobs:
             throw "Can't find stable-diffusion.dll"
           }
           if ("${{ matrix.build }}" -eq "cuda12") {
-            Copy-Item ggml/src/ggml-cuda/vendors/cutlass/LICENSE.txt (Join-Path (Split-Path -Parent $filePath) 'cutlass.txt')
+            Copy-Item thirdparty/cutlass/LICENSE.txt (Join-Path (Split-Path -Parent $filePath) 'cutlass.txt')
           }
           7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip $filePath .\start-server.sh .\start-server.bat
 
