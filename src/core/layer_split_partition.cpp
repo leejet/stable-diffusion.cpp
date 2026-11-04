@@ -206,7 +206,7 @@ namespace sd {
         for (size_t seg_idx = 0; seg_idx < plan.segments.size(); seg_idx++) {
             ggml_backend_t backend = backend_by_segment[seg_idx];
             const auto& segment    = plan.segments[seg_idx];
-            auto assign_node = [&](int node_index) {
+            auto assign_node       = [&](int node_index) {
                 if (node_index < 0 || node_index >= n_nodes) {
                     return;
                 }
