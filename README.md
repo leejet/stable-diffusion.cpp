@@ -73,6 +73,7 @@ API and command-line option may change frequently.***
     - [Ming-Image Design](./docs/ming_image.md)
     - [PixArt](./docs/pixart.md)
     - [Iris-3B](./docs/iris.md)
+    - [P-H3-Image](./docs/p_h3_image.md)
   - [Image Edit Models](./docs/edit.md)
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
     - [Qwen Image Edit series](./docs/qwen_image_edit.md)
@@ -81,6 +82,7 @@ API and command-line option may change frequently.***
     - [Mage-Flow-Edit](./docs/mage_flow.md#image-editing)
     - [LLaDA-Image Edit](./docs/llada_image.md#image-editing)
     - [Fibo 2.0 Dev / Edit Turbo](./docs/fibo2.md#editing-and-turbo)
+    - [P-H3-Image](./docs/p_h3_image.md#image-editing)
   - Video Models
     - [Wan2.1/Wan2.2](./docs/wan.md)
     - [MiniMax-H3](./docs/minimax_h3.md)

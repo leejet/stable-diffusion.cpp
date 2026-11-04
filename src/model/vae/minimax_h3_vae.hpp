@@ -365,9 +365,12 @@ namespace MiniMaxH3VAE {
         static constexpr int num_layers          = 36;
         static constexpr int num_register_tokens = 4;
         static constexpr int patch_size          = 16;
-        static constexpr int patch_size_t        = 4;
+        // P-H3-Image's decoder turns one latent frame into one image instead of four frames.
+        const bool image;
+        const int patch_size_t;
 
-        Decoder() {
+        explicit Decoder(bool image = false)
+            : image(image), patch_size_t(image ? 1 : 4) {
             blocks["x_embedder"] = std::make_shared<Linear>(24, dim, true);
             for (int i = 0; i < num_layers; ++i) {
                 blocks["transformer_blocks." + std::to_string(i)] =
@@ -389,7 +392,9 @@ namespace MiniMaxH3VAE {
                                                            GGML_TYPE_F32,
                                                            dim,
                                                            num_register_tokens);
-            params["mask_token"]      = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, dim);
+            if (!image) {
+                params["mask_token"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, dim);
+            }
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -443,7 +448,7 @@ namespace MiniMaxH3VAE {
     };
 
     struct MiniMaxH3VideoVAE : public GGMLBlock {
-        MiniMaxH3VideoVAE() {
+        explicit MiniMaxH3VideoVAE(bool image_decoder = false) {
             blocks["encoder"]         = std::make_shared<Encoder>();
             blocks["quant_conv"]      = std::make_shared<Conv3d>(48,
                                                                  48,
@@ -451,7 +456,7 @@ namespace MiniMaxH3VAE {
             blocks["post_quant_conv"] = std::make_shared<Conv3d>(24,
                                                                  24,
                                                                  std::tuple{1, 1, 1});
-            blocks["decoder"]         = std::make_shared<Decoder>();
+            blocks["decoder"]         = std::make_shared<Decoder>(image_decoder);
         }
 
         ggml_tensor* encode(GGMLRunnerContext* ctx,
@@ -483,6 +488,7 @@ namespace MiniMaxH3VAE {
     };
 
     struct MiniMaxH3VideoVAERunner : public VAE {
+        bool image_decoder;
         MiniMaxH3VideoVAE model;
         sd::Tensor<float> pixel_mean;
         sd::Tensor<float> pixel_std;
@@ -490,11 +496,20 @@ namespace MiniMaxH3VAE {
         sd::Tensor<float> latents_std;
         sd::Tensor<float> rope_cache;
 
+        static bool detect_image_decoder(const String2TensorStorage& tensor_storage_map,
+                                         const std::string& prefix) {
+            auto proj_out = tensor_storage_map.find(prefix + ".decoder.proj_out.weight");
+            return proj_out != tensor_storage_map.end() &&
+                   proj_out->second.ne[1] == 3 * Decoder::patch_size * Decoder::patch_size;
+        }
+
         MiniMaxH3VideoVAERunner(ggml_backend_t backend,
                                 const String2TensorStorage& tensor_storage_map,
                                 const std::string& prefix                           = "first_stage_model",
                                 std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : VAE(VERSION_MINIMAX_H3, backend, prefix, weight_manager),
+              image_decoder(detect_image_decoder(tensor_storage_map, prefix)),
+              model(image_decoder),
               pixel_mean({1, 1, 1, 3}, {0.485f, 0.456f, 0.406f}),
               pixel_std({1, 1, 1, 3}, {0.229f, 0.224f, 0.225f}),
               latents_mean({1, 1, 1, 24},
@@ -752,7 +767,10 @@ namespace MiniMaxH3VAE {
             ids.reserve(static_cast<size_t>(width * height * num_frames + 5));
             constexpr float two_pi = 6.28318530717958647692f;
             for (int64_t t = 0; t < num_frames; ++t) {
-                float pt = (2.f * ((t + 0.5f) / num_frames) - 1.f) * two_pi;
+                // The image decoder places its frame where a video clip's first latent frame of
+                // seven would be.
+                float pt = image_decoder ? (2.f * (0.5f / 7.f) - 1.f) * two_pi
+                                         : (2.f * ((t + 0.5f) / num_frames) - 1.f) * two_pi;
                 for (int64_t h = 0; h < height; ++h) {
                     float ph = (2.f * ((h + 0.5f) / height) - 1.f) * two_pi;
                     for (int64_t w = 0; w < width; ++w) {

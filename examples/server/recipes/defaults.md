@@ -73,6 +73,7 @@ For community edit adapters and other optional extensions, these are the base-mo
 | `moss-image-sft` | 3 | 20 | 1024 × 1024 | [Source](https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT)  |
 | `nitrosd-realism` | 1 | 1 | 1024 × 1024 | [Source](https://huggingface.co/ChenDY/NitroFusion)  |
 | `ovis-image` | 5 | 20 | 1024 × 1024 | [Source](https://huggingface.co/ATH-MaaS/Ovis-Image-7B)  |
+| `p-h3-image` | 1 | 8 | 1024 × 1024 | [Source](https://huggingface.co/PrunaAI/P-H3-Image) Guidance-distilled; its fixed 8-step sigma grid is applied on model load. The source recommends 8 MP (default 2912 × 2912); edits work best at 4 or 8 MP. |
 | `pid` | 1 | 4 | 2048 × 2048 | [Source](https://huggingface.co/nvidia/PiD) Standalone PiD decoding at 2K; guidance is handled by the upstream generator. |
 | `pid-15` | 1 | 4 | 2048 × 2048 | [Source](https://huggingface.co/nvidia/PiD) Standalone PiD decoding at 2K; guidance is handled by the upstream generator. |
 | `pid-15-flux2` | 1 | 4 | 2048 × 2048 | [Source](https://huggingface.co/nvidia/PiD) Standalone PiD decoding at 2K; guidance is handled by the upstream generator. |

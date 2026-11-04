@@ -70,6 +70,7 @@ enum SDVersion {
     VERSION_MOSS_IMAGE,
     VERSION_FIBO2,
     VERSION_CHROMA,
+    VERSION_P_H3_IMAGE,
     VERSION_COUNT,
 };
 
@@ -165,8 +166,13 @@ static inline bool sd_version_is_ltxav(SDVersion version) {
     return false;
 }
 
+// P-H3-Image is MiniMax-H3 generating one frame, so it takes every MiniMax-H3 path.
 static inline bool sd_version_is_minimax_h3(SDVersion version) {
-    return version == VERSION_MINIMAX_H3;
+    return version == VERSION_MINIMAX_H3 || version == VERSION_P_H3_IMAGE;
+}
+
+static inline bool sd_version_is_p_h3_image(SDVersion version) {
+    return version == VERSION_P_H3_IMAGE;
 }
 
 static inline bool sd_version_is_wan(SDVersion version) {
@@ -303,7 +309,7 @@ static inline bool sd_version_supports_video_generation(SDVersion version) {
 }
 
 static inline bool sd_version_supports_image_generation(SDVersion version) {
-    return !sd_version_supports_video_generation(version);
+    return !sd_version_supports_video_generation(version) || sd_version_is_p_h3_image(version);
 }
 
 static inline bool sd_version_uses_flux_vae(SDVersion version) {

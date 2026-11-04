@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "p-h3-image",
+  "name": "P-H3-Image",
+  "size_multiple": 32,
+  "description": "Text-to-image, or editing with one to eight reference images; the first is the image to edit. Uses the text encoder with its text connector.",
+  "model_url": "https://huggingface.co/PrunaAI/P-H3-Image",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "P-H3-Image Qwen 3 VL 4B Text Encoder"
+    },
+    {
+      "id": "vae",
+      "required": true,
+      "label": "P-H3-Image VAE"
+    }
+  ],
+  "defaults": {
+    "cfg_scale": 1,
+    "steps": 8,
+    "width": 1024,
+    "height": 1024,
+    "sampling_method": "euler"
+  },
+  "features": [
+    "ref_images"
+  ],
+  "disabled_features": [
+    "img2img",
+    "mask_image"
+  ]
+}

@@ -1407,21 +1407,25 @@ struct MingImageFlowDenoiser : DiscreteFlowDenoiser {
 
 struct H3AVFlowDenoiser : public DiscreteFlowDenoiser {
     int64_t video_channels;
-    float audio_shift;
+    float audio_shift;  // 0 steps the audio on the video's shift
 
     H3AVFlowDenoiser(float shift, float audio_shift, int64_t video_channels)
         : DiscreteFlowDenoiser(shift),
           video_channels(video_channels),
           audio_shift(audio_shift) {
-        GGML_ASSERT(shift > 0.f && audio_shift > 0.f && video_channels > 0);
+        GGML_ASSERT(shift > 0.f && audio_shift >= 0.f && video_channels > 0);
+    }
+
+    float effective_audio_shift() const {
+        return audio_shift > 0.f ? audio_shift : shift;
     }
 
     sd::Tensor<float> process_latent_in(const sd::Tensor<float>& latent) override {
-        return scale_audio(latent, shift / audio_shift);
+        return scale_audio(latent, shift / effective_audio_shift());
     }
 
     sd::Tensor<float> process_latent_out(sd::Tensor<float> latent) override {
-        auto transformed = scale_audio(latent, audio_shift / shift);
+        auto transformed = scale_audio(latent, effective_audio_shift() / shift);
         if (transformed.empty()) {
             return latent;
         }

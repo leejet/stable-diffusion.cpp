@@ -1971,11 +1971,102 @@ struct AnimaConditioner : public Conditioner {
     }
 };
 
+struct PH3ImageTextConnectorConfig {
+    int64_t in_channels  = 5 * 2560;
+    int64_t out_channels = 5120;
+
+    static PH3ImageTextConnectorConfig detect_from_weights(const String2TensorStorage& tensor_storage_map,
+                                                           const std::string& prefix) {
+        PH3ImageTextConnectorConfig config;
+        auto proj = tensor_storage_map.find(prefix + ".proj.weight");
+        if (proj == tensor_storage_map.end()) {
+            return config;
+        }
+        config.in_channels  = proj->second.ne[0];
+        config.out_channels = proj->second.ne[1];
+        LOG_VERBOSE("p_h3_image text connector: in_channels = %" PRId64 ", out_channels = %" PRId64,
+                    config.in_channels,
+                    config.out_channels);
+        return config;
+    }
+};
+
+// P-H3-Image's map from five Qwen3-VL hidden states to the channels MiniMax-H3's transformer
+// reads: standardize, project, destandardize. Ref: diffusers PH3ImageTextConnector.
+struct PH3ImageTextConnector : public GGMLBlock {
+    PH3ImageTextConnectorConfig config;
+
+    explicit PH3ImageTextConnector(const PH3ImageTextConnectorConfig& config)
+        : config(config) {
+        blocks["proj"] = std::make_shared<Linear>(config.in_channels, config.out_channels, false);
+    }
+
+    void init_params(ggml_context* ctx,
+                     const String2TensorStorage& tensor_storage_map = {},
+                     const std::string prefix                       = "") override {
+        SD_UNUSED(tensor_storage_map);
+        SD_UNUSED(prefix);
+        params["input_mean"]     = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, config.in_channels);
+        params["input_std"]      = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, config.in_channels);
+        params["output_mean"]    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, config.out_channels);
+        params["output_std"]     = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, config.out_channels);
+        params["sink_embedding"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, config.out_channels);
+    }
+
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+        auto proj = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
+        x         = ggml_div(ctx->ggml_ctx, ggml_sub(ctx->ggml_ctx, x, params["input_mean"]), params["input_std"]);
+        x         = proj->forward(ctx, x);
+        x         = ggml_add(ctx->ggml_ctx, ggml_mul(ctx->ggml_ctx, x, params["output_std"]), params["output_mean"]);
+        // The first token is an attention sink, conditioned the same for every prompt.
+        auto sink = ggml_reshape_2d(ctx->ggml_ctx, params["sink_embedding"], config.out_channels, 1);
+        if (x->ne[1] == 1) {
+            return sink;
+        }
+        return ggml_concat(ctx->ggml_ctx, sink, ggml_ext_slice(ctx->ggml_ctx, x, 1, 1, x->ne[1]), 1);
+    }
+};
+
+struct PH3ImageTextConnectorRunner : public GGMLRunner {
+    PH3ImageTextConnectorConfig config;
+    PH3ImageTextConnector model;
+
+    PH3ImageTextConnectorRunner(ggml_backend_t backend,
+                                const String2TensorStorage& tensor_storage_map      = {},
+                                const std::string& prefix                           = "",
+                                std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : GGMLRunner(backend, weight_manager),
+          config(PH3ImageTextConnectorConfig::detect_from_weights(tensor_storage_map, prefix)),
+          model(config) {
+        model.init(params_ctx, tensor_storage_map, prefix);
+    }
+
+    std::string get_desc() override {
+        return "p_h3_image_text_connector";
+    }
+
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) {
+        model.get_param_tensors(tensors, prefix);
+    }
+
+    sd::Tensor<float> compute(int n_threads, const sd::Tensor<float>& hidden_states) {
+        auto get_graph = [&]() -> ggml_cgraph* {
+            ggml_cgraph* gf = ggml_new_graph(compute_ctx);
+            auto runner_ctx = get_context();
+            ggml_build_forward_expand(gf, model.forward(&runner_ctx, make_input(hidden_states)));
+            return gf;
+        };
+        return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, true),
+                                               hidden_states.dim());
+    }
+};
+
 struct LLMEmbedder : public Conditioner {
     SDVersion version;
     std::shared_ptr<Tokenizer> tokenizer;
     std::shared_ptr<LLM::LLMRunner> llm;
     std::shared_ptr<T5Runner> byt5;
+    std::shared_ptr<PH3ImageTextConnectorRunner> text_connector;
 
     LLMEmbedder(ggml_backend_t backend,
                 const String2TensorStorage& tensor_storage_map      = {},
@@ -2046,6 +2137,12 @@ struct LLMEmbedder : public Conditioner {
                 tokenizer = std::make_shared<Qwen2Tokenizer>();
             }
         }
+        if (sd_version_is_p_h3_image(version)) {
+            text_connector = std::make_shared<PH3ImageTextConnectorRunner>(backend,
+                                                                           tensor_storage_map,
+                                                                           "text_encoders.llm.text_connector",
+                                                                           weight_manager);
+        }
         if (sd_version_is_hunyuan_video(version)) {
             const std::string byt5_prefix = "text_encoders.t5xxl.transformer";
             for (const auto& [name, _] : tensor_storage_map) {
@@ -2066,6 +2163,9 @@ struct LLMEmbedder : public Conditioner {
         if (byt5) {
             byt5->get_param_tensors(tensors, "text_encoders.t5xxl.transformer");
         }
+        if (text_connector) {
+            text_connector->get_param_tensors(tensors, "text_encoders.llm.text_connector");
+        }
     }
 
     void get_param_tensor_ops(std::map<ggml_tensor*, enum ggml_op>& tensor_ops) override {
@@ -2076,6 +2176,9 @@ struct LLMEmbedder : public Conditioner {
         llm->set_max_graph_vram_bytes(max_vram_bytes);
         if (byt5) {
             byt5->set_max_graph_vram_bytes(max_vram_bytes);
+        }
+        if (text_connector) {
+            text_connector->set_max_graph_vram_bytes(max_vram_bytes);
         }
     }
 
@@ -2140,6 +2243,9 @@ struct LLMEmbedder : public Conditioner {
         }
         if (byt5) {
             byt5->runner_end();
+        }
+        if (text_connector) {
+            text_connector->runner_end();
         }
     }
 
@@ -2459,6 +2565,10 @@ struct LLMEmbedder : public Conditioner {
             prompt_template_encode_start_idx = 0;
             out_layers                       = {50};
             prompt_attn_range                = {0, 0};
+            if (text_connector) {
+                // hidden_states 13, 19, 25, 31 and the final normed one, as the connector was trained on.
+                out_layers = {13, 19, 25, 31, static_cast<int>(llm->config.num_layers) + 1};
+            }
 
             if (llm->enable_vision) {
                 const int patch_size = llm->config.vision.patch_size;
@@ -2469,14 +2579,30 @@ struct LLMEmbedder : public Conditioner {
                     int width  = static_cast<int>(image.shape()[0]);
                     int h_bar  = std::max(factor, static_cast<int>(std::round(static_cast<double>(height) / factor)) * factor);
                     int w_bar  = std::max(factor, static_cast<int>(std::round(static_cast<double>(width) / factor)) * factor);
-                    resize_image_dims(height,
-                                      width,
-                                      h_bar,
-                                      w_bar,
-                                      factor,
-                                      3136,
-                                      12845056,
-                                      RefImageResizeMode::AREA);
+                    if (sd_version_is_p_h3_image(version)) {
+                        // About one megapixel at the image's aspect ratio, as P-H3-Image's vision_pixels;
+                        // a size already on the grid and within 20% of that is kept.
+                        constexpr double vision_pixels = 1000000.0;
+                        double area                    = static_cast<double>(width) * height;
+                        if (width % factor != 0 || height % factor != 0 ||
+                            area < 0.8 * vision_pixels || area > 1.2 * vision_pixels) {
+                            double ratio = static_cast<double>(width) / height;
+                            w_bar        = std::max(factor, static_cast<int>(std::round(std::sqrt(vision_pixels * ratio) / factor)) * factor);
+                            h_bar        = std::max(factor, static_cast<int>(std::round(std::sqrt(vision_pixels / ratio) / factor)) * factor);
+                        } else {
+                            w_bar = width;
+                            h_bar = height;
+                        }
+                    } else {
+                        resize_image_dims(height,
+                                          width,
+                                          h_bar,
+                                          w_bar,
+                                          factor,
+                                          3136,
+                                          12845056,
+                                          RefImageResizeMode::AREA);
+                    }
                     auto resized = sd::ops::interpolate(
                         image,
                         std::vector<int64_t>{w_bar, h_bar, image.shape()[2], image.shape()[3]});
@@ -2562,6 +2688,15 @@ struct LLMEmbedder : public Conditioner {
                             return {};
                         }
                     }
+                }
+            }
+            if (sd_version_is_p_h3_image(version) && !image_embeds.empty()) {
+                // An edit names the image it changes, unless the prompt already does (as the
+                // reference prompt upsampler's edit briefs do).
+                const size_t start = conditioner_params.text.find_first_not_of(" \t\n\r");
+                const auto text    = start == std::string::npos ? std::string() : conditioner_params.text.substr(start);
+                if (!starts_with(text, "Edit <Picture 1>.") && !starts_with(text, "subject_definitions:")) {
+                    prompt += "Edit <Picture 1>. ";
                 }
             }
             prompt += conditioner_params.text;
@@ -3226,6 +3361,12 @@ struct LLMEmbedder : public Conditioner {
                                            version == VERSION_IRIS ? &text_mask : nullptr);
         if (hidden_states.empty()) {
             return {};
+        }
+        if (text_connector) {
+            hidden_states = text_connector->compute(n_threads, hidden_states);
+            if (hidden_states.empty()) {
+                return {};
+            }
         }
         std::vector<sd::Tensor<float>> extra_hidden_states_vec;
         if (sd_version_is_hunyuan_video(version) && byt5) {

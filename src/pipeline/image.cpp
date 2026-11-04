@@ -831,6 +831,75 @@ namespace sd::pipeline {
         return {};
     }
 
+    // P-H3-Image is MiniMax-H3 generating a single frame, so each image of a batch is one run of
+    // the video pipeline; edit images are its reference images.
+    static bool generate_p_h3_image(StableDiffusionGGML* sd,
+                                    const sd_img_gen_params_t* params,
+                                    sd_image_t** images_out,
+                                    int* num_images_out,
+                                    std::vector<nlohmann::json>* infos_out) {
+        if (params->init_image.data != nullptr || params->mask_image.data != nullptr) {
+            LOG_ERROR("P-H3-Image edits the images passed as reference images (--ref-image), not an init image");
+            return false;
+        }
+        if (params->control_image.data != nullptr || params->ip_adapter_image.data != nullptr ||
+            params->pm_params.id_images_count > 0 ||
+            (params->pulid_params.id_embedding_path != nullptr && *params->pulid_params.id_embedding_path) ||
+            params->hires.enabled) {
+            LOG_ERROR("P-H3-Image supports neither control, IP-Adapter, PhotoMaker, PuLID nor hires fix");
+            return false;
+        }
+        const int64_t seed = resolve_seed(params->seed);
+        sd_vid_gen_params_t video;
+        sd_vid_gen_params_init(&video);
+        video.loras             = params->loras;
+        video.lora_count        = params->lora_count;
+        video.prompt            = params->prompt;
+        video.negative_prompt   = params->negative_prompt;
+        video.clip_skip         = params->clip_skip;
+        video.ref_images        = params->ref_images;
+        video.ref_images_count  = params->ref_images_count;
+        video.ref_image_args    = params->ref_image_args;
+        video.width             = params->width;
+        video.height            = params->height;
+        video.sample_params     = params->sample_params;
+        video.video_frames      = 1;
+        video.fps               = 24;
+        video.vae_tiling_params = params->vae_tiling_params;
+        video.cache             = params->cache;
+        video.circular_x        = params->circular_x;
+        video.circular_y        = params->circular_y;
+        video.image_preprocess  = params->image_preprocess;
+
+        std::vector<sd_image_t> images;
+        for (int b = 0; b < params->batch_count; ++b) {
+            if (b > 0 && sd->get_cancel_flag() != SD_CANCEL_RESET) {
+                break;
+            }
+            video.seed         = static_cast<int64_t>((static_cast<uint64_t>(seed) + b) & INT64_MAX);
+            sd_image_t* frames = nullptr;
+            int count          = 0;
+            nlohmann::json info;
+            if (!generate_video(sd, &video, &frames, &count, nullptr, nullptr, &info) || count < 1) {
+                free_sd_images(frames, count);
+                free_sd_images(images.data(), static_cast<int>(images.size()));
+                return false;
+            }
+            images.push_back(frames[0]);
+            for (int i = 1; i < count; ++i) {
+                free(frames[i].data);
+            }
+            free(frames);
+            if (infos_out != nullptr) {
+                infos_out->push_back(std::move(info));
+            }
+        }
+        *images_out = static_cast<sd_image_t*>(malloc(images.size() * sizeof(sd_image_t)));
+        std::copy(images.begin(), images.end(), *images_out);
+        *num_images_out = static_cast<int>(images.size());
+        return true;
+    }
+
     bool generate_image(StableDiffusionGGML* sd,
                         const sd_img_gen_params_t* sd_img_gen_params,
                         sd_image_t** images_out,
@@ -852,6 +921,9 @@ namespace sd::pipeline {
             LOG_ERROR("%s cannot be run with generate_image(); use generate_video() or --mode vid_gen in the CLI",
                       sd_version_name(sd->version));
             return false;
+        }
+        if (sd_version_is_p_h3_image(sd->version)) {
+            return generate_p_h3_image(sd, sd_img_gen_params, images_out, num_images_out, infos_out);
         }
 
         sd->reset_cancel_flag();

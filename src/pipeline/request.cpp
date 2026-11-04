@@ -310,6 +310,11 @@ namespace sd::pipeline {
         if (!img_cfg_was_set) {
             guidance->img_cfg = 1.f;
         }
+        if (sd_version_is_p_h3_image(sd->version) && (guidance->txt_cfg != 1.f || guidance->img_cfg != 1.f)) {
+            LOG_WARN("P-H3-Image is guidance-distilled; ignoring CFG %.2f", guidance->txt_cfg);
+            guidance->txt_cfg = 1.f;
+            guidance->img_cfg = 1.f;
+        }
 
         if (!sd_version_supports_img_cfg(sd->version, has_ref_images)) {
             if (img_cfg_was_set && guidance->img_cfg != 1.f) {
@@ -444,6 +449,14 @@ namespace sd::pipeline {
                     LOG_WARN("total_steps != custom_sigmas_count - 1, set high_noise_sample_steps to %d", high_noise_sample_steps);
                 }
             }
+        } else if (sd_version_is_p_h3_image(sd->version)) {
+            // The checkpoint is distilled to these eight steps; pass custom sigmas for another schedule.
+            sigmas = {1.f, 0.984753f, 0.967905f, 0.951688f, 0.925372f, 0.881923f, 0.810083f, 0.528718f, 0.f};
+            if (sample_steps != 8) {
+                LOG_WARN("P-H3-Image samples its 8-step grid; ignoring %d steps (pass custom sigmas to change it)",
+                         sample_steps);
+            }
+            sample_steps = total_steps = 8;
         } else {
             scheduler          = resolve_scheduler(sd,
                                                    sample_params->scheduler,

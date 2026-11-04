@@ -488,6 +488,19 @@ namespace sd::pipeline {
         return {align32(source_w * scale), align32(source_h * scale)};
     }
 
+    // P-H3-Image keeps each edit image's own size, scaled into 1 to 8 megapixels at its aspect ratio,
+    // with both sides rounded to multiples of 32.
+    static std::pair<int, int> p_h3_image_reference_size(int source_w, int source_h) {
+        constexpr double kMinPixels = 1024.0 * 1024.0;
+        constexpr double kMaxPixels = 8.0 * 1024.0 * 1024.0;
+        double area                 = static_cast<double>(source_w) * source_h;
+        double scale                = std::sqrt(std::clamp(area, kMinPixels, kMaxPixels) / area);
+        auto align32                = [](double value) {
+            return std::max(32, static_cast<int>(std::round(value / 32.0)) * 32);
+        };
+        return {align32(source_w * scale), align32(source_h * scale)};
+    }
+
     static std::optional<ImageGenerationLatents> prepare_video_generation_latents(StableDiffusionGGML* sd,
                                                                                   const sd_vid_gen_params_t* sd_vid_gen_params,
                                                                                   GenerationRequest* request,
@@ -616,7 +629,9 @@ namespace sd::pipeline {
                     int source_w = static_cast<int>(image.shape()[0]);
                     int source_h = static_cast<int>(image.shape()[1]);
                     auto [width, height] =
-                        minimax_h3_reference_size(source_w, source_h, request->width, request->height, ref_image_params.ref_image_size);
+                        sd_version_is_p_h3_image(sd->version)
+                            ? p_h3_image_reference_size(source_w, source_h)
+                            : minimax_h3_reference_size(source_w, source_h, request->width, request->height, ref_image_params.ref_image_size);
                     LOG_INFO("MiniMax-H3 reference image %d: %dx%d -> %dx%d",
                              i + 1,
                              source_w,

@@ -1491,7 +1491,10 @@ bool StableDiffusionGGML::build_denoiser() {
         }
         case H3_AV_FLOW_PRED: {
             LOG_INFO("running in MiniMax H3 AV FLOW mode");
-            denoiser = std::make_shared<H3AVFlowDenoiser>(default_flow_shift, 3.f, get_latent_channel());
+            // P-H3-Image steps its audio rows on the image's schedule (0 follows the video shift).
+            denoiser = std::make_shared<H3AVFlowDenoiser>(default_flow_shift,
+                                                          sd_version_is_p_h3_image(version) ? 0.f : 3.f,
+                                                          get_latent_channel());
             break;
         }
         case MING_IMAGE_FLOW_PRED: {
@@ -2589,14 +2592,15 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                 diffusion_params.extra = LLaDAImageDiffusionExtra{
                     condition.extra_c_crossattns.empty() ? nullptr : &condition.extra_c_crossattns[0]};
             } else if (sd_version_is_minimax_h3(version)) {
-                diffusion_params.extra = MiniMaxH3DiffusionExtra{
+                const float video_shift = std::isfinite(active_flow_shift) ? active_flow_shift : 12.f;
+                diffusion_params.extra  = MiniMaxH3DiffusionExtra{
                     condition.c_token_types.empty() ? nullptr : &condition.c_token_types,
                     condition.c_position_ids.empty() ? nullptr : &condition.c_position_ids,
                     condition.c_ref_audios.empty() ? nullptr : &condition.c_ref_audios,
                     condition.c_reference_blocks.empty() ? nullptr : &condition.c_reference_blocks,
                     audio_length,
-                    std::isfinite(active_flow_shift) ? active_flow_shift : 12.f,
-                    3.f};
+                    video_shift,
+                    sd_version_is_p_h3_image(version) ? video_shift : 3.f};
             } else if (sd_version_is_ltxav(version)) {
                 diffusion_params.extra = LTXAVDiffusionExtra{
                     nullptr,
@@ -2946,7 +2950,9 @@ sd::Tensor<float> StableDiffusionGGML::generate_init_latent(int width,
 
 int StableDiffusionGGML::video_frames_to_latent_frames(int frames) {
     int latent_frames = frames;
-    if (sd_version_is_ltxav(version)) {
+    if (sd_version_is_p_h3_image(version)) {
+        latent_frames = 1;
+    } else if (sd_version_is_ltxav(version)) {
         latent_frames = ((frames - 1) / 8) + 1;
     } else if (sd_version_is_minimax_h3(version)) {
         latent_frames = frames <= 5 ? 2 : ((frames - 5) / 17) * 5 + 2;
@@ -2959,6 +2965,9 @@ int StableDiffusionGGML::video_frames_to_latent_frames(int frames) {
 int StableDiffusionGGML::latent_frames_to_video_frames(int latent_frames) {
     if (latent_frames <= 0) {
         return latent_frames;
+    }
+    if (sd_version_is_p_h3_image(version)) {
+        return 1;
     }
     if (sd_version_is_ltxav(version)) {
         return (latent_frames - 1) * 8 + 1;
@@ -2973,6 +2982,9 @@ int StableDiffusionGGML::latent_frames_to_video_frames(int latent_frames) {
 }
 
 int StableDiffusionGGML::align_video_frames(int frames) {
+    if (sd_version_is_p_h3_image(version)) {
+        return 1;
+    }
     if (sd_version_is_minimax_h3(version)) {
         frames = std::max(frames, 5);
         while (frames % 17 != 5) {

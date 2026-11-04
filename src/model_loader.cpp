@@ -578,6 +578,10 @@ SDVersion ModelLoader::get_sd_version() const {
         }
         if (tensor_storage.name.find("model.diffusion_model.video_patch_proj.weight") != std::string::npos &&
             tensor_storage_map.find("model.diffusion_model.audio_patch_proj.weight") != tensor_storage_map.end()) {
+            // P-H3-Image keeps MiniMax-H3's transformer and adds a text connector to its text encoder.
+            if (tensor_storage_map.find("text_encoders.llm.text_connector.proj.weight") != tensor_storage_map.end()) {
+                return VERSION_P_H3_IMAGE;
+            }
             return VERSION_MINIMAX_H3;
         }
         if (name == "model.diffusion_model.y_embedder.layer_pool.weight" &&

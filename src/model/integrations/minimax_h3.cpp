@@ -40,6 +40,12 @@ const std::vector<ModelDefinition>& minimax_h3_definitions() {
             definition.build                            = build_minimax_h3;
             result.push_back(std::move(definition));
         }
+        {
+            ModelDefinition definition = result.back();
+            definition.version         = VERSION_P_H3_IMAGE;
+            definition.name            = "P-H3-Image";
+            result.push_back(std::move(definition));
+        }
         return result;
     }();
     return definitions;
