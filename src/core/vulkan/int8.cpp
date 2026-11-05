@@ -119,7 +119,7 @@ namespace sd_vulkan_i8 {
         SDW4Operation op;
         if (!device_info(dev, d) || !sd_ggml_w4_describe(dst, &op) || !bounded(d, dst) ||
             sizeof(sd_vulkan_shaders::mul_mat_w4a4_convrot) <= 4 || sizeof(sd_vulkan_shaders::mul_mat_w4a8_convrot) <= 4 ||
-            d.compute.shared_memory < 16384 || d.info.max_push_constants < 16)
+            d.compute.shared_memory < (op.kind == SDW4Kind::W4A8 ? 16452u : 13312u) || d.info.max_push_constants < 16)
             return false;
         for (auto* t : dst->src)
             if (t && (!bounded(d, t) || ggml_nbytes(t) > UINT32_MAX))

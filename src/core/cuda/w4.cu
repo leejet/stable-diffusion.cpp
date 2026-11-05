@@ -4,6 +4,17 @@
 
 namespace SD_CUDA_NAMESPACE {
     namespace sd_w4_cuda {
+        static __device__ __forceinline__ int shuffle_sum(int value, int lane, int width) {
+#if defined(SD_CUDA_VENDOR_HIP)
+            // ROCm LLVM 24 can crash lowering __shfl's wave_shuffle on RDNA2.
+            // These 8/16-lane groups stay within one ds_bpermute half-wave.
+            const int index = (lane & (width - 1)) + (__lane_id() & ~(width - 1));
+            return __builtin_amdgcn_ds_bpermute(index * 4, value);
+#else
+            return cuda_shuffle(value, lane, width);
+#endif
+        }
+
         // Signed byte dots preserve the INT4 grid after the XOR-8 bias correction.
         static __device__ __forceinline__ int dot4(int a, int b, int c) {
 #if defined(SD_CUDA_VENDOR_HIP) && (defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1102__) || defined(__gfx1103__) || defined(__gfx1150__) || defined(__gfx1151__) || defined(__gfx1200__) || defined(__gfx1201__))
@@ -197,11 +208,11 @@ namespace SD_CUDA_NAMESPACE {
             }
 
             int v = my_sum;
-            v += cuda_shuffle(v, (int(threadIdx.x) % 8 + 4) % 8, 8);
-            v += cuda_shuffle(v, (int(threadIdx.x) % 8 + 2) % 8, 8);
-            v += cuda_shuffle(v, (int(threadIdx.x) % 8 + 1) % 8, 8);
-            const int sum0 = cuda_shuffle(v, 0, 16);
-            const int sum1 = cuda_shuffle(v, 8, 16);
+            v += shuffle_sum(v, (int(threadIdx.x) % 8 + 4) % 8, 8);
+            v += shuffle_sum(v, (int(threadIdx.x) % 8 + 2) % 8, 8);
+            v += shuffle_sum(v, (int(threadIdx.x) % 8 + 1) % 8, 8);
+            const int sum0 = shuffle_sum(v, 0, 16);
+            const int sum1 = shuffle_sum(v, 8, 16);
 
             const int accv[2][4] = {
                 {acc0a + acc0b, acc1a + acc1b, acc2a + acc2b, acc3a + acc3b},

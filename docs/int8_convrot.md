@@ -121,13 +121,15 @@ converted to GGUF Q4 blocks at load time.
 Both formats imply convrot rotation even without a `convrot` flag; missing
 `convrot_groupsize` defaults to 256.
 
-Both formats reuse the convrot activation cache and produce F32 outputs with
-optional bias. CPU provides a portable implementation. CUDA/HIP/MUSA use shared
-packed-weight kernels without requiring INT8 BLAS; CUDA and supported AMD targets
-use packed byte-dot instructions, with portable byte arithmetic for other targets.
-Vulkan requires integer dot product support. GPU W4 kernels require the logical
-input width to be divisible by 64; H64 and H256 are supported. Other shapes use
-CPU fallback. HIP W4A8 selects wave64 WMMA by the active compilation target's
+Both formats reuse the convrot activation cache when the input scale is `1` and
+produce F32 outputs with optional bias. CPU provides a portable implementation.
+CUDA/HIP/MUSA use shared packed-weight kernels without requiring INT8 BLAS;
+CUDA and supported AMD targets use packed byte-dot instructions, with portable
+byte arithmetic for other targets. Vulkan requires integer dot product support
+and at least 13312 bytes of shared memory for W4A4 or 16452 bytes for W4A8.
+GPU W4 kernels require the logical input width to be divisible by 64; H64 and
+H256 are supported. Other shapes use CPU fallback. HIP W4A8 selects wave64 WMMA
+by the active compilation target's
 intrinsic support, preferring the GFX12 fragment layout over the GFX11 layout.
 There is no GPU architecture allowlist: newer targets supporting either
 intrinsic automatically use its matching layout. Selection happens per device
