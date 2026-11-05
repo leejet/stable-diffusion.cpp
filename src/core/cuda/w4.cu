@@ -1,6 +1,13 @@
 #include <climits>
 #include "core/ggml_extensions.h"
 #include "runtime.h"
+#ifdef SD_CUDA_W4_CUTLASS
+#include <cstdlib>
+#include <mutex>
+#include <unordered_map>
+#include "i8_gemm.h"
+#include "w4_mma.h"
+#endif
 
 namespace SD_CUDA_NAMESPACE {
     namespace sd_w4_cuda {
@@ -789,7 +796,37 @@ namespace SD_CUDA_NAMESPACE {
                     return false;
             return true;
         }
-        static ggml_status prepare(ggml_backend_t, ggml_tensor* const* nodes, int, void**, size_t* bytes, void*) {
+        struct Plan {
+            bool mma           = false;
+            size_t gemm_offset = 0;
+#ifdef SD_CUDA_W4_CUTLASS
+            SDI8CudaGemmPlan* gemm = nullptr;
+            ~Plan() { sd_cuda_i8_gemm_free(gemm); }
+#endif
+        };
+        static bool use_mma(ggml_backend_t backend, const SDW4Operation& op) {
+#ifdef SD_CUDA_W4_CUTLASS
+            if (!aligned(op.input, 16) || !aligned(op.weight, 16))
+                return false;
+            static const bool disabled = [] { const char* v = std::getenv("GGML_CUDA_W4_FORCE_DP4A"); return v && std::atoi(v); }();
+            if (disabled)
+                return false;
+            static std::mutex mutex;
+            static std::unordered_map<int, bool> devices;
+            const auto device = cuda_device_info(ggml_backend_get_device(backend)).device;
+            std::lock_guard<std::mutex> lock(mutex);
+            auto found = devices.find(device);
+            if (found != devices.end())
+                return found->second;
+            cudaDeviceProp prop  = {};
+            const bool available = cudaGetDeviceProperties(&prop, device) == cudaSuccess && prop.major >= 8;
+            devices.emplace(device, available);
+            return available;
+#else
+            return false;
+#endif
+        }
+        static ggml_status prepare(ggml_backend_t backend, ggml_tensor* const* nodes, int, void** state, size_t* bytes, void*) {
             SDW4Operation op;
             if (!sd_ggml_w4_describe(nodes[0], &op))
                 return GGML_STATUS_FAILED;
@@ -812,7 +849,22 @@ namespace SD_CUDA_NAMESPACE {
                     may_alias |= !input->buffer || (input->buffer == dst->buffer && a < b + size && b < a + ggml_nbytes(dst));
                 }
             }
-            *bytes = ggml_nbytes(dst) * ((op.kind == SDW4Kind::W4A4 ? 1 : 0) + (may_alias ? 1 : 0));
+            auto* plan        = new Plan;
+            plan->mma         = use_mma(backend, op);
+            *state            = plan;
+            size_t gemm_bytes = 0;
+#ifdef SD_CUDA_W4_CUTLASS
+            if (plan->mma && op.kind == SDW4Kind::W4A4) {
+                if (!op.bias && aligned(dst, 16) && aligned(op.weight_scale, 16))
+                    plan->gemm = sd_cuda_i8_gemm_prepare(ggml_backend_get_device(backend), ggml_nrows(dst), dst->ne[0], op.input->ne[0], false, &gemm_bytes, true);
+                plan->mma = plan->gemm != nullptr;
+                if (plan->gemm && gemm_bytes == 0)
+                    gemm_bytes = 256;
+            }
+#endif
+            const size_t tensor_bytes = ggml_nbytes(dst) * ((op.kind == SDW4Kind::W4A4 && !plan->mma ? 1 : 0) + (may_alias ? 1 : 0));
+            plan->gemm_offset         = (tensor_bytes + 255) / 256 * 256;
+            *bytes                    = plan->gemm_offset + gemm_bytes;
             return GGML_STATUS_SUCCESS;
         }
         static bool overlaps(const ggml_tensor* dst, const ggml_tensor* src) {
@@ -821,7 +873,7 @@ namespace SD_CUDA_NAMESPACE {
             const auto a = reinterpret_cast<uintptr_t>(dst->data), b = reinterpret_cast<uintptr_t>(src->data);
             return a <= b ? b - a < ggml_nbytes(dst) : a - b < ggml_nbytes(src);
         }
-        static ggml_status execute(const ggml_ext_execution_context* e, ggml_tensor* const* nodes, int, void*, void*) {
+        static ggml_status execute(const ggml_ext_execution_context* e, ggml_tensor* const* nodes, int, void* state, void*) {
             auto* dst = nodes[0];
             SDW4Operation op;
             ggml_ext_gpu_context context;
@@ -840,7 +892,21 @@ namespace SD_CUDA_NAMESPACE {
             const auto* ws   = static_cast<const float*>(op.weight_scale->data);
             const auto* bias = op.bias ? static_cast<const float*>(op.bias->data) : nullptr;
             const dim3 grid(unsigned((n + 63) / 64), unsigned((rows + 31) / 32)), block(16, 16);
-            if (op.kind == SDW4Kind::W4A4) {
+#ifdef SD_CUDA_W4_CUTLASS
+            auto* plan = static_cast<Plan*>(state);
+            if (plan->mma) {
+                if (plan->gemm) {
+                    auto* workspace = scratch ? reinterpret_cast<char*>(scratch) + plan->gemm_offset : nullptr;
+                    if (sd_cuda_i8_gemm_execute(plan->gemm, reinterpret_cast<const int8_t*>(x), reinterpret_cast<const int8_t*>(w), xs, ws, output, workspace, stream) != GGML_STATUS_SUCCESS)
+                        return GGML_STATUS_FAILED;
+                } else {
+                    const dim3 tiles(unsigned((n + 63) / 64), unsigned((rows + 127) / 128));
+                    sd_w4_mma::w4a8<128, 64, 128><<<tiles, 256, 0, stream>>>(reinterpret_cast<const uint8_t*>(w), reinterpret_cast<const int8_t*>(x), xs, ws,
+                                                                             static_cast<const float*>(op.s_channel->data), static_cast<const uint8_t*>(op.s_rel->data), bias, output, int(rows), int(n), int(k));
+                }
+            } else
+#endif
+                if (op.kind == SDW4Kind::W4A4) {
                 auto* accum = reinterpret_cast<int32_t*>(scratch + (alias ? ggml_nelements(dst) : 0));
                 mul_mat_w4a4_convrot_dp4a<<<grid, block, 0, stream>>>(w, x, accum, uint32_t(n), uint32_t(rows), uint32_t(k / 2));
                 if (cuda_last_error() != cuda_success)
@@ -867,7 +933,7 @@ namespace SD_CUDA_NAMESPACE {
         d.supports             = sd_w4_cuda::supports;
         d.prepare              = sd_w4_cuda::prepare;
         d.execute              = sd_w4_cuda::execute;
-        d.destroy              = [](void*, void*) {};
+        d.destroy              = [](void* state, void*) { delete static_cast<sd_w4_cuda::Plan*>(state); };
         GGML_ASSERT(ggml_ext_register_kernel_ex(device, &d, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
     }
 }

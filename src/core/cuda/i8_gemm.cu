@@ -143,8 +143,9 @@ namespace sd_i8_cutlass {
             dst[i] = src[i / 2 + (i % 2) * (n / 2)];
     }
 
-    template <class Config, bool StreamK>
+    template <class Config, bool StreamK, bool PackedW4 = false>
     struct DenseTypes {
+        using Weight   = std::conditional_t<PackedW4, cutlass::int4b_t, int8_t>;
         using Tile     = typename Config::Tile;
         using Warp     = typename Config::Warp;
         using Swizzle  = std::conditional_t<StreamK, BandedStreamK, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>>;
@@ -161,10 +162,10 @@ namespace sd_i8_cutlass {
             cutlass::layout::RowMajor,
             cutlass::ComplexTransform::kNone,
             16,
-            int8_t,
+            Weight,
             cutlass::layout::ColumnMajor,
             cutlass::ComplexTransform::kNone,
-            16,
+            PackedW4 ? 32 : 16,
             float,
             cutlass::layout::RowMajor,
             4,
@@ -178,11 +179,12 @@ namespace sd_i8_cutlass {
             Epilogue,
             Swizzle,
             4,
-            cutlass::arch::OpMultiplyAddSaturate>::GemmKernel;
+            std::conditional_t<PackedW4, cutlass::arch::OpMultiplyAddMixedInputUpcast, cutlass::arch::OpMultiplyAddSaturate>>::GemmKernel;
         using Gemm = cutlass::gemm::device::GemmUniversalAdapter<Kernel>;
     };
     template <class Config, bool StreamK>
     struct SwigluTypes {
+        using Weight          = int8_t;
         using Tile            = typename Config::Tile;
         using Warp            = typename Config::Warp;
         using Swizzle         = std::conditional_t<StreamK, BandedStreamK, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>>;
@@ -205,6 +207,7 @@ namespace sd_i8_cutlass {
         DeviceInfo device;
         int64_t rows, n, k;
         bool swiglu;
+        bool packed_w4;
         size_t kernel_bytes = 0, scratch_offset = 0;
         int occupancy                                                                                                       = 0;
         ggml_status (*launch)(Plan&, const int8_t*, const int8_t*, const float*, const float*, float*, void*, cudaStream_t) = nullptr;
@@ -213,7 +216,7 @@ namespace sd_i8_cutlass {
     static typename Types::Gemm::Arguments arguments(const Plan& p, const int8_t* x, const int8_t* w, const float* xs, const float* ws, float* out) {
         typename Types::ScaleW::Arguments scales     = {{{}, {xs, 0.f, {}}, {}}, {ws, 0.f, {}}, {}};
         typename Types::Epilogue::Arguments epilogue = {scales, {out, {p.n, cute::_1{}, p.rows * p.n}}};
-        return {cutlass::gemm::GemmUniversalMode::kGemm, {int(p.rows), int(p.n), int(p.k)}, 1, epilogue, x, w, nullptr, nullptr, p.rows * p.k, p.n * p.k, 0, 0, p.k, p.k, 0, 0};
+        return {cutlass::gemm::GemmUniversalMode::kGemm, {int(p.rows), int(p.n), int(p.k)}, 1, epilogue, x, reinterpret_cast<const typename Types::Weight*>(w), nullptr, nullptr, p.rows * p.k, p.n * p.k, 0, 0, p.k, p.k, 0, 0};
     }
     template <class Types>
     static ggml_status launch(Plan& p, const int8_t* x, const int8_t* w, const float* xs, const float* ws, float* out, void* scratch, cudaStream_t stream) {
@@ -272,6 +275,8 @@ namespace sd_i8_cutlass {
     }
     template <class Config>
     static bool configure_tile(Plan& p) {
+        if (p.packed_w4)
+            return configure_kernel<DenseTypes<Config, false, true>>(p);
         if (p.swiglu)
             return p.rows >= 8192 ? configure_kernel<SwigluTypes<Config, true>>(p) : configure_kernel<SwigluTypes<Config, false>>(p);
         return p.rows >= 8192 ? configure_kernel<DenseTypes<Config, true>>(p) : configure_kernel<DenseTypes<Config, false>>(p);
@@ -300,20 +305,21 @@ namespace sd_i8_cutlass {
     }
 }
 struct SDI8CudaGemmPlan : sd_i8_cutlass::Plan {};
-SDI8CudaGemmPlan* sd_cuda_i8_gemm_prepare(ggml_backend_dev_t device, int64_t rows, int64_t n, int64_t k, bool swiglu, size_t* workspace) {
+SDI8CudaGemmPlan* sd_cuda_i8_gemm_prepare(ggml_backend_dev_t device, int64_t rows, int64_t n, int64_t k, bool swiglu, size_t* workspace, bool packed_w4) {
 #ifdef SD_CUDA_FORCE_CUBLAS
     return nullptr;
 #else
     const auto info = sd_i8_cutlass::device_info(device);
-    if (info.major < 8 || rows < (sd_i8_cutlass::small_rows_enabled(rows, n, k) ? 1 : 128) ||
+    if ((packed_w4 && (swiglu || k > INT_MAX / 1024)) || info.major < 8 || rows < (sd_i8_cutlass::small_rows_enabled(rows, n, k) ? 1 : 128) ||
         rows > INT_MAX || n < 1 || n > INT_MAX || k < 1 || k > INT_MAX || k % 64 || n % (swiglu ? 256 : 128))
         return nullptr;
-    auto* p   = new SDI8CudaGemmPlan;
-    p->device = info;
-    p->rows   = rows;
-    p->n      = n;
-    p->k      = k;
-    p->swiglu = swiglu;
+    auto* p      = new SDI8CudaGemmPlan;
+    p->device    = info;
+    p->rows      = rows;
+    p->n         = n;
+    p->k         = k;
+    p->swiglu    = swiglu;
+    p->packed_w4 = packed_w4;
     if (!sd_i8_cutlass::configure(*p)) {
         delete p;
         return nullptr;
