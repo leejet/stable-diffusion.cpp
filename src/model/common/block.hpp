@@ -319,7 +319,7 @@ protected:
             tensor_storage_map.find(prefix + "to_k_ip.weight") != tensor_storage_map.end()) {
             has_ip            = true;
             int64_t inner_dim = d_head * n_head;
-            int64_t ip_dim    = tensor_storage_map.at(prefix + "to_k_ip.weight").ne[0];
+            int64_t ip_dim    = tensor_storage_map.at(prefix + "to_k_ip.weight").logical_ne0();
             blocks["to_k_ip"] = std::shared_ptr<GGMLBlock>(new Linear(ip_dim, inner_dim, false));
             blocks["to_v_ip"] = std::shared_ptr<GGMLBlock>(new Linear(ip_dim, inner_dim, false));
         }

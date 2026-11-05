@@ -104,6 +104,16 @@ and backend `graph_plan_*` interfaces do not dispatch these extensions.
 
 ## Backend services
 
+Packed ComfyUI INT4 linear layers use `sd.linear_w4_convrot.v1`, built by
+`ggml_mul_mat_w4_convrot`. The operator consumes byte-packed I8 weights and the
+explicit output of `sd.quantize_i8_convrot.v1`; F32 callers get a quantization
+node during graph construction. Logical output dimensions are stored in the
+operator attributes, so backend copies of the packed activation do not need to
+retain the producer's op marker. W4A4 uses row scales; W4A8 additionally exposes
+the codebook, channel scales, and FP8 relative scales as tensor dependencies.
+CPU, CUDA/HIP/MUSA, and Vulkan register kernels through the same extension API
+as INT8. No ggml submodule changes are required.
+
 Services are discovered through `ggml_backend_reg_get_proc_address`:
 
 | Service | Purpose |

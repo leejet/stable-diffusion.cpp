@@ -11,7 +11,10 @@
 #include "mul_mat_i8_tensorwise.h"
 #include "mul_mat_i8_tensorwise_cm1.h"
 #include "mul_mat_i8_tensorwise_cm2.h"
+#include "mul_mat_w4a4_convrot.h"
+#include "mul_mat_w4a8_convrot.h"
 #include "quantize_i8_convrot.h"
+#include "quantize_i8_convrot_h64.h"
 #include "quantize_i8_convrot_register.h"
 #include "quantize_i8_convrot_subgroup.h"
 #include "rms_modulate_convrot.h"
@@ -109,6 +112,23 @@ namespace sd_vulkan_i8 {
         const uint64_t cols = op.weight->ne[1], rows = ggml_nrows(dst);
         return op.weight->ne[0] % 256 == 0 && op.weight->ne[0] <= UINT32_MAX && cols <= UINT32_MAX && rows <= UINT32_MAX &&
                (cols + 15) / 16 <= d.info.max_group_count[0] && (rows + 15) / 16 <= d.info.max_group_count[1] &&
+               d.info.max_group_invocations >= 256 && d.info.max_group_size[0] >= 16 && d.info.max_group_size[1] >= 16;
+    }
+    static bool w4_supports(ggml_backend_dev_t dev, const ggml_tensor* dst, void*) {
+        Device d;
+        SDW4Operation op;
+        if (!device_info(dev, d) || !sd_ggml_w4_describe(dst, &op) || !bounded(d, dst) ||
+            sizeof(sd_vulkan_shaders::mul_mat_w4a4_convrot) <= 4 || sizeof(sd_vulkan_shaders::mul_mat_w4a8_convrot) <= 4 ||
+            d.compute.shared_memory < (op.kind == SDW4Kind::W4A8 ? 16452u : 13312u) || d.info.max_push_constants < 16)
+            return false;
+        for (auto* t : dst->src)
+            if (t && (!bounded(d, t) || ggml_nbytes(t) > UINT32_MAX))
+                return false;
+        const uint64_t k = op.input->ne[0], n = dst->ne[0], rows = ggml_nrows(dst);
+        return k % 64 == 0 && k <= UINT32_MAX && n <= UINT32_MAX && rows <= UINT32_MAX &&
+               ggml_nelements(dst) <= UINT32_MAX &&
+               (k * ((rows + 3) / 4 * 4)) % d.info.buffer_alignment == 0 &&
+               (n + 63) / 64 <= d.info.max_group_count[0] && (rows + 31) / 32 <= d.info.max_group_count[1] &&
                d.info.max_group_invocations >= 256 && d.info.max_group_size[0] >= 16 && d.info.max_group_size[1] >= 16;
     }
     static bool can_fuse_sigmoid_convrot(const Device& device, const ggml_cgraph* graph, int i) {
@@ -534,9 +554,12 @@ namespace sd_vulkan_i8 {
             status                     = d.api->dispatch(e->backend, &pipeline, bindings.data(), &pc, groups);
         } else {
             ggml_ext_vulkan_binding bindings[] = {{x}, packed, scales, {up}};
-            auto pipeline                      = SD_VK_PIPELINE(quantize_i8_convrot, 3, QuantParameters);
-            bool subgroup                      = d.subgroup && k >= 1024;
-            uint32_t width                     = k;
+            int group;
+            if (!sd_ggml_convrot_describe(output, &group))
+                return GGML_STATUS_FAILED;
+            auto pipeline  = group == 64 ? SD_VK_PIPELINE(quantize_i8_convrot_h64, 3, QuantParameters) : SD_VK_PIPELINE(quantize_i8_convrot, 3, QuantParameters);
+            bool subgroup  = group == 256 && d.subgroup && k >= 1024;
+            uint32_t width = k;
             if (subgroup) {
                 pipeline = SD_VK_PIPELINE(quantize_i8_convrot_subgroup, 3, QuantParameters);
                 if (!up && ((uint64_t(k) + 2047) / 2048) * 8 <= 64) {
@@ -653,6 +676,42 @@ namespace sd_vulkan_i8 {
         }
         return finish(e, d, output, dst, alias, status);
     }
+    static ggml_status multiply_w4(const ggml_ext_execution_context* e, const Device& d, ggml_tensor* output) {
+        SDW4Operation op;
+        if (!sd_ggml_w4_describe(output, &op))
+            return GGML_STATUS_FAILED;
+        const uint32_t k = uint32_t(op.input->ne[0]), n = uint32_t(output->ne[0]), rows = uint32_t(ggml_nrows(output));
+        const size_t scale_offset                     = size_t(k) * ((uint64_t(rows) + 3) / 4 * 4);
+        const ggml_ext_vulkan_binding xs              = {op.input, nullptr, scale_offset, size_t(rows) * 4};
+        std::vector<ggml_ext_vulkan_binding> bindings = {{op.weight}, {op.input, nullptr, 0, scale_offset}, {op.weight_scale}};
+        if (op.kind == SDW4Kind::W4A8) {
+            bindings.push_back({op.s_channel});
+            bindings.push_back({op.s_rel});
+        }
+        bindings.push_back(xs);
+        bindings.push_back({op.bias ? op.bias : op.weight_scale});
+        ggml_ext_vulkan_binding dst;
+        bool alias;
+        if (!output_binding(e, d, output, bindings, dst, alias))
+            return GGML_STATUS_FAILED;
+        bindings.push_back(dst);
+        struct Parameters {
+            uint32_t n, rows, k, bias;
+        };
+        const Parameters pc     = {n, rows, k, op.bias ? 1u : 0u};
+        auto pipeline           = op.kind == SDW4Kind::W4A4 ? SD_VK_PIPELINE(mul_mat_w4a4_convrot, 6, Parameters) : SD_VK_PIPELINE(mul_mat_w4a8_convrot, 8, Parameters);
+        const uint32_t groups[] = {(n + 63) / 64, (rows + 31) / 32, 1};
+        auto status             = d.api->dispatch(e->backend, &pipeline, bindings.data(), &pc, groups);
+        return finish(e, d, output, dst, alias, status);
+    }
+    static bool quant64_supports(ggml_backend_dev_t dev, const ggml_tensor* n, void*) {
+        Device d;
+        int group;
+        return device_info(dev, d) && sd_ggml_convrot_describe(n, &group) && group == 64 &&
+               bounded(d, n) && bounded(d, n->src[0]) && n->ne[0] <= UINT32_MAX &&
+               ggml_nrows(n->src[0]) <= UINT32_MAX && d.info.max_group_invocations >= 16 && d.info.max_group_size[0] >= 16 &&
+               (uint64_t(n->ne[0]) * ((ggml_nrows(n->src[0]) + 3) / 4 * 4)) % d.info.buffer_alignment == 0;
+    }
     static bool quant_supports(ggml_backend_dev_t dev, const ggml_tensor* n, void*) {
         Device d;
         return device_info(dev, d) && can_quantize(d, n);
@@ -747,6 +806,8 @@ namespace sd_vulkan_i8 {
         Device d;
         if (!device_info(ggml_backend_get_device(e->backend), d))
             return GGML_STATUS_FAILED;
+        if (ggml_ext_op_get(nodes[0]) == sd_ggml_w4_op())
+            return multiply_w4(e, d, nodes[0]);
         return is_convrot(nodes[count - 1]) ? quantize(e, d, nodes, count) : multiply(e, d, nodes, count);
     }
 #undef SD_VK_PIPELINE
@@ -767,6 +828,13 @@ void sd_ggml_register_vulkan_i8(ggml_backend_dev_t device) {
     d.op                   = GGML_OP_CUSTOM;
     d.custom_op            = sd_ggml_convrot_op();
     d.supports             = quant_supports;
+    GGML_ASSERT(ggml_ext_register_kernel(device, &d));
+    d.name     = "sd.quantize_i8_convrot.h64.vulkan.v1";
+    d.supports = quant64_supports;
+    GGML_ASSERT(ggml_ext_register_kernel(device, &d));
+    d.name      = "sd.linear_w4_convrot.vulkan.v1";
+    d.custom_op = sd_ggml_w4_op();
+    d.supports  = w4_supports;
     GGML_ASSERT(ggml_ext_register_kernel(device, &d));
     d.name      = "sd.linear_i8.vulkan.v1";
     d.op        = GGML_OP_CUSTOM;
