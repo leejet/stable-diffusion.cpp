@@ -11,6 +11,7 @@ class ConditioningCache {
     struct Entry {
         ConditionerParams params;
         std::vector<sd::Tensor<float>> ref_images;
+        std::vector<sd::Tensor<float>> text_images;
         std::vector<MiniMaxH3PresentationItem> references;
         SDCondition condition;
 
@@ -24,6 +25,10 @@ class ConditioningCache {
             if (input.minimax_h3_references != nullptr) {
                 references                   = *input.minimax_h3_references;
                 params.minimax_h3_references = &references;
+            }
+            if (input.text_images != nullptr) {
+                text_images        = *input.text_images;
+                params.text_images = &text_images;
             }
         }
 
@@ -49,14 +54,18 @@ class ConditioningCache {
                             r.pass_to_vlm, r.pass_to_dit, r.ref_index_mode,
                             r.force_ref_timestep_zero, r.resize_before_vae, r.vae_input_max_pixels,
                             r.vlm_resize_mode, r.vlm_min_size, r.vlm_max_size, r.resize_vae_to_target,
-                            r.ref_image_size);
+                            r.ref_image_size, r.render_text_images, r.text_render_fonts);
         };
         if (fields(a) != fields(b) ||
             (a.ref_images == nullptr) != (b.ref_images == nullptr) ||
+            (a.text_images == nullptr) != (b.text_images == nullptr) ||
             (a.minimax_h3_references == nullptr) != (b.minimax_h3_references == nullptr)) {
             return false;
         }
         if (a.ref_images != nullptr && !same_images(*a.ref_images, *b.ref_images)) {
+            return false;
+        }
+        if (a.text_images != nullptr && !same_images(*a.text_images, *b.text_images)) {
             return false;
         }
         if (a.minimax_h3_references != nullptr &&
