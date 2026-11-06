@@ -1,0 +1,164 @@
+#version 460
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_NV_cooperative_matrix2 : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_EXT_control_flow_attributes : require
+
+layout(local_size_x = 256) in;
+layout(constant_id = 0) const uint BM = 64;
+layout(constant_id = 1) const uint BN = 64;
+layout(constant_id = 2) const uint BK = 64;
+const uint STRIDE                     = BK / 2 + 4;
+
+layout(push_constant) uniform parameter {
+    uint n;
+    uint rows;
+    uint k;
+    uint has_bias;
+}
+p;
+
+layout(binding = 0, std430) readonly buffer W {
+    uvec2 data_w[];
+};
+layout(binding = 1, std430) readonly buffer A {
+    uvec4 data_a[];
+};
+layout(binding = 2, std430) readonly buffer CB {
+    float data_cb[];
+};
+layout(binding = 3, std430) readonly buffer SC {
+    float data_sc[];
+};
+layout(binding = 4, std430) readonly buffer SR {
+    uint data_sr[];
+};
+layout(binding = 5, std430) readonly buffer AS {
+    float data_as[];
+};
+layout(binding = 6, std430) readonly buffer B {
+    float data_b[];
+};
+layout(binding = 7, std430) writeonly buffer D {
+    int32_t data_d[];
+};
+shared uint lut[256];
+shared int cb[16];
+shared float cb_scale;
+shared float relative[256];
+shared float scales[BK / 16 * BM];
+
+float fp8_e4m3(uint v) {
+    const uint exponent = (v >> 3) & 15u, mantissa = v & 7u;
+    const float value = exponent == 15u && mantissa == 7u ? uintBitsToFloat(0x7fc00000u) : exponent == 0u ? ldexp(float(mantissa), -9)
+                                                                                                          : ldexp(1.0 + float(mantissa) / 8.0, int(exponent) - 7);
+    return (v & 128u) != 0u ? -value : value;
+}
+
+int32_t accumulate_group(const in uint row, const in uint col, const in int32_t value, const in int32_t previous, const in uint group) {
+    return floatBitsToInt(fma(float(value), scales[group * BM + row], intBitsToFloat(previous)));
+}
+
+shared uint weights[BM * STRIDE];
+const uint A_STRIDE = BK / 4 + 4;
+shared uint activations[BN * A_STRIDE];
+
+int32_t dequantize(const in uint row, const in uint col, const in int32_t acc, const in uint row_base, const in uint col_base) {
+    const uint r = row_base + col, c = col_base + row;
+    if (r >= p.rows || c >= p.n) {
+        return 0;
+    }
+    precise float value = intBitsToFloat(acc) * data_as[r];
+    if (p.has_bias != 0) {
+        value += data_b[c];
+    }
+    return floatBitsToInt(value);
+}
+
+void main() {
+    const uint tid  = gl_LocalInvocationIndex;
+    const uint cols = gl_NumWorkGroups.x, rows = gl_NumWorkGroups.y;
+    const uint linear = gl_WorkGroupID.y * cols + gl_WorkGroupID.x;
+    // Reuse weight panels across activation tiles when the output expands.
+    const uint panel      = p.n > p.k ? 16u : cols;
+    const uint first_col  = (linear / (panel * rows)) * panel;
+    const uint group_cols = min(panel, cols - first_col);
+    const uint within     = linear - first_col * rows;
+    const uint col_base = (first_col + within % group_cols) * BM, row_base = (within / group_cols) * BN;
+    tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> d_layout      = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
+    d_layout                                                                 = setTensorLayoutDimensionNV(d_layout, p.rows, p.n);
+    tensorViewNV<2, false, 1, 0> transpose                                   = createTensorViewNV(2, false, 1, 0);
+    coopmat<int32_t, gl_ScopeWorkgroup, BM, BN, gl_MatrixUseAccumulator> sum = coopmat<int32_t, gl_ScopeWorkgroup, BM, BN, gl_MatrixUseAccumulator>(0);
+    if (tid == 0) {
+        float amax = 0.0;
+        for (uint i = 0; i < 16; ++i) {
+            amax = max(amax, abs(data_cb[i]));
+        }
+        cb_scale = amax / 127.0;
+        for (uint i = 0; i < 16; ++i) {
+            cb[i] = cb_scale == 0.0 ? 0 : clamp(int(roundEven(data_cb[i] / cb_scale)), -127, 127);
+        }
+    }
+    relative[tid] = fp8_e4m3(tid);
+    barrier();
+    for (uint i = tid; i < 256; i += 256) {
+        lut[i] = uint(cb[i & 15u] & 255) | (uint(cb[i >> 4] & 255) << 8);
+    }
+    barrier();
+    for (uint base = 0; base < p.k; base += BK) {
+        for (uint i = tid; i < BN * BK / 16; i += 256) {
+            const uint r = i / (BK / 16), t = i % (BK / 16);
+            const uvec4 value       = row_base + r < p.rows ? data_a[(row_base + r) * (p.k / 16) + base / 16 + t] : uvec4(0);
+            const uint offset       = r * A_STRIDE + t * 4;
+            activations[offset]     = value.x;
+            activations[offset + 1] = value.y;
+            activations[offset + 2] = value.z;
+            activations[offset + 3] = value.w;
+        }
+        for (uint i = tid; i < BM * BK / 16; i += 256) {
+            const uint c = i / (BK / 16), part = i % (BK / 16);
+            const uvec2 packed = col_base + c < p.n ? data_w[(col_base + c) * (p.k / 16) + base / 16 + part] : uvec2(0);
+            // Complementary zero halves let adjacent groups reuse one activation fragment.
+            const uint odd         = part % 2;
+            const uint offset      = c * STRIDE + part * 8 + odd * 4;
+            const uint zero_offset = c * STRIDE + part * 8 + (1 - odd) * 4;
+            for (uint j = 0; j < 2; ++j) {
+                const uint v                     = packed[j];
+                weights[offset + 2 * j]          = lut[v & 255u] | (lut[(v >> 8) & 255u] << 16);
+                weights[offset + 2 * j + 1]      = lut[(v >> 16) & 255u] | (lut[v >> 24] << 16);
+                weights[zero_offset + 2 * j]     = 0u;
+                weights[zero_offset + 2 * j + 1] = 0u;
+            }
+        }
+        for (uint i = tid; i < BM * BK / 16; i += 256) {
+            const uint c = i / (BK / 16), g = i % (BK / 16);
+            float scale = 0.0;
+            if (col_base + c < p.n) {
+                const uint packed = data_sr[(col_base + c) * (p.k / 64) + base / 64 + g / 4];
+                scale             = cb_scale * (data_sc[col_base + c] * relative[(packed >> (8 * (g % 4))) & 255u]);
+            }
+            scales[g * BM + c] = scale;
+        }
+        barrier();
+        // The relative scale changes every 16 input values, so each group
+        // needs its own integer MMA and floating-point accumulation. Pad the
+        // weights with zeros to satisfy the device's K=32 matrix granularity.
+        [[unroll]] for (uint g = 0; g < BK / 16; g += 2) {
+            coopmat<int8_t, gl_ScopeWorkgroup, 32, BN, gl_MatrixUseB> a;
+            coopMatLoad(a, activations, g * 4, A_STRIDE, gl_CooperativeMatrixLayoutColumnMajor);
+            [[unroll]] for (uint j = 0; j < 2; ++j) {
+                coopmat<int8_t, gl_ScopeWorkgroup, BM, 32, gl_MatrixUseA> w;
+                coopmat<int32_t, gl_ScopeWorkgroup, BM, BN, gl_MatrixUseAccumulator> part = coopmat<int32_t, gl_ScopeWorkgroup, BM, BN, gl_MatrixUseAccumulator>(0);
+                coopMatLoad(w, weights, (g + j) * 8, STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+                part = coopMatMulAdd(w, a, part);
+                coopMatPerElementNV(sum, part, accumulate_group, sum, g + j);
+            }
+        }
+        barrier();
+    }
+    coopMatPerElementNV(sum, sum, dequantize, row_base, col_base);
+    coopMatStoreTensorNV(sum, data_d, 0, sliceTensorLayoutNV(d_layout, row_base, BN, col_base, BM), transpose);
+}

@@ -133,9 +133,26 @@ Other CUDA shapes and builds retain the packed byte-dot path. Set
 use packed byte-dot instructions, with portable byte arithmetic for other targets.
 Vulkan requires integer dot product support and at least 13312 bytes of shared
 memory for W4A4 or 16452 bytes for W4A8. GPU W4 kernels require the logical input
-width to be divisible by 64; H64 and H256 are supported. Other shapes use CPU
-fallback. HIP W4A8 selects wave64 WMMA by the active compilation target's
-intrinsic support, preferring the GFX12 fragment layout over the GFX11 layout.
+width to be divisible by 64; H64 and H256 are supported. When supported by the
+compiler and device, Vulkan uses NV cooperative matrix integer GEMM. W4A4
+decodes packed weights directly into cooperative matrices for aligned input
+and output widths. Complete activation tiles and the final partial tile use
+separate shader specializations. Other W4A4 shapes use double-buffered weight
+and activation tiles (20480 bytes of shared memory, or 30720 for larger tiles).
+W4A8 stages both weights and activations in shared memory in K=64 tiles,
+reusing them for each 16-value group's integer
+MMA and FP32 scale restoration. FP8 scales use a shared lookup table, and
+expanding projections visit activation tiles in groups of weight panels for
+cache reuse. Adjacent groups share a K=32 activation fragment, with
+complementary zero padding in the weights to preserve each group's scale.
+This path uses 17476 bytes of shared memory, or 22596 for larger tiles.
+Both paths use 256-thread workgroups and keep the model's
+weights packed; neither expands a full layer in device memory. Other Vulkan
+devices retain the packed dot-product path; set `GGML_VK_W4_FORCE_DP4A=1` to compare
+against it. FP32 accumulation order can differ between these paths.
+Other shapes use CPU fallback. HIP W4A8 selects wave64 WMMA by the active
+compilation target's intrinsic support, preferring the GFX12 fragment layout
+over the GFX11 layout.
 There is no GPU architecture allowlist: newer targets supporting either
 intrinsic automatically use its matching layout. Selection happens per device
 image, including multi-architecture builds; targets supporting neither intrinsic

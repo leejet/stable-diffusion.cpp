@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <climits>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 #include "core/ggml_extensions.h"
@@ -12,7 +13,10 @@
 #include "mul_mat_i8_tensorwise_cm1.h"
 #include "mul_mat_i8_tensorwise_cm2.h"
 #include "mul_mat_w4a4_convrot.h"
+#include "mul_mat_w4a4_convrot_cm2.h"
+#include "mul_mat_w4a4_convrot_decode_cm2.h"
 #include "mul_mat_w4a8_convrot.h"
+#include "mul_mat_w4a8_convrot_cm2.h"
 #include "quantize_i8_convrot.h"
 #include "quantize_i8_convrot_h64.h"
 #include "quantize_i8_convrot_register.h"
@@ -23,11 +27,17 @@
 #include "swiglu_quantize_i8_convrot_16384.h"
 
 namespace sd_vulkan_i8 {
+    // Keep these budgets in sync with the cooperative matrix shader tile layouts.
+    static constexpr uint32_t w4a4_shared       = 2 * (64 + 64) * (64 / 4 + 4) * 4;
+    static constexpr uint32_t w4a4_large_shared = 2 * (64 + 128) * (64 / 4 + 4) * 4;
+    static constexpr uint32_t w4a8_shared       = (64 * (64 / 2 + 4) + 64 * (64 / 16) + 64 * (64 / 4 + 4) + 256 + 256 + 16 + 1) * 4;
+    static constexpr uint32_t w4a8_large_shared = (64 * (64 / 2 + 4) + 64 * (64 / 16) + 128 * (64 / 4 + 4) + 256 + 256 + 16 + 1) * 4;
     struct Device {
         const ggml_ext_vulkan_api* api;
         ggml_ext_vulkan_device_info info;
         ggml_ext_vulkan_compute_info compute;
         bool subgroup, cm2, cm2_small;
+        bool w4a4_cm2, w4a8_cm2;
         uint32_t cm_m, cm_n, cm_k;
     };
     static bool device_info(ggml_backend_dev_t dev, Device& d) {
@@ -54,6 +64,10 @@ namespace sd_vulkan_i8 {
             if (prop.flexible && prop.workgroup_scope && prop.invocations == 128 && 128 % prop.m == 0 && 64 % prop.n == 0 && 64 % prop.k == 0 && sizeof(sd_vulkan_shaders::mul_mat_i8_tensorwise_cm2) > 4) {
                 d.cm2 = true;
                 d.cm2_small |= 64 % prop.m == 0 && 32 % prop.n == 0;
+            }
+            if (prop.flexible && prop.workgroup_scope && prop.invocations == 256 && d.info.max_group_size[0] >= 256 && 64 % prop.m == 0 && 64 % prop.n == 0) {
+                d.w4a4_cm2 |= d.compute.shared_memory >= w4a4_shared && 64 % prop.k == 0 && sizeof(sd_vulkan_shaders::mul_mat_w4a4_convrot_cm2) > 4;
+                d.w4a8_cm2 |= d.compute.shared_memory >= w4a8_shared && 32 % prop.k == 0 && sizeof(sd_vulkan_shaders::mul_mat_w4a8_convrot_cm2) > 4;
             }
         }
         return d.info.integer_dot_product && sizeof(sd_vulkan_shaders::mul_mat_i8_tensorwise) > 4;
@@ -698,9 +712,45 @@ namespace sd_vulkan_i8 {
         struct Parameters {
             uint32_t n, rows, k, bias;
         };
-        const Parameters pc     = {n, rows, k, op.bias ? 1u : 0u};
-        auto pipeline           = op.kind == SDW4Kind::W4A4 ? SD_VK_PIPELINE(mul_mat_w4a4_convrot, 6, Parameters) : SD_VK_PIPELINE(mul_mat_w4a8_convrot, 8, Parameters);
-        const uint32_t groups[] = {(n + 63) / 64, (rows + 31) / 32, 1};
+        const Parameters pc = {n, rows, k, op.bias ? 1u : 0u};
+        auto pipeline       = op.kind == SDW4Kind::W4A4 ? SD_VK_PIPELINE(mul_mat_w4a4_convrot, 6, Parameters) : SD_VK_PIPELINE(mul_mat_w4a8_convrot, 8, Parameters);
+        uint32_t tile_cols = 64, tile_rows = 32;
+        const bool large_w4a4  = op.kind == SDW4Kind::W4A4 && rows >= 512 && d.compute.shared_memory >= w4a4_large_shared;
+        const bool large_w4a8  = op.kind == SDW4Kind::W4A8 && rows >= 512 && d.compute.shared_memory >= w4a8_large_shared;
+        const bool decode_w4a4 = op.kind == SDW4Kind::W4A4 && d.w4a4_cm2 && k % 256 == 0 && n % 64 == 0 && rows >= 128 &&
+                                 aligned(op.weight, 16) && sizeof(sd_vulkan_shaders::mul_mat_w4a4_convrot_decode_cm2) > 4;
+        const uint32_t constants[] = {64, large_w4a4 || large_w4a8 ? 128u : 64u, 64};
+        const char* force_dp4a     = std::getenv("GGML_VK_W4_FORCE_DP4A");
+        if (!(force_dp4a && std::atoi(force_dp4a)) && aligned(op.input, 16) &&
+            (op.kind == SDW4Kind::W4A4 ? d.w4a4_cm2 : d.w4a8_cm2 && aligned(op.weight, 8))) {
+            pipeline = op.kind == SDW4Kind::W4A4 ? SD_VK_PIPELINE(mul_mat_w4a4_convrot_cm2, 6, Parameters) : SD_VK_PIPELINE(mul_mat_w4a8_convrot_cm2, 8, Parameters);
+            if (decode_w4a4) {
+                struct DecodeParameters {
+                    uint32_t n, rows, k, bias, row_offset;
+                };
+                DecodeParameters decoded    = {n, rows, k, pc.bias, 0};
+                uint32_t decode_constants[] = {64, 128, 128, 1};
+                pipeline                    = SD_VK_PIPELINE(mul_mat_w4a4_convrot_decode_cm2, 6, DecodeParameters);
+                pipeline.constants          = decode_constants;
+                pipeline.constant_count     = 4;
+                uint32_t groups[]           = {n / 64, rows / 128, 1};
+                auto status                 = d.api->dispatch(e->backend, &pipeline, bindings.data(), &decoded, groups);
+                if (status == GGML_STATUS_SUCCESS && rows % 128) {
+                    // Specialize the tail separately so bounds checks do not inhibit full-tile loads.
+                    decoded.row_offset  = rows / 128 * 128;
+                    decode_constants[1] = rows % 128 <= 64 ? 64 : 128;
+                    decode_constants[3] = 0;
+                    groups[1]           = 1;
+                    status              = d.api->dispatch(e->backend, &pipeline, bindings.data(), &decoded, groups);
+                }
+                return finish(e, d, output, dst, alias, status);
+            }
+            pipeline.constants      = constants;
+            pipeline.constant_count = 3;
+            tile_cols               = constants[0];
+            tile_rows               = constants[1];
+        }
+        const uint32_t groups[] = {(n + tile_cols - 1) / tile_cols, (rows + tile_rows - 1) / tile_rows, 1};
         auto status             = d.api->dispatch(e->backend, &pipeline, bindings.data(), &pc, groups);
         return finish(e, d, output, dst, alias, status);
     }
