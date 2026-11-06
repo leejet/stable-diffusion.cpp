@@ -198,6 +198,7 @@ These projects use `stable-diffusion.cpp` as a backend for their image generatio
 - [Neural-Pixel](https://github.com/Luiz-Alcantara/Neural-Pixel)
 - [KoboldCpp](https://github.com/LostRuins/koboldcpp)
 - [Kokon](https://github.com/GabrieleLozupone/kokon)
+- [Quo](https://github.com/quo-ai/quo)
 
 ## Contributors
 
