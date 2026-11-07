@@ -35,6 +35,7 @@ const char* const modes_str[] = {
     "convert",
     "upscale",
     "metadata",
+    "vid_upscale",
 };
 
 static sd_vae_format_t str_to_vae_format(const std::string& value) {

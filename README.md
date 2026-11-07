@@ -96,6 +96,7 @@ API and command-line option may change frequently.***
   - Latent Consistency Models support (LCM/LCM-LoRA)
   - Faster and memory efficient latent decoding with [TAESD](./docs/taesd.md)
   - Upscale images generated with [ESRGAN](./docs/esrgan.md)
+  - Upscale videos with [RelayVSR](./docs/relay_vsr.md) (experimental, 2x and 4x)
 - Supported backends
   - CPU (AVX, AVX2 and AVX512 support for x86 architectures)
   - CUDA

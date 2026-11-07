@@ -80,6 +80,18 @@ struct SDSolAttentionParams {
     float tau;
 };
 
+struct SDWindowAttentionParams {
+    int32_t width, height, heads, planes;
+    int16_t window_height[4], window_width[4];
+    int32_t preserve_boundary;
+};
+
+ggml_ext_op_t sd_ggml_window_attn_op();
+bool sd_ggml_window_attn_describe(const ggml_tensor* node, SDWindowAttentionParams* params);
+// Contiguous F32 Q [D*heads, W*H], K/V [D*kv_heads, W*H*planes].
+// Returns Q's layout, or nullptr when the backend has no compatible kernel.
+ggml_tensor* sd_ggml_window_attn(ggml_context* ctx, ggml_backend_t backend, ggml_tensor* q, ggml_tensor* k, ggml_tensor* v, const SDWindowAttentionParams& params);
+
 ggml_ext_op_t sd_ggml_sol_attn_op();
 bool sd_ggml_sol_attn_describe(const ggml_tensor* node, SDSolAttentionParams* params);
 // Noncausal Sol-Attn: contiguous F32 Q/K/V [128, tokens, heads, batch], output [128, heads, tokens, batch].
