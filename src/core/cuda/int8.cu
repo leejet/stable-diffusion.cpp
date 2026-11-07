@@ -445,6 +445,13 @@ namespace SD_CUDA_NAMESPACE {
             static const bool disabled = [] { const char* v = std::getenv("GGML_CUDA_DISABLE_FUSION"); return v && std::atoi(v) != 0; }();
             return disabled;
         }
+#ifdef SD_CUDA_I8_CUTLASS
+        static bool cutlass_compatible(const SDI8Operation& op, const ggml_tensor* dst) {
+            return op.weight_scale && !op.bias && op.weight->ne[0] <= INT_MAX / 16384 &&
+                   aligned(op.weight, 16) && aligned(op.weight_scale, 16) && aligned(dst, 16) &&
+                   (op.input->type == GGML_TYPE_F32 || (aligned(op.input, 16) && aligned(op.input_scale, 16)));
+        }
+#endif
         static int match(ggml_backend_dev_t device, const ggml_cgraph* graph, int first, void*) {
             auto* g = const_cast<ggml_cgraph*>(graph);
             if (fusion_disabled() || first + 1 >= ggml_graph_n_nodes(g))
@@ -466,8 +473,21 @@ namespace SD_CUDA_NAMESPACE {
                 const auto* quant = ggml_graph_node(g, first + 2);
                 int group;
                 if (quant->src[0] == next && sd_ggml_convrot_describe(quant, &group) && group == 256 && convrot_supports(device, quant, nullptr) &&
-                    size_t(next->ne[0]) * sizeof(float) + 128 <= cuda_device_info(device).shared_memory)
+                    size_t(next->ne[0]) * sizeof(float) + 128 <= cuda_device_info(device).shared_memory) {
+#ifdef SD_CUDA_I8_CUTLASS
+                    if (!next->data && !next->buffer && !next->view_src && cutlass_compatible(op, next)) {
+                        size_t workspace          = 0;
+                        auto* gemm                = sd_cuda_i8_gemm_prepare(device, ggml_nrows(mat), mat->ne[0], op.weight->ne[0], true, &workspace);
+                        const bool fused_epilogue = gemm != nullptr;
+                        sd_cuda_i8_gemm_free(gemm);
+                        // ConvRot is a separate launch either way. Keep its input in the
+                        // tensor arena so other operations can reuse this large allocation.
+                        if (fused_epilogue)
+                            return 2;
+                    }
+#endif
                     return 3;
+                }
             }
             return 2;
         }
@@ -511,9 +531,7 @@ namespace SD_CUDA_NAMESPACE {
 #ifdef SD_CUDA_I8_CUTLASS
                 size_t gemm_bytes = 0;
                 // Retain cuBLAS when I32 accumulation can overflow.
-                if (op.weight_scale && !op.bias && p->k <= INT_MAX / 16384 &&
-                    aligned(op.weight, 16) && aligned(op.weight_scale, 16) && aligned(dst, 16) &&
-                    (op.input->type == GGML_TYPE_F32 || (aligned(op.input, 16) && aligned(op.input_scale, 16))) &&
+                if (cutlass_compatible(op, dst) &&
                     (p->kind != CONCAT || ggml_nbytes(dst->src[0]) % 16 == 0)) {
                     if (p->kind == SWIGLU || p->kind == SWIGLU_QUANTIZE) {
                         p->gemm        = sd_cuda_i8_gemm_prepare(device, p->rows, p->n, p->k, true, &gemm_bytes);

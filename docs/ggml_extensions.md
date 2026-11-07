@@ -288,9 +288,11 @@ Only interleaved weight scales and any Stream-K workspace remain temporary.
 Plans reserve bounded Stream-K workspace, cache occupancy on first execution,
 and initialize barriers on every launch, so CUDA Graph replay observes updated
 inputs and scales. External consumers retain ordinary execution; overlapping
-outputs use workspace. The CUTLASS SwiGLU/ConvRot chain can write its packed
-output directly after GEMM, because quantization reads only its workspace
-intermediate. Shapes or alignments unsuitable for CUTLASS use cuBLAS.
+outputs use workspace. For fresh outputs, the CUTLASS SwiGLU epilogue writes
+an allocator-managed tensor that the subsequent ConvRot launch consumes. This
+keeps the same GPU launches while allowing its storage to be reused by other
+operations. The combined SwiGLU/ConvRot path retains its workspace intermediate
+for other cases. Shapes or alignments unsuitable for CUTLASS use cuBLAS.
 Custom I8 nodes also retain cuBLAS when the reduction could overflow I32, to
 preserve their previous accumulation behavior. Fusion disable and force-cuBLAS
 settings are honored. No CUTLASS headers are needed for the cuBLAS path.
