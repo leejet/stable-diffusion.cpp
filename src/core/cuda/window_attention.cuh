@@ -253,7 +253,20 @@ static ggml_status window_attention_execute(const ggml_ext_execution_context* ex
 }
 
 void sd_ggml_register_cuda_window_attention(ggml_backend_dev_t device) {
-    if (!cuda_device(device))
+    const auto* info = cuda_device(device);
+    if (!info || info->properties.major < 8)
+        return;
+    int previous;
+    if (cudaGetDevice(&previous) != cudaSuccess || cudaSetDevice(info->ordinal) != cudaSuccess)
+        return;
+    cudaFuncAttributes attributes64{}, attributes128{};
+    const auto error64  = cudaFuncGetAttributes(&attributes64, sd_fattn_cute::window_kernel<64>);
+    const auto error128 = cudaFuncGetAttributes(&attributes128, sd_fattn_cute::window_kernel<128>);
+    const auto restored = cudaSetDevice(previous);
+    // JIT can produce an SM80+ binary from older PTX containing only the trap.
+    if (restored != cudaSuccess || error64 != cudaSuccess || error128 != cudaSuccess ||
+        std::min(attributes64.binaryVersion, attributes64.ptxVersion) < 80 ||
+        std::min(attributes128.binaryVersion, attributes128.ptxVersion) < 80)
         return;
     ggml_ext_kernel_desc desc = {};
     desc.abi_version          = GGML_EXT_ABI_VERSION;
