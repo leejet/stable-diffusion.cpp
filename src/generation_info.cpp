@@ -117,8 +117,12 @@ namespace sd {
         }
         if (p.lora_count > 0) {
             info["loras"] = json::array();
-            for (uint32_t i = 0; i < p.lora_count; ++i)
-                info["loras"].push_back({{"path", text(p.loras[i].path)}, {"multiplier", p.loras[i].multiplier}, {"is_high_noise", p.loras[i].is_high_noise}});
+            for (uint32_t i = 0; i < p.lora_count; ++i) {
+                // Round to 4 decimals in double so float32 representation noise
+                // (e.g. 0.85f -> 0.8500000238418579) does not leak into metadata.
+                const double multiplier = std::round(static_cast<double>(p.loras[i].multiplier) * 1e4) / 1e4;
+                info["loras"].push_back({{"path", text(p.loras[i].path)}, {"multiplier", multiplier}, {"is_high_noise", p.loras[i].is_high_noise}});
+            }
         }
         return info;
     }
