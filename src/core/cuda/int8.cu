@@ -530,8 +530,12 @@ namespace SD_CUDA_NAMESPACE {
             const bool large_rotation = (!mat || (op.input->type == GGML_TYPE_F32 && op.group_size == 256)) && size_t(p->k) * sizeof(float) + 128 > p->device.shared_memory;
             p->partial                = reserve(total, p->group == 64 ? size_t(p->rows) * (p->k / 64) * sizeof(float) : large_rotation ? size_t(p->rows) * (p->k / 256) * sizeof(float)
                                                                                                                                        : 0);
-            p->output                 = reserve(total, p->gemm && p->kind == SWIGLU_QUANTIZE ? 0 : ggml_nbytes(dst));
-            *workspace                = total;
+            // Custom/concat outputs and packed GLU cannot reuse their input storage.
+            const bool fresh_output = !dst->data && !dst->buffer && !dst->view_src &&
+                                      (dst->op == GGML_OP_CUSTOM || dst->op == GGML_OP_CONCAT ||
+                                       (dst->op == GGML_OP_GLU && !dst->src[1]));
+            p->output  = fresh_output || (p->gemm && p->kind == SWIGLU_QUANTIZE) ? SIZE_MAX : reserve(total, ggml_nbytes(dst));
+            *workspace = total;
             return GGML_STATUS_SUCCESS;
         }
         static void destroy(void* state, void*) {
@@ -642,9 +646,10 @@ namespace SD_CUDA_NAMESPACE {
             ggml_ext_gpu_context context;
             if (!cuda_context(execution->backend, &context) || context.device != p.device.device)
                 return GGML_STATUS_FAILED;
-            auto stream   = static_cast<CUDAStream>(context.stream);
-            auto* scratch = static_cast<char*>(ggml_backend_buffer_get_base(execution->workspace));
-            auto* dst     = nodes[count - 1];
+            auto stream     = static_cast<CUDAStream>(context.stream);
+            auto* scratch   = execution->workspace ? static_cast<char*>(ggml_backend_buffer_get_base(execution->workspace)) : nullptr;
+            auto scratch_at = [scratch](size_t offset) { return scratch ? scratch + offset : nullptr; };
+            auto* dst       = nodes[count - 1];
             SDI8Operation op;
             const bool mat = sd_ggml_i8_describe(nodes[0], &op);
             bool alias     = false;
@@ -659,20 +664,22 @@ namespace SD_CUDA_NAMESPACE {
             // CUTLASS quantization epilogues read only the workspace intermediate after GEMM completes.
             if (p.gemm && p.kind == SWIGLU_QUANTIZE)
                 alias = false;
-            void* output    = alias ? scratch + p.output : dst->data;
+            if (alias && p.output == SIZE_MAX)
+                return GGML_STATUS_FAILED;
+            void* output    = alias ? scratch_at(p.output) : dst->data;
             CUDAError error = cuda_success;
             if (!mat) {
                 auto* quant  = static_cast<int8_t*>(output);
                 auto* scales = reinterpret_cast<float*>(quant + p.k * p.padded);
-                error        = convrot_launch(p, stream, static_cast<const float*>(dst->src[0]->data), quant, scales, reinterpret_cast<float*>(scratch + p.partial));
+                error        = convrot_launch(p, stream, static_cast<const float*>(dst->src[0]->data), quant, scales, reinterpret_cast<float*>(scratch_at(p.partial)));
             } else {
-                auto* quant = reinterpret_cast<int8_t*>(scratch + p.quant);
+                auto* quant = reinterpret_cast<int8_t*>(scratch_at(p.quant));
                 const float* scales;
                 if (op.input->type == GGML_TYPE_F32) {
-                    auto* temporary_scales = reinterpret_cast<float*>(scratch + p.scales);
+                    auto* temporary_scales = reinterpret_cast<float*>(scratch_at(p.scales));
                     scales                 = temporary_scales;
                     if (op.group_size)
-                        error = convrot_launch(p, stream, static_cast<const float*>(op.input->data), quant, temporary_scales, reinterpret_cast<float*>(scratch + p.partial));
+                        error = convrot_launch(p, stream, static_cast<const float*>(op.input->data), quant, temporary_scales, reinterpret_cast<float*>(scratch_at(p.partial)));
                     else {
                         if (p.padded > p.rows)
                             error = cuda_memset_async(quant + p.k * p.rows, 0, size_t(p.k) * (p.padded - p.rows), stream);
@@ -696,12 +703,12 @@ namespace SD_CUDA_NAMESPACE {
                 const auto* bias        = op.bias ? static_cast<const float*>(op.bias->data) : nullptr;
                 const size_t prefix     = p.kind == CONCAT ? ggml_nbytes(dst->src[0]) : 0;
                 auto* gemm_output       = reinterpret_cast<float*>(static_cast<char*>(output) + prefix);
-                auto* accum             = reinterpret_cast<int32_t*>(scratch + p.accum);
+                auto* accum             = reinterpret_cast<int32_t*>(scratch_at(p.accum));
                 const bool intermediate = p.kind == SWIGLU_QUANTIZE || (p.kind == SWIGLU && !p.fast_swiglu);
 #ifdef SD_CUDA_I8_CUTLASS
                 if (p.gemm) {
                     auto status = sd_cuda_i8_gemm_execute(p.gemm, quant, static_cast<const int8_t*>(op.weight->data), scales, ws,
-                                                          intermediate ? reinterpret_cast<float*>(accum) : gemm_output, scratch + p.gemm_offset, stream);
+                                                          intermediate ? reinterpret_cast<float*>(accum) : gemm_output, scratch_at(p.gemm_offset), stream);
                     if (status != GGML_STATUS_SUCCESS)
                         return status;
                 } else

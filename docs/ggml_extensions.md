@@ -142,6 +142,12 @@ Workspace is a backend buffer. Its base is a CUDA device pointer on CUDA; caller
 must use the representation appropriate to their backend. Vulkan extensions use
 the command recording services described below.
 
+CUDA INT8 Linear, RoPE, ConvRot, RMS affine and INT8 gated residual kernels omit output
+scratch when allocation guarantees that a fresh owning output cannot overlap
+live inputs. Existing outputs and views retain overlap protection. Internal
+GEMM and quantization workspace is still reserved when required; kernels also
+handle a null workspace when the entire step needs no scratch.
+
 Compute workspace measurement preserves the storage identities and offsets of
 external tensors, including views. Separate allocations must not share a synthetic
 buffer identity: that can invent overlap, overestimate scratch, and repeatedly

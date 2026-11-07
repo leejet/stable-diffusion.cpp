@@ -246,7 +246,7 @@ namespace sd_i8_cutlass {
             if (cudaGetLastError() != cudaSuccess)
                 return GGML_STATUS_FAILED;
         }
-        if (params.init_workspace(static_cast<char*>(scratch) + p.scratch_offset, stream) != cutlass::Status::kSuccess)
+        if (params.init_workspace(scratch ? static_cast<char*>(scratch) + p.scratch_offset : nullptr, stream) != cutlass::Status::kSuccess)
             return GGML_STATUS_FAILED;
         cutlass::arch::synclog_setup();
         cutlass::Kernel2<Kernel><<<params.get_grid_dims(), Kernel::kThreadCount, sizeof(typename Kernel::SharedStorage), stream>>>(params);
