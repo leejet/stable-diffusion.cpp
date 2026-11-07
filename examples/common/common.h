@@ -227,6 +227,7 @@ struct SDGenerationParams {
     std::string end_image_path;
     std::string mask_image_path;
     std::string control_image_path;
+    std::string control_type;
     std::string ip_adapter_image_path;
     std::vector<std::string> ref_image_paths;
     std::vector<std::string> ref_video_paths;
@@ -291,6 +292,7 @@ struct SDGenerationParams {
     std::string prompt_with_lora;  // for metadata record only
     std::vector<sd_lora_t> lora_vec;
     sd_hires_upscaler_t resolved_hires_upscaler;
+    sd_control_type_t resolved_control_type = SD_CONTROL_TYPE_NONE;
 
     // Owned execution payload.
     SDImageOwner init_image;

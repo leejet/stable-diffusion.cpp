@@ -936,6 +936,7 @@ LTX and Wan preserve causal state between temporal tiles. Hunyuan Video and TAEH
 | `ref_image_args` | `string` |
 | `increase_ref_index` | `boolean` |
 | `control_strength` | `number` |
+| `control_type` | `string` |
 | `ip_adapter_strength` | `number` |
 | `hires` | `object` |
 | `hires.enabled` | `boolean` |
@@ -1116,6 +1117,7 @@ Example:
   "ref_image_args": "",
   "increase_ref_index": false,
   "control_strength": 0.9,
+  "control_type": "",
   "ip_adapter_strength": 1.0,
   "embed_image_metadata": true,
 
@@ -1241,6 +1243,7 @@ Top-level scalar fields:
 | `image_preprocess` | `string \| array<string>` |
 | `increase_ref_index` | `boolean` |
 | `control_strength` | `number` |
+| `control_type` | `string` |
 | `ip_adapter_strength` | `number` |
 | `embed_image_metadata` | `boolean` |
 | `preview` | `string` |

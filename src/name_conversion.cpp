@@ -1840,6 +1840,15 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
         if (sd_version_is_sdxl(version) && is_diffusers_controlnet_name(name)) {
             name = convert_diffusers_controlnet_to_original_sdxl(name);
         }
+        // controlnet union fusion: nn.MultiheadAttention has in_proj_weight/in_proj_bias,
+        // MultiheadAttention here has in_proj.weight/in_proj.bias
+        if (starts_with(name, "transformer_layes.")) {
+            const std::string from = "attn.in_proj_";
+            size_t pos             = name.find(from);
+            if (pos != std::string::npos) {
+                name.replace(pos, from.size(), "attn.in_proj.");
+            }
+        }
     }
 
     static const std::vector<std::pair<std::string, std::string>> generic_name_map = {

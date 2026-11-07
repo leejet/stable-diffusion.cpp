@@ -400,6 +400,19 @@ enum sd_hires_upscaler_t {
     SD_HIRES_UPSCALER_COUNT,
 };
 
+enum sd_control_type_t {
+    SD_CONTROL_TYPE_NONE,
+    SD_CONTROL_TYPE_OPENPOSE,
+    SD_CONTROL_TYPE_DEPTH,
+    SD_CONTROL_TYPE_SCRIBBLE,  // thick lines: scribble, hed, softedge, ted
+    SD_CONTROL_TYPE_CANNY,     // thin lines: canny, lineart, anime lineart, mlsd
+    SD_CONTROL_TYPE_NORMAL,
+    SD_CONTROL_TYPE_SEGMENT,
+    SD_CONTROL_TYPE_TILE,
+    SD_CONTROL_TYPE_REPAINT,  // inpaint, outpaint
+    SD_CONTROL_TYPE_COUNT,
+};
+
 typedef struct {
     bool enabled;
     enum sd_hires_upscaler_t upscaler;
@@ -444,6 +457,7 @@ typedef struct {
     bool circular_x;
     bool circular_y;
     sd_image_preprocess_params_t image_preprocess;
+    enum sd_control_type_t control_type;
 } sd_img_gen_params_t;
 
 typedef struct {
@@ -531,6 +545,10 @@ SD_API const char* sd_lora_apply_mode_name(enum lora_apply_mode_t mode);
 SD_API enum lora_apply_mode_t str_to_lora_apply_mode(const char* str);
 SD_API const char* sd_hires_upscaler_name(enum sd_hires_upscaler_t upscaler);
 SD_API enum sd_hires_upscaler_t str_to_sd_hires_upscaler(const char* str);
+SD_API const char* sd_control_type_name(enum sd_control_type_t control_type);
+// Also accepts the names of the kinds a type stands for (hed, lineart, mlsd, ...);
+// returns SD_CONTROL_TYPE_COUNT when the name is unknown.
+SD_API enum sd_control_type_t str_to_sd_control_type(const char* str);
 
 SD_API void sd_cache_params_init(sd_cache_params_t* cache_params);
 SD_API void sd_hires_params_init(sd_hires_params_t* hires_params);
