@@ -120,7 +120,13 @@ namespace sd {
             for (uint32_t i = 0; i < p.lora_count; ++i) {
                 // Round to 4 decimals in double so float32 representation noise
                 // (e.g. 0.85f -> 0.8500000238418579) does not leak into metadata.
-                const double multiplier = std::round(static_cast<double>(p.loras[i].multiplier) * 1e4) / 1e4;
+                // A nonzero multiplier that would round to zero keeps its
+                // original value so a native-record replay preserves the weight.
+                const double raw  = static_cast<double>(p.loras[i].multiplier);
+                double multiplier = std::round(raw * 1e4) / 1e4;
+                if (multiplier == 0.0 && raw != 0.0) {
+                    multiplier = raw;
+                }
                 info["loras"].push_back({{"path", text(p.loras[i].path)}, {"multiplier", multiplier}, {"is_high_noise", p.loras[i].is_high_noise}});
             }
         }
