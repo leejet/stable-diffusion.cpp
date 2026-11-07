@@ -218,6 +218,10 @@ ConvRot output fusion. These kernels use only the public extension API, borrowed
 CUDA stream, and scheduler-owned workspace; they do not use ggml's CUDA pool or
 private conversion helpers. The existing CUDA fusion and CuTe disable environment
 variables are honored.
+Aligned contiguous FP16 K/V inputs are read directly without reserving conversion
+buffers. Fresh F32 outputs are written by the attention epilogue, retaining the
+original FP16 rounding before output scaling. Packed ConvRot and preallocated or
+view outputs retain the intermediate half buffer.
 
 `src/core/cuda/i8_projection.cu` supplies the INT8 GEMM projection epilogues:
 `GEMM -> Reshape -> RMSNorm -> Mul -> RoPE`, optional scaling and FP16 copy,
