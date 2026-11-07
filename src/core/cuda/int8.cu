@@ -552,6 +552,99 @@ namespace SD_CUDA_NAMESPACE {
             const auto x = reinterpret_cast<uintptr_t>(a->data), y = reinterpret_cast<uintptr_t>(b->data);
             return x <= y ? y - x < ggml_nbytes(a) : x - y < ggml_nbytes(b);
         }
+#ifdef SD_CUDA_I8_CUTLASS
+        static bool split_describe(ggml_backend_dev_t device, ggml_tensor* const* nodes, SDI8Operation& gate, SDI8Operation& up) {
+            const auto* glu = nodes[2];
+            if (glu->op != GGML_OP_GLU || ggml_get_glu_op(glu) != GGML_GLU_OP_SWIGLU || glu->op_params[1] != 0 ||
+                !glu->src[0] || !glu->src[1] || glu->src[0] == glu->src[1] || glu->view_src ||
+                glu->type != GGML_TYPE_F32 || !ggml_is_contiguous(glu) || !aligned(glu, 16) ||
+                !((nodes[0] == glu->src[0] && nodes[1] == glu->src[1]) || (nodes[1] == glu->src[0] && nodes[0] == glu->src[1])))
+                return false;
+            for (const auto* mat : {glu->src[0], glu->src[1]})
+                if (mat->view_src || !supports(device, mat, nullptr) || !ggml_are_same_shape(mat, glu))
+                    return false;
+            if (!sd_ggml_i8_describe(glu->src[0], &gate) || !sd_ggml_i8_describe(glu->src[1], &up) ||
+                gate.input != up.input || gate.input_scale != up.input_scale || gate.packed != up.packed ||
+                gate.input->type != GGML_TYPE_I8 || gate.bias || up.bias || !gate.weight_scale || !up.weight_scale ||
+                !ggml_are_same_shape(gate.weight, up.weight))
+                return false;
+            for (const auto* t : {gate.input, gate.input_scale, gate.weight, up.weight, gate.weight_scale, up.weight_scale})
+                if (!aligned(t, 16))
+                    return false;
+            return true;
+        }
+        static int split_match(ggml_backend_dev_t device, const ggml_cgraph* graph, int first, void*) {
+            auto* g = const_cast<ggml_cgraph*>(graph);
+            if (fusion_disabled() || first + 2 >= ggml_graph_n_nodes(g))
+                return 0;
+            ggml_tensor* nodes[] = {ggml_graph_node(g, first), ggml_graph_node(g, first + 1), ggml_graph_node(g, first + 2)};
+            SDI8Operation gate, up;
+            if (!split_describe(device, nodes, gate, up))
+                return 0;
+            size_t workspace     = 0;
+            auto* gemm           = sd_cuda_i8_gemm_prepare_split(device, ggml_nrows(nodes[2]), nodes[2]->ne[0], gate.weight->ne[0], &workspace);
+            const bool supported = gemm != nullptr;
+            sd_cuda_i8_gemm_free(gemm);
+            return supported ? 3 : 0;
+        }
+        struct SplitPlan {
+            SDI8CudaGemmPlan* gemm = nullptr;
+            size_t output          = SIZE_MAX;
+            int device;
+        };
+        static ggml_status split_prepare(ggml_backend_t backend, ggml_tensor* const* nodes, int count, void** state, size_t* workspace, void*) {
+            auto* p     = new SplitPlan;
+            *state      = p;
+            auto device = ggml_backend_get_device(backend);
+            p->device   = cuda_device_info(device).device;
+            SDI8Operation gate, up;
+            if (count != 3 || !split_describe(device, nodes, gate, up))
+                return GGML_STATUS_FAILED;
+            auto* dst    = nodes[2];
+            size_t bytes = 0;
+            p->gemm      = sd_cuda_i8_gemm_prepare_split(device, ggml_nrows(dst), dst->ne[0], gate.weight->ne[0], &bytes);
+            if (!p->gemm)
+                return GGML_STATUS_FAILED;
+            size_t total = (bytes + 255) / 256 * 256;
+            if (dst->data || dst->buffer || dst->view_src)
+                p->output = reserve(total, ggml_nbytes(dst));
+            *workspace = total;
+            return GGML_STATUS_SUCCESS;
+        }
+        static void split_destroy(void* state, void*) {
+            auto* p = static_cast<SplitPlan*>(state);
+            if (p)
+                sd_cuda_i8_gemm_free(p->gemm);
+            delete p;
+        }
+        static ggml_status split_execute(const ggml_ext_execution_context* execution, ggml_tensor* const* nodes, int, void* state, void*) {
+            auto& p   = *static_cast<SplitPlan*>(state);
+            auto* dst = nodes[2];
+            SDI8Operation gate, up;
+            if (!sd_ggml_i8_describe(dst->src[0], &gate) || !sd_ggml_i8_describe(dst->src[1], &up))
+                return GGML_STATUS_FAILED;
+            ggml_ext_gpu_context context;
+            if (!cuda_context(execution->backend, &context) || context.device != p.device)
+                return GGML_STATUS_FAILED;
+            auto stream   = static_cast<CUDAStream>(context.stream);
+            auto* scratch = static_cast<char*>(ggml_backend_buffer_get_base(execution->workspace));
+            bool alias    = false;
+            for (const auto* t : {gate.input, gate.input_scale, gate.weight, up.weight, gate.weight_scale, up.weight_scale})
+                alias |= overlaps(dst, t);
+            if (alias && p.output == SIZE_MAX)
+                return GGML_STATUS_FAILED;
+            auto* output         = alias ? reinterpret_cast<float*>(scratch + p.output) : static_cast<float*>(dst->data);
+            const auto* input    = static_cast<const int8_t*>(gate.input->data);
+            const int64_t padded = (ggml_nrows(dst) + 3) / 4 * 4;
+            const auto* scales   = gate.packed ? reinterpret_cast<const float*>(input + gate.weight->ne[0] * padded) : static_cast<const float*>(gate.input_scale->data);
+            auto status          = sd_cuda_i8_gemm_execute_split(p.gemm, input, static_cast<const int8_t*>(gate.weight->data), static_cast<const int8_t*>(up.weight->data),
+                                                                 scales, static_cast<const float*>(gate.weight_scale->data), static_cast<const float*>(up.weight_scale->data),
+                                                                 output, scratch, stream);
+            if (status != GGML_STATUS_SUCCESS || (alias && cuda_copy_async(dst->data, output, ggml_nbytes(dst), stream) != cuda_success))
+                return GGML_STATUS_FAILED;
+            return GGML_STATUS_SUCCESS;
+        }
+#endif
         static CUDAError convrot_launch(const Plan& p, CUDAStream stream, const float* src, int8_t* dst, float* scales, float* partial) {
             if (p.padded > p.rows) {
                 auto error = cuda_memset_async(dst + p.k * p.rows, 0, size_t(p.k) * (p.padded - p.rows), stream);
@@ -801,6 +894,17 @@ namespace SD_CUDA_NAMESPACE {
         desc.custom_op = sd_ggml_convrot_op();
         desc.supports  = sd_i8_cuda::convrot_supports;
         GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
+#ifdef SD_CUDA_I8_CUTLASS
+        desc.name      = "sd.linear_i8.swiglu_split.cuda.v1";
+        desc.custom_op = sd_ggml_i8_op();
+        desc.priority  = 260;
+        desc.supports  = nullptr;
+        desc.match     = sd_i8_cuda::split_match;
+        desc.prepare   = sd_i8_cuda::split_prepare;
+        desc.execute   = sd_i8_cuda::split_execute;
+        desc.destroy   = sd_i8_cuda::split_destroy;
+        GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
+#endif
     }
 
 }

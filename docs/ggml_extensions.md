@@ -278,6 +278,13 @@ small-row policy, Stream-K scheduling, Ada column bands, and separate scaling
 order. The same extension matches `GEMM -> SwiGLU [-> ConvRot]` and row
 concatenation for custom GEMM nodes. Weight scales remain explicit
 inputs, including the gate/up scale permutation recorded on every SwiGLU launch.
+Two independent INT8 GEMMs sharing a quantized input can also fuse with split
+SwiGLU. A paired-column iterator reads the separate gate/up weight allocations,
+and the GEMM epilogue writes only the activated output. Both intermediate
+activations are omitted through the generic fusion allocation interface; weights
+are neither copied nor concatenated. This path requires bias-free branches,
+compatible layouts and alignments, and no external intermediate consumers.
+Only interleaved weight scales and any Stream-K workspace remain temporary.
 Plans reserve bounded Stream-K workspace, cache occupancy on first execution,
 and initialize barriers on every launch, so CUDA Graph replay observes updated
 inputs and scales. External consumers retain ordinary execution; overlapping
