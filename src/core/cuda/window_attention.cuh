@@ -75,6 +75,7 @@ namespace sd_fattn_cute {
 
     template <int D>
     __global__ __launch_bounds__(128) void window_kernel(const cutlass::half_t* q, const cutlass::half_t* k, const cutlass::half_t* v, float* output, SDWindowAttentionParams p, int kv_heads) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
         constexpr int BM = 64, BN = 64, TW = 8;
         using T       = Traits<BM, BN, D>;
         using Element = typename T::Element;
@@ -171,6 +172,10 @@ namespace sd_fattn_cute {
             if (token >= 0)
                 output[(int64_t(token) * p.heads + head) * D + get<1>(output_id(i))] = acc_o(i);
         }
+#else
+        // This translation unit also targets older GPUs; runtime dispatch excludes this kernel there.
+        asm volatile("trap;");
+#endif
     }
 }
 
