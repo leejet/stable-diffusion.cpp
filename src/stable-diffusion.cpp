@@ -279,6 +279,9 @@ const char* control_type_to_str[] = {
     "repaint",
 };
 
+static_assert(SD_CONTROL_TYPE_COUNT == sizeof(control_type_to_str) / sizeof(control_type_to_str[0]),
+              "\nnumber of elements in control_type_to_str[] != SD_CONTROL_TYPE_COUNT");
+
 const char* sd_control_type_name(enum sd_control_type_t control_type) {
     if (control_type >= SD_CONTROL_TYPE_NONE && control_type < SD_CONTROL_TYPE_COUNT) {
         return control_type_to_str[control_type];

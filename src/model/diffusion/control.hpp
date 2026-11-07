@@ -32,7 +32,7 @@ struct ControlNetUnionConfig {
             return config;
         }
         // control_add_embedding takes CONTROL_TYPE_EMBED_DIM inputs per control type
-        config.num_control_types = static_cast<int>(embedding->second.ne[0] / CONTROL_TYPE_EMBED_DIM);
+        config.num_control_types = static_cast<int>(embedding->second.logical_ne0() / CONTROL_TYPE_EMBED_DIM);
         while (tensor_storage_map.find(p + "transformer_layes." + std::to_string(config.num_fusion_layers) + ".ln_1.weight") != tensor_storage_map.end()) {
             config.num_fusion_layers++;
         }
@@ -474,7 +474,7 @@ struct ControlNet : public GGMLRunner {
         }
         // the types of a union model, in training order: the enum without NONE
         const int index = static_cast<int>(type) - 1;
-        if (index >= config.num_control_types) {
+        if (index < 0 || index >= config.num_control_types) {
             LOG_ERROR("control type '%s' is not supported by this ControlNet Union (it has %d control types)",
                       sd_control_type_name(type), config.num_control_types);
             return false;
@@ -545,7 +545,7 @@ struct ControlNet : public GGMLRunner {
 
         ggml_tensor* control_types = nullptr;
         if (is_union()) {
-            const int64_t batch = x_tensor.shape()[3];
+            const int64_t batch = x_tensor.dim() >= 4 ? x_tensor.shape()[3] : 1;
             control_type_tensor = sd::zeros<float>({config.num_control_types * batch});
             for (int64_t i = 0; i < batch; i++) {
                 control_type_tensor[i * config.num_control_types + control_type_index] = 1.f;
