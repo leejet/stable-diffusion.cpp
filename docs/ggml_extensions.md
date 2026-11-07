@@ -142,6 +142,11 @@ Workspace is a backend buffer. Its base is a CUDA device pointer on CUDA; caller
 must use the representation appropriate to their backend. Vulkan extensions use
 the command recording services described below.
 
+Compute workspace measurement preserves the storage identities and offsets of
+external tensors, including views. Separate allocations must not share a synthetic
+buffer identity: that can invent overlap, overestimate scratch, and repeatedly
+rebuild a workspace whose actual allocation is smaller than the estimate.
+
 ## sd.cpp integration
 
 `src/core/ggml_extensions.cpp` and `.h` contain the shared operator schemas,
