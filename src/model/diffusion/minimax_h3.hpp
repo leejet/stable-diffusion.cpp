@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
+#include <functional>
 #include <set>
 #include <string>
 #include <tuple>
@@ -243,8 +244,68 @@ namespace MiniMaxH3 {
             blocks["out_proj"] = std::make_shared<Linear>(inner, hidden_size, false);
         }
 
-        ggml_tensor* project_qkv(GGMLRunnerContext* ctx, ggml_tensor* x) {
-            return std::dynamic_pointer_cast<Linear>(blocks["qkv_proj"])->forward(ctx, x);
+        std::vector<ggml_tensor*> split_qkv(GGMLRunnerContext* ctx, ggml_tensor* projected) {
+            std::vector<ggml_tensor*> result;
+            for (int i = 0; i < 3; ++i) {
+                result.push_back(ggml_view_4d(ctx->ggml_ctx, projected, head_dim, heads,
+                                              projected->ne[1], projected->ne[2] * projected->ne[3],
+                                              head_dim * projected->nb[0], projected->nb[1], projected->nb[2],
+                                              i * heads * head_dim * projected->nb[0]));
+            }
+            return result;
+        }
+
+        std::vector<ggml_tensor*> project_qkv(GGMLRunnerContext* ctx,
+                                              const std::vector<ggml_tensor*>& inputs,
+                                              const std::function<ggml_tensor*(ggml_tensor*, size_t)>& prepare_input = {}) {
+            auto projection  = std::dynamic_pointer_cast<Linear>(blocks["qkv_proj"]);
+            int64_t sequence = 0;
+            for (auto input : inputs) {
+                sequence += input->ne[1];
+            }
+            int64_t chunk_size = sequence;
+            if (ctx->backend != nullptr) {
+                auto buft        = ggml_backend_get_default_buffer_type(ctx->backend);
+                size_t alignment = ggml_backend_buft_get_alignment(buft);
+                size_t max_size  = ggml_backend_buft_get_max_size(buft);
+                max_size -= max_size % alignment;
+                size_t token_bytes = ggml_row_size(GGML_TYPE_F32, 3 * heads * head_dim) * inputs[0]->ne[2] * inputs[0]->ne[3];
+                chunk_size         = static_cast<int64_t>(std::min<size_t>(chunk_size, std::max<size_t>(1, max_size / token_bytes)));
+            }
+            if (chunk_size == sequence) {
+                ggml_tensor* projected = nullptr;
+                for (size_t i = 0; i < inputs.size(); ++i) {
+                    auto input = prepare_input ? prepare_input(inputs[i], i) : inputs[i];
+                    auto part  = projection->forward(ctx, input);
+                    projected  = projected == nullptr ? part : ggml_concat(ctx->ggml_ctx, projected, part, 1);
+                }
+                return split_qkv(ctx, projected);
+            }
+
+            // Split Q/K/V before concatenating tokens so the full packed QKV never exceeds the buffer limit.
+            std::vector<ggml_tensor*> chunks[3];
+            for (size_t i = 0; i < inputs.size(); ++i) {
+                auto input = inputs[i];
+                for (int64_t start = 0; start < input->ne[1]; start += chunk_size) {
+                    auto part = ggml_ext_slice(ctx->ggml_ctx, input, 1, start, std::min(start + chunk_size, input->ne[1]), false);
+                    if (!ggml_is_contiguous(part)) {
+                        part = ggml_cont(ctx->ggml_ctx, part);
+                    }
+                    // Keep normalization/modulation adjacent to the projection's input quantization.
+                    if (prepare_input) {
+                        part = prepare_input(part, i);
+                    }
+                    auto qkv = split_qkv(ctx, projection->forward(ctx, part));
+                    for (int j = 0; j < 3; ++j) {
+                        chunks[j].push_back(ggml_cont(ctx->ggml_ctx, qkv[j]));
+                    }
+                }
+            }
+            std::vector<ggml_tensor*> result;
+            for (auto& parts : chunks) {
+                result.push_back(ggml_ext_vec_concat(ctx->ggml_ctx, parts, 2));
+            }
+            return result;
         }
 
         ggml_tensor* project_output(GGMLRunnerContext* ctx, ggml_tensor* x) {
@@ -252,22 +313,15 @@ namespace MiniMaxH3 {
         }
 
         ggml_tensor* attend(GGMLRunnerContext* ctx,
-                            ggml_tensor* projected,
+                            const std::vector<ggml_tensor*>& qkv,
                             ggml_tensor* pe = nullptr) {
-            auto q_norm      = std::dynamic_pointer_cast<RMSNorm>(blocks["q_norm"]);
-            auto k_norm      = std::dynamic_pointer_cast<RMSNorm>(blocks["k_norm"]);
-            int64_t sequence = projected->ne[1];
-            int64_t batch    = projected->ne[2] * projected->ne[3];
-            auto view        = [&](int index) {
-                return ggml_view_4d(ctx->ggml_ctx, projected, head_dim, heads, sequence, batch,
-                                    head_dim * projected->nb[0], projected->nb[1], projected->nb[2],
-                                    index * heads * head_dim * projected->nb[0]);
-            };
-            auto q = view(0);
-            auto k = view(1);
-            auto v = view(2);
-            q      = q_norm->forward(ctx, q);
-            k      = k_norm->forward(ctx, k);
+            auto q_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["q_norm"]);
+            auto k_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["k_norm"]);
+            auto q      = qkv[0];
+            auto k      = qkv[1];
+            auto v      = qkv[2];
+            q           = q_norm->forward(ctx, q);
+            k           = k_norm->forward(ctx, k);
             if (pe != nullptr) {
                 q = apply_partial_rope(ctx, q, pe);
                 k = apply_partial_rope(ctx, k, pe);
@@ -290,7 +344,7 @@ namespace MiniMaxH3 {
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* x,
                              ggml_tensor* pe = nullptr) {
-            return project_output(ctx, attend(ctx, project_qkv(ctx, x), pe));
+            return project_output(ctx, attend(ctx, project_qkv(ctx, {x}), pe));
         }
     };
 
@@ -447,16 +501,9 @@ namespace MiniMaxH3 {
             auto modulate = [&](ggml_tensor* value, const std::vector<ggml_tensor*>& row, int shift, int scale) {
                 return ggml_ext_modulate(ctx, value, row[shift], row[scale]);
             };
-            ggml_tensor* qkv = nullptr;
-            for (size_t i = 0; i < segments.size(); ++i) {
-                auto h = modulate(norm1->forward(ctx, inputs[i]), rows[i], 0, 1);
-                h      = attn->project_qkv(ctx, h);
-                if (qkv == nullptr) {
-                    qkv = h;
-                    continue;
-                }
-                qkv = ggml_concat(ctx->ggml_ctx, qkv, h, 1);
-            }
+            auto qkv      = attn->project_qkv(ctx, inputs, [&](ggml_tensor* input, size_t i) {
+                return modulate(norm1->forward(ctx, input), rows[i], 0, 1);
+            });
             auto attended = attn->attend(ctx, qkv, pe);
             std::vector<ggml_tensor*> projections;
             for (const auto& segment : segments) {
