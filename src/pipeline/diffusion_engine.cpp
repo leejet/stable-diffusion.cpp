@@ -2270,6 +2270,10 @@ static sd::Tensor<float> batch_two_condition_tensors(const sd::Tensor<float>& a,
     return sd::ops::concat(a, b, static_cast<size_t>(batch_dim));
 }
 
+bool StableDiffusionGGML::set_control_type(sd_control_type_t type) {
+    return control_net == nullptr || control_net->set_control_type(type);
+}
+
 void StableDiffusionGGML::compute_sample_controls(const sd::Tensor<float>& control_image,
                                                   const sd::Tensor<float>& noised_input,
                                                   const sd::Tensor<float>& timesteps_tensor,

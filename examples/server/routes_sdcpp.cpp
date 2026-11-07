@@ -154,6 +154,7 @@ static json make_img_gen_defaults_json(const SDGenerationParams& defaults, const
         {"image_preprocess", defaults.image_preprocess},
         {"increase_ref_index", defaults.increase_ref_index},
         {"control_strength", defaults.control_strength},
+        {"control_type", defaults.control_type},
         {"ip_adapter_strength", defaults.ip_adapter_strength},
         {"sample_params", make_sample_params_json(defaults.sample_params, defaults.skip_layers, defaults.custom_sigmas)},
         {"hires", make_hires_json(defaults)},

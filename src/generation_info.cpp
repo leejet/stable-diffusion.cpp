@@ -127,8 +127,11 @@ namespace sd {
         auto info = common_info(p, "image");
         if (p.init_image.data)
             info["strength"] = p.strength;
-        if (p.control_image.data)
+        if (p.control_image.data) {
             info["control_strength"] = p.control_strength;
+            if (p.control_type != SD_CONTROL_TYPE_NONE)
+                info["control_type"] = sd_control_type_name(p.control_type);
+        }
         if (p.ip_adapter_image.data)
             info["ip_adapter_strength"] = p.ip_adapter_strength;
         if (p.pm_params.id_images && p.pm_params.id_images_count > 0) {
@@ -188,7 +191,7 @@ namespace sd {
         auto inpaint        = image_info(inpaint_params);
         inpaint["strength"] = inpaint_params.strength;
         // ADetailer clears these inputs before generating each crop.
-        for (const auto* key : {"control_strength", "pm_params", "pulid_params", "hires", "image_preprocess"})
+        for (const auto* key : {"control_strength", "control_type", "pm_params", "pulid_params", "hires", "image_preprocess"})
             inpaint.erase(key);
         sd_img_gen_params_t defaults;
         sd_img_gen_params_init(&defaults);
