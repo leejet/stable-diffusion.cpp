@@ -597,6 +597,37 @@ SD_API int get_upscale_factor(upscaler_ctx_t* upscaler_ctx);
 // Reads model metadata only; returns 0 if the file is not a recognized RGB ESRGAN model.
 SD_API int get_upscaler_model_scale(const char* model_path);
 
+typedef struct video_upscaler_ctx_t video_upscaler_ctx_t;
+
+typedef struct {
+    const char* diffusion_model_path;
+    const char* vae_path;
+    // Explicit output scale; RelayVSR requires 2 or 4 matching both checkpoints.
+    int upscale_factor;
+    int n_threads;
+    const char* backend;
+    const char* params_backend;
+} sd_video_upscaler_ctx_params_t;
+
+typedef struct {
+    const sd_image_t* frames;
+    int frame_count;
+    int fps;
+    int64_t seed;
+    // RelayVSR reference window, including both endpoints; defaults to 16.
+    int window_size;
+} sd_video_upscale_params_t;
+
+SD_API void sd_video_upscaler_ctx_params_init(sd_video_upscaler_ctx_params_t* params);
+SD_API void sd_video_upscale_params_init(sd_video_upscale_params_t* params);
+SD_API video_upscaler_ctx_t* new_video_upscaler_ctx(const sd_video_upscaler_ctx_params_t* params);
+SD_API void free_video_upscaler_ctx(video_upscaler_ctx_t* ctx);
+// Frames are RGB, have equal dimensions, and remain owned by the caller.
+// Free the result with free_sd_video_generation_result().
+SD_API bool upscale_video(video_upscaler_ctx_t* ctx,
+                          const sd_video_upscale_params_t* params,
+                          sd_video_generation_result_t** result_out);
+
 typedef struct adetailer_ctx_t adetailer_ctx_t;
 
 typedef struct {

@@ -150,7 +150,7 @@ namespace sd_fattn_cute {
         }
     }
 
-    template <int Rows>
+    template <int Rows, bool Masked = false>
     struct Softmax {
         decltype(make_tensor<float>(Shape<Int<Rows>>{})) maximum, sum;
         template <bool First, typename Scores, typename Output>
@@ -180,8 +180,9 @@ namespace sd_fattn_cute {
                 }
 #pragma unroll
                 for (int n = 0; n < size<1>(scores); ++n) {
-                    const float value = exp2f(scores(m, n) * 1.4426950408889634f - next_max * 1.4426950408889634f);
-                    scores(m, n)      = value;
+                    const float safe_max = Masked && next_max == -INFINITY ? 0.f : next_max;
+                    const float value    = exp2f(scores(m, n) * 1.4426950408889634f - safe_max * 1.4426950408889634f);
+                    scores(m, n)         = value;
                     row_sum += value;
                 }
                 // Defer the four-lane sum reduction until the final output normalization.
@@ -196,7 +197,7 @@ namespace sd_fattn_cute {
                 float total = sum(m);
                 total += __shfl_xor_sync(0xffffffff, total, 2);
                 total += __shfl_xor_sync(0xffffffff, total, 1);
-                const float inverse = 1.f / total;
+                const float inverse = Masked && total == 0.f ? 0.f : 1.f / total;
 #pragma unroll
                 for (int n = 0; n < size<1>(output); ++n)
                     output(m, n) *= inverse;
@@ -790,3 +791,5 @@ void sd_ggml_register_cuda_attention(ggml_backend_dev_t device) {
     desc.priority  = 400;
     GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
 }
+
+#include "window_attention.cuh"

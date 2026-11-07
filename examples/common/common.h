@@ -22,7 +22,7 @@ std::string argv_to_utf8(int index, const char** argv);
 #define BOOL_STR(b) ((b) ? "true" : "false")
 
 extern const char* const modes_str[];
-#define SD_ALL_MODES_STR "img_gen, adetailer, vid_gen, convert, upscale, metadata"
+#define SD_ALL_MODES_STR "img_gen, adetailer, vid_gen, convert, upscale, metadata, vid_upscale"
 
 enum SDMode {
     IMG_GEN,
@@ -31,6 +31,7 @@ enum SDMode {
     CONVERT,
     UPSCALE,
     METADATA,
+    VID_UPSCALE,
     MODE_COUNT
 };
 

@@ -715,10 +715,10 @@ namespace sd_vulkan_i8 {
         const Parameters pc = {n, rows, k, op.bias ? 1u : 0u};
         auto pipeline       = op.kind == SDW4Kind::W4A4 ? SD_VK_PIPELINE(mul_mat_w4a4_convrot, 6, Parameters) : SD_VK_PIPELINE(mul_mat_w4a8_convrot, 8, Parameters);
         uint32_t tile_cols = 64, tile_rows = 32;
-        const bool large_w4a4  = op.kind == SDW4Kind::W4A4 && rows >= 512 && d.compute.shared_memory >= w4a4_large_shared;
-        const bool large_w4a8  = op.kind == SDW4Kind::W4A8 && rows >= 512 && d.compute.shared_memory >= w4a8_large_shared;
-        const bool decode_w4a4 = op.kind == SDW4Kind::W4A4 && d.w4a4_cm2 && k % 256 == 0 && n % 64 == 0 && rows >= 128 &&
-                                 aligned(op.weight, 16) && sizeof(sd_vulkan_shaders::mul_mat_w4a4_convrot_decode_cm2) > 4;
+        const bool large_w4a4      = op.kind == SDW4Kind::W4A4 && rows >= 512 && d.compute.shared_memory >= w4a4_large_shared;
+        const bool large_w4a8      = op.kind == SDW4Kind::W4A8 && rows >= 512 && d.compute.shared_memory >= w4a8_large_shared;
+        const bool decode_w4a4     = op.kind == SDW4Kind::W4A4 && d.w4a4_cm2 && k % 256 == 0 && n % 64 == 0 && rows >= 128 &&
+                                     aligned(op.weight, 16) && sizeof(sd_vulkan_shaders::mul_mat_w4a4_convrot_decode_cm2) > 4;
         const uint32_t constants[] = {64, large_w4a4 || large_w4a8 ? 128u : 64u, 64};
         const char* force_dp4a     = std::getenv("GGML_VK_W4_FORCE_DP4A");
         if (!(force_dp4a && std::atoi(force_dp4a)) && aligned(op.input, 16) &&
