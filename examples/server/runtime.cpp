@@ -372,6 +372,13 @@ ArgOptions SDSvrParams::get_options() {
              model_dirs.push_back(argv_to_utf8(index, argv));
              return 1;
          }},
+        {"", "--recipes", "recipe file (.json or .ini with one section per recipe); repeatable, takes precedence over recipes directories",
+         [this](int argc, const char** argv, int index) {
+             if (++index >= argc || argv[index][0] == '\0')
+                 return -1;
+             recipe_files.push_back(argv_to_utf8(index, argv));
+             return 1;
+         }},
     };
     add_log_options(options, log_level);
     return options;
