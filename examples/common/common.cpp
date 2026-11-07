@@ -2440,6 +2440,7 @@ bool SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
     std::smatch m;
 
     bool missing    = false;
+    bool removed    = false;
     std::string tmp = prompt;
 
     while (std::regex_search(tmp, m, re)) {
@@ -2450,8 +2451,9 @@ bool SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
         try {
             mul = std::stof(raw_mul);
         } catch (...) {
-            tmp    = m.suffix().str();
-            prompt = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+            tmp     = m.suffix().str();
+            prompt  = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+            removed = true;
             continue;
         }
 
@@ -2473,6 +2475,7 @@ bool SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
             LOG_WARN("invalid lora path %s", raw_path.c_str());
             tmp     = m.suffix().str();
             prompt  = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+            removed = true;
             missing = true;
             continue;
         }
@@ -2491,6 +2494,7 @@ bool SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
                 LOG_WARN("can not found lora %s", final_path.lexically_normal().u8string().c_str());
                 tmp     = m.suffix().str();
                 prompt  = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+                removed = true;
                 missing = true;
                 continue;
             }
@@ -2503,9 +2507,15 @@ bool SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
         else
             lora_map[key] += mul;
 
-        prompt = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+        prompt  = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+        removed = true;
 
         tmp = m.suffix().str();
+    }
+
+    if (removed) {
+        while (!prompt.empty() && std::isspace(static_cast<unsigned char>(prompt.back())))
+            prompt.pop_back();
     }
 
     return !missing;
