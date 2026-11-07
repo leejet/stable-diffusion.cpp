@@ -89,8 +89,13 @@ again after reordering.
 
 External inputs stay allocated through the final node. Native graph optimization
 and execution operate on the remaining contiguous ranges, so native fusion cannot
-consume nodes selected by an extension. Intermediate allocations are retained
-in this initial implementation; only their computation is removed.
+consume nodes selected by an extension. Fused intermediates are excluded from
+allocation through the backend's `skip_alloc` callback and
+`ggml_gallocr_set_skipped_tensors`. Their metadata and graph edges remain available,
+but execution must not access their data or buffers. Storage backing the final
+output is retained, including an internal owner used by an in-place final write.
+The skipped set is replaced for each allocation graph; changing which tensors are skipped
+invalidates cached allocation assignments even when tensor shapes are unchanged.
 
 Automatic extension fusion is enabled in scheduler execution with one pipeline
 copy and without evaluation callbacks. Multiple pipeline copies and evaluation
