@@ -169,3 +169,18 @@ Notes for this mode:
   block's working memory must also fit within the VRAM budget.
 - The default video flow shift is 12. The audio stream is mapped internally to
   its shift of 3, so the regular samplers can operate on the packed AV latent.
+
+## HyperFlow H3 Flash
+
+[HyperFlow H3 Flash](https://huggingface.co/VideoRebirthAI/hyperflow-h3-flash)
+uses the shared components and input options described in this guide. Replace
+`--diffusion-model` with the matching HyperFlow FL2VA or Ref2VA checkpoint and
+use these sampling options:
+
+```sh
+--sampling-method euler --cfg-scale 1 --sigmas hyperflow-h3-flash-6
+```
+
+Use `hyperflow-h3-flash-4` or `hyperflow-h3-flash-8` for 4 or 8 steps. These
+presets also work with `--hires-sigmas`; their length determines the step count.
+They already include video flow shift 12, so keep the default flow shift.
