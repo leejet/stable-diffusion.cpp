@@ -89,8 +89,13 @@ again after reordering.
 
 External inputs stay allocated through the final node. Native graph optimization
 and execution operate on the remaining contiguous ranges, so native fusion cannot
-consume nodes selected by an extension. Intermediate allocations are retained
-in this initial implementation; only their computation is removed.
+consume nodes selected by an extension. Fused intermediates are excluded from
+allocation through the backend's `skip_alloc` callback and
+`ggml_gallocr_set_skipped_tensors`. Their metadata and graph edges remain available,
+but execution must not access their data or buffers. Storage backing the final
+output is retained, including an internal owner used by an in-place final write.
+The skipped set is replaced for each allocation graph; changing which tensors are skipped
+invalidates cached allocation assignments even when tensor shapes are unchanged.
 
 Automatic extension fusion is enabled in scheduler execution with one pipeline
 copy and without evaluation callbacks. Multiple pipeline copies and evaluation
@@ -136,6 +141,17 @@ quantization, or model fusion on the application's behalf.
 Workspace is a backend buffer. Its base is a CUDA device pointer on CUDA; callers
 must use the representation appropriate to their backend. Vulkan extensions use
 the command recording services described below.
+
+CUDA INT8 Linear, RoPE, ConvRot, RMS affine and INT8 gated residual kernels omit output
+scratch when allocation guarantees that a fresh owning output cannot overlap
+live inputs. Existing outputs and views retain overlap protection. Internal
+GEMM and quantization workspace is still reserved when required; kernels also
+handle a null workspace when the entire step needs no scratch.
+
+Compute workspace measurement preserves the storage identities and offsets of
+external tensors, including views. Separate allocations must not share a synthetic
+buffer identity: that can invent overlap, overestimate scratch, and repeatedly
+rebuild a workspace whose actual allocation is smaller than the estimate.
 
 ## sd.cpp integration
 
@@ -202,6 +218,10 @@ ConvRot output fusion. These kernels use only the public extension API, borrowed
 CUDA stream, and scheduler-owned workspace; they do not use ggml's CUDA pool or
 private conversion helpers. The existing CUDA fusion and CuTe disable environment
 variables are honored.
+Aligned contiguous FP16 K/V inputs are read directly without reserving conversion
+buffers. Fresh F32 outputs are written by the attention epilogue, retaining the
+original FP16 rounding before output scaling. Packed ConvRot and preallocated or
+view outputs retain the intermediate half buffer.
 
 `src/core/cuda/i8_projection.cu` supplies the INT8 GEMM projection epilogues:
 `GEMM -> Reshape -> RMSNorm -> Mul -> RoPE`, optional scaling and FP16 copy,
@@ -262,12 +282,21 @@ small-row policy, Stream-K scheduling, Ada column bands, and separate scaling
 order. The same extension matches `GEMM -> SwiGLU [-> ConvRot]` and row
 concatenation for custom GEMM nodes. Weight scales remain explicit
 inputs, including the gate/up scale permutation recorded on every SwiGLU launch.
+Two independent INT8 GEMMs sharing a quantized input can also fuse with split
+SwiGLU. A paired-column iterator reads the separate gate/up weight allocations,
+and the GEMM epilogue writes only the activated output. Both intermediate
+activations are omitted through the generic fusion allocation interface; weights
+are neither copied nor concatenated. This path requires bias-free branches,
+compatible layouts and alignments, and no external intermediate consumers.
+Only interleaved weight scales and any Stream-K workspace remain temporary.
 Plans reserve bounded Stream-K workspace, cache occupancy on first execution,
 and initialize barriers on every launch, so CUDA Graph replay observes updated
 inputs and scales. External consumers retain ordinary execution; overlapping
-outputs use workspace. The CUTLASS SwiGLU/ConvRot chain can write its packed
-output directly after GEMM, because quantization reads only its workspace
-intermediate. Shapes or alignments unsuitable for CUTLASS use cuBLAS.
+outputs use workspace. For fresh outputs, the CUTLASS SwiGLU epilogue writes
+an allocator-managed tensor that the subsequent ConvRot launch consumes. This
+keeps the same GPU launches while allowing its storage to be reused by other
+operations. The combined SwiGLU/ConvRot path retains its workspace intermediate
+for other cases. Shapes or alignments unsuitable for CUTLASS use cuBLAS.
 Custom I8 nodes also retain cuBLAS when the reduction could overflow I32, to
 preserve their previous accumulation behavior. Fusion disable and force-cuBLAS
 settings are honored. No CUTLASS headers are needed for the cuBLAS path.

@@ -204,7 +204,8 @@ namespace SD_CUDA_NAMESPACE {
             plan->device = cuda_device_info(ggml_backend_get_device(backend));
             if (!describe(nodes, count, plan->op) || !supported(plan->op, plan->device))
                 return GGML_STATUS_FAILED;
-            *workspace = ggml_nbytes(nodes[count - 1]);
+            const auto* dst = nodes[count - 1];
+            *workspace      = !dst->data && !dst->buffer && !dst->view_src ? 0 : ggml_nbytes(dst);
             return GGML_STATUS_SUCCESS;
         }
         static void destroy(void* state, void*) {
