@@ -1422,6 +1422,8 @@ std::string convert_sep_to_dot(std::string name) {
         "transformer_blocks",
         "single_transformer_blocks",
         "single_blocks",
+        "layerwise_blocks",
+        "refiner_blocks",
         "diffusion_model",
         "cond_stage_model",
         "first_stage_model",
