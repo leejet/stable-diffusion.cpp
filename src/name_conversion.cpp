@@ -1422,8 +1422,6 @@ std::string convert_sep_to_dot(std::string name, SDVersion version) {
         "transformer_blocks",
         "single_transformer_blocks",
         "single_blocks",
-        "layerwise_blocks",
-        "refiner_blocks",
         "diffusion_model",
         "cond_stage_model",
         "first_stage_model",
@@ -1482,6 +1480,7 @@ std::string convert_sep_to_dot(std::string name, SDVersion version) {
         "token_refiner",
     };
     if (sd_version_is_krea2(version)) {
+        protected_tokens.push_back("text_fusion");
         protected_tokens.push_back("layerwise_blocks");
         protected_tokens.push_back("refiner_blocks");
     }
