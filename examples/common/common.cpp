@@ -1136,7 +1136,7 @@ ArgOptions SDGenerationParams::get_options() {
          &extra_ad_args},
         {"-i",
          "--init-img",
-         "path to the init image",
+         "path to the init image, or a single input image for vid_upscale",
          0,
          &init_image_path},
         {"",
