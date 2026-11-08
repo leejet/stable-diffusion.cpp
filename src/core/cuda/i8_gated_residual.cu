@@ -426,7 +426,7 @@ namespace sd_i8_gated {
         return false;
     }
     static ggml_status prepare(ggml_backend_t backend, ggml_tensor* const* nodes, int count, void** state, size_t* workspace, void*) {
-        auto* plan   = new Plan;
+        auto* plan    = new Plan;
         *state        = plan;
         plan->device  = device_info(ggml_backend_get_device(backend));
         const auto op = describe(nodes, count);

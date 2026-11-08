@@ -277,7 +277,7 @@ namespace SD_CUDA_NAMESPACE {
     }
 
     static ggml_status rope_prepare(ggml_backend_t, ggml_tensor* const* nodes, int count, void**, size_t* workspace, void*) {
-        const auto* dst         = nodes[count - 1];
+        const auto* dst = nodes[count - 1];
         // Owning casts are fresh outputs; copies into existing storage retain view_src.
         const bool fresh_output = !dst->data && !dst->buffer && !dst->view_src;
         *workspace              = fresh_output ? 0 : ggml_nbytes(dst);
