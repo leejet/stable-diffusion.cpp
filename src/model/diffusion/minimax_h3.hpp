@@ -19,9 +19,10 @@
 
 namespace MiniMaxH3 {
 
-    constexpr int H3_GRAPH_SIZE          = 131072;
-    constexpr float FRAME_RESCALE        = 5.f / 3.f;
-    constexpr float VISUAL_COND_TIMESTEP = 0.999f;
+    constexpr int H3_GRAPH_SIZE                   = 131072;
+    constexpr float DEFAULT_ATTN_CHUNK_BUDGET_GIB = 2.f;
+    constexpr float FRAME_RESCALE                 = 5.f / 3.f;
+    constexpr float VISUAL_COND_TIMESTEP          = 0.999f;
 
     struct Config {
         int64_t hidden_size              = 5376;
@@ -231,6 +232,7 @@ namespace MiniMaxH3 {
     struct Attention : public GGMLBlock {
         int64_t heads;
         int64_t head_dim;
+        float head_chunk_budget_gib = DEFAULT_ATTN_CHUNK_BUDGET_GIB;
 
         Attention(int64_t hidden_size,
                   int64_t heads,
@@ -315,6 +317,31 @@ namespace MiniMaxH3 {
         ggml_tensor* attend(GGMLRunnerContext* ctx,
                             const std::vector<ggml_tensor*>& qkv,
                             ggml_tensor* pe = nullptr) {
+            // Budget one F32 Q/K tensor per group, not the full attention working set.
+            const double head_bytes  = double(ggml_row_size(GGML_TYPE_F32, head_dim)) * qkv[0]->ne[2] * qkv[0]->ne[3];
+            const int64_t head_chunk = head_chunk_budget_gib > 0
+                                           ? static_cast<int64_t>(std::clamp(double(head_chunk_budget_gib) * (1024ULL * 1024 * 1024) / head_bytes,
+                                                                             1.0, double(heads)))
+                                           : heads;
+            if (head_chunk < heads) {
+                std::vector<ggml_tensor*> outputs;
+                for (int64_t start = 0; start < heads; start += head_chunk) {
+                    std::vector<ggml_tensor*> part;
+                    for (auto tensor : qkv) {
+                        part.push_back(ggml_ext_slice(ctx->ggml_ctx, tensor, 1, start, std::min(start + head_chunk, heads), false));
+                    }
+                    outputs.push_back(attend_heads(ctx, part, pe));
+                    // Keep each head group's temporaries out of the concatenation tree's live set.
+                    ctx->expand_graph(outputs.back());
+                }
+                return ggml_ext_vec_concat(ctx->ggml_ctx, outputs, 0);
+            }
+            return attend_heads(ctx, qkv, pe);
+        }
+
+        ggml_tensor* attend_heads(GGMLRunnerContext* ctx,
+                                  const std::vector<ggml_tensor*>& qkv,
+                                  ggml_tensor* pe) {
             auto q_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["q_norm"]);
             auto k_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["k_norm"]);
             auto q      = qkv[0];
@@ -333,7 +360,7 @@ namespace MiniMaxH3 {
                                               q,
                                               k,
                                               v,
-                                              static_cast<int>(heads),
+                                              static_cast<int>(qkv[0]->ne[1]),
                                               nullptr,
                                               true,
                                               ctx->flash_attn_enabled,
@@ -1035,10 +1062,30 @@ namespace MiniMaxH3 {
         MiniMaxH3Runner(ggml_backend_t backend,
                         const String2TensorStorage& tensors,
                         const std::string& prefix                           = "model.diffusion_model",
-                        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+                        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr,
+                        const char* model_args                              = nullptr)
             : DiffusionModelRunner(backend, prefix, weight_manager),
               config(Config::detect_from_weights(tensors, prefix)),
               model(config) {
+            float head_chunk_budget_gib = DEFAULT_ATTN_CHUNK_BUDGET_GIB;
+            for (const auto& [key, value] : parse_key_value_args(model_args, "model arg")) {
+                if (key == "minimax_h3_attn_chunk_budget") {
+                    float parsed = 0.f;
+                    if (parse_strict_float(value, parsed) && std::isfinite(parsed) && parsed >= 0.f) {
+                        head_chunk_budget_gib = parsed;
+                    } else {
+                        LOG_WARN("ignoring invalid MiniMax-H3 model arg '%s=%s': expected a finite non-negative GiB budget", key.c_str(), value.c_str());
+                    }
+                }
+            }
+            std::vector<GGMLBlock*> blocks;
+            model.get_all_blocks(blocks);
+            for (auto block : blocks) {
+                if (auto attention = dynamic_cast<Attention*>(block)) {
+                    attention->head_chunk_budget_gib = head_chunk_budget_gib;
+                }
+            }
+            LOG_INFO("MiniMax-H3 attention chunk budget: %.3g GiB (0 disables grouping)", head_chunk_budget_gib);
             model.init(params_ctx, tensors, prefix);
         }
 
@@ -1178,7 +1225,8 @@ namespace MiniMaxH3 {
                 timestep_features = make_input(timestep_feature_input_cache);
             }
 
-            auto runner_ctx = get_context();
+            auto graph      = new_graph_custom(H3_GRAPH_SIZE);
+            auto runner_ctx = get_context(graph);
             auto output     = model.forward(&runner_ctx,
                                             video,
                                             audio,
@@ -1201,7 +1249,6 @@ namespace MiniMaxH3 {
                                                     output.second,
                                                     1.f + (audio_scale - 1.f) * sigma_a));
             auto merged   = merge_av_latents(compute_ctx, output.first, output.second);
-            auto graph    = new_graph_custom(H3_GRAPH_SIZE);
             ggml_build_forward_expand(graph, merged);
             return graph;
         }

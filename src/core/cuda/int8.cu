@@ -552,8 +552,8 @@ namespace SD_CUDA_NAMESPACE {
             const bool fresh_output = !dst->data && !dst->buffer && !dst->view_src &&
                                       (dst->op == GGML_OP_CUSTOM || dst->op == GGML_OP_CONCAT ||
                                        (dst->op == GGML_OP_GLU && !dst->src[1]));
-            p->output  = fresh_output || (p->gemm && p->kind == SWIGLU_QUANTIZE) ? SIZE_MAX : reserve(total, ggml_nbytes(dst));
-            *workspace = total;
+            p->output               = fresh_output || (p->gemm && p->kind == SWIGLU_QUANTIZE) ? SIZE_MAX : reserve(total, ggml_nbytes(dst));
+            *workspace              = total;
             return GGML_STATUS_SUCCESS;
         }
         static void destroy(void* state, void*) {

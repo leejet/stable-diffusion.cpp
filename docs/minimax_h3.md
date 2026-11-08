@@ -155,5 +155,17 @@ Notes for this mode:
 - Width and height are aligned upward to a multiple of 32.
 - Frame count is aligned upward to the `17k + 5` grid, with a minimum of 5.
 - MiniMax-H3 runs at 24 fps; another requested value is overridden.
+- Attention head grouping is controlled by
+  `--model-args minimax_h3_attn_chunk_budget=2`, in GiB (default: `2`).
+  The budget estimates the size of a single FP32 Q/K tensor per group:
+  `head_dim * tokens * batch * 4 bytes * heads_per_group`. The group size adapts
+  to the sequence length, with a minimum of one head; inputs that fit use all
+  heads together. Set `0` to disable grouping, or a smaller budget such as
+  `0.25` to reduce peak activation memory for long sequences at the cost of
+  extra launches and concatenation. Each head still attends to the full sequence.
+  This is a grouping target, not a cap on total attention memory or VRAM usage;
+  other intermediates, backend workspace, and weights require additional memory.
+  `--max-vram` and `--offload-to-cpu` control weight residency, but the active
+  block's working memory must also fit within the VRAM budget.
 - The default video flow shift is 12. The audio stream is mapped internally to
   its shift of 3, so the regular samplers can operate on the packed AV latent.

@@ -179,19 +179,19 @@ namespace sd_i8_cutlass {
     template <class Config, bool StreamK, bool PackedW4 = false>
     struct DenseTypes {
         static constexpr bool kSplit = false;
-        using Weight   = std::conditional_t<PackedW4, cutlass::int4b_t, int8_t>;
-        using Tile     = typename Config::Tile;
-        using Warp     = typename Config::Warp;
-        using Swizzle  = std::conditional_t<StreamK, BandedStreamK, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>>;
-        using Map      = cutlass::epilogue::threadblock::OutputTileThreadLayout<Tile, Warp, float, 4, 1>;
-        using Col      = cutlass::epilogue::threadblock::VisitorColBroadcast<Map, float, cute::Stride<cute::_1, cute::_0, int>>;
-        using Row      = cutlass::epilogue::threadblock::VisitorRowBroadcast<Map, float, cute::Stride<cute::_0, cute::_1, int>>;
-        using Mul      = cutlass::epilogue::threadblock::VisitorCompute<cutlass::multiplies, float, float, cutlass::FloatRoundStyle::round_to_nearest>;
-        using ScaleX   = cutlass::epilogue::threadblock::Sm80EVT<Mul, cutlass::epilogue::threadblock::VisitorAccFetch, Col>;
-        using ScaleW   = cutlass::epilogue::threadblock::Sm80EVT<Mul, ScaleX, Row>;
-        using Store    = cutlass::epilogue::threadblock::VisitorAuxStore<Map, float, cutlass::FloatRoundStyle::round_to_nearest, cute::Stride<int64_t, cute::_1, int64_t>>;
-        using Epilogue = cutlass::epilogue::threadblock::Sm80EVT<Store, ScaleW>;
-        using Kernel   = typename cutlass::gemm::kernel::DefaultGemmWithVisitor<
+        using Weight                 = std::conditional_t<PackedW4, cutlass::int4b_t, int8_t>;
+        using Tile                   = typename Config::Tile;
+        using Warp                   = typename Config::Warp;
+        using Swizzle                = std::conditional_t<StreamK, BandedStreamK, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>>;
+        using Map                    = cutlass::epilogue::threadblock::OutputTileThreadLayout<Tile, Warp, float, 4, 1>;
+        using Col                    = cutlass::epilogue::threadblock::VisitorColBroadcast<Map, float, cute::Stride<cute::_1, cute::_0, int>>;
+        using Row                    = cutlass::epilogue::threadblock::VisitorRowBroadcast<Map, float, cute::Stride<cute::_0, cute::_1, int>>;
+        using Mul                    = cutlass::epilogue::threadblock::VisitorCompute<cutlass::multiplies, float, float, cutlass::FloatRoundStyle::round_to_nearest>;
+        using ScaleX                 = cutlass::epilogue::threadblock::Sm80EVT<Mul, cutlass::epilogue::threadblock::VisitorAccFetch, Col>;
+        using ScaleW                 = cutlass::epilogue::threadblock::Sm80EVT<Mul, ScaleX, Row>;
+        using Store                  = cutlass::epilogue::threadblock::VisitorAuxStore<Map, float, cutlass::FloatRoundStyle::round_to_nearest, cute::Stride<int64_t, cute::_1, int64_t>>;
+        using Epilogue               = cutlass::epilogue::threadblock::Sm80EVT<Store, ScaleW>;
+        using Kernel                 = typename cutlass::gemm::kernel::DefaultGemmWithVisitor<
             int8_t,
             cutlass::layout::RowMajor,
             cutlass::ComplexTransform::kNone,
@@ -219,20 +219,20 @@ namespace sd_i8_cutlass {
     template <class Config, bool StreamK, bool Split = false>
     struct SwigluTypes {
         static constexpr bool kSplit = Split;
-        using Weight          = int8_t;
-        using Tile            = typename Config::Tile;
-        using Warp            = typename Config::Warp;
-        using Swizzle         = std::conditional_t<StreamK, BandedStreamK, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>>;
-        using Map             = cutlass::epilogue::threadblock::OutputTileThreadLayout<Tile, Warp, float, 4, 1>;
-        using Col             = cutlass::epilogue::threadblock::VisitorColBroadcast<Map, float, cute::Stride<cute::_1, cute::_0, int>>;
-        using Row             = cutlass::epilogue::threadblock::VisitorRowBroadcast<Map, float, cute::Stride<cute::_0, cute::_1, int>>;
-        using Mul             = cutlass::epilogue::threadblock::VisitorCompute<cutlass::multiplies, float, float, cutlass::FloatRoundStyle::round_to_nearest>;
-        using ScaleX          = cutlass::epilogue::threadblock::Sm80EVT<Mul, cutlass::epilogue::threadblock::VisitorAccFetch, Col>;
-        using ScaleW          = cutlass::epilogue::threadblock::Sm80EVT<Mul, ScaleX, Row>;
-        using Store           = SwigluStore<Map>;
-        using Epilogue        = cutlass::epilogue::threadblock::Sm80EVT<Store, ScaleW>;
-        using GemmBase        = typename cutlass::gemm::kernel::DefaultGemmUniversal<int8_t, cutlass::layout::RowMajor, cutlass::ComplexTransform::kNone, 16, int8_t, cutlass::layout::ColumnMajor, cutlass::ComplexTransform::kNone, 16, float, cutlass::layout::RowMajor, int, cutlass::arch::OpClassTensorOp, cutlass::arch::Sm80, Tile, Warp, cutlass::gemm::GemmShape<16, 8, 32>, cutlass::epilogue::thread::LinearCombination<float, 4, int, float>, Swizzle, 4, cutlass::arch::OpMultiplyAddSaturate, cutlass::gemm::SharedMemoryClearOption::kNone, false, false, false, cutlass::layout::NoPermute, cutlass::layout::NoPermute, WeightLayout>::GemmKernel;
-        using VisitorEpilogue = cutlass::epilogue::threadblock::EpilogueWithVisitorCallbacks<typename GemmBase::Epilogue, Epilogue, 1>;
+        using Weight                 = int8_t;
+        using Tile                   = typename Config::Tile;
+        using Warp                   = typename Config::Warp;
+        using Swizzle                = std::conditional_t<StreamK, BandedStreamK, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>>;
+        using Map                    = cutlass::epilogue::threadblock::OutputTileThreadLayout<Tile, Warp, float, 4, 1>;
+        using Col                    = cutlass::epilogue::threadblock::VisitorColBroadcast<Map, float, cute::Stride<cute::_1, cute::_0, int>>;
+        using Row                    = cutlass::epilogue::threadblock::VisitorRowBroadcast<Map, float, cute::Stride<cute::_0, cute::_1, int>>;
+        using Mul                    = cutlass::epilogue::threadblock::VisitorCompute<cutlass::multiplies, float, float, cutlass::FloatRoundStyle::round_to_nearest>;
+        using ScaleX                 = cutlass::epilogue::threadblock::Sm80EVT<Mul, cutlass::epilogue::threadblock::VisitorAccFetch, Col>;
+        using ScaleW                 = cutlass::epilogue::threadblock::Sm80EVT<Mul, ScaleX, Row>;
+        using Store                  = SwigluStore<Map>;
+        using Epilogue               = cutlass::epilogue::threadblock::Sm80EVT<Store, ScaleW>;
+        using GemmBase               = typename cutlass::gemm::kernel::DefaultGemmUniversal<int8_t, cutlass::layout::RowMajor, cutlass::ComplexTransform::kNone, 16, int8_t, cutlass::layout::ColumnMajor, cutlass::ComplexTransform::kNone, 16, float, cutlass::layout::RowMajor, int, cutlass::arch::OpClassTensorOp, cutlass::arch::Sm80, Tile, Warp, cutlass::gemm::GemmShape<16, 8, 32>, cutlass::epilogue::thread::LinearCombination<float, 4, int, float>, Swizzle, 4, cutlass::arch::OpMultiplyAddSaturate, cutlass::gemm::SharedMemoryClearOption::kNone, false, false, false, cutlass::layout::NoPermute, cutlass::layout::NoPermute, WeightLayout>::GemmKernel;
+        using VisitorEpilogue        = cutlass::epilogue::threadblock::EpilogueWithVisitorCallbacks<typename GemmBase::Epilogue, Epilogue, 1>;
         using BaseMma                = typename GemmBase::Mma;
         using SplitMma               = cutlass::gemm::threadblock::MmaMultistage<
             typename BaseMma::Shape,
@@ -246,11 +246,11 @@ namespace sd_i8_cutlass {
             typename BaseMma::LayoutC,
             typename BaseMma::Policy,
             BaseMma::Detail::kStages>;
-        using Mma             = std::conditional_t<Split, SplitMma, BaseMma>;
-        using Kernel          = std::conditional_t<StreamK,
+        using Mma    = std::conditional_t<Split, SplitMma, BaseMma>;
+        using Kernel = std::conditional_t<StreamK,
                                           cutlass::gemm::kernel::GemmWithEpilogueVisitorStreamk<Mma, VisitorEpilogue, Swizzle>,
                                           cutlass::gemm::kernel::GemmWithEpilogueVisitor<Mma, VisitorEpilogue, Swizzle>>;
-        using Gemm            = cutlass::gemm::device::GemmUniversalAdapter<Kernel>;
+        using Gemm   = cutlass::gemm::device::GemmUniversalAdapter<Kernel>;
     };
     struct Plan {
         DeviceInfo device;
@@ -259,7 +259,7 @@ namespace sd_i8_cutlass {
         bool packed_w4;
         bool split;
         size_t kernel_bytes = 0, scratch_offset = 0;
-        int occupancy                                                                                                       = 0;
+        int occupancy                                                                                                                                    = 0;
         ggml_status (*launch)(Plan&, const int8_t*, const int8_t*, const float*, const float*, float*, void*, cudaStream_t, const int8_t*, const float*) = nullptr;
     };
     template <class Types>
