@@ -1402,8 +1402,8 @@ std::string convert_pmid_v2_name(const std::string& name) {
     return name;
 }
 
-std::string convert_sep_to_dot(std::string name) {
-    const std::vector<std::string> protected_tokens = {
+std::string convert_sep_to_dot(std::string name, SDVersion version) {
+    std::vector<std::string> protected_tokens = {
         "self_attn",
         "out_proj",
         "q_proj",
@@ -1481,6 +1481,10 @@ std::string convert_sep_to_dot(std::string name) {
         "output_proj",
         "token_refiner",
     };
+    if (sd_version_is_krea2(version)) {
+        protected_tokens.push_back("layerwise_blocks");
+        protected_tokens.push_back("refiner_blocks");
+    }
 
     // record the positions of underscores that should NOT be replaced
     std::unordered_set<size_t> protected_positions;
@@ -1730,7 +1734,7 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
         // LOG_VERBOSE("name %s %d", name.c_str(), version);
 
         if (sd_version_is_unet(version) || is_underline || is_lycoris_underline) {
-            name = convert_sep_to_dot(name);
+            name = convert_sep_to_dot(name, version);
         }
     }
 
