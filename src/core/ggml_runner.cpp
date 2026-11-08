@@ -211,22 +211,6 @@ ggml_backend_t GGMLRunner::backend_for_weight(const ggml_tensor* tensor) const {
     return nullptr;
 }
 
-static bool backend_can_allocate_op(ggml_backend_t backend, const ggml_tensor* node) {
-    auto buft        = ggml_backend_get_default_buffer_type(backend);
-    size_t alignment = ggml_backend_buft_get_alignment(buft);
-    size_t max_size  = ggml_backend_buft_get_max_size(buft);
-    max_size -= max_size % alignment;
-    if (ggml_backend_buft_get_alloc_size(buft, node) > max_size) {
-        return false;
-    }
-    for (auto src : node->src) {
-        if (src != nullptr && ggml_backend_buft_get_alloc_size(buft, src) > max_size) {
-            return false;
-        }
-    }
-    return true;
-}
-
 void GGMLRunner::pin_multi_device_nodes(ggml_backend_sched_t sched, ggml_cgraph* gf, ggml_cgraph* original_graph) {
     if (sched == nullptr || gf == nullptr) {
         return;
@@ -251,14 +235,7 @@ void GGMLRunner::pin_multi_device_nodes(ggml_backend_sched_t sched, ggml_cgraph*
             node->op == GGML_OP_PERMUTE || node->op == GGML_OP_TRANSPOSE) {
             continue;
         }
-        // Operation support can allow tensors larger than the backend's allocation limit.
-        // Check inputs too, since cross-backend copies must also fit a single allocation.
-        if (!backend_can_allocate_op(current, node)) {
-            auto cpu = workspace_.cpu_backend();
-            if (cpu != nullptr && ggml_backend_supports_op(cpu, node)) {
-                ggml_backend_sched_set_tensor_backend(sched, node, cpu);
-            }
-        } else if (ggml_backend_supports_op(current, node)) {
+        if (ggml_backend_supports_op(current, node)) {
             ggml_backend_sched_set_tensor_backend(sched, node, current);
         }
     }
