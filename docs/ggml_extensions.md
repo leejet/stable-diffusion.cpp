@@ -130,6 +130,9 @@ Services are discovered through `ggml_backend_reg_get_proc_address`:
 | `ggml_ext_gpu_device_v1` | Query CUDA/HIP/MUSA runtime kind, physical ordinal, shared-memory limit, warp size, and INT8 BLAS capability. |
 | `ggml_ext_gpu_context_v1` | Borrow the matching runtime's device and execution stream. |
 | `ggml_ext_gpu_blas_v1` | Borrow the matching cuBLAS, hipBLAS, or muBLAS handle on that stream. |
+| `ggml_ext_metal_device_v1` | Borrow the Metal device for application pipeline compilation. |
+| `ggml_ext_metal_buffer_v1` | Resolve a backend buffer range to its Metal buffer and offset, including private storage and split allocations. |
+| `ggml_ext_metal_submit_v1` | Encode application commands on a backend-owned command buffer, ordered with native Metal work and tracked by backend synchronization. |
 
 The borrowed cuBLAS handle remains owned by the backend. Extensions must not retain
 or destroy it, or change its stream, pointer mode, math mode, or workspace. This
@@ -160,6 +163,21 @@ validation, graph construction helpers, and backend registration entry point.
 CPU kernels and fusion rules live in `src/core/cpu/`, with registration collected
 in `cpu/registration.cpp`. CUDA-style and Vulkan implementations live in their
 respective backend directories.
+
+`src/core/metal/int8.mm` registers Metal INT8 linear and ConvRot kernels. Their
+Metal source is embedded at build time and compiled for the selected device
+during registration. The public `ggml-ext-metal.h` services expose borrowed
+objects without private backend headers. The submit callback only encodes work;
+GGML owns submission, cancellation checks, command-buffer lifetime, and
+asynchronous error tracking. Rotation scratch and any overlapping output use
+the scheduler workspace. No full floating-point weight copy is allocated.
+When runtime compilation supports Metal 4 TensorOps, INT8 multiplication uses
+`matmul2d` with INT32 cooperative results and fused scale/bias restoration.
+The SIMD-group implementation remains the fallback for older systems and
+devices where the TensorOps pipeline is unavailable.
+TensorOps multiplies at most 1024 pairs per partial result and combines those
+results with wrapping integer addition. This preserves exact INT32 semantics
+even when TensorOps uses floating-point arithmetic internally.
 
 `ggml_ext_modulate(ctx, x, shift, scale)` emits `sd.modulate.v1` for F32 inputs
 when the runner context uses CPU, CUDA/HIP/MUSA, or Vulkan.

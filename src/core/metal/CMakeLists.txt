@@ -1,0 +1,8 @@
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS int8.metal int8_mpp.metal)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/int8.metal" SD_METAL_I8_SOURCE)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/int8_mpp.metal" SD_METAL_I8_MPP_SOURCE)
+configure_file(int8_source.h.in "${CMAKE_CURRENT_BINARY_DIR}/int8_source.h" @ONLY)
+target_sources(${SD_LIB} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/int8.mm")
+target_compile_options(${SD_LIB} PRIVATE "$<$<COMPILE_LANGUAGE:OBJCXX>:-fno-objc-arc>")
+target_include_directories(${SD_LIB} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+set_target_properties(${SD_LIB} PROPERTIES OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
