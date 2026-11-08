@@ -1437,6 +1437,10 @@ namespace Flux {
             return "flux";
         }
 
+        int get_patch_size() const override {
+            return config.patch_size;
+        }
+
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
             flux.get_param_tensors(tensors, prefix);
         }

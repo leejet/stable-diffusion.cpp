@@ -2930,7 +2930,12 @@ int StableDiffusionGGML::get_image_channels() const {
 
 int StableDiffusionGGML::get_image_seq_len(int h, int w) {
     int vae_scale_factor = get_vae_scale_factor();
-    return (h / vae_scale_factor) * (w / vae_scale_factor);
+    int patch_size       = diffusion_model != nullptr ? diffusion_model->get_patch_size() : 1;
+    int latent_h         = h / vae_scale_factor;
+    int latent_w         = w / vae_scale_factor;
+    int tokens_h         = (latent_h + patch_size - 1) / patch_size;
+    int tokens_w         = (latent_w + patch_size - 1) / patch_size;
+    return tokens_h * tokens_w;
 }
 
 sd::Tensor<float> StableDiffusionGGML::generate_init_latent(int width,
