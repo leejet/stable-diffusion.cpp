@@ -1,6 +1,7 @@
 #include "generation_info.h"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -12,6 +13,21 @@ namespace sd {
 
     static const char* text(const char* value) {
         return value ? value : "";
+    }
+
+    static double shortest_f32_as_double(float value) {
+        if (!std::isfinite(value)) {
+            return static_cast<double>(value);
+        }
+        char buf[64];
+        buf[0] = '\0';
+        for (int prec = 1; prec <= 9; ++prec) {
+            std::snprintf(buf, sizeof(buf), "%.*g", prec, static_cast<double>(value));
+            if (std::strtof(buf, nullptr) == value) {
+                break;
+            }
+        }
+        return std::strtod(buf, nullptr);
     }
 
     static json sampling_info(const sd_sample_params_t& p, bool high_noise = false) {
@@ -117,8 +133,13 @@ namespace sd {
         }
         if (p.lora_count > 0) {
             info["loras"] = json::array();
-            for (uint32_t i = 0; i < p.lora_count; ++i)
-                info["loras"].push_back({{"path", text(p.loras[i].path)}, {"multiplier", p.loras[i].multiplier}, {"is_high_noise", p.loras[i].is_high_noise}});
+            for (uint32_t i = 0; i < p.lora_count; ++i) {
+                // nlohmann::json promotes float to double, so dump the shortest
+                // decimal that round-trips the float32 (e.g. 0.85f stays 0.85
+                // instead of 0.8500000238418579) to keep replay exact.
+                const double multiplier = shortest_f32_as_double(p.loras[i].multiplier);
+                info["loras"].push_back({{"path", text(p.loras[i].path)}, {"multiplier", multiplier}, {"is_high_noise", p.loras[i].is_high_noise}});
+            }
         }
         return info;
     }
