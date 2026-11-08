@@ -1161,31 +1161,31 @@ std::string convert_diffusers_vae_to_original_sd1(std::string name) {
         {"mid.attn_1.", "mid_block.attentions.0."},
     };
 
-    static std::vector<std::pair<std::string, std::string>> vae_conversion_map_layer;
-    if (vae_conversion_map_layer.empty()) {
+    static const auto vae_conversion_map_layer = [] {
+        std::vector<std::pair<std::string, std::string>> mappings;
         for (int i = 0; i < 4; ++i) {
             // --- encoder down blocks ---
             for (int j = 0; j < 2; ++j) {
                 std::string hf_down_prefix = "encoder.down_blocks." + std::to_string(i) + ".resnets." + std::to_string(j) + ".";
                 std::string sd_down_prefix = "encoder.down." + std::to_string(i) + ".block." + std::to_string(j) + ".";
-                vae_conversion_map_layer.emplace_back(sd_down_prefix, hf_down_prefix);
+                mappings.emplace_back(sd_down_prefix, hf_down_prefix);
             }
 
             if (i < 3) {
                 std::string hf_downsample_prefix = "down_blocks." + std::to_string(i) + ".downsamplers.0.";
                 std::string sd_downsample_prefix = "down." + std::to_string(i) + ".downsample.";
-                vae_conversion_map_layer.emplace_back(sd_downsample_prefix, hf_downsample_prefix);
+                mappings.emplace_back(sd_downsample_prefix, hf_downsample_prefix);
 
                 std::string hf_upsample_prefix = "up_blocks." + std::to_string(i) + ".upsamplers.0.";
                 std::string sd_upsample_prefix = "up." + std::to_string(3 - i) + ".upsample.";
-                vae_conversion_map_layer.emplace_back(sd_upsample_prefix, hf_upsample_prefix);
+                mappings.emplace_back(sd_upsample_prefix, hf_upsample_prefix);
             }
 
             // --- decoder up blocks (reverse) ---
             for (int j = 0; j < 3; ++j) {
                 std::string hf_up_prefix = "decoder.up_blocks." + std::to_string(i) + ".resnets." + std::to_string(j) + ".";
                 std::string sd_up_prefix = "decoder.up." + std::to_string(3 - i) + ".block." + std::to_string(j) + ".";
-                vae_conversion_map_layer.emplace_back(sd_up_prefix, hf_up_prefix);
+                mappings.emplace_back(sd_up_prefix, hf_up_prefix);
             }
         }
 
@@ -1193,9 +1193,10 @@ std::string convert_diffusers_vae_to_original_sd1(std::string name) {
         for (int i = 0; i < 2; ++i) {
             std::string hf_mid_res_prefix = "mid_block.resnets." + std::to_string(i) + ".";
             std::string sd_mid_res_prefix = "mid.block_" + std::to_string(i + 1) + ".";
-            vae_conversion_map_layer.emplace_back(sd_mid_res_prefix, hf_mid_res_prefix);
+            mappings.emplace_back(sd_mid_res_prefix, hf_mid_res_prefix);
         }
-    }
+        return mappings;
+    }();
 
     static const std::vector<std::pair<std::string, std::string>> vae_conversion_map_attn = {
         {"norm.", "group_norm."},

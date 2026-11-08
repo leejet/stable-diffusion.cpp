@@ -625,6 +625,9 @@ typedef struct {
     int n_threads;
     const char* backend;
     const char* params_backend;
+    // auto/on/off or diffusion/vae assignments; null selects auto.
+    const char* flash_attn_mode;
+    const char* conv_direct_mode;
 } sd_video_upscaler_ctx_params_t;
 
 typedef struct {
@@ -634,6 +637,8 @@ typedef struct {
     int64_t seed;
     // RelayVSR reference window, including both endpoints; defaults to 16.
     int window_size;
+    // SeedVR2 independent temporal chunks in input frames (1 or 4n+1); defaults to 5.
+    int temporal_chunk_size;
 } sd_video_upscale_params_t;
 
 SD_API void sd_video_upscaler_ctx_params_init(sd_video_upscaler_ctx_params_t* params);
