@@ -174,14 +174,14 @@ namespace MiniMaxH3 {
 
             int64_t chunk_size = x->ne[1];
             if (ctx->backend != nullptr) {
-                auto buft        = ggml_backend_get_default_buffer_type(ctx->backend);
-                size_t alignment = ggml_backend_buft_get_alignment(buft);
-                size_t max_size  = ggml_backend_buft_get_max_size(buft);
-                max_size -= max_size % alignment;
-                // Matmul outputs are F32 even for quantized weights. Split before fc1
-                // so its expanded activation never needs an oversized backend buffer.
+                auto buft           = ggml_backend_get_default_buffer_type(ctx->backend);
+                size_t alignment    = ggml_backend_buft_get_alignment(buft);
+                size_t chunk_budget = ggml_backend_buft_get_max_size(buft);
+                chunk_budget -= chunk_budget % alignment;
+                // Use the backend's preferred allocation size as a conservative chunk budget.
+                // Matmul outputs are F32 even for quantized weights.
                 size_t token_bytes = ggml_row_size(GGML_TYPE_F32, std::max(x->ne[0], 2 * ffn_hidden_size)) * x->ne[2] * x->ne[3];
-                chunk_size         = static_cast<int64_t>(std::min<size_t>(chunk_size, std::max<size_t>(1, max_size / token_bytes)));
+                chunk_size         = static_cast<int64_t>(std::min<size_t>(chunk_size, std::max<size_t>(1, chunk_budget / token_bytes)));
             }
             if (chunk_size == x->ne[1]) {
                 return forward_chunk(x);
@@ -269,10 +269,11 @@ namespace MiniMaxH3 {
             if (ctx->backend != nullptr) {
                 auto buft        = ggml_backend_get_default_buffer_type(ctx->backend);
                 size_t alignment = ggml_backend_buft_get_alignment(buft);
-                size_t max_size  = ggml_backend_buft_get_max_size(buft);
-                max_size -= max_size % alignment;
+                // This is a conservative chunk budget, not an operation support limit.
+                size_t chunk_budget = ggml_backend_buft_get_max_size(buft);
+                chunk_budget -= chunk_budget % alignment;
                 size_t token_bytes = ggml_row_size(GGML_TYPE_F32, 3 * heads * head_dim) * inputs[0]->ne[2] * inputs[0]->ne[3];
-                chunk_size         = static_cast<int64_t>(std::min<size_t>(chunk_size, std::max<size_t>(1, max_size / token_bytes)));
+                chunk_size         = static_cast<int64_t>(std::min<size_t>(chunk_size, std::max<size_t>(1, chunk_budget / token_bytes)));
             }
             if (chunk_size == sequence) {
                 ggml_tensor* projected = nullptr;
@@ -284,7 +285,7 @@ namespace MiniMaxH3 {
                 return split_qkv(ctx, projected);
             }
 
-            // Split Q/K/V before concatenating tokens so the full packed QKV never exceeds the buffer limit.
+            // Split Q/K/V before concatenating tokens to avoid materializing the full packed QKV.
             std::vector<ggml_tensor*> chunks[3];
             for (size_t i = 0; i < inputs.size(); ++i) {
                 auto input = inputs[i];
