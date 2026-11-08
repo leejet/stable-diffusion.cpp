@@ -2593,14 +2593,16 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                 diffusion_params.extra = LLaDAImageDiffusionExtra{
                     condition.extra_c_crossattns.empty() ? nullptr : &condition.extra_c_crossattns[0]};
             } else if (sd_version_is_minimax_h3(version)) {
-                diffusion_params.extra = MiniMaxH3DiffusionExtra{
+                const size_t target_index = static_cast<size_t>(std::abs(step));
+                diffusion_params.extra    = MiniMaxH3DiffusionExtra{
                     condition.c_token_types.empty() ? nullptr : &condition.c_token_types,
                     condition.c_position_ids.empty() ? nullptr : &condition.c_position_ids,
                     condition.c_ref_audios.empty() ? nullptr : &condition.c_ref_audios,
                     condition.c_reference_blocks.empty() ? nullptr : &condition.c_reference_blocks,
                     version == VERSION_P_H3_IMAGE ? 2 : audio_length,
                     std::isfinite(active_flow_shift) ? active_flow_shift : 12.f,
-                    version == VERSION_P_H3_IMAGE ? 1.f : 3.f};
+                    version == VERSION_P_H3_IMAGE ? 1.f : 3.f,
+                    target_index > 0 && target_index < sigmas.size() ? sigmas[target_index] : NAN};
             } else if (sd_version_is_ltxav(version)) {
                 diffusion_params.extra = LTXAVDiffusionExtra{
                     nullptr,
