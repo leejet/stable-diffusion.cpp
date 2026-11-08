@@ -28,6 +28,7 @@ struct RefImageParams {
     bool force_ref_timestep_zero       = false;
     bool resize_before_vae             = true;
     int vae_input_max_pixels           = -1;
+    int vae_input_max_edge             = -1;  // >0: cap the reference long edge at N px before VAE (16-aligned)
     RefImageResizeMode vlm_resize_mode = RefImageResizeMode::AREA;
     int vlm_min_size                   = -1;
     int vlm_max_size                   = -1;
@@ -52,19 +53,32 @@ const std::unordered_map<std::string, RefImageParams> REF_IMAGE_PRESETS = {
          params.vlm_use_vae_input           = true;
          return params;
      }()},
-    {"flux_kontext", {false, true, Rope::RefIndexMode::FIXED, false, true, -1, RefImageResizeMode::NONE, -1, -1}},
-    {"longcat", {true, true, Rope::RefIndexMode::FIXED, false, true, -1, RefImageResizeMode::AREA, -1, -1}},
-    {"flux2", {false, true, Rope::RefIndexMode::INCREASE, false, true, -1, RefImageResizeMode::NONE, -1, -1}},
-    {"qwen", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, RefImageResizeMode::AREA, -1, -1}},
-    {"qwen_layered", {true, true, Rope::RefIndexMode::DECREASE, false, true, -1, RefImageResizeMode::AREA, -1, -1}},
-    {"mage_flow", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, RefImageResizeMode::LONGEST_SIDE, -1, 384, true}},
-    {"z_image_omni", {true, true, Rope::RefIndexMode::FIXED, false, true, -1, RefImageResizeMode::AREA, -1, -1}},
-    {"krea2_ostris_edit", {true, true, Rope::RefIndexMode::INCREASE, true, true, -1, RefImageResizeMode::AREA, -1, -1}},
-    {"krea2_edit", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, RefImageResizeMode::LONGEST_SIDE, 768, 768}},
+    {"flux_kontext", {false, true, Rope::RefIndexMode::FIXED, false, true, -1, -1, RefImageResizeMode::NONE, -1, -1}},
+    {"longcat", {true, true, Rope::RefIndexMode::FIXED, false, true, -1, -1, RefImageResizeMode::AREA, -1, -1}},
+    {"flux2", {false, true, Rope::RefIndexMode::INCREASE, false, true, -1, -1, RefImageResizeMode::NONE, -1, -1}},
+    {"qwen", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, -1, RefImageResizeMode::AREA, -1, -1}},
+    {"qwen_layered", {true, true, Rope::RefIndexMode::DECREASE, false, true, -1, -1, RefImageResizeMode::AREA, -1, -1}},
+    {"mage_flow", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, -1, RefImageResizeMode::LONGEST_SIDE, -1, 384, true}},
+    {"z_image_omni", {true, true, Rope::RefIndexMode::FIXED, false, true, -1, -1, RefImageResizeMode::AREA, -1, -1}},
+    {"krea2_ostris_edit", {true, true, Rope::RefIndexMode::INCREASE, true, true, -1, -1, RefImageResizeMode::AREA, -1, -1}},
+    {"krea2_edit", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, -1, RefImageResizeMode::LONGEST_SIDE, 768, 768}},
     // pass_to_vlm routes the reference image to the conditioner, which is where LLaDA-Image's
     // SigVQ encoder lives; it does its own half-resolution resize.
-    {"llada_image", {true, true, Rope::RefIndexMode::FIXED, true, true, -1, RefImageResizeMode::NONE, -1, -1, true}},
-    {"cosmos_reference", {false, true, Rope::RefIndexMode::INCREASE, false, false, -1, RefImageResizeMode::NONE, -1, -1}},
+    {"llada_image", {true, true, Rope::RefIndexMode::FIXED, true, true, -1, -1, RefImageResizeMode::NONE, -1, -1, true}},
+    {"cosmos_reference", {false, true, Rope::RefIndexMode::INCREASE, false, false, -1, -1, RefImageResizeMode::NONE, -1, -1}},
+    // MOSS-Image Edit: FLUX.2-VAE latent refs into the DiT at t=0 (chinoll/Moss-Image-Edit adapter).
+    // pass_to_vlm=false: the ViT is unused; refs never appear in the text prompt.
+    {"moss_edit", [] {
+         RefImageParams params;
+         params.pass_to_vlm             = false;
+         params.pass_to_dit             = true;
+         params.ref_index_mode          = Rope::RefIndexMode::INCREASE;  // refs numbered 1..N (documentation; MOSS builds its own PE)
+         params.force_ref_timestep_zero = true;
+         params.resize_before_vae       = true;
+         params.vlm_resize_mode         = RefImageResizeMode::NONE;
+         params.vae_input_max_edge      = 1024;  // official adapter default; ComfyUI node ships 512
+         return params;
+     }()},
 };
 
 struct UNetDiffusionExtra {
