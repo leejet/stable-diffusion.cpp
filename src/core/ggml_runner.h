@@ -23,6 +23,8 @@
 #define MAX_PARAMS_TENSOR_NUM 32768
 #define MAX_GRAPH_SIZE 327680
 
+struct GGMLRunnerContext;
+
 struct WeightAdapter {
     struct ForwardParams {
         enum class op_type_t {
@@ -46,22 +48,26 @@ struct WeightAdapter {
             float scale     = 1.f;
         } conv2d;
     };
-    virtual ggml_tensor* patch_weight(ggml_context* ctx, ggml_backend_t backend, ggml_tensor* weight, const std::string& weight_name) = 0;
-    virtual ggml_tensor* forward_with_lora(ggml_context* ctx,
-                                           ggml_backend_t backend,
+
+    virtual ggml_tensor* patch_weight(GGMLRunnerContext* runner_ctx,
+                                      ggml_tensor* weight,
+                                      const std::string& weight_name) = 0;
+
+    virtual ggml_tensor* forward_with_lora(GGMLRunnerContext* runner_ctx,
                                            ggml_tensor* x,
                                            ggml_tensor* w,
                                            ggml_tensor* b,
                                            const std::string& prefix,
-                                           ForwardParams forward_params)                                                              = 0;
-    virtual ggml_tensor* add_lora_to_output(ggml_context* ctx,
-                                            ggml_backend_t backend,
+                                           ForwardParams forward_params) = 0;
+
+    virtual ggml_tensor* add_lora_to_output(GGMLRunnerContext* runner_ctx,
                                             ggml_tensor* x,
                                             ggml_tensor* w,
                                             ggml_tensor* output,
                                             const std::string& prefix,
-                                            ForwardParams forward_params)                                                             = 0;
-    virtual size_t get_extra_graph_size()                                                                                             = 0;
+                                            ForwardParams forward_params) = 0;
+
+    virtual size_t get_extra_graph_size() = 0;
 };
 
 struct GGMLRunnerContext {
@@ -124,17 +130,6 @@ struct GGMLRunnerContext {
     }
 };
 
-ggml_tensor* ggml_ext_attention_ext(GGMLRunnerContext* ctx,
-                                    ggml_tensor* q,
-                                    ggml_tensor* k,
-                                    ggml_tensor* v,
-                                    int64_t n_head,
-                                    ggml_tensor* mask     = nullptr,
-                                    bool skip_reshape     = false,
-                                    bool flash_attn       = false,
-                                    float kv_scale        = 1.f,
-                                    bool* used_flash_attn = nullptr);
-
 struct GGMLRunner {
 private:
     std::map<ggml_backend_t, size_t> logged_compute_bytes_;
@@ -142,11 +137,15 @@ private:
     ggml_status last_compute_status_ = GGML_STATUS_SUCCESS;
 
     sd::ComputeWorkspace::Measurement measure(ggml_cgraph* graph, const std::unordered_set<const ggml_tensor*>* external_outputs = nullptr);
+
     std::vector<DeviceMemoryRequest> memory_requests(const std::vector<sd::BackendBufferSize>& sizes,
                                                      size_t pending_cache_bytes) const;
+
     bool fits(const std::vector<DeviceMemoryRequest>& requests,
               const std::vector<ggml_tensor*>& params) const;
+
     bool execute_segment(ggml_cgraph* graph, int n_threads, const std::function<void()>& on_before_compute);
+
     std::optional<sd::Tensor<float>> execute_graph(ggml_cgraph* graph, int n_threads, bool no_return, const std::function<bool()>& read_outputs);
 
 protected:

@@ -13,22 +13,6 @@
 
 using namespace sd;
 
-ggml_tensor* ggml_ext_attention_ext(GGMLRunnerContext* ctx,
-                                    ggml_tensor* q,
-                                    ggml_tensor* k,
-                                    ggml_tensor* v,
-                                    int64_t n_head,
-                                    ggml_tensor* mask,
-                                    bool skip_reshape,
-                                    bool flash_attn,
-                                    float kv_scale,
-                                    bool* used_flash_attn) {
-    if (ctx->attn_scale > 0.f) {
-        kv_scale = ctx->attn_scale;
-    }
-    return ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, n_head, mask, skip_reshape, flash_attn, kv_scale, ctx->sage_attn_enabled, used_flash_attn);
-}
-
 void GGMLRunner::alloc_params_ctx() {
     ggml_init_params params;
     params.mem_size   = static_cast<size_t>(MAX_PARAMS_TENSOR_NUM * ggml_tensor_overhead());
