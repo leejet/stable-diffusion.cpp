@@ -51,10 +51,19 @@ namespace sd::guidance {
     class ClassifierFreeGuidance : public BaseGuidance {
         float guidance_scale_       = 1.0f;
         float image_guidance_scale_ = 1.0f;
+        // Nucleus-Image renormalized CFG (pipeline_nucleusmoe_image.py):
+        //   comb = uncond + scale * (cond - uncond)
+        //   pred = comb * (||cond||_2 / ||comb||_2)
+        // The norm is taken per latent token, i.e. over the packed [C, patch, patch]
+        // feature vector (torch dim=-1 of the packed prediction [B, S, C*p*p]).
+        // In the sd.cpp tensor layout [W, H, C, N] a token is a patch_size x patch_size
+        // block over all C channels. renorm_patch_size_ > 0 enables the renorm.
+        int renorm_patch_size_ = 0;
 
     public:
         ClassifierFreeGuidance(float guidance_scale,
-                               float image_guidance_scale);
+                               float image_guidance_scale,
+                               int renorm_patch_size = 0);
 
         GuiderOutput forward(const GuidanceInput& input,
                              GuiderOutput previous,
