@@ -110,7 +110,7 @@ and backend `graph_plan_*` interfaces do not dispatch these extensions.
 ## Backend services
 
 Packed ComfyUI INT4 linear layers use `sd.linear_w4_convrot.v1`, built by
-`ggml_mul_mat_w4_convrot`. The operator consumes byte-packed I8 weights and the
+`ggml_ext_mul_mat_w4_convrot`. The operator consumes byte-packed I8 weights and the
 explicit output of `sd.quantize_i8_convrot.v1`; F32 callers get a quantization
 node during graph construction. Logical output dimensions are stored in the
 operator attributes, so backend copies of the packed activation do not need to
@@ -159,7 +159,15 @@ rebuild a workspace whose actual allocation is smaller than the estimate.
 ## sd.cpp integration
 
 `src/core/ggml_extensions.cpp` and `.h` contain the shared operator schemas,
-validation, graph construction helpers, and backend registration entry point.
+validation, and backend registration entry point. Graph construction helpers live
+in `src/core/ggml_extend.cpp` and `.h`; they take `GGMLRunnerContext*` so backend
+selection, compatibility workarounds, and shared ConvRot nodes use the same
+context as the calling model. Per-call precision, scaling, attention, and padding
+options remain explicit. Model blocks retain weight loading and adapter
+orchestration, while the shared helpers own FP8 fallback, embedding lookup,
+full/partial RoPE, grouped convolution, and backend-dependent repeat handling.
+LoRA/LoKr construction, n-mode products, and Kronecker products stay in
+`src/model/adapter/lora_ops.cpp` and `.h`, with the same runner-context interface.
 CPU kernels and fusion rules live in `src/core/cpu/`, with registration collected
 in `cpu/registration.cpp`. CUDA-style and Vulkan implementations live in their
 respective backend directories.
@@ -261,13 +269,13 @@ implementations. The CPU kernels use the
 configured thread pool and scheduler workspace; the old CPU INT8 GEMM and ConvRot
 implementations have been removed from ggml.
 Model code keeps calling `ggml_ext_linear_i8_tensorwise`,
-`ggml_mul_mat_i8_tensorwise`, and `ggml_quantize_i8_convrot`. The latter two
+`ggml_ext_mul_mat_i8_tensorwise`, and `ggml_ext_quantize_i8_convrot`. The latter two
 constructors are declared and implemented in sd.cpp and create custom nodes.
 Their former ggml declarations, implementations, ConvRot opcode, and native
 backend paths have been removed. CPU, CUDA/HIP/MUSA, and Vulkan register kernels
 and fusion rules through the extension interfaces.
 
-For already quantized activations, `ggml_mul_mat_i8_tensorwise` accepts ordinary
+For already quantized activations, `ggml_ext_mul_mat_i8_tensorwise` accepts ordinary
 I8 weight and activation tensors. Its optional final `input_scale` parameter is a
 separate F32 tensor with one value per activation row. Weight scales have one
 value per output channel; weight scales and bias can be null. Existing calls
@@ -276,8 +284,8 @@ order. All scales are explicit graph dependencies; there is no quantized-tensor
 wrapper. Shapes use ggml's low-to-high dimension order. Call
 `sd_ggml_register_extensions` before scheduling these custom nodes.
 
-`ggml_mul_mat_i8_tensorwise` also accepts F32 activations (quantized into temporary
-workspace) or the output of `ggml_quantize_i8_convrot`. ConvRot keeps the existing
+`ggml_ext_mul_mat_i8_tensorwise` also accepts F32 activations (quantized into temporary
+workspace) or the output of `ggml_ext_quantize_i8_convrot`. ConvRot keeps the existing
 packed I8 activation rows, padded to a multiple of four rows, followed by F32 row
 scales. Weight scales remain separate. CPU ConvRot groups are 1, 4, 16, 64, or 256.
 Unsupported layouts and malformed scale shapes are rejected. Separate CPU quantize
@@ -490,8 +498,8 @@ weight scales; unsupported custom nodes fall back to CPU.
 
 ## SageAttention
 
-The existing `ggml_sage_attn` entry point is declared and implemented in sd.cpp's
-common extension files. It constructs `sd.sage_attn.v1` with explicit Q/K/V inputs
+The `ggml_ext_sage_attn` entry point is declared and implemented in sd.cpp's
+graph construction helpers. It constructs `sd.sage_attn.v1` with explicit Q/K/V inputs
 and scale/mode attributes. ggml has no Sage-specific opcode, allocation rule, or
 backend dispatch branch.
 
@@ -509,7 +517,7 @@ layers; a custom Sage node itself does not silently change algorithms.
 
 ## Sol-Attn
 
-The existing `ggml_sol_attn` entry point now lives in the common sd.cpp extension
+The `ggml_ext_sol_attn` entry point lives in the common sd.cpp graph construction
 files and constructs `sd.sol_attn.v1`. It accepts contiguous F32 Q/K/V tensors
 with shape `[128, tokens, heads, batch]`, a positive finite scale, and finite tau.
 The output remains F32 `[128, heads, tokens, batch]`. No current sd.cpp model or

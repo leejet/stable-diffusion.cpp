@@ -66,8 +66,8 @@ namespace MiniMaxH3VAE {
             auto reflect_pad = [&](ggml_tensor* value, int dim, int amount) {
                 for (int i = 0; i < amount; ++i) {
                     GGML_ASSERT(value->ne[dim] > 1);
-                    auto left  = ggml_ext_slice(ctx->ggml_ctx, value, dim, 1, 2);
-                    auto right = ggml_ext_slice(ctx->ggml_ctx,
+                    auto left  = ggml_ext_slice(ctx, value, dim, 1, 2);
+                    auto right = ggml_ext_slice(ctx,
                                                 value,
                                                 dim,
                                                 value->ne[dim] - 2,
@@ -82,8 +82,7 @@ namespace MiniMaxH3VAE {
             x                = reflect_pad(x, 1, std::get<1>(temporal_padding));
             int temporal_pad = std::get<0>(temporal_padding) * 2;
             if (temporal_pad > 0) {
-                x = ggml_ext_pad_ext(ctx->ggml_ctx,
-                                     ctx->backend,
+                x = ggml_ext_pad_ext(ctx,
                                      x,
                                      0,
                                      0,
@@ -105,7 +104,7 @@ namespace MiniMaxH3VAE {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             ggml_tensor* result = nullptr;
             for (int64_t t = 0; t < x->ne[2]; ++t) {
-                auto frame = ggml_ext_slice(ctx->ggml_ctx, x, 2, t, t + 1);
+                auto frame = ggml_ext_slice(ctx, x, 2, t, t + 1);
                 GGML_ASSERT(frame->ne[3] % num_channels == 0);
                 int64_t batch_size = frame->ne[3] / num_channels;
                 frame              = ggml_cont(ctx->ggml_ctx, frame);
@@ -146,9 +145,9 @@ namespace MiniMaxH3VAE {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             if (spatial_stride == 2) {
                 GGML_ASSERT(x->ne[0] > 1 && x->ne[1] > 1);
-                auto right  = ggml_ext_slice(ctx->ggml_ctx, x, 0, x->ne[0] - 2, x->ne[0] - 1);
+                auto right  = ggml_ext_slice(ctx, x, 0, x->ne[0] - 2, x->ne[0] - 1);
                 x           = ggml_concat(ctx->ggml_ctx, x, right, 0);
-                auto bottom = ggml_ext_slice(ctx->ggml_ctx, x, 1, x->ne[1] - 2, x->ne[1] - 1);
+                auto bottom = ggml_ext_slice(ctx, x, 1, x->ne[1] - 2, x->ne[1] - 1);
                 x           = ggml_concat(ctx->ggml_ctx, x, bottom, 1);
             }
             return std::dynamic_pointer_cast<CausalConv3d>(blocks["conv"])->forward(ctx, x);
@@ -263,14 +262,14 @@ namespace MiniMaxH3VAE {
         auto ctx        = runner_ctx->ggml_ctx;
         int64_t rot_dim = pe->ne[2] * 2;
         auto rotated    = Rope::apply_rope(runner_ctx,
-                                           ggml_ext_slice(ctx, x, 0, 0, rot_dim),
+                                           ggml_ext_slice(runner_ctx, x, 0, 0, rot_dim),
                                            pe,
                                            false);
         if (rot_dim == x->ne[0]) {
             return rotated;
         }
         auto tail = attention_layout(ctx,
-                                     ggml_ext_slice(ctx, x, 0, rot_dim, x->ne[0]));
+                                     ggml_ext_slice(runner_ctx, x, 0, rot_dim, x->ne[0]));
         return ggml_concat(ctx, rotated, tail, 0);
     }
 
@@ -298,7 +297,7 @@ namespace MiniMaxH3VAE {
                                                   num_head,
                                                   sequence,
                                                   batch_size);
-            auto qkv            = ggml_ext_chunk(ctx->ggml_ctx, qkv_projection, 3, 0);
+            auto qkv            = ggml_ext_chunk(ctx, qkv_projection, 3, 0);
             auto q              = ggml_reshape_4d(ctx->ggml_ctx,
                                                   qkv[0],
                                                   head_dim,
@@ -434,7 +433,7 @@ namespace MiniMaxH3VAE {
             GGML_ASSERT(batch_size == 1);
 
             z                   = ggml_cont(ctx->ggml_ctx,
-                                            ggml_ext_torch_permute(ctx->ggml_ctx, z, 3, 0, 1, 2));
+                                            ggml_ext_torch_permute(ctx, z, 3, 0, 1, 2));
             z                   = ggml_reshape_3d(ctx->ggml_ctx,
                                                   z,
                                                   24,
@@ -444,8 +443,8 @@ namespace MiniMaxH3VAE {
             auto h              = x_embedder->forward(ctx, z);
             int64_t num_patches = h->ne[1];
             h                   = ggml_concat(ctx->ggml_ctx, h, params["register_tokens"], 1);
-            auto zero           = ggml_ext_scale(ctx->ggml_ctx,
-                                                 ggml_ext_slice(ctx->ggml_ctx, h, 1, 0, 1),
+            auto zero           = ggml_ext_scale(ctx,
+                                                 ggml_ext_slice(ctx, h, 1, 0, 1),
                                                  0.f);
             h                   = ggml_concat(ctx->ggml_ctx, h, zero, 1);
 
@@ -461,8 +460,8 @@ namespace MiniMaxH3VAE {
             auto norm_out = std::dynamic_pointer_cast<LayerNorm>(blocks["norm_out"]);
             auto proj_out = std::dynamic_pointer_cast<Linear>(blocks["proj_out"]);
             h             = proj_out->forward(ctx, norm_out->forward(ctx, h));
-            h             = ggml_ext_slice(ctx->ggml_ctx, h, 1, 0, num_patches);
-            return DiT::unpatchify_3d(ctx->ggml_ctx,
+            h             = ggml_ext_slice(ctx, h, 1, 0, num_patches);
+            return DiT::unpatchify_3d(ctx,
                                       h,
                                       num_frames,
                                       height,
@@ -499,7 +498,7 @@ namespace MiniMaxH3VAE {
             auto encoder = std::dynamic_pointer_cast<Encoder>(blocks["encoder"]);
             auto quant   = std::dynamic_pointer_cast<Conv3d>(blocks["quant_conv"]);
             auto moments = quant->forward(ctx, encoder->forward(ctx, pixels));
-            return single_frame ? moments : ggml_ext_slice(ctx->ggml_ctx, moments, 3, 0, 24);
+            return single_frame ? moments : ggml_ext_slice(ctx, moments, 3, 0, 24);
         }
 
         ggml_tensor* decode(GGMLRunnerContext* ctx,
