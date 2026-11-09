@@ -9,13 +9,28 @@ if (NOT XCODE AND NOT MSVC AND NOT CMAKE_BUILD_TYPE)
 endif()
 
 if (MSVC)
+    cmake_host_system_information(RESULT SD_LOGICAL_CORES QUERY NUMBER_OF_LOGICAL_CORES)
+    if (SD_LOGICAL_CORES GREATER 8)
+        math(EXPR SD_DEFAULT_MSVC_MP_COUNT "${SD_LOGICAL_CORES} - 2")
+    elseif (SD_LOGICAL_CORES GREATER 2)
+        math(EXPR SD_DEFAULT_MSVC_MP_COUNT "${SD_LOGICAL_CORES} - 1")
+    else()
+        set(SD_DEFAULT_MSVC_MP_COUNT "${SD_LOGICAL_CORES}")
+    endif()
+    if (NOT SD_DEFAULT_MSVC_MP_COUNT GREATER 0)
+        set(SD_DEFAULT_MSVC_MP_COUNT 1)
+    endif()
+    set(SD_MSVC_MP_COUNT "${SD_DEFAULT_MSVC_MP_COUNT}" CACHE STRING "Maximum parallel MSVC compilations per project")
+    if (NOT SD_MSVC_MP_COUNT MATCHES "^[1-9][0-9]*$" OR SD_MSVC_MP_COUNT GREATER 65536)
+        message(FATAL_ERROR "SD_MSVC_MP_COUNT must be an integer between 1 and 65536")
+    endif()
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
     add_compile_definitions(_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING)
     # /MP is MSVC-only: icx rejects it outright once offloading is enabled.
     add_compile_options(
-        $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:MSVC>>:/MP>
+        $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:MSVC>>:/MP${SD_MSVC_MP_COUNT}>
         $<$<COMPILE_LANGUAGE:C>:/utf-8>
-        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/MP>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/MP${SD_MSVC_MP_COUNT}>
         $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
     )
 endif()
