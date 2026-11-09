@@ -169,15 +169,35 @@ namespace SD_CUDA_NAMESPACE {
             }
         }
 
+        static uintptr_t address(const ggml_tensor* tensor) {
+            size_t offset = 0;
+            while (tensor && !tensor->data && tensor->view_src) {
+                offset += tensor->view_offs;
+                tensor = tensor->view_src;
+            }
+            return tensor && tensor->data ? reinterpret_cast<uintptr_t>(tensor->data) + offset : 0;
+        }
         static bool overlaps(const ggml_tensor* a, const ggml_tensor* b) {
             if (!b)
                 return false;
-            const auto x = reinterpret_cast<uintptr_t>(a->data), y = reinterpret_cast<uintptr_t>(b->data);
+            const auto x = address(a), y = address(b);
+            if (!x || !y)
+                return false;
             return x <= y ? y - x < ggml_nbytes(a) : x - y < ggml_nbytes(b);
+        }
+        static bool needs_scratch(const Operation& op) {
+            const auto* dst = op.output;
+            return (overlaps(dst, op.input) && address(dst) != address(op.input)) ||
+                   (overlaps(dst, op.residual) && address(dst) != address(op.residual)) ||
+                   overlaps(dst, op.weight) || overlaps(dst, op.gate) || overlaps(dst, op.shift);
         }
 
         static ggml_status prepare(ggml_backend_t, ggml_tensor* const* nodes, int count, void**, size_t* workspace, void*) {
-            *workspace = ggml_nbytes(nodes[count - 1]);
+            const auto op    = describe(nodes, count);
+            const auto* dst  = op.output;
+            const bool fresh = !dst->data && !dst->buffer && !dst->view_src;
+            // Fresh outputs may reuse the residual elementwise; external inputs stay live.
+            *workspace = fresh || (dst->data && !needs_scratch(op)) ? 0 : ggml_nbytes(dst);
             return GGML_STATUS_SUCCESS;
         }
         static void destroy(void*, void*) {}
@@ -206,11 +226,11 @@ namespace SD_CUDA_NAMESPACE {
             ggml_ext_gpu_context context;
             if (!cuda_context(execution->backend, &context))
                 return GGML_STATUS_FAILED;
-            const auto op     = describe(nodes, count);
-            auto* dst         = op.output;
-            const bool alias  = (overlaps(dst, op.input) && dst->data != op.input->data) ||
-                                (overlaps(dst, op.residual) && dst->data != op.residual->data) ||
-                                overlaps(dst, op.weight) || overlaps(dst, op.gate) || overlaps(dst, op.shift);
+            const auto op    = describe(nodes, count);
+            auto* dst        = op.output;
+            const bool alias = needs_scratch(op);
+            if (alias && !execution->workspace)
+                return GGML_STATUS_FAILED;
             auto* output      = static_cast<float*>(alias ? ggml_backend_buffer_get_base(execution->workspace) : dst->data);
             const auto stream = static_cast<CUDAStream>(context.stream);
             CUDAError error   = cuda_invalid_value;

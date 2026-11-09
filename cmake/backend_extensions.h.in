@@ -3,6 +3,8 @@
 
 #include "core/cuda/registration.h"
 
+void sd_ggml_register_metal_i8(ggml_backend_dev_t device);
+
 void sd_ggml_register_vulkan_rope(ggml_backend_dev_t device);
 void sd_ggml_register_vulkan_i8(ggml_backend_dev_t device);
 void sd_ggml_register_vulkan_rms_affine(ggml_backend_dev_t device);
