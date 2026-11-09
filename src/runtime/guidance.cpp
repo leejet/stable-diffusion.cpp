@@ -141,9 +141,70 @@ namespace sd::guidance {
     }
 
     ClassifierFreeGuidance::ClassifierFreeGuidance(float guidance_scale,
-                                                   float image_guidance_scale)
+                                                   float image_guidance_scale,
+                                                   int renorm_patch_size)
         : guidance_scale_(guidance_scale),
-          image_guidance_scale_(image_guidance_scale) {
+          image_guidance_scale_(image_guidance_scale),
+          renorm_patch_size_(renorm_patch_size) {
+    }
+
+    // Nucleus-Image renormalized CFG: rescale the combined prediction so that each latent
+    // token's L2 norm (over the packed [C, patch, patch] feature vector) matches the cond
+    // prediction's norm for the same token. pred shape is [W, H, C, N]; a token is a
+    // patch x patch block over all C channels. In-place on pred.
+    static void renorm_pred_to_cond_norm(sd::Tensor<float>& pred,
+                                         const sd::Tensor<float>& cond,
+                                         int64_t patch) {
+        if (pred.empty() || pred.shape() != cond.shape() || patch <= 0) {
+            return;
+        }
+        const std::vector<int64_t>& shape = pred.shape();
+        if (shape.size() != 4 || shape[0] % patch != 0 || shape[1] % patch != 0) {
+            LOG_WARN("guidance renorm: unsupported prediction shape, skipping renorm");
+            return;
+        }
+        const int64_t W  = shape[0];
+        const int64_t H  = shape[1];
+        const int64_t C  = shape[2];
+        const int64_t N  = shape[3];
+        const int64_t pw = W / patch;
+        const int64_t ph = H / patch;
+        float* pd         = pred.data();
+        const float* cd   = cond.data();
+        // row-major [W, H, C, N]: index = x + W * (y + H * (c + C * n))
+        for (int64_t n = 0; n < N; ++n) {
+            for (int64_t py = 0; py < ph; ++py) {
+                for (int64_t px = 0; px < pw; ++px) {
+                    double comb_sq = 0.0;
+                    double cond_sq = 0.0;
+                    for (int64_t c = 0; c < C; ++c) {
+                        for (int64_t dy = 0; dy < patch; ++dy) {
+                            const int64_t y = patch * py + dy;
+                            for (int64_t dx = 0; dx < patch; ++dx) {
+                                const int64_t idx = (patch * px + dx) + W * (y + H * (c + C * n));
+                                comb_sq += (double)pd[idx] * pd[idx];
+                                cond_sq += (double)cd[idx] * cd[idx];
+                            }
+                        }
+                    }
+                    const double comb_norm = std::sqrt(comb_sq);
+                    const double cond_norm = std::sqrt(cond_sq);
+                    if (comb_norm <= 1e-12 || !std::isfinite(comb_norm) || !std::isfinite(cond_norm)) {
+                        continue;
+                    }
+                    const float scale = (float)(cond_norm / comb_norm);
+                    for (int64_t c = 0; c < C; ++c) {
+                        for (int64_t dy = 0; dy < patch; ++dy) {
+                            const int64_t y = patch * py + dy;
+                            for (int64_t dx = 0; dx < patch; ++dx) {
+                                const int64_t idx = (patch * px + dx) + W * (y + H * (c + C * n));
+                                pd[idx] *= scale;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     GuiderOutput ClassifierFreeGuidance::forward(const GuidanceInput& input,
@@ -169,6 +230,11 @@ namespace sd::guidance {
 
             } else {
                 output.pred = pred_uncond + guidance_scale * (pred_cond - pred_uncond);
+                // Nucleus-Image renormalized CFG: the reference pipeline renormalizes the
+                // plain text-CFG combination to the cond prediction's per-token norm.
+                if (renorm_patch_size_ > 0) {
+                    renorm_pred_to_cond_norm(output.pred, pred_cond, renorm_patch_size_);
+                }
             }
         } else if (has_tensor(input.pred_img_uncond)) {
             const sd::Tensor<float>& pred_img_uncond = *input.pred_img_uncond;
