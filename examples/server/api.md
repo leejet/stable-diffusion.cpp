@@ -775,12 +775,64 @@ Field types:
 | `queue_position` | `integer` |
 | `result` | `object \| null` |
 | `error` | `object \| null` |
+| `progress` | `object` |
 | `preview` | `object \| null` |
 
 `created`, `started`, and `completed` are integer Unix timestamps in
 **milliseconds**. Subtract `started` from `completed` and divide by 1000 to get
 the elapsed generation time in seconds, including output encoding and excluding
 queue time.
+
+`progress` is available independently of the preview setting, for both image
+and video jobs. Continue polling until `status` is terminal: a sampling pass
+can finish before decoding, ADetailer, or output encoding finishes.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `progress.stage` | `string` | Current execution stage; see below |
+| `progress.detail` | `string` | Stage detail, or an empty string |
+| `progress.pass` | `integer` | Sampling pass number within the job; zero before sampling |
+| `progress.completed` | `integer \| null` | Completed units in the current stage/pass |
+| `progress.total` | `integer \| null` | Actual total units, or null when unknown |
+| `progress.unit` | `string \| null` | `steps` for sampling, `images` for image output encoding; null when uncounted |
+| `progress.stage_elapsed_ms` | `integer` | Elapsed time in the current stage/detail/pass |
+| `progress.elapsed_ms` | `integer` | Job execution time, excluding queue time; zero before execution |
+
+Stages include `queued`, `waiting` (waiting for the execution lock), `preparing`,
+`conditioning`, `sampling`, `vae_encode`, `vae_decode`, `audio_decode`,
+`upscaling`, `adetailer`, and `encoding`. Stages may repeat or be skipped.
+Details include `positive_prompt` / `negative_prompt` / `image_condition` for
+conditioning, `high_noise` / `low_noise` for two-stage sampling, and `image` /
+`video` for output encoding. During ADetailer, `detail` identifies the inner
+stage, such as `conditioning` or `sampling`. Clients should tolerate unknown
+stage, detail, and unit values.
+
+Sampling counts completed logical steps using the actual schedule, including
+strength adjustments. Each new sampling pass increments `pass` and starts at
+zero, including batch items, highres passes, high/low-noise passes, and ADetailer
+passes. The ratio is **current-pass progress**, not overall job completion.
+The progress snapshot is published atomically. Preview metadata still describes
+the preview frame, which may be older than the current progress.
+
+Unknown totals are represented by null counts, not an estimated percentage.
+For example, prompt encoding can report:
+
+```json
+"progress": {
+  "stage": "conditioning",
+  "detail": "positive_prompt",
+  "pass": 0,
+  "completed": null,
+  "total": null,
+  "unit": null,
+  "stage_elapsed_ms": 3200,
+  "elapsed_ms": 4100
+}
+```
+
+Elapsed times freeze when a job completes, fails, or is cancelled; the last
+stage is retained for inspection. Use `status` to determine the final outcome.
+Elapsed time alone does not indicate that computation is advancing.
 
 `preview` sub-fields:
 
@@ -936,6 +988,7 @@ LTX and Wan preserve causal state between temporal tiles. Hunyuan Video and TAEH
 | `ref_image_args` | `string` |
 | `increase_ref_index` | `boolean` |
 | `control_strength` | `number` |
+| `control_type` | `string` |
 | `ip_adapter_strength` | `number` |
 | `hires` | `object` |
 | `hires.enabled` | `boolean` |
@@ -1116,6 +1169,7 @@ Example:
   "ref_image_args": "",
   "increase_ref_index": false,
   "control_strength": 0.9,
+  "control_type": "",
   "ip_adapter_strength": 1.0,
   "embed_image_metadata": true,
 
@@ -1241,6 +1295,7 @@ Top-level scalar fields:
 | `image_preprocess` | `string \| array<string>` |
 | `increase_ref_index` | `boolean` |
 | `control_strength` | `number` |
+| `control_type` | `string` |
 | `ip_adapter_strength` | `number` |
 | `embed_image_metadata` | `boolean` |
 | `preview` | `string` |

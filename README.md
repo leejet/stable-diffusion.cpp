@@ -88,6 +88,9 @@ API and command-line option may change frequently.***
     - [LTX-2.3/LTX-2.5](./docs/ltx2.md)
     - [HunyuanVideo 1.5](./docs/hunyuan_video.md)
     - [LingBot-Video](./docs/lingbot_video.md)
+  - Video Upscale Models
+    - [RelayVSR](./docs/relay_vsr.md)
+    - [SeedVR2](./docs/seedvr2.md)
   - [PhotoMaker](./docs/photo_maker.md) support.
   - [IP-Adapter](./docs/ip_adapter.md) support (SD 1.5 and SDXL, including Plus)
   - Control Net support with SD 1.5
@@ -199,6 +202,8 @@ These projects use `stable-diffusion.cpp` as a backend for their image generatio
 - [KoboldCpp](https://github.com/LostRuins/koboldcpp)
 - [Kokon](https://github.com/GabrieleLozupone/kokon)
 - [NodeTool](https://github.com/nodetool-ai/nodetool)
+- [Quo](https://github.com/quo-ai/quo)
+- [Prisme](https://github.com/d3Ita/prisme)
 
 ## Contributors
 

@@ -1,0 +1,92 @@
+#version 460
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_EXT_shader_8bit_storage : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_NV_cooperative_matrix2 : require
+#extension GL_KHR_memory_scope_semantics : require
+layout(local_size_x = 256) in;
+layout(constant_id = 0) const uint BM   = 64;
+layout(constant_id = 1) const uint BN   = 64;
+layout(constant_id = 2) const uint BK   = 64;
+layout(constant_id = 3) const bool FULL = true;
+layout(push_constant) uniform parameter {
+    uint n;
+    uint rows;
+    uint k;
+    uint has_bias;
+    uint row_offset;
+}
+p;
+layout(binding = 0, std430) readonly buffer W {
+    uvec4 data_w[];
+};
+layout(binding = 1, std430) readonly buffer A {
+    int8_t data_a[];
+};
+layout(binding = 2, std430) readonly buffer WS {
+    float data_ws[];
+};
+layout(binding = 3, std430) readonly buffer AS {
+    float data_as[];
+};
+layout(binding = 4, std430) readonly buffer B {
+    float data_b[];
+};
+layout(binding = 5, std430) writeonly buffer D {
+    int32_t data_d[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer PackedBlock {
+    uvec4 value;
+};
+int8_t decode_weight(const in PackedBlock block, const in uint block_coords[2], const in uint coord[2]) {
+    return int8_t(bitfieldExtract(int(block.value[coord[1] / 8]), int((coord[1] % 8) * 4), 4));
+}
+int32_t dequantize(const in uint r, const in uint c, const in int32_t v, const in uint row, const in uint col) {
+    if (row + c >= p.rows || col + r >= p.n)
+        return 0;
+    precise float value = float(v) * data_as[row + c] * data_ws[col + r];
+    if (p.has_bias != 0)
+        value += data_b[col + r];
+    return floatBitsToInt(value);
+}
+// The host selects complete weight tiles and a 256-aligned input width.
+void main() {
+    const uint cols = gl_NumWorkGroups.x, rows = gl_NumWorkGroups.y;
+    const uint linear = gl_WorkGroupID.y * cols + gl_WorkGroupID.x;
+    const uint panel = min(32u, cols), first_col = (linear / (panel * rows)) * panel;
+    const uint group_cols = min(panel, cols - first_col), within = linear - first_col * rows;
+    const uint row = p.row_offset + (within / group_cols) * BN, col = (first_col + within % group_cols) * BM;
+    coopmat<int32_t, gl_ScopeWorkgroup, BM, BN, gl_MatrixUseAccumulator> sum = coopmat<int32_t, gl_ScopeWorkgroup, BM, BN, gl_MatrixUseAccumulator>(0);
+    tensorLayoutNV<2> wl                                                     = createTensorLayoutNV(2);
+    wl                                                                       = setTensorLayoutBlockSizeNV(wl, 1, 32);
+    wl                                                                       = setTensorLayoutDimensionNV(wl, p.n, p.k & ~255u);
+    tensorLayoutNV<2> al                                                     = createTensorLayoutNV(2);
+    al                                                                       = setTensorLayoutDimensionNV(al, p.rows, p.k & ~255u);
+    tensorViewNV<2, false, 1, 0> at                                          = createTensorViewNV(2, false, 1, 0);
+    if (FULL) {
+        for (uint base = 0; base < p.k; base += BK) {
+            coopmat<int8_t, gl_ScopeWorkgroup, BM, BK, gl_MatrixUseA> w;
+            coopmat<int8_t, gl_ScopeWorkgroup, BK, BN, gl_MatrixUseB> a;
+            coopMatLoadTensorNV(w, data_w, 0, sliceTensorLayoutNV(wl, col, BM, base, BK), decode_weight);
+            coopMatLoadTensorNV(a, data_a, 0, sliceTensorLayoutNV(al, row, BN, base, BK), at);
+            sum = coopMatMulAdd(w, a, sum);
+        }
+    } else {
+        tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> tail = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
+        tail                                                            = setTensorLayoutDimensionNV(tail, p.rows, p.k & ~255u);
+        for (uint base = 0; base < p.k; base += BK) {
+            coopmat<int8_t, gl_ScopeWorkgroup, BM, BK, gl_MatrixUseA> w;
+            coopmat<int8_t, gl_ScopeWorkgroup, BK, BN, gl_MatrixUseB> a;
+            coopMatLoadTensorNV(w, data_w, 0, sliceTensorLayoutNV(wl, col, BM, base, BK), decode_weight);
+            coopMatLoadTensorNV(a, data_a, 0, sliceTensorLayoutNV(tail, row, BN, base, BK), at);
+            sum = coopMatMulAdd(w, a, sum);
+        }
+    }
+    coopMatPerElementNV(sum, sum, dequantize, row, col);
+    tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> dl = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
+    dl                                                            = setTensorLayoutDimensionNV(dl, p.rows, p.n);
+    tensorViewNV<2, false, 1, 0> transpose                        = createTensorViewNV(2, false, 1, 0);
+    coopMatStoreTensorNV(sum, data_d, 0, sliceTensorLayoutNV(dl, row, BN, col, BM), transpose);
+}

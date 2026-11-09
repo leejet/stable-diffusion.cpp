@@ -1,0 +1,7 @@
+#ifndef __SD_CORE_METAL_INT8_SOURCE_H__
+#define __SD_CORE_METAL_INT8_SOURCE_H__
+
+static const char sd_metal_i8_source[] = R"SD_METAL(@SD_METAL_I8_SOURCE@)SD_METAL";
+static const char sd_metal_i8_mpp_source[] = R"SD_METAL(@SD_METAL_I8_MPP_SOURCE@)SD_METAL";
+
+#endif

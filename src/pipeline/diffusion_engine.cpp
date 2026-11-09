@@ -1019,7 +1019,7 @@ void StableDiffusionGGML::configure_weight_loading() {
     bool have_int8_tensorwise = false;
     bool have_quant_type_rule = false;
     for (const auto& [_, tensor_storage] : model_loader.get_tensor_storage_map()) {
-        if (tensor_storage.is_int8_tensorwise) {
+        if (tensor_storage.is_int8_tensorwise || tensor_storage.w4_convrot_kind) {
             have_int8_tensorwise = true;
         }
         if (tensor_storage.expected_type < GGML_TYPE_COUNT && ggml_is_quantized(tensor_storage.expected_type)) {
@@ -1051,7 +1051,7 @@ void StableDiffusionGGML::configure_weight_loading() {
     } else if (sd_ctx_params->lora_apply_mode == LORA_APPLY_IMMEDIATELY) {
         if (have_int8_tensorwise) {
             LOG_WARN(
-                "INT8 tensorwise weights do not support the immediately LoRA apply mode; "
+                "ComfyUI INT8/packed INT4 weights do not support the immediately LoRA apply mode; "
                 "using at_runtime instead");
             apply_lora_immediately = false;
         } else if (row_split_active()) {
@@ -1807,6 +1807,7 @@ void StableDiffusionGGML::lora_stat() {
 }
 
 bool StableDiffusionGGML::apply_loras(const sd_lora_t* loras, uint32_t lora_count) {
+    generation_progress.report("preparing", "loras");
     std::vector<ModelManager::LoraSpec> all_loras;
     all_loras.reserve(lora_count);
     for (uint32_t i = 0; i < lora_count; i++) {
@@ -2243,6 +2244,7 @@ void StableDiffusionGGML::report_sample_progress(int step,
                                  ? (now - *last_progress_us) / 1000000.f
                                  : 0.f;
         pretty_progress(showstep, (int)total_steps, step_seconds);
+        generation_progress.report_sample(showstep, static_cast<int64_t>(total_steps));
         if (last_progress_us != nullptr) {
             *last_progress_us = now;
         }
@@ -2268,6 +2270,10 @@ static sd::Tensor<float> batch_two_condition_tensors(const sd::Tensor<float>& a,
         }
     }
     return sd::ops::concat(a, b, static_cast<size_t>(batch_dim));
+}
+
+bool StableDiffusionGGML::set_control_type(sd_control_type_t type) {
+    return control_net == nullptr || control_net->set_control_type(type);
 }
 
 void StableDiffusionGGML::compute_sample_controls(const sd::Tensor<float>& control_image,
@@ -2420,6 +2426,9 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
 
     int64_t last_progress_us = ggml_time_us();
     sd_begin_preview_pass(static_cast<int>(steps));
+    generation_progress.begin_sample(static_cast<int64_t>(steps),
+                                     work_diffusion_model == high_noise_diffusion_model ? "high_noise" : high_noise_diffusion_model != nullptr ? "low_noise"
+                                                                                                                                               : "");
     SamplePreviewContext preview = prepare_sample_preview_context();
 
     sd::Tensor<float> processed_init_latent       = denoiser->process_latent_in(init_latent);
@@ -2430,6 +2439,15 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                                                         ? denoiser->noise_scaling(sigmas[0], noise, sampling_init_latent)
                                                         : sampling_init_latent;
     sd::Tensor<float> denoised                    = x_t;
+
+#ifdef SD_USE_UPSTREAM_GGML
+    // workaround for sd.cpp #2149
+    const auto diffusion_backends = backend_manager.runtime_backends(SDBackendModule::DIFFUSION);
+    const bool batch_cfg_backend_ok = std::none_of(diffusion_backends.begin(), diffusion_backends.end(),
+            [](ggml_backend_t backend) { return sd_backend_is(backend, "MTL"); });
+#else
+    const bool batch_cfg_backend_ok = true;
+#endif
 
     auto denoise = [&](const sd::Tensor<float>& x, float sigma, int step) -> sd::guidance::GuiderOutput {
         if (get_cancel_flag() == SD_CANCEL_ALL) {
@@ -2589,14 +2607,16 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                 diffusion_params.extra = LLaDAImageDiffusionExtra{
                     condition.extra_c_crossattns.empty() ? nullptr : &condition.extra_c_crossattns[0]};
             } else if (sd_version_is_minimax_h3(version)) {
-                diffusion_params.extra = MiniMaxH3DiffusionExtra{
+                const size_t target_index = static_cast<size_t>(std::abs(step));
+                diffusion_params.extra    = MiniMaxH3DiffusionExtra{
                     condition.c_token_types.empty() ? nullptr : &condition.c_token_types,
                     condition.c_position_ids.empty() ? nullptr : &condition.c_position_ids,
                     condition.c_ref_audios.empty() ? nullptr : &condition.c_ref_audios,
                     condition.c_reference_blocks.empty() ? nullptr : &condition.c_reference_blocks,
                     version == VERSION_P_H3_IMAGE ? 2 : audio_length,
                     std::isfinite(active_flow_shift) ? active_flow_shift : 12.f,
-                    version == VERSION_P_H3_IMAGE ? 1.f : 3.f};
+                    version == VERSION_P_H3_IMAGE ? 1.f : 3.f,
+                    target_index > 0 && target_index < sigmas.size() ? sigmas[target_index] : NAN};
             } else if (sd_version_is_ltxav(version)) {
                 diffusion_params.extra = LTXAVDiffusionExtra{
                     nullptr,
@@ -2751,6 +2771,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
         }
 
         const bool batch_cfg_ok = config_->params.batched_cfg &&
+                                  batch_cfg_backend_ok &&
                                   sd_version_is_unet(version) &&
                                   !uncond.empty() &&
                                   img_uncond.empty() &&
@@ -2926,7 +2947,12 @@ int StableDiffusionGGML::get_image_channels() const {
 
 int StableDiffusionGGML::get_image_seq_len(int h, int w) {
     int vae_scale_factor = get_vae_scale_factor();
-    return (h / vae_scale_factor) * (w / vae_scale_factor);
+    int patch_size       = diffusion_model != nullptr ? diffusion_model->get_patch_size() : 1;
+    int latent_h         = h / vae_scale_factor;
+    int latent_w         = w / vae_scale_factor;
+    int tokens_h         = (latent_h + patch_size - 1) / patch_size;
+    int tokens_w         = (latent_w + patch_size - 1) / patch_size;
+    return tokens_h * tokens_w;
 }
 
 sd::Tensor<float> StableDiffusionGGML::generate_init_latent(int width,
@@ -2984,6 +3010,7 @@ int StableDiffusionGGML::align_video_frames(int frames) {
 }
 
 sd::Tensor<float> StableDiffusionGGML::encode_to_vae_latents(const sd::Tensor<float>& x) {
+    generation_progress.report("vae_encode");
     auto latents = first_stage_model->encode(n_threads, x, vae_tiling_params, circular_x, circular_y);
     if (latents.empty()) {
         return {};
@@ -3004,6 +3031,7 @@ sd::Tensor<float> StableDiffusionGGML::encode_first_stage(const sd::Tensor<float
 }
 
 sd::Tensor<float> StableDiffusionGGML::decode_first_stage(const sd::Tensor<float>& x, bool decode_video) {
+    generation_progress.report("vae_decode");
     if (sd_version_is_pid(version) || sd_version_is_minit2i(version) || version == VERSION_IRIS) {
         return sd::ops::clamp((x + 1.f) * 0.5f, 0.0f, 1.0f);
     }
@@ -3058,6 +3086,7 @@ sd::Tensor<float> StableDiffusionGGML::decode_ltx_audio_latent(const sd::Tensor<
     if (audio_vae_model == nullptr || audio_latent.empty()) {
         return {};
     }
+    generation_progress.report("audio_decode");
     auto waveform = audio_vae_model->decode(n_threads, audio_latent);
     return waveform;
 }

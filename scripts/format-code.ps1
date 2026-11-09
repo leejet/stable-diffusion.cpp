@@ -10,6 +10,8 @@ $patterns = @(
     "src/core/*.hpp"
     "src/core/cpu/*.cpp"
     "src/core/cpu/*.h"
+    "src/core/metal/*.mm"
+    "src/core/metal/*.metal"
     "src/core/cuda/*.cu"
     "src/core/cuda/*.cuh"
     "src/core/cuda/*.h"
