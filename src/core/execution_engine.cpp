@@ -862,7 +862,7 @@ namespace sd {
             auto& session = *entry.second;
             if (session.owner_id() != request.owner_id && session.workspace_.release()) {
                 sync_residency(session);
-                if (capacity().fits()) {
+                if (capacity().fits(true)) {
                     return true;
                 }
             }
@@ -905,12 +905,12 @@ namespace sd {
             return lhs.last_use_epoch < rhs.last_use_epoch;
         });
         for (const auto& block : candidates) {
-            if (manager.evict_compute_backend_block(block) && capacity().fits()) {
+            if (manager.evict_compute_backend_block(block) && capacity().fits(true)) {
                 return true;
             }
         }
         auto available = capacity();
-        if (available.fits()) {
+        if (available.fits(true)) {
             return true;
         }
         if (sd_backend_is(request.compute_backend, "Vulkan") &&
@@ -920,7 +920,7 @@ namespace sd {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
             do {
                 available = capacity();
-                if (available.fits()) {
+                if (available.fits(true)) {
                     return true;
                 }
                 if (available.required_budget_bytes > available.available_budget_bytes) {

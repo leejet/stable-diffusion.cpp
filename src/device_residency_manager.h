@@ -48,9 +48,11 @@ struct DeviceMemoryCapacity {
     size_t available_budget_bytes = SIZE_MAX;
     bool requires_reclamation     = false;
     bool valid                    = true;
+    bool wrapped_device_report    = false;
 
-    bool fits() const {
+    bool fits(bool after_reclamation = false) const {
         return valid && !requires_reclamation &&
+               (after_reclamation || !wrapped_device_report) &&
                required_device_bytes <= available_device_bytes &&
                required_budget_bytes <= available_budget_bytes;
     }
