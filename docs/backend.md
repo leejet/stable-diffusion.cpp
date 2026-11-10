@@ -181,8 +181,18 @@ GPU cache space follows the same component priority. Before a lower-priority
 component can become permanently resident, the planner leaves room for the full
 weights and estimated compute space of higher-priority offloaded components.
 If offloaded diffusion already needs the entire main GPU budget, TE and VAE also
-use offloaded parameters. Their GPU copies can then be released after their
-phases, leaving more room to reuse diffusion weights across sampling steps.
+use offloaded parameters. GPU copies remain cached across sampling steps while
+a component's execution is active and are released under memory pressure.
+Ending a component's execution releases its staged GPU copies, disk-backed
+weight buffers, temporary compute buffers and execution caches. Parameters
+assigned permanently to a backend remain resident. Hires model upscaling shares
+the runtime budget and can
+reclaim idle weight copies from other components.
+Reclamation releases idle compute buffers first, then cached weight allocations
+until the current work fits. Weights used by active computation or pending
+transfers stay protected.
+For CPU computation with disk-backed parameters, cached weights are released
+when execution ends so they do not accumulate in RAM across components.
 CPU parameter residency allows GPU weight caching; it does not force every
 weight to be copied again at every step.
 
