@@ -151,8 +151,8 @@ namespace Lens {
             int64_t N       = img->ne[2];
             int64_t inner   = dim_head * num_heads;
 
-            auto img_qkv_vec = ggml_ext_split_qkv(ctx, img_qkv->forward(ctx, img));
-            auto txt_qkv_vec = ggml_ext_split_qkv(ctx, txt_qkv->forward(ctx, txt));
+            auto img_qkv_vec = ggml_ext_chunk(ctx, img_qkv->forward(ctx, img), 3, 0);
+            auto txt_qkv_vec = ggml_ext_chunk(ctx, txt_qkv->forward(ctx, txt), 3, 0);
 
             auto img_q = ggml_reshape_4d(ctx->ggml_ctx, img_qkv_vec[0], dim_head, num_heads, n_img, N);
             auto img_k = ggml_reshape_4d(ctx->ggml_ctx, img_qkv_vec[1], dim_head, num_heads, n_img, N);

@@ -1252,7 +1252,7 @@ namespace LLM {
             } else {
                 auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
                 auto qkv      = qkv_proj->forward(ctx, x);
-                qkv_vec       = ggml_ext_split_qkv(ctx, qkv);
+                qkv_vec       = ggml_ext_chunk(ctx, qkv, 3, 0);
             }
 
             auto q = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[0], head_dim, num_heads, qkv_vec[0]->ne[1], qkv_vec[0]->ne[2]);  // [N, n_token, n_head, d_head]

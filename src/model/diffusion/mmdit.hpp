@@ -334,7 +334,7 @@ public:
         auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
 
         auto qkv         = qkv_proj->forward(ctx, x);
-        auto qkv_vec     = ggml_ext_split_qkv(ctx, qkv);
+        auto qkv_vec     = ggml_ext_chunk(ctx, qkv, 3, 0);
         int64_t head_dim = qkv_vec[0]->ne[0] / num_heads;
         auto q           = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[0], head_dim, num_heads, qkv_vec[0]->ne[1], qkv_vec[0]->ne[2]);  // [N, n_token, n_head, d_head]
         auto k           = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[1], head_dim, num_heads, qkv_vec[1]->ne[1], qkv_vec[1]->ne[2]);  // [N, n_token, n_head, d_head]
