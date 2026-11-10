@@ -430,6 +430,7 @@ namespace MiniMaxH3VAE {
                 auto input   = ggml_ext_slice(ctx, x, 1, row, std::min(row + rows_per_chunk, x->ne[1]), false);
                 auto indices = ggml_ext_slice(ctx, sol->row_ids, 0, row, std::min(row + rows_per_chunk, x->ne[1]), false);
                 output       = ggml_set_rows(ctx->ggml_ctx, output, finish(input), indices);
+                ctx->expand_graph(output);
             }
             return output;
         }

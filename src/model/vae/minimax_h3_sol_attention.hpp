@@ -172,6 +172,7 @@ namespace MiniMaxH3VAE {
                                                                heads, nullptr, false, runner_ctx->flash_attn_enabled);
                         auto indices  = ggml_reshape_1d(ctx, batch.output_rows, ggml_nelements(batch.output_rows));
                         output        = ggml_set_rows(ctx, output, ggml_reshape_2d(ctx, attended, dim, indices->ne[0]), indices);
+                        runner_ctx->expand_graph(output);
                     }
                     // Later windows can only read this block and its immediate successor.
                     previous = current;
