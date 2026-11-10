@@ -12,7 +12,7 @@ namespace SD_CUDA_NAMESPACE {
             v = __fadd_rn(v, cuda_shuffle_xor(v, mask));
         return v;
     }
-    template <int D, bool interleaved, typename T>
+    template <int D, bool interleaved, typename T, bool affine = true>
     static __global__ void rms_norm_mul_rope_apply_fused(
         const float* x,
         const float* weight,
@@ -51,7 +51,7 @@ namespace SD_CUDA_NAMESPACE {
 #pragma unroll
         for (int j = 0; j < D / 32; ++j) {
             const int col     = j * 32 + lane;
-            const float value = __fmul_rn(__fmul_rn(scale, v[j]), weight[col]);
+            const float value = affine ? __fmul_rn(__fmul_rn(scale, v[j]), weight[col]) : __fmul_rn(scale, v[j]);
             float rotated     = value;
             if constexpr (interleaved) {
                 const float other = cuda_shuffle_xor(value, 1, 32);
@@ -65,7 +65,7 @@ namespace SD_CUDA_NAMESPACE {
             } else {
                 if (col < 2 * rot_half) {
                     const int partner   = col < rot_half ? col + rot_half : col - rot_half;
-                    const float other   = __fmul_rn(__fmul_rn(scale, x_row[partner]), weight[partner]);
+                    const float other   = affine ? __fmul_rn(__fmul_rn(scale, x_row[partner]), weight[partner]) : __fmul_rn(scale, x_row[partner]);
                     const float* m      = pe + 4 * (token * rot_half + col % rot_half);
                     const float4 matrix = make_float4(m[0], m[1], m[2], m[3]);
                     rotated             = col < rot_half
@@ -178,6 +178,20 @@ namespace SD_CUDA_NAMESPACE {
                (ggml_nrows(x) + 3) / 4 <= INT_MAX;
     }
 
+    static bool rope_non_affine_fusion_supports(const ggml_tensor* norm, const ggml_tensor* rope) {
+        if (!norm || norm->op != GGML_OP_RMS_NORM || !rope_is_node(rope) || rope->src[0] != norm ||
+            !rope_supports(nullptr, rope, nullptr) || rope_interleaved(rope))
+            return false;
+        const auto* x  = norm->src[0];
+        const auto* pe = rope->src[1];
+        // The kernel reads contiguous channels and position matrices, with row strides in floats.
+        return x && x->type == GGML_TYPE_F32 && x->ne[0] == 64 &&
+               x->nb[0] == sizeof(float) && x->nb[1] % sizeof(float) == 0 &&
+               x->nb[2] % sizeof(float) == 0 && x->nb[3] % sizeof(float) == 0 &&
+               ggml_are_same_shape(x, norm) && ggml_is_contiguous(pe) &&
+               ggml_nrows(x) > 0 && (ggml_nrows(x) + 3) / 4 <= INT_MAX;
+    }
+
     template <typename T, bool Interleaved>
     static CUDAError rms_rope_launch(CUDAStream stream, ggml_tensor* const* nodes, T* output, float scale) {
         const auto* x      = nodes[0]->src[0];
@@ -220,6 +234,9 @@ namespace SD_CUDA_NAMESPACE {
         if (disabled)
             return 0;
         auto* g = const_cast<ggml_cgraph*>(graph);
+        if (first + 1 < ggml_graph_n_nodes(g) &&
+            rope_non_affine_fusion_supports(ggml_graph_node(g, first), ggml_graph_node(g, first + 1)))
+            return 2;
         if (first + 2 >= ggml_graph_n_nodes(g) || !rope_fusion_supports(
                                                       ggml_graph_node(g, first), ggml_graph_node(g, first + 1), ggml_graph_node(g, first + 2)))
             return 0;
@@ -253,6 +270,16 @@ namespace SD_CUDA_NAMESPACE {
         for (int i = 2; i + 1 < total; ++i) {
             const auto* mul  = ggml_graph_node(graph, i);
             const auto* rope = ggml_graph_node(graph, i + 1);
+            if (rope_non_affine_fusion_supports(rope->src[0], rope)) {
+                for (int j = i; j >= 0 && j >= i - 64; --j) {
+                    if (ggml_graph_node(graph, j) == rope->src[0]) {
+                        if (j < i)
+                            ggml_ext_graph_delay(graph, j, 1, i + 1);
+                        break;
+                    }
+                }
+                continue;
+            }
             if (mul->op != GGML_OP_MUL || !rope_is_node(rope) || rope->src[0] != mul ||
                 !mul->src[0] || mul->src[0]->op != GGML_OP_RMS_NORM)
                 continue;
@@ -296,13 +323,20 @@ namespace SD_CUDA_NAMESPACE {
         if (!cuda_context(execution->backend, &context))
             return GGML_STATUS_FAILED;
         auto stream      = static_cast<CUDAStream>(context.stream);
-        const auto* rope = nodes[count == 1 ? 0 : 2];
+        const auto* rope = nodes[count <= 2 ? count - 1 : 2];
         const auto* x    = count == 1 ? rope->src[0] : nodes[0]->src[0];
         auto* dst        = nodes[count - 1];
-        const bool alias = overlaps(dst, x) || overlaps(dst, rope->src[1]) || (count > 1 && overlaps(dst, nodes[1]->src[1]));
+        const bool alias = overlaps(dst, x) || overlaps(dst, rope->src[1]) || (count > 2 && overlaps(dst, nodes[1]->src[1]));
         void* output     = alias ? ggml_backend_buffer_get_base(execution->workspace) : dst->data;
         CUDAError error;
-        if (count > 1) {
+        if (count == 2) {
+            const auto* pe     = rope->src[1];
+            const int64_t rows = ggml_nrows(x);
+            rms_norm_mul_rope_apply_fused<64, false, float, false><<<static_cast<unsigned int>((rows + 3) / 4), dim3(32, 4), 0, stream>>>(
+                static_cast<const float*>(x->data), nullptr, static_cast<const float*>(pe->data), static_cast<float*>(output),
+                x->ne[1], x->ne[2], rows, x->nb[1] / 4, x->nb[2] / 4, x->nb[3] / 4, int(pe->ne[2]), param_f32(nodes[0], 0), 1.f);
+            error = cuda_last_error();
+        } else if (count > 2) {
             error = rms_rope_launch(stream, nodes, output, count > 3, count == 5 ? param_f32(nodes[3], 0) : 1.f);
         } else {
             RopeApplyStrides strides;
