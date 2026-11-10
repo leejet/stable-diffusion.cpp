@@ -335,6 +335,18 @@ namespace MiniMaxH3VAE {
             return {q, k, v};
         }
 
+        std::array<ggml_tensor*, 3> project_sol(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* pe) {
+            auto to_qkv         = std::dynamic_pointer_cast<Linear>(blocks["to_qkv"]);
+            auto qkv_projection = to_qkv->forward(ctx, x);
+            qkv_projection      = ggml_reshape_4d(ctx->ggml_ctx, qkv_projection, 3 * head_dim, num_head, x->ne[1], x->ne[2] * x->ne[3]);
+            auto qkv            = ggml_ext_chunk(ctx, qkv_projection, 3, 0, false);
+            auto q              = ggml_rms_norm(ctx->ggml_ctx, qkv[0], 1e-5f);
+            auto k              = ggml_rms_norm(ctx->ggml_ctx, qkv[1], 1e-5f);
+            return {Rope::apply_rope(ctx, q, pe, false),
+                    Rope::apply_rope(ctx, k, pe, false),
+                    ggml_ext_cont(ctx, qkv[2])};
+        }
+
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* x,
                              ggml_tensor* pe,
@@ -343,7 +355,7 @@ namespace MiniMaxH3VAE {
             auto to_out = std::dynamic_pointer_cast<Linear>(blocks["to_out"]);
             if (sol != nullptr) {
                 auto project_rows = [&](ggml_tensor* rows, ggml_tensor* local_pe) {
-                    auto [q, k, v] = project(ctx, norm.forward(ctx, rows), local_pe);
+                    auto [q, k, v] = project_sol(ctx, norm.forward(ctx, rows), local_pe);
                     auto as_rows   = [&](ggml_tensor* tensor) {
                         return ggml_reshape_2d(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, tensor), dim, rows->ne[1]);
                     };

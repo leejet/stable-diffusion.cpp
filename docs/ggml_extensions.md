@@ -215,11 +215,13 @@ HIP, MUSA, and Vulkan. Other backends can use the scheduler's CPU fallback.
 The former `ggml_rope_apply` API, builtin opcode, and CPU implementation have
 been removed from ggml.
 
-`src/core/cuda/rope.cu` supplies standalone CUDA RoPE
-and `RMSNorm -> Mul -> RoPE [-> Scale -> FP16 Copy]` fusion. CuTe attention shares
+`src/core/cuda/rope.cu` supplies standalone CUDA RoPE,
+`RMSNorm -> RoPE` fusion for non-affine normalization, and
+`RMSNorm -> Mul -> RoPE [-> Scale -> FP16 Copy]` fusion. CuTe attention shares
 its RMSNorm/RoPE kernel. Partial rotation and arbitrary float-aligned input and
 position-encoding strides are supported by the standalone kernel; RMSNorm fusion
-requires contiguous position encoding and weights. Copy fusion uses workspace
+requires contiguous position encoding and, when present, weights. The non-affine
+fusion uses 64-channel F32 inputs and split-half RoPE. Copy fusion uses workspace
 when the destination overlaps an input. These registrations do not require
 CUTLASS. The old CUDA/HIP/MUSA RoPE dispatch is removed.
 
