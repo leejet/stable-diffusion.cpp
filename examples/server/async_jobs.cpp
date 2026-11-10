@@ -92,6 +92,63 @@ static void set_preview_callback(AsyncGenerationJob& job) {
     sd_set_preview_callback(preview_callback, mode, interval, true, false, &job);
 }
 
+static void update_job_progress(AsyncGenerationJob& job, const char* stage, const char* detail = "", int sample_pass = -1, int64_t completed = 0, int64_t total = 0, const char* unit = "") {
+    std::lock_guard<std::mutex> lock(job.progress_mutex);
+    auto& progress = job.progress;
+    if (sample_pass < 0) {
+        sample_pass = progress.sample_pass;
+    }
+    if (progress.stage != stage || progress.detail != detail || progress.sample_pass != sample_pass) {
+        progress.stage_started = std::chrono::steady_clock::now();
+    }
+    progress.stage       = stage;
+    progress.detail      = detail;
+    progress.sample_pass = sample_pass;
+    progress.completed   = completed;
+    progress.total       = total;
+    progress.unit        = unit;
+}
+
+static void finish_job_progress(AsyncGenerationJob& job) {
+    std::lock_guard<std::mutex> lock(job.progress_mutex);
+    job.progress.finished = std::chrono::steady_clock::now();
+}
+
+class JobCallbacksGuard {
+    sd_ctx_t* ctx_;
+    AsyncGenerationJob& job_;
+    bool detailing_ = false;
+
+    static void progress_callback(const sd_generation_progress_t* progress, void* data) {
+        auto& guard = *static_cast<JobCallbacksGuard*>(data);
+        update_job_progress(guard.job_, guard.detailing_ ? "adetailer" : progress->stage,
+                            guard.detailing_ ? progress->stage : progress->detail,
+                            progress->sample_pass, progress->completed, progress->total, progress->unit);
+    }
+
+public:
+    JobCallbacksGuard(sd_ctx_t* ctx, AsyncGenerationJob& job)
+        : ctx_(ctx), job_(job) {
+        clear_preview_callback();
+        set_preview_callback(job);
+        sd_set_generation_progress_callback(ctx_, progress_callback, this);
+    }
+
+    ~JobCallbacksGuard() {
+        sd_set_generation_progress_callback(ctx_, nullptr, nullptr);
+        clear_preview_callback();
+    }
+
+    void begin_detailing() {
+        clear_preview_callback();
+        detailing_ = true;
+        update_job_progress(job_, "adetailer");
+    }
+
+    JobCallbacksGuard(const JobCallbacksGuard&)            = delete;
+    JobCallbacksGuard& operator=(const JobCallbacksGuard&) = delete;
+};
+
 const char* async_job_kind_name(AsyncJobKind kind) {
     switch (kind) {
         case AsyncJobKind::ImgGen:
@@ -186,6 +243,7 @@ bool cancel_queued_job(AsyncJobManager& manager, AsyncGenerationJob& job) {
     job.result_fps         = 0;
     job.error_code         = "cancelled";
     job.error_message      = "job cancelled by client";
+    finish_job_progress(job);
     return true;
 }
 
@@ -199,6 +257,24 @@ json make_async_job_json(const AsyncJobManager& manager, const AsyncGenerationJo
     result["started"]          = job.started_at == 0 ? json(nullptr) : json(job.started_at);
     result["completed"]        = job.completed_at == 0 ? json(nullptr) : json(job.completed_at);
     result["queue_position"]   = 0;
+
+    {
+        std::lock_guard<std::mutex> lock(job.progress_mutex);
+        const auto& progress = job.progress;
+        const auto end       = progress.finished == std::chrono::steady_clock::time_point{}
+                                   ? std::chrono::steady_clock::now()
+                                   : progress.finished;
+        result["progress"]   = {
+            {"stage", progress.stage},
+            {"detail", progress.detail},
+            {"pass", progress.sample_pass},
+            {"completed", progress.total > 0 ? json(progress.completed) : json(nullptr)},
+            {"total", progress.total > 0 ? json(progress.total) : json(nullptr)},
+            {"unit", progress.unit.empty() ? json(nullptr) : json(progress.unit)},
+            {"stage_elapsed_ms", std::chrono::duration_cast<std::chrono::milliseconds>(end - progress.stage_started).count()},
+            {"elapsed_ms", job.started_at == 0 ? 0 : std::max<int64_t>(0, (job.completed_at == 0 ? unix_timestamp_now_ms() : job.completed_at) - job.started_at)},
+        };
+    }
 
     if (job.status == AsyncJobStatus::Queued) {
         size_t position = 1;
@@ -278,17 +354,19 @@ bool execute_img_gen_job(ServerRuntime& runtime,
             return false;
         }
         JobCancellationMonitor cancellation(runtime.sd_ctx, job);
-        set_preview_callback(job);
+        JobCallbacksGuard callbacks(runtime.sd_ctx, job);
         sd_image_generation_result_t* generated = nullptr;
         generate_image(runtime.sd_ctx, &params, &generated);
         results.adopt(generated, runtime.ctx_params->lora_model_dir);
-        clear_preview_callback();
         if (job.cancel_requested.load()) {
             return false;
         }
-        if (!results.empty() && !apply_server_adetailer(runtime, job.img_gen, params, results)) {
-            error_message = "ADetailer failed";
-            return false;
+        if (!results.empty() && job.img_gen.adetailer_enabled && !runtime.default_gen_params->ad_model_path.empty()) {
+            callbacks.begin_detailing();
+            if (!apply_server_adetailer(runtime, job.img_gen, params, results)) {
+                error_message = "ADetailer failed";
+                return false;
+            }
         }
     }
 
@@ -305,6 +383,7 @@ bool execute_img_gen_job(ServerRuntime& runtime,
         encoded_format = EncodedImageFormat::WEBP;
     }
 
+    update_job_progress(job, "encoding", "image", -1, 0, num_results, "images");
     for (int i = 0; i < num_results; ++i) {
         if (results[i].data == nullptr) {
             continue;
@@ -325,6 +404,7 @@ bool execute_img_gen_job(ServerRuntime& runtime,
         }
         output_images.push_back(base64_encode(image_bytes));
         output_info.push_back(json::parse(results.generation_info(i)));
+        update_job_progress(job, "encoding", "image", -1, i + 1, num_results, "images");
     }
 
     if (output_images.empty()) {
@@ -356,7 +436,7 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
             return false;
         }
         JobCancellationMonitor cancellation(runtime.sd_ctx, job);
-        set_preview_callback(job);
+        JobCallbacksGuard callbacks(runtime.sd_ctx, job);
         sd_video_generation_result_t* generated = nullptr;
         if (generate_video(runtime.sd_ctx, &params, &generated)) {
             output_fps       = generated->fps;
@@ -367,7 +447,6 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
             if (job.vid_gen.gen_params.embed_image_metadata)
                 str_params = results.generation_info(0);
         }
-        clear_preview_callback();
     }
 
     num_results = results.count();
@@ -377,6 +456,7 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
         return false;
     }
 
+    update_job_progress(job, "encoding", "video");
     std::vector<uint8_t> video_bytes = create_video_from_sd_images_to_vector(job.vid_gen.output_format,
                                                                              results.data(),
                                                                              num_results,
@@ -425,6 +505,7 @@ void async_job_worker(ServerRuntime& runtime) {
             job             = it->second;
             job->status     = AsyncJobStatus::Generating;
             job->started_at = unix_timestamp_now_ms();
+            update_job_progress(*job, "waiting");
         }
 
         std::vector<std::string> output_images;
@@ -459,6 +540,7 @@ void async_job_worker(ServerRuntime& runtime) {
             }
 
             job->completed_at = unix_timestamp_now_ms();
+            finish_job_progress(*job);
             if (job->cancel_requested.load()) {
                 job->status        = AsyncJobStatus::Cancelled;
                 job->error_code    = "cancelled";

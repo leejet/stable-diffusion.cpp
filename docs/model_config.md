@@ -60,6 +60,8 @@ static UNetConfig detect_from_weights(const String2TensorStorage& tensor_storage
 ```
 
 Use `TensorStorage` metadata, especially `n_dims` and `ne`, to infer shapes.
+Use `logical_ne0()` for Linear input widths; packed INT4 weights store half of
+the logical width in `ne[0]`. Keep raw `ne` values for storage layout calculations.
 Do not load or parse tensor data for config detection.
 
 Detection should respect `prefix`. For nested weights, construct full names from

@@ -8,8 +8,19 @@ $patterns = @(
     "src/core/*.cpp"
     "src/core/*.h"
     "src/core/*.hpp"
+    "src/core/cpu/*.cpp"
+    "src/core/cpu/*.h"
+    "src/core/metal/*.mm"
+    "src/core/metal/*.metal"
+    "src/core/cuda/*.cu"
+    "src/core/cuda/*.cuh"
+    "src/core/cuda/*.h"
+    "src/core/cuda/sageattention/*.cuh"
     "src/core/probe/*.cpp"
     "src/core/probe/*.h"
+    "src/core/vulkan/*.cpp"
+    "src/core/vulkan/*.h"
+    "src/core/vulkan/shaders/*.comp"
     "src/extensions/*.cpp"
     "src/extensions/*.h"
     "src/extensions/*.hpp"
@@ -23,8 +34,6 @@ $patterns = @(
     "src/model/*/*.hpp"
     "src/tokenizers/*.h"
     "src/tokenizers/*.cpp"
-    "src/tokenizers/vocab/*.h"
-    "src/tokenizers/vocab/*.cpp"
     "src/model_io/*.h"
     "src/model_io/*.cpp"
     "examples/cli/*.cpp"
@@ -45,10 +54,6 @@ try {
 
         foreach ($file in $files) {
             $relativePath = $file.FullName.Substring($root.Length).TrimStart('\', '/') -replace '\\', '/'
-
-            if ($relativePath -like "vocab*") {
-                continue
-            }
 
             Write-Host "formatting '$relativePath'"
 

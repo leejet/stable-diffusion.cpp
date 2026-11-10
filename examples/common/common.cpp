@@ -35,6 +35,7 @@ const char* const modes_str[] = {
     "convert",
     "upscale",
     "metadata",
+    "vid_upscale",
 };
 
 static sd_vae_format_t str_to_vae_format(const std::string& value) {
@@ -464,7 +465,7 @@ ArgOptions SDContextParams::get_options() {
          &uncond_diffusion_model_path},
         {"",
          "--embeddings-connectors",
-         "path to LTXAV embeddings connectors",
+         "path to embeddings connectors (LTXAV or P-H3-Image)",
          0,
          &embeddings_connectors_path},
         {"",
@@ -1135,7 +1136,7 @@ ArgOptions SDGenerationParams::get_options() {
          &extra_ad_args},
         {"-i",
          "--init-img",
-         "path to the init image",
+         "path to the init image, or a single input image for vid_upscale",
          0,
          &init_image_path},
         {"",
@@ -1187,6 +1188,13 @@ ArgOptions SDGenerationParams::get_options() {
          "under --hires-upscalers-dir (default: Latent)",
          0,
          &hires_upscaler},
+        {"",
+         "--control-type",
+         "kind of the control image, one of [openpose, depth, scribble, canny, normal, segment, tile, repaint]. "
+         "Required by an SDXL Control Net Union model (tile and repaint only exist in its ProMax variant), ignored by any other Control Net. "
+         "Also accepted: hed, softedge, pidi, ted (scribble); lineart, anime_lineart, mlsd (canny); seg (segment); inpaint, outpaint (repaint)",
+         0,
+         &control_type},
         {"",
          "--extra-sample-args",
          "extra sampler/scheduler/guidance args, key=value list. CFG supports guidance_schedule; APG supports apg_eta, apg_momentum, apg_norm_threshold, apg_norm_threshold_smoothing; SLG supports slg_uncond; lcm supports noise_clip_std, noise_scale_start, noise_scale_end; flux supports base_shift, max_shift; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma; beta scheduler supports alpha, beta; logit_normal supports mu, std, logsnr_min, logsnr_max, resolution_aware; llada_image supports uniform; lms supports lms_max_order, lms_shift, lms_divisions; noise-injecting samplers support noise_sampler with value iid (default except for dpm++2m_sde_bt) or brownian_tree; brownian_tree_rng supports cpu (default), cuda, std_default or sampler_rng",
@@ -1530,6 +1538,14 @@ ArgOptions SDGenerationParams::get_options() {
         std::string sigmas_str = value;
         if (sigmas_str == "qwen-image-2.1-turbo") {
             sigmas_str = "1.0,0.978453,0.95418,0.926626,0.89508,0.845148,0.704534,0.414568,0.0";
+        } else if (sigmas_str == "p-h3-image") {
+            sigmas_str = "1.0,0.984753,0.967905,0.951688,0.925372,0.881923,0.810083,0.528718,0.0";
+        } else if (sigmas_str == "hyperflow-h3-flash-4") {
+            sigmas_str = "1.0,0.962575853,0.755781889,0.312497854,0.0";
+        } else if (sigmas_str == "hyperflow-h3-flash-6") {
+            sigmas_str = "1.0,0.982655942,0.914642572,0.674755692,0.385223746,0.159055337,0.0";
+        } else if (sigmas_str == "hyperflow-h3-flash-8") {
+            sigmas_str = "1.0,0.993909776,0.9842875,0.966063678,0.923076928,0.834942341,0.696852028,0.468753338,0.0";
         }
         if (!sigmas_str.empty() && sigmas_str.front() == '[') {
             sigmas_str.erase(0, 1);
@@ -1777,11 +1793,11 @@ ArgOptions SDGenerationParams::get_options() {
          on_scheduler_arg},
         {"",
          "--sigmas",
-         "custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\") or preset: qwen-image-2.1-turbo.",
+         "custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\") or preset: qwen-image-2.1-turbo, p-h3-image, hyperflow-h3-flash-4, hyperflow-h3-flash-6, hyperflow-h3-flash-8.",
          on_sigmas_arg},
         {"",
          "--hires-sigmas",
-         "custom sigma values for the highres fix second pass, comma-separated (e.g., \"0.85,0.725,0.421875,0.0\") or preset: qwen-image-2.1-turbo.",
+         "custom sigma values for the highres fix second pass, comma-separated (e.g., \"0.85,0.725,0.421875,0.0\") or preset: qwen-image-2.1-turbo, p-h3-image, hyperflow-h3-flash-4, hyperflow-h3-flash-6, hyperflow-h3-flash-8.",
          on_hires_sigmas_arg},
         {"",
          "--skip-layers",
@@ -2247,6 +2263,7 @@ bool SDGenerationParams::from_json_str(
 
     load_if_exists("strength", strength);
     load_if_exists("control_strength", control_strength);
+    load_if_exists("control_type", control_type);
     load_if_exists("ip_adapter_strength", ip_adapter_strength);
     load_if_exists("moe_boundary", moe_boundary);
     load_if_exists("vace_strength", vace_strength);
@@ -2636,6 +2653,15 @@ bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::s
         sample_params.sample_steps = std::clamp(sample_params.sample_steps, 1, 100);
     }
 
+    resolved_control_type = SD_CONTROL_TYPE_NONE;
+    if (!control_type.empty()) {
+        resolved_control_type = str_to_sd_control_type(control_type.c_str());
+        if (resolved_control_type == SD_CONTROL_TYPE_COUNT) {
+            LOG_ERROR("invalid control type '%s' (openpose, depth, scribble, canny, normal, segment, tile, repaint)", control_type.c_str());
+            return false;
+        }
+    }
+
     hires_upscaler_model_path.clear();
     if (hires_enabled) {
         if (hires_upscaler.empty()) {
@@ -2875,6 +2901,7 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     params.qwen_image_layers   = qwen_image_layers;
     params.control_image       = control_image.get();
     params.control_strength    = control_strength;
+    params.control_type        = resolved_control_type;
     params.ip_adapter_image    = ip_adapter_image.get();
     params.ip_adapter_strength = ip_adapter_strength;
     params.pm_params           = pm_params;
@@ -3080,6 +3107,7 @@ std::string SDGenerationParams::to_string() const {
         << "  vace_strength: " << vace_strength << ",\n"
         << "  strength: " << strength << ",\n"
         << "  control_strength: " << control_strength << ",\n"
+        << "  control_type: \"" << control_type << "\",\n"
         << "  seed: " << seed << ",\n"
         << "  upscale_repeats: " << upscale_repeats << ",\n"
         << "  upscale_tile_size: " << upscale_tile_size << ",\n"

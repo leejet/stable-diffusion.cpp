@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cinttypes>
+
 #include "core/pe_cache.h"
 
 #include "model/common/ggml_block.hpp"
@@ -31,16 +32,16 @@ namespace MOSSImage {
                 }
                 auto key = name.substr(prefix.size() + 1);
                 if (key == "video_embedder.weight") {
-                    config.channels = tensor.ne[0];
+                    config.channels = tensor.logical_ne0();
                     config.dim      = tensor.ne[1];
                 } else if (key == "text_embedder.proj.weight") {
-                    config.text_dim = tensor.ne[0];
+                    config.text_dim = tensor.logical_ne0();
                 } else if (key == "layers.0.proj.ffn_down.weight") {
-                    config.ffn_dim = tensor.ne[0];
+                    config.ffn_dim = tensor.logical_ne0();
                 } else if (key == "layers.0.q_norm.weight") {
                     config.head_dim = tensor.ne[0];
                 } else if (key == "time_embedding.0.weight") {
-                    config.freq_dim = tensor.ne[0];
+                    config.freq_dim = tensor.logical_ne0();
                 }
                 if (starts_with(key, "layers.")) {
                     depth = std::max<int64_t>(depth, std::stoi(key.substr(7)) + 1);
@@ -54,13 +55,6 @@ namespace MOSSImage {
             return config;
         }
     };
-
-    inline ggml_tensor* situ(ggml_context* c, ggml_tensor* hidden, ggml_tensor* gate) {
-        auto a = ggml_scale(c, ggml_tanh(c, ggml_scale(c, gate, 0.25f)), 4.f);
-        a      = ggml_mul(c, a, ggml_sigmoid(c, gate));
-        auto b = ggml_scale(c, ggml_tanh(c, ggml_scale(c, hidden, 1.f / 25.f)), 25.f);
-        return ggml_mul(c, a, b);
-    }
 
     struct TextBlock : public GGMLBlock {
         MOSSImageConfig config;
@@ -85,7 +79,8 @@ namespace MOSSImage {
             auto y      = norm("norm1", x);
             auto qkv    = linear("qkv", y);
             auto split  = [&](int i) {
-                return ggml_reshape_4d(c, ggml_ext_slice(c, qkv, 0, i * config.dim, (i + 1) * config.dim), config.head_dim, config.dim / config.head_dim, x->ne[1], x->ne[2]);
+                // q/k feed rms_norm and v a permuted copy, which read these strided views in place.
+                return ggml_view_4d(c, qkv, config.head_dim, config.dim / config.head_dim, x->ne[1], x->ne[2], config.head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * config.dim * qkv->nb[0]);
             };
             auto q = norm("q_norm", split(0));
             auto k = norm("k_norm", split(1));
@@ -94,7 +89,7 @@ namespace MOSSImage {
             y      = linear("proj", y);
             x      = ggml_add(c, x, y);
             y      = norm("norm2", x);
-            y      = situ(c, linear("ffn_up", y), linear("ffn_gate", y));
+            y      = ggml_ext_situ(ctx, linear("ffn_up", y), linear("ffn_gate", y));
             y      = linear("ffn_down", y);
             return ggml_add(c, x, y);
         }
@@ -121,7 +116,7 @@ namespace MOSSImage {
             auto norm   = [&](const char* name, ggml_tensor* h) { return std::dynamic_pointer_cast<RMSNorm>(blocks[name])->forward(ctx, h); };
             auto part   = [&](int i) { return mod[i]; };
             auto y      = norm("norm1", x);
-            y           = ggml_add(c, ggml_add(c, y, ggml_mul(c, y, part(1))), part(0));
+            y           = ggml_ext_modulate(ctx, y, part(0), part(1));
             auto qkv    = linear("proj.qkv", y);
             auto split  = [&](int i) {
                 return ggml_view_4d(c, qkv, config.head_dim, config.dim / config.head_dim, x->ne[1], x->ne[2],
@@ -135,9 +130,9 @@ namespace MOSSImage {
             y            = ggml_mul(c, y, part(2));
             x            = ggml_add(c, x, y);
             y            = norm("norm2", x);
-            y            = ggml_add(c, ggml_add(c, y, ggml_mul(c, y, part(4))), part(3));
+            y            = ggml_ext_modulate(ctx, y, part(3), part(4));
             auto up_gate = linear("proj.ffn_up_gate", y);
-            y            = situ(c, ggml_ext_slice(c, up_gate, 0, 0, config.ffn_dim), ggml_ext_slice(c, up_gate, 0, config.ffn_dim, 2 * config.ffn_dim));
+            y            = ggml_ext_situ(ctx, up_gate);
             y            = linear("proj.ffn_down", y);
             y            = ggml_mul(c, y, part(5));
             return ggml_add(c, x, y);
@@ -169,9 +164,9 @@ namespace MOSSImage {
             auto c            = ctx->ggml_ctx;
             auto linear       = [&](const char* name, ggml_tensor* h) { return std::dynamic_pointer_cast<Linear>(blocks[name])->forward(ctx, h); };
             int64_t image_len = image->ne[0] * image->ne[1];
-            auto x            = linear("video_embedder", DiT::patchify(c, image, 1, 1));
+            auto x            = linear("video_embedder", DiT::patchify(ctx, image, 1, 1));
             text              = linear("text_embedder.proj", text);
-            auto text_pe      = ggml_ext_slice(c, pe, 3, image_len, image_len + text->ne[1]);
+            auto text_pe      = ggml_ext_slice(ctx, pe, 3, image_len, image_len + text->ne[1]);
             for (int i = 0; i < 2; ++i) {
                 text = std::dynamic_pointer_cast<TextBlock>(blocks["text_embedder.blocks." + std::to_string(i)])->forward(ctx, text, text_pe);
             }
@@ -180,7 +175,7 @@ namespace MOSSImage {
             auto head = linear("video_head_modulation", time);
             std::array<ggml_tensor*, 6> parts;
             for (int i = 0; i < 6; ++i) {
-                parts[i] = ggml_ext_slice(c, mod, 0, i * config.dim, (i + 1) * config.dim);
+                parts[i] = ggml_ext_slice(ctx, mod, 0, i * config.dim, (i + 1) * config.dim);
                 if (ctx->graph != nullptr) {
                     ggml_build_forward_expand(ctx->graph, parts[i]);
                 }
@@ -192,13 +187,13 @@ namespace MOSSImage {
                     sd::ggml_graph_cut::mark_graph_cut(x, "moss_image.layers." + std::to_string(i), "x");
                 }
             }
-            x          = ggml_ext_slice(c, x, 1, 0, image_len);
+            x          = ggml_ext_slice(ctx, x, 1, 0, image_len);
             x          = std::dynamic_pointer_cast<RMSNorm>(blocks["final_norm_video"])->forward(ctx, x);
-            auto shift = ggml_ext_slice(c, head, 0, 0, config.dim);
-            auto scale = ggml_ext_slice(c, head, 0, config.dim, 2 * config.dim);
-            x          = ggml_add(c, ggml_add(c, x, ggml_mul(c, x, scale)), shift);
+            auto shift = ggml_ext_slice(ctx, head, 0, 0, config.dim);
+            auto scale = ggml_ext_slice(ctx, head, 0, config.dim, 2 * config.dim);
+            x          = ggml_ext_modulate(ctx, x, shift, scale);
             x          = linear("final_linear_video", x);
-            return DiT::unpatchify(c, x, image->ne[1], image->ne[0], 1, 1);
+            return DiT::unpatchify(ctx, x, image->ne[1], image->ne[0], 1, 1);
         }
     };
 

@@ -42,7 +42,7 @@ namespace ErnieImage {
                     config.in_channels = tensor_storage.ne[2];
                     config.hidden_size = tensor_storage.ne[3];
                 } else if (ends_with(name, "text_proj.weight") && tensor_storage.n_dims == 2) {
-                    config.text_in_dim = tensor_storage.ne[0];
+                    config.text_in_dim = tensor_storage.logical_ne0();
                 } else if (ends_with(name, "layers.0.self_attention.norm_q.weight")) {
                     detected_head_dim = tensor_storage.ne[0];
                 } else if (ends_with(name, "layers.0.mlp.gate_proj.weight") && tensor_storage.n_dims == 2) {
@@ -85,11 +85,12 @@ namespace ErnieImage {
         }
     };
 
-    __STATIC_INLINE__ ggml_tensor* timestep_embedding_sin_cos(ggml_context* ctx,
+    __STATIC_INLINE__ ggml_tensor* timestep_embedding_sin_cos(GGMLRunnerContext* runner_ctx,
                                                               ggml_tensor* timesteps,
                                                               int dim,
                                                               int max_period = 10000) {
-        auto emb       = ggml_ext_timestep_embedding(ctx, timesteps, dim, max_period, 1.0f);
+        auto ctx       = runner_ctx->ggml_ctx;
+        auto emb       = ggml_ext_timestep_embedding(runner_ctx, timesteps, dim, max_period, 1.0f);
         int64_t half   = dim / 2;
         auto cos_part  = ggml_view_2d(ctx, emb, half, emb->ne[1], emb->nb[1], 0);
         auto sin_part  = ggml_view_2d(ctx, emb, half, emb->ne[1], emb->nb[1], half * emb->nb[0]);
@@ -97,7 +98,8 @@ namespace ErnieImage {
         return sin_first;
     }
 
-    __STATIC_INLINE__ ggml_tensor* apply_rotary_emb(ggml_context* ctx, ggml_tensor* x, ggml_tensor* pe) {
+    __STATIC_INLINE__ ggml_tensor* apply_rotary_emb(GGMLRunnerContext* runner_ctx, ggml_tensor* x, ggml_tensor* pe) {
+        auto ctx = runner_ctx->ggml_ctx;
         // x: [N, S, heads, head_dim]
         // pe: [2, S, 1, head_dim], stored as ggml [head_dim, 1, S, 2].
         int64_t head_dim = x->ne[0];
@@ -110,8 +112,8 @@ namespace ErnieImage {
         GGML_ASSERT(pe->ne[1] == 1 && pe->ne[2] == S && pe->ne[3] == 2);
 
         x           = ggml_cont(ctx, x);
-        auto x_rot  = ggml_ext_slice(ctx, x, 0, 0, rot_dim, false);
-        auto x_pass = rot_dim < head_dim ? ggml_ext_slice(ctx, x, 0, rot_dim, head_dim, false) : nullptr;
+        auto x_rot  = ggml_ext_slice(runner_ctx, x, 0, 0, rot_dim, false);
+        auto x_pass = rot_dim < head_dim ? ggml_ext_slice(runner_ctx, x, 0, rot_dim, head_dim, false) : nullptr;
 
         int64_t half = rot_dim / 2;
         auto x1      = ggml_view_4d(ctx, x_rot, half, heads, S, N, x_rot->nb[1], x_rot->nb[2], x_rot->nb[3], 0);
@@ -120,8 +122,8 @@ namespace ErnieImage {
         x2           = ggml_cont(ctx, x2);
         auto rotated = ggml_concat(ctx, ggml_neg(ctx, x2), x1, 0);
 
-        auto cos_emb = ggml_ext_slice(ctx, pe, 3, 0, 1, false);
-        auto sin_emb = ggml_ext_slice(ctx, pe, 3, 1, 2, false);
+        auto cos_emb = ggml_ext_slice(runner_ctx, pe, 3, 0, 1, false);
+        auto sin_emb = ggml_ext_slice(runner_ctx, pe, 3, 1, 2, false);
 
         auto out = ggml_add(ctx, ggml_mul(ctx, x_rot, cos_emb), ggml_mul(ctx, rotated, sin_emb));
         if (x_pass != nullptr) {
@@ -175,8 +177,8 @@ namespace ErnieImage {
             q = norm_q->forward(ctx, q);
             k = norm_k->forward(ctx, k);
 
-            q = apply_rotary_emb(ctx->ggml_ctx, q, pe);
-            k = apply_rotary_emb(ctx->ggml_ctx, k, pe);
+            q = apply_rotary_emb(ctx, q, pe);
+            k = apply_rotary_emb(ctx, k, pe);
 
             q = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, q, 0, 2, 1, 3));  // [N, heads, S, head_dim]
             q = ggml_reshape_3d(ctx->ggml_ctx, q, q->ne[0], q->ne[1], q->ne[2] * q->ne[3]);
@@ -204,9 +206,8 @@ namespace ErnieImage {
             auto linear_fc2 = std::dynamic_pointer_cast<Linear>(blocks["linear_fc2"]);
 
             auto gate = gate_proj->forward(ctx, x);
-            gate      = ggml_ext_gelu(ctx->ggml_ctx, gate);
             x         = up_proj->forward(ctx, x);
-            x         = ggml_mul(ctx->ggml_ctx, x, gate);
+            x         = ggml_geglu_split(ctx->ggml_ctx, gate, x);
             x         = linear_fc2->forward(ctx, x);
             return x;
         }
@@ -247,13 +248,13 @@ namespace ErnieImage {
 
             auto residual = x;
             x             = adaLN_sa_ln->forward(ctx, x);
-            x             = Flux::modulate(ctx->ggml_ctx, x, shift_msa, scale_msa, true);
+            x             = Flux::modulate(ctx, x, shift_msa, scale_msa, true);
             auto attn_out = self_attention->forward(ctx, x, pe, attention_mask);
             x             = ggml_add(ctx->ggml_ctx, residual, ggml_mul(ctx->ggml_ctx, attn_out, gate_msa));
 
             residual = x;
             x        = adaLN_mlp_ln->forward(ctx, x);
-            x        = Flux::modulate(ctx->ggml_ctx, x, shift_mlp, scale_mlp, true);
+            x        = Flux::modulate(ctx, x, shift_mlp, scale_mlp, true);
             x        = ggml_add(ctx->ggml_ctx, residual, ggml_mul(ctx->ggml_ctx, mlp->forward(ctx, x), gate_mlp));
             return x;
         }
@@ -270,12 +271,12 @@ namespace ErnieImage {
             auto norm   = std::dynamic_pointer_cast<LayerNorm>(blocks["norm"]);
             auto linear = std::dynamic_pointer_cast<Linear>(blocks["linear"]);
 
-            auto mods  = ggml_ext_chunk(ctx->ggml_ctx, linear->forward(ctx, conditioning), 2, 0);
+            auto mods  = ggml_ext_chunk(ctx, linear->forward(ctx, conditioning), 2, 0);
             auto scale = mods[0];
             auto shift = mods[1];
 
             x = norm->forward(ctx, x);
-            x = Flux::modulate(ctx->ggml_ctx, x, shift, scale);
+            x = Flux::modulate(ctx, x, shift, scale);
             return x;
         }
     };
@@ -337,9 +338,9 @@ namespace ErnieImage {
             auto final_norm      = std::dynamic_pointer_cast<ErnieImageAdaLNContinuous>(blocks["final_norm"]);
             auto final_linear    = std::dynamic_pointer_cast<Linear>(blocks["final_linear"]);
 
-            auto img = x_embedder_proj->forward(ctx, x);                                                  // [N, hidden_size, Hp, Wp]
-            img      = ggml_reshape_3d(ctx->ggml_ctx, img, img->ne[0] * img->ne[1], img->ne[2], N);       // [N, hidden_size, image_tokens]
-            img      = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, img, 1, 0, 2, 3));  // [N, image_tokens, hidden_size]
+            auto img = x_embedder_proj->forward(ctx, x);                                             // [N, hidden_size, Hp, Wp]
+            img      = ggml_reshape_3d(ctx->ggml_ctx, img, img->ne[0] * img->ne[1], img->ne[2], N);  // [N, hidden_size, image_tokens]
+            img      = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, img, 1, 0, 2, 3));       // [N, image_tokens, hidden_size]
 
             auto txt       = context;
             auto text_proj = std::dynamic_pointer_cast<Linear>(blocks["text_proj"]);
@@ -349,13 +350,13 @@ namespace ErnieImage {
 
             auto hidden_states = ggml_concat(ctx->ggml_ctx, img, txt, 1);  // [N, image_tokens + text_tokens, hidden_size]
 
-            auto sample = timestep_embedding_sin_cos(ctx->ggml_ctx, timestep, static_cast<int>(config.hidden_size));
+            auto sample = timestep_embedding_sin_cos(ctx, timestep, static_cast<int>(config.hidden_size));
             auto c      = time_embedding->forward(ctx, sample);  // [N, hidden_size]
 
             auto mod_params = adaLN_mod->forward(ctx, ggml_silu(ctx->ggml_ctx, c));  // [N, 6 * hidden_size]
             sd::ggml_graph_cut::mark_graph_cut(hidden_states, "ernie_image.prelude", "hidden_states");
             // sd::ggml_graph_cut::mark_graph_cut(mod_params, "ernie_image.prelude", "mod_params");
-            auto chunks = ggml_ext_chunk(ctx->ggml_ctx, mod_params, 6, 0);
+            auto chunks = ggml_ext_chunk(ctx, mod_params, 6, 0);
             std::vector<ggml_tensor*> temb;
             temb.reserve(6);
             for (auto chunk : chunks) {
@@ -369,10 +370,10 @@ namespace ErnieImage {
             }
 
             hidden_states = final_norm->forward(ctx, hidden_states, c);
-            hidden_states = final_linear->forward(ctx, hidden_states);                  // [N, image_tokens, p*p*out_channels]
-            auto patches  = ggml_ext_slice(ctx->ggml_ctx, hidden_states, 1, 0, n_img);  // [N, image_tokens, hidden_size]
+            hidden_states = final_linear->forward(ctx, hidden_states);        // [N, image_tokens, p*p*out_channels]
+            auto patches  = ggml_ext_slice(ctx, hidden_states, 1, 0, n_img);  // [N, image_tokens, hidden_size]
 
-            auto out = DiT::unpatchify(ctx->ggml_ctx,
+            auto out = DiT::unpatchify(ctx,
                                        patches,
                                        Hp,
                                        Wp,

@@ -21,6 +21,25 @@ git pull origin master
 git submodule update --init --recursive
 ```
 
+## MSVC compilation parallelism
+
+MSVC builds limit parallel C/C++ compilation within each project by default.
+For `n` logical processors, the limit is `n` when `n <= 2`, `n - 1` when
+`3 <= n <= 8`, and `n - 2` when `n > 8`. The default is calculated when the
+build directory is first configured with this setting. Override it with
+`-DSD_MSVC_MP_COUNT=4`, or pass `-USD_MSVC_MP_COUNT` to recalculate it.
+
+For Visual Studio builds, keep project-level parallelism at one to avoid
+multiplying the per-project limit:
+
+```shell
+cmake --build build --config Release --parallel 1
+```
+
+This setting controls MSVC's `/MP` option, not CUDA compiler parallelism or a
+hard CPU usage limit. Other build tools, such as Ninja, schedule compilation
+jobs separately; use `cmake --build build --parallel N` to limit those jobs.
+
 ## Selecting a GGML source tree
 
 By default, sd.cpp builds the patched GGML submodule in `ggml/`. To build with
@@ -32,8 +51,10 @@ cmake -S . -B build-upstream -DSD_USE_UPSTREAM_GGML=ON -DSD_GGML_SOURCE_DIR=../g
 cmake --build build-upstream --config Release
 ```
 
-The selected source tree supplies both the library and its private headers.
-Backend options such as `-DSD_CUDA=ON` apply to the selected tree as usual.
+Upstream compatibility mode uses the selected library and matching private
+headers. The patched GGML build uses public headers, including `ggml-ext.h` and
+`ggml-graph.h`. Backend options such as `-DSD_CUDA=ON` apply to the selected tree
+as usual.
 
 `SD_USE_UPSTREAM_GGML` defaults to `OFF`, which enables the patched GGML
 extensions. Set it to `ON` when using upstream GGML; it selects the compatibility
@@ -50,10 +71,12 @@ creating an inference context. Ordinary floating-point and shared GGML
 quantization types remain available, subject to backend operator support.
 
 `SD_USE_SYSTEM_GGML=ON` instead links an installed GGML CMake package, located
-with `ggml_DIR` or `CMAKE_PREFIX_PATH`. In that mode, `SD_GGML_SOURCE_DIR` must
-point to the matching source tree for private headers. The installed library
-must use the same ABI settings as sd.cpp, including `GGML_MAX_NAME`.
-Set `SD_USE_UPSTREAM_GGML=ON` as well if the installed package is upstream GGML.
+with `ggml_DIR` or `CMAKE_PREFIX_PATH`. An installed patched package must include
+the extension and graph APIs; its source tree is not required for private
+headers. The installed library must use the same ABI settings as sd.cpp,
+including `GGML_MAX_NAME`. For an upstream package, also set
+`SD_USE_UPSTREAM_GGML=ON` and point `SD_GGML_SOURCE_DIR` to its matching source
+tree for the compatibility layer's private headers.
 
 ## WebP and WebM Support in Examples
 
@@ -95,8 +118,8 @@ cmake --build . --config Release
 
 ## Build with CUDA
 
-Native SageAttention is included when using CUDA with patched GGML
-(`SD_USE_UPSTREAM_GGML=OFF`).
+The sd.cpp SageAttention extension is included when using CUDA with patched
+GGML (`SD_USE_UPSTREAM_GGML=OFF`).
 See [SageAttention](sage_attention.md) for GPU requirements and `--sage-attn` usage.
 
 This provides GPU acceleration using NVIDIA GPU. Make sure to have the CUDA toolkit installed. You can download it from your Linux distro's package manager (e.g. `apt install nvidia-cuda-toolkit`) or from here: [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads). Recommended to have at least 4 GB of VRAM.
@@ -107,7 +130,7 @@ cmake .. -DSD_CUDA=ON
 cmake --build . --config Release
 ```
 
-CUDA builds with the bundled patched GGML use the CUTLASS submodule by default
+CUDA extensions use sd.cpp's `thirdparty/cutlass` submodule by default
 for eligible INT8 GEMM and CuTe attention operations. If its headers are missing,
 CMake stops with an initialization hint; it does not download them automatically.
 Run `git submodule update --init --recursive` from the repository root before
@@ -117,14 +140,17 @@ To build with the existing CUDA implementations without CUTLASS, configure from
 the repository root with:
 
 ```shell
-cmake -S . -B build -DSD_CUDA=ON -DGGML_CUDA_CUTLASS_PATH:PATH=
+cmake -S . -B build -DSD_CUDA=ON -DSD_CUDA_CUTLASS_PATH:PATH=
 cmake --build build --config Release
 ```
 
-Alternatively, set `GGML_CUDA_CUTLASS_PATH` to another local CUTLASS source
+Alternatively, set `SD_CUDA_CUTLASS_PATH` to another local CUTLASS source
 directory (tested with 3.9.2). Existing CMake caches retain their configured path;
-pass `-UGGML_CUDA_CUTLASS_PATH` when reconfiguring to restore the bundled default.
-Non-CUDA builds do not require CUTLASS.
+pass `-USD_CUDA_CUTLASS_PATH` when reconfiguring to restore the bundled default.
+Existing `GGML_CUDA_CUTLASS_PATH` caches are migrated on first configuration:
+the old bundled path becomes `thirdparty/cutlass`, while custom paths and an
+empty disabled value are preserved. An explicitly set `SD_CUDA_CUTLASS_PATH`
+takes precedence. Non-CUDA builds do not require CUTLASS.
 
 ## Build with HipBLAS
 

@@ -76,6 +76,16 @@ Recipes declaring `video_frames` also switch the form to Video Generation;
 other recipes switch to Image Generation. Generation is enabled after the
 selected recipe is loaded. Changing a selection does not reload the model
 until you click Load.
+
+The generation status bar shows the current stage and elapsed time even when
+Preview Mode is `none`. During sampling it shows completed steps for the current
+pass; prompt encoding and VAE decoding show an activity indicator when their
+total work is unknown. Sampling reaching 100% does not mean the job is finished:
+decoding, ADetailer, and output encoding may still follow.
+The canvas keeps the submitted output aspect ratio, and stage changes keep the
+same layout. Editing the next request's resolution does not resize the current
+preview or result.
+
 The server can also start with the existing model arguments shown below;
 existing API clients then work without selecting a recipe. The UI automatically
 selects **Command-line model (all features)** and uses the startup generation

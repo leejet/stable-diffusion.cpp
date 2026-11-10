@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/rng_mt19937.hpp"
 #include "model/common/rope.hpp"
 #include "model/diffusion/dit.hpp"
 #include "model/vae/vae.hpp"
@@ -17,6 +18,34 @@
 namespace MiniMaxH3VAE {
 
     constexpr int H3_VIDEO_VAE_GRAPH_SIZE = 262144;
+
+    struct MiniMaxH3VAEConfig {
+        int num_layers   = 36;
+        int patch_size_t = 4;
+
+        static MiniMaxH3VAEConfig detect_from_weights(const String2TensorStorage& tensors, const std::string& prefix) {
+            MiniMaxH3VAEConfig config;
+            auto proj = tensors.find(prefix + ".decoder.proj_out.weight");
+            if (proj != tensors.end()) {
+                config.patch_size_t = static_cast<int>(proj->second.ne[1] / (3 * 16 * 16));
+                if (config.patch_size_t != 1 && config.patch_size_t != 4) {
+                    throw std::runtime_error("unsupported MiniMax-H3 VAE temporal patch size");
+                }
+                int layers              = 0;
+                const auto layer_prefix = prefix + ".decoder.transformer_blocks.";
+                for (const auto& [name, _] : tensors) {
+                    if (starts_with(name, layer_prefix)) {
+                        layers = std::max(layers, std::atoi(name.c_str() + layer_prefix.size()) + 1);
+                    }
+                }
+                if (layers > 0) {
+                    config.num_layers = layers;
+                }
+                LOG_VERBOSE("minimax_h3_vae: layers=%d, patch_size_t=%d", config.num_layers, config.patch_size_t);
+            }
+            return config;
+        }
+    };
 
     struct CausalConv3d : public Conv3d {
         std::tuple<int, int, int> temporal_padding;
@@ -37,8 +66,8 @@ namespace MiniMaxH3VAE {
             auto reflect_pad = [&](ggml_tensor* value, int dim, int amount) {
                 for (int i = 0; i < amount; ++i) {
                     GGML_ASSERT(value->ne[dim] > 1);
-                    auto left  = ggml_ext_slice(ctx->ggml_ctx, value, dim, 1, 2);
-                    auto right = ggml_ext_slice(ctx->ggml_ctx,
+                    auto left  = ggml_ext_slice(ctx, value, dim, 1, 2);
+                    auto right = ggml_ext_slice(ctx,
                                                 value,
                                                 dim,
                                                 value->ne[dim] - 2,
@@ -53,8 +82,7 @@ namespace MiniMaxH3VAE {
             x                = reflect_pad(x, 1, std::get<1>(temporal_padding));
             int temporal_pad = std::get<0>(temporal_padding) * 2;
             if (temporal_pad > 0) {
-                x = ggml_ext_pad_ext(ctx->ggml_ctx,
-                                     ctx->backend,
+                x = ggml_ext_pad_ext(ctx,
                                      x,
                                      0,
                                      0,
@@ -76,7 +104,7 @@ namespace MiniMaxH3VAE {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             ggml_tensor* result = nullptr;
             for (int64_t t = 0; t < x->ne[2]; ++t) {
-                auto frame = ggml_ext_slice(ctx->ggml_ctx, x, 2, t, t + 1);
+                auto frame = ggml_ext_slice(ctx, x, 2, t, t + 1);
                 GGML_ASSERT(frame->ne[3] % num_channels == 0);
                 int64_t batch_size = frame->ne[3] / num_channels;
                 frame              = ggml_cont(ctx->ggml_ctx, frame);
@@ -117,9 +145,9 @@ namespace MiniMaxH3VAE {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             if (spatial_stride == 2) {
                 GGML_ASSERT(x->ne[0] > 1 && x->ne[1] > 1);
-                auto right  = ggml_ext_slice(ctx->ggml_ctx, x, 0, x->ne[0] - 2, x->ne[0] - 1);
+                auto right  = ggml_ext_slice(ctx, x, 0, x->ne[0] - 2, x->ne[0] - 1);
                 x           = ggml_concat(ctx->ggml_ctx, x, right, 0);
-                auto bottom = ggml_ext_slice(ctx->ggml_ctx, x, 1, x->ne[1] - 2, x->ne[1] - 1);
+                auto bottom = ggml_ext_slice(ctx, x, 1, x->ne[1] - 2, x->ne[1] - 1);
                 x           = ggml_concat(ctx->ggml_ctx, x, bottom, 1);
             }
             return std::dynamic_pointer_cast<CausalConv3d>(blocks["conv"])->forward(ctx, x);
@@ -234,14 +262,14 @@ namespace MiniMaxH3VAE {
         auto ctx        = runner_ctx->ggml_ctx;
         int64_t rot_dim = pe->ne[2] * 2;
         auto rotated    = Rope::apply_rope(runner_ctx,
-                                           ggml_ext_slice(ctx, x, 0, 0, rot_dim),
+                                           ggml_ext_slice(runner_ctx, x, 0, 0, rot_dim),
                                            pe,
                                            false);
         if (rot_dim == x->ne[0]) {
             return rotated;
         }
         auto tail = attention_layout(ctx,
-                                     ggml_ext_slice(ctx, x, 0, rot_dim, x->ne[0]));
+                                     ggml_ext_slice(runner_ctx, x, 0, rot_dim, x->ne[0]));
         return ggml_concat(ctx, rotated, tail, 0);
     }
 
@@ -269,7 +297,7 @@ namespace MiniMaxH3VAE {
                                                   num_head,
                                                   sequence,
                                                   batch_size);
-            auto qkv            = ggml_ext_chunk(ctx->ggml_ctx, qkv_projection, 3, 0);
+            auto qkv            = ggml_ext_chunk(ctx, qkv_projection, 3, 0);
             auto q              = ggml_reshape_4d(ctx->ggml_ctx,
                                                   qkv[0],
                                                   head_dim,
@@ -316,11 +344,8 @@ namespace MiniMaxH3VAE {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             auto w1   = std::dynamic_pointer_cast<Linear>(blocks["w1"]);
             auto w2   = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
-            auto gate = ggml_ext_chunk(ctx->ggml_ctx, w1->forward(ctx, x), 2, 0);
-            return w2->forward(ctx,
-                               ggml_mul(ctx->ggml_ctx,
-                                        ggml_silu(ctx->ggml_ctx, gate[0]),
-                                        gate[1]));
+            auto gate = ggml_swiglu(ctx->ggml_ctx, w1->forward(ctx, x));
+            return w2->forward(ctx, gate);
         }
     };
 
@@ -364,13 +389,14 @@ namespace MiniMaxH3VAE {
     };
 
     struct Decoder : public GGMLBlock {
-        static constexpr int dim                 = 2048;
-        static constexpr int num_layers          = 36;
+        static constexpr int dim = 2048;
+        int num_layers;
         static constexpr int num_register_tokens = 4;
         static constexpr int patch_size          = 16;
-        static constexpr int patch_size_t        = 4;
+        int patch_size_t;
 
-        Decoder() {
+        explicit Decoder(const MiniMaxH3VAEConfig& config)
+            : num_layers(config.num_layers), patch_size_t(config.patch_size_t) {
             blocks["x_embedder"] = std::make_shared<Linear>(24, dim, true);
             for (int i = 0; i < num_layers; ++i) {
                 blocks["transformer_blocks." + std::to_string(i)] =
@@ -392,7 +418,9 @@ namespace MiniMaxH3VAE {
                                                            GGML_TYPE_F32,
                                                            dim,
                                                            num_register_tokens);
-            params["mask_token"]      = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, dim);
+            if (patch_size_t != 1) {
+                params["mask_token"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, dim);
+            }
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -405,7 +433,7 @@ namespace MiniMaxH3VAE {
             GGML_ASSERT(batch_size == 1);
 
             z                   = ggml_cont(ctx->ggml_ctx,
-                                            ggml_ext_torch_permute(ctx->ggml_ctx, z, 3, 0, 1, 2));
+                                            ggml_ext_torch_permute(ctx, z, 3, 0, 1, 2));
             z                   = ggml_reshape_3d(ctx->ggml_ctx,
                                                   z,
                                                   24,
@@ -415,8 +443,8 @@ namespace MiniMaxH3VAE {
             auto h              = x_embedder->forward(ctx, z);
             int64_t num_patches = h->ne[1];
             h                   = ggml_concat(ctx->ggml_ctx, h, params["register_tokens"], 1);
-            auto zero           = ggml_ext_scale(ctx->ggml_ctx,
-                                                 ggml_ext_slice(ctx->ggml_ctx, h, 1, 0, 1),
+            auto zero           = ggml_ext_scale(ctx,
+                                                 ggml_ext_slice(ctx, h, 1, 0, 1),
                                                  0.f);
             h                   = ggml_concat(ctx->ggml_ctx, h, zero, 1);
 
@@ -432,8 +460,8 @@ namespace MiniMaxH3VAE {
             auto norm_out = std::dynamic_pointer_cast<LayerNorm>(blocks["norm_out"]);
             auto proj_out = std::dynamic_pointer_cast<Linear>(blocks["proj_out"]);
             h             = proj_out->forward(ctx, norm_out->forward(ctx, h));
-            h             = ggml_ext_slice(ctx->ggml_ctx, h, 1, 0, num_patches);
-            return DiT::unpatchify_3d(ctx->ggml_ctx,
+            h             = ggml_ext_slice(ctx, h, 1, 0, num_patches);
+            return DiT::unpatchify_3d(ctx,
                                       h,
                                       num_frames,
                                       height,
@@ -446,7 +474,10 @@ namespace MiniMaxH3VAE {
     };
 
     struct MiniMaxH3VideoVAE : public GGMLBlock {
-        MiniMaxH3VideoVAE() {
+        bool single_frame;
+
+        explicit MiniMaxH3VideoVAE(const MiniMaxH3VAEConfig& config)
+            : single_frame(config.patch_size_t == 1) {
             blocks["encoder"]         = std::make_shared<Encoder>();
             blocks["quant_conv"]      = std::make_shared<Conv3d>(48,
                                                                  48,
@@ -454,7 +485,7 @@ namespace MiniMaxH3VAE {
             blocks["post_quant_conv"] = std::make_shared<Conv3d>(24,
                                                                  24,
                                                                  std::tuple{1, 1, 1});
-            blocks["decoder"]         = std::make_shared<Decoder>();
+            blocks["decoder"]         = std::make_shared<Decoder>(config);
         }
 
         ggml_tensor* encode(GGMLRunnerContext* ctx,
@@ -467,7 +498,7 @@ namespace MiniMaxH3VAE {
             auto encoder = std::dynamic_pointer_cast<Encoder>(blocks["encoder"]);
             auto quant   = std::dynamic_pointer_cast<Conv3d>(blocks["quant_conv"]);
             auto moments = quant->forward(ctx, encoder->forward(ctx, pixels));
-            return ggml_ext_slice(ctx->ggml_ctx, moments, 3, 0, 24);
+            return single_frame ? moments : ggml_ext_slice(ctx, moments, 3, 0, 24);
         }
 
         ggml_tensor* decode(GGMLRunnerContext* ctx,
@@ -486,6 +517,7 @@ namespace MiniMaxH3VAE {
     };
 
     struct MiniMaxH3VideoVAERunner : public VAE {
+        MiniMaxH3VAEConfig config;
         MiniMaxH3VideoVAE model;
         sd::Tensor<float> pixel_mean;
         sd::Tensor<float> pixel_std;
@@ -498,6 +530,8 @@ namespace MiniMaxH3VAE {
                                 const std::string& prefix                           = "first_stage_model",
                                 std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : VAE(VERSION_MINIMAX_H3, backend, prefix, weight_manager),
+              config(MiniMaxH3VAEConfig::detect_from_weights(tensor_storage_map, prefix)),
+              model(config),
               pixel_mean({1, 1, 1, 3}, {0.485f, 0.456f, 0.406f}),
               pixel_std({1, 1, 1, 3}, {0.229f, 0.224f, 0.225f}),
               latents_mean({1, 1, 1, 24},
@@ -519,12 +553,12 @@ namespace MiniMaxH3VAE {
         }
 
         std::string get_desc() override {
-            return "minimax_h3_video_vae";
+            return config.patch_size_t == 1 ? "p_h3_image_vae" : "minimax_h3_video_vae";
         }
 
         int get_encoder_output_channels(int input_channels) override {
             SD_UNUSED(input_channels);
-            return 24;
+            return config.patch_size_t == 1 ? 48 : 24;
         }
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
@@ -534,6 +568,15 @@ namespace MiniMaxH3VAE {
         sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output,
                                                 std::shared_ptr<RNG> rng) override {
             SD_UNUSED(rng);
+            if (config.patch_size_t == 1) {
+                auto mean   = sd::ops::slice(vae_output, 3, 0, 24);
+                auto logvar = sd::ops::slice(vae_output, 3, 24, 48);
+                auto noise  = MT19937RNG(42).randn(static_cast<uint32_t>(mean.numel()));
+                for (int64_t i = 0; i < mean.numel(); ++i) {
+                    mean[i] += std::exp(0.5f * std::clamp(logvar[i], -30.f, 20.f)) * noise[i];
+                }
+                return mean;
+            }
             return vae_output;
         }
 
@@ -613,6 +656,10 @@ namespace MiniMaxH3VAE {
                                  bool circular_y = false) override {
             auto input  = ensure_video_shape(x);
             auto tiling = resolve_tiling_params(tiling_params);
+            if (config.patch_size_t == 1 && input.shape()[2] != 1) {
+                LOG_ERROR("P-H3-Image VAE encodes single-frame images only");
+                return {};
+            }
             if (input.shape()[2] == 1) {
                 auto encoded = VAE::encode(n_threads, input, tiling, circular_x, circular_y);
                 if (!encoded.empty() && encoded.shape()[2] > 1) {
@@ -657,6 +704,10 @@ namespace MiniMaxH3VAE {
                                  bool silent       = false) override {
             auto input  = ensure_video_shape(x);
             auto tiling = resolve_tiling_params(tiling_params);
+            if (config.patch_size_t == 1 && input.shape()[2] != 1) {
+                LOG_ERROR("P-H3-Image VAE decodes single-frame latents only");
+                return {};
+            }
             if (input.shape()[2] == 1) {
                 auto decoded = VAE::decode(n_threads,
                                            input,
@@ -755,7 +806,9 @@ namespace MiniMaxH3VAE {
             ids.reserve(static_cast<size_t>(width * height * num_frames + 5));
             constexpr float two_pi = 6.28318530717958647692f;
             for (int64_t t = 0; t < num_frames; ++t) {
-                float pt = (2.f * ((t + 0.5f) / num_frames) - 1.f) * two_pi;
+                float pt = (config.patch_size_t == 1 ? 2.f * (0.5f / 7.f) - 1.f
+                                                     : 2.f * ((t + 0.5f) / num_frames) - 1.f) *
+                           two_pi;
                 for (int64_t h = 0; h < height; ++h) {
                     float ph = (2.f * ((h + 0.5f) / height) - 1.f) * two_pi;
                     for (int64_t w = 0; w < width; ++w) {

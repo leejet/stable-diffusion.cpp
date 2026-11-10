@@ -4,8 +4,9 @@
 the high-noise diffusion model when present. Python, PyTorch, and Triton are not
 required at build time or runtime.
 
-The CUDA backend automatically selects a kernel supported by both the GPU and
-the compiled CUDA toolkit:
+The sd.cpp CUDA extension registers SageAttention through GGML's generic
+operator API. It selects a kernel supported by the GPU, compiled CUDA target,
+and toolkit:
 
 | GPU / toolkit | Implementation |
 | --- | --- |

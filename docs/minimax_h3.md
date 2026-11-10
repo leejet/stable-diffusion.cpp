@@ -99,10 +99,88 @@ The C API exposes the same inputs through `ref_images`, `ref_videos`, and
 `ref_audios` in `sd_vid_gen_params_t`. Each `sd_ref_video_t` supplies its own
 frame rate and optional soundtrack; non-24-fps inputs are resampled internally.
 
+## Latent hires second pass (two-stage sampling)
+
+MiniMax-H3 supports `--hires` with two interchangeable second-stage upscalers:
+
+- an interpolating latent upscaler (`Latent`, `Latent (nearest)`,
+  `Latent (bicubic)`, ...): after the first pass finishes, the packed AV latent
+  is resampled in latent space to `--hires-width` x `--hires-height` and
+  refined by a second sampling pass;
+- a model-backed upscaler (`--hires-upscaler <name>` + `--hires-upscalers-dir`):
+  a H3-shaped learned latent upscaler checkpoint runs between the passes,
+  like the LTX spatial upsampler. This is the sd.cpp equivalent of the
+  two-sampler workflows used for H3 in node-based frontends (e.g. the
+  community 3D-conv latent upscaler from
+  [LBH-123-AI/Minimax_h3_latent_Upscaler](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler)).
+
+Draft at a low megapixel count (e.g. 0.4 MP) and refine at a higher one
+(e.g. 0.8 MP) instead of paying for the full resolution in every step:
+
+```sh
+.\bin\Release\sd-cli.exe -M vid_gen --diffusion-model  ..\models\diffusion_models\minimax_h3_fl2va-Q4_K_M.gguf --vae ..\models\vae\minimax_h3_video_vae_fp16.safetensors --audio-vae ..\models\vae\minimax_h3_audio_vae_fp32.safetensors --llm ..\models\text_encoders\qwen3vl_32b_minimax_h3-Q4_K_M.gguf -p "a lovely cat" --cfg-scale 1.0 -v -W 864 -H 480 --diffusion-fa --offload-to-cpu --rng cpu --video-frames 56 --hires --hires-upscaler "Latent (bicubic)" --hires-width 1216 --hires-height 672 --hires-steps 4 --hires-denoising-strength 0.4
+```
+
+or with the learned upscaler:
+
+```sh
+.\bin\Release\sd-cli.exe -M vid_gen ... --hires --hires-upscalers-dir ..\models\latent_upscale_models --hires-upscaler h3-latent-upscaler-3d --hires-width 1216 --hires-height 672 --hires-steps 4 --hires-denoising-strength 0.4
+```
+
+Notes for this mode:
+
+- The learned upscaler expects a second normalization of the diffusion latent,
+  matching its training convention. The runner applies and reverses this extra
+  transform internally; callers should pass the usual H3 diffusion latents.
+- The frame count is never changed by the second stage, so the packed audio
+  latent length stays valid and the generated soundtrack is preserved.
+- Width and height still have to be multiples of 32; the hires target is
+  aligned like any other resolution. The learned upscaler additionally wants
+  an even latent size on both axes, which 32-pixel targets provide.
+- `--hires-sigmas` can replace `--hires-denoising-strength` when the second
+  stage should resume from an explicit sigma schedule, which is how most
+  two-stage H3 workflows split the sampler.
+- Keyframe conditioning (`--init-img` / `--end-img`) is not available together
+  with hires yet: those latents are encoded at the first stage resolution and
+  would have to be re-encoded for the hires canvas. Use T2VA or Ref2VA.
+- The second stage runs at the larger latent, so it is the memory-hungry half;
+  combine it with quantization, `--vae-tiling` and `--offload-to-cpu` on
+  small cards.
+- The learned upscaler is scale-conditional: the target-to-source ratio is
+  fed into the network as an embedding, 1.2-2.0x is the trained domain, and
+  downscaling is rejected.
+
 ## Shape and runtime notes
 
 - Width and height are aligned upward to a multiple of 32.
 - Frame count is aligned upward to the `17k + 5` grid, with a minimum of 5.
 - MiniMax-H3 runs at 24 fps; another requested value is overridden.
+- Attention head grouping is controlled by
+  `--model-args minimax_h3_attn_chunk_budget=2`, in GiB (default: `2`).
+  The budget estimates the size of a single FP32 Q/K tensor per group:
+  `head_dim * tokens * batch * 4 bytes * heads_per_group`. The group size adapts
+  to the sequence length, with a minimum of one head; inputs that fit use all
+  heads together. Set `0` to disable grouping, or a smaller budget such as
+  `0.25` to reduce peak activation memory for long sequences at the cost of
+  extra launches and concatenation. Each head still attends to the full sequence.
+  This is a grouping target, not a cap on total attention memory or VRAM usage;
+  other intermediates, backend workspace, and weights require additional memory.
+  `--max-vram` and `--offload-to-cpu` control weight residency, but the active
+  block's working memory must also fit within the VRAM budget.
 - The default video flow shift is 12. The audio stream is mapped internally to
   its shift of 3, so the regular samplers can operate on the packed AV latent.
+
+## HyperFlow H3 Flash
+
+[HyperFlow H3 Flash](https://huggingface.co/VideoRebirthAI/hyperflow-h3-flash)
+uses the shared components and input options described in this guide. Replace
+`--diffusion-model` with the matching HyperFlow FL2VA or Ref2VA checkpoint and
+use these sampling options:
+
+```sh
+--sampling-method euler --cfg-scale 1 --sigmas hyperflow-h3-flash-6
+```
+
+Use `hyperflow-h3-flash-4` or `hyperflow-h3-flash-8` for 4 or 8 steps. These
+presets also work with `--hires-sigmas`; their length determines the step count.
+They already include video flow shift 12, so keep the default flow shift.

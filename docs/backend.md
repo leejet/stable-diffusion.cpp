@@ -135,7 +135,10 @@ regardless of argument order, even with `--auto-fit on`.
 
 Auto-fit preserves explicit `--backend` assignments, including per-module
 assignments and device lists. For modules without a runtime assignment, it chooses
-the GPU with the largest available memory budget (the first device on a tie).
+the discrete GPU with the largest positive memory budget (the first device on a
+tie), falling back to integrated GPUs when no discrete GPU has a positive budget.
+An integrated GPU's shared system memory does not give it priority over a discrete
+GPU. Explicit assignments such as `--backend Vulkan1` still select that device.
 It then derives parameter placements from the model metadata, each module's
 compute devices, and the remaining memory budgets. The chosen backend
 specifications are printed.
@@ -247,6 +250,9 @@ These are backend-level defaults. GGML still chooses the actual kernel based on
 weight type, shape, and hardware; enabling direct convolution does not guarantee
 that every operation uses implicit GEMM. The CUDA-family implicit GEMM paths
 require F16 weights and can use ordinary direct kernels for other cases.
+For 3D convolution, a supported direct kernel is also used as a fallback when
+the im2col decomposition is unsupported for the actual tensor sizes, including
+when an intermediate reshape or matrix multiplication exceeds backend limits.
 This option does not change the separately created image upscaler context.
 
 Repeating `--conv-direct` replaces the previous assignment string. Existing

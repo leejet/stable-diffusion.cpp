@@ -42,6 +42,8 @@ For community edit adapters and other optional extensions, these are the base-mo
 | `flux3-klein` | 1 | 16 | 1024 × 1024 | [Source](https://raw.githubusercontent.com/black-forest-labs/flux-3-image-klein/main/README.md)  |
 | `flux3-klein-base` | 4 | 20 | 1024 × 1024 | [Source](https://raw.githubusercontent.com/black-forest-labs/flux-3-image-klein/main/src/flux3/pipeline.py)  |
 | `hidream-o1-dev` | 1 | 20 | 1024 × 1024 | [Source](https://huggingface.co/HiDream-ai/HiDream-O1-Image-Dev)  |
+| `hyperflow-h3-flash-fl2va` | 1 | 6 | 1344 × 768 | [Source](https://huggingface.co/VideoRebirthAI/hyperflow-h3-flash) Two-time FL2VA checkpoint; native text and first/last-frame generation. Fixed 6-step video sigma grid with shift 12, 124 frames at 24 FPS. Reuses MiniMax-H3 components. |
+| `hyperflow-h3-flash-ref2va` | 1 | 6 | 1344 × 768 | [Source](https://huggingface.co/VideoRebirthAI/hyperflow-h3-flash) Separate two-time Ref2VA checkpoint; image references. Same schedule and components as FL2VA; video/audio references remain unverified. |
 | `hunyuan-video-15-i2v` | 6 | 20 | 1280 × 720 | [Source](https://huggingface.co/tencent/HunyuanVideo-1.5) 720p base I2V defaults; CFG/step-distilled and 480p checkpoints use different settings. |
 | `hunyuan-video-15-t2v` | 6 | 20 | 1280 × 720 | [Source](https://huggingface.co/tencent/HunyuanVideo-1.5) 720p base T2V defaults; CFG-distilled / 480p checkpoints need their published settings. |
 | `ideogram4` | 7 | 20 | 1024 × 1024 | [Source](https://raw.githubusercontent.com/ideogram-oss/ideogram4/main/docs/inference.md) Constant-guidance pipeline defaults; this recipe does not reproduce the CLI’s per-step guidance schedule. |
@@ -71,6 +73,7 @@ For community edit adapters and other optional extensions, these are the base-mo
 | `minit2i` | 2.5 | 20 | 512 × 512 | [Source](https://huggingface.co/MiniT2I/MiniT2I/raw/main/pipeline.py) B/16 example and native model size; L/16 uses CFG 6. |
 | `moss-image-base` | 3 | 20 | 1024 × 1024 | [Source](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base)  |
 | `moss-image-sft` | 3 | 20 | 1024 × 1024 | [Source](https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT)  |
+| `p-h3-image` | 1 | 8 | 1024 × 1024 | [Runtime guide](../../../docs/p_h3_image.md) Fixed P-H3 sigma schedule; upstream 2912 × 2912 reduced to the catalog default. |
 | `nitrosd-realism` | 1 | 1 | 1024 × 1024 | [Source](https://huggingface.co/ChenDY/NitroFusion)  |
 | `ovis-image` | 5 | 20 | 1024 × 1024 | [Source](https://huggingface.co/ATH-MaaS/Ovis-Image-7B)  |
 | `pid` | 1 | 4 | 2048 × 2048 | [Source](https://huggingface.co/nvidia/PiD) Standalone PiD decoding at 2K; guidance is handled by the upstream generator. |
