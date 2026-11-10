@@ -1345,12 +1345,6 @@ std::string convert_diffusers_to_original_wan_vae(std::string name, bool qwen_im
 }
 
 std::string convert_first_stage_model_name(std::string name, std::string prefix, SDVersion version) {
-    // The decoder-only Sol-H3-VAE checkpoint stores these tensors without a decoder prefix.
-    if (version == VERSION_MINIMAX_H3 &&
-        (starts_with(name, "blocks.") || starts_with(name, "x_embedder.") ||
-         starts_with(name, "norm_out.") || starts_with(name, "proj_out.") || name == "register_tokens")) {
-        return "decoder." + name;
-    }
     if (sd_version_is_hunyuan_video(version) || sd_version_is_mage_flow(version) || sd_version_is_minimax_h3(version)) {
         return name;
     }

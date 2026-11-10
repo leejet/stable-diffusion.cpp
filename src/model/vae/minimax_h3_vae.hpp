@@ -29,13 +29,11 @@ namespace MiniMaxH3VAE {
         int num_layers   = 36;
         int patch_size_t = 4;
         bool sol         = false;
-        bool has_encoder = true;
 
         static MiniMaxH3VAEConfig detect_from_weights(const String2TensorStorage& tensors, const std::string& prefix) {
             MiniMaxH3VAEConfig config;
-            config.sol         = tensors.count(prefix + ".decoder.blocks.0.scale1") != 0;
-            config.has_encoder = !config.sol || tensors.count(prefix + ".encoder.conv_in.weight") != 0;
-            auto proj = tensors.find(prefix + ".decoder.proj_out.weight");
+            config.sol = tensors.count(prefix + ".decoder.blocks.0.scale1") != 0;
+            auto proj  = tensors.find(prefix + ".decoder.proj_out.weight");
             if (proj != tensors.end()) {
                 config.patch_size_t = static_cast<int>(proj->second.ne[1] / (3 * 16 * 16));
                 if (config.patch_size_t != 1 && config.patch_size_t != 4) {
@@ -53,9 +51,8 @@ namespace MiniMaxH3VAE {
                 }
             }
             if (config.sol || proj != tensors.end()) {
-                LOG_VERBOSE("minimax_h3_vae: decoder=%s, has_encoder=%s, layers=%d, patch_size_t=%d",
+                LOG_VERBOSE("minimax_h3_vae: decoder=%s, layers=%d, patch_size_t=%d",
                             config.sol ? "sol" : "original",
-                            config.has_encoder ? "true" : "false",
                             config.num_layers,
                             config.patch_size_t);
             }
@@ -380,9 +377,10 @@ namespace MiniMaxH3VAE {
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
-            auto w1 = std::dynamic_pointer_cast<Linear>(blocks["w1"]);
-            auto w2 = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
-            return w2->forward(ctx, ggml_swiglu(ctx->ggml_ctx, w1->forward(ctx, x)));
+            auto w1   = std::dynamic_pointer_cast<Linear>(blocks["w1"]);
+            auto w2   = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
+            auto gate = ggml_swiglu(ctx->ggml_ctx, w1->forward(ctx, x));
+            return w2->forward(ctx, gate);
         }
     };
 
@@ -517,13 +515,9 @@ namespace MiniMaxH3VAE {
                                                    "hidden_states");
             }
 
-            auto norm_out = std::dynamic_pointer_cast<LayerNorm>(blocks["norm_out"]);
-            auto proj_out = std::dynamic_pointer_cast<Linear>(blocks["proj_out"]);
-            auto to_pixels = [&](ggml_tensor* patches, int64_t latent_frames) {
-                return DiT::unpatchify_3d(ctx, patches, latent_frames, height, width,
-                                          patch_size_t, patch_size, patch_size, true);
-            };
-            auto finalize = [&](ggml_tensor* pixels) {
+            auto norm_out              = std::dynamic_pointer_cast<LayerNorm>(blocks["norm_out"]);
+            auto proj_out              = std::dynamic_pointer_cast<Linear>(blocks["proj_out"]);
+            auto denormalize_and_clamp = [&](ggml_tensor* pixels) {
                 auto scaled = ggml_mul(ctx->ggml_ctx, pixels, pixel_std);
                 return ggml_clamp(ctx->ggml_ctx, ggml_add(ctx->ggml_ctx, scaled, pixel_mean), 0.f, 1.f);
             };
@@ -537,10 +531,12 @@ namespace MiniMaxH3VAE {
                 for (int64_t t = 0; t < num_frames; t += sol_block_size) {
                     const int64_t end = std::min(t + sol_block_size, num_frames);
                     auto rows         = ggml_ext_slice(ctx, h, 1, t * frame_rows, end * frame_rows, false);
-                    auto pixels       = to_pixels(proj_out->forward(ctx, norm_out->forward(ctx, rows)), end - t);
+                    auto patches      = proj_out->forward(ctx, norm_out->forward(ctx, rows));
+                    auto pixels       = DiT::unpatchify_3d(ctx, patches, end - t, height, width,
+                                                           patch_size_t, patch_size, patch_size, true);
                     // Keep only the last frame of the first latent patch in each native block.
                     pixels              = ggml_ext_slice(ctx, pixels, 2, patch_size_t - 1, pixels->ne[2], false);
-                    pixels              = finalize(pixels);
+                    pixels              = denormalize_and_clamp(pixels);
                     const int64_t count = pixels->ne[2];
                     for (int64_t c = 0; c < channels; ++c) {
                         auto plane          = ggml_ext_slice(ctx, pixels, 3, c, c + 1, false);
@@ -549,13 +545,17 @@ namespace MiniMaxH3VAE {
                         auto indices        = ggml_ext_slice(ctx, sol_inputs[0].row_ids, 0, start, start + count, false);
                         output              = ggml_set_rows(ctx->ggml_ctx, output, frames, indices);
                     }
+                    // Write each block before expanding the next block's pixel graph.
+                    ctx->expand_graph(output);
                     frame_offset += count;
                 }
                 return ggml_reshape_4d(ctx->ggml_ctx, output, width * patch_size, height * patch_size, output_frames, channels);
             }
-            h             = proj_out->forward(ctx, norm_out->forward(ctx, h));
-            h             = ggml_ext_slice(ctx, h, 1, 0, num_patches);
-            return finalize(to_pixels(h, num_frames));
+            h           = proj_out->forward(ctx, norm_out->forward(ctx, h));
+            h           = ggml_ext_slice(ctx, h, 1, 0, num_patches);
+            auto pixels = DiT::unpatchify_3d(ctx, h, num_frames, height, width,
+                                             patch_size_t, patch_size, patch_size, true);
+            return denormalize_and_clamp(pixels);
         }
     };
 
@@ -564,10 +564,8 @@ namespace MiniMaxH3VAE {
 
         explicit MiniMaxH3VideoVAE(const MiniMaxH3VAEConfig& config)
             : single_frame(config.patch_size_t == 1) {
-            if (config.has_encoder) {
-                blocks["encoder"]    = std::make_shared<Encoder>();
-                blocks["quant_conv"] = std::make_shared<Conv3d>(48, 48, std::tuple{1, 1, 1});
-            }
+            blocks["encoder"]         = std::make_shared<Encoder>();
+            blocks["quant_conv"]      = std::make_shared<Conv3d>(48, 48, std::tuple{1, 1, 1});
             blocks["post_quant_conv"] = std::make_shared<Conv3d>(24,
                                                                  24,
                                                                  std::tuple{1, 1, 1});
@@ -643,10 +641,6 @@ namespace MiniMaxH3VAE {
             return config.patch_size_t == 1 ? "p_h3_image_vae" : "minimax_h3_video_vae";
         }
 
-        bool can_tile_decode() const override {
-            return !config.sol;
-        }
-
         int get_encoder_output_channels(int input_channels) override {
             SD_UNUSED(input_channels);
             return config.patch_size_t == 1 ? 48 : 24;
@@ -692,6 +686,10 @@ namespace MiniMaxH3VAE {
         }
 
         sd_tiling_params_t resolve_tiling_params(sd_tiling_params_t params) const override {
+            return config.sol ? params : resolve_original_tiling_params(params);
+        }
+
+        static sd_tiling_params_t resolve_original_tiling_params(sd_tiling_params_t params) {
             if (!params.enabled) {
                 params.target_overlap = 0.25f;
             }
@@ -745,12 +743,8 @@ namespace MiniMaxH3VAE {
                                  sd_tiling_params_t tiling_params,
                                  bool circular_x = false,
                                  bool circular_y = false) override {
-            if (!config.has_encoder) {
-                LOG_ERROR("Sol-H3-VAE checkpoint is missing the MiniMax-H3 encoder");
-                return {};
-            }
             auto input  = ensure_video_shape(x);
-            auto tiling = resolve_tiling_params(tiling_params);
+            auto tiling = resolve_original_tiling_params(tiling_params);
             if (config.patch_size_t == 1 && input.shape()[2] != 1) {
                 LOG_ERROR("P-H3-Image VAE encodes single-frame images only");
                 return {};
@@ -790,6 +784,46 @@ namespace MiniMaxH3VAE {
             return result;
         }
 
+        bool supports_temporal_tiling(VAETemporalDirection direction) const override {
+            return config.sol && direction == VAETemporalDirection::DECODE;
+        }
+
+        int get_default_temporal_tile_frames(VAETemporalDirection direction) const override {
+            SD_UNUSED(direction);
+            return 2 * sol_block_size;
+        }
+
+        int get_default_temporal_tile_overlap(VAETemporalDirection direction) const override {
+            SD_UNUSED(direction);
+            return sol_block_size;
+        }
+
+        sd::Tensor<float> _compute_temporal_tiled(int n_threads,
+                                                  const sd::Tensor<float>& input,
+                                                  VAETemporalDirection direction,
+                                                  const VAETemporalTilingConfig& tiling) override {
+            GGML_ASSERT(supports_temporal_tiling(direction));
+            if (tiling.tile_frames % sol_block_size || tiling.overlap % sol_block_size ||
+                tiling.overlap >= tiling.tile_frames) {
+                LOG_ERROR("Sol-H3-VAE temporal tile size and overlap must be multiples of %d latent frames, with overlap smaller than the tile",
+                          static_cast<int>(sol_block_size));
+                return {};
+            }
+            if (input.shape()[2] <= tiling.tile_frames) {
+                return _compute(n_threads, input, true);
+            }
+            auto plan = make_vae_temporal_tile_plan(input.shape()[2], tiling);
+            // With block-aligned starts, the same mapping gives tile lengths and output offsets.
+            auto frame_count = [&](int64_t frames) { return sol_output_frames(frames, config.patch_size_t); };
+            return process_vae_temporal_tiles_blended(input, plan, frame_count, frame_count,
+                                                      [&](const sd::Tensor<float>& tile, const VAETemporalTile& window) {
+                                                          LOG_VERBOSE("Sol-H3-VAE temporal tile %d/%d: latent frames [%lld, %lld)",
+                                                                      window.index + 1, static_cast<int>(plan.tiles.size()),
+                                                                      static_cast<long long>(window.start), static_cast<long long>(window.end));
+                                                          return _compute(n_threads, tile, true);
+                                                      });
+        }
+
         sd::Tensor<float> decode(int n_threads,
                                  const sd::Tensor<float>& x,
                                  sd_tiling_params_t tiling_params,
@@ -797,18 +831,24 @@ namespace MiniMaxH3VAE {
                                  bool circular_x   = false,
                                  bool circular_y   = false,
                                  bool silent       = false) override {
-            auto input  = ensure_video_shape(x);
+            auto input = ensure_video_shape(x);
             if (config.sol) {
+                circular_x = circular_x || circular_x_enabled;
+                circular_y = circular_y || circular_y_enabled;
                 if (circular_x || circular_y) {
-                    LOG_ERROR("Sol-H3-VAE does not support circular decoding");
-                    return {};
+                    int tile_w = static_cast<int>(input.shape()[0]);
+                    int tile_h = static_cast<int>(input.shape()[1]);
+                    float overlap;
+                    if (tiling_params.enabled &&
+                        !get_tile_sizes(tile_w, tile_h, overlap, tiling_params, input.shape()[0], input.shape()[1])) {
+                        return {};
+                    }
+                    if ((circular_x && tile_w >= input.shape()[0]) || (circular_y && tile_h >= input.shape()[1])) {
+                        LOG_ERROR("Sol-H3-VAE circular decoding requires spatial tiles smaller than the input on every circular axis");
+                        return {};
+                    }
                 }
-                if (tiling_params.enabled || tiling_params.temporal_tiling) {
-                    LOG_WARN("Sol-H3-VAE decodes the whole clip; ignoring VAE decode tiling");
-                }
-                auto pixels = _compute(n_threads, input, true);
-                runner_end();
-                return pixels;
+                return VAE::decode(n_threads, input, tiling_params, decode_video, circular_x, circular_y, silent);
             }
             auto tiling = resolve_tiling_params(tiling_params);
             if (config.patch_size_t == 1 && input.shape()[2] != 1) {
@@ -957,10 +997,10 @@ namespace MiniMaxH3VAE {
                                         input.shape()[1],
                                         input.shape()[2]);
                 if (config.sol) {
-                    const auto& shape = input.shape();
-                    sol_plan          = std::make_unique<SolAttentionPlan>(shape[0], shape[1], shape[2], false);
-                    shifted_plan      = std::make_unique<SolAttentionPlan>(shape[0], shape[1], shape[2], true);
-                    shifted_rope      = build_rope(shape[0], shape[1], shape[2], true);
+                    const auto& shape  = input.shape();
+                    sol_plan           = std::make_unique<SolAttentionPlan>(shape[0], shape[1], shape[2], false);
+                    shifted_plan       = std::make_unique<SolAttentionPlan>(shape[0], shape[1], shape[2], true);
+                    shifted_rope       = build_rope(shape[0], shape[1], shape[2], true);
                     const int64_t rows = std::max(shifted_rope.shape()[3], pixel_mean.shape()[3] *
                                                                                sol_output_frames(shape[2], config.patch_size_t));
                     sol_row_ids        = sd::Tensor<int32_t>({rows});
@@ -973,15 +1013,16 @@ namespace MiniMaxH3VAE {
                 auto value       = make_input(input);
                 auto mean        = make_input(pixel_mean);
                 auto std         = make_input(pixel_std);
-                auto runner_ctx  = get_context();
+                auto graph       = new_graph_custom(H3_VIDEO_VAE_GRAPH_SIZE);
+                auto runner_ctx  = get_context(graph);
                 ggml_tensor* out = nullptr;
                 if (decode_graph) {
-                    auto pe = make_input(rope_cache);
+                    auto pe         = make_input(rope_cache);
                     auto shifted_pe = config.sol ? make_input(shifted_rope) : nullptr;
                     std::array<SolAttentionPlan::Inputs, 2> sol_inputs;
                     if (sol_plan) {
-                        auto bind_input = [&](const auto& tensor) { return make_input(tensor); };
-                        sol_inputs      = {sol_plan->bind(bind_input), shifted_plan->bind(bind_input)};
+                        auto bind_input       = [&](const auto& tensor) { return make_input(tensor); };
+                        sol_inputs            = {sol_plan->bind(bind_input), shifted_plan->bind(bind_input)};
                         auto row_ids          = make_input(sol_row_ids);
                         sol_inputs[0].row_ids = row_ids;
                         sol_inputs[1].row_ids = row_ids;
@@ -990,7 +1031,6 @@ namespace MiniMaxH3VAE {
                 } else {
                     out = model.encode(&runner_ctx, value, mean, std);
                 }
-                auto graph = new_graph_custom(H3_VIDEO_VAE_GRAPH_SIZE);
                 ggml_build_forward_expand(graph, out);
                 return graph;
             };

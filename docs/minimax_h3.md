@@ -104,13 +104,18 @@ frame rate and optional soundtrack; non-24-fps inputs are resampled internally.
 Pass a [Sol-H3-VAE checkpoint](https://huggingface.co/Comfy-Org/MiniMax-H3/tree/main/vae)
 with `--vae` to use the distilled video decoder. The ComfyUI FP16 and INT8
 ConvRot checkpoints include the MiniMax-H3 encoder for image and video inputs.
-The [decoder-only release](https://huggingface.co/Efficient-Large-Model/Sol-H3-VAE)
-can be used for text-to-video. Supply `--audio-vae` as usual to decode the soundtrack.
+Supply `--audio-vae` as usual to decode the soundtrack.
 
-Sol decodes the whole clip at once and its output can differ from the original
-decoder's. Memory use grows with resolution and clip length.
-Use the original MiniMax-H3 VAE when you need spatial or temporal decode tiling
-or circular decoding.
+Sol decodes the whole clip by default. Use `--vae-tiling` for spatial tiling or
+`--temporal-tiling` for temporal tiling. Either can reduce memory use but may
+affect output quality because the decoder has less context at tile boundaries.
+
+Temporal tiles default to 10 latent frames with 5 latent frames of overlap.
+Set `temporal_tile_frames` and `temporal_tile_overlap` in
+`--extra-tiling-args` to override them. Both must be multiples of 5 latent
+frames, and overlap must be smaller than the tile. The last tile may be shorter.
+Circular decoding requires spatial tiling on each circular axis, with a tile
+size smaller than the input on that axis.
 
 ## Latent hires second pass (two-stage sampling)
 
