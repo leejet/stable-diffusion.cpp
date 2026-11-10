@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "id": "minimax-h3-image",
+  "name": "MiniMax H3 Image",
+  "size_multiple": 32,
+  "description": "Text-to-image and reference-image editing with the six-step PDD checkpoint. Requires the MiniMax-H3-Image 2D VAE and MiniMax-H3 Qwen3-VL-32B text encoder with its vision tower.",
+  "model_url": "https://huggingface.co/MiniMaxAI/MiniMax-H3-Image",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "MiniMax-H3 Qwen 3 VL 32B Text Encoder"
+    },
+    {
+      "id": "llm_vision",
+      "required": false,
+      "label": "Vision tower (required when not included in the text encoder)"
+    },
+    {
+      "id": "vae",
+      "required": true,
+      "label": "MiniMax-H3-Image 2D VAE"
+    }
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "cfg_scale": 1,
+    "steps": 6,
+    "width": 1024,
+    "height": 1024,
+    "custom_sigmas": [
+      1.0,
+      0.9675236940383911,
+      0.8875485062599182,
+      0.75,
+      0.5327739119529724,
+      0.23200887441635132,
+      0.0
+    ]
+  },
+  "features": [
+    "ref_images"
+  ]
+}

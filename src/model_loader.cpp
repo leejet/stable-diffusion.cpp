@@ -577,7 +577,10 @@ SDVersion ModelLoader::get_sd_version() const {
             return VERSION_LTXAV;
         }
         if (tensor_storage.name.find("model.diffusion_model.video_patch_proj.weight") != std::string::npos &&
-            tensor_storage_map.find("model.diffusion_model.audio_patch_proj.weight") != tensor_storage_map.end()) {
+            tensor_storage_map.find("model.diffusion_model.condition_proj.weight") != tensor_storage_map.end()) {
+            if (tensor_storage_map.count("model.diffusion_model.audio_patch_proj.weight") == 0) {
+                return VERSION_MINIMAX_H3_IMAGE;
+            }
             // P-H3 uses the same DiT architecture as H3; its VAE or connector identifies the image pipeline.
             auto decoder = tensor_storage_map.find("first_stage_model.decoder.proj_out.weight");
             if (decoder == tensor_storage_map.end()) {

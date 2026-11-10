@@ -2589,7 +2589,9 @@ struct LLMEmbedder : public Conditioner {
                 } else if (conditioner_params.ref_images != nullptr) {
                     for (size_t i = 0; i < conditioner_params.ref_images->size(); ++i) {
                         auto resized = resize_for_vision((*conditioner_params.ref_images)[i]);
-                        prompt += "<Picture " + std::to_string(i + 1) + ">: ";
+                        prompt += version == VERSION_MINIMAX_H3_IMAGE
+                                      ? "Picture " + std::to_string(i + 1) + ": "
+                                      : "<Picture " + std::to_string(i + 1) + ">: ";
                         if (!add_vision_outputs(llm->encode_image_outputs(n_threads,
                                                                           resized,
                                                                           false),
