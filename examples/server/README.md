@@ -287,6 +287,16 @@ If you want to use a different host or port, pass:
 --listen-ip <ip> --listen-port <port>
 ```
 
+The native async job queue can be tuned with:
+
+```bash
+--max-pending-jobs <count> --completed-ttl-seconds <seconds>
+```
+
+`--max-pending-jobs` defaults to 64 and limits how many async jobs may be
+queued or generating. `--completed-ttl-seconds` defaults to 600 and controls
+how long completed jobs remain available through the async API.
+
 # Frontend
 
 ## Build with Frontend

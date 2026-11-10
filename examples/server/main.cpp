@@ -113,6 +113,10 @@ int main(int argc, const char** argv) {
     std::vector<UpscalerEntry> upscaler_cache;
     std::mutex upscaler_mutex;
     AsyncJobManager async_job_manager;
+    async_job_manager.max_pending_jobs =
+        static_cast<size_t>(svr_params.max_pending_jobs);
+    async_job_manager.completed_ttl_seconds =
+        static_cast<int64_t>(svr_params.completed_ttl_seconds);
     ServerRuntime runtime = {
         models.context.get(),
         &sd_ctx_mutex,
