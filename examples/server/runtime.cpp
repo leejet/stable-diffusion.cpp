@@ -351,6 +351,12 @@ ArgOptions SDSvrParams::get_options() {
 
     options.int_options = {
         {"", "--listen-port", "server listen port (default: 1234)", &listen_port},
+        {"", "--max-pending-jobs",
+         "maximum number of pending async jobs (default: 64)",
+         &max_pending_jobs},
+        {"", "--completed-ttl-seconds",
+         "retention time for completed async jobs in seconds (default: 600)",
+         &completed_ttl_seconds},
     };
 
     options.bool_options = {
@@ -388,6 +394,16 @@ bool SDSvrParams::validate() {
         return false;
     }
 
+    if (max_pending_jobs <= 0) {
+        LOG_ERROR("error: max_pending_jobs must be greater than 0");
+        return false;
+    }
+
+    if (completed_ttl_seconds < 0) {
+        LOG_ERROR("error: completed_ttl_seconds must be non-negative");
+        return false;
+    }
+
     if (!serve_html_path.empty() && !fs::exists(fs::u8path(serve_html_path))) {
         LOG_ERROR("error: serve_html_path file does not exist: %s", serve_html_path.c_str());
         return false;
@@ -408,6 +424,8 @@ std::string SDSvrParams::to_string() const {
         << "  log_level: " << log_level_name(log_level) << ",\n"
         << "  listen_ip: " << listen_ip << ",\n"
         << "  listen_port: \"" << listen_port << "\",\n"
+        << "  max_pending_jobs: " << max_pending_jobs << ",\n"
+        << "  completed_ttl_seconds: " << completed_ttl_seconds << ",\n"
         << "  serve_html_path: \"" << serve_html_path << "\",\n"
         << "}";
     return oss.str();
