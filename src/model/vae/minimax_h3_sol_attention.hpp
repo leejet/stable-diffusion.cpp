@@ -107,7 +107,8 @@ namespace MiniMaxH3VAE {
                 }
                 // Bound the workspace of backends that fall back to unfused attention.
                 constexpr size_t max_windows = 4;
-                for (const auto& [query_count, windows] : groups) {
+                for (const auto& group : groups) {
+                    const auto& windows = group.second;
                     for (size_t first_window = 0; first_window < windows.size(); first_window += max_windows) {
                         const auto n      = static_cast<int64_t>(std::min(max_windows, windows.size() - first_window));
                         auto pack_windows = [&](auto member) -> sd::Tensor<int32_t> {
