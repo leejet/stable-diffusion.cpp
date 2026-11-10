@@ -293,7 +293,7 @@ namespace Pid {
             auto proj     = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
 
             auto qkv         = qkv_proj->forward(ctx, x);
-            auto qkv_vec     = ggml_ext_split_qkv(ctx, qkv);
+            auto qkv_vec     = ggml_ext_chunk(ctx, qkv, 3, 0);
             int64_t L        = x->ne[1];
             int64_t N        = x->ne[2];
             int64_t head_dim = dim / num_heads;
@@ -343,14 +343,14 @@ namespace Pid {
             int64_t N        = x->ne[2];
             int64_t head_dim = dim / num_heads;
 
-            auto qkv_x = ggml_ext_split_qkv(ctx, qkv_x_proj->forward(ctx, x));
+            auto qkv_x = ggml_ext_chunk(ctx, qkv_x_proj->forward(ctx, x), 3, 0);
             auto qx    = ggml_reshape_4d(ctx->ggml_ctx, qkv_x[0], head_dim, num_heads, Nx, N);
             auto kx    = ggml_reshape_4d(ctx->ggml_ctx, qkv_x[1], head_dim, num_heads, Nx, N);
             auto vx    = ggml_reshape_4d(ctx->ggml_ctx, qkv_x[2], head_dim, num_heads, Nx, N);
             qx         = q_norm_x->forward(ctx, qx);
             kx         = k_norm_x->forward(ctx, kx);
 
-            auto qkv_y = ggml_ext_split_qkv(ctx, qkv_y_proj->forward(ctx, y));
+            auto qkv_y = ggml_ext_chunk(ctx, qkv_y_proj->forward(ctx, y), 3, 0);
             auto qy    = ggml_reshape_4d(ctx->ggml_ctx, qkv_y[0], head_dim, num_heads, Ny, N);
             auto ky    = ggml_reshape_4d(ctx->ggml_ctx, qkv_y[1], head_dim, num_heads, Ny, N);
             auto vy    = ggml_reshape_4d(ctx->ggml_ctx, qkv_y[2], head_dim, num_heads, Ny, N);

@@ -150,14 +150,6 @@ ggml_tensor* ggml_ext_conv_3d(GGMLRunnerContext* runner_ctx,
                               float scale         = 1.f,
                               bool allow_conv2d   = false);
 
-// qkv: [N, L, 3*C]
-// return: ([N, L, C], [N, L, C], [N, L, C])
-std::vector<ggml_tensor*> ggml_ext_split_qkv(GGMLRunnerContext* runner_ctx, ggml_tensor* qkv);
-
-// qkv: [N, 3*C, H, W]
-// return: ([N, C, H, W], [N, C, H, W], [N, C, H, W])
-std::vector<ggml_tensor*> ggml_ext_split_image_qkv(GGMLRunnerContext* runner_ctx, ggml_tensor* qkv);
-
 // Constant and cast helpers require the built-in tensors initialized by GGMLRunner.
 ggml_tensor* ggml_ext_full(GGMLRunnerContext* runner_ctx,
                            float value,
