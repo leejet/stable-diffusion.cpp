@@ -86,6 +86,11 @@ The canvas keeps the submitted output aspect ratio, and stage changes keep the
 same layout. Editing the next request's resolution does not resize the current
 preview or result.
 
+Settings offers **Notify me when generation finishes**. When enabled, the UI
+requests browser notification permission and shows a notification when a
+generation job completes, fails, or is cancelled, so you do not need to watch
+the tab while waiting. The preference is saved locally.
+
 The server can also start with the existing model arguments shown below;
 existing API clients then work without selecting a recipe. The UI automatically
 selects **Command-line model (all features)** and uses the startup generation
