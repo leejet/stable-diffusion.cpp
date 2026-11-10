@@ -20,6 +20,11 @@ namespace MiniMaxH3VAE {
 
     constexpr int H3_VIDEO_VAE_GRAPH_SIZE = 262144;
 
+    static int64_t sol_output_frames(int64_t latent_frames, int patch_size_t) {
+        const int64_t blocks = (latent_frames + sol_block_size - 1) / sol_block_size;
+        return latent_frames * patch_size_t - blocks * (patch_size_t - 1);
+    }
+
     struct MiniMaxH3VAEConfig {
         int num_layers   = 36;
         int patch_size_t = 4;
@@ -336,11 +341,12 @@ namespace MiniMaxH3VAE {
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* x,
                              ggml_tensor* pe,
+                             RMSNorm& norm,
                              const SolAttentionPlan::Inputs* sol) {
             auto to_out = std::dynamic_pointer_cast<Linear>(blocks["to_out"]);
             if (sol != nullptr) {
                 auto project_rows = [&](ggml_tensor* rows, ggml_tensor* local_pe) {
-                    auto [q, k, v] = project(ctx, rows, local_pe);
+                    auto [q, k, v] = project(ctx, norm.forward(ctx, rows), local_pe);
                     auto as_rows   = [&](ggml_tensor* tensor) {
                         return ggml_reshape_2d(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, tensor), dim, rows->ne[1]);
                     };
@@ -351,7 +357,7 @@ namespace MiniMaxH3VAE {
                 };
                 return to_out->forward(ctx, sol->forward(ctx, x, pe, num_head, project_rows));
             }
-            auto [q, k, v]      = project(ctx, x, pe);
+            auto [q, k, v]      = project(ctx, norm.forward(ctx, x), pe);
             auto out            = ggml_ext_attention_ext(ctx,
                                                          q,
                                                          k,
@@ -408,11 +414,11 @@ namespace MiniMaxH3VAE {
             auto attn  = std::dynamic_pointer_cast<DecoderAttention>(blocks["attn"]);
             auto norm2 = std::dynamic_pointer_cast<RMSNorm>(blocks["norm2"]);
             auto ff    = std::dynamic_pointer_cast<DecoderFeedForward>(blocks["ff"]);
-            x          = ggml_add(ctx->ggml_ctx,
-                                  x,
-                                  ggml_mul(ctx->ggml_ctx,
-                                           attn->forward(ctx, norm1->forward(ctx, x), pe, sol),
-                                           params["scale1"]));
+            x           = ggml_add(ctx->ggml_ctx,
+                                   x,
+                                   ggml_mul(ctx->ggml_ctx,
+                                            attn->forward(ctx, x, pe, *norm1, sol),
+                                            params["scale1"]));
             auto finish = [&](ggml_tensor* rows) {
                 auto update = ff->forward(ctx, norm2->forward(ctx, rows));
                 return ggml_add(ctx->ggml_ctx, rows, ggml_mul(ctx->ggml_ctx, update, params["scale2"]));
@@ -471,7 +477,9 @@ namespace MiniMaxH3VAE {
                              ggml_tensor* z,
                              ggml_tensor* pe,
                              ggml_tensor* shifted_pe,
-                             const std::array<SolAttentionPlan::Inputs, 2>& sol_inputs) {
+                             const std::array<SolAttentionPlan::Inputs, 2>& sol_inputs,
+                             ggml_tensor* pixel_mean,
+                             ggml_tensor* pixel_std) {
             int64_t width      = z->ne[0];
             int64_t height     = z->ne[1];
             int64_t num_frames = z->ne[2];
@@ -511,17 +519,43 @@ namespace MiniMaxH3VAE {
 
             auto norm_out = std::dynamic_pointer_cast<LayerNorm>(blocks["norm_out"]);
             auto proj_out = std::dynamic_pointer_cast<Linear>(blocks["proj_out"]);
+            auto to_pixels = [&](ggml_tensor* patches, int64_t latent_frames) {
+                return DiT::unpatchify_3d(ctx, patches, latent_frames, height, width,
+                                          patch_size_t, patch_size, patch_size, true);
+            };
+            auto finalize = [&](ggml_tensor* pixels) {
+                auto scaled = ggml_mul(ctx->ggml_ctx, pixels, pixel_std);
+                return ggml_clamp(ctx->ggml_ctx, ggml_add(ctx->ggml_ctx, scaled, pixel_mean), 0.f, 1.f);
+            };
+            if (sol) {
+                const int64_t frame_rows    = width * height;
+                const int64_t output_frames = sol_output_frames(num_frames, patch_size_t);
+                const int64_t frame_size    = width * height * patch_size * patch_size;
+                const int64_t channels      = pixel_mean->ne[3];
+                auto output                 = ggml_new_tensor_2d(ctx->ggml_ctx, GGML_TYPE_F32, frame_size, channels * output_frames);
+                int64_t frame_offset        = 0;
+                for (int64_t t = 0; t < num_frames; t += sol_block_size) {
+                    const int64_t end = std::min(t + sol_block_size, num_frames);
+                    auto rows         = ggml_ext_slice(ctx, h, 1, t * frame_rows, end * frame_rows, false);
+                    auto pixels       = to_pixels(proj_out->forward(ctx, norm_out->forward(ctx, rows)), end - t);
+                    // Keep only the last frame of the first latent patch in each native block.
+                    pixels              = ggml_ext_slice(ctx, pixels, 2, patch_size_t - 1, pixels->ne[2], false);
+                    pixels              = finalize(pixels);
+                    const int64_t count = pixels->ne[2];
+                    for (int64_t c = 0; c < channels; ++c) {
+                        auto plane          = ggml_ext_slice(ctx, pixels, 3, c, c + 1, false);
+                        auto frames         = ggml_reshape_2d(ctx->ggml_ctx, ggml_ext_cont(ctx, plane), frame_size, count);
+                        const int64_t start = c * output_frames + frame_offset;
+                        auto indices        = ggml_ext_slice(ctx, sol_inputs[0].row_ids, 0, start, start + count, false);
+                        output              = ggml_set_rows(ctx->ggml_ctx, output, frames, indices);
+                    }
+                    frame_offset += count;
+                }
+                return ggml_reshape_4d(ctx->ggml_ctx, output, width * patch_size, height * patch_size, output_frames, channels);
+            }
             h             = proj_out->forward(ctx, norm_out->forward(ctx, h));
             h             = ggml_ext_slice(ctx, h, 1, 0, num_patches);
-            return DiT::unpatchify_3d(ctx,
-                                      h,
-                                      num_frames,
-                                      height,
-                                      width,
-                                      patch_size_t,
-                                      patch_size,
-                                      patch_size,
-                                      true);
+            return finalize(to_pixels(h, num_frames));
         }
     };
 
@@ -562,11 +596,7 @@ namespace MiniMaxH3VAE {
                             ggml_tensor* pixel_std) {
             auto post_quant = std::dynamic_pointer_cast<Conv3d>(blocks["post_quant_conv"]);
             auto decoder    = std::dynamic_pointer_cast<Decoder>(blocks["decoder"]);
-            auto pixels     = decoder->forward(ctx, post_quant->forward(ctx, latent), pe, shifted_pe, sol_inputs);
-            pixels          = ggml_add(ctx->ggml_ctx,
-                                       ggml_mul(ctx->ggml_ctx, pixels, pixel_std),
-                                       pixel_mean);
-            return ggml_clamp(ctx->ggml_ctx, pixels, 0.f, 1.f);
+            return decoder->forward(ctx, post_quant->forward(ctx, latent), pe, shifted_pe, sol_inputs, pixel_mean, pixel_std);
         }
     };
 
@@ -778,29 +808,7 @@ namespace MiniMaxH3VAE {
                 }
                 auto pixels = _compute(n_threads, input, true);
                 runner_end();
-                if (pixels.empty()) {
-                    return {};
-                }
-                const int64_t latent_frames = input.shape()[2];
-                const int64_t block_frames  = sol_block_size * config.patch_size_t;
-                const int64_t block_count   = (latent_frames + sol_block_size - 1) / sol_block_size;
-                const int64_t trim          = config.patch_size_t - 1;
-                const int64_t frames        = pixels.shape()[2];
-                const int64_t kept_frames   = frames - block_count * trim;
-                const int64_t frame_size    = pixels.shape()[0] * pixels.shape()[1];
-                auto shape                  = pixels.shape();
-                shape[2]                    = kept_frames;
-                sd::Tensor<float> result(shape);
-                // Each native block keeps only the last frame of its first latent patch.
-                for (int64_t c = 0; c < shape[3]; ++c) {
-                    int64_t offset = c * kept_frames * frame_size;
-                    for (int64_t first = 0; first < frames; first += block_frames) {
-                        const int64_t count = (std::min(frames - first, block_frames) - trim) * frame_size;
-                        std::copy_n(pixels.data() + (c * frames + first + trim) * frame_size, count, result.data() + offset);
-                        offset += count;
-                    }
-                }
-                return result;
+                return pixels;
             }
             auto tiling = resolve_tiling_params(tiling_params);
             if (config.patch_size_t == 1 && input.shape()[2] != 1) {
@@ -953,7 +961,8 @@ namespace MiniMaxH3VAE {
                     sol_plan          = std::make_unique<SolAttentionPlan>(shape[0], shape[1], shape[2], false);
                     shifted_plan      = std::make_unique<SolAttentionPlan>(shape[0], shape[1], shape[2], true);
                     shifted_rope      = build_rope(shape[0], shape[1], shape[2], true);
-                    const int64_t rows = shifted_rope.shape()[3];
+                    const int64_t rows = std::max(shifted_rope.shape()[3], pixel_mean.shape()[3] *
+                                                                               sol_output_frames(shape[2], config.patch_size_t));
                     sol_row_ids        = sd::Tensor<int32_t>({rows});
                     for (int64_t i = 0; i < rows; ++i) {
                         sol_row_ids.data()[i] = static_cast<int32_t>(i);
