@@ -447,7 +447,7 @@ namespace SD_CUDA_NAMESPACE {
         }
 #ifdef SD_CUDA_I8_CUTLASS
         static bool cutlass_compatible(const SDI8Operation& op, const ggml_tensor* dst) {
-            return op.weight_scale && !op.bias && op.weight->ne[0] <= INT_MAX / 16384 &&
+            return op.weight_scale && op.weight->ne[0] <= INT_MAX / 16384 && aligned(op.bias, 16) &&
                    aligned(op.weight, 16) && aligned(op.weight_scale, 16) && aligned(dst, 16) &&
                    (op.input->type == GGML_TYPE_F32 || (aligned(op.input, 16) && aligned(op.input_scale, 16)));
         }
@@ -531,7 +531,7 @@ namespace SD_CUDA_NAMESPACE {
 #ifdef SD_CUDA_I8_CUTLASS
                 size_t gemm_bytes = 0;
                 // Retain cuBLAS when I32 accumulation can overflow.
-                if (cutlass_compatible(op, dst) &&
+                if (cutlass_compatible(op, dst) && (!op.bias || p->kind == MAT) &&
                     (p->kind != CONCAT || ggml_nbytes(dst->src[0]) % 16 == 0)) {
                     if (p->kind == SWIGLU || p->kind == SWIGLU_QUANTIZE) {
                         p->gemm        = sd_cuda_i8_gemm_prepare(device, p->rows, p->n, p->k, true, &gemm_bytes);
@@ -819,7 +819,7 @@ namespace SD_CUDA_NAMESPACE {
 #ifdef SD_CUDA_I8_CUTLASS
                 if (p.gemm) {
                     auto status = sd_cuda_i8_gemm_execute(p.gemm, quant, static_cast<const int8_t*>(op.weight->data), scales, ws,
-                                                          intermediate ? reinterpret_cast<float*>(accum) : gemm_output, scratch_at(p.gemm_offset), stream);
+                                                          intermediate ? reinterpret_cast<float*>(accum) : gemm_output, scratch_at(p.gemm_offset), stream, bias);
                     if (status != GGML_STATUS_SUCCESS)
                         return status;
                 } else
