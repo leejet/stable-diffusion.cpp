@@ -294,12 +294,10 @@ namespace MiniMaxH3VAE {
             blocks["to_out"] = std::make_shared<Linear>(dim, dim, true);
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx,
-                             ggml_tensor* x,
-                             ggml_tensor* pe,
-                             const SolAttentionPlan::Inputs* sol) {
+        std::array<ggml_tensor*, 3> project(GGMLRunnerContext* ctx,
+                                            ggml_tensor* x,
+                                            ggml_tensor* pe) {
             auto to_qkv         = std::dynamic_pointer_cast<Linear>(blocks["to_qkv"]);
-            auto to_out         = std::dynamic_pointer_cast<Linear>(blocks["to_out"]);
             auto qkv_projection = to_qkv->forward(ctx, x);
             int64_t sequence    = x->ne[1];
             int64_t batch_size  = x->ne[2] * x->ne[3];
@@ -332,14 +330,28 @@ namespace MiniMaxH3VAE {
             k                   = ggml_rms_norm(ctx->ggml_ctx, k, 1e-5f);
             q                   = apply_partial_rope(ctx, q, pe);
             k                   = apply_partial_rope(ctx, k, pe);
+            return {q, k, v};
+        }
+
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* pe,
+                             const SolAttentionPlan::Inputs* sol) {
+            auto to_out = std::dynamic_pointer_cast<Linear>(blocks["to_out"]);
             if (sol != nullptr) {
-                auto as_rows = [&](ggml_tensor* tensor) {
-                    return ggml_reshape_2d(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, tensor), dim, sequence);
+                auto project_rows = [&](ggml_tensor* rows, ggml_tensor* local_pe) {
+                    auto [q, k, v] = project(ctx, rows, local_pe);
+                    auto as_rows   = [&](ggml_tensor* tensor) {
+                        return ggml_reshape_2d(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, tensor), dim, rows->ne[1]);
+                    };
+                    return std::array<ggml_tensor*, 3>{
+                        as_rows(ggml_permute(ctx->ggml_ctx, q, 0, 2, 1, 3)),
+                        as_rows(ggml_permute(ctx->ggml_ctx, k, 0, 2, 1, 3)),
+                        as_rows(v)};
                 };
-                q = as_rows(ggml_permute(ctx->ggml_ctx, q, 0, 2, 1, 3));
-                k = as_rows(ggml_permute(ctx->ggml_ctx, k, 0, 2, 1, 3));
-                return to_out->forward(ctx, sol->forward(ctx, q, k, as_rows(v), num_head));
+                return to_out->forward(ctx, sol->forward(ctx, x, pe, num_head, project_rows));
             }
+            auto [q, k, v]      = project(ctx, x, pe);
             auto out            = ggml_ext_attention_ext(ctx,
                                                          q,
                                                          k,
@@ -361,22 +373,10 @@ namespace MiniMaxH3VAE {
             blocks["w2"] = std::make_shared<Linear>(kInnerDim, dim, true);
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, int64_t rows_per_chunk) {
-            auto w1   = std::dynamic_pointer_cast<Linear>(blocks["w1"]);
-            auto w2   = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
-            auto forward_chunk = [&](ggml_tensor* input) {
-                return w2->forward(ctx, ggml_swiglu(ctx->ggml_ctx, w1->forward(ctx, input)));
-            };
-            if (rows_per_chunk == 0 || x->ne[1] <= rows_per_chunk) {
-                return forward_chunk(x);
-            }
-            // Chunk independent tokens to bound the feed-forward activation memory.
-            std::vector<ggml_tensor*> chunks;
-            for (int64_t row = 0; row < x->ne[1]; row += rows_per_chunk) {
-                auto input = ggml_ext_slice(ctx, x, 1, row, std::min(row + rows_per_chunk, x->ne[1]), false);
-                chunks.push_back(forward_chunk(input));
-            }
-            return ggml_ext_vec_concat(ctx, chunks, 1);
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+            auto w1 = std::dynamic_pointer_cast<Linear>(blocks["w1"]);
+            auto w2 = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
+            return w2->forward(ctx, ggml_swiglu(ctx->ggml_ctx, w1->forward(ctx, x)));
         }
     };
 
@@ -413,11 +413,21 @@ namespace MiniMaxH3VAE {
                                   ggml_mul(ctx->ggml_ctx,
                                            attn->forward(ctx, norm1->forward(ctx, x), pe, sol),
                                            params["scale1"]));
-            return ggml_add(ctx->ggml_ctx,
-                            x,
-                            ggml_mul(ctx->ggml_ctx,
-                                     ff->forward(ctx, norm2->forward(ctx, x), rows_per_chunk),
-                                     params["scale2"]));
+            auto finish = [&](ggml_tensor* rows) {
+                auto update = ff->forward(ctx, norm2->forward(ctx, rows));
+                return ggml_add(ctx->ggml_ctx, rows, ggml_mul(ctx->ggml_ctx, update, params["scale2"]));
+            };
+            if (rows_per_chunk == 0 || x->ne[1] <= rows_per_chunk) {
+                return finish(x);
+            }
+            // Normalize and update each independent chunk before writing it to the layer output.
+            auto output = ggml_new_tensor_2d(ctx->ggml_ctx, x->type, x->ne[0], x->ne[1]);
+            for (int64_t row = 0; row < x->ne[1]; row += rows_per_chunk) {
+                auto input   = ggml_ext_slice(ctx, x, 1, row, std::min(row + rows_per_chunk, x->ne[1]), false);
+                auto indices = ggml_ext_slice(ctx, sol->row_ids, 0, row, std::min(row + rows_per_chunk, x->ne[1]), false);
+                output       = ggml_set_rows(ctx->ggml_ctx, output, finish(input), indices);
+            }
+            return output;
         }
     };
 
@@ -489,7 +499,7 @@ namespace MiniMaxH3VAE {
             }
             h = ggml_concat(ctx->ggml_ctx, h, registers, 1);
 
-            const int64_t rows_per_chunk = sol ? width * height * sol_block_size + sol_global_rows : 0;
+            const int64_t rows_per_chunk = sol ? width * height + sol_global_rows : 0;
             for (int i = 0; i < num_layers; ++i) {
                 auto block = std::dynamic_pointer_cast<DecoderBlock>(
                     blocks[(sol ? "blocks." : "transformer_blocks.") + std::to_string(i)]);
@@ -933,6 +943,7 @@ namespace MiniMaxH3VAE {
             std::unique_ptr<SolAttentionPlan> sol_plan;
             std::unique_ptr<SolAttentionPlan> shifted_plan;
             sd::Tensor<float> shifted_rope;
+            sd::Tensor<int32_t> sol_row_ids;
             if (decode_graph) {
                 rope_cache = build_rope(input.shape()[0],
                                         input.shape()[1],
@@ -942,6 +953,11 @@ namespace MiniMaxH3VAE {
                     sol_plan          = std::make_unique<SolAttentionPlan>(shape[0], shape[1], shape[2], false);
                     shifted_plan      = std::make_unique<SolAttentionPlan>(shape[0], shape[1], shape[2], true);
                     shifted_rope      = build_rope(shape[0], shape[1], shape[2], true);
+                    const int64_t rows = shifted_rope.shape()[3];
+                    sol_row_ids        = sd::Tensor<int32_t>({rows});
+                    for (int64_t i = 0; i < rows; ++i) {
+                        sol_row_ids.data()[i] = static_cast<int32_t>(i);
+                    }
                 }
             }
             auto get_graph = [&]() -> ggml_cgraph* {
@@ -957,6 +973,9 @@ namespace MiniMaxH3VAE {
                     if (sol_plan) {
                         auto bind_input = [&](const auto& tensor) { return make_input(tensor); };
                         sol_inputs      = {sol_plan->bind(bind_input), shifted_plan->bind(bind_input)};
+                        auto row_ids          = make_input(sol_row_ids);
+                        sol_inputs[0].row_ids = row_ids;
+                        sol_inputs[1].row_ids = row_ids;
                     }
                     out = model.decode(&runner_ctx, value, pe, shifted_pe, sol_inputs, mean, std);
                 } else {

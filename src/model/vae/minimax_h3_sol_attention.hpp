@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <map>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -21,6 +22,7 @@ namespace MiniMaxH3VAE {
         struct Batch {
             sd::Tensor<int32_t> queries;
             sd::Tensor<int32_t> keys;
+            int64_t query_offset;
         };
 
         std::vector<Batch> batches;
@@ -38,9 +40,9 @@ namespace MiniMaxH3VAE {
                 }
             };
             using Window = std::pair<std::vector<int32_t>, std::vector<int32_t>>;
-            std::map<std::pair<int64_t, int64_t>, std::vector<Window>> groups;
-            auto add = [&](std::vector<int32_t> queries, std::vector<int32_t> keys) {
-                groups[{queries.size(), keys.size()}].emplace_back(std::move(queries), std::move(keys));
+            std::map<std::tuple<int64_t, int64_t, int64_t>, std::vector<Window>> groups;
+            auto add = [&](std::vector<int32_t> queries, std::vector<int32_t> keys, int64_t query_offset) {
+                groups[{queries.size(), keys.size(), query_offset}].emplace_back(std::move(queries), std::move(keys));
             };
 
             for (int64_t t = -time_shift; t < frames; t += sol_block_size) {
@@ -61,7 +63,7 @@ namespace MiniMaxH3VAE {
                         for (int64_t block = first / sol_block_size; block <= (end - 1) / sol_block_size; ++block) {
                             global_rows(block, keys);
                         }
-                        add(std::move(queries), std::move(keys));
+                        add(std::move(queries), std::move(keys), 0);
                     }
                 }
             }
@@ -76,17 +78,17 @@ namespace MiniMaxH3VAE {
                     keys.push_back(static_cast<int32_t>(i));
                 }
                 keys.insert(keys.end(), queries.begin(), queries.end());
-                add(std::move(queries), std::move(keys));
+                add(std::move(queries), std::move(keys), end - first);
             }
 
             // Equal-length windows can share an attention launch without padding or a mask.
             // Bound the batch so the unfused attention fallback also has bounded workspace.
-            constexpr size_t max_windows = 4;
             for (const auto& [lengths, windows] : groups) {
-                const auto [query_count, key_count] = lengths;
+                const auto [query_count, key_count, query_offset] = lengths;
+                const size_t max_windows                          = query_offset == 0 ? 4 : 1;
                 for (size_t first = 0; first < windows.size(); first += max_windows) {
                     const int64_t count = static_cast<int64_t>(std::min(max_windows, windows.size() - first));
-                    Batch batch{sd::Tensor<int32_t>({query_count, count}), sd::Tensor<int32_t>({key_count, count})};
+                    Batch batch{sd::Tensor<int32_t>({query_count, count}), sd::Tensor<int32_t>({key_count, count}), query_offset};
                     for (int64_t i = 0; i < count; ++i) {
                         const auto& [queries, keys] = windows[first + i];
                         std::copy(queries.begin(), queries.end(), batch.queries.data() + i * query_count);
@@ -98,26 +100,39 @@ namespace MiniMaxH3VAE {
         }
 
         struct Inputs {
-            std::vector<std::pair<ggml_tensor*, ggml_tensor*>> batches;
+            struct Batch {
+                ggml_tensor* queries;
+                ggml_tensor* keys;
+                int64_t query_offset;
+            };
+            std::vector<Batch> batches;
+            ggml_tensor* row_ids = nullptr;
 
+            template <typename Project>
             ggml_tensor* forward(GGMLRunnerContext* runner_ctx,
-                                 ggml_tensor* q,
-                                 ggml_tensor* k,
-                                 ggml_tensor* v,
-                                 int64_t heads) const {
+                                 ggml_tensor* x,
+                                 ggml_tensor* pe,
+                                 int64_t heads,
+                                 Project project) const {
                 auto ctx          = runner_ctx->ggml_ctx;
-                const int64_t dim = q->ne[0];
+                const int64_t dim = x->ne[0];
                 // The batches write each query row exactly once.
-                auto output = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, dim, q->ne[1]);
-                auto gather = [&](ggml_tensor* value, ggml_tensor* indices) {
-                    auto rows = ggml_reshape_1d(ctx, indices, ggml_nelements(indices));
-                    return ggml_reshape_3d(ctx, ggml_get_rows(ctx, value, rows), dim, indices->ne[0], indices->ne[1]);
-                };
-                for (const auto& [queries, keys] : batches) {
+                auto output    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, dim, x->ne[1]);
+                auto positions = ggml_reshape_2d(ctx, pe, pe->ne[0] * pe->ne[1] * pe->ne[2], pe->ne[3]);
+                for (const auto& [queries, keys, query_offset] : batches) {
+                    auto key_rows = ggml_reshape_1d(ctx, keys, ggml_nelements(keys));
+                    auto local_pe = ggml_reshape_4d(ctx, ggml_get_rows(ctx, positions, key_rows),
+                                                    pe->ne[0], pe->ne[1], pe->ne[2], key_rows->ne[0]);
+                    // Only the rows read by this batch need projected attention data.
+                    auto [q, k, v]  = project(ggml_get_rows(ctx, x, key_rows), local_pe);
+                    auto as_windows = [&](ggml_tensor* value) {
+                        return ggml_reshape_3d(ctx, value, dim, keys->ne[0], keys->ne[1]);
+                    };
+                    q             = ggml_ext_slice(runner_ctx, as_windows(q), 1, query_offset, query_offset + queries->ne[0]);
                     auto attended = ggml_ext_attention_ext(runner_ctx,
-                                                           gather(q, queries),
-                                                           gather(k, keys),
-                                                           gather(v, keys),
+                                                           q,
+                                                           as_windows(k),
+                                                           as_windows(v),
                                                            heads,
                                                            nullptr,
                                                            false,
@@ -134,7 +149,7 @@ namespace MiniMaxH3VAE {
         Inputs bind(BindInput bind_input) const {
             Inputs inputs;
             for (const auto& batch : batches) {
-                inputs.batches.emplace_back(bind_input(batch.queries), bind_input(batch.keys));
+                inputs.batches.push_back({bind_input(batch.queries), bind_input(batch.keys), batch.query_offset});
             }
             return inputs;
         }
