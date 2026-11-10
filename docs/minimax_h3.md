@@ -99,6 +99,19 @@ The C API exposes the same inputs through `ref_images`, `ref_videos`, and
 `ref_audios` in `sd_vid_gen_params_t`. Each `sd_ref_video_t` supplies its own
 frame rate and optional soundtrack; non-24-fps inputs are resampled internally.
 
+## Sol-H3-VAE decoding
+
+Pass a [Sol-H3-VAE checkpoint](https://huggingface.co/Comfy-Org/MiniMax-H3/tree/main/vae)
+with `--vae` to use the distilled video decoder. The ComfyUI FP16 and INT8
+ConvRot checkpoints include the MiniMax-H3 encoder for image and video inputs.
+The [decoder-only release](https://huggingface.co/Efficient-Large-Model/Sol-H3-VAE)
+can be used for text-to-video. Supply `--audio-vae` as usual to decode the soundtrack.
+
+Sol decodes the whole clip at once and its output can differ from the original
+decoder's. Memory use grows with resolution and clip length.
+Use the original MiniMax-H3 VAE when you need spatial or temporal decode tiling
+or circular decoding.
+
 ## Latent hires second pass (two-stage sampling)
 
 MiniMax-H3 supports `--hires` with two interchangeable second-stage upscalers:

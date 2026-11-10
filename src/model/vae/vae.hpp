@@ -201,6 +201,10 @@ public:
         return supports_temporal_tiling(VAETemporalDirection::DECODE);
     }
 
+    virtual bool can_tile_decode() const {
+        return true;
+    }
+
     virtual sd_tiling_params_t resolve_tiling_params(sd_tiling_params_t params) const {
         return params;
     }

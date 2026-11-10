@@ -3041,6 +3041,9 @@ sd::Tensor<float> StableDiffusionGGML::decode_first_stage(const sd::Tensor<float
                                             ? sd::ops::slice(x, 3, 0, get_latent_channel())
                                             : x;
     auto latents                      = first_stage_model->diffusion_to_vae_latents(image_latents);
+    if (!first_stage_model->can_tile_decode()) {
+        return first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
+    }
     auto tiling_params                = first_stage_model->resolve_tiling_params(vae_tiling_params);
     const bool prefer_temporal_tiling = decode_video && latents.dim() == 5 && latents.shape()[2] > 1 &&
                                         first_stage_model->can_temporal_tile_decode();
