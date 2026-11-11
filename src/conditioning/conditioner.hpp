@@ -2009,6 +2009,7 @@ struct LLMEmbedder : public Conditioner {
             arch = LLM::LLMArch::GEMMA2_2B;
         } else if (version == VERSION_FIBO2 ||
                    version == VERSION_QWEN_IMAGE_2_1 ||
+                   version == VERSION_NUCLEUS_IMAGE ||
                    sd_version_is_flux3(version) ||
                    sd_version_is_lingbot_video(version) ||
                    sd_version_is_ideogram4(version) ||
@@ -3141,6 +3142,22 @@ struct LLMEmbedder : public Conditioner {
             max_length                       = 4096;
             prompt                           = "<|im_start|>user\n" + conditioner_params.text + "<|im_end|>\n<|im_start|>assistant\n<think>\n";
             prompt_attn_range                = {0, 0};
+        } else if (version == VERSION_NUCLEUS_IMAGE) {
+            // Nucleus-Image text encoder is Qwen3-VL-8B-Instruct; its chat template (processor/chat_template.json)
+            // wraps messages as <|im_start|>{role}\n...<|im_end|>\n.
+            // Pipeline reference (diffusers pipeline_nucleusmoe_image.py):
+            //   DEFAULT_SYSTEM_PROMPT = "You are an image generation assistant. Follow the user's prompt
+            //   literally. Pay careful attention to spatial layout: ... Match exact object counts and assign
+            //   colors to the correct objects."
+            // and prompt_embeds = text_encoder(...).hidden_states[default_return_index=-8]:
+            // the pre-final-norm output of layer (num_hidden_layers - 8), NOT the normed last layer.
+            prompt_template_encode_start_idx = 0;
+            out_layers                       = {static_cast<int>(llm->config.num_layers) - 7};  // hidden_states[-8] (1-based layer id)
+            prompt                           = "<|im_start|>system\nYou are an image generation assistant. Follow the user's prompt literally. Pay careful attention to spatial layout: objects described as on the left must appear on the left, on the right on the right. Match exact object counts and assign colors to the correct objects.<|im_end|>\n<|im_start|>user\n";
+            prompt_attn_range.first          = static_cast<int>(prompt.size());
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+            prompt += "<|im_end|>\n<|im_start|>assistant\n";
         } else if (sd_version_is_flux3(version)) {
             prompt_template_encode_start_idx = 0;
             max_length                       = 4096;

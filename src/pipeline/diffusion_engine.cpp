@@ -2418,7 +2418,11 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
     if (use_apg_guidance) {
         LOG_INFO("using Adaptive Projected Guidance (APG)");
     }
-    sd::guidance::ClassifierFreeGuidance classifier_free_guidance(cfg_scale, img_cfg_scale);
+    // Nucleus-Image uses renormalized CFG: the linear combination is rescaled per latent
+    // token to the cond prediction's L2 norm (pipeline_nucleusmoe_image.py). Other
+    // versions keep the standard classifier-free guidance.
+    sd::guidance::ClassifierFreeGuidance classifier_free_guidance(
+        cfg_scale, img_cfg_scale, sd_version_is_nucleus_image(version) ? 2 : 0);
     sd::guidance::AdaptiveProjectedGuidance adaptive_projected_guidance(cfg_scale, img_cfg_scale, apg_params);
     const sd::guidance::BaseGuidance& primary_guidance = use_apg_guidance
                                                              ? static_cast<const sd::guidance::BaseGuidance&>(adaptive_projected_guidance)
