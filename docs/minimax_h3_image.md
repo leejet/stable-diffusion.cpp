@@ -16,10 +16,19 @@ Use the MiniMax-H3 text encoder, including its Qwen3-VL vision tower and
 DeepStack mergers. An existing MiniMax-H3 text encoder can be reused. If the
 vision tower is stored separately, pass it with `--llm_vision`.
 
+The P-H3-Image text encoder can be used instead: Qwen3-VL-4B with the P-H3
+text connector. It needs much less memory (about 5 GB for the INT8 ConvRot
+file, versus 18 GB for the 32B encoder in Q4_K_M) and works for both
+text-to-image and reference-image editing. Pass the P-H3-Image text encoder,
+which includes the connector, with `--llm`. Alternatively, pass Qwen3-VL-4B
+with `--llm` and the [separate text connector](https://huggingface.co/PrunaAI/P-H3-Image/blob/main/text_connector/diffusion_pytorch_model.safetensors)
+with `--embeddings-connectors`. Reference-image editing needs the Qwen3-VL-4B
+vision tower in the text encoder or in `--llm_vision`.
+
 Use a single-file diffusion checkpoint with the six-step PDD output heads
 included, such as `minimax_h3_image_pruned_bf16.safetensors` or its INT8 ConvRot
 version. Use the MiniMax-H3-Image VAE; the MiniMax-H3 video VAE and P-H3-Image
-VAE are incompatible. No audio VAE or P-H3 text connector is needed.
+VAE are incompatible. No audio VAE is needed.
 
 ### Download weights
 
@@ -28,6 +37,8 @@ VAE are incompatible. No audio VAE or P-H3 text connector is needed.
 - Download qwen3vl_32b_minimax_h3
     - safetensors: https://huggingface.co/Comfy-Org/MiniMax-H3-Image/tree/main/text_encoders
     - gguf: https://huggingface.co/leejet/MiniMax-H3-GGUF/tree/main
+- Or download the P-H3-Image text encoder (Qwen3-VL-4B with the text connector)
+    - safetensors: https://huggingface.co/PrunaAI/P-H3-Image-Comfy/tree/main/text_encoders
 - Download vae
     - safetensors: https://huggingface.co/Comfy-Org/MiniMax-H3-Image/tree/main/vae
 
@@ -35,6 +46,12 @@ VAE are incompatible. No audio VAE or P-H3 text connector is needed.
 
 ```sh
 .\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\minimax_h3_image_pruned_bf16.safetensors --vae ..\models\vae\minimax_h3_image_vae_fp16.safetensors --llm ..\models\text_encoders\qwen3vl_32b_minimax_h3-Q4_K_M.gguf -p "A silver tabby kitten holding a sign reading 'sd.cpp', natural daylight" --cfg-scale 1.0 --steps 6 --sampling-method euler --sigmas minimax-h3-image -v -W 1024 -H 1024 --offload-to-cpu --rng cpu --diffusion-fa --vae-tiling
+```
+
+With the P-H3-Image text encoder, replace the `--llm` argument:
+
+```sh
+--llm ..\models\text_encoders\p-h3-image_text_encoder_int8_convrot.safetensors
 ```
 
 Use Euler, CFG 1, and `--sigmas minimax-h3-image` for the model's six-step
