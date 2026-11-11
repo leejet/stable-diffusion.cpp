@@ -222,7 +222,7 @@ namespace Ideogram4 {
             auto out_proj = std::dynamic_pointer_cast<Linear>(blocks["o"]);
 
             auto qkv     = qkv_proj->forward(ctx, x);
-            auto qkv_vec = ggml_ext_split_qkv(ctx, qkv);
+            auto qkv_vec = ggml_ext_chunk(ctx, qkv, 3, 0);
             auto q       = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[0], head_dim, num_heads, n_token, N);
             auto k       = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[1], head_dim, num_heads, n_token, N);
             auto v       = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[2], head_dim, num_heads, n_token, N);

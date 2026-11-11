@@ -92,7 +92,7 @@ namespace Iris {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* pe = nullptr, ggml_tensor* mask = nullptr) {
             auto c   = ctx->ggml_ctx;
-            auto qkv = ggml_ext_split_qkv(ctx, std::dynamic_pointer_cast<Linear>(blocks["qkv"])->forward(ctx, x));
+            auto qkv = ggml_ext_chunk(ctx, std::dynamic_pointer_cast<Linear>(blocks["qkv"])->forward(ctx, x), 3, 0);
             auto q   = ggml_reshape_4d(c, qkv[0], dim / heads, heads, x->ne[1], x->ne[2]);
             auto k   = ggml_reshape_4d(c, qkv[1], dim / heads, heads, x->ne[1], x->ne[2]);
             auto v   = ggml_reshape_4d(c, qkv[2], dim / heads, heads, x->ne[1], x->ne[2]);

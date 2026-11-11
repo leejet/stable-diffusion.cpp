@@ -176,9 +176,22 @@ namespace sd_i8_cutlass {
             dst[i] = up ? (i % 2 ? up[i / 2] : src[i / 2]) : src[i / 2 + (i % 2) * (n / 2)];
     }
 
+    template <class Fragment>
+    struct AddBias {
+        CUTLASS_DEVICE Fragment operator()(const Fragment& value, const Fragment& bias) const {
+            Fragment result;
+            // Prevent contraction with the preceding scale multiplication.
+            CUTLASS_PRAGMA_UNROLL
+            for (int i = 0; i < Fragment::kElements; ++i)
+                result[i] = __fadd_rn(value[i], bias[i]);
+            return result;
+        }
+    };
+
     template <class Config, bool StreamK, bool PackedW4 = false>
     struct DenseTypes {
         static constexpr bool kSplit = false;
+        static constexpr bool kBias  = !PackedW4;
         using Weight                 = std::conditional_t<PackedW4, cutlass::int4b_t, int8_t>;
         using Tile                   = typename Config::Tile;
         using Warp                   = typename Config::Warp;
@@ -190,7 +203,9 @@ namespace sd_i8_cutlass {
         using ScaleX                 = cutlass::epilogue::threadblock::Sm80EVT<Mul, cutlass::epilogue::threadblock::VisitorAccFetch, Col>;
         using ScaleW                 = cutlass::epilogue::threadblock::Sm80EVT<Mul, ScaleX, Row>;
         using Store                  = cutlass::epilogue::threadblock::VisitorAuxStore<Map, float, cutlass::FloatRoundStyle::round_to_nearest, cute::Stride<int64_t, cute::_1, int64_t>>;
-        using Epilogue               = cutlass::epilogue::threadblock::Sm80EVT<Store, ScaleW>;
+        using Add                    = cutlass::epilogue::threadblock::VisitorCompute<AddBias, float, float, cutlass::FloatRoundStyle::round_to_nearest>;
+        using Biased                 = cutlass::epilogue::threadblock::Sm80EVT<Add, ScaleW, Row>;
+        using Epilogue               = cutlass::epilogue::threadblock::Sm80EVT<Store, std::conditional_t<kBias, Biased, ScaleW>>;
         using Kernel                 = typename cutlass::gemm::kernel::DefaultGemmWithVisitor<
             int8_t,
             cutlass::layout::RowMajor,
@@ -219,6 +234,7 @@ namespace sd_i8_cutlass {
     template <class Config, bool StreamK, bool Split = false>
     struct SwigluTypes {
         static constexpr bool kSplit = Split;
+        static constexpr bool kBias  = false;
         using Weight                 = int8_t;
         using Tile                   = typename Config::Tile;
         using Warp                   = typename Config::Warp;
@@ -259,24 +275,30 @@ namespace sd_i8_cutlass {
         bool packed_w4;
         bool split;
         size_t kernel_bytes = 0, scratch_offset = 0;
-        int occupancy                                                                                                                                    = 0;
-        ggml_status (*launch)(Plan&, const int8_t*, const int8_t*, const float*, const float*, float*, void*, cudaStream_t, const int8_t*, const float*) = nullptr;
+        int occupancy                                                                                                                                                  = 0;
+        ggml_status (*launch)(Plan&, const int8_t*, const int8_t*, const float*, const float*, float*, void*, cudaStream_t, const int8_t*, const float*, const float*) = nullptr;
     };
     template <class Types>
-    static typename Types::Gemm::Arguments arguments(const Plan& p, const int8_t* x, const int8_t* w, const float* xs, const float* ws, float* out) {
-        typename Types::ScaleW::Arguments scales     = {{{}, {xs, 0.f, {}}, {}}, {ws, 0.f, {}}, {}};
-        typename Types::Epilogue::Arguments epilogue = {scales, {out, {p.n, cute::_1{}, p.rows * p.n}}};
+    static typename Types::Gemm::Arguments arguments(const Plan& p, const int8_t* x, const int8_t* w, const float* xs, const float* ws, float* out, const float* bias) {
+        typename Types::ScaleW::Arguments scales = {{{}, {xs, 0.f, {}}, {}}, {ws, 0.f, {}}, {}};
+        typename Types::Epilogue::Arguments epilogue;
+        if constexpr (Types::kBias) {
+            // A negative zero default preserves signed-zero outputs.
+            epilogue = {{scales, {bias, -0.f, {}}, {}}, {out, {p.n, cute::_1{}, p.rows * p.n}}};
+        } else {
+            epilogue = {scales, {out, {p.n, cute::_1{}, p.rows * p.n}}};
+        }
         return {cutlass::gemm::GemmUniversalMode::kGemm, {int(p.rows), int(p.n), int(p.k)}, 1, epilogue, x, reinterpret_cast<const typename Types::Weight*>(w), nullptr, nullptr, p.rows * p.k, p.n * p.k, 0, 0, p.k, p.k, 0, 0};
     }
     template <class Types>
-    static ggml_status launch(Plan& p, const int8_t* x, const int8_t* w, const float* xs, const float* ws, float* out, void* scratch, cudaStream_t stream, const int8_t* up, const float* up_scales) {
+    static ggml_status launch(Plan& p, const int8_t* x, const int8_t* w, const float* xs, const float* ws, float* out, void* scratch, cudaStream_t stream, const int8_t* up, const float* up_scales, const float* bias) {
         using Kernel = typename Types::Kernel;
         if ((reinterpret_cast<uintptr_t>(x) | reinterpret_cast<uintptr_t>(w) | reinterpret_cast<uintptr_t>(xs) |
-             reinterpret_cast<uintptr_t>(ws) | reinterpret_cast<uintptr_t>(out) | reinterpret_cast<uintptr_t>(up) | reinterpret_cast<uintptr_t>(up_scales)) %
+             reinterpret_cast<uintptr_t>(ws) | reinterpret_cast<uintptr_t>(out) | reinterpret_cast<uintptr_t>(up) | reinterpret_cast<uintptr_t>(up_scales) | reinterpret_cast<uintptr_t>(bias)) %
             16)
             return GGML_STATUS_FAILED;
         auto* paired = static_cast<float*>(scratch);
-        auto args    = arguments<Types>(p, x, w, xs, p.swiglu ? paired : ws, out);
+        auto args    = arguments<Types>(p, x, w, xs, p.swiglu ? paired : ws, out, bias);
         if (Kernel::can_implement(args) != cutlass::Status::kSuccess)
             return GGML_STATUS_FAILED;
         if (!p.occupancy) {
@@ -312,7 +334,7 @@ namespace sd_i8_cutlass {
         using Kernel = typename Types::Kernel;
         if (sizeof(typename Kernel::SharedStorage) > p.device.shared)
             return false;
-        auto args = arguments<Types>(p, nullptr, nullptr, nullptr, nullptr, nullptr);
+        auto args = arguments<Types>(p, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
         if (Kernel::can_implement(args) != cutlass::Status::kSuccess)
             return false;
         size_t bytes = 0;
@@ -394,11 +416,13 @@ SDI8CudaGemmPlan* sd_cuda_i8_gemm_prepare_split(ggml_backend_dev_t device, int64
         return nullptr;
     return prepare_gemm(device, rows, 2 * n, k, true, workspace, false, true);
 }
-ggml_status sd_cuda_i8_gemm_execute(SDI8CudaGemmPlan* plan, const int8_t* x, const int8_t* w, const float* xs, const float* ws, float* out, void* scratch, cudaStream_t stream) {
-    return plan->launch(*plan, x, w, xs, ws, out, scratch, stream, nullptr, nullptr);
+ggml_status sd_cuda_i8_gemm_execute(SDI8CudaGemmPlan* plan, const int8_t* x, const int8_t* w, const float* xs, const float* ws, float* out, void* scratch, cudaStream_t stream, const float* bias) {
+    if (bias && (plan->swiglu || plan->packed_w4))
+        return GGML_STATUS_FAILED;
+    return plan->launch(*plan, x, w, xs, ws, out, scratch, stream, nullptr, nullptr, bias);
 }
 ggml_status sd_cuda_i8_gemm_execute_split(SDI8CudaGemmPlan* plan, const int8_t* x, const int8_t* gate, const int8_t* up, const float* xs, const float* gate_scales, const float* up_scales, float* out, void* scratch, cudaStream_t stream) {
-    return plan->launch(*plan, x, gate, xs, gate_scales, out, scratch, stream, up, up_scales);
+    return plan->launch(*plan, x, gate, xs, gate_scales, out, scratch, stream, up, up_scales, nullptr);
 }
 void sd_cuda_i8_gemm_free(SDI8CudaGemmPlan* plan) {
     delete plan;

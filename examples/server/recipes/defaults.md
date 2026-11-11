@@ -70,6 +70,7 @@ For community edit adapters and other optional extensions, these are the base-mo
 | `ming-image` | 1 | 12 | 1024 × 1024 | [Source](https://huggingface.co/inclusionAI/Ming-Image-0.1-Design)  |
 | `minimax-h3-fl2va` | 1 | — | 1344 × 768 | [Source](https://huggingface.co/docs/diffusers/main/en/api/pipelines/minimax_h3) Guidance-distilled; official 768p canvas. No fixed step count is prescribed here; the upstream API counts sigma grid points rather than sd.cpp denoising steps. |
 | `minimax-h3-ref2va` | 1 | — | 1344 × 768 | [Source](https://huggingface.co/docs/diffusers/main/en/api/pipelines/minimax_h3) Guidance-distilled; official 768p canvas. No fixed step count is prescribed here; the upstream API counts sigma grid points rather than sd.cpp denoising steps. |
+| `minimax-h3-image` | 1 | 6 | 1024 × 1024 | [Runtime guide](../../../docs/minimax_h3_image.md) Dedicated image VAE and fixed PDD sigma schedule. |
 | `minit2i` | 2.5 | 20 | 512 × 512 | [Source](https://huggingface.co/MiniT2I/MiniT2I/raw/main/pipeline.py) B/16 example and native model size; L/16 uses CFG 6. |
 | `moss-image-base` | 3 | 20 | 1024 × 1024 | [Source](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base)  |
 | `moss-image-sft` | 3 | 20 | 1024 × 1024 | [Source](https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT)  |
