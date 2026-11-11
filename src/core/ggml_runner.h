@@ -78,6 +78,7 @@ struct GGMLRunnerContext {
     float attn_scale                                                 = 0.f;
     bool conv2d_direct_enabled                                       = false;
     bool conv3d_direct_enabled                                       = false;
+    bool vae_conv2d_enabled                                          = false;
     bool circular_x_enabled                                          = false;
     bool circular_y_enabled                                          = false;
     ggml_tensor* ip_context                                          = nullptr;
@@ -165,6 +166,7 @@ protected:
     float attn_scale           = 0.f;
     bool conv2d_direct_enabled = false;
     bool conv3d_direct_enabled = false;
+    bool vae_conv2d_enabled    = false;
     bool circular_x_enabled    = false;
     bool circular_y_enabled    = false;
 
@@ -317,6 +319,10 @@ public:
 
     void set_conv3d_direct_enabled(bool enabled) {
         conv3d_direct_enabled = enabled;
+    }
+
+    void set_vae_conv2d_enabled(bool enabled) {
+        vae_conv2d_enabled = enabled;
     }
 
     void set_circular_axes(bool circular_x, bool circular_y) {

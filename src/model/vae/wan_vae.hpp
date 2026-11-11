@@ -1,6 +1,7 @@
 #ifndef __SD_MODEL_VAE_WAN_VAE_HPP__
 #define __SD_MODEL_VAE_WAN_VAE_HPP__
 
+#include <cstring>
 #include <map>
 #include <memory>
 #include <utility>
@@ -14,6 +15,31 @@
 namespace WAN {
 
     constexpr int CACHE_T = 2;
+
+    static ggml_tensor* pack_temporal_channels(ggml_context* ctx, ggml_tensor* input, int64_t kernel_depth) {
+        GGML_ASSERT(input->type == GGML_TYPE_F32 && kernel_depth > 0 && input->ne[2] >= kernel_depth);
+        if (!ggml_is_contiguous(input)) {
+            input = ggml_cont(ctx, input);
+        }
+        const int64_t channels = input->ne[3];
+        const int64_t frames   = input->ne[2] - kernel_depth + 1;
+        if (frames == 1) {
+            return ggml_reshape_4d(ctx, input, input->ne[0], input->ne[1], kernel_depth * channels, 1);
+        }
+        if (kernel_depth == 1) {
+            return ggml_cont(ctx, ggml_permute(ctx, input, 0, 1, 3, 2));
+        }
+        // Channel order k + kernel_depth*c matches the contiguous Conv3D weight layout.
+        auto channel_rows = ggml_scale(ctx, ggml_arange(ctx, 0, channels, 1), input->ne[2]);
+        channel_rows      = ggml_reshape_3d(ctx, channel_rows, 1, channels, 1);
+        auto shape        = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, kernel_depth, channels, frames);
+        auto rows         = ggml_repeat(ctx, channel_rows, shape);
+        rows              = ggml_add(ctx, rows, ggml_arange(ctx, 0, kernel_depth, 1));
+        rows              = ggml_add(ctx, rows, ggml_reshape_3d(ctx, ggml_arange(ctx, 0, frames, 1), 1, 1, frames));
+        rows              = ggml_cast(ctx, ggml_reshape_1d(ctx, rows, kernel_depth * channels * frames), GGML_TYPE_I32);
+        auto packed       = ggml_get_rows(ctx, ggml_reshape_2d(ctx, input, input->ne[0] * input->ne[1], input->ne[2] * channels), rows);
+        return ggml_reshape_4d(ctx, packed, input->ne[0], input->ne[1], kernel_depth * channels, frames);
+    }
 
     class CausalConv3d : public GGMLBlock {
     protected:
@@ -43,6 +69,13 @@ namespace WAN {
             if (bias) {
                 params["bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_channels);
             }
+        }
+
+    private:
+        bool supports_packed_conv2d(const GGMLRunnerContext* ctx, const ggml_tensor* x, const ggml_tensor* w) const {
+            return std::strncmp(ggml_backend_name(ctx->backend), "MTL", 3) == 0 &&
+                   x->ne[3] == in_channels && w->type == GGML_TYPE_F16 && x->type == GGML_TYPE_F32 &&
+                   std::get<0>(stride) == 1 && std::get<0>(dilation) == 1 && x->ne[2] >= w->ne[2];
         }
 
     public:
@@ -87,6 +120,24 @@ namespace WAN {
             }
 
             x = ggml_ext_pad_ext(ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
+            // The 2D im2col path rounds activations to F16, so keep this experiment opt-in.
+            if (ctx->vae_conv2d_enabled && supports_packed_conv2d(ctx, x, w)) {
+                auto input         = scale == 1.f ? x : ggml_ext_scale(ctx, x, scale);
+                auto packed_input  = pack_temporal_channels(ctx->ggml_ctx, input, w->ne[2]);
+                auto packed_weight = ggml_reshape_4d(ctx->ggml_ctx, w, w->ne[0], w->ne[1], w->ne[2] * in_channels, out_channels);
+                auto output        = ggml_ext_conv_2d(ctx, packed_input, packed_weight, nullptr,
+                                                      std::get<2>(stride), std::get<1>(stride), 0, 0,
+                                                      std::get<2>(dilation), std::get<1>(dilation), false);
+                output             = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, output, 0, 1, 3, 2));
+                if (scale != 1.f) {
+                    output = ggml_ext_scale(ctx, output, 1.f / scale);
+                }
+                if (b) {
+                    output = ggml_add_inplace(ctx->ggml_ctx, output,
+                                              ggml_reshape_4d(ctx->ggml_ctx, b, 1, 1, 1, out_channels));
+                }
+                return output;
+            }
             return ggml_ext_conv_3d(ctx, x, w, b, in_channels,
                                     std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
                                     0, 0, 0,
@@ -1436,7 +1487,8 @@ namespace WAN {
             ggml_cgraph* gf = new_graph_custom(10240 * z_tensor.shape()[2]);
             ggml_tensor* z  = make_input(z_tensor);
 
-            auto runner_ctx = get_context();
+            auto runner_ctx               = get_context();
+            runner_ctx.vae_conv2d_enabled = vae_conv2d_enabled && decode_graph;
 
             ggml_tensor* out = decode_graph ? ae.decode(&runner_ctx, z) : ae.encode(&runner_ctx, z);
 

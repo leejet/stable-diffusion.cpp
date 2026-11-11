@@ -1304,6 +1304,9 @@ bool StableDiffusionGGML::validate_and_load_runners() {
     if (first_stage_model || preview_vae || audio_vae_model) {
         set_conv_direct(SDBackendModule::VAE, {first_stage_model.get(), preview_vae.get(), audio_vae_model.get()});
     }
+    if (first_stage_model) {
+        first_stage_model->set_vae_conv2d_enabled(sd_ctx_params->vae_conv2d);
+    }
     if (control_net) {
         set_conv_direct(SDBackendModule::CONTROL_NET, {control_net.get()});
     }

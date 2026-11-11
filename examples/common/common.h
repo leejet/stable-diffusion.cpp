@@ -183,6 +183,7 @@ struct SDContextParams {
     bool sage_attn             = false;
     bool diffusion_conv_direct = false;
     bool vae_conv_direct       = false;
+    bool vae_conv2d            = false;
     bool taesd_preview_only    = false;
 
     prediction_t prediction           = PREDICTION_COUNT;

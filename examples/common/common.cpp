@@ -748,6 +748,13 @@ ArgOptions SDContextParams::get_options() {
              return 0;
          }},
         {"",
+         "--vae-conv2d",
+         "enable packed 2D convolution for Wan-style VAE decoding on Metal (default: off); rounds activations to FP16 and may increase memory use with temporal tiling",
+         [this](int, const char**, int) {
+             vae_conv2d = true;
+             return 0;
+         }},
+        {"",
          "--conv-direct",
          "on|off|auto or diffusion/vae/controlnet assignments (default: auto), e.g. auto,vae=off. Overrides legacy convolution flags",
          [this](int argc, const char** argv, int index) {
@@ -1019,6 +1026,7 @@ std::string SDContextParams::to_string() const {
         << "  attn_scale: " << attn_scale << ",\n"
         << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
         << "  vae_conv_direct: " << (vae_conv_direct ? "true" : "false") << ",\n"
+        << "  vae_conv2d: " << (vae_conv2d ? "true" : "false") << ",\n"
         << "  taesd_preview_only: " << (taesd_preview_only ? "true" : "false") << ",\n"
         << "  prediction: " << sd_prediction_name(prediction) << ",\n"
         << "  lora_apply_mode: " << sd_lora_apply_mode_name(lora_apply_mode) << ",\n"
@@ -1080,6 +1088,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t() {
     sd_ctx_params.tae_preview_only                = taesd_preview_only;
     sd_ctx_params.diffusion_conv_direct           = diffusion_conv_direct;
     sd_ctx_params.vae_conv_direct                 = vae_conv_direct;
+    sd_ctx_params.vae_conv2d                      = vae_conv2d;
     sd_ctx_params.force_sdxl_vae_conv_scale       = force_sdxl_vae_conv_scale;
     sd_ctx_params.vae_format                      = str_to_vae_format(vae_format);
     sd_ctx_params.max_vram                        = max_vram.c_str();

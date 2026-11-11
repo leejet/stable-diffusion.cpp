@@ -277,6 +277,22 @@ Library callers can set the appended `sd_ctx_params_t::conv_direct_mode` field
 to the same string; null or empty selects `auto` while honoring legacy true
 flags. The context copies the string.
 
+### Packed VAE convolution on Metal
+
+`--vae-conv2d` enables packed 2D convolution for supported Wan-style VAE
+decoding on Metal. It is disabled by default and does not change encoding.
+It also applies to image models sharing the Wan VAE implementation. Other
+backends and unsupported tensor types or shapes retain the existing path.
+
+This option rounds convolution activations to FP16 and can change output
+pixels. Check output quality for the model you use. Packing may increase
+memory use, particularly with temporal tiling; automatic memory recovery may
+retry decoding with a different tiling configuration. It is separate from
+`--conv-direct` and does not enable direct convolution.
+
+C API callers can set `sd_ctx_params_t::vae_conv2d` after initializing the
+parameters with `sd_ctx_params_init()`.
+
 ## Flash attention (`--flash-attn on|off|auto`)
 
 `--flash-attn` defaults to `auto`. Selection happens while creating the model
