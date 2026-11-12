@@ -7,11 +7,9 @@
 static bool build_nucleus_image(const sd::model_builders::Context& ctx,
                                 const TokenizerConfig& tokenizers,
                                 sd::model_builders::CoreRunners& runners) {
-    // NOTE: Nucleus trunk activations run at RMS 100-600 with outliers up to ~2e5, which
-    // overflows every F16-accumulated matmul kernel (Vulkan MMQ / CPU llamafile; F16 max
-    // 65504). This is handled inside nucleus_image.hpp with exact power-of-two rescales at
-    // each large-input matmul (see NucleusFeedForward / NucleusAttention), so the weights
-    // stay quantized as shipped and the memory footprint is unchanged.
+    // Nucleus trunk activations reach magnitudes that overflow F16-accumulated matmul
+    // kernels; nucleus_image.hpp applies exact power-of-two rescales at the affected
+    // matmuls so the weights stay quantized as shipped.
     runners.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                         ctx.tensor_storage_map, ctx.version, "", false,
                                                         ctx.weight_manager, tokenizers);

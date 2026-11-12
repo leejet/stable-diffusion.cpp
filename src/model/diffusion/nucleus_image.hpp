@@ -22,19 +22,9 @@
 
 // Nucleus-Image: sparse mixture-of-experts diffusion transformer with expert-choice routing
 // (diffusers: NucleusMoEImageTransformer2DModel, text encoder Qwen3-VL-8B, Qwen-Image VAE).
-//
-// Reference math: diffusers transformer_nucleusmoe_image.py (see NucleusMoELayer / NucleusMoEAttnProcessor2_0 /
-// NucleusMoEImageTransformerBlock). The GGUF checkpoint ships no metadata, so all hyper-parameters are hardcoded
-// in NucleusImageConfig and cross-checked against weight shapes in detect_from_weights.
-//
-// MoE expert weights are stored in the file pre-transposed per expert (torch layout (E, in, out), i.e. ggml
-// ne = [out, in, E]) and are declared with exactly that layout in NucleusMoELayer::init_params, so they load
-// through the regular ModelManager path like every other weight. ggml_mul_mat contracts ne[0], so each expert
-// slice is dequantized to F32 and transposed in the graph (see NucleusMoELayer::expert_weight).
-//
-// Expert-choice routing keeps every (token, expert) contribution: each expert processes its own top-C tokens
-// and scatter-adds the result, so a token picked by k experts receives all k contributions (no per-token
-// expert slot limit).
+// Reference math: diffusers transformer_nucleusmoe_image.py. The GGUF checkpoint ships no
+// metadata, so all hyper-parameters are hardcoded in NucleusImageConfig and cross-checked
+// against weight shapes in detect_from_weights.
 namespace NucleusImage {
 
 struct NucleusImageConfig {
@@ -152,8 +142,7 @@ struct NucleusFeedForward : public UnaryBlock {
         // diffusers FeedForward(activation_fn="swiglu") -> SwiGLU module:
         //   hidden, gate = proj(x).chunk(2, dim=-1); out = hidden * silu(gate)
         // i.e. the FIRST half is the VALUE and silu applies to the SECOND half.
-        // (Mini-test vs diffusers NucleusMoELayer.shared_expert: cos 0.79 before, 1.0 after.)
-        // NOTE: the routed MoE experts (SwiGLUExperts) are the opposite convention
+        // The routed MoE experts (SwiGLUExperts) are the opposite convention
         // (gate first, silu(gate) * up) and are implemented as such below.
         auto up   = ggml_ext_slice(ctx, x, 0, 0, x->ne[0] / 2);
         auto gate = ggml_ext_slice(ctx, x, 0, x->ne[0] / 2, x->ne[0]);
@@ -166,7 +155,7 @@ struct NucleusFeedForward : public UnaryBlock {
 
 // diffusers NucleusMoELayer: expert-choice routing with a shared expert.
 //
-// Expert-choice routing (per recipe, verified against diffusers):
+// Expert-choice routing:
 //  1) router_in = concat(temb, x_unmodulated) [2H, S, B]; P = softmax over experts of
 //     gate(router_in) [E, S, B].
 //  2) Each expert e keeps its top-C tokens: IDX = argsort_top_k(P^T [S, E, B], C) (descending).
@@ -280,7 +269,6 @@ struct NucleusMoELayer : public GGMLBlock {
                                     ggml_silu(c, ggml_ext_slice(ctx, gate_up, 0, 0, inner_dim)),
                                     ggml_ext_slice(ctx, gate_up, 0, inner_dim, inner_dim * 2));  // [I, C, B, 1]
             auto out     = ggml_mul(c, ggml_mul_mat(c, expert_weight(ctx, "experts.down_proj", e, inner_dim, H), h), w);
-            // scatter the weighted contribution back onto its token rows
             auto z = ggml_set_rows(c, ggml_ext_zeros(ctx, H, S, B, 1), out, ids);  // [H, S, B, 1]
             routed = routed == nullptr ? z : ggml_add(c, routed, z);
         }
@@ -349,7 +337,7 @@ struct NucleusAttention : public GGMLBlock {
 
         // Concat K/V BEFORE rope (4D, txt first to match the pe token order), then apply rope with the
         // full pe. Rope::apply_rope returns 3D [d, L, heads*N], so concatenating after rope would need
-        // a dim-1 concat of 3D tensors; the concat-first order mirrors the verified qwen_image path.
+        // a dim-1 concat of 3D tensors.
         auto k_img  = norm_k->forward(ctx, ggml_reshape_4d(c, to_k->forward(ctx, x_scaled), head_dim, kv_heads, S, N));
         auto k_txt  = norm_added_k->forward(ctx, ggml_reshape_4d(c, add_k_proj->forward(ctx, y), head_dim, kv_heads, Lt, N));
         auto k      = ggml_concat(c, k_txt, k_img, 2);  // [d, kv_heads, Lt + S, N]
@@ -489,9 +477,8 @@ struct NucleusImageModel : public GGMLBlock {
         const int64_t S  = h_len * w_len;        // img tokens
         const int64_t Lt = pe->ne[3] - S;        // txt tokens (pe covers txt + img, txt first)
 
-        // A/B RESOLVED: diffusers _pack_latents (pipeline_nucleusmoe_image.py) is channel-major
-        // (permute(0, 2, 4, 1, 3, 5) over (B, h, w, C, ph, pw)) => patch_last=true. The earlier
-        // false (patch-major) pair silently permuted the img_in/proj_out feature dims.
+        // diffusers _pack_latents is channel-major (permute(0, 2, 4, 1, 3, 5) over
+        // (B, h, w, C, ph, pw)) => patch_last=true.
         auto img = std::dynamic_pointer_cast<Linear>(blocks["img_in"])->forward(
             ctx, DiT::pad_and_patchify(ctx, x, config.patch_size, config.patch_size, true));  // [H, S, N]
 
@@ -532,7 +519,6 @@ struct NucleusImageRunner : public DiffusionModelRunner {
     NucleusImageConfig config;
     NucleusImageModel model;
     std::vector<float> pe_vec;
-    bool params_sanitized = false;
 
     NucleusImageRunner(ggml_backend_t backend,
                        const String2TensorStorage& weights,
@@ -546,138 +532,6 @@ struct NucleusImageRunner : public DiffusionModelRunner {
 
     std::string get_desc() override { return "Nucleus-Image"; }
 
-    // The released stduhpf Q5_1 checkpoint carries corrupted tensor data (e.g. all five
-    // transformer_blocks.9 img_mod/img_mlp tensors have 3-12% non-finite/huge quant scales,
-    // plus scattered bad blocks in layers 21/30/31). Any non-finite weight poisons the whole
-    // denoiser output (uniform-noise images). Zero the bad blocks/elements once at load so the
-    // model runs until a clean re-download; disable with NUCLEUS_NO_SANITIZE.
-    // Clean tensors in this checkpoint have |quant scale| <= 3.6 and |weight| <= ~1.3, so the
-    // thresholds below never touch healthy data.
-    static void sanitize_weight_bytes(uint8_t* data, size_t nbytes, ggml_type type, int64_t& patched_blocks, int64_t& patched_elems) {
-        if (type == GGML_TYPE_F32) {
-            float* v = reinterpret_cast<float*>(data);
-            for (size_t i = 0; i < nbytes / sizeof(float); ++i) {
-                if (!std::isfinite(v[i]) || std::fabs(v[i]) > 100.f) {
-                    v[i] = 0.f;
-                    ++patched_elems;
-                }
-            }
-        } else if (type == GGML_TYPE_F16 || type == GGML_TYPE_BF16) {
-            uint16_t* v = reinterpret_cast<uint16_t*>(data);
-            for (size_t i = 0; i < nbytes / 2; ++i) {
-                float x;
-                if (type == GGML_TYPE_F16) {
-                    x = ggml_fp16_to_fp32(*reinterpret_cast<ggml_fp16_t*>(&v[i]));
-                } else {
-                    uint32_t u = static_cast<uint32_t>(v[i]) << 16;
-                    std::memcpy(&x, &u, sizeof(x));
-                }
-                if (!std::isfinite(x) || std::fabs(x) > 100.f) {
-                    v[i] = 0;
-                    ++patched_elems;
-                }
-            }
-        } else if (type == GGML_TYPE_Q8_0) {
-            // block: d f16, qs 32B (34 bytes). d = 0 zeroes the block's 32 values.
-            for (size_t off = 0; off + 34 <= nbytes; off += 34) {
-                float d = ggml_fp16_to_fp32(*reinterpret_cast<ggml_fp16_t*>(data + off));
-                if (!std::isfinite(d) || std::fabs(d) > 4.f) {
-                    std::memset(data + off, 0, 2);
-                    ++patched_blocks;
-                }
-            }
-        } else if (type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q5_0) {
-            // Q4_0: d f16 + qs 16B (18B); Q5_0: d f16 + qh 4B + qs 16B (22B).
-            const size_t block_size = type == GGML_TYPE_Q4_0 ? 18 : 22;
-            for (size_t off = 0; off + block_size <= nbytes; off += block_size) {
-                float d = ggml_fp16_to_fp32(*reinterpret_cast<ggml_fp16_t*>(data + off));
-                if (!std::isfinite(d) || std::fabs(d) > 4.f) {
-                    std::memset(data + off, 0, 2);
-                    ++patched_blocks;
-                }
-            }
-        } else if (type == GGML_TYPE_Q4_1) {
-            // Q4_1: d f16, m f16, qs 16B (20B).
-            for (size_t off = 0; off + 20 <= nbytes; off += 20) {
-                float d = ggml_fp16_to_fp32(*reinterpret_cast<ggml_fp16_t*>(data + off));
-                float m = ggml_fp16_to_fp32(*reinterpret_cast<ggml_fp16_t*>(data + off + 2));
-                if (!std::isfinite(d) || !std::isfinite(m) || std::fabs(d) > 4.f || std::fabs(m) > 4.f) {
-                    std::memset(data + off, 0, 4);
-                    ++patched_blocks;
-                }
-            }
-        } else if (type == GGML_TYPE_Q5_1) {
-            // block: d f16, m f16, qh 4B, qs 16B. d = m = 0 zeroes the block's 32 values.
-            for (size_t off = 0; off + 24 <= nbytes; off += 24) {
-                float d = ggml_fp16_to_fp32(*reinterpret_cast<ggml_fp16_t*>(data + off));
-                float m = ggml_fp16_to_fp32(*reinterpret_cast<ggml_fp16_t*>(data + off + 2));
-                if (!std::isfinite(d) || !std::isfinite(m) || std::fabs(d) > 4.f || std::fabs(m) > 4.f) {
-                    std::memset(data + off, 0, 4);
-                    ++patched_blocks;
-                }
-            }
-        }
-    }
-
-    void ensure_params_sanitized() {
-        if (params_sanitized) {
-            return;
-        }
-        if (std::getenv("NUCLEUS_NO_SANITIZE") != nullptr) {
-            params_sanitized = true;
-            return;
-        }
-        std::map<std::string, ggml_tensor*> tensors;
-        model.get_param_tensors(tensors, prefix);
-        int64_t patched_blocks = 0;
-        int64_t patched_elems  = 0;
-        int64_t scanned        = 0;
-        int64_t skipped_nobuf  = 0;
-        int64_t skipped_type   = 0;
-        for (const auto& [name, tensor] : tensors) {
-            if (tensor == nullptr) {
-                continue;
-            }
-            if (tensor->buffer == nullptr) {
-                ++skipped_nobuf;
-                continue;
-            }
-            const ggml_type type   = tensor->type;
-            const size_t  nbytes   = ggml_nbytes(tensor);
-            if (type != GGML_TYPE_F32 && type != GGML_TYPE_F16 && type != GGML_TYPE_BF16 &&
-                type != GGML_TYPE_Q5_1 && type != GGML_TYPE_Q8_0 && type != GGML_TYPE_Q5_0 &&
-                type != GGML_TYPE_Q4_0 && type != GGML_TYPE_Q4_1) {
-                ++skipped_type;
-                continue;
-            }
-            ++scanned;
-            std::vector<uint8_t> buf(nbytes);
-            ggml_backend_tensor_get(tensor, buf.data(), 0, nbytes);
-            const int64_t before_blocks = patched_blocks;
-            const int64_t before_elems  = patched_elems;
-            sanitize_weight_bytes(buf.data(), nbytes, type, patched_blocks, patched_elems);
-            if (patched_blocks != before_blocks || patched_elems != before_elems) {
-                ggml_backend_tensor_set(tensor, buf.data(), 0, nbytes);
-                LOG_WARN("Nucleus-Image: sanitized corrupt tensor '%s' (%lld blocks, %lld elements zeroed)",
-                         name.c_str(), (long long)(patched_blocks - before_blocks),
-                         (long long)(patched_elems - before_elems));
-            }
-        }
-        LOG_VERBOSE("Nucleus-Image: sanitize pass scanned %lld tensors (skipped: %lld no-buffer, %lld unsupported-type), "
-                    "patched %lld blocks + %lld elements",
-                    (long long)scanned, (long long)skipped_nobuf, (long long)skipped_type,
-                    (long long)patched_blocks, (long long)patched_elems);
-        // Only mark complete when every tensor had a buffer (lazy loading may
-        // defer some parameter allocations; those are caught on the next call)
-        if (skipped_nobuf == 0) {
-            params_sanitized = true;
-        }
-        if (patched_blocks > 0 || patched_elems > 0) {
-            LOG_WARN("Nucleus-Image: checkpoint corruption repaired: %lld quant blocks + %lld elements zeroed in total",
-                     (long long)patched_blocks, (long long)patched_elems);
-        }
-    }
-
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
         model.get_param_tensors(tensors, prefix);
     }
@@ -688,7 +542,6 @@ struct NucleusImageRunner : public DiffusionModelRunner {
             LOG_ERROR("Nucleus-Image requires latents, timesteps and text features");
             return {};
         }
-        ensure_params_sanitized();
         auto graph = [&]() {
             auto gf   = new_graph_custom(131072);
             auto x    = make_input(*inputs.x);

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "nucleus-image",
   "name": "Nucleus Image (Sparse MoE)",
-  "description": "First sparse MoE image DiT (17B total, ~2B active). Works best with cfg_scale 4-7 (renormalized CFG); keep resolution at 768x768 or below on 16 GB GPUs.",
+  "description": "First sparse MoE image DiT (17B total, ~2B active). Keep resolution at 768x768 or below on 16 GB GPUs.",
   "model_url": "https://huggingface.co/NucleusAI/Nucleus-Image",
   "slots": [
     {
