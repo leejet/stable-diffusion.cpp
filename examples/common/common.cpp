@@ -884,6 +884,12 @@ void SDContextParams::build_embedding_map() {
         lower_seen[lower]  = key;
     };
 
+    // Collect first so relative-path keys can be registered before stem keys.
+    // This keeps a root-level file reachable when a nested file shares its
+    // stem: the root file owns the bare stem while the nested file stays
+    // reachable via its relative path.
+    std::vector<std::pair<std::string, std::string>> rel_entries;
+    std::vector<std::pair<std::string, std::string>> stem_entries;
     std::error_code ec;
     for (auto it = fs::recursive_directory_iterator(embedding_dir_path, ec);
          it != fs::recursive_directory_iterator();
@@ -911,20 +917,24 @@ void SDContextParams::build_embedding_map() {
         if (!valid)
             continue;
 
-        std::string value = path.u8string();
-
+        std::string value    = path.u8string();
         std::string stem_key = path.stem().u8string();
-        try_insert(stem_key, value);
-
-        try {
-            fs::path rel = fs::relative(path, embedding_dir_path);
+        std::string rel_key;
+        // Lexical only: never resolve symlinks, so the documented
+        // relative path stays selectable even for symlinked files.
+        fs::path rel = path.lexically_relative(embedding_dir_path);
+        if (!rel.empty()) {
             rel.replace_extension();
-            std::string rel_key = rel.generic_u8string();
-            if (rel_key != stem_key) {
-                try_insert(rel_key, value);
-            }
-        } catch (const std::exception&) {
+            rel_key = rel.generic_u8string();
         }
+        rel_entries.emplace_back(rel_key, value);
+        stem_entries.emplace_back(stem_key, value);
+    }
+    for (const auto& entry : rel_entries) {
+        try_insert(entry.first, entry.second);
+    }
+    for (const auto& entry : stem_entries) {
+        try_insert(entry.first, entry.second);
     }
 }
 

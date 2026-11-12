@@ -54,9 +54,8 @@ Normal prompt weighting applies, so `(ehartnoveau:1.2)` boosts it and
 
 ### 2. Explicit `<embedding:...>` tag
 
-When the file name is hard to type, contains spaces, lives in a subdirectory,
-or collides with an ordinary word, reference it explicitly. This mirrors the
-`<lora:...>` syntax:
+When the file name is hard to type, contains spaces, or lives in a subdirectory,
+reference it explicitly. This mirrors the `<lora:...>` syntax:
 
 ```text
 a lovely cat, <embedding:ehartnoveau:0.8>
@@ -77,6 +76,10 @@ Rules:
   `<embedding:ehartnoveau:0.8>` becomes `(ehartnoveau:0.8)`.
 - An unknown name logs a warning and falls back to the stripped name as plain
   text, so a typo does not leak `<embedding:...>` tokens into the tokenizer.
+- If the file stem collides with an ordinary word (for example an embedding
+  named `cat`), rename the file to a unique stem instead of using a tag: the
+  tag expands to the same trigger word, so a bare `cat` elsewhere in the
+  prompt would still activate the embedding.
 
 ## Troubleshooting
 

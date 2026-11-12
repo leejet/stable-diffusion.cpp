@@ -413,18 +413,231 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             if (auto hit = lookup(no_ext); !hit.empty()) {
                 return hit;
             }
-            norm = no_ext;
         }
-        auto slash = norm.find_last_of('/');
-        if (slash != std::string::npos) {
-            std::string base = norm.substr(slash + 1);
-            if (!base.empty()) {
-                if (auto hit = lookup(base); !hit.empty()) {
-                    return hit;
+        return {};
+    }
+
+    // Format a weight so parse_prompt_attention can read it back: decimal
+    // digits and '.' only, without exponent. The attention lexer accepts an
+    // optional sign followed by digits and dots, so "1e2" would be misread.
+    static std::string format_embedding_weight(float weight) {
+        std::ostringstream oss;
+        oss << std::setprecision(9) << std::noshowpoint << static_cast<double>(weight);
+        std::string s = oss.str();
+        bool has_exp = false;
+        for (char c : s) {
+            if (c == 'e' || c == 'E' || c == 'n' || c == 'N' || c == 'i' || c == 'I') {
+                has_exp = true;
+                break;
+            }
+        }
+        if (has_exp) {
+            oss.str("");
+            oss.clear();
+            oss << std::fixed << std::setprecision(10) << static_cast<double>(weight);
+            s = oss.str();
+            auto dot = s.find('.');
+            if (dot != std::string::npos) {
+                while (!s.empty() && s.back() == '0') {
+                    s.pop_back();
+                }
+                if (!s.empty() && s.back() == '.') {
+                    s.pop_back();
+                }
+                if (s.empty() || s == "-" || s == "+") {
+                    s = "0";
                 }
             }
         }
-        return {};
+        return s;
+    }
+
+    // Expand tags, replacing triggers that contain attention punctuation with
+    // placeholders that survive parse_prompt_attention as one chunk. The
+    // caller restores placeholders to the real triggers after parsing.
+    std::string expand_embedding_tags_with_placeholders(
+        const std::string& text,
+        std::vector<std::pair<std::string, std::string>>& placeholder_map) const {
+        placeholder_map.clear();
+        if (text.find('<') == std::string::npos) {
+            return text;
+        }
+        std::string result;
+        result.reserve(text.size());
+        size_t pos             = 0;
+        size_t placeholder_idx = 0;
+        bool expanded          = false;
+        auto is_tag_space = [](char c) {
+            return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+        };
+        auto matches_tag = [](const std::string& s, size_t p, const char* lit) {
+            for (size_t i = 0; lit[i] != '\0'; ++i) {
+                if (p + i >= s.size()) {
+                    return false;
+                }
+                if (std::tolower((unsigned char)s[p + i]) != (unsigned char)lit[i]) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        auto make_placeholder = [&](std::string& out) {
+            out.clear();
+            out.push_back('\x1f');
+            out += "embph";
+            out += std::to_string(placeholder_idx++);
+            out.push_back('\x1f');
+        };
+        while (true) {
+            size_t lt = text.find('<', pos);
+            if (lt == std::string::npos) {
+                result += text.substr(pos);
+                break;
+            }
+            size_t cur    = lt + 1;
+            size_t spaces = 0;
+            while (cur < text.size() && is_tag_space(text[cur]) && spaces < 64) {
+                ++cur;
+                ++spaces;
+            }
+            if (spaces >= 64 && cur < text.size() && is_tag_space(text[cur])) {
+                result += text.substr(pos, lt - pos + 1);
+                pos = lt + 1;
+                continue;
+            }
+            size_t name_len = 0;
+            if (matches_tag(text, cur, "embedding")) {
+                name_len = 9;
+            } else if (matches_tag(text, cur, "emb")) {
+                name_len = 3;
+            } else {
+                result += text.substr(pos, lt - pos + 1);
+                pos = lt + 1;
+                continue;
+            }
+            cur += name_len;
+            spaces = 0;
+            while (cur < text.size() && is_tag_space(text[cur]) && spaces < 64) {
+                ++cur;
+                ++spaces;
+            }
+            if (spaces >= 64 && cur < text.size() && is_tag_space(text[cur])) {
+                result += text.substr(pos, lt - pos + 1);
+                pos = lt + 1;
+                continue;
+            }
+            if (cur >= text.size() || text[cur] != ':') {
+                result += text.substr(pos, lt - pos + 1);
+                pos = lt + 1;
+                continue;
+            }
+            size_t content_start = cur + 1;
+            size_t gt            = text.find('>', content_start);
+            if (gt == std::string::npos) {
+                result += text.substr(pos);
+                pos = text.size();
+                break;
+            }
+            if (gt == content_start) {
+                result += text.substr(pos, gt - pos + 1);
+                pos = gt + 1;
+                continue;
+            }
+            std::string content = text.substr(content_start, gt - content_start);
+            std::string raw_name;
+            std::string raw_weight;
+            std::string formatted_weight;
+            float weight    = 1.0f;
+            bool has_weight = false;
+            auto colon      = content.rfind(':');
+            if (colon != std::string::npos) {
+                std::string maybe_name   = trim(content.substr(0, colon));
+                std::string maybe_weight = trim(content.substr(colon + 1));
+                float parsed             = 1.0f;
+                if (!maybe_name.empty() && parse_strict_float(maybe_weight, parsed) && std::isfinite(parsed)) {
+                    raw_name         = maybe_name;
+                    raw_weight       = maybe_weight;
+                    formatted_weight = format_embedding_weight(parsed);
+                    weight           = parsed;
+                    has_weight       = true;
+                } else {
+                    raw_name = trim(content);
+                }
+            } else {
+                raw_name = trim(content);
+            }
+            if (raw_name.empty()) {
+                LOG_WARN("ignoring <embedding:...> tag with empty name");
+                result += text.substr(pos, lt - pos);
+                pos      = gt + 1;
+                expanded = true;
+                continue;
+            }
+            std::string trigger = find_embedding_trigger(raw_name);
+            bool known          = !trigger.empty();
+            if (!known) {
+                LOG_WARN("embedding '%s' not found, using '%s' as plain text", raw_name.c_str(), raw_name.c_str());
+                std::string fallback = raw_name;
+                std::replace(fallback.begin(), fallback.end(), '\\', '/');
+                auto slash = fallback.find_last_of('/');
+                if (slash != std::string::npos && slash + 1 < fallback.size()) {
+                    fallback = fallback.substr(slash + 1);
+                }
+                static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt", ".ckpt"};
+                std::string lowered_fallback = normalize_embedding_name(fallback);
+                for (const auto& ext : valid_ext) {
+                    if (lowered_fallback.size() > ext.size() && lowered_fallback.compare(lowered_fallback.size() - ext.size(), ext.size(), ext) == 0) {
+                        fallback = fallback.substr(0, fallback.size() - ext.size());
+                        break;
+                    }
+                }
+                fallback = trim(fallback);
+                trigger  = fallback.empty() ? raw_name : fallback;
+            }
+            std::string replacement;
+            bool has_attention_syntax = trigger.find_first_of("()[]:\\") != std::string::npos;
+            bool needs_placeholder    = known && has_attention_syntax;
+            if (has_weight && std::fabs(weight - 1.0f) > 1e-6f) {
+                if (has_attention_syntax) {
+                    LOG_WARN("embedding '%s' contains attention syntax, ignoring weight %s", trigger.c_str(), raw_weight.c_str());
+                    if (needs_placeholder) {
+                        make_placeholder(replacement);
+                        placeholder_map.emplace_back(replacement, trigger);
+                    } else {
+                        replacement = trigger;
+                    }
+                } else {
+                    replacement = "(" + trigger + ":" + formatted_weight + ")";
+                }
+            } else {
+                if (needs_placeholder) {
+                    make_placeholder(replacement);
+                    placeholder_map.emplace_back(replacement, trigger);
+                } else {
+                    replacement = trigger;
+                }
+            }
+            result += text.substr(pos, lt - pos);
+            result += replacement;
+            pos      = gt + 1;
+            expanded = true;
+        }
+        if (!expanded) {
+            return text;
+        }
+        return result;
+    }
+
+    static void restore_embedding_placeholders(
+        std::string& s,
+        const std::vector<std::pair<std::string, std::string>>& placeholder_map) {
+        for (const auto& entry : placeholder_map) {
+            size_t p = 0;
+            while ((p = s.find(entry.first, p)) != std::string::npos) {
+                s.replace(p, entry.first.size(), entry.second);
+                p += entry.second.size();
+            }
+        }
     }
 
     // Expand "<embedding:name>" and "<embedding:name:weight>" ("<emb:...>" alias,
@@ -436,86 +649,14 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         if (text.find('<') == std::string::npos) {
             return text;
         }
-        try {
-            static const std::regex re(R"(<\s*(embedding|emb)\s*:([^>]+)>)", std::regex::icase);
-            std::string result;
-            std::string remaining = text;
-            std::smatch m;
-            bool expanded = false;
-            while (std::regex_search(remaining, m, re)) {
-                result += m.prefix().str();
-                std::string content = m[2].str();
-                std::string raw_name;
-                std::string raw_weight;
-                float weight      = 1.0f;
-                bool has_weight   = false;
-                auto colon        = content.rfind(':');
-                if (colon != std::string::npos) {
-                    std::string maybe_name   = trim(content.substr(0, colon));
-                    std::string maybe_weight = trim(content.substr(colon + 1));
-                    float parsed             = 1.0f;
-                    if (!maybe_name.empty() && parse_strict_float(maybe_weight, parsed)) {
-                        raw_name   = maybe_name;
-                        raw_weight = maybe_weight;
-                        weight     = parsed;
-                        has_weight = true;
-                    } else {
-                        raw_name = trim(content);
-                    }
-                } else {
-                    raw_name = trim(content);
-                }
-                if (raw_name.empty()) {
-                    LOG_WARN("ignoring <embedding:...> tag with empty name");
-                    remaining = m.suffix().str();
-                    expanded  = true;
-                    continue;
-                }
-                std::string trigger = find_embedding_trigger(raw_name);
-                if (trigger.empty()) {
-                    LOG_WARN("embedding '%s' not found, using '%s' as plain text", raw_name.c_str(), raw_name.c_str());
-                    std::string fallback = raw_name;
-                    std::replace(fallback.begin(), fallback.end(), '\\', '/');
-                    auto slash = fallback.find_last_of('/');
-                    if (slash != std::string::npos && slash + 1 < fallback.size()) {
-                        fallback = fallback.substr(slash + 1);
-                    }
-                    static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt", ".ckpt"};
-                    std::string lowered_fallback = normalize_embedding_name(fallback);
-                    for (const auto& ext : valid_ext) {
-                        if (lowered_fallback.size() > ext.size() && lowered_fallback.compare(lowered_fallback.size() - ext.size(), ext.size(), ext) == 0) {
-                            fallback = fallback.substr(0, fallback.size() - ext.size());
-                            break;
-                        }
-                    }
-                    fallback = trim(fallback);
-                    trigger  = fallback.empty() ? raw_name : fallback;
-                }
-                std::string replacement;
-                if (has_weight && std::fabs(weight - 1.0f) > 1e-6f) {
-                    if (trigger.find_first_of("()[]:\\") != std::string::npos) {
-                        LOG_WARN("embedding '%s' contains attention syntax, ignoring weight %s", trigger.c_str(), raw_weight.c_str());
-                        replacement = trigger;
-                    } else {
-                        replacement = "(" + trigger + ":" + raw_weight + ")";
-                    }
-                } else {
-                    replacement = trigger;
-                }
-                result += replacement;
-                remaining = m.suffix().str();
-                expanded  = true;
-            }
-            if (!expanded) {
-                return text;
-            }
-            result += remaining;
-            LOG_VERBOSE("expanded embedding tags '%s' to '%s'", escape_newlines(text).c_str(), escape_newlines(result).c_str());
-            return result;
-        } catch (const std::regex_error& e) {
-            LOG_WARN("embedding tag expansion failed: %s", e.what());
+        std::vector<std::pair<std::string, std::string>> placeholder_map;
+        std::string expanded = expand_embedding_tags_with_placeholders(text, placeholder_map);
+        if (expanded == text) {
             return text;
         }
+        restore_embedding_placeholders(expanded, placeholder_map);
+        LOG_VERBOSE("expanded embedding tags '%s' to '%s'", escape_newlines(text).c_str(), escape_newlines(expanded).c_str());
+        return expanded;
     }
 
     bool append_embedding_tokens(std::string str, std::vector<int32_t>& bpe_tokens) {
@@ -543,8 +684,14 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                                              size_t min_length          = 0,
                                                              size_t max_length          = 0,
                                                              bool allow_overflow_expand = true) {
-        text                  = expand_embedding_tags(text);
-        auto parsed_attention = parse_prompt_attention(text);
+        std::vector<std::pair<std::string, std::string>> placeholder_map;
+        std::string expanded_text = expand_embedding_tags_with_placeholders(text, placeholder_map);
+        auto parsed_attention     = parse_prompt_attention(expanded_text);
+        for (auto& item : parsed_attention) {
+            restore_embedding_placeholders(item.first, placeholder_map);
+        }
+        text = expanded_text;
+        restore_embedding_placeholders(text, placeholder_map);
 
         {
             std::stringstream ss;
