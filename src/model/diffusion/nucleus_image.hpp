@@ -623,8 +623,8 @@ struct NucleusImageRunner : public DiffusionModelRunner {
         if (params_sanitized) {
             return;
         }
-        params_sanitized = true;
         if (std::getenv("NUCLEUS_NO_SANITIZE") != nullptr) {
+            params_sanitized = true;
             return;
         }
         std::map<std::string, ggml_tensor*> tensors;
@@ -667,6 +667,11 @@ struct NucleusImageRunner : public DiffusionModelRunner {
                     "patched %lld blocks + %lld elements",
                     (long long)scanned, (long long)skipped_nobuf, (long long)skipped_type,
                     (long long)patched_blocks, (long long)patched_elems);
+        // Only mark complete when every tensor had a buffer (lazy loading may
+        // defer some parameter allocations; those are caught on the next call)
+        if (skipped_nobuf == 0) {
+            params_sanitized = true;
+        }
         if (patched_blocks > 0 || patched_elems > 0) {
             LOG_WARN("Nucleus-Image: checkpoint corruption repaired: %lld quant blocks + %lld elements zeroed in total",
                      (long long)patched_blocks, (long long)patched_elems);

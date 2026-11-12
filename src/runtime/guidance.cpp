@@ -160,6 +160,11 @@ namespace sd::guidance {
         }
         const std::vector<int64_t>& shape = pred.shape();
         if (shape.size() != 4 || shape[0] % patch != 0 || shape[1] % patch != 0) {
+            // Known limitation: an odd latent width or height (e.g. a 520x512
+            // request producing a 65x64 latent with patch=2) skips renorm.
+            // Padding inside this helper would change which tokens the norm
+            // uses; rounding requests to a multiple of 16 changes accepted
+            // sizes. Left as-is until the reference rule is established.
             LOG_WARN("guidance renorm: unsupported prediction shape, skipping renorm");
             return;
         }
