@@ -2030,20 +2030,23 @@ struct LLMEmbedder : public Conditioner {
                                                "text_encoders.llm",
                                                enable_vision,
                                                weight_manager);
-        // MiniMax-H3-Image also accepts the P-H3-Image text encoder in place of the MiniMax-H3 Qwen3-VL-32B encoder.
-        const bool has_ph3_connector = tensor_storage_map.find(std::string(PH3ImageTextConnectorRunner::prefix) + ".proj.weight") !=
-                                       tensor_storage_map.end();
-        if (version == VERSION_P_H3_IMAGE || (version == VERSION_MINIMAX_H3_IMAGE && has_ph3_connector)) {
-            if (llm->config.num_layers != 36 || llm->config.hidden_size != 2560) {
-                throw std::runtime_error(version == VERSION_P_H3_IMAGE
-                                             ? "P-H3-Image requires the Qwen3-VL-4B text encoder"
-                                             : "The P-H3-Image text connector requires the Qwen3-VL-4B text encoder");
+        if (sd_version_is_minimax_h3(version)) {
+            const bool has_ph3_connector = tensor_storage_map.count(std::string(PH3ImageTextConnectorRunner::prefix) + ".proj.weight") != 0;
+            if (has_ph3_connector) {
+                if (llm->config.num_layers != 36 || llm->config.hidden_size != 2560) {
+                    throw std::runtime_error("The P-H3-Image text connector requires the Qwen3-VL-4B text encoder");
+                }
+                ph3_connector = std::make_shared<PH3ImageTextConnectorRunner>(backend, tensor_storage_map, weight_manager);
+            } else if (llm->config.hidden_size == 2560) {
+                throw std::runtime_error(
+                    sd_format("%s with Qwen3-VL-4B requires the P-H3-Image text connector; "
+                              "pass it with --embeddings-connectors or use the MiniMax-H3 Qwen3-VL-32B text encoder",
+                              sd_version_name(version)));
+            } else if (llm->config.hidden_size != 5120 || (llm->config.num_layers != 50 && llm->config.num_layers != 64)) {
+                throw std::runtime_error(
+                    sd_format("%s requires the MiniMax-H3 Qwen3-VL-32B text encoder or Qwen3-VL-4B with the P-H3-Image text connector",
+                              sd_version_name(version)));
             }
-            ph3_connector = std::make_shared<PH3ImageTextConnectorRunner>(backend, tensor_storage_map, weight_manager);
-        } else if (version == VERSION_MINIMAX_H3_IMAGE && llm->config.hidden_size == 2560) {
-            throw std::runtime_error(
-                "MiniMax-H3-Image with Qwen3-VL-4B requires the P-H3-Image text connector; "
-                "pass it with --embeddings-connectors or use the MiniMax-H3 Qwen3-VL-32B text encoder");
         }
         int pad_id = 151643;
         if (arch == LLM::LLMArch::MISTRAL_SMALL_3_2 || arch == LLM::LLMArch::MINISTRAL_3_3B) {

@@ -12,12 +12,31 @@ Pass the four MiniMax-H3 components separately:
 - `--diffusion-model`: MiniMax-H3 diffusion transformer
 - `--vae`: MiniMax-H3 video VAE
 - `--audio-vae`: MiniMax-H3 audio VAE
-- `--llm`: the MiniMax-H3 Qwen3-VL-32B text encoder checkpoint
+- `--llm`: the MiniMax-H3 Qwen3-VL-32B text encoder, or Qwen3-VL-4B with the P-H3 text connector
 
-The text encoder must be the MiniMax-H3 variant: Qwen3-VL-32B truncated to 50
+For the 32B option, use the MiniMax-H3 variant: Qwen3-VL-32B truncated to 50
 language layers and exported without the final language-model normalization.
-Its Qwen3-VL vision tower, including the three DeepStack mergers, must also be
-present. If the vision tower is stored separately, pass it with `--llm_vision`.
+
+For the smaller 4B option, pass the P-H3-Image text encoder, which bundles the
+connector, with `--llm`. Alternatively, pass Qwen3-VL-4B with `--llm` and the
+[separate P-H3 text connector](https://huggingface.co/PrunaAI/P-H3-Image/blob/main/text_connector/diffusion_pytorch_model.safetensors)
+with `--embeddings-connectors`. For example, replace the `--llm` argument in the
+commands below with either:
+
+```sh
+--llm ..\models\text_encoders\p-h3-image_text_encoder_int8_convrot.safetensors
+```
+
+or:
+
+```sh
+--llm ..\models\text_encoders\qwen3vl_4b.gguf --embeddings-connectors ..\models\text_encoders\p-h3-image_text_connector.safetensors
+```
+
+Reference-image and reference-video conditioning needs the matching encoder's
+Qwen3-VL vision tower, including the three DeepStack mergers. If stored
+separately, pass it with `--llm_vision`. Keep using the MiniMax-H3 video and audio
+VAEs with either text encoder.
 
 Both the original time-embedder DiT and the smaller AdaLN curve-table variant
 are detected from their weights.
@@ -30,6 +49,8 @@ are detected from their weights.
 - Download qwen3vl_32b_minimax_h3
     - safetensors: https://huggingface.co/Comfy-Org/MiniMax-H3/tree/main/text_encoders
     - gguf: https://huggingface.co/leejet/MiniMax-H3-GGUF/tree/main
+- Or download the P-H3-Image text encoder (Qwen3-VL-4B with the text connector)
+    - safetensors: https://huggingface.co/PrunaAI/P-H3-Image-Comfy/tree/main/text_encoders
 - Download vae
     - safetensors: https://huggingface.co/Comfy-Org/MiniMax-H3/tree/main/vae
 - Download audio vae
