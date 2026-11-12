@@ -131,8 +131,8 @@ namespace Fibo2 {
                     v = reshape(project("to_v", kv));
                 }
             }
-            q = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_q"])->forward(ctx, q);
-            k = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_k"])->forward(ctx, k);
+            q            = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_q"])->forward(ctx, q);
+            k            = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_k"])->forward(ctx, k);
             auto prepare = [&](ggml_tensor* h) {
                 if (pe) {
                     return Rope::apply_rope(ctx, h, pe);

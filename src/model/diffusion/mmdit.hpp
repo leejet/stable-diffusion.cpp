@@ -373,7 +373,7 @@ public:
                          ggml_tensor* x) {
         auto qkv = pre_attention(ctx, x);
         x        = ggml_ext_attention_ext(ctx, qkv[0], qkv[1], qkv[2], num_heads, nullptr, true, ctx->flash_attn_enabled);  // [N, n_token, dim]
-        x        = post_attention(ctx, x);                                                                                   // [N, n_token, dim]
+        x        = post_attention(ctx, x);                                                                                  // [N, n_token, dim]
         return x;
     }
 };

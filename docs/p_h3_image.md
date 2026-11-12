@@ -1,6 +1,6 @@
 # How to Use
 
-P-H3-Image supports text-to-image and reference-image editing. It uses a MiniMax-H3 diffusion transformer, a single-frame VAE, and Qwen3-VL-4B with a text connector. Prompt enhancement is not included.
+P-H3-Image supports text-to-image and reference-image editing. It uses a MiniMax-H3 diffusion transformer, a single-frame VAE, and either Qwen3-VL-4B with a text connector or the MiniMax-H3 Qwen3-VL-32B text encoder. Prompt enhancement is not included.
 
 ## Download weights
 
@@ -10,8 +10,21 @@ P-H3-Image supports text-to-image and reference-image editing. It uses a MiniMax
     - safetensors: https://huggingface.co/PrunaAI/P-H3-Image-Comfy/tree/main/vae
 - Download Qwen3-VL-4B with the text connector
     - https://huggingface.co/PrunaAI/P-H3-Image-Comfy/tree/main/text_encoders
+- Or download the MiniMax-H3 Qwen3-VL-32B text encoder
+    - safetensors: https://huggingface.co/Comfy-Org/MiniMax-H3/tree/main/text_encoders
+    - gguf: https://huggingface.co/leejet/MiniMax-H3-GGUF/tree/main
 
 Alternatively, reuse Qwen3-VL-4B, including its vision tower, with the [separate text connector](https://huggingface.co/PrunaAI/P-H3-Image/blob/main/text_connector/diffusion_pytorch_model.safetensors). Save the connector as `p-h3-image_text_connector.safetensors` and pass it with `--embeddings-connectors`.
+
+The MiniMax-H3 Qwen3-VL-32B encoder does not need a text connector. To use it in
+either example below, omit `--embeddings-connectors` and replace `--llm` with:
+
+```sh
+--llm ..\models\text_encoders\qwen3vl_32b_minimax_h3-Q4_K_M.gguf
+```
+
+Reference-image editing needs the matching encoder's vision tower. If stored
+separately, pass it with `--llm_vision`.
 
 Use the P-H3 image VAE; the MiniMax-H3 video VAE is not compatible. No audio VAE is needed.
 

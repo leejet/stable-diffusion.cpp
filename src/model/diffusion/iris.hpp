@@ -91,10 +91,10 @@ namespace Iris {
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* pe = nullptr, ggml_tensor* mask = nullptr) {
-            auto c        = ctx->ggml_ctx;
-            auto head_dim = dim / heads;
-            auto qkv      = std::dynamic_pointer_cast<Linear>(blocks["qkv"])->forward(ctx, x);
-            auto qkv_dim  = qkv->ne[0] / 3;
+            auto c         = ctx->ggml_ctx;
+            auto head_dim  = dim / heads;
+            auto qkv       = std::dynamic_pointer_cast<Linear>(blocks["qkv"])->forward(ctx, x);
+            auto qkv_dim   = qkv->ne[0] / 3;
             auto split_qkv = [&](int i) {
                 return ggml_view_4d(c, qkv, head_dim, qkv_dim / head_dim, qkv->ne[1], qkv->ne[2] * qkv->ne[3],
                                     head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * qkv_dim * qkv->nb[0]);
