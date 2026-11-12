@@ -1,11 +1,13 @@
 #ifndef __SD_CONDITIONING_CONDITIONER_HPP__
 #define __SD_CONDITIONING_CONDITIONER_HPP__
 
+#include <algorithm>
 #include <cinttypes>
 #include <cmath>
 #include <iomanip>
 #include <limits>
 #include <optional>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
 #include "core/ggml_tensor_utils.h"
@@ -193,8 +195,18 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         }
         for (const auto& kv : orig_embedding_map) {
             std::string name    = normalize_embedding_name(kv.first);
+            std::replace(name.begin(), name.end(), '\\', '/');
             embedding_map[name] = kv.second;
             tokenizer->add_special_token(name);
+            // Allow Windows-style separators in trigger words.
+            if (name.find('/') != std::string::npos) {
+                std::string backslash_name = name;
+                std::replace(backslash_name.begin(), backslash_name.end(), '/', '\\');
+                if (embedding_map.find(backslash_name) == embedding_map.end()) {
+                    embedding_map[backslash_name] = kv.second;
+                    tokenizer->add_special_token(backslash_name);
+                }
+            }
         }
         bool force_clip_f32 = !embedding_map.empty();
         if (sd_version_is_sd1(version)) {
@@ -372,9 +384,144 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         return name;
     }
 
+    // Resolve an <embedding:...> name to a trigger word present in embedding_map.
+    // Accepts a bare file stem ("my_emb"), a relative path ("sub/dir/my_emb")
+    // with or without extension, and backslash separators. Returns the matched
+    // map key, or an empty string when nothing matches.
+    std::string find_embedding_trigger(const std::string& raw_name) const {
+        std::string norm = normalize_embedding_name(trim(raw_name));
+        std::replace(norm.begin(), norm.end(), '\\', '/');
+        if (norm.empty()) {
+            return {};
+        }
+        auto lookup = [&](const std::string& key) -> std::string {
+            auto it = embedding_map.find(key);
+            return it != embedding_map.end() ? it->first : std::string();
+        };
+        if (auto hit = lookup(norm); !hit.empty()) {
+            return hit;
+        }
+        static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt", ".ckpt"};
+        std::string no_ext = norm;
+        for (const auto& ext : valid_ext) {
+            if (no_ext.size() > ext.size() && no_ext.compare(no_ext.size() - ext.size(), ext.size(), ext) == 0) {
+                no_ext = no_ext.substr(0, no_ext.size() - ext.size());
+                break;
+            }
+        }
+        if (no_ext != norm) {
+            if (auto hit = lookup(no_ext); !hit.empty()) {
+                return hit;
+            }
+            norm = no_ext;
+        }
+        auto slash = norm.find_last_of('/');
+        if (slash != std::string::npos) {
+            std::string base = norm.substr(slash + 1);
+            if (!base.empty()) {
+                if (auto hit = lookup(base); !hit.empty()) {
+                    return hit;
+                }
+            }
+        }
+        return {};
+    }
+
+    // Expand "<embedding:name>" and "<embedding:name:weight>" ("<emb:...>" alias,
+    // case-insensitive tag) into a trigger word that the textual-inversion path
+    // understands. A non-1.0 weight becomes "(trigger:weight)" so the existing
+    // attention parser applies it. Unknown names fall back to the stripped name
+    // so the prompt stays readable instead of leaking "<embedding:...>" tokens.
+    std::string expand_embedding_tags(const std::string& text) const {
+        if (text.find('<') == std::string::npos) {
+            return text;
+        }
+        try {
+            static const std::regex re(R"(<\s*(embedding|emb)\s*:([^>]+)>)", std::regex::icase);
+            std::string result;
+            std::string remaining = text;
+            std::smatch m;
+            bool expanded = false;
+            while (std::regex_search(remaining, m, re)) {
+                result += m.prefix().str();
+                std::string content = m[2].str();
+                std::string raw_name;
+                std::string raw_weight;
+                float weight      = 1.0f;
+                bool has_weight   = false;
+                auto colon        = content.rfind(':');
+                if (colon != std::string::npos) {
+                    std::string maybe_name   = trim(content.substr(0, colon));
+                    std::string maybe_weight = trim(content.substr(colon + 1));
+                    float parsed             = 1.0f;
+                    if (!maybe_name.empty() && parse_strict_float(maybe_weight, parsed)) {
+                        raw_name   = maybe_name;
+                        raw_weight = maybe_weight;
+                        weight     = parsed;
+                        has_weight = true;
+                    } else {
+                        raw_name = trim(content);
+                    }
+                } else {
+                    raw_name = trim(content);
+                }
+                if (raw_name.empty()) {
+                    LOG_WARN("ignoring <embedding:...> tag with empty name");
+                    remaining = m.suffix().str();
+                    expanded  = true;
+                    continue;
+                }
+                std::string trigger = find_embedding_trigger(raw_name);
+                if (trigger.empty()) {
+                    LOG_WARN("embedding '%s' not found, using '%s' as plain text", raw_name.c_str(), raw_name.c_str());
+                    std::string fallback = raw_name;
+                    std::replace(fallback.begin(), fallback.end(), '\\', '/');
+                    auto slash = fallback.find_last_of('/');
+                    if (slash != std::string::npos && slash + 1 < fallback.size()) {
+                        fallback = fallback.substr(slash + 1);
+                    }
+                    static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt", ".ckpt"};
+                    std::string lowered_fallback = normalize_embedding_name(fallback);
+                    for (const auto& ext : valid_ext) {
+                        if (lowered_fallback.size() > ext.size() && lowered_fallback.compare(lowered_fallback.size() - ext.size(), ext.size(), ext) == 0) {
+                            fallback = fallback.substr(0, fallback.size() - ext.size());
+                            break;
+                        }
+                    }
+                    fallback = trim(fallback);
+                    trigger  = fallback.empty() ? raw_name : fallback;
+                }
+                std::string replacement;
+                if (has_weight && std::fabs(weight - 1.0f) > 1e-6f) {
+                    if (trigger.find_first_of("()[]:\\") != std::string::npos) {
+                        LOG_WARN("embedding '%s' contains attention syntax, ignoring weight %s", trigger.c_str(), raw_weight.c_str());
+                        replacement = trigger;
+                    } else {
+                        replacement = "(" + trigger + ":" + raw_weight + ")";
+                    }
+                } else {
+                    replacement = trigger;
+                }
+                result += replacement;
+                remaining = m.suffix().str();
+                expanded  = true;
+            }
+            if (!expanded) {
+                return text;
+            }
+            result += remaining;
+            LOG_VERBOSE("expanded embedding tags '%s' to '%s'", escape_newlines(text).c_str(), escape_newlines(result).c_str());
+            return result;
+        } catch (const std::regex_error& e) {
+            LOG_WARN("embedding tag expansion failed: %s", e.what());
+            return text;
+        }
+    }
+
     bool append_embedding_tokens(std::string str, std::vector<int32_t>& bpe_tokens) {
         std::string name = normalize_embedding_name(std::move(str));
-        auto iter        = embedding_map.find(name);
+        std::replace(name.begin(), name.end(), '\\', '/');
+        auto iter = embedding_map.find(name);
         if (iter == embedding_map.end()) {
             return false;
         }
@@ -396,6 +543,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                                              size_t min_length          = 0,
                                                              size_t max_length          = 0,
                                                              bool allow_overflow_expand = true) {
+        text                  = expand_embedding_tags(text);
         auto parsed_attention = parse_prompt_attention(text);
 
         {

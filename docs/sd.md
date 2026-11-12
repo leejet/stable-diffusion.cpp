@@ -1,3 +1,5 @@
+See [Textual Inversion Embeddings](./embeddings.md) for `--embd-dir` and `<embedding:...>` usage with SD 1.x/2.x/SDXL.
+
 ## Download weights
 
 - download original weights(.ckpt or .safetensors). For example
