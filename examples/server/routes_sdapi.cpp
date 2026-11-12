@@ -600,6 +600,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             {
                 std::lock_guard<std::mutex> lock(*runtime->sd_ctx_mutex);
+                PromptImageCallbackGuard prompt_images(runtime->sd_ctx, request.gen_params);
                 const bool detailing = request.adetailer_enabled && !runtime->default_gen_params->ad_model_path.empty();
                 SDAPIPreviewGuard preview_guard(id_task, img_gen_params, img2img ? "img2img" : "txt2img", detailing);
                 sd_image_generation_result_t* generated = nullptr;

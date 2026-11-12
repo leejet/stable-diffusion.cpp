@@ -94,10 +94,6 @@ static bool build_openai_edit_request(const httplib::Request& req,
 
     size_t image_count    = req.form.get_file_count("image[]");
     bool has_legacy_image = req.form.has_file("image");
-    if (image_count == 0 && !has_legacy_image) {
-        error_message = "at least one image[] required";
-        return false;
-    }
 
     std::vector<std::vector<uint8_t>> images_bytes;
     for (size_t i = 0; i < image_count; ++i) {
@@ -204,6 +200,10 @@ static bool build_openai_edit_request(const httplib::Request& req,
         error_message = "invalid sd_cpp_extra_args";
         return false;
     }
+    if (images_bytes.empty() && request.gen_params.prompt_images.empty()) {
+        error_message = "at least one image[] or prompt_images in sd_cpp_extra_args required";
+        return false;
+    }
 
     // Intentionally disable prompt-embedded LoRA tag parsing for server APIs.
     if (!request.gen_params.resolve_and_validate(IMG_GEN, "", runtime.ctx_params->hires_upscalers_dir, true)) {
@@ -223,6 +223,7 @@ static bool execute_sync_img_gen_request(ServerRuntime& runtime,
 
     {
         std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
+        PromptImageCallbackGuard prompt_images(runtime.sd_ctx, request.gen_params);
         sd_image_generation_result_t* generated = nullptr;
         generate_image(runtime.sd_ctx, &img_gen_params, &generated);
         results.adopt(generated, runtime.ctx_params->lora_model_dir);

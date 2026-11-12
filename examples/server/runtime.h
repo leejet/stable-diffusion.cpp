@@ -94,6 +94,19 @@ struct ImgGenJobRequest {
     }
 };
 
+class PromptImageCallbackGuard {
+    sd_ctx_t* ctx_;
+    const SDGenerationParams& params_;
+
+    static bool load_image(const char* source, void* data, sd_image_t* image_out);
+
+public:
+    PromptImageCallbackGuard(sd_ctx_t* ctx, const SDGenerationParams& params);
+    ~PromptImageCallbackGuard();
+    PromptImageCallbackGuard(const PromptImageCallbackGuard&)            = delete;
+    PromptImageCallbackGuard& operator=(const PromptImageCallbackGuard&) = delete;
+};
+
 constexpr int k_max_generation_dimension = 4096;
 constexpr int k_max_adetailer_steps      = 100;
 

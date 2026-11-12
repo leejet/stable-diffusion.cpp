@@ -355,6 +355,7 @@ bool execute_img_gen_job(ServerRuntime& runtime,
         }
         JobCancellationMonitor cancellation(runtime.sd_ctx, job);
         JobCallbacksGuard callbacks(runtime.sd_ctx, job);
+        PromptImageCallbackGuard prompt_images(runtime.sd_ctx, job.img_gen.gen_params);
         sd_image_generation_result_t* generated = nullptr;
         generate_image(runtime.sd_ctx, &params, &generated);
         results.adopt(generated, runtime.ctx_params->lora_model_dir);
@@ -437,6 +438,7 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
         }
         JobCancellationMonitor cancellation(runtime.sd_ctx, job);
         JobCallbacksGuard callbacks(runtime.sd_ctx, job);
+        PromptImageCallbackGuard prompt_images(runtime.sd_ctx, job.vid_gen.gen_params);
         sd_video_generation_result_t* generated = nullptr;
         if (generate_video(runtime.sd_ctx, &params, &generated)) {
             output_fps       = generated->fps;
