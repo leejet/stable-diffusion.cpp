@@ -116,7 +116,12 @@ mkdir build && cd build
 export ROCM_VERSION=10.1
 if command -v rocminfo; then export GFX_NAME=$(rocminfo | awk '/ *Name: +gfx[1-9]/ {print $2; exit}'); else echo "rocminfo missing!"; fi
 sudo apt install amdrocm${ROCM_VERSION}-${GFX_NAME}
-if [ -z "${GFX_NAME}" ]; then echo "Error: Couldn't detect GPU!"; else echo "Building for GPU: ${GFX_NAME}"; fi
+if [ -z "${GFX_NAME}" ]; then
+  echo "Error: Couldn't detect GPU!"
+  exit 1
+fi
+sudo apt install "amdrocm${ROCM_VERSION}-${GFX_NAME}"
+echo "Building for GPU: ${GFX_NAME}"
 cmake .. -G "Ninja" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSD_HIPBLAS=ON -DCMAKE_BUILD_TYPE=Release -DGPU_TARGETS=$GFX_NAME -DAMDGPU_TARGETS=$GFX_NAME -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_POSITION_INDEPENDENT_CODE=ON
 cmake --build . --config Release
 ```
