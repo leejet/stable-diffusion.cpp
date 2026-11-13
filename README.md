@@ -98,6 +98,7 @@ API and command-line option may change frequently.***
   - Control Net support with SD 1.5
   - [ADetailer](./docs/adetailer.md)
   - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
+  - [Textual inversion embeddings](./docs/embeddings.md) for SD 1.x/2.x/SDXL via `--embd-dir` and `<embedding:...>` tags
   - Latent Consistency Models support (LCM/LCM-LoRA)
   - Faster and memory efficient latent decoding with [TAESD](./docs/taesd.md)
   - Upscale images generated with [ESRGAN](./docs/esrgan.md)

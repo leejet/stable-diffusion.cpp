@@ -184,7 +184,7 @@ steps/CFG for the chosen weights.
 Metadata inspection, conversion, standalone upscaling and ADetailer are CLI
 workflows rather than model-loading recipes. ESRGAN and LTX latent upscalers
 are selected through generation upscaling settings with `--hires-upscalers-dir`;
-textual inversion uses the startup `--embd-dir` option.
+textual inversion uses the startup `--embd-dir` option (see `docs/embeddings.md` for trigger words and `<embedding:...>` tags).
 
 Repeat `--model-dir` to share multiple model directories, including an existing
 SD WebUI model directory:
