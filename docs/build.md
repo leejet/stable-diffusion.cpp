@@ -157,29 +157,69 @@ the old bundled path becomes `thirdparty/cutlass`, while custom paths and an
 empty disabled value are preserved. An explicitly set `SD_CUDA_CUTLASS_PATH`
 takes precedence. Non-CUDA builds do not require CUTLASS.
 
-## Build with HipBLAS
+## Build with HIPBLAS
 
-This provides GPU acceleration using AMD GPU. Make sure to have the ROCm toolkit installed.
-To build for another GPU architecture than installed in your system, set `$GFX_NAME` manually to the desired architecture (replace first command). This is also necessary if your GPU is not officially supported by ROCm, for example you have to set `$GFX_NAME` manually to `gfx1030` for consumer RDNA2 cards.
+Use `-DSD_HIPBLAS=ON` for AMD GPU acceleration through HIP and hipBLAS.
+Install a compatible AMD GPU driver and the ROCm SDK, including the HIP compiler,
+hipBLAS, rocBLAS, and their development files. See
+[AMD's ROCm installation guide](https://rocm.docs.amd.com/en/latest/install/rocm.html)
+for supported GPUs, operating systems, and installation methods.
 
-You may need to set up some prerequisites from the [AMD ROCm site](https://rocm.docs.amd.com/en/latest/install/rocm.html) based on your GPU and OS type. Once the repository has been registered, you can proceed with the steps below.
+**Linux**
 
-Windows User Refer to [docs/hipBLAS_on_Windows.md](docs%2FhipBLAS_on_Windows.md) for a comprehensive guide.
+With ROCm installed, use the default CMake generator and host compilers:
 
 ```shell
 mkdir build && cd build
-export ROCM_VERSION=10.1
-if command -v rocminfo; then export GFX_NAME=$(rocminfo | awk '/ *Name: +gfx[1-9]/ {print $2; exit}'); else echo "rocminfo missing!"; fi
-sudo apt install amdrocm${ROCM_VERSION}-${GFX_NAME}
-if [ -z "${GFX_NAME}" ]; then
-  echo "Error: Couldn't detect GPU!"
-  exit 1
-fi
-sudo apt install "amdrocm${ROCM_VERSION}-${GFX_NAME}"
-echo "Building for GPU: ${GFX_NAME}"
-cmake .. -G "Ninja" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSD_HIPBLAS=ON -DCMAKE_BUILD_TYPE=Release -DGPU_TARGETS=$GFX_NAME -DAMDGPU_TARGETS=$GFX_NAME -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+cmake .. -DSD_HIPBLAS=ON
 cmake --build . --config Release
 ```
+
+For an SDK outside the default installation path, set `ROCM_PATH` to its root
+and add `$ROCM_PATH/bin` to `PATH` before configuring. If its shared libraries
+are not on the system library search path, add `$ROCM_PATH/lib` and
+`$ROCM_PATH/lib64` to `LD_LIBRARY_PATH` when running the executable.
+
+**Windows**
+
+Install Visual Studio 2022 C++ build tools with the Windows SDK, CMake, and
+Ninja. Open an x64 **Developer PowerShell for VS 2022**. The Windows HIP build
+uses ROCm Clang with Ninja; the Visual Studio generator is not supported.
+
+Set `HIP_PATH` to the SDK root. The HIP SDK installer normally sets this variable;
+for [ROCm wheels](https://github.com/ROCm/TheRock/blob/main/RELEASES.md), run
+`rocm-sdk init` and use `rocm-sdk path --root`. The build commands below cover
+both the installer and wheel SDK compiler layouts.
+
+For the wheel SDK, also set the device library path before building:
+
+```powershell
+$env:HIP_DEVICE_LIB_PATH = "$env:HIP_PATH\lib\llvm\amdgcn\bitcode"
+```
+
+Then configure and build:
+
+```powershell
+$env:ROCM_PATH = $env:HIP_PATH
+$env:PATH = "$env:HIP_PATH\bin;$env:HIP_PATH\lib\llvm\bin;$env:PATH"
+cmake -S . -B build-hip -G Ninja -DSD_HIPBLAS=ON -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release
+cmake --build build-hip --config Release
+```
+
+Keep the SDK's `bin` directory on `PATH` when running `build-hip\bin\sd-cli.exe`
+so its runtime DLLs can be found.
+
+**GPU targets and verification**
+
+CMake normally detects the installed GPU. To select a target explicitly or build
+on a machine without an AMD GPU, add `-DGPU_TARGETS=gfx1100` to the configure
+command (for example, for an RX 7900 XTX, XT, or GRE). For multiple targets, use a
+quoted list such as `-DGPU_TARGETS="gfx1100;gfx1200"`. Check AMD's
+[GPU specifications](https://rocm.docs.amd.com/en/latest/reference/gpu-specs.html)
+for the correct target; the installed SDK libraries must also support it.
+
+Use a fresh build directory when switching SDKs or compilers. Run the resulting
+`sd-cli --version` to check that the executable starts without loading a model.
 
 ## Build with MUSA
 
