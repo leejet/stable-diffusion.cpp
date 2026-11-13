@@ -837,14 +837,13 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
     });
 
     routes.post("/sdapi/v1/interrupt", [runtime](const httplib::Request&, httplib::Response& res) {
-        bool active;
-        {
-            std::lock_guard<std::mutex> lock(g_preview.mutex);
-            active = g_preview.active;
-        }
+        // Hold the preview lock through the cancel: the generation's preview guard clears
+        // `active` under this lock before sd_ctx_mutex is released, so the next queued
+        // generation cannot start (and be cancelled by mistake) between check and cancel.
         // protect() holds runtime_mutex (shared) for this handler, so sd_ctx cannot be
-        // unloaded underneath us; the cancel reaches the running sdapi generation.
-        if (active && runtime->sd_ctx) {
+        // unloaded underneath us. sd_cancel_generation only stores an atomic flag.
+        std::lock_guard<std::mutex> lock(g_preview.mutex);
+        if (g_preview.active && runtime->sd_ctx) {
             sd_cancel_generation(runtime->sd_ctx, SD_CANCEL_ALL);
         }
         res.set_content(json::object().dump(), "application/json");
