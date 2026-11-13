@@ -29,6 +29,12 @@ namespace SD_CUDA_NAMESPACE {
         static bool bounded(const ggml_tensor* tensor) {
             return ggml_nelements(tensor) > 0 && ggml_nelements(tensor) <= int64_t(INT_MAX) * 1024;
         }
+        static bool cast_supports(ggml_backend_dev_t, const ggml_tensor* node, void*) {
+            const auto* src = node->src[0];
+            return node->src[1] == node && !node->view_src && node->type == GGML_TYPE_F16 && ggml_is_contiguous(node) &&
+                   src && src->type == GGML_TYPE_F32 && ggml_are_same_shape(src, node) && !ggml_is_contiguous(src) && src->ne[0] % 4 == 0 && src->nb[0] == sizeof(float) &&
+                   (src->nb[1] | src->nb[2] | src->nb[3]) % 16 == 0 && aligned(src, 16) && aligned(node, 4) && bounded(node);
+        }
         static int match(ggml_backend_dev_t, const ggml_cgraph* graph, int first, void*) {
             auto* g = const_cast<ggml_cgraph*>(graph);
             if (disabled() || first + 1 >= ggml_graph_n_nodes(g))
@@ -106,15 +112,19 @@ namespace SD_CUDA_NAMESPACE {
             dst[2 * i]               = __floats2half2_rn(value.x, value.y);
             dst[2 * i + 1]           = __floats2half2_rn(value.z, value.w);
         }
-        static __global__ void scale_permute(const float* src, half2* dst, int64_t dim, int64_t tokens, int64_t heads, int64_t count, int64_t nb1, int64_t nb2, int64_t nb3, float scale) {
+        template <bool Scaled>
+        static __global__ void cast_strided(const float* src, half2* dst, int64_t dim, int64_t ne1, int64_t ne2, int64_t count, int64_t stride1, int64_t stride2, int64_t stride3, float scale) {
             const int64_t index = (int64_t(blockIdx.x) * blockDim.x + threadIdx.x) * 4;
             if (index >= count)
                 return;
             const int64_t col = index % dim, row = index / dim;
-            const int64_t token = row % tokens, head = row / tokens % heads, batch = row / (tokens * heads);
-            const float4 value = *reinterpret_cast<const float4*>(src + col + head * nb1 + token * nb2 + batch * nb3);
-            dst[index / 2]     = __floats2half2_rn(__fmul_rn(value.x, scale), __fmul_rn(value.y, scale));
-            dst[index / 2 + 1] = __floats2half2_rn(__fmul_rn(value.z, scale), __fmul_rn(value.w, scale));
+            const int64_t i1 = row % ne1, i2 = row / ne1 % ne2, i3 = row / (ne1 * ne2);
+            float4 value = *reinterpret_cast<const float4*>(src + col + i1 * stride1 + i2 * stride2 + i3 * stride3);
+            if constexpr (Scaled) {
+                value = make_float4(__fmul_rn(value.x, scale), __fmul_rn(value.y, scale), __fmul_rn(value.z, scale), __fmul_rn(value.w, scale));
+            }
+            dst[index / 2]     = __floats2half2_rn(value.x, value.y);
+            dst[index / 2 + 1] = __floats2half2_rn(value.z, value.w);
         }
         static bool overlaps(const ggml_tensor* a, const ggml_tensor* b) {
             const auto x = reinterpret_cast<uintptr_t>(a->data), y = reinterpret_cast<uintptr_t>(b->data);
@@ -129,15 +139,17 @@ namespace SD_CUDA_NAMESPACE {
             ggml_ext_gpu_context context;
             if (!cuda_context(execution->backend, &context))
                 return GGML_STATUS_FAILED;
-            auto stream           = static_cast<CUDAStream>(context.stream);
-            const auto* node      = nodes[0];
-            const auto* a         = node->src[0];
-            const auto* b         = node->op == GGML_OP_CONT ? nullptr : node->src[1];
-            auto* dst             = nodes[count - 1];
-            const auto* residual  = node->op == GGML_OP_MUL ? (dst->src[0] == node ? dst->src[1] : dst->src[0]) : nullptr;
-            const bool gate       = residual != nullptr;
-            const bool alias      = (overlaps(dst, a) && !(gate && dst->data == a->data)) || (b && overlaps(dst, b)) ||
-                                    (residual && overlaps(dst, residual) && dst->data != residual->data);
+            auto stream          = static_cast<CUDAStream>(context.stream);
+            const auto* node     = nodes[0];
+            const auto* a        = node->src[0];
+            const auto* b        = node->op == GGML_OP_CONT || node->op == GGML_OP_CPY ? nullptr : node->src[1];
+            auto* dst            = nodes[count - 1];
+            const auto* residual = node->op == GGML_OP_MUL ? (dst->src[0] == node ? dst->src[1] : dst->src[0]) : nullptr;
+            const bool gate      = residual != nullptr;
+            const bool alias     = (overlaps(dst, a) && !(gate && dst->data == a->data)) || (b && overlaps(dst, b)) ||
+                                   (residual && overlaps(dst, residual) && dst->data != residual->data);
+            if (alias && !execution->workspace)
+                return GGML_STATUS_FAILED;
             void* output          = alias ? ggml_backend_buffer_get_base(execution->workspace) : dst->data;
             const int64_t count4  = ggml_nelements(dst) / 4;
             const unsigned blocks = unsigned((count4 + 255) / 256);
@@ -150,9 +162,12 @@ namespace SD_CUDA_NAMESPACE {
                 kernel<<<blocks, 256, 0, stream>>>(static_cast<const float4*>(a->data), static_cast<const float4*>(b->data),
                                                    static_cast<half2*>(output), node->ne[0] / 4, a->ne[permuted ? 2 : 1], node->ne[permuted ? 2 : 1],
                                                    node->ne[permuted ? 1 : 2], count4);
+            } else if (node->op == GGML_OP_CONT) {
+                cast_strided<true><<<blocks, 256, 0, stream>>>(static_cast<const float*>(a->data), static_cast<half2*>(output),
+                                                               a->ne[0], a->ne[2], a->ne[1], ggml_nelements(dst), a->nb[2] / 4, a->nb[1] / 4, a->nb[3] / 4, param(nodes[1], 0));
             } else {
-                scale_permute<<<blocks, 256, 0, stream>>>(static_cast<const float*>(a->data), static_cast<half2*>(output),
-                                                          a->ne[0], a->ne[2], a->ne[1], ggml_nelements(dst), a->nb[1] / 4, a->nb[2] / 4, a->nb[3] / 4, param(nodes[1], 0));
+                cast_strided<false><<<blocks, 256, 0, stream>>>(static_cast<const float*>(a->data), static_cast<half2*>(output),
+                                                                a->ne[0], a->ne[1], a->ne[2], ggml_nelements(dst), a->nb[1] / 4, a->nb[2] / 4, a->nb[3] / 4, 1.f);
             }
             auto error = cuda_last_error();
             if (error == cuda_success && alias)
@@ -177,6 +192,12 @@ namespace SD_CUDA_NAMESPACE {
         GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
         desc.name = "sd.cont_scale_permute_cast." SD_CUDA_NAME ".v1";
         desc.op   = GGML_OP_CONT;
+        GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
+        desc.name      = "sd.cast_strided_f32_f16." SD_CUDA_NAME ".v1";
+        desc.op        = GGML_OP_CPY;
+        desc.match     = nullptr;
+        desc.supports  = sd_affine_cuda::cast_supports;
+        desc.preferred = sd_affine_cuda::cast_supports;
         GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
     }
 

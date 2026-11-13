@@ -438,7 +438,7 @@ namespace SD_CUDA_NAMESPACE {
         }
         enum Kind { MAT,
                     QUANTIZE,
-                    SWIGLU,
+                    GATED,
                     SWIGLU_QUANTIZE,
                     CONCAT };
         static bool fusion_disabled() {
@@ -465,9 +465,24 @@ namespace SD_CUDA_NAMESPACE {
                 next->type == GGML_TYPE_F32 && mat->ne[2] == 1 && mat->ne[3] == 1 &&
                 next->ne[2] == 1 && next->ne[3] == 1 && ggml_is_contiguous(next) && ggml_is_contiguous(next->src[0]))
                 return 2;
-            if (next->op != GGML_OP_GLU || ggml_get_glu_op(next) != GGML_GLU_OP_SWIGLU || next->op_params[1] != 0 ||
+            if (next->op != GGML_OP_GLU ||
                 next->src[0] != mat || next->src[1] || next->type != GGML_TYPE_F32 || !ggml_is_contiguous(next) ||
                 ggml_nelements(next) > int64_t(INT_MAX) * 256)
+                return 0;
+            const auto activation = ggml_get_glu_op(next);
+            if (activation == GGML_GLU_OP_SITU && next->op_params[1] != 0) {
+#ifdef SD_CUDA_I8_CUTLASS
+                if (!next->data && !next->buffer && !next->view_src && cutlass_compatible(op, next)) {
+                    size_t workspace     = 0;
+                    auto* gemm           = sd_cuda_i8_gemm_prepare(device, ggml_nrows(mat), mat->ne[0], op.weight->ne[0], SDI8GemmActivation::Situ, &workspace);
+                    const bool supported = gemm != nullptr;
+                    sd_cuda_i8_gemm_free(gemm);
+                    return supported ? 2 : 0;
+                }
+#endif
+                return 0;
+            }
+            if (activation != GGML_GLU_OP_SWIGLU || next->op_params[1] != 0)
                 return 0;
             if (first + 2 < ggml_graph_n_nodes(g)) {
                 const auto* quant = ggml_graph_node(g, first + 2);
@@ -477,7 +492,7 @@ namespace SD_CUDA_NAMESPACE {
 #ifdef SD_CUDA_I8_CUTLASS
                     if (!next->data && !next->buffer && !next->view_src && cutlass_compatible(op, next)) {
                         size_t workspace          = 0;
-                        auto* gemm                = sd_cuda_i8_gemm_prepare(device, ggml_nrows(mat), mat->ne[0], op.weight->ne[0], true, &workspace);
+                        auto* gemm                = sd_cuda_i8_gemm_prepare(device, ggml_nrows(mat), mat->ne[0], op.weight->ne[0], SDI8GemmActivation::Swiglu, &workspace);
                         const bool fused_epilogue = gemm != nullptr;
                         sd_cuda_i8_gemm_free(gemm);
                         // ConvRot is a separate launch either way. Keep its input in the
@@ -498,7 +513,8 @@ namespace SD_CUDA_NAMESPACE {
             int64_t k, n, rows, padded;
             size_t quant, scales, accum, partial, output, gemm_offset;
             SDI8CudaGemmPlan* gemm = nullptr;
-            bool fast_swiglu       = false;
+            bool fused_activation  = false;
+            bool situ              = false;
         };
         static size_t reserve(size_t& total, size_t bytes) {
             const size_t offset = total;
@@ -516,12 +532,13 @@ namespace SD_CUDA_NAMESPACE {
             p->kind        = !mat ? QUANTIZE : count == 3              ? SWIGLU_QUANTIZE
                                            : count == 1                ? MAT
                                            : dst->op == GGML_OP_CONCAT ? CONCAT
-                                                                       : SWIGLU;
+                                                                       : GATED;
             p->k           = mat ? op.weight->ne[0] : dst->ne[0];
             p->n           = mat ? nodes[0]->ne[0] : 0;
             p->rows        = mat ? ggml_nrows(nodes[0]) : ggml_nrows(dst->src[0]);
             p->padded      = (p->rows + 3) / 4 * 4;
             p->group       = mat ? op.group_size : 0;
+            p->situ        = p->kind == GATED && ggml_get_glu_op(dst) == GGML_GLU_OP_SITU;
             if (!mat)
                 sd_ggml_convrot_describe(dst, &p->group);
             size_t total = 0;
@@ -533,17 +550,18 @@ namespace SD_CUDA_NAMESPACE {
                 // Retain cuBLAS when I32 accumulation can overflow.
                 if (cutlass_compatible(op, dst) && (!op.bias || p->kind == MAT) &&
                     (p->kind != CONCAT || ggml_nbytes(dst->src[0]) % 16 == 0)) {
-                    if (p->kind == SWIGLU || p->kind == SWIGLU_QUANTIZE) {
-                        p->gemm        = sd_cuda_i8_gemm_prepare(device, p->rows, p->n, p->k, true, &gemm_bytes);
-                        p->fast_swiglu = p->gemm != nullptr;
+                    if (p->kind == GATED || p->kind == SWIGLU_QUANTIZE) {
+                        const auto activation = p->situ ? SDI8GemmActivation::Situ : SDI8GemmActivation::Swiglu;
+                        p->gemm               = sd_cuda_i8_gemm_prepare(device, p->rows, p->n, p->k, activation, &gemm_bytes);
+                        p->fused_activation   = p->gemm != nullptr;
                     }
                     if (!p->gemm)
-                        p->gemm = sd_cuda_i8_gemm_prepare(device, p->rows, p->n, p->k, false, &gemm_bytes);
+                        p->gemm = sd_cuda_i8_gemm_prepare(device, p->rows, p->n, p->k, SDI8GemmActivation::None, &gemm_bytes);
                 }
                 p->gemm_offset = reserve(total, gemm_bytes);
 #endif
-                const bool intermediate = !p->gemm || p->kind == SWIGLU_QUANTIZE || (p->kind == SWIGLU && !p->fast_swiglu);
-                p->accum                = reserve(total, intermediate ? size_t(p->fast_swiglu ? p->n / 2 : p->n) * p->padded * sizeof(float) : 0);
+                const bool intermediate = !p->gemm || p->kind == SWIGLU_QUANTIZE || (p->kind == GATED && !p->fused_activation);
+                p->accum                = reserve(total, intermediate ? size_t(p->fused_activation ? p->n / 2 : p->n) * p->padded * sizeof(float) : 0);
             }
             const bool large_rotation = (!mat || (op.input->type == GGML_TYPE_F32 && op.group_size == 256)) && size_t(p->k) * sizeof(float) + 128 > p->device.shared_memory;
             p->partial                = reserve(total, p->group == 64 ? size_t(p->rows) * (p->k / 64) * sizeof(float) : large_rotation ? size_t(p->rows) * (p->k / 256) * sizeof(float)
@@ -705,7 +723,7 @@ namespace SD_CUDA_NAMESPACE {
             return cuda_last_error();
         }
         template <bool Dequantize>
-        static __global__ void swiglu(const float* src, const float* xs, const float* ws, float* dst, int64_t n, int64_t rows) {
+        static __global__ void gated_activation(const float* src, const float* xs, const float* ws, float* dst, int64_t n, int64_t rows, bool situ) {
             const int64_t i    = int64_t(blockIdx.x) * blockDim.x + threadIdx.x;
             const int64_t half = n / 2;
             if (i >= rows * half)
@@ -721,7 +739,7 @@ namespace SD_CUDA_NAMESPACE {
                 gate = src[row * n + col];
                 up   = src[row * n + half + col];
             }
-            dst[i] = __fmul_rn(gate / (1.f + expf(-gate)), up);
+            dst[i] = situ ? sd_convrot::situ(up, gate) : __fmul_rn(gate / (1.f + expf(-gate)), up);
         }
         template <bool Swiglu, bool Dequantize, bool Rotated>
         static CUDAError quantize_epilogue(const Plan& p, const float* src, const float* xs, const float* ws, int8_t* output, CUDAStream stream) {
@@ -815,7 +833,7 @@ namespace SD_CUDA_NAMESPACE {
                 const size_t prefix     = p.kind == CONCAT ? ggml_nbytes(dst->src[0]) : 0;
                 auto* gemm_output       = reinterpret_cast<float*>(static_cast<char*>(output) + prefix);
                 auto* accum             = reinterpret_cast<int32_t*>(scratch_at(p.accum));
-                const bool intermediate = p.kind == SWIGLU_QUANTIZE || (p.kind == SWIGLU && !p.fast_swiglu);
+                const bool intermediate = p.kind == SWIGLU_QUANTIZE || (p.kind == GATED && !p.fused_activation);
 #ifdef SD_CUDA_I8_CUTLASS
                 if (p.gemm) {
                     auto status = sd_cuda_i8_gemm_execute(p.gemm, quant, static_cast<const int8_t*>(op.weight->data), scales, ws,
@@ -856,18 +874,18 @@ namespace SD_CUDA_NAMESPACE {
                 }
                 const auto* values = reinterpret_cast<const float*>(accum);
                 if (p.kind == SWIGLU_QUANTIZE) {
-                    if (p.fast_swiglu)
+                    if (p.fused_activation)
                         error = quantize_epilogue<false, false, true>(p, values, nullptr, nullptr, static_cast<int8_t*>(output), stream);
                     else if (p.gemm)
                         error = quantize_epilogue<true, false, false>(p, values, nullptr, nullptr, static_cast<int8_t*>(output), stream);
                     else
                         error = quantize_epilogue<true, true, false>(p, values, scales, ws, static_cast<int8_t*>(output), stream);
-                } else if (p.kind == SWIGLU && !p.fast_swiglu) {
+                } else if (p.kind == GATED && !p.fused_activation) {
                     const unsigned blocks = unsigned((p.rows * (p.n / 2) + 255) / 256);
                     if (p.gemm)
-                        swiglu<false><<<blocks, 256, 0, stream>>>(values, scales, ws, static_cast<float*>(output), p.n, p.rows);
+                        gated_activation<false><<<blocks, 256, 0, stream>>>(values, scales, ws, static_cast<float*>(output), p.n, p.rows, p.situ);
                     else
-                        swiglu<true><<<blocks, 256, 0, stream>>>(values, scales, ws, static_cast<float*>(output), p.n, p.rows);
+                        gated_activation<true><<<blocks, 256, 0, stream>>>(values, scales, ws, static_cast<float*>(output), p.n, p.rows, p.situ);
                     error = cuda_last_error();
                 } else if (!p.gemm) {
                     const unsigned gy = unsigned(std::min<int64_t>(p.rows, 65535)), gz = unsigned((p.rows + 65534) / 65535);
