@@ -11,6 +11,14 @@ The server currently exposes three API families:
 The `sdcpp API` is the native API surface.
 Its request schema is the same schema used by `sd_cpp_extra_args`.
 
+Image and video requests can include interleaved images in `prompt` or
+`negative_prompt` using `<image:ID>`. The native `sdcpp API` accepts a
+`prompt_images` object mapping each ID to a base64 image or image data URI.
+For `OpenAI API` and `sdapi`, pass `prompt_images` through `sd_cpp_extra_args`
+embedded inside `prompt`. IDs are resolved against that request's images.
+See [images in prompts](../../docs/prompt_images.md) for examples and supported
+LLM encoders.
+
 Global LoRA rule:
 
 - Server APIs do not parse LoRA tags embedded inside `prompt`.

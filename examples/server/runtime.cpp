@@ -19,6 +19,26 @@
 
 namespace fs = std::filesystem;
 
+bool PromptImageCallbackGuard::load_image(const char* source, void* data, sd_image_t* image_out) {
+    const auto& params = static_cast<PromptImageCallbackGuard*>(data)->params_;
+    const auto it      = params.prompt_images.find(source);
+    if (it == params.prompt_images.end()) {
+        LOG_ERROR("Unknown prompt image ID: %s", source);
+        return false;
+    }
+    *image_out = it->second.get();
+    return image_out->data != nullptr;
+}
+
+PromptImageCallbackGuard::PromptImageCallbackGuard(sd_ctx_t* ctx, const SDGenerationParams& params)
+    : ctx_(ctx), params_(params) {
+    sd_set_prompt_image_callback(ctx_, load_image, this);
+}
+
+PromptImageCallbackGuard::~PromptImageCallbackGuard() {
+    sd_set_prompt_image_callback(ctx_, nullptr, nullptr);
+}
+
 bool validate_server_img_gen_request(const ServerRuntime& runtime,
                                      const ImgGenJobRequest& request,
                                      std::string& error_message) {
