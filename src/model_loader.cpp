@@ -189,6 +189,26 @@ void ModelLoader::add_tensor_storage(const TensorStorage& tensor_storage) {
     tensor_storage_map[tensor_storage.name] = tensor_storage;
 }
 
+// A tensorwise INT8 weight needs a matching .weight_scale, otherwise model
+// construction reaches an assert. The scale may live in a different shard of
+// an index, so this runs on the merged storage map once a model's files are
+// fully parsed rather than per file.
+bool ModelLoader::validate_int8_tensorwise_scales() {
+    for (const auto& entry : tensor_storage_map) {
+        const TensorStorage& tensor_storage = entry.second;
+        if (!tensor_storage.is_int8_tensorwise || !ends_with(tensor_storage.name, ".weight")) {
+            continue;
+        }
+        const std::string module_name =
+            tensor_storage.name.substr(0, tensor_storage.name.size() - std::string(".weight").size());
+        if (tensor_storage_map.count(module_name + ".weight_scale") == 0) {
+            LOG_ERROR("missing weight_scale for ComfyUI INT8 tensorwise weight '%s'", tensor_storage.name.c_str());
+            return false;
+        }
+    }
+    return true;
+}
+
 void ModelLoader::set_n_threads(int n_threads) {
     n_threads_ = n_threads > 0 ? n_threads : sd_get_num_physical_cores();
     LOG_VERBOSE("using %d threads for model loading", n_threads_);
@@ -224,7 +244,7 @@ bool ModelLoader::parse_file(const std::string& file_path, const std::string& pr
         return init_from_safetensors_index_file(file_path, prefix);
     } else if (is_safetensors_file(file_path)) {
         LOG_INFO("load %s using safetensors format", file_path.c_str());
-        return init_from_safetensors_file(file_path, prefix);
+        return init_from_safetensors_file(file_path, prefix) && validate_int8_tensorwise_scales();
     } else if (is_torch_zip_file(file_path)) {
         LOG_INFO("load %s using torch zip format", file_path.c_str());
         return init_from_torch_zip_file(file_path, prefix);
@@ -344,7 +364,7 @@ bool ModelLoader::init_from_safetensors_index_file(const std::string& file_path,
         const auto expected = (std::filesystem::u8path(file_path).parent_path() /
                                std::filesystem::u8path(entry.value().get<std::string>()))
                                   .lexically_normal();
-        bool found          = false;
+        bool found = false;
         for (const auto& shard : parsed_tensor_names_) {
             if (std::filesystem::u8path(shard.first).lexically_normal() == expected) {
                 found = shard.second.count(entry.key()) != 0;
@@ -357,7 +377,7 @@ bool ModelLoader::init_from_safetensors_index_file(const std::string& file_path,
         }
     }
 
-    return true;
+    return validate_int8_tensorwise_scales();
 }
 
 /*================================================= TorchLegacyModelLoader ==================================================*/
