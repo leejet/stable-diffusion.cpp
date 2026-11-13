@@ -206,6 +206,7 @@ These projects use `stable-diffusion.cpp` as a backend for their image generatio
 - [NodeTool](https://github.com/nodetool-ai/nodetool)
 - [Quo](https://github.com/quo-ai/quo)
 - [Prisme](https://github.com/d3Ita/prisme)
+- [Rust Image Studio](https://github.com/hid276/rust-image-studio)
 
 ## Contributors
 
