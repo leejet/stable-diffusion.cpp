@@ -131,8 +131,7 @@ namespace SD_CUDA_NAMESPACE {
             return x <= y ? y - x < ggml_nbytes(a) : x - y < ggml_nbytes(b);
         }
         static ggml_status prepare(ggml_backend_t, ggml_tensor* const* nodes, int count, void**, size_t* workspace, void*) {
-            const auto* dst = nodes[count - 1];
-            *workspace      = count == 1 && !dst->data && !dst->buffer ? 0 : ggml_nbytes(dst);
+            *workspace = ggml_nbytes(nodes[count - 1]);
             return GGML_STATUS_SUCCESS;
         }
         static void destroy(void*, void*) {}
