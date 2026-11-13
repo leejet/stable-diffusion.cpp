@@ -368,8 +368,15 @@ if (SD_CUDA)
     set_property(SOURCE src/core/ggml_extend_backend.cpp APPEND PROPERTY COMPILE_DEFINITIONS SD_USE_CUDA)
     if (NOT SD_USE_UPSTREAM_GGML)
         include(cmake/cutlass.cmake)
+        if (TARGET ggml-cuda)
+            # ggml resolves CUDA architectures in a child directory scope.
+            get_target_property(CMAKE_CUDA_ARCHITECTURES ggml-cuda CUDA_ARCHITECTURES)
+        endif()
         enable_language(CUDA)
-        set_target_properties(${SD_LIB} PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON)
+        set_target_properties(${SD_LIB} PROPERTIES
+            CUDA_STANDARD 17
+            CUDA_STANDARD_REQUIRED ON
+            CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
         if (SD_CUDA_CUTLASS_PATH)
             target_sources(${SD_LIB} PRIVATE src/core/cuda/cute_attention.cu src/core/cuda/i8_projection.cu src/core/cuda/i8_gated_residual.cu src/core/cuda/i8_gemm.cu src/core/cuda/bf16_gemm.cu)
             set_source_files_properties(src/core/cuda/cute_attention.cu src/core/cuda/i8_projection.cu src/core/cuda/i8_gated_residual.cu src/core/cuda/i8_gemm.cu src/core/cuda/bf16_gemm.cu PROPERTIES

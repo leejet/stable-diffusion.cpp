@@ -130,6 +130,11 @@ cmake .. -DSD_CUDA=ON
 cmake --build . --config Release
 ```
 
+When building GGML from source, sd.cpp's CUDA extensions use the same target
+architectures as GGML, including native GPU detection with `GGML_NATIVE=ON`.
+To select target GPUs explicitly, pass `-DCMAKE_CUDA_ARCHITECTURES=89` (Ada),
+for example, or a quoted list such as `-DCMAKE_CUDA_ARCHITECTURES="80;89"`.
+
 CUDA extensions use sd.cpp's `thirdparty/cutlass` submodule by default
 for eligible INT8 GEMM and CuTe attention operations. If its headers are missing,
 CMake stops with an initialization hint; it does not download them automatically.

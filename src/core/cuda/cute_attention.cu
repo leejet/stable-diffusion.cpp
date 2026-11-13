@@ -37,6 +37,7 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <cutlass/numeric_conversion.h>
+#include <algorithm>
 #include <climits>
 #include <cstdlib>
 #include <cstring>
@@ -809,7 +810,18 @@ static void attention_destroy(void* state, void*) {
 }
 
 void sd_ggml_register_cuda_attention(ggml_backend_dev_t device) {
-    if (!cuda_device(device))
+    const auto* info = cuda_device(device);
+    if (!info || info->properties.major < 8)
+        return;
+    int previous;
+    if (cudaGetDevice(&previous) != cudaSuccess || cudaSetDevice(info->ordinal) != cudaSuccess)
+        return;
+    cudaFuncAttributes attributes{};
+    const auto error    = cudaFuncGetAttributes(&attributes, sd_fattn_cute::kernel<64, 64>);
+    const auto restored = cudaSetDevice(previous);
+    // JIT preserves instruction guards from the original PTX architecture.
+    if (restored != cudaSuccess || error != cudaSuccess ||
+        std::min(attributes.binaryVersion, attributes.ptxVersion) < 80)
         return;
     ggml_ext_kernel_desc desc = {};
     desc.abi_version          = GGML_EXT_ABI_VERSION;
