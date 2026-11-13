@@ -4,6 +4,8 @@
 #include <map>
 #include <stdexcept>
 
+#include "core/util.h"
+
 namespace sd {
 
     PromptInputTemplate::PromptInputTemplate(const PromptInput* input)
@@ -119,7 +121,17 @@ namespace sd {
     }
 
     bool resolve_prompt_images(PromptInput& input, const PromptImageLoader& loader) {
-        std::map<std::string, Tensor<float>> images;
+        constexpr size_t max_image_sources = 32;
+        std::map<std::string, std::shared_ptr<const Tensor<float>>> images;
+        for (const auto& part : input) {
+            if (part.type == PromptPart::Type::IMAGE) {
+                images.try_emplace(part.content);
+                if (images.size() > max_image_sources) {
+                    LOG_ERROR("A prompt supports at most %zu unique image sources", max_image_sources);
+                    return false;
+                }
+            }
+        }
         for (auto& part : input) {
             if (part.type != PromptPart::Type::IMAGE) {
                 continue;
@@ -127,15 +139,15 @@ namespace sd {
             if (!loader) {
                 return false;
             }
-            auto it = images.find(part.content);
-            if (it == images.end()) {
+            auto& resolved = images.at(part.content);
+            if (!resolved) {
                 auto image = loader(part.content);
                 if (image.empty()) {
                     return false;
                 }
-                it = images.emplace(part.content, std::move(image)).first;
+                resolved = std::make_shared<const Tensor<float>>(std::move(image));
             }
-            part.image = it->second;
+            part.image = resolved;
         }
         return true;
     }

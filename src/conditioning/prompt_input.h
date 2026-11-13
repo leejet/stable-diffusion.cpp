@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -16,7 +17,7 @@ namespace sd {
 
         Type type = Type::TEXT;
         std::string content;
-        Tensor<float> image;
+        std::shared_ptr<const Tensor<float>> image;
         float weight = 1.f;
     };
 

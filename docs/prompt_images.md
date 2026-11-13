@@ -38,6 +38,12 @@ The context limit includes visual tokens and the model's prompt template. An
 image-containing prompt that exceeds the limit fails; images are never partially
 truncated.
 
+Each prompt supports at most 32 unique image sources, checked before loading any
+of them. Repeated sources share their resolved pixels. Qwen2.5-VL also limits
+each resized image to 8192 vision patches (2048 visual tokens), keeping its
+window mask within 256 MiB. Larger grids fail before vision encoding; use a
+smaller source image if this limit is exceeded.
+
 ## C API
 
 Register a context-local image resolver with `sd_set_prompt_image_callback()`,

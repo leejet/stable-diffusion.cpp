@@ -67,7 +67,8 @@ class ConditioningCache {
                         b.prompt_input->begin(), b.prompt_input->end(),
                         [](const sd::PromptPart& x, const sd::PromptPart& y) {
                             return x.type == y.type && x.content == y.content && x.weight == y.weight &&
-                                   x.image.shape() == y.image.shape() && x.image.values() == y.image.values();
+                                   (x.image == y.image ||
+                                    (x.image && y.image && x.image->shape() == y.image->shape() && x.image->values() == y.image->values()));
                         })) {
             return false;
         }

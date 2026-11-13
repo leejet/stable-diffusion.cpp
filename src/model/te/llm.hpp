@@ -2230,6 +2230,16 @@ namespace LLM {
         std::array<std::vector<int32_t>, 4> pos_embed_idx_data_;
         std::array<std::vector<float>, 4> pos_embed_weight_data_;
 
+        static bool check_window_mask_size(int64_t grid_h, int64_t grid_w) {
+            // The dense float mask must fit within 256 MiB, including rectangular grids.
+            constexpr int64_t max_patches = 8192;
+            if (grid_h <= 0 || grid_w <= 0 || grid_h > max_patches || grid_w > max_patches / grid_h) {
+                LOG_ERROR("Qwen2.5-VL images support at most %" PRId64 " patches (256 MiB window mask)", max_patches);
+                return false;
+            }
+            return true;
+        }
+
         static ggml_tensor* process_image_common(GGMLRunnerContext* runner_ctx,
                                                  ggml_tensor* image,
                                                  const LLMVisionConfig& vision_params) {
@@ -2340,8 +2350,12 @@ namespace LLM {
             GGML_ASSERT(image->ne[1] % (vision_params.patch_size * vision_params.spatial_merge_size) == 0);
             GGML_ASSERT(image->ne[0] % (vision_params.patch_size * vision_params.spatial_merge_size) == 0);
 
-            int grid_h = static_cast<int>(image->ne[1]) / vision_params.patch_size;
-            int grid_w = static_cast<int>(image->ne[0]) / vision_params.patch_size;
+            if (vision_params.arch == LLMVisionArch::QWEN2_5_VL &&
+                !check_window_mask_size(image->ne[1] / vision_params.patch_size, image->ne[0] / vision_params.patch_size)) {
+                throw std::invalid_argument("Qwen2.5-VL window mask exceeds its memory limit");
+            }
+            int grid_h = static_cast<int>(image->ne[1] / vision_params.patch_size);
+            int grid_w = static_cast<int>(image->ne[0] / vision_params.patch_size);
 
             auto pixel_values = process_image_common(runner_ctx, image, vision_params);
             int head_dim      = static_cast<int>(vision_params.hidden_size / vision_params.num_heads);
@@ -2403,7 +2417,8 @@ namespace LLM {
             runner->set_backend_tensor_data(window_index, window_index_vec.data());
             runner->set_backend_tensor_data(window_inverse_index, window_inverse_index_vec.data());
 
-            window_mask_vec.resize((grid_h * grid_w) * (grid_h * grid_w));
+            const size_t n_patches = static_cast<size_t>(grid_h) * grid_w;
+            window_mask_vec.resize(n_patches * n_patches);
             int window_start_index = 0;
             for (int seq_index = 0; seq_index < seqlens.size(); seq_index++) {
                 int window_end_index = window_start_index + seqlens[seq_index];
@@ -2414,8 +2429,9 @@ namespace LLM {
                         if (j >= window_start_index && j < window_end_index) {
                             mask_value = 0;
                         }
-                        GGML_ASSERT((i * (grid_h * grid_w) + j) < window_mask_vec.size());
-                        window_mask_vec[i * (grid_h * grid_w) + j] = mask_value;
+                        const size_t index = static_cast<size_t>(i) * n_patches + j;
+                        GGML_ASSERT(index < window_mask_vec.size());
+                        window_mask_vec[index] = mask_value;
                     }
                 }
                 window_start_index = window_end_index;
@@ -2977,11 +2993,11 @@ namespace LLM {
                 if (!append_tokens(vision_start, 1.f)) {
                     return false;
                 }
-                const auto& source = part.image;
-                if (source.empty() || source.dim() != 4 || source.shape()[2] != 3 || source.shape()[3] != 1) {
+                if (!part.image || part.image->empty() || part.image->dim() != 4 || part.image->shape()[2] != 3 || part.image->shape()[3] != 1) {
                     LOG_ERROR("Prompt images must be RGB tensors with one frame");
                     return false;
                 }
+                const auto& source  = *part.image;
                 const int factor    = config.vision.patch_size * config.vision.spatial_merge_size;
                 const double height = static_cast<double>(source.shape()[1]);
                 const double width  = static_cast<double>(source.shape()[0]);
@@ -3006,6 +3022,9 @@ namespace LLM {
                 const int count = (h / factor) * (w / factor);
                 if (count > max_length - result.expanded_length) {
                     LOG_ERROR("Prompt images exceed the %d-token context", max_length);
+                    return false;
+                }
+                if (qwen25 && !check_window_mask_size(h / config.vision.patch_size, w / config.vision.patch_size)) {
                     return false;
                 }
                 auto image          = sd::ops::interpolate(source, {w, h, 3, 1}, sd::ops::InterpolateMode::Bicubic, false, true);
