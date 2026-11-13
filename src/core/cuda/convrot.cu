@@ -30,6 +30,7 @@ namespace SD_CUDA_NAMESPACE {
                     MOD,
                     RMS_MOD,
                     SWIGLU,
+                    SITU,
                     SILU,
                     SIGMOID };
         struct Operation {
@@ -81,8 +82,11 @@ namespace SD_CUDA_NAMESPACE {
                 op.eps        = param_f32(first, 0);
                 if (op.k < 1024 || !vector(op.weight, op.k) || !vector(op.modulation, op.k) || (op.shift && !vector(op.shift, op.k)))
                     return false;
-            } else if (count == 2 && first->op == GGML_OP_GLU && ggml_get_glu_op(first) == GGML_GLU_OP_SWIGLU && value == first) {
-                op.kind = SWIGLU;
+            } else if (count == 2 && first->op == GGML_OP_GLU && value == first) {
+                const auto glu = ggml_get_glu_op(first);
+                if (glu != GGML_GLU_OP_SWIGLU && glu != GGML_GLU_OP_SITU)
+                    return false;
+                op.kind = glu == GGML_GLU_OP_SITU ? SITU : SWIGLU;
                 op.up   = first->src[1] ? first->src[1] : op.input;
                 if (!f32(op.up))
                     return false;
@@ -217,26 +221,26 @@ namespace SD_CUDA_NAMESPACE {
             const auto x = reinterpret_cast<uintptr_t>(a->data), y = reinterpret_cast<uintptr_t>(b->data);
             return x <= y ? y - x < ggml_nbytes(a) : x - y < ggml_nbytes(b);
         }
-        template <bool Swiglu = false, bool Normalize = false, bool Scaled = false, bool Sigmoid = false, bool RMS = false, bool Modulate = false>
+        template <bool Swiglu = false, bool Normalize = false, bool Scaled = false, bool Sigmoid = false, bool RMS = false, bool Modulate = false, bool Situ = false>
         static CUDAError launch(Plan& p, const Operation& op, int8_t* output, CUDAStream stream) {
             constexpr bool warp = Scaled || RMS || Modulate;
             constexpr int extra = Normalize ? 384 : RMS ? 256
                                                         : 128;
             if (!p.configured) {
-                auto status = cuda_set_shared_memory(quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS, Modulate>,
+                auto status = cuda_set_shared_memory(quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS, Modulate, Situ>,
                                                      int(p.device.shared_memory - extra));
                 if (status != cuda_success)
                     return status;
                 p.configured = true;
             }
-            const int threads    = Normalize ? 1024 : RMS                               ? (op.k <= 1024 ? 128 : op.k <= 6144 ? 256
-                                                                                                            : op.k <= 8192   ? 512
-                                                                                                                             : 1024)
-                                                  : Swiglu && !Sigmoid && op.k >= 16384 ? 512
-                                                                                        : 256;
+            const int threads    = Normalize ? 1024 : RMS                                                       ? (op.k <= 1024 ? 128 : op.k <= 6144 ? 256
+                                                                                                                                    : op.k <= 8192   ? 512
+                                                                                                                                                     : 1024)
+                                                  : (Situ ? op.k >= 8192 : Swiglu && !Sigmoid && op.k >= 16384) ? 512
+                                                                                                                : 256;
             const int64_t padded = (op.rows + 3) / 4 * 4;
             auto data            = [](const ggml_tensor* t) { return t ? static_cast<const float*>(t->data) : nullptr; };
-            quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS, Modulate><<<unsigned(op.rows), threads, size_t(op.k) * sizeof(float), stream>>>(
+            quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS, Modulate, Situ><<<unsigned(op.rows), threads, size_t(op.k) * sizeof(float), stream>>>(
                 data(op.input) + op.gate_offset, output, reinterpret_cast<float*>(output + op.k * padded), op.k, op.rows, op.k,
                 op.up ? data(op.up) + op.up_offset : nullptr, op.stride, op.up_stride, nullptr, nullptr, data(op.modulation), op.eps, op.scale, op.bias, data(op.weight), data(op.shift));
             return cuda_last_error();
@@ -273,6 +277,9 @@ namespace SD_CUDA_NAMESPACE {
                 case SWIGLU:
                 case SILU:
                     error = launch<true>(plan, op, output, stream);
+                    break;
+                case SITU:
+                    error = launch<true, false, false, false, false, false, true>(plan, op, output, stream);
                     break;
                 case SIGMOID:
                     error = launch<true, false, false, true>(plan, op, output, stream);

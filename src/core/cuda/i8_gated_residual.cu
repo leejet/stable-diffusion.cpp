@@ -35,10 +35,12 @@ namespace sd_i8_gated {
         }
     };
 
-    template <int M, int N, int WM>
+    template <int M, int N, int WM, int Stages = 4, int Band = 1>
     struct TileConfig {
-        using Tile = cutlass::gemm::GemmShape<M, N, 64>;
-        using Warp = cutlass::gemm::GemmShape<WM, 64, 64>;
+        using Tile                   = cutlass::gemm::GemmShape<M, N, 64>;
+        using Warp                   = cutlass::gemm::GemmShape<WM, 64, 64>;
+        static constexpr int kStages = Stages;
+        static constexpr int kBand   = Band;
     };
 
     enum Tile {
@@ -100,7 +102,7 @@ namespace sd_i8_gated {
     struct KernelTypes {
         using Tile         = typename Config::Tile;
         using Warp         = typename Config::Warp;
-        using Swizzle      = std::conditional_t<stream_k, BandedStreamK, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>>;
+        using Swizzle      = std::conditional_t<stream_k, BandedStreamK, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<Config::kBand>>;
         using Map          = cutlass::epilogue::threadblock::OutputTileThreadLayout<Tile, Warp, float, 4, 1>;
         using Col          = cutlass::epilogue::threadblock::VisitorColBroadcast<Map, float, cute::Stride<cute::_1, cute::_0, int>>;
         using Row          = cutlass::epilogue::threadblock::VisitorRowBroadcast<Map, float, cute::Stride<cute::_0, cute::_1, int>>;
@@ -139,7 +141,7 @@ namespace sd_i8_gated {
             cutlass::gemm::GemmShape<16, 8, 32>,
             Epilogue,
             Swizzle,
-            4,
+            Config::kStages,
             cutlass::arch::OpMultiplyAddSaturate>::GemmKernel;
         using Gemm = cutlass::gemm::device::GemmUniversalAdapter<Kernel>;
     };
@@ -147,6 +149,7 @@ namespace sd_i8_gated {
     struct DeviceInfo {
         int ordinal        = -1;
         int major          = 0;
+        int minor          = 0;
         int sms            = 0;
         int threads_per_sm = 0;
         size_t shared      = 0;
@@ -164,7 +167,7 @@ namespace sd_i8_gated {
         int ordinal          = query ? query(device) : -1;
         cudaDeviceProp props = {};
         if (ordinal >= 0 && cudaGetDeviceProperties(&props, ordinal) == cudaSuccess)
-            info = {ordinal, props.major, props.multiProcessorCount, props.maxThreadsPerMultiProcessor, size_t(props.sharedMemPerBlockOptin)};
+            info = {ordinal, props.major, props.minor, props.multiProcessorCount, props.maxThreadsPerMultiProcessor, size_t(props.sharedMemPerBlockOptin)};
         cache.emplace(device, info);
         return info;
     }
@@ -286,6 +289,10 @@ namespace sd_i8_gated {
         return op.rows >= 8192 ? configure<Config, false, true>(op, plan) : configure<Config, false, false>(op, plan);
     }
     static bool configure(const Operation& op, Plan& plan) {
+        if (plan.device.major == 8 && plan.device.minor == 9 && op.scale == 1.f &&
+            op.rows >= 4096 && op.rows < 8192 && op.n == 3072 && (op.k == 3072 || op.k == 8192) &&
+            configure<TileConfig<128, 128, 64, 3, 4>, false, false>(op, plan))
+            return true;
         auto try_tile = [&](Tile tile) {
             switch (tile) {
                 case TILE_128_256:
