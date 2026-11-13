@@ -428,6 +428,10 @@ bool read_safetensors_file(const std::string& file_path,
                         return false;
                     }
                 }
+                if (w4_kind == 0 && header_.find(module_name + ".weight_scale") == header_.end()) {
+                    set_error(error, "missing weight_scale for ComfyUI INT8 tensorwise weight '" + name + "'");
+                    return false;
+                }
                 tensor_storage.is_int8_tensorwise      = w4_kind == 0;
                 tensor_storage.w4_convrot_kind         = w4_kind;
                 tensor_storage.int8_convrot            = config->second.convrot;
