@@ -197,6 +197,7 @@ GGMLRunnerContext GGMLRunner::get_context(ggml_cgraph* graph) {
     runner_ctx.attn_scale            = attn_scale;
     runner_ctx.conv2d_direct_enabled = conv2d_direct_enabled;
     runner_ctx.conv3d_direct_enabled = conv3d_direct_enabled;
+    runner_ctx.vae_conv2d_enabled    = vae_conv2d_enabled;
     runner_ctx.circular_x_enabled    = circular_x_enabled;
     runner_ctx.circular_y_enabled    = circular_y_enabled;
     runner_ctx.weight_adapter        = weight_adapter;

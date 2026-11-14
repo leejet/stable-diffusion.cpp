@@ -256,6 +256,7 @@ typedef struct {
     int conditioning_cache_size;  // Maximum cached conditioning entries per context; 0 disables caching (default: 4)
     const char* flash_attn_mode;  // on/off/auto or module assignments (e.g. "auto,te=off"); NULL/empty honors legacy flags.
     const char* conv_direct_mode;  // on/off/auto or diffusion/vae/controlnet assignments; NULL/empty honors legacy flags.
+    bool vae_conv2d;  // Opt-in packed 2D convolution for Wan-style VAE decoding on Metal; may affect precision and memory use.
 } sd_ctx_params_t;
 
 typedef struct {
