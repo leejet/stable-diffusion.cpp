@@ -457,6 +457,13 @@ SDVersion ModelLoader::get_sd_version() const {
         return VERSION_MOSS_IMAGE;
     }
 
+    // Nucleus-Image (sparse MoE DiT): unique expert-choice MoE expert tensors + img_mod modulation
+    if (tensor_storage_map.count("model.diffusion_model.transformer_blocks.3.img_mlp.experts.gate_up_proj") &&
+        tensor_storage_map.count("model.diffusion_model.img_in.weight") &&
+        tensor_storage_map.count("model.diffusion_model.time_text_embed.timestep_embedder.linear_1.weight")) {
+        return VERSION_NUCLEUS_IMAGE;
+    }
+
     bool has_multiple_encoders = false;
     bool is_unet               = false;
 

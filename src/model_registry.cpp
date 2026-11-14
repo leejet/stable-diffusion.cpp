@@ -33,6 +33,7 @@ const std::vector<ModelDefinition>& lens_definitions();
 const std::vector<ModelDefinition>& iris_definitions();
 const std::vector<ModelDefinition>& sd_definitions();
 const std::vector<ModelDefinition>& moss_image_definitions();
+const std::vector<ModelDefinition>& nucleus_image_definitions();
 
 static const std::array<const ModelDefinition*, VERSION_COUNT>& model_definitions() {
     static const auto definitions = [] {
@@ -76,6 +77,7 @@ static const std::array<const ModelDefinition*, VERSION_COUNT>& model_definition
         append(iris_definitions());
         append(sd_definitions());
         append(moss_image_definitions());
+        append(nucleus_image_definitions());
         for (const auto* definition : result) {
             if (!definition)
                 throw std::logic_error("missing model registration");
