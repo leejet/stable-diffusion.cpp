@@ -5,6 +5,26 @@ transformer. The implementation supports text-to-audio-video (T2VA), optional
 first-frame conditioning (I2VA), first/last-frame conditioning (FL2VA), and
 image/video/audio reference conditioning (Ref2VA).
 
+## Supported variants
+
+Two H3 learned latent upscaler checkpoints are available, one folder per
+generation in
+[LBH-123-AI/Minimax_h3_latent_Upscaler](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler).
+Both load through `--hires-upscaler <file name without extension>` plus
+`--hires-upscalers-dir`, and the variant is detected from the checkpoint itself,
+so switching between them only changes the file name.
+
+| Checkpoint | fp16 size | When to use |
+| --- | --- | --- |
+| `minimax_h3_latent_upscaler_3d_conv_v1_fp16` | ~690 MB | full 3D temporal modelling across the frame stack; the larger of the two |
+| `minimax_h3_latent_upscaler_2d_conv_v1_fp16` | ~364 MB | lighter and faster; the economical choice for the small 1.x factors a hires second pass usually asks for |
+
+Neither changes the frame count or the packed audio latent, so the audio track
+survives the second pass. Both are scale-conditional in the same way (see the
+notes under the hires examples below); they differ in fine detail rather than in
+structure, so if the look matters for your prompt, compare them once before
+committing to one.
+
 ## Model files
 
 Pass the four MiniMax-H3 components separately:
@@ -68,6 +88,7 @@ are detected from their weights.
 | P-H3-Image text encoder (Qwen3-VL-4B with the text connector) | [Safetensors](https://huggingface.co/PrunaAI/P-H3-Image-Comfy/tree/main/text_encoders) | `--llm` | Use matching text encoder |
 | vae | [Safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/tree/main/vae) | `--vae` | Use matching VAE |
 | audio vae | [Safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/tree/main/vae) | `--audio-vae` | Required |
+| H3 latent upscaler | [3D-conv](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler/tree/main/minimax_h3_latent_upscaler_3d_conv_v1)<br>[2D-conv](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler/tree/main/minimax_h3_latent_upscaler_2d_conv_v1) | `--hires-upscalers-dir` | Optional; see [Supported variants](#supported-variants) |
 
 ## Usage
 
@@ -299,8 +320,9 @@ MiniMax-H3 supports `--hires` with two interchangeable second-stage upscalers:
   a H3-shaped learned latent upscaler checkpoint runs between the passes,
   like the LTX spatial upsampler. This is the sd.cpp equivalent of the
   two-sampler workflows used for H3 in node-based frontends (e.g. the
-  community 3D-conv latent upscaler from
+  community latent upscalers from
   [LBH-123-AI/Minimax_h3_latent_Upscaler](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler)).
+  See [Supported variants](#supported-variants) for the available checkpoints.
 
 Draft at a low megapixel count (e.g. 0.4 MP) and refine at a higher one
 (e.g. 0.8 MP) instead of paying for the full resolution in every step:
@@ -366,7 +388,7 @@ or with the learned upscaler:
   -M vid_gen ... `
   --hires-upscalers-dir ..\models\latent_upscale_models `
   --hires `
-  --hires-upscaler h3-latent-upscaler-3d `
+  --hires-upscaler minimax_h3_latent_upscaler_3d_conv_v1_fp16 `
   --hires-width 1216 `
   --hires-height 672 `
   --hires-steps 4 `
@@ -380,7 +402,7 @@ or with the learned upscaler:
   -M vid_gen ... \
   --hires-upscalers-dir ../models/latent_upscale_models \
   --hires \
-  --hires-upscaler h3-latent-upscaler-3d \
+  --hires-upscaler minimax_h3_latent_upscaler_3d_conv_v1_fp16 \
   --hires-width 1216 \
   --hires-height 672 \
   --hires-steps 4 \

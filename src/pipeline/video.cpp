@@ -1477,7 +1477,7 @@ namespace sd::pipeline {
         struct UpsamplerScope {
             ModelManager& manager;
             ModelLoader::FileId owned_source = 0;
-            std::unique_ptr<H3VUpsampler::H3LatentUpscalerRunner> runner;
+            std::unique_ptr<H3VUpsampler::H3LatentUpscalerRunnerBase> runner;
             std::vector<ggml_tensor*> params;
 
             ~UpsamplerScope() {
@@ -1504,20 +1504,21 @@ namespace sd::pipeline {
         }
         scope.owned_source = owns_source ? source_file : 0;
 
-        auto& upsampler                   = scope.runner;
-        upsampler                         = std::make_unique<H3VUpsampler::H3LatentUpscalerRunner>(sd->backend_for(SDBackendModule::UPSCALER),
-                                                                                                   model_manager->loader().get_tensor_storage_map(),
-                                                                                                   prefix,
-                                                                                                   model_manager);
-        const size_t max_graph_vram_bytes = sd->max_graph_vram_bytes_for_module(SDBackendModule::UPSCALER);
-        upsampler->set_max_graph_vram_bytes(max_graph_vram_bytes);
-        if (upsampler->model == nullptr) {
+        const String2TensorStorage& upscaler_tensors = model_manager->loader().get_tensor_storage_map();
+        const size_t max_graph_vram_bytes            = sd->max_graph_vram_bytes_for_module(SDBackendModule::UPSCALER);
+
+        scope.runner = H3VUpsampler::create_upscaler_runner(sd->backend_for(SDBackendModule::UPSCALER),
+                                                            upscaler_tensors,
+                                                            prefix,
+                                                            model_manager);
+        if (scope.runner == nullptr || !scope.runner->ready()) {
             LOG_ERROR("init H3 latent upsampler from metadata failed");
             return {};
         }
+        scope.runner->set_max_graph_vram_bytes(max_graph_vram_bytes);
 
         std::map<std::string, ggml_tensor*> tensors;
-        upsampler->get_param_tensors(tensors);
+        scope.runner->collect_params(tensors);
         for (const auto& entry : tensors) {
             scope.params.push_back(entry.second);
         }
@@ -1531,8 +1532,8 @@ namespace sd::pipeline {
             return {};
         }
 
-        sd::Tensor<float> upscaled = upsampler->compute(sd->n_threads, video_latent, target_width, target_height);
-        upsampler->runner_end();
+        sd::Tensor<float> upscaled = scope.runner->compute(sd->n_threads, video_latent, target_width, target_height);
+        scope.runner->runner_end();
         if (upscaled.empty()) {
             LOG_ERROR("H3 learned latent spatial upscale failed");
             return {};
