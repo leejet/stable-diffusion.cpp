@@ -125,8 +125,8 @@ namespace SD_CUDA_NAMESPACE {
                             if constexpr (dequantize) {
                                 gate_value = (float)((const int32_t*)src_row)[i] * activation_scales[row];
                                 up_value   = (float)((const int32_t*)up)[row * up_stride + i] * activation_scales[row];
-                                gate_value *= weight_scales[i];
-                                up_value *= weight_scales[k + i];
+                                gate_value *= weight_scales[(situ_gate ? k : 0) + i];
+                                up_value *= weight_scales[(situ_gate ? 0 : k) + i];
                             } else {
                                 gate_value = src_row[i];
                                 up_value   = up[row * up_stride + i];
