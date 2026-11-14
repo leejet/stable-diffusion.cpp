@@ -164,8 +164,9 @@ namespace SD_CUDA_NAMESPACE {
             }
         }
 
+        template <typename Input>
         static __global__ void convrot_group_amax_i8_cuda(
-            const float* src,
+            Input input,
             float* partial_max,
             int64_t k,
             int64_t groups,
@@ -180,11 +181,10 @@ namespace SD_CUDA_NAMESPACE {
             __shared__ float maxima[2];
             const int64_t row   = index / groups;
             const int64_t group = index - row * groups;
-            const float* input  = src + row * k + group * 256;
-            values[tid]         = input[tid] * (1.0f / 16.0f);
-            values[tid + 64]    = input[tid + 64] * (1.0f / 16.0f);
-            values[tid + 128]   = input[tid + 128] * (1.0f / 16.0f);
-            values[tid + 192]   = input[tid + 192] * (1.0f / 16.0f);
+#pragma unroll
+            for (int i = tid; i < 256; i += 64) {
+                values[i] = input.load(row, group * 256 + i, k) * (1.0f / 16.0f);
+            }
             __syncthreads();
 
 #pragma unroll
@@ -205,6 +205,9 @@ namespace SD_CUDA_NAMESPACE {
                 __syncthreads();
             }
 
+#pragma unroll
+            for (int i = tid; i < 256; i += 64)
+                input.store(row * k + group * 256 + i, values[i]);
             float value = fmaxf(fabsf(values[tid]), fabsf(values[tid + 64]));
             value       = fmaxf(value, fabsf(values[tid + 128]));
             value       = fmaxf(value, fabsf(values[tid + 192]));
@@ -217,6 +220,39 @@ namespace SD_CUDA_NAMESPACE {
                 partial_max[index] = fmaxf(maxima[0], maxima[1]);
             }
         }
+
+        struct ConvrotInput {
+            const float* values;
+
+            __device__ float load(int64_t row, int64_t col, int64_t width) const {
+                return values[row * width + col];
+            }
+            __device__ void store(int64_t, float) const {}
+        };
+
+#if defined(SD_CUDA_VENDOR_HIP)
+        struct SplitSwiGLUInput {
+            const int32_t* gate;
+            int32_t* up;
+            const float* row_scales;
+            const float* gate_scales;
+            const float* up_scales;
+
+            __device__ float load(int64_t row, int64_t col, int64_t width) const {
+                const int64_t index = row * width + col;
+                const float scale   = row_scales[row];
+                const float g       = __fmul_rn(__fmul_rn(float(gate[index]), scale), gate_scales[col]);
+                const float u       = __fmul_rn(__fmul_rn(float(up[index]), scale), up_scales[col]);
+                const float silu    = __fdiv_rn(g, __fadd_rn(1.0f, __ocml_exp_f32(-g)));
+                return __fmul_rn(silu, u);
+            }
+
+            __device__ void store(int64_t index, float value) const {
+                // Reuse the up accumulator after the block has read its entire tile.
+                up[index] = __float_as_int(value);
+            }
+        };
+#endif
 
         static __global__ void reduce_convrot_row_amax_i8_cuda(
             const float* partial_max,
@@ -247,6 +283,7 @@ namespace SD_CUDA_NAMESPACE {
             }
         }
 
+        template <bool pre_rotated = false>
         static __global__ void convrot_group_quantize_i8_cuda(
             const float* src,
             int8_t* dst,
@@ -266,28 +303,29 @@ namespace SD_CUDA_NAMESPACE {
             const int64_t group = index - row * groups;
             const float* input  = src + row * k + group * 256;
             int8_t* output      = dst + row * dst_stride + group * 256;
-            values[tid]         = input[tid] * (1.0f / 16.0f);
-            values[tid + 64]    = input[tid + 64] * (1.0f / 16.0f);
-            values[tid + 128]   = input[tid + 128] * (1.0f / 16.0f);
-            values[tid + 192]   = input[tid + 192] * (1.0f / 16.0f);
-            __syncthreads();
+            if constexpr (!pre_rotated) {
+#pragma unroll
+                for (int i = tid; i < 256; i += 64)
+                    values[i] = input[i] * (1.0f / 16.0f);
+                __syncthreads();
 
 #pragma unroll
-            for (int stride = 1; stride < 256; stride *= 4) {
-                const int base = (tid / stride) * 4 * stride + tid % stride;
-                const int i0   = base;
-                const int i1   = i0 + stride;
-                const int i2   = i1 + stride;
-                const int i3   = i2 + stride;
-                const float a  = values[i0];
-                const float b  = values[i1];
-                const float c  = values[i2];
-                const float d  = values[i3];
-                values[i0]     = a + b + c - d;
-                values[i1]     = a + b - c + d;
-                values[i2]     = a - b + c + d;
-                values[i3]     = -a + b + c + d;
-                __syncthreads();
+                for (int stride = 1; stride < 256; stride *= 4) {
+                    const int base = (tid / stride) * 4 * stride + tid % stride;
+                    const int i0   = base;
+                    const int i1   = i0 + stride;
+                    const int i2   = i1 + stride;
+                    const int i3   = i2 + stride;
+                    const float a  = values[i0];
+                    const float b  = values[i1];
+                    const float c  = values[i2];
+                    const float d  = values[i3];
+                    values[i0]     = a + b + c - d;
+                    values[i1]     = a + b - c + d;
+                    values[i2]     = a - b + c + d;
+                    values[i3]     = -a + b + c + d;
+                    __syncthreads();
+                }
             }
 
             const float row_scale = scales[row];
@@ -295,9 +333,15 @@ namespace SD_CUDA_NAMESPACE {
             const int indices[4]  = {tid, tid + 64, tid + 128, tid + 192};
 #pragma unroll
             for (int i = 0; i < 4; ++i) {
-                int value          = row_scale == 0.0f ? 0 : __float2int_rn(values[indices[i]] * inv_scale);
-                value              = max(-127, min(127, value));
-                output[indices[i]] = (int8_t)value;
+                float rotated;
+                if constexpr (pre_rotated) {
+                    rotated = __int_as_float(reinterpret_cast<const int32_t*>(input)[indices[i]]);
+                } else {
+                    rotated = values[indices[i]];
+                }
+                int value           = row_scale == 0.0f ? 0 : __float2int_rn(rotated * inv_scale);
+                value               = max(-127, min(127, value));
+                output[indices[i]]  = (int8_t)value;
             }
             if (group == 0 && tid == 0 && dst_stride != k) {
                 *((float*)(dst + row * dst_stride + k)) = row_scale;
@@ -507,6 +551,29 @@ namespace SD_CUDA_NAMESPACE {
             }
             return true;
         }
+
+        static void optimize_gated_residual(ggml_backend_dev_t device, ggml_cgraph* graph, void*) {
+            if (fusion_disabled())
+                return;
+            const int total = ggml_graph_n_nodes(graph);
+            for (int i = 2; i + 1 < total; ++i) {
+                const auto* mul = ggml_graph_node(graph, i);
+                if (mul->op != GGML_OP_MUL)
+                    continue;
+                const auto* mat = mul->src[0];
+                const auto* add = ggml_graph_node(graph, i + 1);
+                SDI8Operation op;
+                if (!sd_ggml_i8_describe(mat, &op) || !op.weight_scale || op.bias ||
+                    !match_gated_residual(mat, mul, add, op) || !supports(device, mat, nullptr))
+                    continue;
+                for (int j = i - 2; j >= 0 && j >= i - 32; --j) {
+                    if (ggml_graph_node(graph, j) == mat) {
+                        ggml_ext_graph_delay(graph, j, 1, i);
+                        break;
+                    }
+                }
+            }
+        }
 #endif
 
         static int match(ggml_backend_dev_t device, const ggml_cgraph* graph, int first, void*) {
@@ -652,7 +719,7 @@ namespace SD_CUDA_NAMESPACE {
             const auto x = reinterpret_cast<uintptr_t>(a->data), y = reinterpret_cast<uintptr_t>(b->data);
             return x <= y ? y - x < ggml_nbytes(a) : x - y < ggml_nbytes(b);
         }
-#ifdef SD_CUDA_I8_CUTLASS
+#if defined(SD_CUDA_I8_CUTLASS) || defined(SD_CUDA_VENDOR_HIP)
         static bool split_describe(ggml_backend_dev_t device, ggml_tensor* const* nodes, SDI8Operation& gate, SDI8Operation& up) {
             const auto* glu = nodes[2];
             if (glu->op != GGML_OP_GLU || ggml_get_glu_op(glu) != GGML_GLU_OP_SWIGLU || glu->op_params[1] != 0 ||
@@ -673,6 +740,8 @@ namespace SD_CUDA_NAMESPACE {
                     return false;
             return true;
         }
+#endif
+#ifdef SD_CUDA_I8_CUTLASS
         static int split_match(ggml_backend_dev_t device, const ggml_cgraph* graph, int first, void*) {
             auto* g = const_cast<ggml_cgraph*>(graph);
             if (fusion_disabled() || first + 2 >= ggml_graph_n_nodes(g))
@@ -780,9 +849,9 @@ namespace SD_CUDA_NAMESPACE {
                 quantize_convrot<<<unsigned(p.rows), threads, shared, stream>>>(src, dst, scales, p.k, p.rows, p.k);
             } else {
                 const int64_t groups = p.k / 256, total_groups = p.rows * groups;
-                convrot_group_amax_i8_cuda<<<unsigned(total_groups), 64, 0, stream>>>(src, partial, p.k, groups, total_groups);
+                convrot_group_amax_i8_cuda<<<unsigned(total_groups), 64, 0, stream>>>(ConvrotInput{src}, partial, p.k, groups, total_groups);
                 reduce_convrot_row_amax_i8_cuda<<<unsigned(p.rows), 256, 0, stream>>>(partial, scales, groups, p.rows);
-                convrot_group_quantize_i8_cuda<<<unsigned(total_groups), 64, 0, stream>>>(src, dst, scales, p.k, groups, total_groups, p.k);
+                convrot_group_quantize_i8_cuda<><<<unsigned(total_groups), 64, 0, stream>>>(src, dst, scales, p.k, groups, total_groups, p.k);
             }
             return cuda_last_error();
         }
@@ -984,6 +1053,108 @@ namespace SD_CUDA_NAMESPACE {
             return error == cuda_success ? GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
         }
 
+#if defined(SD_CUDA_VENDOR_HIP)
+        struct SplitConvrotPlan {
+            int64_t k, n, rows, padded;
+            size_t partial, output;
+        };
+
+        static int split_convrot_match(ggml_backend_dev_t device, const ggml_cgraph* graph, int first, void*) {
+            auto* g = const_cast<ggml_cgraph*>(graph);
+            if (fusion_disabled() || first + 3 >= ggml_graph_n_nodes(g))
+                return 0;
+            ggml_tensor* nodes[] = {ggml_graph_node(g, first), ggml_graph_node(g, first + 1), ggml_graph_node(g, first + 2), ggml_graph_node(g, first + 3)};
+            SDI8Operation gate, up;
+            int group;
+            if (!split_describe(device, nodes, gate, up) || !gate.packed ||
+                nodes[3]->src[0] != nodes[2] || !sd_ggml_convrot_describe(nodes[3], &group) || group != 256 ||
+                !convrot_supports(device, nodes[3], nullptr) ||
+                size_t(nodes[2]->ne[0]) * sizeof(float) + 128 <= cuda_device_info(device).shared_memory)
+                return 0;
+            return 4;
+        }
+
+        static ggml_status split_convrot_prepare(ggml_backend_t, ggml_tensor* const* nodes, int, void** state, size_t* workspace, void*) {
+            SDI8Operation op;
+            if (!sd_ggml_i8_describe(nodes[0], &op))
+                return GGML_STATUS_FAILED;
+            auto* p         = new SplitConvrotPlan{};
+            *state          = p;
+            p->rows         = ggml_nrows(nodes[2]);
+            p->padded       = (p->rows + 3) / 4 * 4;
+            p->n            = nodes[2]->ne[0];
+            p->k            = op.weight->ne[0];
+            size_t total    = 2 * size_t(p->n) * p->padded * sizeof(int32_t);
+            p->partial      = reserve(total, size_t(p->rows) * (p->n / 256) * sizeof(float));
+            const auto* dst = nodes[3];
+            p->output       = dst->data || dst->buffer || dst->view_src ? reserve(total, ggml_nbytes(dst)) : SIZE_MAX;
+            *workspace      = total;
+            return GGML_STATUS_SUCCESS;
+        }
+
+        static ggml_status split_convrot_execute(const ggml_ext_execution_context* execution, ggml_tensor* const* nodes, int, void* state, void*) {
+            const auto& p = *static_cast<const SplitConvrotPlan*>(state);
+            auto* dst     = nodes[3];
+            SDI8Operation gate, up;
+            if (!sd_ggml_i8_describe(nodes[2]->src[0], &gate) || !sd_ggml_i8_describe(nodes[2]->src[1], &up))
+                return GGML_STATUS_FAILED;
+            ggml_ext_gpu_context context;
+            if (!cuda_context(execution->backend, &context))
+                return GGML_STATUS_FAILED;
+            auto reg        = ggml_backend_dev_backend_reg(ggml_backend_get_device(execution->backend));
+            auto blas_query = reinterpret_cast<ggml_ext_gpu_blas_fn>(ggml_backend_reg_get_proc_address(reg, "ggml_ext_gpu_blas_v1"));
+            auto handle     = blas_query ? static_cast<hipblasHandle_t>(blas_query(execution->backend)) : nullptr;
+            if (!handle)
+                return GGML_STATUS_FAILED;
+
+            auto stream       = static_cast<CUDAStream>(context.stream);
+            auto* scratch     = static_cast<char*>(ggml_backend_buffer_get_base(execution->workspace));
+            auto* gate_accum  = reinterpret_cast<int32_t*>(scratch);
+            auto* up_accum    = gate_accum + p.n * p.padded;
+            const auto* input = static_cast<const int8_t*>(gate.input->data);
+            auto gemm         = [&](const SDI8Operation& op, int32_t* output) {
+                const HipI8Gemm g{int(p.n), int(p.padded), int(p.k), op.weight->data, input, output, handle, stream};
+#ifdef SD_HIP_I8_LT
+                if (hip_i8_gemm_lt(context.device, g))
+                    return true;
+#endif
+                return g.run_hipblas() == HIPBLAS_STATUS_SUCCESS;
+            };
+            if (!gemm(gate, gate_accum) || !gemm(up, up_accum))
+                return GGML_STATUS_FAILED;
+
+            bool alias = false;
+            for (const auto* tensor : {gate.input, gate.weight, up.weight, gate.weight_scale, up.weight_scale})
+                alias |= overlaps(dst, tensor);
+            if (alias && p.output == SIZE_MAX)
+                return GGML_STATUS_FAILED;
+            auto* output = static_cast<int8_t*>(alias ? scratch + p.output : dst->data);
+            if (p.padded > p.rows && cuda_memset_async(output + p.n * p.rows, 0, size_t(p.n) * (p.padded - p.rows), stream) != cuda_success)
+                return GGML_STATUS_FAILED;
+            auto* row_scales        = reinterpret_cast<float*>(output + p.n * p.padded);
+            auto* partial           = reinterpret_cast<float*>(scratch + p.partial);
+            const auto groups       = p.n / 256;
+            const auto total_groups = p.rows * groups;
+            const SplitSwiGLUInput glu{gate_accum, up_accum, reinterpret_cast<const float*>(input + p.k * p.padded),
+                                       static_cast<const float*>(gate.weight_scale->data), static_cast<const float*>(up.weight_scale->data)};
+            convrot_group_amax_i8_cuda<<<unsigned(total_groups), 64, 0, stream>>>(glu, partial, p.n, groups, total_groups);
+            if (cuda_last_error() != cuda_success)
+                return GGML_STATUS_FAILED;
+            reduce_convrot_row_amax_i8_cuda<<<unsigned(p.rows), 256, 0, stream>>>(partial, row_scales, groups, p.rows);
+            if (cuda_last_error() != cuda_success)
+                return GGML_STATUS_FAILED;
+            convrot_group_quantize_i8_cuda<true><<<unsigned(total_groups), 64, 0, stream>>>(
+                reinterpret_cast<const float*>(up_accum), output, row_scales, p.n, groups, total_groups, p.n);
+            if (cuda_last_error() != cuda_success || (alias && cuda_copy_async(dst->data, output, ggml_nbytes(dst), stream) != cuda_success))
+                return GGML_STATUS_FAILED;
+            return GGML_STATUS_SUCCESS;
+        }
+
+        static void split_convrot_destroy(void* state, void*) {
+            delete static_cast<SplitConvrotPlan*>(state);
+        }
+#endif
+
     }
 
     void register_i8(ggml_backend_dev_t device) {
@@ -1002,9 +1173,13 @@ namespace SD_CUDA_NAMESPACE {
         desc.priority = 240;
         desc.supports = nullptr;
         desc.match    = sd_i8_cuda::match;
+#if defined(SD_CUDA_VENDOR_HIP)
+        desc.optimize = sd_i8_cuda::optimize_gated_residual;
+#endif
         GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
         desc.priority  = 100;
         desc.match     = nullptr;
+        desc.optimize  = nullptr;
         desc.name      = "sd.quantize_i8_convrot." SD_CUDA_NAME ".v1";
         desc.custom_op = sd_ggml_convrot_op();
         desc.supports  = sd_i8_cuda::convrot_supports;
@@ -1018,6 +1193,17 @@ namespace SD_CUDA_NAMESPACE {
         desc.prepare   = sd_i8_cuda::split_prepare;
         desc.execute   = sd_i8_cuda::split_execute;
         desc.destroy   = sd_i8_cuda::split_destroy;
+        GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
+#endif
+#if defined(SD_CUDA_VENDOR_HIP)
+        desc.name      = "sd.linear_i8.swiglu_split_convrot.hip.v1";
+        desc.custom_op = sd_ggml_i8_op();
+        desc.priority  = 260;
+        desc.supports  = nullptr;
+        desc.match     = sd_i8_cuda::split_convrot_match;
+        desc.prepare   = sd_i8_cuda::split_convrot_prepare;
+        desc.execute   = sd_i8_cuda::split_convrot_execute;
+        desc.destroy   = sd_i8_cuda::split_convrot_destroy;
         GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
 #endif
     }
