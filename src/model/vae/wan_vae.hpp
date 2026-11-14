@@ -16,6 +16,11 @@ namespace WAN {
 
     constexpr int CACHE_T = 2;
 
+    /**
+     * Pack F32 [W, H, T, C] windows as [W, H, K*C, T-K+1] for Conv2D.
+     * Requires 0 < K <= T; channel order k + K*c matches Conv3D weights.
+     * Returned graph tensors belong to ctx; input values are not modified.
+     */
     static ggml_tensor* pack_temporal_channels(ggml_context* ctx, ggml_tensor* input, int64_t kernel_depth) {
         GGML_ASSERT(input->type == GGML_TYPE_F32 && kernel_depth > 0 && input->ne[2] >= kernel_depth);
         if (!ggml_is_contiguous(input)) {
@@ -72,6 +77,11 @@ namespace WAN {
         }
 
     private:
+        /**
+         * Check the Metal, tensor-type and temporal-layout constraints for packing.
+         * x must already include causal padding and any cached frames. This does
+         * not check the caller's opt-in or whether the graph is decoding.
+         */
         bool supports_packed_conv2d(const GGMLRunnerContext* ctx, const ggml_tensor* x, const ggml_tensor* w) const {
             return std::strncmp(ggml_backend_name(ctx->backend), "MTL", 3) == 0 &&
                    x->ne[3] == in_channels && w->type == GGML_TYPE_F16 && x->type == GGML_TYPE_F32 &&
