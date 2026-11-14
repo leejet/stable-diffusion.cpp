@@ -1081,7 +1081,8 @@ namespace Rope {
                                              ggml_tensor* pe,
                                              ggml_tensor* mask,
                                              float kv_scale        = 1.0f,
-                                             bool rope_interleaved = true) {
+                                             bool rope_interleaved = true,
+                                             int64_t ref_start     = -1) {
         // q,k,v: [N, L, n_head, d_head]
         // pe: [L, d_head/2, 2, 2]
         // return: [N, L, n_head*d_head]
@@ -1089,6 +1090,23 @@ namespace Rope {
 
         q = apply_rope(ctx, q, pe, rope_interleaved);  // [N*n_head, L, d_head]
         k = apply_rope(ctx, k, pe, rope_interleaved);  // [N*n_head, L, d_head]
+
+        auto c = ctx->ggml_ctx;
+        if (ref_start >= 0 && mask == nullptr && q->ne[1] > ref_start) {
+            // q rows [ref_start, L) are reference tokens: they attend ONLY to k/v rows [ref_start, L).
+            // Body rows [0, ref_start) attend to everything. Refs sit at the END of the sequence.
+            // Mirrors ComfyUI's MOSS-Image reference_attention; two attention calls instead of a mask.
+            // q/k are contiguous 3D [d_head, L, n_head*N] after apply_rope (slice along ne[1]);
+            // v keeps its pre-rope 4D layout [d_head, n_head, L, N] (slice along ne[2]).
+            auto q_body = ggml_view_3d(c, q, q->ne[0], ref_start, q->ne[2], q->nb[1], q->nb[2], 0);
+            auto q_ref  = ggml_view_3d(c, q, q->ne[0], q->ne[1] - ref_start, q->ne[2], q->nb[1], q->nb[2], ref_start * q->nb[1]);
+            auto k_ref  = ggml_view_3d(c, k, k->ne[0], k->ne[1] - ref_start, k->ne[2], k->nb[1], k->nb[2], ref_start * k->nb[1]);
+            auto v_ref  = ggml_view_4d(c, v, v->ne[0], v->ne[1], v->ne[2] - ref_start, v->ne[3],
+                                       v->nb[1], v->nb[2], v->nb[3], ref_start * v->nb[2]);
+            auto body   = ggml_ext_attention_ext(ctx, q_body, k, v, n_head, nullptr, true, ctx->flash_attn_enabled, kv_scale);
+            auto refs   = ggml_ext_attention_ext(ctx, q_ref, k_ref, v_ref, n_head, nullptr, true, ctx->flash_attn_enabled, kv_scale);
+            return ggml_concat(c, body, refs, 1);
+        }
 
         auto x = ggml_ext_attention_ext(ctx, q, k, v, n_head, mask, true, ctx->flash_attn_enabled, kv_scale);  // [N, L, n_head*d_head]
         return x;

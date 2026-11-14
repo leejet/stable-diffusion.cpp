@@ -21,6 +21,7 @@ Depending on the architecture, different models handle reference images differen
 | [**LLaDA-Image**](../models/llada_image.md#image-editing) | `llada_image` |
 | [**Fibo 2.0 Dev / Edit Turbo**](../models/fibo2.md#examples) | `fibo2` |
 | **Anima (Community Edit LoRAs)** | `cosmos_reference` |
+| **MOSS-Image (Community Edit LoRA)** | `moss_edit` |
 
 Stable-diffusion.spp also supports basic Unet-based editing models like instruct-pix2pix or CosXL-Edit. This document is not about those.
 
@@ -59,6 +60,7 @@ The `--ref-image-args` argument accepts a comma-separated list of key-value pair
 | `mage_flow` | Mage-Flow-Edit |
 | `krea2_edit` | Specifically for [lbouaraba/krea2edit](https://huggingface.co/conradlocke/krea2-identity-edit). (or similar) |
 | `cosmos_reference` | For Anima |
+| `moss_edit` | MOSS-Image Community Edit LoRA (FLUX.2-VAE refs into the DiT at t=0) |
 | `default` | Uses the automatic detection based on model architecture. |
 
 ---
@@ -73,13 +75,14 @@ If presets are insufficient, you can manually configure the following parameters
 | `pass_to_vlm` | bool | Whether reference images are passed to the VLM encoder. | `true`, `false` |
 | `pass_to_dit` | bool | Whether VAE-encoded references are passed directly to the DiT. | `true`, `false` |
 | `ref_index_mode` | string | Behavior of the RoPE index. | `fixed`, `increase`, `decrease` |
-| `force_ref_timestep_zero` | bool | Forces timestep=0 for reference tokens. | `true`, `false` (Krea2 only) |
+| `force_ref_timestep_zero` | bool | Forces timestep=0 for reference tokens. | `true`, `false` (Krea2, MOSS-Image) |
 | `resize_before_vae` | bool | Whether reference images are resized before VAE encoding. | `true`, `false` |
 | `resize_vae_to_target` | bool | Use output dimensions for every reference, overriding area-based sizing. | `true`, `false` |
 | `resize_single_ref_to_target` | bool | Use output dimensions when exactly one reference is supplied. | `true`, `false` |
 | `vae_size_buckets` | bool | Choose aligned dimensions within ±10% of the requested area, minimizing aspect-ratio cropping. Ignored when using output dimensions. | `true`, `false` |
 | `vae_center_crop` | bool | Scale to cover the selected dimensions with Lanczos, then center-crop. Otherwise resize directly. | `true`, `false` |
 | `vae_input_max_pixels` | int | VAE area budget, also capped by output area in ordinary resizing. With size buckets, this is the target area and output area does not cap it. | Integer |
+| `vae_input_max_edge` | int | Cap the reference long edge at N px before VAE encoding (aspect ratio preserved, 16-aligned). Overrides the area-based sizing when set. | Integer |
 | `vlm_use_vae_input` | bool | Reuse the resized/cropped VAE input for the VLM, before the VLM's own resize. Has no effect when `resize_before_vae=false`. | `true`, `false` |
 | `vlm_resize_mode` | string | How to resize VLM reference inputs. | `longest_side`, `area`, `none` |
 | `vlm_max_size` | int | Maximum VLM input size; interpreted according to `vlm_resize_mode`. | Integer |
@@ -106,6 +109,8 @@ For a technical overview of how each preset is configured, see the table below.
 | `krea2_ostris_edit`| Yes | `increase` | `area` | `force_ref_timestep_zero = true` |
 | `krea2_edit` | Yes | `increase` | `longest` | `vlm_size = 768` |
 | `cosmos_reference` | No | `fixed` | `none` | `resize_before_vae = false` |
+| `moss_edit` | No | `increase` | `none` | `force_ref_timestep_zero = true`, `vae_input_max_edge = 1024` |
+
 
 **Additional Default Notes:**
 - **VLM Input Sizes:** For most presets, `vlm_max_size` and `vlm_min_size` are set to `-1`, meaning the values are model-dependent and handled automatically. In `area` mode they represent pixel area; in `longest_side` mode they represent a side length in pixels.

@@ -3251,8 +3251,11 @@ struct LLMEmbedder : public Conditioner {
         } else if (version == VERSION_MOSS_IMAGE) {
             prompt_template_encode_start_idx = 0;
             max_length                       = 4096;
-            prompt                           = "<|im_start|>user\n" + conditioner_params.text + "<|im_end|>\n<|im_start|>assistant\n<think>\n";
-            prompt_attn_range                = {0, 0};
+            prompt                           = "<|im_start|>user\n";
+            prompt_attn_range.first = static_cast<int>(prompt.size());
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+            prompt += "<|im_end|>\n<|im_start|>assistant\n<think>\n";
         } else if (sd_version_is_flux3(version)) {
             prompt_template_encode_start_idx = 0;
             max_length                       = 4096;

@@ -3241,6 +3241,11 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
                 rejected_keys.insert(key);
             }
+        } else if (key == "vae_input_max_edge") {
+            if (!parse_strict_int(value, params.vae_input_max_edge)) {
+                LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+                rejected_keys.insert(key);
+            }
         } else if (key == "vlm_resize_mode") {
             if (value == "longest_side") {
                 params.vlm_resize_mode = RefImageResizeMode::LONGEST_SIDE;
@@ -3294,8 +3299,8 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
             break;
         }
     }
-    if (params.force_ref_timestep_zero && !sd_version_is_krea2(version)) {
-        LOG_WARN("force_ref_timestep_zero is only supported by Krea2 architecture for now");
+    if (params.force_ref_timestep_zero && !sd_version_is_krea2(version) && version != VERSION_MOSS_IMAGE) {
+        LOG_WARN("force_ref_timestep_zero is only supported by Krea2 and MOSS-Image for now");
     }
     if (version == VERSION_MINIMAX_H3) {
         // H3 consumes references as VAE latents in its own packed sequence rather than

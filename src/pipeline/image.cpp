@@ -390,21 +390,34 @@ namespace sd::pipeline {
                     vae_width  = request->width;
                     vae_height = request->height;
                 } else {
-                    int default_pixels = sd->version == VERSION_QWEN_IMAGE_2_1 ? request->width * request->height : 1024 * 1024;
-                    int target_pixels  = ref_image_params.vae_input_max_pixels > 0 ? ref_image_params.vae_input_max_pixels : default_pixels;
-                    if (ref_image_params.vae_size_buckets) {
-                        auto size  = sd::select_image_size_bucket(static_cast<int>(ref_images[i].shape()[0]), static_cast<int>(ref_images[i].shape()[1]), target_pixels, factor, request->width, request->height);
-                        vae_width  = size.first;
-                        vae_height = size.second;
+                    if (ref_image_params.vae_input_max_edge > 0) {
+                        // Long-edge cap (ComfyUI MOSS-Image-Edit parity): scale down so the
+                        // longest edge is at most vae_input_max_edge px, preserving aspect ratio.
+                        double edge_scale = std::min(1.0,
+                            double(ref_image_params.vae_input_max_edge) /
+                            double(std::max(ref_images[i].shape()[0], ref_images[i].shape()[1])));
+                        vae_width  = double(ref_images[i].shape()[0]) * edge_scale;
+                        vae_height = double(ref_images[i].shape()[1]) * edge_scale;
                     } else {
-                        int vae_image_size = std::min(target_pixels, request->width * request->height);
-                        vae_width          = sqrt(vae_image_size * ref_images[i].shape()[0] / ref_images[i].shape()[1]);
-                        vae_height         = vae_width * ref_images[i].shape()[1] / ref_images[i].shape()[0];
+                        int default_pixels = sd->version == VERSION_QWEN_IMAGE_2_1 ? request->width * request->height : 1024 * 1024;
+                        int target_pixels  = ref_image_params.vae_input_max_pixels > 0 ? ref_image_params.vae_input_max_pixels : default_pixels;
+                        if (ref_image_params.vae_size_buckets) {
+                            auto size  = sd::select_image_size_bucket(static_cast<int>(ref_images[i].shape()[0]), static_cast<int>(ref_images[i].shape()[1]), target_pixels, factor, request->width, request->height);
+                            vae_width  = size.first;
+                            vae_height = size.second;
+                        } else {
+                            int vae_image_size = std::min(target_pixels, request->width * request->height);
+                            vae_width          = sqrt(vae_image_size * ref_images[i].shape()[0] / ref_images[i].shape()[1]);
+                            vae_height         = vae_width * ref_images[i].shape()[1] / ref_images[i].shape()[0];
+                        }
                     }
                 }
 
                 vae_height = round(vae_height / factor) * factor;
                 vae_width  = round(vae_width / factor) * factor;
+                // Never produce a sub-16px axis (ComfyUI's max(16, ...) floor).
+                vae_height = std::max(double(factor), vae_height);
+                vae_width  = std::max(double(factor), vae_width);
 
                 auto resized_ref_img = ref_image_params.vae_center_crop
                                            ? sd::resize_and_center_crop(ref_images[i], static_cast<int>(vae_width), static_cast<int>(vae_height))
