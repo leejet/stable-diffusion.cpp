@@ -21,25 +21,6 @@ git pull origin master
 git submodule update --init --recursive
 ```
 
-## MSVC compilation parallelism
-
-MSVC builds limit parallel C/C++ compilation within each project by default.
-For `n` logical processors, the limit is `n` when `n <= 2`, `n - 1` when
-`3 <= n <= 8`, and `n - 2` when `n > 8`. The default is calculated when the
-build directory is first configured with this setting. Override it with
-`-DSD_MSVC_MP_COUNT=4`, or pass `-USD_MSVC_MP_COUNT` to recalculate it.
-
-For Visual Studio builds, keep project-level parallelism at one to avoid
-multiplying the per-project limit:
-
-```shell
-cmake --build build --config Release --parallel 1
-```
-
-This setting controls MSVC's `/MP` option, not CUDA compiler parallelism or a
-hard CPU usage limit. Other build tools, such as Ninja, schedule compilation
-jobs separately; use `cmake --build build --parallel N` to limit those jobs.
-
 ## Selecting a GGML source tree
 
 By default, sd.cpp builds the patched GGML submodule in `ggml/`. To build with
@@ -196,9 +177,8 @@ are not on the system library search path, add `$ROCM_PATH/lib` and
 
 **Windows**
 
-Install Visual Studio 2022 C++ build tools with the Windows SDK, CMake, and
-Ninja. Open an x64 **Developer PowerShell for VS 2022**. The Windows HIP build
-uses ROCm Clang with Ninja; the Visual Studio generator is not supported.
+Follow the Windows environment setup in [Ninja](#ninja). The Windows HIP build
+requires ROCm Clang with Ninja; the Visual Studio generator is not supported.
 
 Set `HIP_PATH` to the SDK root. The HIP SDK installer normally sets this variable;
 for [ROCm wheels](https://github.com/ROCm/TheRock/blob/main/RELEASES.md), run
@@ -278,10 +258,8 @@ Currently, it supports only Adreno GPUs and is primarily optimized for Q4_0 type
 
 To build for Windows ARM please refers to [Windows 11 Arm64](https://github.com/ggml-org/llama.cpp/blob/master/docs/backend/OPENCL.md#windows-11-arm64)
 
-Building for Android:
-
-  Android NDK:
-       Download and install the Android NDK from the [official Android developer site](https://developer.android.com/ndk/downloads).
+For Android, prepare [Ninja](#ninja) and install the Android NDK from the
+[official Android developer site](https://developer.android.com/ndk/downloads).
 
 Setup OpenCL Dependencies for NDK:
 
@@ -313,7 +291,7 @@ You need to provide OpenCL headers and the ICD loader library to your NDK sysroo
       -DANDROID_PLATFORM=24 \
       -DANDROID_STL=c++_shared
 
-    ninja
+    cmake --build .
     # Replace <YOUR_NDK_PATH>
     # e.g., cp libOpenCL.so /path/to/android-ndk-r26c/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android
     sudo cp libOpenCL.so <YOUR_NDK_PATH>/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android
@@ -334,7 +312,7 @@ cmake .. -G Ninja \
   -DGGML_OPENMP=OFF \
   -DSD_OPENCL=ON
 
-ninja
+cmake --build .
 ```
 *(Note: Don't forget to include `LD_LIBRARY_PATH=/vendor/lib64` in your command line before running the binary)*
 
@@ -354,3 +332,89 @@ cmake .. -DSD_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SY
 
 cmake --build . --config Release
 ```
+
+## Build tools and compiler cache
+
+The settings in this section can be combined with the backend options in
+this guide.
+
+### Ninja
+
+Install Ninja and make sure `ninja --version` works in your build terminal.
+For native Windows builds with MSVC or ROCm Clang, install Visual Studio
+2022 C++ build tools with the Windows SDK, CMake, and Ninja, then open an
+x64 **Developer PowerShell for VS 2022**.
+
+From the repository root, configure and build a Release version with:
+
+```shell
+cmake -S . -B build-ninja -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build-ninja --parallel 8
+```
+
+This builds the CPU backend by default. Add backend options such as
+`-DSD_CUDA=ON` or `-DSD_VULKAN=ON` to the configure command as needed.
+With MSVC, you can explicitly select the compiler by adding
+`-DCMAKE_C_COMPILER=cl.exe -DCMAKE_CXX_COMPILER=cl.exe`.
+Adjust `--parallel 8` for your available CPU and memory resources.
+
+Use a separate build directory when switching from another CMake generator,
+such as Visual Studio. With this Ninja generator, select the build type at
+configure time using `CMAKE_BUILD_TYPE`.
+
+### ccache (optional)
+
+Install [ccache](https://ccache.dev/download.html) and add it to `PATH`.
+Check that it is available and optionally set a cache size limit:
+
+```shell
+ccache --version
+ccache --max-size=20G
+```
+
+To cache C and C++ compilation, configure with compiler launchers:
+
+```shell
+cmake -S . -B build-ninja -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+cmake --build build-ninja --parallel 8
+ccache --show-stats
+```
+
+For CUDA builds, also add `-DSD_CUDA=ON` and
+`-DCMAKE_CUDA_COMPILER_LAUNCHER=ccache` to the configure command so CUDA
+compilation is cached as well. Keep any other backend or compiler options
+used for your build.
+
+These [compiler launcher settings](https://cmake.org/cmake/help/latest/prop_tgt/LANG_COMPILER_LAUNCHER.html)
+work with Ninja and Makefile generators. The Visual Studio generator does
+not use them.
+
+The first compilation populates the cache. After a successful build, you can
+check reuse by rebuilding the same configuration with the cache intact:
+
+```shell
+ccache --zero-stats
+cmake --build build-ninja --clean-first --parallel 8
+ccache --show-stats
+```
+
+Look for cache hits in the statistics. A normal incremental build with no
+changed files skips compilation and does not produce new cache hits.
+
+### MSVC compilation parallelism
+
+MSVC builds limit parallel C/C++ compilation within each project by default.
+For `n` logical processors, the limit is `n` when `n <= 2`, `n - 1` when
+`3 <= n <= 8`, and `n - 2` when `n > 8`. The default is calculated when the
+build directory is first configured with this setting. Override it with
+`-DSD_MSVC_MP_COUNT=4`, or pass `-USD_MSVC_MP_COUNT` to recalculate it.
+
+For Visual Studio builds, keep project-level parallelism at one to avoid
+multiplying the per-project limit:
+
+```shell
+cmake --build build --config Release --parallel 1
+```
+
+This setting controls MSVC's `/MP` option, not CUDA compiler parallelism or a
+hard CPU usage limit. For Ninja job limits, see [Ninja](#ninja).
