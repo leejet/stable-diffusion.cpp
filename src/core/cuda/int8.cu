@@ -9,7 +9,7 @@ struct SDI8CudaGemmPlan;
 
 #include "runtime.h"
 #if defined(SD_CUDA_VENDOR_HIP)
-#include <hipblas/hipblas.h>
+#include "hip_i8_gemm.h"
 #elif !defined(SD_CUDA_VENDOR_MUSA)
 #include <cublas_v2.h>
 #endif
@@ -362,6 +362,39 @@ namespace SD_CUDA_NAMESPACE {
             dst[index] = value;
         }
 
+#if defined(SD_CUDA_VENDOR_HIP)
+        static __device__ __forceinline__ float dequantize_gated_residual(int32_t accum, float row_scale, float weight_scale, float gate, float residual) {
+            const float value = __fmul_rn(__fmul_rn(float(accum), row_scale), weight_scale);
+            return __fadd_rn(__fmul_rn(value, gate), residual);
+        }
+
+        static __global__ void dequantize_gated_residual_vec4(
+            const int4* accum,
+            const float* scales,
+            const float4* weight_scales,
+            const float4* gates,
+            const float4* residual,
+            float4* dst,
+            int64_t n4,
+            int64_t rows) {
+            const int64_t col = int64_t(blockIdx.x) * blockDim.x + threadIdx.x;
+            const int64_t row = blockIdx.y + int64_t(blockIdx.z) * 65535;
+            if (col >= n4 || row >= rows)
+                return;
+
+            const int64_t index = row * n4 + col;
+            const int4 a        = accum[index];
+            const float scale   = scales[row];
+            const float4 w      = weight_scales[col];
+            const float4 g      = gates[col];
+            const float4 r      = residual[index];
+            dst[index]          = make_float4(dequantize_gated_residual(a.x, scale, w.x, g.x, r.x),
+                                              dequantize_gated_residual(a.y, scale, w.y, g.y, r.y),
+                                              dequantize_gated_residual(a.z, scale, w.z, g.z, r.z),
+                                              dequantize_gated_residual(a.w, scale, w.w, g.w, r.w));
+        }
+#endif
+
         static bool aligned(const ggml_tensor* tensor, size_t alignment = 4) {
             if (!tensor)
                 return true;
@@ -439,6 +472,7 @@ namespace SD_CUDA_NAMESPACE {
         enum Kind { MAT,
                     QUANTIZE,
                     GATED,
+                    GATED_RESIDUAL,
                     SWIGLU_QUANTIZE,
                     CONCAT };
         static bool fusion_disabled() {
@@ -452,6 +486,29 @@ namespace SD_CUDA_NAMESPACE {
                    (op.input->type == GGML_TYPE_F32 || (aligned(op.input, 16) && aligned(op.input_scale, 16)));
         }
 #endif
+        static const ggml_tensor* residual_input(const ggml_tensor* mul, const ggml_tensor* add) {
+            return add->src[0] == mul ? add->src[1] : add->src[1] == mul ? add->src[0]
+                                                                         : nullptr;
+        }
+
+#if defined(SD_CUDA_VENDOR_HIP)
+        static bool match_gated_residual(const ggml_tensor* mat, const ggml_tensor* mul, const ggml_tensor* add, const SDI8Operation& op) {
+            if (mul->op != GGML_OP_MUL || mul->src[0] != mat || add->op != GGML_OP_ADD || !aligned(op.weight_scale, 16))
+                return false;
+            const auto* gate     = mul->src[1];
+            const auto* residual = residual_input(mul, add);
+            if (!gate || gate == mat || gate->ne[0] != mat->ne[0] || ggml_nelements(gate) != mat->ne[0] ||
+                !residual || residual == mat || residual == mul)
+                return false;
+            for (const auto* tensor : {mat, mul, add, gate, residual}) {
+                if (tensor->type != GGML_TYPE_F32 || !ggml_is_contiguous(tensor) || !aligned(tensor, 16) ||
+                    (tensor != gate && !ggml_are_same_shape(mat, tensor)))
+                    return false;
+            }
+            return true;
+        }
+#endif
+
         static int match(ggml_backend_dev_t device, const ggml_cgraph* graph, int first, void*) {
             auto* g = const_cast<ggml_cgraph*>(graph);
             if (fusion_disabled() || first + 1 >= ggml_graph_n_nodes(g))
@@ -461,6 +518,10 @@ namespace SD_CUDA_NAMESPACE {
             if (!supports(device, mat, nullptr) || !sd_ggml_i8_describe(mat, &op) || !op.weight_scale || op.bias)
                 return 0;
             const auto* next = ggml_graph_node(g, first + 1);
+#if defined(SD_CUDA_VENDOR_HIP)
+            if (first + 2 < ggml_graph_n_nodes(g) && match_gated_residual(mat, next, ggml_graph_node(g, first + 2), op))
+                return 3;
+#endif
             if (next->op == GGML_OP_CONCAT && next->src[1] == mat && next->src[0] != mat && next->op_params[0] == 1 &&
                 next->type == GGML_TYPE_F32 && mat->ne[2] == 1 && mat->ne[3] == 1 &&
                 next->ne[2] == 1 && next->ne[3] == 1 && ggml_is_contiguous(next) && ggml_is_contiguous(next->src[0]))
@@ -470,7 +531,8 @@ namespace SD_CUDA_NAMESPACE {
                 ggml_nelements(next) > int64_t(INT_MAX) * 256)
                 return 0;
             const auto activation = ggml_get_glu_op(next);
-            if (activation == GGML_GLU_OP_SITU && next->op_params[1] != 0) {
+            const bool situ       = activation == GGML_GLU_OP_SITU && next->op_params[1] != 0;
+            if (situ) {
 #ifdef SD_CUDA_I8_CUTLASS
                 if (!next->data && !next->buffer && !next->view_src && cutlass_compatible(op, next)) {
                     size_t workspace     = 0;
@@ -480,9 +542,11 @@ namespace SD_CUDA_NAMESPACE {
                     return supported ? 2 : 0;
                 }
 #endif
+#if !defined(SD_CUDA_VENDOR_HIP)
                 return 0;
+#endif
             }
-            if (activation != GGML_GLU_OP_SWIGLU || next->op_params[1] != 0)
+            if (!situ && (activation != GGML_GLU_OP_SWIGLU || next->op_params[1] != 0))
                 return 0;
             if (first + 2 < ggml_graph_n_nodes(g)) {
                 const auto* quant = ggml_graph_node(g, first + 2);
@@ -504,7 +568,7 @@ namespace SD_CUDA_NAMESPACE {
                     return 3;
                 }
             }
-            return 2;
+            return situ ? 0 : 2;
         }
         struct Plan {
             ggml_ext_gpu_device_info device;
@@ -529,7 +593,7 @@ namespace SD_CUDA_NAMESPACE {
             *state         = p;
             auto device    = ggml_backend_get_device(backend);
             p->device      = cuda_device_info(device);
-            p->kind        = !mat ? QUANTIZE : count == 3              ? SWIGLU_QUANTIZE
+            p->kind        = !mat ? QUANTIZE : count == 3              ? (dst->op == GGML_OP_ADD ? GATED_RESIDUAL : SWIGLU_QUANTIZE)
                                            : count == 1                ? MAT
                                            : dst->op == GGML_OP_CONCAT ? CONCAT
                                                                        : GATED;
@@ -538,7 +602,7 @@ namespace SD_CUDA_NAMESPACE {
             p->rows        = mat ? ggml_nrows(nodes[0]) : ggml_nrows(dst->src[0]);
             p->padded      = (p->rows + 3) / 4 * 4;
             p->group       = mat ? op.group_size : 0;
-            p->situ        = p->kind == GATED && ggml_get_glu_op(dst) == GGML_GLU_OP_SITU;
+            p->situ        = (p->kind == GATED || p->kind == SWIGLU_QUANTIZE) && ggml_get_glu_op(nodes[1]) == GGML_GLU_OP_SITU;
             if (!mat)
                 sd_ggml_convrot_describe(dst, &p->group);
             size_t total = 0;
@@ -741,10 +805,10 @@ namespace SD_CUDA_NAMESPACE {
             }
             dst[i] = situ ? sd_convrot::situ(up, gate) : __fmul_rn(gate / (1.f + expf(-gate)), up);
         }
-        template <bool Swiglu, bool Dequantize, bool Rotated>
+        template <bool Swiglu, bool Dequantize, bool Rotated, bool Situ = false>
         static CUDAError quantize_epilogue(const Plan& p, const float* src, const float* xs, const float* ws, int8_t* output, CUDAStream stream) {
             const int64_t hidden = p.n / 2;
-            auto kernel          = sd_convrot::quantize<Swiglu, Dequantize, false, false, Rotated>;
+            auto kernel          = sd_convrot::quantize<Swiglu, Dequantize, false, false, Rotated, float, false, false, false, Situ>;
             static std::mutex mutex;
             static std::unordered_map<int, bool> initialized;
             {
@@ -761,12 +825,17 @@ namespace SD_CUDA_NAMESPACE {
                 if (error != cuda_success)
                     return error;
             }
-            const int threads = Rotated && !Swiglu && !Dequantize ? (hidden <= 1024 ? 128 : hidden <= 8192 ? 256
-                                                                                                           : 1024)
-                                                                  : 256;
-            kernel<<<unsigned(p.rows), threads, size_t(hidden) * sizeof(float), stream>>>(src, output,
-                                                                                          reinterpret_cast<float*>(output + hidden * p.padded), hidden, p.rows, hidden,
-                                                                                          Swiglu ? src + hidden : nullptr, Swiglu ? p.n : hidden, Swiglu ? p.n : hidden, xs, ws, nullptr, 0.f, 1.f, 0.f, nullptr, nullptr);
+            int threads = Situ && hidden >= 8192 ? 512 : 256;
+            if constexpr (Rotated && !Swiglu && !Dequantize) {
+                threads = hidden <= 1024 ? 128 : hidden <= 8192 ? 256
+                                                                : 1024;
+            }
+            const auto* gate  = Situ ? src + hidden : src;
+            const auto* up    = Swiglu ? src + (Situ ? 0 : hidden) : nullptr;
+            const auto stride = Swiglu ? p.n : hidden;
+            kernel<<<unsigned(p.rows), threads, size_t(hidden) * sizeof(float), stream>>>(
+                gate, output, reinterpret_cast<float*>(output + hidden * p.padded), hidden, p.rows, hidden,
+                up, stride, stride, xs, ws, nullptr, 0.f, 1.f, 0.f, nullptr, nullptr);
             return cuda_last_error();
         }
         static ggml_status execute(const ggml_ext_execution_context* execution, ggml_tensor* const* nodes, int count, void* state, void*) {
@@ -780,14 +849,15 @@ namespace SD_CUDA_NAMESPACE {
             auto scratch_at = [scratch](size_t offset) { return scratch ? scratch + offset : nullptr; };
             auto* dst       = nodes[count - 1];
             SDI8Operation op;
-            const bool mat = sd_ggml_i8_describe(nodes[0], &op);
-            bool alias     = false;
+            const bool mat       = sd_ggml_i8_describe(nodes[0], &op);
+            const auto* residual = p.kind == GATED_RESIDUAL ? residual_input(nodes[1], dst) : nullptr;
+            bool alias           = false;
             for (int i = 0; i < count; ++i)
                 for (auto* input : nodes[i]->src) {
                     bool internal = false;
                     for (int j = 0; j < count; ++j)
                         internal |= input == nodes[j];
-                    if (!internal)
+                    if (!internal && !(residual && i == count - 1 && input == residual && dst->data == residual->data))
                         alias |= overlaps(dst, input);
                 }
             // CUTLASS quantization epilogues read only the workspace intermediate after GEMM completes.
@@ -850,19 +920,16 @@ namespace SD_CUDA_NAMESPACE {
 #if defined(SD_CUDA_VENDOR_MUSA)
                     return GGML_STATUS_FAILED;
 #else
-                    const int32_t alpha = 1, beta = 0;
 #if defined(SD_CUDA_VENDOR_HIP)
-#if HIP_VERSION >= 60500000
-                    constexpr auto compute_type = HIPBLAS_COMPUTE_32I;
+                    const HipI8Gemm gemm{int(p.n), int(p.padded), int(p.k), op.weight->data, quant, accum,
+                                         static_cast<hipblasHandle_t>(handle), stream};
+#ifdef SD_HIP_I8_LT
+                    if (!hip_i8_gemm_lt(context.device, gemm) && gemm.run_hipblas() != HIPBLAS_STATUS_SUCCESS)
 #else
-                    constexpr auto compute_type = HIPBLAS_R_32I;
+                    if (gemm.run_hipblas() != HIPBLAS_STATUS_SUCCESS)
 #endif
-                    const auto status = hipblasGemmEx(static_cast<hipblasHandle_t>(handle), HIPBLAS_OP_T, HIPBLAS_OP_N,
-                                                      int(p.n), int(p.padded), int(p.k), &alpha,
-                                                      op.weight->data, HIPBLAS_R_8I, int(p.k), quant, HIPBLAS_R_8I, int(p.k),
-                                                      &beta, accum, HIPBLAS_R_32I, int(p.n), compute_type, HIPBLAS_GEMM_DEFAULT);
-                    if (status != HIPBLAS_STATUS_SUCCESS)
 #else
+                    const int32_t alpha = 1, beta = 0;
                     const auto status = cublasGemmEx(static_cast<cublasHandle_t>(handle), CUBLAS_OP_T, CUBLAS_OP_N,
                                                      int(p.n), int(p.padded), int(p.k), &alpha,
                                                      op.weight->data, CUDA_R_8I, int(p.k), quant, CUDA_R_8I, int(p.k),
@@ -878,6 +945,10 @@ namespace SD_CUDA_NAMESPACE {
                         error = quantize_epilogue<false, false, true>(p, values, nullptr, nullptr, static_cast<int8_t*>(output), stream);
                     else if (p.gemm)
                         error = quantize_epilogue<true, false, false>(p, values, nullptr, nullptr, static_cast<int8_t*>(output), stream);
+#if defined(SD_CUDA_VENDOR_HIP)
+                    else if (p.situ)
+                        error = quantize_epilogue<true, true, false, true>(p, values, scales, ws, static_cast<int8_t*>(output), stream);
+#endif
                     else
                         error = quantize_epilogue<true, true, false>(p, values, scales, ws, static_cast<int8_t*>(output), stream);
                 } else if (p.kind == GATED && !p.fused_activation) {
@@ -889,7 +960,15 @@ namespace SD_CUDA_NAMESPACE {
                     error = cuda_last_error();
                 } else if (!p.gemm) {
                     const unsigned gy = unsigned(std::min<int64_t>(p.rows, 65535)), gz = unsigned((p.rows + 65534) / 65535);
-                    if ((reinterpret_cast<uintptr_t>(ws) | reinterpret_cast<uintptr_t>(bias) | reinterpret_cast<uintptr_t>(gemm_output)) % 16 == 0) {
+#if defined(SD_CUDA_VENDOR_HIP)
+                    if (p.kind == GATED_RESIDUAL) {
+                        dequantize_gated_residual_vec4<<<dim3(unsigned((p.n + 1023) / 1024), gy, gz), 256, 0, stream>>>(
+                            reinterpret_cast<const int4*>(accum), scales, reinterpret_cast<const float4*>(ws),
+                            static_cast<const float4*>(nodes[1]->src[1]->data), static_cast<const float4*>(residual->data),
+                            reinterpret_cast<float4*>(gemm_output), p.n / 4, p.rows);
+                    } else
+#endif
+                        if ((reinterpret_cast<uintptr_t>(ws) | reinterpret_cast<uintptr_t>(bias) | reinterpret_cast<uintptr_t>(gemm_output)) % 16 == 0) {
                         dequantize_i32_rows_vec4_cuda<<<dim3(unsigned((p.n + 1023) / 1024), gy, gz), 256, 0, stream>>>(
                             reinterpret_cast<const int4*>(accum), scales, reinterpret_cast<const float4*>(ws), reinterpret_cast<const float4*>(bias), reinterpret_cast<float4*>(gemm_output), p.n / 4, p.rows);
                     } else {

@@ -165,6 +165,20 @@ hipBLAS, rocBLAS, and their development files. See
 [AMD's ROCm installation guide](https://rocm.docs.amd.com/en/latest/install/rocm.html)
 for supported GPUs, operating systems, and installation methods.
 
+When the hipBLASLt development package (version 1.0 or later) is available,
+CMake also enables INT8 GEMM tuning. The first run of an eligible matrix shape
+benchmarks the no-workspace candidates returned by hipBLASLt for the current
+device, including CDNA devices, and caches the result in the process. It
+selects a hipBLASLt candidate that runs successfully and beats hipBLAS, or a
+working candidate if hipBLAS does not support the operation.
+Set `SD_HIP_DISABLE_I8_LT=1` to use the hipBLAS GEMM path for comparison.
+
+With a compiled wave32 WMMA kernel, the HIP flash attention path supports
+head dimensions 40, 52, 64, 72, 80, 120, 128, 160, 256, and 320, including
+grouped-query attention. It requires unmasked attention with at least 512
+query tokens and 512 key tokens. Set `SD_HIP_DISABLE_WMMA_ATTN=1` to use
+ggml's native attention path for comparison.
+
 **Linux**
 
 With ROCm installed, use the default CMake generator and host compilers:
