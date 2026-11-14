@@ -57,18 +57,19 @@ namespace sd_hip {
     struct HipLtDevice {
         int ordinal;
         std::mutex mutex;
-        hipblasLtHandle_t handle = nullptr;
+        std::map<hipStream_t, hipblasLtHandle_t> handles;
         std::list<HipLtPlan> plans;
 
         explicit HipLtDevice(int ordinal)
             : ordinal(ordinal) {}
 
         ~HipLtDevice() {
-            if (!handle)
+            if (handles.empty())
                 return;
             int previous;
             if (hipGetDevice(&previous) == hipSuccess && hipSetDevice(ordinal) == hipSuccess) {
-                hipblasLtDestroy(handle);
+                for (const auto& entry : handles)
+                    (void)hipblasLtDestroy(entry.second);
                 (void)hipSetDevice(previous);
             }
         }
@@ -102,7 +103,7 @@ namespace sd_hip {
         }
     };
 
-    static void tune(const HipLtDevice& device, const HipI8Gemm& gemm, HipLtPlan& plan) {
+    static void tune(int device, hipblasLtHandle_t handle, const HipI8Gemm& gemm, HipLtPlan& plan) {
         if (!plan.init(gemm))
             return;
 
@@ -114,7 +115,7 @@ namespace sd_hip {
         std::array<hipblasLtMatmulHeuristicResult_t, 8> choices{};
         int count = 0;
         if (hipblasLtMatmulPreferenceSetAttribute(preference, HIPBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspace, sizeof(workspace)) == HIPBLAS_STATUS_SUCCESS) {
-            const auto status = hipblasLtMatmulAlgoGetHeuristic(device.handle, plan.op, plan.a, plan.b, plan.c, plan.c,
+            const auto status = hipblasLtMatmulAlgoGetHeuristic(handle, plan.op, plan.a, plan.b, plan.c, plan.c,
                                                                 preference, int(choices.size()), choices.data(), &count);
             if (status != HIPBLAS_STATUS_SUCCESS)
                 count = 0;
@@ -141,9 +142,9 @@ namespace sd_hip {
         for (int i = 0; i < count; ++i) {
             const auto& candidate = choices[i];
             if (candidate.state != HIPBLAS_STATUS_SUCCESS || candidate.workspaceSize != 0 ||
-                plan.run(device.handle, gemm, candidate.algo) != HIPBLAS_STATUS_SUCCESS)
+                plan.run(handle, gemm, candidate.algo) != HIPBLAS_STATUS_SUCCESS)
                 continue;
-            const float ms = timer.measure(gemm.stream, [&] { return plan.run(device.handle, gemm, candidate.algo); });
+            const float ms = timer.measure(gemm.stream, [&] { return plan.run(handle, gemm, candidate.algo); });
             if (ms > 0.f && ms < best) {
                 best        = ms;
                 plan.algo   = candidate.algo;
@@ -153,10 +154,10 @@ namespace sd_hip {
         if (plan.use_lt) {
             if (blas_unsupported) {
                 LOG_VERBOSE("hipBLASLt INT8 GEMM %d x %d x %d on HIP device %d: %.3f ms (hipBLAS unsupported)",
-                            gemm.n, gemm.rows, gemm.k, device.ordinal, best);
+                            gemm.n, gemm.rows, gemm.k, device, best);
             } else {
                 LOG_VERBOSE("hipBLASLt INT8 GEMM %d x %d x %d on HIP device %d: %.3f -> %.3f ms",
-                            gemm.n, gemm.rows, gemm.k, device.ordinal, baseline, best);
+                            gemm.n, gemm.rows, gemm.k, device, baseline, best);
             }
         }
     }
@@ -180,26 +181,38 @@ namespace sd_hip {
         std::lock_guard<std::mutex> lock(state.mutex);
         const GemmShape shape(gemm.n, gemm.rows, gemm.k);
         auto plan = std::find_if(state.plans.begin(), state.plans.end(), [&](const auto& entry) { return entry.shape == shape; });
-        if (plan == state.plans.end()) {
-            // Measuring uses the actual matrices and synchronizes the stream.
-            // A cold shape can only be tuned outside graph capture.
+        const bool needs_tuning = plan == state.plans.end();
+        if (!needs_tuning) {
+            state.plans.splice(state.plans.begin(), state.plans, plan);
+            if (!plan->use_lt)
+                return false;
+        }
+
+        const auto stream_handle = state.handles.find(gemm.stream);
+        hipblasLtHandle_t handle = stream_handle == state.handles.end() ? nullptr : stream_handle->second;
+        if (needs_tuning || !handle) {
+            // Handle creation and tuning must run outside graph capture.
             hipStreamCaptureStatus capture;
             if (hipStreamIsCapturing(gemm.stream, &capture) != hipSuccess || capture != hipStreamCaptureStatusNone)
                 return false;
-            if (!state.handle && hipblasLtCreate(&state.handle) != HIPBLAS_STATUS_SUCCESS)
+        }
+        if (!handle) {
+            // A host lock does not wait for work submitted on another stream.
+            if (hipblasLtCreate(&handle) != HIPBLAS_STATUS_SUCCESS)
                 return false;
+            state.handles.emplace(gemm.stream, handle);
+        }
 
+        if (needs_tuning) {
             state.plans.emplace_front(shape);
             plan = state.plans.begin();
-            tune(state, gemm, *plan);
+            tune(device, handle, gemm, *plan);
             if (state.plans.size() > 64)
                 state.plans.pop_back();
-        } else {
-            state.plans.splice(state.plans.begin(), state.plans, plan);
+            if (!plan->use_lt)
+                return false;
         }
-        if (!plan->use_lt)
-            return false;
-        if (plan->run(state.handle, gemm, plan->algo) == HIPBLAS_STATUS_SUCCESS)
+        if (plan->run(handle, gemm, plan->algo) == HIPBLAS_STATUS_SUCCESS)
             return true;
         plan->use_lt = false;
         return false;
