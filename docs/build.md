@@ -333,7 +333,7 @@ Using SYCL makes the computation run on the Intel GPU. Please make sure you have
 source /opt/intel/oneapi/setvars.sh
 
 # Make and enter build dir
-mkdir -p build && cd build
+mkdir build && cd build
 
 # Option 1: Use FP32 (recommended for better performance in most cases)
 cmake .. -DSD_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
