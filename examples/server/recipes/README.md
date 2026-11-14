@@ -56,7 +56,7 @@ prompt, a style preset, or a collection of sampling settings.
   has different native inpainting/control conditioning, beyond its layer count
   ([model card](https://huggingface.co/ostris/Flex.2-preview)). SDXS uses an
   adjusted AutoEncoderTiny and a one-step model, rather than only a shallower
-  ordinary SD checkpoint ([runtime guide](../../../docs/distilled_sd.md#sdxs-512-dreamshaper)).
+  ordinary SD checkpoint ([runtime guide](../../../docs/models/distilled_sd.md#sdxs-512-dreamshaper)).
   Their native components stay in their own model recipe.
 - Quantization, file format, prompt wording, seeds, step counts and CFG values
   are not grounds for another recipe. Differences in required components,

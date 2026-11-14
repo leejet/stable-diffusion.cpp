@@ -16,7 +16,7 @@ Image and video requests can include interleaved images in `prompt` or
 `prompt_images` object mapping each ID to a base64 image or image data URI.
 For `OpenAI API` and `sdapi`, pass `prompt_images` through `sd_cpp_extra_args`
 embedded inside `prompt`. IDs are resolved against that request's images.
-See [images in prompts](../../docs/prompt_images.md) for examples and supported
+See [images in prompts](../../docs/guides/prompt_images.md) for examples and supported
 LLM encoders.
 
 Global LoRA rule:
@@ -983,7 +983,7 @@ Shared default fields used by both `img_gen` and `vid_gen`:
 | `output_format` | `string` |
 | `output_compression` | `integer` |
 
-`vae_tiling_params.tile_size_w` and `tile_size_h` are in **image pixels**, with `0` selecting the 256-pixel default. Both encode and decode use these sizes without an encoding multiplier. Positive `rel_size_w`/`rel_size_h` values override the corresponding absolute size: values up to 1 are dimension fractions, and values greater than 1 are target tile counts. Set `enabled` to use spatial tiling. Sizes are aligned down to the VAE scale factor and capped at the input dimensions; explicit sizes below the minimum supported tile size are rejected. These fields previously used latent units; see [VAE tiling](../../docs/performance.md#use-vae-tiling-to-reduce-encode-and-decode-memory-usage) for migration and OOM retry behavior.
+`vae_tiling_params.tile_size_w` and `tile_size_h` are in **image pixels**, with `0` selecting the 256-pixel default. Both encode and decode use these sizes without an encoding multiplier. Positive `rel_size_w`/`rel_size_h` values override the corresponding absolute size: values up to 1 are dimension fractions, and values greater than 1 are target tile counts. Set `enabled` to use spatial tiling. Sizes are aligned down to the VAE scale factor and capped at the input dimensions; explicit sizes below the minimum supported tile size are rejected. These fields previously used latent units; see [VAE tiling](../../docs/guides/performance.md#use-vae-tiling-to-reduce-encode-and-decode-memory-usage) for migration and OOM retry behavior.
 
 `vae_tiling_params.extra_tiling_args` accepts a key=value list. Supported video VAEs accept `temporal_tile_frames` (alias `temporal_tile_size`, default `4`) and `temporal_tile_overlap` (default `1`). Wan2.2 TI2V 5B uses `temporal_decode_frames` (default `1`) to decode multiple latent frames per forward pass, trading additional memory for throughput; other model versions ignore this option.
 LTX and Wan preserve causal state between temporal tiles. Hunyuan Video and TAEHV use overlap blending. MiniMax H3 keeps its model-specific fixed temporal windows because its latent-to-frame mapping is non-linear.
@@ -1255,7 +1255,7 @@ Example:
 
 Native image/video requests and SDAPI accept `image_preprocess` as a rule string
 or array of rule strings. OpenAI-compatible requests can supply it in
-`sd_cpp_extra_args`. See [Image preprocessing](../../docs/image_preprocessing.md)
+`sd_cpp_extra_args`. See [Image preprocessing](../../docs/guides/image_preprocessing.md)
 for one-time input geometry, native-resolution decoding, mask alignment, and
 `canny=true` for edge detection on any supported image input.
 
@@ -1616,7 +1616,7 @@ Example:
 - Other video model families currently ignore `ref_images`.
 - `features_by_mode.vid_gen` does not currently advertise `ref_images`; its absence is not an indication that MiniMax-H3 reference images are unsupported.
 
-See [MiniMax-H3 reference conditioning](../../docs/minimax_h3.md#reference-to-audio-video-conditioning) for model requirements and prompt examples.
+See [MiniMax-H3 reference conditioning](../../docs/models/minimax_h3.md#reference-to-audio-video-conditioning) for model requirements and prompt examples.
 
 ### LoRA Rules
 
@@ -1911,5 +1911,5 @@ result items and OpenAI image items contain the parameter snapshot with each
 image's actual seed and without `batch_count`. Native video
 results contain the video request snapshot. SD API `info.generation_info` is an array
 aligned with `info.infotexts` and `info.all_seeds`; the outer `parameters` field
-remains the request echo. See [generation metadata](../../docs/generation_metadata.md)
+remains the request echo. See [generation metadata](../../docs/guides/generation_metadata.md)
 for field semantics, postprocessing and container storage.

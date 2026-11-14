@@ -1,0 +1,114 @@
+# Image Editing
+
+Image editing in `stable-diffusion.cpp` allows you to use reference images to guide the generation process, enabling tasks like identity preservation, style transfer, or layout modification.
+
+
+## Supported Models
+
+Depending on the architecture, different models handle reference images differently.
+
+| Model | Default Preset |
+| :--- | :--- |
+| [**FLUX.1-Kontext-dev**](../models/kontext.md) | `flux_kontext` |
+| [**LongCat Image Edit**](../models/longcat_image.md) | `longcat` |
+| [**Qwen Image Edit**](../models/qwen_image_edit.md) | `qwen` |
+| **Qwen Image LAYERED** | `qwen_layered` |
+| [**Flux.2 [Dev] / Flux.2 [Klein]**](../models/flux2.md) | `flux2` |
+| [**FLUX.3 Image Klein / Klein Base**](../models/flux3.md) | `flux2` |
+| [**Boogu Image Edit**](../models/boogu_image.md) | `z_image_omni` |
+| **Krea2 (Community Edit LoRAs)** | `krea2_ostris_edit` |
+| [**Mage-Flow-Edit**](../models/mage_flow.md#image-editing) | `mage_flow` |
+| [**LLaDA-Image**](../models/llada_image.md#image-editing) | `llada_image` |
+| [**Fibo 2.0 Dev / Edit Turbo**](../models/fibo2.md#examples) | `fibo2` |
+| **Anima (Community Edit LoRAs)** | `cosmos_reference` |
+
+Stable-diffusion.spp also supports basic Unet-based editing models like instruct-pix2pix or CosXL-Edit. This document is not about those.
+
+---
+
+## Configuring Reference Modes (`--ref-image-args`)
+
+For a one-time input transform before reference presets and model processing,
+including cropping, padding, and resizing algorithms, see [Image preprocessing](./image_preprocessing.md).
+
+Different DiT-based editing models require different configurations to process reference images correctly (e.g., whether to use a Vision Language Model (VLM) encoder or pass VAE-encoded images directly to the DiT).
+
+To simplify this, we provide **Presets**. By default, the system automatically selects the best preset based on the model architecture. However, you can override this using the `--ref-image-args` argument.
+
+### Usage
+The `--ref-image-args` argument accepts a comma-separated list of key-value pairs:
+
+**Using a preset:**
+`--ref-image-args "preset=qwen_layered"`
+
+**Using a preset with a specific override:**
+`--ref-image-args "preset=krea2_edit,force_ref_timestep_zero=true"`
+
+### Available Presets
+
+| Preset | Primary Use Case |
+| :--- | :--- |
+| `flux_kontext` | FLUX.1 Kontext |
+| `longcat` | LongCat Image Edit |
+| `flux2` | FLUX.2 models |
+| `fibo2` | Fibo 2.0 Dev / Edit Turbo |
+| `qwen` | Qwen Image Edit |
+| `qwen_layered` | Qwen Image Layered |
+| `z_image_omni` | Boogu, Z-Image Omni |
+| `krea2_ostris_edit` | Most Krea2 Community edit LoRAs (trained with Ostris script) |
+| `mage_flow` | Mage-Flow-Edit |
+| `krea2_edit` | Specifically for [lbouaraba/krea2edit](https://huggingface.co/conradlocke/krea2-identity-edit). (or similar) |
+| `cosmos_reference` | For Anima |
+| `default` | Uses the automatic detection based on model architecture. |
+
+---
+
+## Advanced Parameter Reference
+
+If presets are insufficient, you can manually configure the following parameters via `--ref-image-args`:
+
+| Key | Type | Description | Allowed Values |
+| :--- | :--- | :--- | :--- |
+| `preset` | string | Overrides the automatic preset. | (See the Presets table above) |
+| `pass_to_vlm` | bool | Whether reference images are passed to the VLM encoder. | `true`, `false` |
+| `pass_to_dit` | bool | Whether VAE-encoded references are passed directly to the DiT. | `true`, `false` |
+| `ref_index_mode` | string | Behavior of the RoPE index. | `fixed`, `increase`, `decrease` |
+| `force_ref_timestep_zero` | bool | Forces timestep=0 for reference tokens. | `true`, `false` (Krea2 only) |
+| `resize_before_vae` | bool | Whether reference images are resized before VAE encoding. | `true`, `false` |
+| `resize_vae_to_target` | bool | Use output dimensions for every reference, overriding area-based sizing. | `true`, `false` |
+| `resize_single_ref_to_target` | bool | Use output dimensions when exactly one reference is supplied. | `true`, `false` |
+| `vae_size_buckets` | bool | Choose aligned dimensions within ±10% of the requested area, minimizing aspect-ratio cropping. Ignored when using output dimensions. | `true`, `false` |
+| `vae_center_crop` | bool | Scale to cover the selected dimensions with Lanczos, then center-crop. Otherwise resize directly. | `true`, `false` |
+| `vae_input_max_pixels` | int | VAE area budget, also capped by output area in ordinary resizing. With size buckets, this is the target area and output area does not cap it. | Integer |
+| `vlm_use_vae_input` | bool | Reuse the resized/cropped VAE input for the VLM, before the VLM's own resize. Has no effect when `resize_before_vae=false`. | `true`, `false` |
+| `vlm_resize_mode` | string | How to resize VLM reference inputs. | `longest_side`, `area`, `none` |
+| `vlm_max_size` | int | Maximum VLM input size; interpreted according to `vlm_resize_mode`. | Integer |
+| `vlm_min_size` | int | Minimum VLM input size; interpreted according to `vlm_resize_mode`. | Integer |
+| `vlm_size` | int | Shortcut to set both VLM min and max size to the same value. | Integer |
+| `ref_image_size` | string | MiniMax-H3 reference image sizing before VAE encoding. `match` scales each reference down to the generation's pixel area; `max` uses a 2048 px short edge. Only references above the limit are downscaled; each axis is then snapped to the nearest 32 px multiple (an axis of at least 16 px grows by at most 16 px, and references are never narrower than 32 px). | `match`, `max` |
+
+`ref_image_size` applies to `vid_gen` with MiniMax-H3 Ref2VA. Reference latents are attended to at every sampling step, so `max` can be several times slower.
+
+### Preset Default Values
+
+For a technical overview of how each preset is configured, see the table below.
+
+| Preset | VLM | RoPE Index | Cond Resize | Special Notes |
+| :--- | :---: | :---: | :---: | :--- |
+| `flux_kontext` | No | `fixed` | `none` | |
+| `longcat` | Yes | `fixed` | `area` | |
+| `flux2` | No | `increase` | `none` | |
+| `fibo2` | Yes | `increase` | `longest` | Shared reference crops; clean reference timesteps; see [Fibo 2.0](../models/fibo2.md) |
+| `qwen` | Yes | `increase` | `area` | |
+| `qwen_layered` | Yes | `decrease` | `area` | |
+| `mage_flow` | Yes | `increase` | `longest` | `vlm_max_size = 384`, VAE input resized to target |
+| `z_image_omni` | Yes | `fixed` | `area` | |
+| `krea2_ostris_edit`| Yes | `increase` | `area` | `force_ref_timestep_zero = true` |
+| `krea2_edit` | Yes | `increase` | `longest` | `vlm_size = 768` |
+| `cosmos_reference` | No | `fixed` | `none` | `resize_before_vae = false` |
+
+**Additional Default Notes:**
+- **VLM Input Sizes:** For most presets, `vlm_max_size` and `vlm_min_size` are set to `-1`, meaning the values are model-dependent and handled automatically. In `area` mode they represent pixel area; in `longest_side` mode they represent a side length in pixels.
+- **VAE Input Size:** `vae_input_max_pixels` defaults to $1024 \times 1024$ pixels (`1048576`).
+- **VAE Geometry:** `resize_vae_to_target` defaults to `true` for Mage-Flow and LLaDA-Image. Fibo enables `resize_single_ref_to_target`, `vae_size_buckets`, and `vae_center_crop`. These options are otherwise `false`. Bucket dimensions use the model's alignment (normally 16, Qwen Image 32), with a minimum side of four alignment units; if no bucket fits, output dimensions are used.
+- **Shared Encoder Input:** `vlm_use_vae_input` defaults to `true` for Fibo and Qwen Image 2.1, otherwise `false`. All these options can be overridden individually after selecting a preset.

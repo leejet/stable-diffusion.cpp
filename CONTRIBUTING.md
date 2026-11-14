@@ -31,19 +31,28 @@ PRs should include:
 
 ## Documentation
 
-Write model usage guides in `docs/` for users. Focus on supported weights,
-setup, runnable commands, parameter meanings, output behavior, and practical
-limits such as memory requirements. Include technical details only when they
-help users choose settings or troubleshoot a problem.
+Write model and component usage guides in `docs/models/` for users. Focus on
+supported weights, setup, runnable commands, parameter meanings, output behavior,
+and practical limits such as memory requirements. Include technical details only
+when they help users choose settings or troubleshoot a problem.
+
+Put shared usage workflows and configuration in `docs/guides/`, and internal
+implementation details and development conventions in `docs/development/`.
+Keep build, Docker, and troubleshooting guides at the root of `docs/`.
+Link new documentation from [the documentation index](docs/README.md) or
+[the model index](docs/models/README.md), as appropriate. Keep supported model
+entries and their guide links in the project README.
 
 Keep tensor layouts, internal class names, kernel implementation details,
 algorithm derivations, and development history out of usage guides. Keep task-specific
 profiling logs, numerical comparison procedures, and test artifacts local, and
 summarize relevant verification results in the PR description.
 
-## README UI Listings
+## Application and UI Listings
 
-The [UIs list in the README](README.md#uis) only includes open-source projects that use `stable-diffusion.cpp` as a backend. Do not submit PRs to add closed-source UIs.
+The [applications and UIs list](docs/ecosystem.md#applications-and-uis) only
+includes open-source projects that use `stable-diffusion.cpp` as a backend.
+Do not submit PRs to add closed-source applications or UIs.
 
 ## Server Recipes
 
@@ -76,7 +85,8 @@ Naming conventions:
 
 Some older code in the project may not fully follow the current conventions. Please do not submit PRs that only rewrite existing code to match style rules.
 
-When adding or modifying model implementations, follow the model config and weight detection conventions in [docs/model_config.md](docs/model_config.md).
+When adding or modifying model implementations, follow the
+[model config and weight detection conventions](docs/development/model_config.md).
 
 ## Tokenizer Data
 

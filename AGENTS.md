@@ -91,7 +91,11 @@ documentation.
 ### Documentation and Tooling
 
 * `docs/` - documentation for supported models, build options, behavior, and
-  workflows.
+  workflows; start from `docs/README.md`.
+* `docs/models/` - model and component usage guides, including LoRAs, adapters,
+  auxiliary models, and model-specific examples.
+* `docs/guides/` - shared usage workflows, configuration, and performance guides.
+* `docs/development/` - internal implementation and model integration conventions.
 * `scripts/` - development, model processing, build automation, formatting, and
   tooling scripts.
 * `cmake/` - CMake support modules.

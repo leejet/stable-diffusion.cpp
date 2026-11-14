@@ -39,68 +39,69 @@ API and command-line option may change frequently.***
 
 - Plain C/C++ implementation based on [ggml](https://github.com/ggml-org/ggml), working in the same way as [llama.cpp](https://github.com/ggml-org/llama.cpp)
 - Super lightweight and without external dependencies
+- Built-in [Web UI](./examples/server/README.md) for image and video generation
 - Supported models
   - Image Models
-    - [SD1.x, SD2.x, SD-Turbo](./docs/sd.md)
-    - [SDXL, SDXL-Turbo](./docs/sd.md)
-    - [Some SD1.x and SDXL distilled models](./docs/distilled_sd.md)
-    - [SD3/SD3.5](./docs/sd3.md)
-    - [FLUX.1-dev/FLUX.1-schnell](./docs/flux.md)
-    - [FLUX.2-dev/FLUX.2-klein](./docs/flux2.md)
-    - [FLUX.3 Image Klein / Klein Base](./docs/flux3.md)
-    - [MOSS-Image-Base / MOSS-Image-SFT](./docs/moss_image.md)
-    - [Fibo 2.0 Dev](./docs/fibo2.md)
-    - [Lens](./docs/lens.md)
-    - [Chroma](./docs/chroma.md)
-    - [Chroma1-Radiance](./docs/chroma_radiance.md)
-    - [Qwen Image](./docs/qwen_image.md)
-    - [Qwen Image 2.1](./docs/qwen_image_2.1.md)
-    - [PiD](./docs/pid.md)
-    - [LongCat Image](./docs/longcat_image.md)
-    - [Z-Image](./docs/z_image.md)
-    - [Z-Image L2P](./docs/z_image_l2p.md)
-    - [MiniT2I](./docs/minit2i.md)
-    - [P-H3-Image](./docs/p_h3_image.md)
-    - [MiniMax-H3-Image](./docs/minimax_h3_image.md)
-    - [SenseNova U1.5](./docs/sensenova_u1.md)
-    - [Ovis-Image](./docs/ovis_image.md)
-    - [Anima](./docs/anima.md)
-    - [ERNIE-Image](./docs/ernie_image.md)
-    - [Boogu Image](./docs/boogu_image.md)
-    - [Krea2](./docs/krea2.md)
-    - [Mage-Flow](./docs/mage_flow.md)
-    - [SeFi-Image](./docs/sefi_image.md)
-    - [HiDream-O1-Image](./docs/hidream_o1_image.md)
-    - [Ideogram4](./docs/ideogram4.md)
-    - [LLaDA-Image](./docs/llada_image.md)
-    - [Ming-Image Design](./docs/ming_image.md)
-    - [PixArt](./docs/pixart.md)
-    - [Iris-3B](./docs/iris.md)
-  - [Image Edit Models](./docs/edit.md)
-    - [FLUX.1-Kontext-dev](./docs/kontext.md)
-    - [Qwen Image Edit series](./docs/qwen_image_edit.md)
-    - [LongCat Image Edit](./docs/longcat_image.md)
-    - [Boogu Image Edit](./docs/boogu_image.md)
-    - [Mage-Flow-Edit](./docs/mage_flow.md#image-editing)
-    - [LLaDA-Image Edit](./docs/llada_image.md#image-editing)
-    - [Fibo 2.0 Dev / Edit Turbo](./docs/fibo2.md#editing-and-turbo)
+    - [SD1.x, SD2.x, SD-Turbo](./docs/models/sd.md)
+    - [SDXL, SDXL-Turbo](./docs/models/sd.md)
+    - [Some SD1.x and SDXL distilled models](./docs/models/distilled_sd.md)
+    - [SD3/SD3.5](./docs/models/sd3.md)
+    - [FLUX.1-dev/FLUX.1-schnell](./docs/models/flux.md)
+    - [FLUX.2-dev/FLUX.2-klein](./docs/models/flux2.md)
+    - [FLUX.3 Image Klein / Klein Base](./docs/models/flux3.md)
+    - [MOSS-Image-Base / MOSS-Image-SFT](./docs/models/moss_image.md)
+    - [Fibo 2.0 Dev](./docs/models/fibo2.md)
+    - [Lens](./docs/models/lens.md)
+    - [Chroma](./docs/models/chroma.md)
+    - [Chroma1-Radiance](./docs/models/chroma_radiance.md)
+    - [Qwen Image](./docs/models/qwen_image.md)
+    - [Qwen Image 2.1](./docs/models/qwen_image_2.1.md)
+    - [PiD](./docs/models/pid.md)
+    - [LongCat Image](./docs/models/longcat_image.md)
+    - [Z-Image](./docs/models/z_image.md)
+    - [Z-Image L2P](./docs/models/z_image_l2p.md)
+    - [MiniT2I](./docs/models/minit2i.md)
+    - [P-H3-Image](./docs/models/p_h3_image.md)
+    - [MiniMax-H3-Image](./docs/models/minimax_h3_image.md)
+    - [SenseNova U1.5](./docs/models/sensenova_u1.md)
+    - [Ovis-Image](./docs/models/ovis_image.md)
+    - [Anima](./docs/models/anima.md)
+    - [ERNIE-Image](./docs/models/ernie_image.md)
+    - [Boogu Image](./docs/models/boogu_image.md)
+    - [Krea2](./docs/models/krea2.md)
+    - [Mage-Flow](./docs/models/mage_flow.md)
+    - [SeFi-Image](./docs/models/sefi_image.md)
+    - [HiDream-O1-Image](./docs/models/hidream_o1_image.md)
+    - [Ideogram4](./docs/models/ideogram4.md)
+    - [LLaDA-Image](./docs/models/llada_image.md)
+    - [Ming-Image Design](./docs/models/ming_image.md)
+    - [PixArt](./docs/models/pixart.md)
+    - [Iris-3B](./docs/models/iris.md)
+  - [Image Edit Models](./docs/guides/edit.md)
+    - [FLUX.1-Kontext-dev](./docs/models/kontext.md)
+    - [Qwen Image Edit series](./docs/models/qwen_image_edit.md)
+    - [LongCat Image Edit](./docs/models/longcat_image.md)
+    - [Boogu Image Edit](./docs/models/boogu_image.md)
+    - [Mage-Flow-Edit](./docs/models/mage_flow.md#image-editing)
+    - [LLaDA-Image Edit](./docs/models/llada_image.md#image-editing)
+    - [Fibo 2.0 Dev / Edit Turbo](./docs/models/fibo2.md#examples)
   - Video Models
-    - [Wan2.1/Wan2.2](./docs/wan.md)
-    - [MiniMax-H3](./docs/minimax_h3.md)
-    - [LTX-2.3/LTX-2.5](./docs/ltx2.md)
-    - [HunyuanVideo 1.5](./docs/hunyuan_video.md)
-    - [LingBot-Video](./docs/lingbot_video.md)
+    - [Wan2.1/Wan2.2](./docs/models/wan.md)
+    - [MiniMax-H3](./docs/models/minimax_h3.md)
+    - [LTX-2.3/LTX-2.5](./docs/models/ltx2.md)
+    - [HunyuanVideo 1.5](./docs/models/hunyuan_video.md)
+    - [LingBot-Video](./docs/models/lingbot_video.md)
   - Video Upscale Models
-    - [RelayVSR](./docs/relay_vsr.md)
-    - [SeedVR2](./docs/seedvr2.md)
-  - [PhotoMaker](./docs/photo_maker.md) support.
-  - [IP-Adapter](./docs/ip_adapter.md) support (SD 1.5 and SDXL, including Plus)
+    - [RelayVSR](./docs/models/relay_vsr.md)
+    - [SeedVR2](./docs/models/seedvr2.md)
+  - [PhotoMaker](./docs/models/photo_maker.md) support.
+  - [IP-Adapter](./docs/models/ip_adapter.md) support (SD 1.5 and SDXL, including Plus)
   - Control Net support with SD 1.5
-  - [ADetailer](./docs/adetailer.md)
+  - [ADetailer](./docs/models/adetailer.md)
   - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
   - Latent Consistency Models support (LCM/LCM-LoRA)
-  - Faster and memory efficient latent decoding with [TAESD](./docs/taesd.md)
-  - Upscale images generated with [ESRGAN](./docs/esrgan.md)
+  - Faster and memory efficient latent decoding with [TAESD](./docs/models/taesd.md)
+  - Upscale images generated with [ESRGAN](./docs/models/esrgan.md)
 - Supported backends
   - CPU (AVX, AVX2 and AVX512 support for x86 architectures)
   - CUDA
@@ -122,16 +123,7 @@ API and command-line option may change frequently.***
 - Negative prompt
 - [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (not all the features, only token weighting for now)
 - VAE tiling processing for reduce memory usage
-- Sampling method
-    - `Euler A`
-    - `Euler`
-    - `Heun`
-    - `DPM2`
-    - `DPM++ 2M`
-    - [`DPM++ 2M v2`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457)
-    - `DPM++ 2S a`
-    - `ER-SDE`
-    - [`LCM`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/issues/13952)
+- Support for a wide range of [sampling methods and schedulers](./docs/guides/sampling.md)
 - Cross-platform reproducibility
     - `--rng cuda`, default, consistent with the `stable-diffusion-webui GPU RNG`
     - `--rng cpu`, consistent with the `comfyui RNG`
@@ -139,73 +131,67 @@ API and command-line option may change frequently.***
 
 ## Quick Start
 
-### Get the sd executable
+### Get the executables
 
-- Download pre-built binaries from the [releases page](https://github.com/leejet/stable-diffusion.cpp/releases)
+- Download and extract pre-built binaries from the [releases page](https://github.com/leejet/stable-diffusion.cpp/releases)
 - Or build from source by following the [build guide](./docs/build.md)
+
+Run the commands below from the directory containing `sd-server` and `sd-cli`
+(typically `build/bin/` or `build/bin/Release/` for source builds). On Windows,
+use `.\sd-server.exe` and `.\sd-cli.exe` in place of `./sd-server` and `./sd-cli`.
 
 ### Download model weights
 
-- download weights(.ckpt or .safetensors or .gguf). For example
-    - Stable Diffusion v1.5 from https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5 
-
-    ```sh
-    curl -L -O https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
-    ```
-
-### Generate an image with just one command
+Choose a model from the [model guides](./docs/models/README.md) and download its
+weights and required components into a `models/` directory. For a simple example,
+download Stable Diffusion v1.5:
 
 ```sh
-./bin/sd-cli -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
+mkdir models
+curl -L -o models/v1-5-pruned-emaonly.safetensors https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
 ```
 
-***For detailed command-line arguments, check out [cli doc](./examples/cli/README.md).***
+### Option 1: Web UI
+
+Start the server:
+
+```sh
+./sd-server --model-dir ./models
+```
+
+Open <http://127.0.0.1:1234/>, choose the matching model recipe and downloaded
+component files, then click **Load models**. Enter a prompt and generate an image.
+
+For startup scripts, frontend build requirements, and server options, see the
+[server guide](./examples/server/README.md).
+
+### Option 2: CLI
+
+Generate an image with one command:
+
+```sh
+./sd-cli -m ./models/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
+```
+
+Run `./sd-cli --help` for the full list of command-line options. See the
+[CLI guide](./examples/cli/README.md) for additional usage notes.
 
 ## Performance
 
-If you want to improve performance or reduce VRAM/RAM usage, please refer to [performance guide](./docs/performance.md).
-For runtime and parameter backend placement, see the [backend selection guide](./docs/backend.md).
+If you want to improve performance or reduce VRAM/RAM usage, please refer to [performance guide](./docs/guides/performance.md).
+For runtime and parameter backend placement, see the [backend selection guide](./docs/guides/backend.md).
 
-## More Guides
+## Documentation
 
+Browse the [documentation index](./docs/README.md) or jump to a topic:
+
+- [Getting started: build, Docker, CLI, and server](./docs/README.md#get-started)
+- [Models and components](./docs/models/README.md)
+- [Generation and inputs](./docs/README.md#generation-and-inputs)
+- [Devices and performance](./docs/README.md#devices-and-performance)
+- [Weights and quantization](./docs/README.md#weights-and-quantization)
 - [Troubleshooting](./docs/troubleshooting.md)
-- [Backend selection](./docs/backend.md)
-- [RPC](./docs/rpc.md)
-- [LoRA](./docs/lora.md)
-- [LCM/LCM-LoRA](./docs/lcm.md)
-- [Docker](./docs/docker.md)
-- [Quantization and GGUF](./docs/quantization_and_gguf.md)
-- [INT8 convrot safetensors](./docs/int8_convrot.md)
-- [Inference acceleration via caching](./docs/caching.md)
-
-## Bindings
-
-These projects wrap `stable-diffusion.cpp` for easier use in other languages/frameworks.
-
-* Golang (non-cgo): [seasonjs/stable-diffusion](https://github.com/seasonjs/stable-diffusion)
-* Golang (cgo): [Binozo/GoStableDiffusion](https://github.com/Binozo/GoStableDiffusion)
-* Golang (non-cgo): [l8bloom/gosd](https://github.com/l8bloom/gosd)
-* C#: [DarthAffe/StableDiffusion.NET](https://github.com/DarthAffe/StableDiffusion.NET)
-* Python: [william-murray1204/stable-diffusion-cpp-python](https://github.com/william-murray1204/stable-diffusion-cpp-python)
-* Rust: [newfla/diffusion-rs](https://github.com/newfla/diffusion-rs)
-* Flutter/Dart: [rmatif/Local-Diffusion](https://github.com/rmatif/Local-Diffusion)
-
-## UIs
-
-These projects use `stable-diffusion.cpp` as a backend for their image generation.
-
-- [GIMP Plugins](https://github.com/themanyone/gimp-plugins)
-- [Stable Diffusion GUI](https://github.com/fszontagh/sd.cpp.gui.wx)
-- [Stable Diffusion CLI-GUI](https://github.com/piallai/stable-diffusion.cpp)
-- [Local Diffusion](https://github.com/rmatif/Local-Diffusion)
-- [sd.cpp-webui](https://github.com/daniandtheweb/sd.cpp-webui)
-- [LocalAI](https://github.com/mudler/LocalAI)
-- [Neural-Pixel](https://github.com/Luiz-Alcantara/Neural-Pixel)
-- [KoboldCpp](https://github.com/LostRuins/koboldcpp)
-- [Kokon](https://github.com/GabrieleLozupone/kokon)
-- [NodeTool](https://github.com/nodetool-ai/nodetool)
-- [Quo](https://github.com/quo-ai/quo)
-- [Prisme](https://github.com/d3Ita/prisme)
+- [Development and contributing](./docs/README.md#development)
 
 ## Contributors
 
