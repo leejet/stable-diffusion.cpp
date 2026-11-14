@@ -54,42 +54,29 @@ and the scale values you tried with their results.
 
 ## Windows: process exits immediately with 0xC0000135 (STATUS_DLL_NOT_FOUND)
 
-Running a Windows ROCm prebuilt (`sd-cli.exe` / `sd-server.exe`) in a shell
-where the HIP runtime is not on `PATH` can terminate before printing anything,
-with exit code `0xC0000135` (`STATUS_DLL_NOT_FOUND`). This is a loader failure,
-not an inference crash: `stable-diffusion.dll` statically imports
-`hipblas.dll` and `libhipblaslt.dll` (which in turn pull in `rocblas.dll`,
-`rocsolver.dll` and the rest of the hipBLAS chain), while the release archive
-only bundles the core runtime DLLs (`amd_comgr.dll`, `amdhip64_7.dll` and
-`rocm_kpack.dll`) alongside the executables.
+`sd-cli.exe` / `sd-server.exe` from the Windows ROCm prebuilt may exit with
+`0xC0000135` (`STATUS_DLL_NOT_FOUND`) and no output when the HIP runtime is
+not on `PATH`. `stable-diffusion.dll` statically imports `hipblas.dll` and
+`libhipblaslt.dll`, but the release archive only bundles `amd_comgr.dll`,
+`amdhip64_7.dll` and `rocm_kpack.dll`. This is a loader failure, unrelated to
+`--audio-vae` or other generation options; `0xC000001D`
+(`STATUS_ILLEGAL_INSTRUCTION`) would instead indicate a CPU instruction issue.
 
-Do not confuse this with `0xC000001D` (`STATUS_ILLEGAL_INSTRUCTION`), which
-indicates a CPU instruction set problem instead. The failure is also
-independent of generation options such as `--audio-vae`: the same binary
-succeeds with those options once the runtime is visible.
+Fix: prepend the ROCm SDK `bin` directories to `PATH` — with the Python ROCm
+wheels these are `<python home>\Lib\site-packages\_rocm_sdk_libraries\bin` and
+`_rocm_sdk_core\bin`. Do not copy individual DLLs: `rocblas.dll` and
+`libhipblaslt.dll` also need their sibling `rocblas\` and `hipblaslt\` data
+directories.
 
-Fix: prepend the directories containing the HIP runtime DLLs to `PATH` before
-starting the executable. Common sources:
-
-- a Windows ROCm runtime/SDK installation (add its `bin` directory to `PATH`,
-  or run inside the environment its installer creates);
-- the Python ROCm distributions, which install the runtime under
-  `<python home>\Lib\site-packages\_rocm_sdk_libraries\bin` and
-  `_rocm_sdk_core\bin`.
-
-Prefer adding those directories to `PATH` over copying individual DLLs.
-`rocblas.dll` and `libhipblaslt.dll` look for their data directories
-(`rocblas\` and `hipblaslt\`) next to themselves, so copying only the DLLs can
-get past the loader and still fail later. If you do copy, copy the DLLs
-together with those sibling data directories.
-
-Verify the fix with:
+Verify:
 
 ```powershell
 .\sd-cli.exe --version
+'0x{0:X8}' -f $LASTEXITCODE
 ```
 
-which should print the version string and exit with code 0. If it still exits
-with `0xC0000135`, inspect the executable's imports (`dumpbin /dependents
-sd-cli.exe` or the [Dependencies](https://github.com/lucasg/Dependencies)
-tool) to identify which DLL is missing.
+Expect the version string and `0x00000000`. If it still fails, inspect the
+whole DLL chain (`sd-cli.exe` -> `stable-diffusion.dll` -> ...): `dumpbin
+/dependents` lists only one image's direct imports, so use
+[Dependencies](https://github.com/lucasg/Dependencies) or also check
+`stable-diffusion.dll` to find the missing module.
