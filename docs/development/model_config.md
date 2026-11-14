@@ -139,6 +139,9 @@ To add a model:
 5. Add version detection signatures and any required weight-name mappings in
    `src/model_loader.cpp` and `src/name_conversion.cpp` respectively. Update shared
    conditioning or runtime code only when existing behavior cannot serve the model.
+6. Add or update the model's usage guide and relevant index/README entries in the
+   same change, following the
+   [model documentation requirements](../../CONTRIBUTING.md#model-documentation).
 
 Use the existing family integration as the starting point for a variant. For a
 new family, `src/model/integrations/moss_image.cpp` is a compact example of a

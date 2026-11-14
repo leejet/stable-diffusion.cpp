@@ -1,35 +1,218 @@
 # IP-Adapter
 
-stable-diffusion.cpp supports [IP-Adapter](https://github.com/tencent-ailab/IP-Adapter)
-image-prompt conditioning for SD 1.5 and SDXL. Given a reference image,
-IP-Adapter transfers the subject and appearance of that image into the
-generation, alongside the text prompt.
+[IP-Adapter](https://github.com/tencent-ailab/IP-Adapter) uses a reference image
+to guide SD 1.5 or SDXL generation alongside
+the text prompt. Classic and Plus adapters are supported, including combination
+with Control Net.
 
-IP-Adapter encodes the reference image with a CLIP-Vision (ViT-H/14)
-encoder, projects the embedding into a few image tokens, and injects them
-through a decoupled cross-attention added to every attn2 layer of the
-UNet. It composes with Control Net, so a reference image (appearance) and
-an OpenPose hint (pose) can be combined in a single generation.
+## Model files
 
-Both the classic adapters and the higher-fidelity **Plus** adapters are
-supported; see [Plus variants](#plus-variants) below. The variant is
-detected from the weight file, so the same options work for both.
+| Component | Weights and downloads | CLI option | Requirement |
+| --- | --- | --- | --- |
+| Base checkpoint | [SD 1.5 or SDXL](sd.md) | `-m` / `--model` | Required; match adapter family |
+| CLIP Vision H | `clip_vision_h.safetensors` from [IP-Adapter](https://huggingface.co/h94/IP-Adapter) | `--clip_vision` | Required; ViT-H/14 |
+| SD 1.5 adapter | [`models/ip-adapter_sd15.safetensors`](https://huggingface.co/h94/IP-Adapter) | `--ip-adapter` | For SD 1.5 |
+| SDXL adapter | [`sdxl_models/ip-adapter_sdxl_vit-h.safetensors`](https://huggingface.co/h94/IP-Adapter) | `--ip-adapter` | For SDXL |
+| SD 1.5 Plus | [`models/ip-adapter-plus_sd15.safetensors`](https://huggingface.co/h94/IP-Adapter) | `--ip-adapter` | Alternative for SD 1.5 |
+| SDXL Plus | [`sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors`](https://huggingface.co/h94/IP-Adapter) | `--ip-adapter` | Alternative for SDXL |
 
-## Required weights
+## Usage
 
-1. A base SD 1.5 or SDXL model.
-2. A CLIP-Vision (ViT-H/14) image encoder, passed with `--clip_vision`
-   (for example `clip_vision_h.safetensors`).
-3. An IP-Adapter weight file, passed with `--ip-adapter`. The `vit-h`
-   variants reuse the same ViT-H encoder as above. From
-   [h94/IP-Adapter](https://huggingface.co/h94/IP-Adapter):
-   - SD 1.5: `models/ip-adapter_sd15.safetensors`
-   - SDXL: `sdxl_models/ip-adapter_sdxl_vit-h.safetensors`
-   - SD 1.5 Plus: `models/ip-adapter-plus_sd15.safetensors`
-   - SDXL Plus: `sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors`
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
-   The Plus files (`ip-adapter-plus_*`) are used exactly like the classic
-   ones; see [Plus variants](#plus-variants).
+### Web UI
+
+Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
+server, then select the recipe matching your weights. Fill the component slots
+below and click **Load models**.
+Use the files and compatibility requirements in [Model files](#model-files).
+
+| Recipe | Component slots |
+| --- | --- |
+| SD 1.5 IP-Adapter / Plus (`sd1-ip-adapter`) | `model`, `clip_vision`, `ip_adapter`, `vae`, `tae` |
+| SDXL IP-Adapter / Plus (`sdxl-ip-adapter`) | `model`, `clip_vision`, `ip_adapter`, `vae`, `tae` |
+
+Slot IDs correspond to CLI component options: `diffusion_model` uses
+`--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
+Select optional components when required by your checkpoint or task.
+
+### CLI
+
+#### Example (SD 1.5)
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  -m ..\models\checkpoints\sd_v1.5.safetensors `
+  --clip_vision ..\models\clip_vision\clip_vision_h.safetensors `
+  --ip-adapter ..\models\ipadapter\ip-adapter_sd15.safetensors `
+  --ip-adapter-image ..\inputs\reference.png `
+  -p "a woman, best quality" `
+  -n "lowres, bad anatomy" `
+  --cfg-scale 7 `
+  --steps 30 `
+  --sampling-method dpm++2m `
+  --scheduler karras `
+  -W 512 `
+  -H 512 `
+  --ip-adapter-strength 0.8
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  -m ../models/checkpoints/sd_v1.5.safetensors \
+  --clip_vision ../models/clip_vision/clip_vision_h.safetensors \
+  --ip-adapter ../models/ipadapter/ip-adapter_sd15.safetensors \
+  --ip-adapter-image ../inputs/reference.png \
+  -p "a woman, best quality" \
+  -n "lowres, bad anatomy" \
+  --cfg-scale 7 \
+  --steps 30 \
+  --sampling-method dpm++2m \
+  --scheduler karras \
+  -W 512 \
+  -H 512 \
+  --ip-adapter-strength 0.8
+```
+
+#### Example (SDXL)
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  -m ..\models\checkpoints\sdxl.safetensors `
+  --clip_vision ..\models\clip_vision\clip_vision_h.safetensors `
+  --ip-adapter ..\models\ipadapter\ip-adapter_sdxl_vit-h.safetensors `
+  --ip-adapter-image ..\inputs\reference.png `
+  -p "a woman, best quality" `
+  -n "lowres, bad anatomy" `
+  --cfg-scale 6 `
+  --steps 25 `
+  --sampling-method dpm++2m `
+  --scheduler karras `
+  -W 1024 `
+  -H 1024 `
+  --ip-adapter-strength 0.8 `
+  --vae-tiling
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  -m ../models/checkpoints/sdxl.safetensors \
+  --clip_vision ../models/clip_vision/clip_vision_h.safetensors \
+  --ip-adapter ../models/ipadapter/ip-adapter_sdxl_vit-h.safetensors \
+  --ip-adapter-image ../inputs/reference.png \
+  -p "a woman, best quality" \
+  -n "lowres, bad anatomy" \
+  --cfg-scale 6 \
+  --steps 25 \
+  --sampling-method dpm++2m \
+  --scheduler karras \
+  -W 1024 \
+  -H 1024 \
+  --ip-adapter-strength 0.8 \
+  --vae-tiling
+```
+
+The SDXL VAE decode at 1024x1024 is memory heavy; add `--vae-tiling` (and
+`--offload-to-cpu`) on GPUs with limited VRAM.
+
+#### Plus variants
+
+Use the Plus weights matching your base model. The same IP-Adapter options
+apply; no extra flag is needed. Plus can also be combined with Control Net.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  -m ..\models\checkpoints\sd_v1.5.safetensors `
+  --clip_vision ..\models\clip_vision\clip_vision_h.safetensors `
+  --ip-adapter ..\models\ipadapter\ip-adapter-plus_sd15.safetensors `
+  --ip-adapter-image ..\inputs\reference.png `
+  -p "a woman, best quality" `
+  -n "lowres, bad anatomy" `
+  --cfg-scale 7 `
+  --steps 30 `
+  --sampling-method dpm++2m `
+  --scheduler karras `
+  -W 512 `
+  -H 512 `
+  --ip-adapter-strength 0.8
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  -m ../models/checkpoints/sd_v1.5.safetensors \
+  --clip_vision ../models/clip_vision/clip_vision_h.safetensors \
+  --ip-adapter ../models/ipadapter/ip-adapter-plus_sd15.safetensors \
+  --ip-adapter-image ../inputs/reference.png \
+  -p "a woman, best quality" \
+  -n "lowres, bad anatomy" \
+  --cfg-scale 7 \
+  --steps 30 \
+  --sampling-method dpm++2m \
+  --scheduler karras \
+  -W 512 \
+  -H 512 \
+  --ip-adapter-strength 0.8
+```
+
+The startup log line `IP-Adapter: 16 image tokens` (versus `4` for the
+classic adapters) confirms a Plus file was loaded.
+
+#### Combining with Control Net
+
+Add the usual Control Net options to keep the reference appearance while
+controlling the pose:
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  -m ..\models\checkpoints\sdxl.safetensors `
+  --clip_vision ..\models\clip_vision\clip_vision_h.safetensors `
+  --ip-adapter ..\models\ipadapter\ip-adapter_sdxl_vit-h.safetensors `
+  --control-net ..\models\controlnet\OpenPoseXL2.safetensors `
+  --ip-adapter-image ..\inputs\character.png `
+  --control-image ..\inputs\pose.png `
+  -p "a character, side view" `
+  --cfg-scale 6 `
+  --steps 25 `
+  -W 1024 `
+  -H 1024 `
+  --ip-adapter-strength 0.9 `
+  --control-strength 0.8 `
+  --vae-tiling
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  -m ../models/checkpoints/sdxl.safetensors \
+  --clip_vision ../models/clip_vision/clip_vision_h.safetensors \
+  --ip-adapter ../models/ipadapter/ip-adapter_sdxl_vit-h.safetensors \
+  --control-net ../models/controlnet/OpenPoseXL2.safetensors \
+  --ip-adapter-image ../inputs/character.png \
+  --control-image ../inputs/pose.png \
+  -p "a character, side view" \
+  --cfg-scale 6 \
+  --steps 25 \
+  -W 1024 \
+  -H 1024 \
+  --ip-adapter-strength 0.9 \
+  --control-strength 0.8 \
+  --vae-tiling
+```
 
 ## Options
 
@@ -38,50 +221,3 @@ detected from the weight file, so the same options work for both.
 - `--ip-adapter-strength <float>` strength of the IP-Adapter injection
   (default 1.0). Lower values let the text prompt dominate; 0.6 to 0.8 is
   a good starting range.
-
-## Example (SD 1.5)
-
-```
-sd-cli -m ..\models\sd_v1.5.safetensors --clip_vision ..\models\clip_vision_h.safetensors --ip-adapter ..\models\ip-adapter_sd15.safetensors --ip-adapter-image ..\assets\reference.png --ip-adapter-strength 0.8 -p "a woman, best quality" -n "lowres, bad anatomy" --cfg-scale 7 --steps 30 --sampling-method dpm++2m --scheduler karras -W 512 -H 512
-```
-
-## Example (SDXL)
-
-```
-sd-cli -m ..\models\sdxl.safetensors --clip_vision ..\models\clip_vision_h.safetensors --ip-adapter ..\models\ip-adapter_sdxl_vit-h.safetensors --ip-adapter-image ..\assets\reference.png --ip-adapter-strength 0.8 -p "a woman, best quality" -n "lowres, bad anatomy" --cfg-scale 6 --steps 25 --sampling-method dpm++2m --scheduler karras -W 1024 -H 1024 --vae-tiling
-```
-
-The SDXL VAE decode at 1024x1024 is memory heavy; add `--vae-tiling` (and
-`--offload-to-cpu`) on GPUs with limited VRAM.
-
-## Plus variants
-
-The Plus adapters (`ip-adapter-plus_sd15`, `ip-adapter-plus_sdxl_vit-h`)
-replace the small linear image projection with a Resampler (a
-Perceiver-style module with learned latent queries). Instead of pooling the
-CLIP-Vision output into one vector, the Resampler attends over the full grid
-of penultimate CLIP-Vision hidden states and emits more image tokens (16
-instead of 4). The result transfers finer detail and layout from the
-reference, at a small extra cost in the image-projection step.
-
-No extra flags are needed. The variant is detected from the weight file (the
-Resampler's `image_proj.latents` tensor), and every Resampler dimension is
-read from the tensor shapes, so the same `--ip-adapter`,
-`--ip-adapter-image`, and `--ip-adapter-strength` options apply. Plus
-composes with Control Net in the same way as the classic adapters.
-
-```
-sd-cli -m ..\models\sd_v1.5.safetensors --clip_vision ..\models\clip_vision_h.safetensors --ip-adapter ..\models\ip-adapter-plus_sd15.safetensors --ip-adapter-image ..\assets\reference.png --ip-adapter-strength 0.8 -p "a woman, best quality" -n "lowres, bad anatomy" --cfg-scale 7 --steps 30 --sampling-method dpm++2m --scheduler karras -W 512 -H 512
-```
-
-The startup log line `IP-Adapter: 16 image tokens` (versus `4` for the
-classic adapters) confirms a Plus file was loaded.
-
-## Combining with Control Net
-
-Add the usual Control Net options to keep the reference appearance while
-controlling the pose:
-
-```
-sd-cli -m ..\models\sdxl.safetensors --clip_vision ..\models\clip_vision_h.safetensors --ip-adapter ..\models\ip-adapter_sdxl_vit-h.safetensors --ip-adapter-image ..\assets\character.png --ip-adapter-strength 0.9 --control-net ..\models\OpenPoseXL2.safetensors --control-image ..\assets\pose.png --control-strength 0.8 -p "a character, side view" --cfg-scale 6 --steps 25 -W 1024 -H 1024 --vae-tiling
-```

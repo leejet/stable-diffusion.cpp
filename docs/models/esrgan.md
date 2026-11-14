@@ -1,13 +1,42 @@
-## Using ESRGAN to upscale results
+# ESRGAN and MoSR
 
-You can use ESRGAN—such as the model [RealESRGAN_x4plus_anime_6B.pth](https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth)—to upscale the generated images and improve their overall resolution and clarity.
+ESRGAN and compatible MoSR weights upscale generated images. Pass the chosen
+upscaler with `--upscale-model`.
 
-MoSR models with the PixelShuffle upsampler, such as [4xNomos2_hq_mosr.pth](https://github.com/Phhofm/models/releases/download/4xNomos2_hq_mosr/4xNomos2_hq_mosr.pth), are also supported. The architecture is detected from the weights, so they are used the same way as ESRGAN models.
+## Model files
 
-RGBA images, including Qwen Image 2.1 output, keep their alpha channel during model upscaling and hires fix. The upscaler processes the RGB channels; the alpha channel is resized with bilinear interpolation and recombined with the upscaled image.
+| Component | Weights and downloads | CLI option | Requirement |
+| --- | --- | --- | --- |
+| Base model | [Stable Diffusion checkpoint](sd.md) | `-m` / `--model` | Required for generation below |
+| ESRGAN upscaler | [RealESRGAN_x4plus_anime_6B.pth](https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth) | `--upscale-model` | Choose a compatible upscaler |
+| MoSR upscaler | [4xNomos2_hq_mosr.pth](https://github.com/Phhofm/models/releases/download/4xNomos2_hq_mosr/4xNomos2_hq_mosr.pth) | `--upscale-model` | Alternative; requires the PixelShuffle upsampler |
 
-- Specify the model path using the `--upscale-model PATH` parameter. example:
+## Usage
 
-```bash
-sd-cli -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat" --upscale-model ../models/RealESRGAN_x4plus_anime_6B.pth
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
+
+### CLI
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  -m ..\models\checkpoints\v1-5-pruned-emaonly.safetensors `
+  --upscale-model ..\models\upscale_models\RealESRGAN_x4plus_anime_6B.pth `
+  -p "a lovely cat"
 ```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  -m ../models/checkpoints/v1-5-pruned-emaonly.safetensors \
+  --upscale-model ../models/upscale_models/RealESRGAN_x4plus_anime_6B.pth \
+  -p "a lovely cat"
+```
+
+## Notes and limitations
+
+RGBA output retains its alpha channel during model upscaling and hires fix.
+The upscaler processes RGB; alpha is resized with bilinear interpolation and
+recombined with the result. The model architecture is detected from the weights.

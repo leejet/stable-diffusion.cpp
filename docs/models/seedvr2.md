@@ -1,8 +1,13 @@
-# SeedVR2 image and video super-resolution
+# SeedVR2
 
 SeedVR2 upscales images and videos with `-M vid_upscale`. Support is experimental.
 
-## Weights
+## Model files
+
+| Component | Weights and downloads | CLI option | Requirement |
+| --- | --- | --- | --- |
+| Diffusion model | [ComfyUI SeedVR2](https://huggingface.co/Comfy-Org/SeedVR2) | `--diffusion-model` | Choose 3B or 7B Sharp below |
+| SeedVR2 VAE | `seedvr2_ema_vae_fp16.safetensors` from the same repository | `--vae` | Required; shared by both variants |
 
 These [ComfyUI safetensors weights](https://huggingface.co/Comfy-Org/SeedVR2)
 load directly, without conversion or a separate text encoder:
@@ -14,30 +19,79 @@ load directly, without conversion or a separate text encoder:
 
 Use the matching SeedVR2 VAE for either model. The 7B model requires more memory.
 
-## Upscale an image
+## Usage
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
+
+### CLI
+
+#### Upscale an image
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  -M vid_upscale `
+  --diffusion-model ..\models\diffusion_models\seedvr2_3b_int8_convrot.safetensors `
+  --vae ..\models\vae\seedvr2_ema_vae_fp16.safetensors `
+  -i input.png `
+  --upscale-factor 2 `
+  -s 42 `
+  -o restored.png
+```
+
+**Linux/macOS**
 
 ```sh
-sd-cli -M vid_upscale \
-  --diffusion-model models/diffusion_models/seedvr2_3b_int8_convrot.safetensors \
-  --vae models/vae/seedvr2_ema_vae_fp16.safetensors \
-  -i input.png --upscale-factor 2 -s 42 -o restored.png
+./bin/sd-cli \
+  -M vid_upscale \
+  --diffusion-model ../models/diffusion_models/seedvr2_3b_int8_convrot.safetensors \
+  --vae ../models/vae/seedvr2_ema_vae_fp16.safetensors \
+  -i input.png \
+  --upscale-factor 2 \
+  -s 42 \
+  -o restored.png
 ```
 
 `-i` / `--init-img` accepts a single image. Outputs can be PNG, JPEG, or WebP.
 No FPS or temporal chunk setting is needed for an image.
 
-## Upscale a video
+#### Upscale a video
 
 Extract the video into numbered frames, then pass the frame directory:
+
+**Windows (PowerShell)**
+
+```powershell
+mkdir frames
+ffmpeg -i input.mp4 -fps_mode passthrough frames\%06d.png
+.\bin\Release\sd-cli.exe `
+  -M vid_upscale `
+  --diffusion-model ..\models\diffusion_models\seedvr2_3b_int8_convrot.safetensors `
+  --vae ..\models\vae\seedvr2_ema_vae_fp16.safetensors `
+  --input-frames frames `
+  --upscale-factor 2 `
+  --fps 24 `
+  --vsr-temporal-chunk-size 1 `
+  -s 42 `
+  -o restored.avi
+```
+
+**Linux/macOS**
 
 ```sh
 mkdir frames
 ffmpeg -i input.mp4 -fps_mode passthrough frames/%06d.png
-sd-cli -M vid_upscale \
-  --diffusion-model models/diffusion_models/seedvr2_3b_int8_convrot.safetensors \
-  --vae models/vae/seedvr2_ema_vae_fp16.safetensors \
-  --input-frames frames --upscale-factor 2 --fps 24 \
-  --vsr-temporal-chunk-size 1 -s 42 -o restored.avi
+./bin/sd-cli \
+  -M vid_upscale \
+  --diffusion-model ../models/diffusion_models/seedvr2_3b_int8_convrot.safetensors \
+  --vae ../models/vae/seedvr2_ema_vae_fp16.safetensors \
+  --input-frames frames \
+  --upscale-factor 2 \
+  --fps 24 \
+  --vsr-temporal-chunk-size 1 \
+  -s 42 \
+  -o restored.avi
 ```
 
 Set `--fps` to the source video's frame rate; 24 is only the example above.
@@ -46,7 +100,7 @@ Frames are read in filename order. Use either `-i` or `--input-frames`, not both
 Video outputs support AVI, WebM, and animated WebP. To save individual frames,
 use an output pattern such as `-o restored/%06d.png`.
 
-## Settings and limits
+## Notes and limitations
 
 - `--upscale-factor` is required and must be a positive integer. Output width
   and height are exactly the input dimensions multiplied by this value.

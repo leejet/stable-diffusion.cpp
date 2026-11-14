@@ -32,38 +32,142 @@ VAE are incompatible. No audio VAE is needed.
 
 ### Download weights
 
-- Download minimax_h3_image_pruned
-    - safetensors: https://huggingface.co/Comfy-Org/MiniMax-H3-Image/tree/main/diffusion_models
-- Download qwen3vl_32b_minimax_h3
-    - safetensors: https://huggingface.co/Comfy-Org/MiniMax-H3-Image/tree/main/text_encoders
-    - gguf: https://huggingface.co/leejet/MiniMax-H3-GGUF/tree/main
-- Or download the P-H3-Image text encoder (Qwen3-VL-4B with the text connector)
-    - safetensors: https://huggingface.co/PrunaAI/P-H3-Image-Comfy/tree/main/text_encoders
-- Download vae
-    - safetensors: https://huggingface.co/Comfy-Org/MiniMax-H3-Image/tree/main/vae
+| Component | Weights and downloads | CLI option | Requirement |
+| --- | --- | --- | --- |
+| minimax_h3_image_pruned | [Safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3-Image/tree/main/diffusion_models) | `--diffusion-model` | Required |
+| qwen3vl_32b_minimax_h3 | [Safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3-Image/tree/main/text_encoders)<br>[GGUF](https://huggingface.co/leejet/MiniMax-H3-GGUF/tree/main) | `--llm` | Use matching text encoder |
+| P-H3-Image text encoder (Qwen3-VL-4B with the text connector) | [Safetensors](https://huggingface.co/PrunaAI/P-H3-Image-Comfy/tree/main/text_encoders) | `--llm` | Use matching text encoder |
+| vae | [Safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3-Image/tree/main/vae) | `--vae` | Use matching VAE |
 
-## Text-to-image
+## Usage
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
+
+### Web UI
+
+Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
+server, then select the recipe matching your weights. Fill the component slots
+below and click **Load models**.
+Use the files and compatibility requirements in [Model files](#model-files).
+
+| Recipe | Component slots |
+| --- | --- |
+| MiniMax H3 Image (`minimax-h3-image`) | `diffusion_model`, `llm`, `llm_vision`, `embeddings_connectors`, `vae` |
+
+Slot IDs correspond to CLI component options: `diffusion_model` uses
+`--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
+Select optional components when required by your checkpoint or task.
+
+### CLI
+
+#### Text-to-image
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  --diffusion-model ..\models\diffusion_models\minimax_h3_image_pruned_bf16.safetensors `
+  --vae ..\models\vae\minimax_h3_image_vae_fp16.safetensors `
+  --llm ..\models\text_encoders\qwen3vl_32b_minimax_h3-Q4_K_M.gguf `
+  -p "A silver tabby kitten holding a sign reading 'sd.cpp', natural daylight" `
+  --cfg-scale 1.0 `
+  --steps 6 `
+  --sampling-method euler `
+  --sigmas minimax-h3-image `
+  -W 1024 `
+  -H 1024 `
+  --rng cpu `
+  --offload-to-cpu `
+  --diffusion-fa `
+  --vae-tiling `
+  -v
+```
+
+**Linux/macOS**
 
 ```sh
-.\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\minimax_h3_image_pruned_bf16.safetensors --vae ..\models\vae\minimax_h3_image_vae_fp16.safetensors --llm ..\models\text_encoders\qwen3vl_32b_minimax_h3-Q4_K_M.gguf -p "A silver tabby kitten holding a sign reading 'sd.cpp', natural daylight" --cfg-scale 1.0 --steps 6 --sampling-method euler --sigmas minimax-h3-image -v -W 1024 -H 1024 --offload-to-cpu --rng cpu --diffusion-fa --vae-tiling
+./bin/sd-cli \
+  --diffusion-model ../models/diffusion_models/minimax_h3_image_pruned_bf16.safetensors \
+  --vae ../models/vae/minimax_h3_image_vae_fp16.safetensors \
+  --llm ../models/text_encoders/qwen3vl_32b_minimax_h3-Q4_K_M.gguf \
+  -p "A silver tabby kitten holding a sign reading 'sd.cpp', natural daylight" \
+  --cfg-scale 1.0 \
+  --steps 6 \
+  --sampling-method euler \
+  --sigmas minimax-h3-image \
+  -W 1024 \
+  -H 1024 \
+  --rng cpu \
+  --offload-to-cpu \
+  --diffusion-fa \
+  --vae-tiling \
+  -v
 ```
 
 With the P-H3-Image text encoder, replace the `--llm` argument:
 
-```sh
+**Windows (PowerShell) arguments**
+
+```text
 --llm ..\models\text_encoders\p-h3-image_text_encoder_int8_convrot.safetensors
+```
+
+**Linux/macOS arguments**
+
+```text
+--llm ../models/text_encoders/p-h3-image_text_encoder_int8_convrot.safetensors
 ```
 
 Use Euler, CFG 1, and `--sigmas minimax-h3-image` for the model's six-step
 schedule. The default discrete scheduler also produces this schedule with
 `--steps 6`. Prompt expansion is not included.
 
-## Reference-image editing
+#### Reference-image editing
 
 Add `--ref-image` (or `-r`) for reference-image editing:
 
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  --diffusion-model ..\models\diffusion_models\minimax_h3_image_pruned_bf16.safetensors `
+  --vae ..\models\vae\minimax_h3_image_vae_fp16.safetensors `
+  --llm ..\models\text_encoders\qwen3vl_32b_minimax_h3-Q4_K_M.gguf `
+  -p "Edit <Picture 1>. Put a red scarf on the cat, preserving its face and the background." `
+  -r ..\inputs\ernie_image\turbo_example.png `
+  --cfg-scale 1.0 `
+  --steps 6 `
+  --sampling-method euler `
+  --sigmas minimax-h3-image `
+  -W 1024 `
+  -H 1024 `
+  --rng cpu `
+  --offload-to-cpu `
+  --diffusion-fa `
+  --vae-tiling `
+  -v
+```
+
+**Linux/macOS**
+
 ```sh
-.\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\minimax_h3_image_pruned_bf16.safetensors --vae ..\models\vae\minimax_h3_image_vae_fp16.safetensors --llm ..\models\text_encoders\qwen3vl_32b_minimax_h3-Q4_K_M.gguf -p "Edit <Picture 1>. Put a red scarf on the cat, preserving its face and the background." -r ..\assets\ernie_image\turbo_example.png --cfg-scale 1.0 --steps 6 --sampling-method euler --sigmas minimax-h3-image -v -W 1024 -H 1024 --offload-to-cpu --rng cpu --diffusion-fa --vae-tiling
+./bin/sd-cli \
+  --diffusion-model ../models/diffusion_models/minimax_h3_image_pruned_bf16.safetensors \
+  --vae ../models/vae/minimax_h3_image_vae_fp16.safetensors \
+  --llm ../models/text_encoders/qwen3vl_32b_minimax_h3-Q4_K_M.gguf \
+  -p "Edit <Picture 1>. Put a red scarf on the cat, preserving its face and the background." \
+  -r ../inputs/ernie_image/turbo_example.png \
+  --cfg-scale 1.0 \
+  --steps 6 \
+  --sampling-method euler \
+  --sigmas minimax-h3-image \
+  -W 1024 \
+  -H 1024 \
+  --rng cpu \
+  --offload-to-cpu \
+  --diffusion-fa \
+  --vae-tiling \
+  -v
 ```
 
 `--ref-image` can be repeated. Reference images are numbered in argument order
@@ -74,7 +178,7 @@ Reference images keep their aspect ratio. The text encoder sees a 1024-pixel
 short edge, while VAE inputs use a short edge between 1024 and 2048 pixels.
 Small references are enlarged and dimensions are rounded to multiples of 32.
 
-## Shape and runtime notes
+## Notes and limitations
 
 - Width and height are aligned upward to a multiple of 32.
 - Start at 1024 × 1024. Larger canvases and more references increase memory use.

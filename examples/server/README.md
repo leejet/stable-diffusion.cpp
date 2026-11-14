@@ -1,70 +1,74 @@
-# Model selection
+# stable-diffusion.cpp Server
 
-Start without model arguments to select models in the web UI:
+`sd-server` provides a Web UI for image and video generation, model management,
+and HTTP APIs. Download or build the server before starting; see the
+[build guide](../../docs/build.md) and [frontend build instructions](#build-with-frontend).
 
-```sh
-sd-server --model-dir ./models
-```
+- [Web UI](#web-ui): start the server, load a model, and generate.
+- [Model management](#model-management): model directories, recipes, and startup models.
+- [Server configuration](#server-configuration): launcher settings, network, logging, and help.
+- [API](#api): native and compatibility endpoints.
+- [Frontend development](#frontend-development): build or customize the Web UI.
 
-From a source checkout, you can also use `sh ./start-server.sh` on Linux/macOS
-or `.\start-server.bat` on Windows. The launchers look for the server relative
-to the script: beside the script, then in `bin/Release/`, `bin/`,
-`build/bin/Release/`, and `build/bin/`, in that order.
-For a different build directory, set `SD_SERVER_PATH` to the executable path:
+## Web UI
 
-```sh
-SD_SERVER_PATH="./build_vulkan/bin/sd-server" sh ./start-server.sh --listen-port 8080
-```
+### Start the server
+
+From the repository root, start the launcher. It finds the server executable
+and uses the repository's `models/` directory:
+
+**Windows (PowerShell)**
 
 ```powershell
-$env:SD_SERVER_PATH = ".\build_vulkan\bin\Release\sd-server.exe"
-.\start-server.bat --listen-port 8080
+.\start-server.bat
 ```
 
-Binary release archives include both launchers. Keep the launchers under version
-control and put personal settings in a separate file beside them:
+You can also double-click `start-server.bat` in File Explorer to start the
+server. Keep the console window open while using the Web UI.
 
-- Windows batch: `start-server.local.bat`
-- Linux/macOS: `start-server.local.sh`
-
-These local files are ignored by Git and excluded from release archives. They
-are loaded automatically after the launcher's defaults. They can override
-`SD_SERVER_PATH`, `MODEL_DIR`, and `COMMANDLINE_ARGS`; there is no need to edit
-the tracked launchers. For example:
-
-```bat
-@echo off
-set "MODEL_DIR=D:\stable-diffusion-webui\models"
-set "COMMANDLINE_ARGS=--listen-port 8080 --offload-to-cpu"
-```
+**Linux/macOS**
 
 ```sh
-MODEL_DIR="/data/stable-diffusion-webui/models"
-COMMANDLINE_ARGS="--listen-port 8080 --offload-to-cpu"
+sh ./start-server.sh
 ```
 
-Each launcher prints the resolved command before execution and forwards the
-server's exit code.
+To start the executable directly instead, run from the build directory:
 
-`SD_SERVER_PATH` inherits the environment value by default; leave it empty for
-automatic discovery, or set it in the local file to select another executable.
-Settings are applied in this order: launcher defaults, local configuration,
-then invocation arguments. Repeated `--model-dir` arguments add roots, so they
-do not replace the `MODEL_DIR` root. Local configuration files are shell scripts
-and use the corresponding shell's syntax.
+**Windows (PowerShell)**
 
-The launchers preserve the current working directory, so the default
-`MODEL_DIR="./models"` is relative to where you start the launcher. Arguments
-passed when invoking the launcher follow these defaults. Repeated `--model-dir`
-arguments add search roots rather than replacing `MODEL_DIR`; set `MODEL_DIR` in
-the local configuration to change the first root. Other single-value options can override the defaults.
-In the shell script, `COMMANDLINE_ARGS` is a
-whitespace-separated list; pass values containing spaces as quoted arguments
-when invoking the script. `MODEL_DIR` itself supports spaces in both scripts.
-A leading `--version` bypasses the configured defaults. An explicit
-`SD_SERVER_PATH` is used without falling back to another build if it is invalid.
+```powershell
+.\bin\Release\sd-server.exe --model-dir ..\models
+```
 
-Choose a recipe, select the required component files, and click **Load models**.
+**Linux/macOS**
+
+```sh
+./bin/sd-server --model-dir ../models
+```
+
+The Windows path above is for a Visual Studio Release build. Adjust the path
+for another build configuration or an extracted release archive. Open
+<http://127.0.0.1:1234/> after the server starts, and keep the server running
+while using the browser.
+
+### Load a model
+
+1. Download the weights and required components listed in the matching
+   [model guide](../../docs/models/README.md). Put them in the category folders
+   under `models/`, such as `checkpoints/`, `diffusion_models/`, `text_encoders/`,
+   `tokenizers/`, and `vae/`. See [Model directories](#model-directories) below.
+2. Click **Model** below the prompt to open model selection.
+3. Choose the matching **Recipe**. Keep **Apply recipe defaults** enabled to
+   start with that recipe's generation settings.
+4. Select each component in its named field: for example, **Diffusion model**,
+   the model-specific text encoder field, and **VAE**. Required fields have an
+   asterisk. A VAE/TAE requirement needs one compatible decoder. Match all files
+   to the chosen checkpoint and variant, as described in its model guide.
+5. If a file is missing from a dropdown, check its category folder and click
+   **Refresh files & recipes**. Selectors support searching by name or path.
+6. Click **Load models** and wait for loading to finish. Selecting a recipe or
+   file alone does not reload the model.
+
 Recipe and component selectors support searching by name or relative file ID.
 Use the arrow keys and Enter to select, or Escape to cancel a search. With
 **Apply recipe defaults** enabled, selecting a recipe immediately applies its
@@ -74,123 +78,56 @@ switching recipes. This preference defaults to enabled and is saved locally.
 Model loading and server-info refreshes do not reapply defaults or reset the form.
 Recipes declaring `video_frames` also switch the form to Video Generation;
 other recipes switch to Image Generation. Generation is enabled after the
-selected recipe is loaded. Changing a selection does not reload the model
-until you click Load.
+selected recipe is loaded.
+
+The model button shows elapsed loading time and keeps the final time after
+success or failure, including after a page refresh.
+
+### Generate an image or video
+
+1. Enter a prompt, for example `a lovely cat` for an image model.
+2. Open **Sample & Guidance** to set **Method**, **Scheduler**, **Steps**, and
+   **CFG Scale** when the model guide specifies values different from the recipe
+   defaults. Set the output dimensions in **Aspect Ratio & Resolution**.
+3. Supply inputs for the chosen task. Editing recipes use **Reference Images**;
+   IP-Adapter uses **IP-Adapter Image**. For image-to-video, use video generation
+   and upload a **Start Frame**; add an **End Frame** only for a compatible
+   first/last-frame workflow. Set the video length and FPS as required by the model.
+4. Click **Generate**. Wait for denoising, decoding, and output encoding to
+   finish, then preview or save the result. Sampling reaching 100% does not mean
+   decoding has finished.
 
 The generation status bar shows the current stage and elapsed time even when
 Preview Mode is `none`. During sampling it shows completed steps for the current
 pass; prompt encoding and VAE decoding show an activity indicator when their
-total work is unknown. Sampling reaching 100% does not mean the job is finished:
-decoding, ADetailer, and output encoding may still follow.
-The canvas keeps the submitted output aspect ratio, and stage changes keep the
-same layout. Editing the next request's resolution does not resize the current
-preview or result.
+total work is unknown. The canvas keeps the submitted output aspect ratio, and
+stage changes keep the same layout. Editing the next request's resolution does
+not resize the current preview or result.
 
-The server can also start with the existing model arguments shown below;
-existing API clients then work without selecting a recipe. The UI automatically
-selects **Command-line model (all features)** and uses the startup generation
-defaults. This runtime-only recipe exposes all controls for the supported
-image/video mode. Selecting another recipe previews a model switch; selecting
-the command-line entry again restores its generation defaults. The entry is
-removed when the command-line context is unloaded or replaced.
+### LoRAs
 
-Built-in recipes cover SD 1/2/3/3.5, SDXL and distilled checkpoints;
-FLUX 1/2/3, Chroma, Qwen Image and editing variants; Z-Image, Anima, ERNIE,
-LENS, PiD and other supported image families; AnimateDiff, Wan, LTX,
-HunyuanVideo, LingBot Video and MiniMax-H3. Model-specific text encoder
-labels identify the expected encoder family and size. Loading a video model enables **Video Generation**; I2V also requires a
-start image. The model button below the prompt opens model and recipe selection.
-Its status summary shows elapsed loading time from the status API and keeps the final
-time after success or failure, including after a page refresh.
-Built-ins are embedded in the
-binary from [recipes/](recipes/), with one JSON file per recipe. Adding or
-editing a built-in requires rebuilding the server. User recipes are read from
-`<model-dir>/recipes/*.json`. A valid user recipe with the same ID replaces
-the entire built-in recipe. Across roots, the first valid user recipe wins;
-overrides are logged. Duplicate user IDs within one root are rejected; invalid
-recipes are reported without removing a valid recipe from another root or the
-built-in version. Slots need only `id` and
-`required`; the server supplies labels and search directories. Use `label`
-only when a recipe needs a more specific display name.
+To apply a LoRA, open **LoRA**, select a compatible file, and set its
+**Strength**. Place files under `models/loras/` or `models/Lora/`. Browser
+requests use this selector; prompt tags such as `<lora:name:1>` are CLI syntax
+and are not parsed by the native server API.
 
-Recipes use `features` to enable specialized controls and `disabled_features`
-to turn off shared defaults. Disabled features take precedence. The UI hides
-unsupported fields, empty sections and irrelevant sampler/cache options, and
-omits hidden values from generation requests. See the
-[feature declarations](api.md#recipe-feature-declarations) for the defaults
-and complete list of supported names.
+## Model management
 
-Built-in additions and changes must follow the [recipe policy](recipes/README.md).
-Split recipes by task weights or added capabilities, not by style or acceleration
-LoRAs. Quantizations, file formats and compatible layer-count variants share a
-recipe. Native encoders, projectors and connectors stay in the model's recipe.
-Community editing recipes require selecting the matching LoRA separately; a
-recipe does not enable it automatically.
-
-See [generation defaults and sources](recipes/defaults.md) for the selected
-publisher recommendations and reference-code defaults, with step defaults capped
-at 20. Recipes link to the
-original publisher's Hugging Face repository where one is available. DiT
-recipes default to Euler, except for models requiring a specialized sampler.
-
-Compatible recipes offer a TAE slot alongside VAE. When the checkpoint does not
-bundle a VAE, select at least one of VAE or TAE. The Models panel shows a reminder
-below the model selectors until this requirement is met. A selected TAE is used for
-encoding and decoding, including when a full VAE is also selected; use complete,
-model-compatible TAE weights rather than decoder-only preview weights. Qwen
-Image 2.1 uses the same recipe for its full VAE and TAEQI2.1 alternatives.
-
-The following variants have dedicated recipes:
-
-| Model | Recipe IDs / notes |
-| --- | --- |
-| Z-Image L2P | `z-image-l2p`; no VAE |
-| LLaDA-Image | `llada-image` (base) and `llada-image-turbo`; use matching encoders and connectors |
-| PixArt Alpha | `pixart-alpha-512`, `pixart-alpha-1024`; Alpha VAE scale and positional settings |
-| PiD / PiD 1.5 | `pid` / `pid-15` for Flux or Z-Image VAE; append `-sd3`, `-flux2`, or `-qwen-image` for other latent formats |
-| SDXL adapters | `sdxl-ip-adapter` supports classic and Plus ViT-H adapters; `sdxl-controlnet` requires compatible SDXL weights |
-| FLUX.1 Fill / Depth | `flux1-fill` uses Init Image and Mask Image; `flux1-depth` uses a precomputed depth map in Control Image |
-| SD2 / SDXL inpainting | `sd2-inpainting`, `sdxl-inpainting` |
-| SD-Turbo | `sd-turbo`; single-file SD2.1-derived checkpoint |
-| Community editing LoRAs | `anima-edit`, `krea2-raw-edit`, `krea2-turbo-edit`; apply a matching LoRA after loading |
-| HunyuanVideo 1.5 | `hunyuan-video-15-t2v`, `hunyuan-video-15-i2v`; choose the task's checkpoint |
-| Wan 2.1 / compatible single Wan 2.2 experts | `wan21-t2v`, `wan21-i2v`; the I2V recipe also accepts compatible SkyReels V2 weights |
-| Qwen Image 2.1 Turbo | `qwen-image-21-turbo`; standalone Turbo weights with the fixed 8-step schedule, Euler and CFG 1 |
-| MOSS Image | `moss-image-base`, `moss-image-sft`; choose the corresponding checkpoint |
-
-PiD always requires a reference image and uses the first one. Its recipes expose
-reference inputs rather than ordinary image-to-image inputs. IP-Adapter recipes
-expose a separate IP-Adapter image and strength. FLUX Canny/Depth consume Control
-Image directly without a separate ControlNet; the UI does not calculate edge
-or depth maps. Their strength is controlled by guidance, not ControlNet strength.
-Krea2 edit recipes use the default `krea2_ostris_edit` reference preset, so the
-editing LoRA must match that convention. Ordinary Anima and Krea2 recipes do not
-expose reference-image editing inputs.
-
-Fill/Depth guidance defaults follow the [Diffusers FLUX documentation](https://huggingface.co/docs/diffusers/api/pipelines/flux).
-SD-Turbo uses the [model card's one-step configuration](https://huggingface.co/stabilityai/sd-turbo),
-with CFG disabled using scale 1 in sd.cpp.
-
-SVD is not included: legacy model recognition and UNet branches remain, but the
-current runner/conditioning setup does not provide a dedicated SVD image-conditioning
-path. Adding a recipe alone would not establish a working SVD pipeline.
-
-Reference images, masks, audio, first/last video frames, and generation options
-such as upscaling remain generation inputs. Hardware and memory options remain
-startup arguments. Tiny SD/Tiny SD2 and Diffusers LCM directories must first be
-converted into single-file checkpoints for the file catalog. LCM checkpoints
-and LoRAs use the matching SD family recipe; select LCM sampling and adjust
-steps/CFG for the chosen weights.
-Metadata inspection, conversion, standalone upscaling and ADetailer are CLI
-workflows rather than model-loading recipes. ESRGAN and LTX latent upscalers
-are selected through generation upscaling settings with `--hires-upscalers-dir`;
-textual inversion uses the startup `--embd-dir` option.
+### Model directories
 
 Repeat `--model-dir` to share multiple model directories, including an existing
-SD WebUI model directory:
+SD WebUI model directory. Run these examples from the build directory:
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-server.exe --model-dir ..\models --model-dir D:\stable-diffusion-webui\models
+```
+
+**Linux/macOS**
 
 ```sh
-sd-server --model-dir ./models --model-dir /data/stable-diffusion-webui/models
+./bin/sd-server --model-dir ../models --model-dir /data/stable-diffusion-webui/models
 ```
 
 With no `--model-dir`, the server uses `./models`. Explicit roots replace that
@@ -216,6 +153,7 @@ models/
   checkpoints/
   diffusion_models/
   text_encoders/
+  tokenizers/
   vae/
   clip_vision/
   loras/
@@ -242,6 +180,132 @@ model root. Use `--lora-model-dir` to replace automatic discovery with one
 explicit LoRA directory. Duplicate names remain separate selectable entries. The LoRA selectors support
 searching by name or path with the same keyboard controls as model selectors.
 
+### Recipes
+
+A recipe describes a model's components, supported capabilities, and generation
+defaults. See the [model guides](../../docs/models/README.md) for compatible
+recipes and weights. Text encoder labels in the selectors identify the expected
+encoder family and size.
+
+#### Built-in and user recipes
+
+Built-in recipes are embedded in the binary from [recipes/](recipes/), with one JSON file per recipe. Adding or
+editing a built-in requires rebuilding the server. User recipes are read from
+`<model-dir>/recipes/*.json`. A valid user recipe with the same ID replaces
+the entire built-in recipe. Across roots, the first valid user recipe wins;
+overrides are logged. Duplicate user IDs within one root are rejected; invalid
+recipes are reported without removing a valid recipe from another root or the
+built-in version. Slots need only `id` and
+`required`; the server supplies labels and search directories. Use `label`
+only when a recipe needs a more specific display name.
+
+Built-in additions and changes must follow the [recipe policy](recipes/README.md).
+Split recipes by task weights or added capabilities, not by style or acceleration
+LoRAs. Quantizations, file formats and compatible layer-count variants share a
+recipe. Native encoders, projectors and connectors stay in the model's recipe.
+Community editing recipes require selecting the matching LoRA separately; a
+recipe does not enable it automatically.
+
+#### Generation defaults and controls
+
+See [generation defaults and sources](recipes/defaults.md) for the selected
+publisher recommendations and reference-code defaults, with step defaults capped
+at 20. Recipes link to the
+original publisher's Hugging Face repository where one is available. DiT
+recipes default to Euler, except for models requiring a specialized sampler.
+
+Recipes use `features` to enable specialized controls and `disabled_features`
+to turn off shared defaults. Disabled features take precedence. The UI hides
+unsupported fields, empty sections and irrelevant sampler/cache options, and
+omits hidden values from generation requests. See the
+[feature declarations](api.md#recipe-feature-declarations) for the defaults
+and complete list of supported names.
+
+#### VAE and TAE
+
+Compatible recipes offer a TAE slot alongside VAE. When the checkpoint does not
+bundle a VAE, select at least one of VAE or TAE. The Models panel shows a reminder
+below the model selectors until this requirement is met. A selected TAE is used for
+encoding and decoding, including when a full VAE is also selected; use complete,
+model-compatible TAE weights rather than decoder-only preview weights. Qwen
+Image 2.1 uses the same recipe for its full VAE and TAEQI2.1 alternatives.
+
+### Models loaded at startup
+
+You can pass the same model-loading arguments used by `sd-cli` to `sd-server`.
+For example, run this Z-Image Turbo configuration from the build directory:
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-server.exe `
+  --model-dir ..\models `
+  --diffusion-model ..\models\diffusion_models\z_image_turbo_bf16.safetensors `
+  --vae ..\models\vae\ae.sft `
+  --llm ..\models\text_encoders\qwen_3_4b.safetensors `
+  --offload-to-cpu `
+  -v `
+  --cfg-scale 1.0
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-server \
+  --model-dir ../models \
+  --diffusion-model ../models/diffusion_models/z_image_turbo_bf16.safetensors \
+  --vae ../models/vae/ae.sft \
+  --llm ../models/text_encoders/qwen_3_4b.safetensors \
+  --offload-to-cpu \
+  -v \
+  --cfg-scale 1.0
+```
+
+`--diffusion-model`, `--vae`, and `--llm` select the model components.
+`--offload-to-cpu` keeps weights in RAM when possible to reduce VRAM pressure,
+`-v` enables verbose logging, and `--cfg-scale 1.0` sets the default CFG scale.
+
+API clients can use the model loaded at startup without selecting a recipe.
+The UI automatically selects **Command-line model (all features)** and uses the
+startup generation defaults. This runtime-only recipe exposes all controls for the supported
+image/video mode. Selecting another recipe previews a model switch; selecting
+the command-line entry again restores its generation defaults. The entry is
+removed when the command-line context is unloaded or replaced.
+
+#### Identity inputs
+
+The browser currently has no PhotoMaker identity-image or PuLID identity-embedding
+upload control. Prepare the inputs using the
+[PhotoMaker](../../docs/models/photo_maker.md) or [PuLID](../../docs/models/pulid.md)
+guide, then supply them when starting the server. From the build directory, for example:
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-server.exe --model-dir ..\models --pm-id-images-dir ..\inputs\identity
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-server --model-dir ../models --pm-id-images-dir ../inputs/identity
+```
+
+Select the PhotoMaker recipe and weights in the browser. For PhotoMaker v2, also
+pass `--pm-id-embed-path` with the prepared embedding file. For PuLID, use
+`--pulid-id-embedding` instead of the PhotoMaker input argument, then select the
+PuLID recipe and weights. These startup inputs are inherited by generation requests.
+
+#### Sharded checkpoints
+
+For a checkpoint loaded from a complete repository directory, pass its model
+loading arguments when starting `sd-server`, as in the model's CLI example.
+Keep the index, tokenizer, and all shards together. The browser then uses
+**Command-line model (all features)** for the model loaded at startup; selecting
+an individual shard in a recipe dropdown does not load the whole repository.
+
+### Switching models
+
 The server keeps one model context loaded. Loading or unloading is rejected
 while generation requests or queued jobs are pending. A switch validates the
 selection before unloading the old context, then loads the replacement.
@@ -253,146 +317,186 @@ request parameters take precedence.
 See [the API reference](api.md#model-management) for recipe fields, supported
 slots, management endpoints, and compatibility behavior.
 
-# Example
+### Limitations
 
-The following example starts `sd-server` with a standalone diffusion model, VAE, and LLM text encoder:
+Tiny SD/Tiny SD2 and Diffusers LCM directories must first be
+converted into single-file checkpoints for the file catalog. LCM checkpoints
+and LoRAs use the matching SD family recipe; select LCM sampling and adjust
+steps/CFG for the chosen weights.
+Metadata inspection, conversion, standalone upscaling and ADetailer are CLI
+workflows rather than model-loading recipes. ESRGAN and LTX latent upscalers
+are selected through generation upscaling settings with `--hires-upscalers-dir`;
+textual inversion uses the startup `--embd-dir` option.
 
+SVD is not available through the current server pipeline.
+
+## Server configuration
+
+Reference images, masks, audio, first/last video frames, and generation options
+such as upscaling are supplied with generation requests. Hardware and memory
+options are startup arguments and apply to subsequent model loads.
+
+### Launcher settings
+
+Both source checkouts and binary release archives include `start-server.bat`
+and `start-server.sh`. The launchers search for the server beside the script,
+then in `bin/Release/`, `bin/`, `build/bin/Release/`, and `build/bin/`, in that order.
+They print the resolved command and forward the server's exit code.
+
+#### Custom executable
+
+For a different build directory, set `SD_SERVER_PATH` to the executable path.
+Run from the repository root:
+
+**Windows (PowerShell)**
+
+```powershell
+$env:SD_SERVER_PATH = ".\build_vulkan\bin\Release\sd-server.exe"
+.\start-server.bat --listen-port 8080
 ```
-.\bin\Release\sd-server.exe --diffusion-model  ..\models\diffusion_models\z_image_turbo_bf16.safetensors --vae ..\models\vae\ae.sft  --llm ..\models\text_encoders\qwen_3_4b.safetensors --offload-to-cpu -v --cfg-scale 1.0
+
+**Linux/macOS**
+
+```sh
+SD_SERVER_PATH="./build_vulkan/bin/sd-server" sh ./start-server.sh --listen-port 8080
 ```
 
-What this example does:
+`SD_SERVER_PATH` inherits the environment value by default. Leave it empty for
+automatic discovery. An explicit invalid path does not fall back to another build.
 
-* `--diffusion-model` selects the standalone diffusion model
-* `--vae` selects the VAE decoder
-* `--llm` selects the text encoder / language model used by this pipeline
-* `--offload-to-cpu` reduces VRAM pressure by keeping weights in RAM when possible
-* `-v` enables verbose logging (equivalent to `--log-level verbose`)
-* `--cfg-scale 1.0` sets the default CFG scale for generation
+#### Local configuration
+
+Keep personal settings in a file beside the launchers: `start-server.local.bat`
+on Windows or `start-server.local.sh` on Linux/macOS. These files are ignored by
+Git and excluded from release archives. They are loaded automatically and can
+set `SD_SERVER_PATH`, `MODEL_DIR`, and `COMMANDLINE_ARGS`.
+
+**Windows (`start-server.local.bat`)**
+
+```bat
+@echo off
+set "MODEL_DIR=D:\stable-diffusion-webui\models"
+set "COMMANDLINE_ARGS=--listen-port 8080 --offload-to-cpu"
+```
+
+**Linux/macOS (`start-server.local.sh`)**
+
+```sh
+MODEL_DIR="/data/stable-diffusion-webui/models"
+COMMANDLINE_ARGS="--listen-port 8080 --offload-to-cpu"
+```
+
+Settings are applied in this order: launcher defaults, local configuration,
+then invocation arguments. Local files are shell scripts and use the
+corresponding shell's syntax.
+
+The launchers preserve the current working directory, so the default
+`MODEL_DIR="./models"` is relative to where you start the launcher. To change
+the first model root, set `MODEL_DIR` in the local configuration. Repeated
+`--model-dir` arguments add search roots; other single-value options can override
+the defaults.
+
+In the shell script, `COMMANDLINE_ARGS` is a whitespace-separated list. Pass
+values containing spaces as quoted invocation arguments instead. `MODEL_DIR`
+itself supports spaces in both scripts. A leading `--version` bypasses the
+configured defaults.
+
+### Network and job queue
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--listen-ip <ip>` | `127.0.0.1` | Server listen address |
+| `--listen-port <port>` | `1234` | Server listen port |
+| `--max-pending-jobs <count>` | `64` | Maximum async jobs queued or generating |
+| `--completed-ttl-seconds <seconds>` | `600` | Retention time for completed async jobs |
+
+### Logging
 
 Logging defaults to `info`. Use `--log-level <level>` to select `debug`, `verbose`,
 `info`, `warn`, or `error` (from most to least detailed). Each level includes
 messages at that level and all less detailed levels. `-v` and `--verbose` are
 equivalent to `--log-level verbose`. If repeated, the last logging option wins.
 
-After the server starts successfully:
+### Command-line help
 
-* the web UI is available at `http://127.0.0.1:1234/`
-* the native async API is available under `/sdcpp/v1/...`
-* the compatibility APIs are available under `/v1/...` and `/sdapi/v1/...`
+Run from the build directory for the complete list of server and generation options:
 
-If you want to use a different host or port, pass:
+**Windows (PowerShell)**
 
-```bash
---listen-ip <ip> --listen-port <port>
+```powershell
+.\bin\Release\sd-server.exe --help
 ```
 
-The native async job queue can be tuned with:
+**Linux/macOS**
 
-```bash
---max-pending-jobs <count> --completed-ttl-seconds <seconds>
+```sh
+./bin/sd-server --help
 ```
 
-`--max-pending-jobs` defaults to 64 and limits how many async jobs may be
-queued or generating. `--completed-ttl-seconds` defaults to 600 and controls
-how long completed jobs remain available through the async API.
+## API
 
-# Frontend
+The server exposes these API families at the same host and port as the Web UI:
 
-## Build with Frontend
+| API | Path prefix |
+| --- | --- |
+| Native async API | `/sdcpp/v1/...` |
+| OpenAI-compatible API | `/v1/...` |
+| Stable Diffusion WebUI-compatible API | `/sdapi/v1/...` |
 
-The server can optionally build the web frontend and embed it into the binary as `gen_index_html.h`.
+See the [API reference](api.md) for endpoints, request fields, and examples.
 
-### Requirements
+## Frontend development
 
-Install the following tools:
+### Build with frontend
 
-* **Node.js** ≥ 20
-  https://nodejs.org/
+The server can build the frontend and embed it in the binary. Install
+[Node.js](https://nodejs.org/) 20 or newer and pnpm 10 or newer:
 
-* **pnpm** ≥ 10
-  Install via npm:
-
-```bash
+```sh
 npm install -g pnpm
-```
-
-Verify installation:
-
-```bash
 node -v
 pnpm -v
 ```
 
-### Install frontend dependencies
+Run the following commands from the repository root. They work in PowerShell
+and POSIX shells. Initialize the frontend submodule if it is missing, then
+configure and build with CMake:
 
-Go to the frontend directory and install dependencies:
-
-```bash
-cd examples/server/frontend
-pnpm install
-```
-
-### Build the server with CMake
-
-Enable the frontend build option when configuring CMake:
-
-```bash
-cmake -B build -DSD_SERVER_BUILD_FRONTEND=ON
+```sh
+git submodule update --init examples/server/frontend
+cmake -S . -B build -DSD_SERVER_BUILD_FRONTEND=ON
 cmake --build build --config Release
 ```
 
-If `pnpm` is available, the build system will automatically run:
+Add the backend options from the [build guide](../../docs/build.md) when
+configuring CMake. The build installs frontend dependencies, runs `pnpm run build`
+and `pnpm run build:header`, and embeds `gen_index_html.h` in `sd-server`.
+If pnpm is unavailable, CMake can use an existing generated header; without
+either, the server builds without the embedded Web UI.
 
-```
-pnpm run build
-pnpm run build:header
-```
+### Using an external frontend
 
-and embed the generated frontend into the server binary.
+Use `--serve-html-path` to serve a custom `index.html` instead of the embedded
+frontend. For example, place it at the repository root and run from the build
+directory:
 
-## Frontend Repository
+**Windows (PowerShell)**
 
-The web frontend is maintained in a **separate repository**, https://github.com/leejet/sdcpp-webui.
-
-If you want to modify the UI or frontend logic, please submit pull requests to the **frontend repository**.
-
-This repository (`stable-diffusion.cpp`) only vendors the frontend periodically. Changes from the frontend repo are synchronized:
-
-* approximately **every 1–2 weeks**, or
-* when there are **major frontend updates**
-
-Because of this, frontend changes will **not appear here immediately** after being merged upstream.
-
-## Using an external frontend
-
-By default, the server uses the **embedded frontend** generated during the build (`gen_index_html.h`).
-
-You can also serve a custom frontend file instead of the embedded one by using:
-
-```bash
---serve-html-path <path-to-index.html>
+```powershell
+.\bin\Release\sd-server.exe --model-dir ..\models --serve-html-path ..\index.html
 ```
 
-For example:
+**Linux/macOS**
 
-```bash
-sd-server --serve-html-path ./index.html
+```sh
+./bin/sd-server --model-dir ../models --serve-html-path ../index.html
 ```
 
-In this case, the server will load and serve the specified `index.html` file instead of the embedded frontend. This is useful when:
+This lets you develop or test the frontend without rebuilding the server binary.
 
-* developing or testing frontend changes
-* using a custom UI
-* avoiding rebuilding the binary after frontend modifications
+### Frontend repository
 
-# Usage
-
-For detailed command-line arguments, run:
-
-```bash
-./bin/sd-server -h
-```
-
-For completely black or white images or videos, NaNs, and the `--linear-scale` /
-`--attn-scale` startup options, see [Troubleshooting](../../docs/troubleshooting.md).
+The Web UI is maintained in the separate
+[sdcpp-webui repository](https://github.com/leejet/sdcpp-webui), included here as
+a Git submodule. Submit UI and frontend logic changes to that repository.
+Changes appear here when the submodule is updated.

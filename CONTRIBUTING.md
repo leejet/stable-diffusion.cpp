@@ -43,6 +43,53 @@ Link new documentation from [the documentation index](docs/README.md) or
 [the model index](docs/models/README.md), as appropriate. Keep supported model
 entries and their guide links in the project README.
 
+### Model Documentation
+
+Every new model or component integration must include a user guide in
+`docs/models/` in the same PR. For a variant or new task of an existing family,
+update that family's guide instead of creating a duplicate page. Add new guides
+to the model index, and update the supported-model entries and guide links in
+the project README when adding a model family or capability.
+
+Model guides should use the model name as their single top-level heading and
+start with a short description of supported tasks and compatibility requirements.
+`Model files` and `Usage` are required. Use the following sections in order,
+omitting other sections when they have no content:
+
+- `Supported variants` when variants need a separate comparison.
+- `Model files`, with component, weights/downloads, CLI option, and requirement
+  columns. Include tokenizers, projectors, connectors, downloads, conversion, and
+  required preprocessing.
+- `Usage`, with `Web UI` and `CLI` subsections where applicable. Link to the
+  server's shared Web UI guide and list compatible recipes/components. Group
+  complete CLI examples by task or variant within this section; do not add a
+  separate `Quick start` or `Examples` section. Keep API usage in its own
+  subsection when needed.
+- `Options` for model-specific settings.
+- `Notes and limitations` for input/output constraints, memory requirements,
+  and unsupported functionality.
+
+Follow the [model example conventions](docs/models/README.md#example-conventions)
+for working directories and shell syntax. Provide Windows PowerShell and
+Linux/macOS forms of executable examples, using `.\bin\Release\sd-cli.exe` and
+`./bin/sd-cli` respectively from the build directory. Use the corresponding
+server paths for Web UI startup. Keep backend-specific examples clearly labeled.
+Use multiline commands with mode and
+model components first, followed by inputs/prompts, sampling settings, dimensions,
+other model options, memory/backend options, and output/seed settings. Preserve
+checkpoint-specific values when reorganizing existing examples. Keep example
+images next to their commands, and update links when section anchors change.
+Keep shared Web UI operating instructions in `examples/server/README.md` and
+link to them from model guides. Document shared settings by linking to
+`docs/guides/`. Only describe Web UI
+recipes and capabilities that already exist; documentation cleanup alone is not
+a reason to add or change a built-in recipe.
+
+Before submitting, check download links, relative links, command paths, CLI
+options, and any recipe/component mappings against the implementation. Report
+which examples were actually run and which were only inspected in the PR's
+verification notes.
+
 Keep tensor layouts, internal class names, kernel implementation details,
 algorithm derivations, and development history out of usage guides. Keep task-specific
 profiling logs, numerical comparison procedures, and test artifacts local, and

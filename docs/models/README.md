@@ -4,6 +4,41 @@ Each guide covers weights, setup, and runnable examples for a model or component
 For shared generation options, device configuration, and troubleshooting, see the
 [documentation index](../README.md).
 
+When adding model support, follow the
+[model documentation requirements](../../CONTRIBUTING.md#model-documentation)
+for guide structure, examples, and index updates.
+
+## Example conventions
+
+Run the executable examples from the CMake build directory, for example after
+`cd build` from the repository root. Each guide gives both command forms:
+
+| Platform | CLI path from the build directory | Server path |
+| --- | --- | --- |
+| Windows, Visual Studio Release | `.\bin\Release\sd-cli.exe` | `.\bin\Release\sd-server.exe` |
+| Linux/macOS | `./bin/sd-cli` | `./bin/sd-server` |
+
+Windows examples use PowerShell backticks for line continuation. Linux/macOS
+examples use POSIX shell backslashes. Backend-specific examples identify their
+requirements; Metal examples apply to macOS only. A different CMake generator,
+build configuration, or extracted release archive can use another executable
+location; substitute that path while keeping the arguments.
+
+Keep weights under the repository's `models/` directory, organized into the
+categories described in the server guide. From the build directory these paths
+start with `../models/` on Linux/macOS and `..\models\` on Windows.
+
+Provide input images, masks, audio, or frame directories at the example paths,
+or change the corresponding arguments. Paths under `../inputs/` refer to local
+inputs you supply. Filenames in commands identify the example weights; adjust
+paths to match your downloads. Conversion and preprocessing scripts identify
+when they must be run from the source repository root instead.
+
+The [server Web UI guide](../../examples/server/README.md#web-ui) covers file
+placement, server startup, model loading, inputs, and generation. Each model
+guide lists its compatible recipes and components. Choose files from the same
+variant; a VAE or TAE selection must match that model.
+
 ## Image generation
 
 - [Anima](anima.md)
@@ -48,7 +83,7 @@ and model presets. Models that support both generation and editing use the same
 model guide.
 
 - [Boogu Image Edit](boogu_image.md#boogu-image-edit)
-- [Fibo 2.0 Dev / Edit Turbo](fibo2.md#examples)
+- [Fibo 2.0 Dev / Edit Turbo](fibo2.md#fibo-20-edit-turbo)
 - [FLUX.1-Kontext-dev](kontext.md)
 - [FLUX.2](flux2.md)
 - [FLUX.3 Image](flux3.md)

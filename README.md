@@ -84,7 +84,7 @@ API and command-line option may change frequently.***
     - [Boogu Image Edit](./docs/models/boogu_image.md)
     - [Mage-Flow-Edit](./docs/models/mage_flow.md#image-editing)
     - [LLaDA-Image Edit](./docs/models/llada_image.md#image-editing)
-    - [Fibo 2.0 Dev / Edit Turbo](./docs/models/fibo2.md#examples)
+    - [Fibo 2.0 Dev / Edit Turbo](./docs/models/fibo2.md#fibo-20-edit-turbo)
   - Video Models
     - [Wan2.1/Wan2.2](./docs/models/wan.md)
     - [MiniMax-H3](./docs/models/minimax_h3.md)
@@ -136,44 +136,69 @@ API and command-line option may change frequently.***
 - Download and extract pre-built binaries from the [releases page](https://github.com/leejet/stable-diffusion.cpp/releases)
 - Or build from source by following the [build guide](./docs/build.md)
 
-Run the commands below from the directory containing `sd-server` and `sd-cli`
-(typically `build/bin/` or `build/bin/Release/` for source builds). On Windows,
-use `.\sd-server.exe` and `.\sd-cli.exe` in place of `./sd-server` and `./sd-cli`.
+The executable examples below run from the build directory (`cd build` from
+the repository root). Windows examples use the Visual Studio Release path;
+adjust the executable path for other build configurations or extracted archives.
+Model files stay under the repository's `models/` directory.
 
 ### Download model weights
 
 Choose a model from the [model guides](./docs/models/README.md) and download its
-weights and required components into a `models/` directory. For a simple example,
-download Stable Diffusion v1.5:
+weights and required components. For a simple example, save Stable Diffusion 1.5
+under `models/checkpoints/`:
+
+**Windows (PowerShell)**
+
+```powershell
+New-Item -ItemType Directory -Force ..\models\checkpoints | Out-Null
+curl.exe -L -o ..\models\checkpoints\v1-5-pruned-emaonly.safetensors https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
+```
+
+**Linux/macOS**
 
 ```sh
-mkdir models
-curl -L -o models/v1-5-pruned-emaonly.safetensors https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
+mkdir -p ../models/checkpoints
+curl -L -o ../models/checkpoints/v1-5-pruned-emaonly.safetensors https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
 ```
 
 ### Option 1: Web UI
 
 Start the server:
 
-```sh
-./sd-server --model-dir ./models
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-server.exe --model-dir ..\models
 ```
 
-Open <http://127.0.0.1:1234/>, choose the matching model recipe and downloaded
-component files, then click **Load models**. Enter a prompt and generate an image.
+**Linux/macOS**
 
-For startup scripts, frontend build requirements, and server options, see the
-[server guide](./examples/server/README.md).
+```sh
+./bin/sd-server --model-dir ../models
+```
+
+Open <http://127.0.0.1:1234/>, choose **SD 1.x** in **Recipe**, select the
+checkpoint, and click **Load models**. Enter a prompt and click **Generate**.
+See the [Web UI guide](./examples/server/README.md#web-ui) for the full workflow.
 
 ### Option 2: CLI
 
 Generate an image with one command:
 
-```sh
-./sd-cli -m ./models/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -m ..\models\checkpoints\v1-5-pruned-emaonly.safetensors -p "a lovely cat"
 ```
 
-Run `./sd-cli --help` for the full list of command-line options. See the
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -m ../models/checkpoints/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
+```
+
+Run `.\bin\Release\sd-cli.exe --help` on Windows or `./bin/sd-cli --help` on
+Linux/macOS for all command-line options. See the
 [CLI guide](./examples/cli/README.md) for additional usage notes.
 
 ## Performance

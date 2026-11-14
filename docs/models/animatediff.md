@@ -1,14 +1,34 @@
-# AnimateDiff (SD 1.5)
+# AnimateDiff
 
-AnimateDiff adds motion to a frozen Stable Diffusion 1.5 checkpoint by
-injecting a temporal-attention module at 20 UNet slots. The base SD 1.5
-model, VAE, and text encoder are unchanged; only the motion module produces
-the temporal residual that turns a batch of independent frames into a
-coherent animation. Reference: Guo et al., "AnimateDiff: Animate Your
-Personalized Text-to-Image Diffusion Models without Specific Tuning"
-(https://arxiv.org/abs/2307.04725).
+AnimateDiff adds video generation to an SD 1.5 checkpoint using a compatible motion module.
 
-## Download weights
+Use the SD 1.5 checkpoint for the desired characters and style, and choose the
+motion module and resolution below. See the
+[AnimateDiff paper](https://arxiv.org/abs/2307.04725) for the model reference.
+
+## Supported variants
+
+Per [animatediff.net/models](https://animatediff.net/models):
+
+| Module              | Base | Native res | Character |
+|---------------------|------|------------|-----------|
+| `mm_sd_v14.ckpt`    | 1.5  | 256x256    | earliest, more jittery |
+| `mm_sd_v15.ckpt`    | 1.5  | 256x256    | improved stability over v1.4 |
+| `mm_sd_v15_v2.ckpt` | 1.5  | 384x384    | significantly better motion dynamics |
+| `v3_sd15_mm.ckpt`   | 1.5  | 512x512    | smoothest, highest quality; pairs with a Domain Adapter LoRA |
+| `mm_sdxl_v10_beta`  | SDXL | 512x512    | experimental, not yet supported here |
+
+Match your `-H -W` to the module's native resolution for best results. v3 is
+trained at 512x512 - going smaller (e.g. 384x384) still works but the motion
+character is closer to v2.
+
+## Model files
+
+| Component | Weights and downloads | CLI option | Requirement |
+| --- | --- | --- | --- |
+| SD 1.5 checkpoint | [Compatible SD 1.5 checkpoint](sd.md) | `-m` / `--model` | Required; SDXL motion modules are not supported |
+| Motion module | v1/v2/v3 motion weights listed below | `--motion-module` | Required; match the resolution and version |
+| Domain adapter LoRA | v3 adapter listed below | `--lora-model-dir` and prompt | Optional; v3 only |
 
 - Motion module (v3, recommended)
     - fp16 safetensors: https://huggingface.co/conrevo/AnimateDiff-A1111/resolve/main/motion_module/mm_sd15_v3.safetensors
@@ -25,75 +45,173 @@ Personalized Text-to-Image Diffusion Models without Specific Tuning"
 The motion module is `~836 MB` and loads alongside the SD 1.5 UNet via
 `--motion-module`.
 
-## Motion module versions
+## Usage
 
-Per [animatediff.net/models](https://animatediff.net/models):
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
-| Module              | Base | Native res | Character |
-|---------------------|------|------------|-----------|
-| `mm_sd_v14.ckpt`    | 1.5  | 256x256    | earliest, more jittery |
-| `mm_sd_v15.ckpt`    | 1.5  | 256x256    | improved stability over v1.4 |
-| `mm_sd_v15_v2.ckpt` | 1.5  | 384x384    | significantly better motion dynamics |
-| `v3_sd15_mm.ckpt`   | 1.5  | 512x512    | smoothest, highest quality; pairs with a Domain Adapter LoRA |
-| `mm_sdxl_v10_beta`  | SDXL | 512x512    | experimental, not yet supported here |
+### Web UI
 
-Match your `-H -W` to the module's native resolution for best results. v3 is
-trained at 512x512 - going smaller (e.g. 384x384) still works but the motion
-character is closer to v2.
+Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
+server, then select the recipe matching your weights. Fill the component slots
+below and click **Load models**.
+Use the files and compatibility requirements in [Model files](#model-files).
 
-## Examples
+| Recipe | Component slots |
+| --- | --- |
+| AnimateDiff SD 1.5 (`animatediff-sd15`) | `model`, `motion_module`, `vae`, `tae` |
+
+Slot IDs correspond to CLI component options: `diffusion_model` uses
+`--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
+Select optional components when required by your checkpoint or task.
+
+### CLI
+
+#### Text-to-video
 
 Generate an 8-frame animation at 512x512, seed 42, 20 steps. The sampler /
 scheduler / CFG values below match what mm_sd15_v3 was trained with; using
 SD 1.5 defaults (euler_a, low CFG) produces noise-like output.
 
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  -M vid_gen `
+  --model ..\models\checkpoints\realisticVisionV60B1.safetensors `
+  --motion-module ..\models\motion_modules\animatediff\mm_sd15_v3.safetensors `
+  -p "a red apple on a wooden table" `
+  --cfg-scale 8.0 `
+  --sampling-method euler `
+  --scheduler discrete `
+  --steps 20 `
+  -H 512 `
+  -W 512 `
+  --video-frames 8 `
+  --fps 8 `
+  --offload-to-cpu `
+  -s 42 `
+  -o out.avi
 ```
-.\bin\Release\sd-cli.exe -M vid_gen \
-    --model ..\models\checkpoints\realisticVisionV60B1.safetensors \
-    --motion-module ..\models\animatediff\mm_sd15_v3.safetensors \
-    --offload-to-cpu \
-    -p "a red apple on a wooden table" \
-    --cfg-scale 8.0 --sampling-method euler --scheduler discrete \
-    -H 512 -W 512 --video-frames 8 --fps 8 --steps 20 -s 42 \
-    -o out.avi
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  -M vid_gen \
+  --model ../models/checkpoints/realisticVisionV60B1.safetensors \
+  --motion-module ../models/motion_modules/animatediff/mm_sd15_v3.safetensors \
+  -p "a red apple on a wooden table" \
+  --cfg-scale 8.0 \
+  --sampling-method euler \
+  --scheduler discrete \
+  --steps 20 \
+  -H 512 \
+  -W 512 \
+  --video-frames 8 \
+  --fps 8 \
+  --offload-to-cpu \
+  -s 42 \
+  -o out.avi
 ```
 
 Generate at the motion module's native 16-frame context (recommended for
 best temporal quality). Needs more VRAM at 512x512, so drop to 384x384 or
 use layer streaming:
 
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  -M vid_gen `
+  --model ..\models\checkpoints\realisticVisionV60B1.safetensors `
+  --motion-module ..\models\motion_modules\animatediff\mm_sd15_v3.safetensors `
+  -p "photo of coastline, rocks, storm weather, wind, waves, lightning" `
+  --cfg-scale 8.0 `
+  --sampling-method euler `
+  --scheduler discrete `
+  --steps 20 `
+  -H 384 `
+  -W 384 `
+  --video-frames 16 `
+  --fps 8 `
+  --offload-to-cpu `
+  -s 42 `
+  -o out.avi
 ```
-.\bin\Release\sd-cli.exe -M vid_gen \
-    --model ..\models\checkpoints\realisticVisionV60B1.safetensors \
-    --motion-module ..\models\animatediff\mm_sd15_v3.safetensors \
-    --offload-to-cpu \
-    -p "photo of coastline, rocks, storm weather, wind, waves, lightning" \
-    --cfg-scale 8.0 --sampling-method euler --scheduler discrete \
-    -H 384 -W 384 --video-frames 16 --fps 8 --steps 20 -s 42 \
-    -o out.avi
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  -M vid_gen \
+  --model ../models/checkpoints/realisticVisionV60B1.safetensors \
+  --motion-module ../models/motion_modules/animatediff/mm_sd15_v3.safetensors \
+  -p "photo of coastline, rocks, storm weather, wind, waves, lightning" \
+  --cfg-scale 8.0 \
+  --sampling-method euler \
+  --scheduler discrete \
+  --steps 20 \
+  -H 384 \
+  -W 384 \
+  --video-frames 16 \
+  --fps 8 \
+  --offload-to-cpu \
+  -s 42 \
+  -o out.avi
 ```
 
 Low-VRAM streaming (verified with a 2 GiB cap on RTX 3060):
 
-```
-.\bin\Release\sd-cli.exe -M vid_gen \
-    --model ..\models\checkpoints\realisticVisionV60B1.safetensors \
-    --motion-module ..\models\animatediff\mm_sd15_v3.safetensors \
-    --max-vram 2.0 \
-    -p "photo of coastline, rocks, storm weather, wind, waves, lightning" \
-    --cfg-scale 8.0 --sampling-method euler --scheduler discrete \
-    -H 384 -W 384 --video-frames 8 --fps 8 --steps 20 -s 42 \
-    -o out.avi
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  -M vid_gen `
+  --model ..\models\checkpoints\realisticVisionV60B1.safetensors `
+  --motion-module ..\models\motion_modules\animatediff\mm_sd15_v3.safetensors `
+  -p "photo of coastline, rocks, storm weather, wind, waves, lightning" `
+  --cfg-scale 8.0 `
+  --sampling-method euler `
+  --scheduler discrete `
+  --steps 20 `
+  -H 384 `
+  -W 384 `
+  --video-frames 8 `
+  --fps 8 `
+  --max-vram 2.0 `
+  -s 42 `
+  -o out.avi
 ```
 
-## Reference-quality reproduction
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  -M vid_gen \
+  --model ../models/checkpoints/realisticVisionV60B1.safetensors \
+  --motion-module ../models/motion_modules/animatediff/mm_sd15_v3.safetensors \
+  -p "photo of coastline, rocks, storm weather, wind, waves, lightning" \
+  --cfg-scale 8.0 \
+  --sampling-method euler \
+  --scheduler discrete \
+  --steps 20 \
+  -H 384 \
+  -W 384 \
+  --video-frames 8 \
+  --fps 8 \
+  --max-vram 2.0 \
+  -s 42 \
+  -o out.avi
+```
+
+#### Reference-quality reproduction
 
 Using guoyww's official reference configs on this impl (RealisticVision v6.0
 base + `mm_sd15_v3` or `mm_sd_v15_v2` + native resolution + 16 frames + euler
 + 25 steps + CFG 8 + linear beta schedule) reproduces the reference
 AnimateDiff output style.
 
-### v3 (512x512, `mm_sd15_v3`)
+##### v3 (512x512, `mm_sd15_v3`)
 
 | Prompt                                | Sample |
 |---------------------------------------|--------|
@@ -102,7 +220,7 @@ AnimateDiff output style.
 | Coastline, storm, waves, lightning    | <img src="../../assets/animatediff/v3_coast.gif" width="256"/>  |
 | Old house, storm, forest, night       | <img src="../../assets/animatediff/v3_house.gif" width="256"/>  |
 
-### v2 (384x384, `mm_sd_v15_v2.ckpt`)
+##### v2 (384x384, `mm_sd_v15_v2.ckpt`)
 
 | Prompt                                | Sample |
 |---------------------------------------|--------|
@@ -116,7 +234,7 @@ and subtle for static subjects (close-up macro), matching reference behavior.
 v2 has an additional motion module at the UNet middle block that v3 dropped;
 this impl auto-detects the topology from the checkpoint.
 
-### v3 + Domain Adapter LoRA
+##### v3 + Domain Adapter LoRA
 
 Attaching the `v3_sd15_adapter` LoRA sharpens the base UNet output toward
 the training distribution the motion module was fine-tuned against. Same
@@ -127,14 +245,29 @@ prompt, seed, config as above:
 Individual fur strands, glowing inner-ear, and richer forest detail become
 visible compared to the no-LoRA rendering.
 
-```
-sd-cli -M vid_gen --model realisticVisionV60B1.safetensors \
-       --motion-module mm_sd15_v3.safetensors \
-       --lora-model-dir ./loras \
-       -p "close up photo of a rabbit ...<lora:v3_sd15_adapter:1.0>" ...
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  -M vid_gen `
+  --model ..\models\checkpoints\realisticVisionV60B1.safetensors `
+  --motion-module ..\models\motion_modules\mm_sd15_v3.safetensors `
+  --lora-model-dir .\loras `
+  -p "close up photo of a rabbit ...<lora:v3_sd15_adapter:1.0>" ...
 ```
 
-## img2video
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  -M vid_gen \
+  --model ../models/checkpoints/realisticVisionV60B1.safetensors \
+  --motion-module ../models/motion_modules/mm_sd15_v3.safetensors \
+  --lora-model-dir ./loras \
+  -p "close up photo of a rabbit ...<lora:v3_sd15_adapter:1.0>" ...
+```
+
+#### img2video
 
 Pass a pre-rendered image via `-i / --init-img` to animate FROM it. All N output frames start from the encoded init latent, then per-frame noise is added at `--strength`. Character identity, composition, and quality are anchored by the init image; the motion module adds subtle motion on top.
 
@@ -142,18 +275,55 @@ Left: init image rendered with `-M img_gen`. Right: 8-frame vid_gen output.
 
 <img src="../../assets/animatediff/img2video_demo.gif" width="512"/>
 
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  -M img_gen ... `
+  -o init.png "#" any high-quality still
+.\bin\Release\sd-cli.exe `
+  -M vid_gen `
+  --motion-module ..\models\motion_modules\mm_sd15_v3.safetensors `
+  -i init.png `
+  -p ... `
+  --strength 0.75 `
+  --cfg-scale 7.0 `
+  --sampling-method euler `
+  --scheduler karras `
+  --steps 25 `
+  -H 512 `
+  -W 512 `
+  --video-frames 8 `
+  -s 42 `
+  -o out.avi
 ```
-sd-cli -M img_gen ... -o init.png                  # any high-quality still
-sd-cli -M vid_gen --motion-module mm_sd15_v3.safetensors \
-    -i init.png --strength 0.75 \
-    --cfg-scale 7.0 --sampling-method euler --scheduler karras \
-    -H 512 -W 512 --video-frames 8 --steps 25 -s 42 \
-    -p "..." -o out.avi
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  -M img_gen ... \
+  -o init.png "#" any high-quality still
+./bin/sd-cli \
+  -M vid_gen \
+  --motion-module ../models/motion_modules/mm_sd15_v3.safetensors \
+  -i init.png \
+  -p ... \
+  --strength 0.75 \
+  --cfg-scale 7.0 \
+  --sampling-method euler \
+  --scheduler karras \
+  --steps 25 \
+  -H 512 \
+  -W 512 \
+  --video-frames 8 \
+  -s 42 \
+  -o out.avi
 ```
 
 `--strength` controls how far the motion module is allowed to deviate from the init image (higher = more motion, lower = more static).
 
-## Notes
+## Notes and limitations
 
 - The motion module was trained at `video_length=16`. Running with
   `--video-frames 16` gives the best coherence; F=8 works but shows a shorter

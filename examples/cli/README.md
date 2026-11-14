@@ -1,8 +1,16 @@
 # Usage
 
-For detailed command-line arguments, run:
+From the build directory, show the full list of command-line arguments:
 
-```bash
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -h
+```
+
+**Linux/macOS**
+
+```sh
 ./bin/sd-cli -h
 ```
 
@@ -37,13 +45,50 @@ input defaults, downstream model processing, mask alignment, and examples.
 Metadata mode inspects PNG, JPEG, WebP (including animated WebP), AVI, WebM, and Matroska
 container metadata without loading any model. Use `--image` for both images and videos:
 
-```bash
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M metadata --image .\output.png
+.\bin\Release\sd-cli.exe `
+  -M metadata `
+  --image .\output.jpg `
+  --metadata-format json
+.\bin\Release\sd-cli.exe -M metadata --image .\output.webm
+.\bin\Release\sd-cli.exe `
+  -M metadata `
+  --image .\output.avi `
+  --metadata-format json
+.\bin\Release\sd-cli.exe `
+  -M metadata `
+  --image .\output.png `
+  --metadata-raw
+.\bin\Release\sd-cli.exe `
+  -M metadata `
+  --image .\output.png `
+  --metadata-all
+```
+
+**Linux/macOS**
+
+```sh
 ./bin/sd-cli -M metadata --image ./output.png
-./bin/sd-cli -M metadata --image ./output.jpg --metadata-format json
+./bin/sd-cli \
+  -M metadata \
+  --image ./output.jpg \
+  --metadata-format json
 ./bin/sd-cli -M metadata --image ./output.webm
-./bin/sd-cli -M metadata --image ./output.avi --metadata-format json
-./bin/sd-cli -M metadata --image ./output.png --metadata-raw
-./bin/sd-cli -M metadata --image ./output.png --metadata-all
+./bin/sd-cli \
+  -M metadata \
+  --image ./output.avi \
+  --metadata-format json
+./bin/sd-cli \
+  -M metadata \
+  --image ./output.png \
+  --metadata-raw
+./bin/sd-cli \
+  -M metadata \
+  --image ./output.png \
+  --metadata-all
 ```
 
 For completely black or white images or videos, NaNs, and the `--linear-scale` /

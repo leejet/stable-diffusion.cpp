@@ -42,4 +42,6 @@ For the project overview and supported models, see the [project README](../READM
 - [ggml operator extensions](development/ggml_extensions.md)
 - [Backend performance probes](development/backend_probe.md)
 - [Position embedding cache](development/pe_cache.md)
+- [PuLID implementation and validation](development/pulid.md)
+- [Qwen Image 2.1 prefix cache internals](development/qwen_image_prefix_cache.md)
 - [Contribution guidelines](../CONTRIBUTING.md)

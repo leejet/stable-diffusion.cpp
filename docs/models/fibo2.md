@@ -1,47 +1,148 @@
-# How to Use
+# Fibo 2.0
 
 Fibo 2.0 uses a Fibo diffusion transformer, the standard FLUX.2 VAE, and Qwen3-VL 4B as the LLM text encoder. The Qwen tokenizer is built in.
 
-## Download weights
+## Model files
 
-- Download Fibo 2.0 Dev
-    - safetensors: https://huggingface.co/Comfy-Org/Fibo-2.0/tree/main/diffusion_models
-- Download Fibo 2.0 Edit Turbo
-    - safetensors: https://huggingface.co/Comfy-Org/Fibo-2.0/tree/main/diffusion_models
-- Download vae
-    - safetensors: https://huggingface.co/black-forest-labs/FLUX.2-dev/tree/main
-- Download Qwen3-VL 4B
-    - safetensors: https://huggingface.co/Comfy-Org/Fibo-2.0/tree/main/text_encoders
-    - gguf: https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/tree/main
+| Component | Weights and downloads | CLI option | Requirement |
+| --- | --- | --- | --- |
+| Fibo 2.0 Dev | [Safetensors](https://huggingface.co/Comfy-Org/Fibo-2.0/tree/main/diffusion_models) | `--diffusion-model` | Choose matching variant |
+| Fibo 2.0 Edit Turbo | [Safetensors](https://huggingface.co/Comfy-Org/Fibo-2.0/tree/main/diffusion_models) | `--diffusion-model` | Choose matching variant |
+| vae | [Safetensors](https://huggingface.co/black-forest-labs/FLUX.2-dev/tree/main) | `--vae` | Use matching VAE |
+| Qwen3-VL 4B | [Safetensors](https://huggingface.co/Comfy-Org/Fibo-2.0/tree/main/text_encoders)<br>[GGUF](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/tree/main) | `--llm` | Use matching text encoder |
 
 The original Diffusers weights from [briaai/Fibo-2.0-dev](https://huggingface.co/briaai/Fibo-2.0-dev) and [briaai/Fibo-2.0-edit-turbo](https://huggingface.co/briaai/Fibo-2.0-edit-turbo) are also supported. Pass the transformer's `diffusion_pytorch_model.safetensors.index.json` to `--diffusion-model` and keep its shards alongside it.
 
 INT8 convrot weights load directly; see [INT8 convrot](../guides/int8_convrot.md) for backend requirements.
 
-## Examples
+## Usage
 
-### Fibo 2.0 Dev
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
+
+### Web UI
+
+Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
+server, then select the recipe matching your weights. Fill the component slots
+below and click **Load models**.
+Use the files and compatibility requirements in [Model files](#model-files).
+
+| Recipe | Component slots |
+| --- | --- |
+| Fibo 2.0 Dev (`fibo2-dev`) | `diffusion_model`, `llm`, `llm_vision`, `vae` |
+| Fibo 2.0 Edit Turbo (`fibo2-edit-turbo`) | `diffusion_model`, `llm`, `llm_vision`, `vae` |
+
+Slot IDs correspond to CLI component options: `diffusion_model` uses
+`--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
+Select optional components when required by your checkpoint or task.
+
+### CLI
+
+#### Fibo 2.0 Dev
 
 Dev supports both text-to-image generation and reference-image editing.
 
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  --diffusion-model ..\models\diffusion_models\fibo2_dev_int8_convrot.safetensors `
+  --llm ..\models\text_encoders\Qwen3-VL-4B-Instruct-Q4_K_M.gguf `
+  --llm_vision ..\models\text_encoders\Qwen3-VL-4B-Instruct-mmproj-BF16.gguf `
+  --vae ..\models\vae\flux2_ae.safetensors `
+  -p "a lovely cat holding a sign says 'fibo2.cpp'" `
+  --cfg-scale 5.0 `
+  --sampling-method euler `
+  --offload-to-cpu `
+  -v
 ```
-.\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\fibo2_dev_int8_convrot.safetensors --llm ..\models\text_encoders\Qwen3-VL-4B-Instruct-Q4_K_M.gguf --llm_vision ..\models\text_encoders\Qwen3-VL-4B-Instruct-mmproj-BF16.gguf --vae ..\models\vae\flux2_ae.safetensors -p "a lovely cat holding a sign says 'fibo2.cpp'" --cfg-scale 5.0 --sampling-method euler -v  --offload-to-cpu
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  --diffusion-model ../models/diffusion_models/fibo2_dev_int8_convrot.safetensors \
+  --llm ../models/text_encoders/Qwen3-VL-4B-Instruct-Q4_K_M.gguf \
+  --llm_vision ../models/text_encoders/Qwen3-VL-4B-Instruct-mmproj-BF16.gguf \
+  --vae ../models/vae/flux2_ae.safetensors \
+  -p "a lovely cat holding a sign says 'fibo2.cpp'" \
+  --cfg-scale 5.0 \
+  --sampling-method euler \
+  --offload-to-cpu \
+  -v
 ```
 
 <img src="../../assets/fibo2/t2i.png" />
 
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  --diffusion-model ..\models\diffusion_models\fibo2_dev_int8_convrot.safetensors `
+  --llm ..\models\text_encoders\Qwen3-VL-4B-Instruct-Q4_K_M.gguf `
+  --llm_vision ..\models\text_encoders\Qwen3-VL-4B-Instruct-mmproj-BF16.gguf `
+  --vae ..\models\vae\flux2_ae.safetensors `
+  -r ..\inputs\flux\flux1-dev-q8_0.png `
+  -p "change 'flux.cpp' to 'fibo2.cpp'" `
+  --cfg-scale 5.0 `
+  --sampling-method euler `
+  --offload-to-cpu `
+  -v
 ```
-.\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\fibo2_dev_int8_convrot.safetensors --llm ..\models\text_encoders\Qwen3-VL-4B-Instruct-Q4_K_M.gguf --llm_vision ..\models\text_encoders\Qwen3-VL-4B-Instruct-mmproj-BF16.gguf --vae ..\models\vae\flux2_ae.safetensors -r ..\assets\flux\flux1-dev-q8_0.png -p "change 'flux.cpp' to 'fibo2.cpp'" --cfg-scale 5.0 --sampling-method euler -v  --offload-to-cpu
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  --diffusion-model ../models/diffusion_models/fibo2_dev_int8_convrot.safetensors \
+  --llm ../models/text_encoders/Qwen3-VL-4B-Instruct-Q4_K_M.gguf \
+  --llm_vision ../models/text_encoders/Qwen3-VL-4B-Instruct-mmproj-BF16.gguf \
+  --vae ../models/vae/flux2_ae.safetensors \
+  -r ../inputs/flux/flux1-dev-q8_0.png \
+  -p "change 'flux.cpp' to 'fibo2.cpp'" \
+  --cfg-scale 5.0 \
+  --sampling-method euler \
+  --offload-to-cpu \
+  -v
 ```
 
 <img src="../../assets/fibo2/dev_edit.png" />
 
-### Fibo 2.0 Edit Turbo
+#### Fibo 2.0 Edit Turbo
 
 Edit Turbo is distilled for reference-image editing in 4 steps with CFG 1.
 
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  --diffusion-model ..\models\diffusion_models\fibo2_edit_turbo_int8_convrot.safetensors `
+  --llm ..\models\text_encoders\Qwen3-VL-4B-Instruct-Q4_K_M.gguf `
+  --llm_vision ..\models\text_encoders\Qwen3-VL-4B-Instruct-mmproj-BF16.gguf `
+  --vae ..\models\vae\flux2_ae.safetensors `
+  -r ..\inputs\flux\flux1-dev-q8_0.png `
+  -p "change 'flux.cpp' to 'fibo2.cpp'" `
+  --cfg-scale 1 `
+  --steps 4 `
+  --sampling-method euler `
+  --offload-to-cpu `
+  -v
 ```
-.\bin\Release\sd-cli.exe --diffusion-model ..\models\diffusion_models\fibo2_edit_turbo_int8_convrot.safetensors --llm ..\models\text_encoders\Qwen3-VL-4B-Instruct-Q4_K_M.gguf --llm_vision ..\models\text_encoders\Qwen3-VL-4B-Instruct-mmproj-BF16.gguf --vae ..\models\vae\flux2_ae.safetensors -r ..\assets\flux\flux1-dev-q8_0.png -p "change 'flux.cpp' to 'fibo2.cpp'" --cfg-scale 1 --steps 4 --sampling-method euler -v  --offload-to-cpu
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  --diffusion-model ../models/diffusion_models/fibo2_edit_turbo_int8_convrot.safetensors \
+  --llm ../models/text_encoders/Qwen3-VL-4B-Instruct-Q4_K_M.gguf \
+  --llm_vision ../models/text_encoders/Qwen3-VL-4B-Instruct-mmproj-BF16.gguf \
+  --vae ../models/vae/flux2_ae.safetensors \
+  -r ../inputs/flux/flux1-dev-q8_0.png \
+  -p "change 'flux.cpp' to 'fibo2.cpp'" \
+  --cfg-scale 1 \
+  --steps 4 \
+  --sampling-method euler \
+  --offload-to-cpu \
+  -v
 ```
 
 The BF16 files accept the same options. Use dimensions divisible by 16. Repeat `-r` to use multiple reference images; instructions can refer to `<image_1>`, `<image_2>`, etc. See [Image Editing](../guides/edit.md) for reference-image preprocessing options. Separate GGUF text encoders need their vision projector passed with `--llm_vision` for editing.

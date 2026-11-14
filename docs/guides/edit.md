@@ -19,7 +19,7 @@ Depending on the architecture, different models handle reference images differen
 | **Krea2 (Community Edit LoRAs)** | `krea2_ostris_edit` |
 | [**Mage-Flow-Edit**](../models/mage_flow.md#image-editing) | `mage_flow` |
 | [**LLaDA-Image**](../models/llada_image.md#image-editing) | `llada_image` |
-| [**Fibo 2.0 Dev / Edit Turbo**](../models/fibo2.md#examples) | `fibo2` |
+| [**Fibo 2.0 Dev / Edit Turbo**](../models/fibo2.md#fibo-20-edit-turbo) | `fibo2` |
 | **Anima (Community Edit LoRAs)** | `cosmos_reference` |
 
 Stable-diffusion.spp also supports basic Unet-based editing models like instruct-pix2pix or CosXL-Edit. This document is not about those.

@@ -6,13 +6,29 @@ inpaint pass for every detected object. The implementation supports YOLOv8
 detection checkpoints. YOLOv8 segmentation and MediaPipe models are not
 supported yet.
 
-## Convert a detector
+## Model files
 
-Ultralytics checkpoints must be converted before use. The converter fuses
-BatchNorm into convolution layers and writes a safetensors file with the weight
-names expected by the native GGML implementation.
+| Component | Weights and downloads | CLI option | Requirement |
+| --- | --- | --- | --- |
+| Base image model | [Compatible image-generation model](README.md) | `-m` / model component options | Required for the inpainting pass |
+| YOLOv8 detector | Converted Safetensors checkpoint prepared below | `--ad-model` | Required; detection checkpoints only |
 
-```bash
+### Prepare the detector
+
+Run the conversion command from the source repository root, then place the
+converted file at the path used by `--ad-model`.
+
+Ultralytics checkpoints must be converted before use. The converter writes the Safetensors detector used by sd.cpp.
+
+**Windows (PowerShell)**
+
+```powershell
+python scripts\convert_yolov8_to_safetensors.py face_yolov8n.pt face_yolov8n.safetensors
+```
+
+**Linux/macOS**
+
+```sh
 python scripts/convert_yolov8_to_safetensors.py face_yolov8n.pt face_yolov8n.safetensors
 ```
 
@@ -22,17 +38,44 @@ Only YOLOv8 detection checkpoints are accepted.
 PyTorch checkpoints use pickle internally, so only convert `.pt` files from a
 trusted source.
 
-## Repair an existing image
+## Usage
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
+
+### CLI
+
+#### Repair an existing image
 
 Use the dedicated `adetailer` mode to detect and repair objects in an existing
 image:
 
-```bash
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  -M adetailer `
+  -m ..\models\checkpoints\model.safetensors `
+  --ad-model ..\models\detectors\face_yolov8n.safetensors `
+  -i input.png `
+  -p "detailed portrait photo" `
+  --negative-prompt "deformed face" `
+  --steps 24 `
+  --cfg-scale 6 `
+  --strength 0.4 `
+  --sampling-method dpm++2m `
+  --scheduler karras `
+  --extra-ad-args "confidence=0.3,inpaint_padding=32,mask_blur=4" `
+  -o repaired.png
+```
+
+**Linux/macOS**
+
+```sh
 ./bin/sd-cli \
   -M adetailer \
-  -m model.safetensors \
+  -m ../models/checkpoints/model.safetensors \
+  --ad-model ../models/detectors/face_yolov8n.safetensors \
   -i input.png \
-  -o repaired.png \
   -p "detailed portrait photo" \
   --negative-prompt "deformed face" \
   --steps 24 \
@@ -40,8 +83,8 @@ image:
   --strength 0.4 \
   --sampling-method dpm++2m \
   --scheduler karras \
-  --ad-model face_yolov8n.safetensors \
-  --extra-ad-args "confidence=0.3,inpaint_padding=32,mask_blur=4"
+  --extra-ad-args confidence=0.3,inpaint_padding=32,mask_blur=4 \
+  -o repaired.png
 ```
 
 This mode reuses the normal image-generation options for the detail pass:
@@ -55,18 +98,32 @@ This mode reuses the normal image-generation options for the detail pass:
 Values provided in `--extra-ad-args`, such as `steps`, `cfg_scale`,
 `denoising_strength`, or `inpaint_width`, take precedence over inherited values.
 
-## Repair generated images
+#### Repair generated images
 
 ADetailer can also run automatically after normal image generation:
 
-```bash
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  -m ..\models\checkpoints\model.safetensors `
+  --ad-model ..\models\detectors\face_yolov8n.safetensors `
+  -p "portrait photo" `
+  --ad-prompt "[PROMPT], detailed face" `
+  --ad-negative-prompt "" `
+  --extra-ad-args "confidence=0.3,denoising_strength=0.4,inpaint_width=512,inpaint_height=512"
+```
+
+**Linux/macOS**
+
+```sh
 ./bin/sd-cli \
-  -m model.safetensors \
+  -m ../models/checkpoints/model.safetensors \
+  --ad-model ../models/detectors/face_yolov8n.safetensors \
   -p "portrait photo" \
-  --ad-model face_yolov8n.safetensors \
   --ad-prompt "[PROMPT], detailed face" \
   --ad-negative-prompt "" \
-  --extra-ad-args "confidence=0.3,denoising_strength=0.4,inpaint_width=512,inpaint_height=512"
+  --extra-ad-args confidence=0.3,denoising_strength=0.4,inpaint_width=512,inpaint_height=512
 ```
 
 The same options can be supplied when starting `sd-server`. When `--ad-model` is set, its detector runs after OpenAI-compatible and native asynchronous image generation. SDAPI requests enable ADetailer through `alwayson_scripts`, as described below. If no object is detected, the original image is returned unchanged. RGBA output keeps its original alpha channel, including when detected regions are repaired. Detector initialization or detail-pass failures are reported as request failures.
@@ -98,6 +155,8 @@ The detector must be configured at server startup with `--ad-model`. `ad_model` 
 Supported settings include prompts, confidence, mask filtering by area or confidence, mask count and area ratios, dilation/erosion, offsets, mask merging/inversion, blur, denoising strength, masked or full-image inpainting, padding, and optional overrides for inpaint dimensions, steps, CFG, sampler/scheduler, and CLIP skip. The corresponding `ad_use_*` flags control whether overrides apply. Otherwise dimensions, steps, CFG, sampler, scheduler, and CLIP skip inherit the main request. Denoising strength defaults to `0.4`. Pixel mask settings are limited to the larger output dimension, with a minimum limit of 32 and a maximum of 16384 pixels.
 
 Model/VAE switching, non-default noise multipliers, face restoration, ControlNet, and skipping the initial img2img pass are not supported; active requests for these features return an error. Unknown settings and invalid active values also return errors. During detailing, `/sdapi/v1/progress` remains active with an `adetailer` job; its percentage and preview stay fixed until detailing finishes.
+
+## Options
 
 An empty ADetailer prompt inherits the main prompt. `[PROMPT]` inserts the main
 prompt, `[SEP]` assigns different prompts to consecutive masks, and `[SKIP]`
@@ -138,6 +197,19 @@ for the next mask, and the seed is incremented by the mask index. Use
 The detector uses the `detector` backend module. For example, keep detection on
 the CPU while diffusion runs on CUDA:
 
-```bash
+**Windows (PowerShell) arguments**
+
+```text
 --backend "diffusion=cuda0,detector=cpu"
 ```
+
+**Linux/macOS arguments**
+
+```text
+--backend diffusion=cuda0,detector=cpu
+```
+
+## Notes and limitations
+
+YOLOv8 segmentation and MediaPipe detectors are not supported. See the
+[server API reference](../../examples/server/api.md) for request schemas.

@@ -1,53 +1,157 @@
-## Using PhotoMaker to personalize image generation
+# PhotoMaker
 
-You can use [PhotoMaker](https://github.com/TencentARC/PhotoMaker) to personalize generated images with your own ID.
+[PhotoMaker](https://github.com/TencentARC/PhotoMaker) personalizes image
+generation from identity images. It requires an SDXL base model.
 
-**NOTE**, currently PhotoMaker **ONLY** works with **SDXL** (any SDXL model files will work).
+## Model files
 
-Download PhotoMaker model file (in safetensor format) [here](https://huggingface.co/bssrdf/PhotoMaker). The official release of the model file (in .bin format) does not work with ```stablediffusion.cpp```.
+| Component | Weights and downloads | CLI option | Requirement |
+| --- | --- | --- | --- |
+| SDXL checkpoint | [SDXL guide](sd.md) | `-m` / `--model` | Required; PhotoMaker is SDXL-only |
+| SDXL VAE | VAE compatible with the selected SDXL checkpoint | `--vae` | Use an override when required |
+| PhotoMaker v1 | [Safetensors weights](https://huggingface.co/bssrdf/PhotoMaker) | `--photo-maker` | For v1; the original .bin release is unsupported |
+| PhotoMaker v2 | [Safetensors weights](https://huggingface.co/bssrdf/PhotoMakerV2) | `--photo-maker` | Alternative to v1; requires precomputed face embeddings |
+| Identity images | A directory of portraits of the same person | `--pm-id-images-dir` | Required |
+| PhotoMaker v2 embeddings | `id_embeds.bin` from the preparation below | `--pm-id-embed-path` | Required for v2 |
 
-- Specify the PhotoMaker model path using the `--photo-maker PATH` parameter.
-- Specify the input images path using the `--pm-id-images-dir PATH` parameter.
+### Prepare PhotoMaker v2 embeddings
 
-In prompt, make sure you have a class word followed by the trigger word ```"img"``` (hard-coded for now). The class word could be one of ```"man, woman, girl, boy"```. If input ID images contain asian faces, add ```Asian``` before the class
-word.
+[PhotoMaker v2](https://github.com/TencentARC/PhotoMaker/blob/main/README_pmv2.md)
+adds a face-embedding preparation step. From the source repository root, run
+[`scripts/face_detect.py`](../../scripts/face_detect.py) on the identity image directory:
 
-Another PhotoMaker specific parameter:
+**Windows (PowerShell)**
 
-- ```--pm-style-strength  (0-100)%```: default is 20 and 10-20 typically gets good results. Lower ratio means more faithfully following input ID (not necessarily better quality).
-
-Other parameters recommended for running Photomaker:
-
-- ```--cfg-scale 5.0```
-- ```-H 1024```
-- ```-W 1024```
-
-If on low memory GPUs (<= 8GB), recommend running with ```--vae-on-cpu``` option to get artifact free images.
-
-Example:
-
-```bash
-bin/sd-cli -m ../models/sdxlUnstableDiffusers_v11.safetensors  --vae ../models/sdxl_vae.safetensors --photo-maker ../models/photomaker-v1.safetensors --pm-id-images-dir ../assets/photomaker_examples/scarletthead_woman -p "a girl img, retro futurism, retro game art style but extremely beautiful, intricate details, masterpiece, best quality, space-themed, cosmic, celestial, stars, galaxies, nebulas, planets, science fiction, highly detailed" -n "realistic, photo-realistic, worst quality, greyscale, bad anatomy, bad hands, error, text" --cfg-scale 5.0  --sampling-method euler -H 1024 -W 1024 --pm-style-strength 10 --vae-on-cpu --steps 50
+```powershell
+python scripts\face_detect.py .\inputs\photomaker_examples\scarletthead_woman
 ```
 
-## PhotoMaker Version 2
+**Linux/macOS**
 
-[PhotoMaker Version 2 (PMV2)](https://github.com/TencentARC/PhotoMaker/blob/main/README_pmv2.md) has some key improvements. Unfortunately it has a very heavy dependency which makes running it a bit involved in ```SD.cpp```. 
-
-Running PMV2 is now a two-step process:
-
-- Run a python script ```face_detect.py``` to obtain **id_embeds** for the given input images
+```sh
+python scripts/face_detect.py ./inputs/photomaker_examples/scarletthead_woman
 ```
-python face_detect.py input_image_dir
+
+The script requires its Python dependencies, including PyTorch, NumPy, Diffusers,
+and InsightFace. It writes `id_embeds.bin` inside the input directory. Compute it
+once and reuse it for later generations. The image directory and `id_embeds.bin` stay under the repository's `inputs/`
+directory.
+
+## Usage
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
+
+### Web UI
+
+Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
+server, then select the recipe matching your weights. Fill the component slots
+below and click **Load models**.
+Use the files and compatibility requirements in [Model files](#model-files).
+
+| Recipe | Component slots |
+| --- | --- |
+| SDXL PhotoMaker (`sdxl-photomaker`) | `model`, `photo_maker`, `vae`, `tae` |
+
+Slot IDs correspond to CLI component options: `diffusion_model` uses
+`--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
+Select optional components when required by your checkpoint or task.
+
+Select the appropriate PhotoMaker weights and supply the identity images.
+PhotoMaker v2 also needs the prepared identity embedding.
+
+### CLI
+
+#### PhotoMaker Version 1
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  -m ..\models\checkpoints\sdxlUnstableDiffusers_v11.safetensors `
+  --vae ..\models\vae\sdxl_vae.safetensors `
+  --photo-maker ..\models\photomaker\photomaker-v1.safetensors `
+  --pm-id-images-dir ..\inputs\photomaker_examples\scarletthead_woman `
+  -p "a girl img, retro futurism, retro game art style but extremely beautiful, intricate details, masterpiece, best quality, space-themed, cosmic, celestial, stars, galaxies, nebulas, planets, science fiction, highly detailed" `
+  -n "realistic, photo-realistic, worst quality, greyscale, bad anatomy, bad hands, error, text" `
+  --cfg-scale 5.0 `
+  --sampling-method euler `
+  --steps 50 `
+  -H 1024 `
+  -W 1024 `
+  --pm-style-strength 10 `
+  --vae-on-cpu
 ```
-An ```id_embeds.bin``` file will be generated in ```input_images_dir```
 
-**Note: this step is only needed to run once; the same ```id_embeds``` can be reused**
+**Linux/macOS**
 
-- Run the same command as in version 1 but replacing ```photomaker-v1.safetensors``` with ```photomaker-v2.safetensors```.
+```sh
+./bin/sd-cli \
+  -m ../models/checkpoints/sdxlUnstableDiffusers_v11.safetensors \
+  --vae ../models/vae/sdxl_vae.safetensors \
+  --photo-maker ../models/photomaker/photomaker-v1.safetensors \
+  --pm-id-images-dir ../inputs/photomaker_examples/scarletthead_woman \
+  -p "a girl img, retro futurism, retro game art style but extremely beautiful, intricate details, masterpiece, best quality, space-themed, cosmic, celestial, stars, galaxies, nebulas, planets, science fiction, highly detailed" \
+  -n "realistic, photo-realistic, worst quality, greyscale, bad anatomy, bad hands, error, text" \
+  --cfg-scale 5.0 \
+  --sampling-method euler \
+  --steps 50 \
+  -H 1024 \
+  -W 1024 \
+  --pm-style-strength 10 \
+  --vae-on-cpu
+```
 
-  You can download ```photomaker-v2.safetensors``` from [here](https://huggingface.co/bssrdf/PhotoMakerV2)
+#### PhotoMaker Version 2
 
-- All the command line parameters from Version 1 remain the same for Version 2 plus one extra pointing to a valid ```id_embeds``` file:  --pm-id-embed-path [path_to__id_embeds.bin] 
+From the build directory, use the prepared identity embedding:
 
+**Windows (PowerShell)**
 
+```powershell
+.\bin\Release\sd-cli.exe `
+  -m ..\models\checkpoints\sdxlUnstableDiffusers_v11.safetensors `
+  --vae ..\models\vae\sdxl_vae.safetensors `
+  --photo-maker ..\models\photomaker\photomaker-v2.safetensors `
+  --pm-id-images-dir ..\inputs\photomaker_examples\scarletthead_woman `
+  --pm-id-embed-path ..\inputs\photomaker_examples\scarletthead_woman\id_embeds.bin `
+  -p "a girl img, retro futurism, retro game art style but extremely beautiful, intricate details, masterpiece, best quality, space-themed, cosmic, celestial, stars, galaxies, nebulas, planets, science fiction, highly detailed" `
+  -n "realistic, photo-realistic, worst quality, greyscale, bad anatomy, bad hands, error, text" `
+  --cfg-scale 5.0 `
+  --sampling-method euler `
+  --steps 50 `
+  -H 1024 `
+  -W 1024 `
+  --pm-style-strength 10 `
+  --vae-on-cpu
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  -m ../models/checkpoints/sdxlUnstableDiffusers_v11.safetensors \
+  --vae ../models/vae/sdxl_vae.safetensors \
+  --photo-maker ../models/photomaker/photomaker-v2.safetensors \
+  --pm-id-images-dir ../inputs/photomaker_examples/scarletthead_woman \
+  --pm-id-embed-path ../inputs/photomaker_examples/scarletthead_woman/id_embeds.bin \
+  -p "a girl img, retro futurism, retro game art style but extremely beautiful, intricate details, masterpiece, best quality, space-themed, cosmic, celestial, stars, galaxies, nebulas, planets, science fiction, highly detailed" \
+  -n "realistic, photo-realistic, worst quality, greyscale, bad anatomy, bad hands, error, text" \
+  --cfg-scale 5.0 \
+  --sampling-method euler \
+  --steps 50 \
+  -H 1024 \
+  -W 1024 \
+  --pm-style-strength 10 \
+  --vae-on-cpu
+```
+
+## Options
+
+The prompt must include a class word followed by the trigger word `img`, for
+example `a girl img`. Class words include `man`, `woman`, `girl`, and `boy`.
+For Asian identity images, the original workflow places `Asian` before the class word.
+
+`--pm-style-strength` accepts 0-100 and defaults to 20. The original examples use
+10-20; lower values follow the source identity more closely. Use CFG 5 and
+1024 x 1024 as in the example. On GPUs with 8 GB or less, `--vae-on-cpu` can help
+with VAE memory usage.

@@ -1,9 +1,14 @@
-# RelayVSR image and video super-resolution
+# RelayVSR
 
 [RelayVSR](https://github.com/kopperx/RelayVSR) upscales images and videos by
 2x or 4x with `-M vid_upscale`.
 
-## Weights
+## Model files
+
+| Component | Weights and downloads | CLI option | Requirement |
+| --- | --- | --- | --- |
+| RelayVSR diffusion model | [ComfyUI RelayVSR](https://huggingface.co/Comfy-Org/RelayVSR) | `--diffusion-model` | Match the requested 2x or 4x scale |
+| RelayVSR VAE | Matching scale-specific VAE from the same repository | `--vae` | Required; ordinary Wan VAE is incompatible |
 
 [ComfyUI safetensors weights](https://huggingface.co/Comfy-Org/RelayVSR) load
 directly. Select the matching pair for the requested scale:
@@ -17,14 +22,40 @@ No separate text encoder or ordinary Wan VAE is needed.
 
 ## Usage
 
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
+
+### CLI
+
 For a video, extract numbered frames into a directory, then run:
 
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  -M vid_upscale `
+  --diffusion-model ..\models\diffusion_models\relayvsr_x2_lightx2v_int8_convrot.safetensors `
+  --vae ..\models\vae\relayvsr_flash_vae_x2_fp32.safetensors `
+  --input-frames input_frames `
+  --upscale-factor 2 `
+  --fps 24 `
+  --vsr-window-size 16 `
+  -s 42 `
+  -o output.avi
+```
+
+**Linux/macOS**
+
 ```sh
-sd-cli -M vid_upscale \
-  --diffusion-model models/diffusion_models/relayvsr_x2_lightx2v_int8_convrot.safetensors \
-  --vae models/vae/relayvsr_flash_vae_x2_fp32.safetensors \
-  --input-frames input_frames --upscale-factor 2 --fps 24 \
-  --vsr-window-size 16 -s 42 -o output.avi
+./bin/sd-cli \
+  -M vid_upscale \
+  --diffusion-model ../models/diffusion_models/relayvsr_x2_lightx2v_int8_convrot.safetensors \
+  --vae ../models/vae/relayvsr_flash_vae_x2_fp32.safetensors \
+  --input-frames input_frames \
+  --upscale-factor 2 \
+  --fps 24 \
+  --vsr-window-size 16 \
+  -s 42 \
+  -o output.avi
 ```
 
 Frames are read in filename order. Set `--fps` to the source video's frame rate.
@@ -35,7 +66,7 @@ For a single image, replace `--input-frames input_frames` with `-i input.png`
 and use `-o output.png` (or JPEG/WebP). No FPS setting is needed for an image.
 `-i` / `--init-img` and `--input-frames` are mutually exclusive.
 
-## Settings and limits
+## Notes and limitations
 
 - `--upscale-factor` is required. Use 2 or 4 with the corresponding weights.
   Output width and height are exactly the input dimensions times the scale.

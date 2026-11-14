@@ -1,11 +1,19 @@
-# How to Use
+# LLaDA-Image
 
-LLaDA-Image is a 6B text-to-image and instruction-guided editing model. The denoiser is a
-Lumina2/Z-Image-style NextDiT conditioned by a LLaDA2-MoE diffusion-LLM text encoder, and it
-reuses the Flux.2 VAE. Two checkpoints are published: a 50-step base model and
-LLaDA-Image-Turbo, a 4-step distilled model.
+LLaDA-Image is a 6B text-to-image and instruction-guided editing model using a
+LLaDA2 text encoder and the FLUX.2 VAE. Choose the 50-step Base checkpoint or the
+4-step Turbo checkpoint, keeping each variant's text encoder and connectors
+together.
 
-## Download weights
+## Model files
+
+| Component | Weights and downloads | CLI option | Requirement |
+| --- | --- | --- | --- |
+| Transformer | Choose the matching Base or Turbo weights below | `--diffusion-model` | Required |
+| Text encoder | Use the text encoder from the same Base or Turbo checkpoint | `--llm` | Required; variants are not interchangeable |
+| Tokenizer | `tokenizer/tokenizer.json` from either original repository below | `--tokenizer` | Required; shared by Base and Turbo |
+| FLUX.2 VAE | `llada_vae.safetensors`, downloaded from either original repository below | `--vae` | Required; shared by Base and Turbo |
+| Connectors | Matching `*-connectors.safetensors` or `*-connectors-edit.safetensors` below | `--embeddings-connectors` | Editing requires the file including SigVQ |
 
 Four components are required: a transformer, a text encoder, a VAE, and a connectors file
 holding the QueryFormer, the text projection and, for editing, the SigVQ image encoder.
@@ -52,19 +60,47 @@ Other quantizations of the transformer and the text encoder are in the same repo
 The VAE comes from the original repository,
 https://huggingface.co/inclusionAI/LLaDA-Image, and is the same file as the Turbo one.
 
-### Converting the weights yourself
+### Optional conversion
+
+Run executable conversion examples from the build directory using the
+[shared path and shell conventions](README.md#example-conventions).
+
+#### Converting the weights yourself
 
 The transformer has to go in through `--diffusion-model` so that its tensor names keep the
 prefix the loader expects, while the text encoder goes in through `-m`:
 
-```bash
-./bin/sd-cli -M convert --diffusion-model transformer/diffusion_pytorch_model.safetensors.index.json \
-  -o llada-image-f16.gguf --type f16
-./bin/sd-cli -M convert -m text_encoder/model.safetensors.index.json \
-  -o llada-image-text_encoder-q8_0.gguf --type q8_0
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  -M convert `
+  --diffusion-model ..\models\transformer\diffusion_pytorch_model.safetensors.index.json `
+  --type f16 `
+  -o llada-image-f16.gguf
+.\bin\Release\sd-cli.exe `
+  -M convert `
+  -m ..\models\text_encoder\model.safetensors.index.json `
+  --type q8_0 `
+  -o llada-image-text_encoder-q8_0.gguf
 ```
 
-### Building the connector file yourself
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  -M convert \
+  --diffusion-model ../models/transformer/diffusion_pytorch_model.safetensors.index.json \
+  --type f16 \
+  -o llada-image-f16.gguf
+./bin/sd-cli \
+  -M convert \
+  -m ../models/text_encoder/model.safetensors.index.json \
+  --type q8_0 \
+  -o llada-image-text_encoder-q8_0.gguf
+```
+
+#### Building the connector file yourself
 
 `--embeddings-connectors` takes one file, so the QueryFormer, the text projection and
 (for editing) the SigVQ encoder have to be combined into a single Safetensors file, each
@@ -85,43 +121,103 @@ for prefix, path in [
 save_file(merged, "llada_connectors.safetensors")
 ```
 
-## Examples
+## Usage
 
-### Text to image
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
-```bash
+### Web UI
+
+Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
+server, then select the recipe matching your weights. Fill the component slots
+below and click **Load models**.
+Use the files and compatibility requirements in [Model files](#model-files).
+
+| Recipe | Component slots |
+| --- | --- |
+| LLaDA Image Turbo (`llada-image-turbo`) | `diffusion_model`, `llm`, `tokenizer`, `embeddings_connectors`, `vae`, `tae` |
+| LLaDA Image (base) (`llada-image`) | `diffusion_model`, `llm`, `tokenizer`, `embeddings_connectors`, `vae`, `tae` |
+
+Slot IDs correspond to CLI component options: `diffusion_model` uses
+`--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
+Select optional components when required by your checkpoint or task.
+
+### CLI
+
+#### Text to image
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  --diffusion-model ..\models\diffusion_models\llada-image-turbo-f16.gguf `
+  --llm ..\models\text_encoders\llada-image-turbo-text_encoder-q8_0.gguf `
+  --tokenizer ..\models\tokenizers\tokenizer.json `
+  --vae ..\models\vae\llada_vae.safetensors `
+  --embeddings-connectors ..\models\text_encoders\llada-image-turbo-connectors.safetensors `
+  --prompt "a lovely cat holding a sign says 'llada.cpp'" `
+  --steps 4 `
+  --cfg-scale 1.0 `
+  --width 1024 `
+  --height 1024 `
+  --seed 42 `
+  --output output.png
+```
+
+**Linux/macOS**
+
+```sh
 ./bin/sd-cli \
-  --diffusion-model /path/to/llada-image-turbo-f16.gguf \
-  --llm /path/to/llada-image-turbo-text_encoder-q8_0.gguf \
-  --tokenizer /path/to/tokenizer.json \
-  --vae /path/to/llada_vae.safetensors \
-  --embeddings-connectors /path/to/llada-image-turbo-connectors.safetensors \
+  --diffusion-model ../models/diffusion_models/llada-image-turbo-f16.gguf \
+  --llm ../models/text_encoders/llada-image-turbo-text_encoder-q8_0.gguf \
+  --tokenizer ../models/tokenizers/tokenizer.json \
+  --vae ../models/vae/llada_vae.safetensors \
+  --embeddings-connectors ../models/text_encoders/llada-image-turbo-connectors.safetensors \
   --prompt "a lovely cat holding a sign says 'llada.cpp'" \
-  --width 1024 \
-  --height 1024 \
   --steps 4 \
   --cfg-scale 1.0 \
+  --width 1024 \
+  --height 1024 \
   --seed 42 \
   --output output.png
 ```
 
 <img width="256" alt="LLaDA-Image example" src="../../assets/llada_image/example.png" />
 
-### Image editing
+#### Image editing
 
-```bash
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  --diffusion-model ..\models\diffusion_models\llada-image-turbo-f16.gguf `
+  --llm ..\models\text_encoders\llada-image-turbo-text_encoder-q8_0.gguf `
+  --tokenizer ..\models\tokenizers\tokenizer.json `
+  --vae ..\models\vae\llada_vae.safetensors `
+  --embeddings-connectors ..\models\text_encoders\llada-image-turbo-connectors-edit.safetensors `
+  --ref-image ..\inputs\input.png `
+  --prompt "change the sign text to 'sd.cpp'" `
+  --steps 4 `
+  --cfg-scale 1.0 `
+  --width 1024 `
+  --height 1024 `
+  --output output.png
+```
+
+**Linux/macOS**
+
+```sh
 ./bin/sd-cli \
-  --diffusion-model /path/to/llada-image-turbo-f16.gguf \
-  --llm /path/to/llada-image-turbo-text_encoder-q8_0.gguf \
-  --tokenizer /path/to/tokenizer.json \
-  --vae /path/to/llada_vae.safetensors \
-  --embeddings-connectors /path/to/llada-image-turbo-connectors-edit.safetensors \
-  --ref-image /path/to/input.png \
+  --diffusion-model ../models/diffusion_models/llada-image-turbo-f16.gguf \
+  --llm ../models/text_encoders/llada-image-turbo-text_encoder-q8_0.gguf \
+  --tokenizer ../models/tokenizers/tokenizer.json \
+  --vae ../models/vae/llada_vae.safetensors \
+  --embeddings-connectors ../models/text_encoders/llada-image-turbo-connectors-edit.safetensors \
+  --ref-image ../inputs/input.png \
   --prompt "change the sign text to 'sd.cpp'" \
-  --width 1024 \
-  --height 1024 \
   --steps 4 \
   --cfg-scale 1.0 \
+  --width 1024 \
+  --height 1024 \
   --output output.png
 ```
 
@@ -133,7 +229,7 @@ before VAE encoding. SigVQ uses bilinear resizing to half the output resolution 
 normalized to `[-1, 1]`. CFG keeps the source latent in both branches and uses SigVQ features
 only in the positive branch. Editing requires connectors that include the SigVQ weights.
 
-## Notes
+## Notes and limitations
 
 - Use 4 steps and `--cfg-scale 1.0` for LLaDA-Image-Turbo; the guidance is distilled away, so
   a higher CFG degrades output and doubles the text encoder cost. The 50-step base model uses

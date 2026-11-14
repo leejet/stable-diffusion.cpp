@@ -119,9 +119,13 @@ documentation.
 1. Identify the relevant modules under `src/`.
 2. Check whether the change touches the public API in `include/`.
 3. Consult relevant `docs/` and examples before changing user-facing behavior.
-4. Follow existing local patterns before adding new abstractions.
-5. Keep edits scoped to the requested behavior.
-6. Run the narrowest useful build, test, or inspection command available.
+4. For model or component integrations, read and follow
+   [the model documentation requirements](CONTRIBUTING.md#model-documentation).
+   Add or update the usage guide and relevant index/README entries in the same
+   change. Treat the integration as incomplete until this documentation is included.
+5. Follow existing local patterns before adding new abstractions.
+6. Keep edits scoped to the requested behavior.
+7. Run the narrowest useful build, test, or inspection command available.
 
 Follow `CONTRIBUTING.md` for formatting, naming, PR expectations, dependency
 update policy, and security rules. For tokenizer additions, follow its embedded-data

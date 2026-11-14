@@ -1,57 +1,24 @@
-# PuLID-Flux face-identity preservation
+# PuLID-Flux
 
-stable-diffusion.cpp supports the [PuLID-Flux](https://github.com/ToTheBeginning/PuLID)
-identity-injection technique on top of Flux.1 (schnell or dev) models.
-Given a single source portrait, PuLID-Flux produces new generations that
-preserve the source person's face across arbitrary scenes, poses, and
-prompts.
+[PuLID-Flux](https://github.com/ToTheBeginning/PuLID) preserves a source portrait
+identity while generating new images with FLUX.1 dev or schnell. Compute the
+identity embedding once with the external Python tool, then reuse it.
 
-Unlike PhotoMaker (which extracts the identity inside the inference
-process from a directory of images), PuLID-Flux's identity extractor is
-a heavy stack (insightface ArcFace + EVA-CLIP-L + IDFormer encoder) that
-is impractical to port to C++/ggml. To keep this implementation small and
-cross-vendor, **stable-diffusion.cpp consumes a precomputed identity
-embedding** produced by an external Python tool that runs once per source
-portrait. Everything downstream of that one-shot extraction is C++ and
-runs on any backend (Vulkan, CUDA, Metal, ROCm, CPU).
+## Model files
 
-## Architecture summary
+| Component | Weights and downloads | CLI option | Requirement |
+| --- | --- | --- | --- |
+| FLUX.1 base components | [FLUX.1 guide](flux.md) | `--diffusion-model`, `--vae`, `--clip_l`, `--t5xxl` | Required; dev or schnell |
+| PuLID v0.9.x weights | [guozinan/PuLID](https://huggingface.co/guozinan/PuLID) | `--pulid-weights` | v0.9.1 is the tested version; v1.1 is unsupported |
+| Identity embedding | `source.pulidembd` from preparation below | `--pulid-id-embedding` | Required for identity preservation |
 
-The PuLID-Flux contribution to the Flux denoise loop is a stack of 20
-small cross-attention modules (`PerceiverAttentionCA`) inserted between
-the Flux transformer blocks:
+### Prepare the identity embedding
 
-- After every 2nd of the 19 double-stream blocks (10 hook points)
-- After every 4th of the 38 single-stream blocks (10 hook points)
-
-Each cross-attention layer takes the current image tokens as query, the
-32-token / 2048-dim identity embedding as key+value, and adds its output
-(scaled by `id_weight`, typically 1.0) back to the image tokens.
-
-## Required weights
-
-Three files in addition to the standard Flux weight set:
-
-1. **Flux base** (transformer + VAE + clip_l + t5xxl) -- exactly as
-   [FLUX.1 guide](flux.md) describes.
-2. **PuLID weights** -- download from
-   [guozinan/PuLID](https://huggingface.co/guozinan/PuLID):
-   - `pulid_flux_v0.9.0.safetensors` or `pulid_flux_v0.9.1.safetensors`
-     (recommended; this implementation is verified against v0.9.1)
-   - **v1.1 (`pulid_v1.1.safetensors`) is NOT yet supported** -- it uses
-     renamed keys (`id_adapter_attn_layers.*` instead of `pulid_ca.*`)
-     and possibly different module structure. Future PR.
-3. **Identity embedding (.pulidembd)** -- produced by the precompute
-   tool below.
-
-## Precompute the identity embedding
-
-The precompute tool runs the PyTorch identity-extraction stack on a
-single portrait image and writes the resulting `(32, 2048)` embedding
-to a `.pulidembd` binary file (about 131 KB). Run it once per source
+The precompute tool extracts an identity embedding from a single portrait
+and writes it to a `.pulidembd` file. Run it once per source
 person; the same file is reused for any number of generations.
 
-A reference Python script is provided alongside this docs file at
+Use
 [`scripts/pulid_extract_id.py`](../../scripts/pulid_extract_id.py). It
 requires:
 - A working CUDA / CPU PyTorch stack
@@ -62,50 +29,91 @@ requires:
   `pulid/pipeline_flux.py`) and `eva_clip/` package on `PYTHONPATH`; `flux/`
   is not needed for embedding extraction
 
-Run it as:
+From the source repository root, run:
 
-```
-python pulid_extract_id.py \
-  --portrait /path/to/source-photo.jpg \
-  --pulid-weights /path/to/pulid_flux_v0.9.1.safetensors \
-  --out /path/to/source.pulidembd
-```
+**Windows (PowerShell)**
 
-## Format (gguf)
-
-The embedding is a standard **gguf** container holding a single tensor:
-
-```
-tensor name : "pulid_id"
-shape       : [token_dim, num_tokens]   (ggml order; typically [2048, 32])
-type        : F16 (also accepts F32 / BF16)
-metadata    : general.architecture = "pulid", pulid.version = 1
+```powershell
+python scripts\pulid_extract_id.py --portrait .\inputs\source-photo.jpg --pulid-weights .\models\pulid\pulid_flux_v0.9.1.safetensors --out .\inputs\source.pulidembd
 ```
 
-stable-diffusion.cpp loads it with the normal gguf reader
-(`gguf_init_from_file`) and converts to fp32 at load time -- no bespoke
-parser. Total file size for the typical (32, 2048, fp16) case is ~131 KB.
+**Linux/macOS**
 
-## Command-line usage
-
+```sh
+python scripts/pulid_extract_id.py --portrait ./inputs/source-photo.jpg --pulid-weights ./models/pulid/pulid_flux_v0.9.1.safetensors --out ./inputs/source.pulidembd
 ```
-.\bin\Release\sd-cli.exe \
-  --diffusion-model     models\flux1-schnell-Q4_K_S.gguf \
-  --vae                 models\ae.safetensors \
-  --clip_l              models\clip_l.safetensors \
-  --t5xxl               models\t5xxl_fp16.safetensors \
-  --pulid-weights       models\pulid_flux_v0.9.1.safetensors \
-  --pulid-id-embedding  source.pulidembd \
-  --pulid-id-weight     1.0 \
+
+The script writes the embedding to the repository's `inputs/` directory.
+The examples below read the same file from the build directory.
+
+## Usage
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
+
+### Web UI
+
+Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
+server, then select the recipe matching your weights. Fill the component slots
+below and click **Load models**.
+Use the files and compatibility requirements in [Model files](#model-files).
+
+| Recipe | Component slots |
+| --- | --- |
+| FLUX.1 dev PuLID (`flux1-pulid`) | `diffusion_model`, `clip_l`, `t5xxl`, `pulid_weights`, `vae`, `tae` |
+
+Slot IDs correspond to CLI component options: `diffusion_model` uses
+`--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
+Select optional components when required by your checkpoint or task.
+
+### CLI
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  --diffusion-model ..\models\diffusion_models\flux1-schnell-Q4_K_S.gguf `
+  --vae ..\models\vae\ae.safetensors `
+  --clip_l ..\models\text_encoders\clip_l.safetensors `
+  --t5xxl ..\models\text_encoders\t5xxl_fp16.safetensors `
+  --pulid-weights ..\models\pulid\pulid_flux_v0.9.1.safetensors `
+  --pulid-id-embedding ..\inputs\source.pulidembd `
+  -p "candid photograph of a young woman on a beach at sunset" `
+  --cfg-scale 1.0 `
+  --sampling-method euler `
+  --steps 4 `
+  -W 512 `
+  -H 512 `
+  --pulid-id-weight 1.0 `
+  --clip-on-cpu `
+  --seed 42 `
+  -o out.png
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  --diffusion-model ../models/diffusion_models/flux1-schnell-Q4_K_S.gguf \
+  --vae ../models/vae/ae.safetensors \
+  --clip_l ../models/text_encoders/clip_l.safetensors \
+  --t5xxl ../models/text_encoders/t5xxl_fp16.safetensors \
+  --pulid-weights ../models/pulid/pulid_flux_v0.9.1.safetensors \
+  --pulid-id-embedding ../inputs/source.pulidembd \
   -p "candid photograph of a young woman on a beach at sunset" \
-  --cfg-scale 1.0 --sampling-method euler --steps 4 -W 512 -H 512 \
-  --seed 42 --clip-on-cpu \
+  --cfg-scale 1.0 \
+  --sampling-method euler \
+  --steps 4 \
+  -W 512 \
+  -H 512 \
+  --pulid-id-weight 1.0 \
+  --clip-on-cpu \
+  --seed 42 \
   -o out.png
 ```
 
 For Flux Dev (instead of Schnell), add `--guidance 3.5` and `--steps 20`.
 
-## Flags
+## Options
 
 | Flag                       | Purpose                                                           |
 |----------------------------|-------------------------------------------------------------------|
@@ -113,37 +121,18 @@ For Flux Dev (instead of Schnell), add `--guidance 3.5` and `--steps 20`.
 | `--pulid-id-embedding <p>` | Path to a `.pulidembd` binary produced by the precompute tool.    |
 | `--pulid-id-weight <f>`    | Identity-injection strength. Typical 0.7-1.2; default 1.0.        |
 
-All three flags must be set together to activate PuLID. Setting only
-`--pulid-weights` (no embedding) loads the weights but disables injection
-at runtime. Setting `--pulid-id-weight 0` zeros out the contribution
-(useful for falsification testing: outputs should be byte-identical to
-a no-PuLID run with the same seed).
+Supply both the PuLID weights and identity embedding to activate identity
+conditioning. `--pulid-id-weight` defaults to 1.0; set it to 0 to disable identity
+injection. Loading `--pulid-weights` without an embedding leaves identity
+conditioning inactive.
 
-## Memory budget
-
-At 512x512, 4 steps (Schnell), the 20 cross-attention layers add roughly
-10% to denoise time and almost nothing to peak VRAM. Tested on a 12 GB
-consumer card alongside Flux Schnell Q4 GGUF + CPU-offloaded clip_l and
-t5xxl + GPU-resident VAE.
-
-At 1024x1024 with Flux Dev Q4 + 20 steps + PuLID, the VAE decode compute
-buffer doesn't fit on a 12 GB card even with `--vae-on-cpu`. Workaround:
-explicitly route VAE to the CPU backend instead of the offload flag:
-
-```
---backend "diffusion=vulkan0,vae=cpu"
-```
-
-The `--vae-on-cpu` flag offloads VAE weights but leaves the compute graph
-on the default backend; this is existing stable-diffusion.cpp behavior,
-not a PuLID-specific issue. Documented here because anyone running PuLID
-at 1024 will hit it.
-
-## Backend selection
+### Backend selection
 
 The standard `--backend` flag works as documented. Common patterns:
 
-```
+**Windows (PowerShell) arguments**
+
+```text
 # AMD Vulkan
 --backend "diffusion=vulkan0,vae=cpu"
 
@@ -154,43 +143,57 @@ The standard `--backend` flag works as documented. Common patterns:
 --backend "diffusion=cuda0,vae=cpu"
 ```
 
+**Linux/macOS arguments**
+
+```text
+# AMD Vulkan
+--backend diffusion=vulkan0,vae=cpu
+
+# NVIDIA Vulkan
+--backend diffusion=vulkan1,vae=cpu
+
+# CUDA
+--backend diffusion=cuda0,vae=cpu
+```
+
 The PuLID cross-attention layers run on the same backend as the main
 diffusion model. They have not yet been independently profiled on every
 backend; only Vulkan and CPU have been tested by the original contributor.
 
-## Verification
+## Notes and limitations
 
-A three-way SHA-256 check is the recommended sanity test when bringing up
-a new combination of model + backend + hardware:
+PuLID v1.1 weights are unsupported. Use PuLID and skip-layer guidance
+(`--skip-layers`) separately. One precomputed identity embedding is accepted per
+request; prepare it using the external tool. Identity conditioning is applied
+to the positive CFG branch.
 
-| Run                                          | Expected hash relation             |
-|----------------------------------------------|------------------------------------|
-| A: no `--pulid-*` flags                      | baseline                           |
-| B: PuLID flags, `--pulid-id-weight 0.0`      | **byte-identical to A**            |
-| C: PuLID flags, `--pulid-id-weight 1.0`      | **different from A,B**, preserves source identity |
+At 512x512, 4 steps (Schnell), the 20 cross-attention layers add roughly
+10% to denoise time and almost nothing to peak VRAM. Tested on a 12 GB
+consumer card alongside Flux Schnell Q4 GGUF + CPU-offloaded clip_l and
+t5xxl + GPU-resident VAE.
 
-If A and C differ but A and B differ too, the injection is allocating
-or computing something even at zero weight -- likely a bug.
+At 1024x1024 with Flux Dev Q4 + 20 steps + PuLID, the VAE decode compute
+buffer doesn't fit on a 12 GB card even with `--vae-on-cpu`. Workaround:
+explicitly route VAE to the CPU backend instead of the offload flag:
 
-## Limitations / not yet supported
+**Windows (PowerShell) arguments**
 
-- **`--skip-layers` (skip-layer-guidance / SLG) combined with PuLID** is not
-  supported. The `pulid_ca` index advances per non-skipped block, so a
-  skipped block silently misaligns the cross-attention weight assignment
-  vs. the trained intervals. The reference PyTorch implementation does
-  not have SLG either, so there is no well-defined behavior to emulate.
-  Use either feature alone.
-- **PuLID v1.1 weights** (`pulid_v1.1.safetensors`, renamed key layout).
-- **Multiple ID images.** The reference PyTorch implementation can fuse
-  several portraits into one embedding for stronger identity. This
-  implementation accepts a single embedding produced from one or more
-  images by the external precompute tool.
-- **Negative-prompt branch of CFG.** PuLID only injects on the positive
-  conditioning path in the published reference, and the implementation
-  here follows that. Flux's distilled guidance doesn't run a separate
-  uncond branch in normal use, so this matters only for `--true-cfg`
-  workflows that aren't standard for Flux.
-- **Backends other than Vulkan and CPU** are untested by the original
-  contributor. The implementation is pure-ggml and should work on CUDA,
-  ROCm, and Metal, but verification by users on those backends is
-  welcomed.
+```text
+--backend "diffusion=vulkan0,vae=cpu"
+```
+
+**Linux/macOS arguments**
+
+```text
+--backend diffusion=vulkan0,vae=cpu
+```
+
+The `--vae-on-cpu` flag offloads VAE weights but leaves the compute graph
+on the default backend; this is existing stable-diffusion.cpp behavior,
+not a PuLID-specific issue. Documented here because anyone running PuLID
+at 1024 will hit it.
+
+The original contributor tested Vulkan and CPU. Other backends were not
+validated in those tests. See [backend selection](../guides/backend.md) for
+device placement. Internal format details and validation procedures are in the
+[PuLID developer notes](../development/pulid.md).

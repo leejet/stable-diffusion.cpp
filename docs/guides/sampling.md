@@ -9,13 +9,31 @@ Choose both according to the [model guide](../models/README.md) for your checkpo
 For example, using the Stable Diffusion 1.5 checkpoint from the
 [quick start](../../README.md#quick-start):
 
-```sh
-./sd-cli -m ./models/v1-5-pruned-emaonly.safetensors \
-  --sampling-method euler_a --scheduler discrete --steps 20 -p "a lovely cat"
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  -m ..\models\checkpoints\v1-5-pruned-emaonly.safetensors `
+  --sampling-method euler_a `
+  --scheduler discrete `
+  --steps 20 `
+  -p "a lovely cat"
 ```
 
-Run this from the directory containing `sd-cli`. On Windows, use `sd-cli.exe`
-with your shell's path and line-continuation syntax.
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  -m ../models/checkpoints/v1-5-pruned-emaonly.safetensors \
+  --sampling-method euler_a \
+  --scheduler discrete \
+  --steps 20 \
+  -p "a lovely cat"
+```
+
+Run the example from the build directory. See the
+[shared command conventions](../models/README.md#example-conventions) for build
+layouts and platform-specific syntax.
 
 | CLI option | Purpose |
 | --- | --- |
@@ -26,8 +44,8 @@ with your shell's path and line-continuation syntax.
 | `--sigmas VALUES_OR_PRESET` | Supply a custom schedule instead of generating one with the scheduler. |
 | `--hires-sigmas VALUES_OR_PRESET` | Supply a custom schedule for the highres fix second pass. |
 
-The names below are the exact, case-sensitive CLI values. Run `./sd-cli --help`
-to check the options supported by your installed build.
+The names below are the exact, case-sensitive CLI values. Run `.\bin\Release\sd-cli.exe --help` on Windows or `./bin/sd-cli --help` on
+Linux/macOS to check the options supported by your installed build.
 
 For native server requests, use `sample_params.sample_method` and
 `sample_params.scheduler`. See the [server API reference](../../examples/server/api.md)
