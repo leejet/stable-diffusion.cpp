@@ -254,6 +254,45 @@ bool read_safetensors_file(const std::string& file_path,
         comfy_quant_configs.emplace(module_name, std::move(config));
     }
 
+    // Some ComfyUI exports omit per-tensor .comfy_quant tensors and only record the
+    // quantization config in the global __metadata__ blob. ComfyUI treats that blob as
+    // authoritative for format detection, so use it for any module without a per-tensor config.
+    if (header_.contains("__metadata__") && header_["__metadata__"].is_object() &&
+        header_["__metadata__"].contains("_quantization_metadata") &&
+        header_["__metadata__"]["_quantization_metadata"].is_string()) {
+        try {
+            const nlohmann::json quant_metadata =
+                nlohmann::json::parse(header_["__metadata__"]["_quantization_metadata"].get<std::string>());
+            const auto layers = quant_metadata.find("layers");
+            if (layers != quant_metadata.end() && layers->is_object()) {
+                for (const auto& item : layers->items()) {
+                    const std::string& format = item.value().value("format", "");
+                    if (format != "int8_tensorwise" && format != "convrot_w4a4" && format != "asym_w4a8_int8") {
+                        continue;
+                    }
+#ifdef SD_USE_UPSTREAM_GGML
+                    set_error(error, "ComfyUI INT8/packed INT4 is not supported by this ggml build (module '" + item.key() + "')");
+                    return false;
+#endif
+                    ComfyQuantConfig config;
+                    config.format            = format;
+                    config.convrot           = item.value().value("convrot", false);
+                    config.group_size        = item.value().value("convrot_groupsize", 0);
+                    config.weight_group_size = item.value().value("group_size", 0);
+                    if (config.format == "convrot_w4a4" || config.format == "asym_w4a8_int8") {
+                        // Packed W4 formats imply rotation, including exports without the INT8 convrot flag.
+                        config.convrot    = true;
+                        config.group_size = item.value().value("convrot_groupsize", 256);
+                    }
+                    comfy_quant_configs.emplace(item.key(), std::move(config));
+                }
+            }
+        } catch (const std::exception&) {
+            set_error(error, "parsing ComfyUI quantization metadata failed");
+            return false;
+        }
+    }
+
     tensor_storages.clear();
     for (auto& item : header_.items()) {
         std::string name           = item.key();
