@@ -45,7 +45,7 @@ the intended output scale:
 The two values can be set independently and apply across model components. The
 default `0` preserves each model's built-in settings; `1` explicitly disables the
 corresponding scaling. Overrides must be finite positive values. C API users can
-set `linear_scale` and `attn_scale` in `sd_ctx_params_t`.
+set the `linear_scale` and `attn_scale` context-option keys with `sd_opt_set_float()`.
 
 If the problem persists after trying the relevant steps above,
 [submit a bug report](https://github.com/leejet/stable-diffusion.cpp/issues/new?template=bug_report.yml).

@@ -17,6 +17,13 @@ From the build directory, show the full list of command-line arguments:
 See [sampling methods and schedulers](../../docs/guides/sampling.md) for supported
 names, defaults, and custom sigma schedules.
 
+Omitted inference options use the [library defaults](../../docs/guides/c_api.md#keys).
+In particular, an omitted seed requests a random seed; use `--seed 42` for a
+repeatable run. Video generation defaults to 6 requested frames before model
+alignment. SLG layers remain unset unless `--skip-layers` is supplied, and the
+conditioning cache uses the library default. Zero and false are explicit inputs;
+invalid values are reported rather than treated as omitted.
+
 Logging defaults to `info`. Use `--log-level <level>` to select `debug`, `verbose`,
 `info`, `warn`, or `error` (from most to least detailed). Each level includes
 messages at that level and all less detailed levels. `-v` and `--verbose` are

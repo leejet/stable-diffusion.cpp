@@ -35,8 +35,8 @@ static bool build_openai_generation_request(const httplib::Request& req,
     std::string size          = j.value("size", "");
     std::string output_format = j.value("output_format", "png");
     int output_compression    = j.value("output_compression", 100);
-    int width                 = runtime.default_gen_params->width > 0 ? runtime.default_gen_params->width : 512;
-    int height                = runtime.default_gen_params->height > 0 ? runtime.default_gen_params->height : 512;
+    auto width                = runtime.default_gen_params->width;
+    auto height               = runtime.default_gen_params->height;
     if (!size.empty()) {
         auto pos = size.find('x');
         if (pos != std::string::npos) {
@@ -120,8 +120,8 @@ static bool build_openai_edit_request(const httplib::Request& req,
     }
 
     std::string size = req.form.get_field("size");
-    int width        = -1;
-    int height       = -1;
+    auto width       = runtime.default_gen_params->width;
+    auto height      = runtime.default_gen_params->height;
     if (!size.empty()) {
         auto pos = size.find('x');
         if (pos != std::string::npos) {
@@ -185,12 +185,12 @@ static bool build_openai_edit_request(const httplib::Request& req,
             mask_w, mask_h, mask_channel,
             0, 0, 1);
         request.gen_params.mask_image.reset({(uint32_t)mask_w, (uint32_t)mask_h, 1, mask_raw});
-        const sd_image_t& mask_image = request.gen_params.mask_image.get();
+        const SDImage& mask_image = request.gen_params.mask_image.get();
         request.gen_params.set_width_and_height_if_unset(mask_image.width, mask_image.height);
     } else {
         request.gen_params.mask_image.reset({
-            (uint32_t)request.gen_params.get_resolved_width(),
-            (uint32_t)request.gen_params.get_resolved_height(),
+            (uint32_t)request.gen_params.get_requested_width(),
+            (uint32_t)request.gen_params.get_requested_height(),
             1,
             nullptr,
         });
@@ -218,17 +218,17 @@ static bool execute_sync_img_gen_request(ServerRuntime& runtime,
                                          ImgGenJobRequest& request,
                                          SDImageVec& results,
                                          std::string& error_message) {
-    sd_img_gen_params_t img_gen_params = request.to_sd_img_gen_params_t();
-    int num_results                    = 0;
+    SDOptPtr img_gen_params = request.to_image_opt();
+    int num_results         = 0;
 
     {
         std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
         PromptImageCallbackGuard prompt_images(runtime.sd_ctx, request.gen_params);
-        sd_image_generation_result_t* generated = nullptr;
-        generate_image(runtime.sd_ctx, &img_gen_params, &generated);
+        sd_result_t* generated = nullptr;
+        generate_sd_image(runtime.sd_ctx, img_gen_params, &generated);
         results.adopt(generated, runtime.ctx_params->lora_model_dir);
         num_results = results.count();
-        if (!results.empty() && !apply_server_adetailer(runtime, request, img_gen_params, results)) {
+        if (!results.empty() && !apply_server_adetailer(runtime, request, results)) {
             error_message = "ADetailer failed";
             return false;
         }

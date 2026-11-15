@@ -10,6 +10,16 @@ and HTTP APIs. Download or build the server before starting; see the
 - [API](#api): native and compatibility endpoints.
 - [Frontend development](#frontend-development): build or customize the Web UI.
 
+Inference settings follow this priority: request fields, explicit server startup
+options, model recipe presets, then [library defaults](../../docs/guides/c_api.md#keys).
+Omitted request fields retain the configured override. In native JSON requests,
+`null` clears an optional inference field so the library selects its value;
+`0`, `false`, empty strings and empty numeric arrays are explicit values.
+Capability `defaults` and `defaults_by_mode` contain configured overrides, with
+`null` for optional settings left to the library. Effective settings are returned
+in generation metadata. Output formats, queue limits and listen addresses keep
+server-local defaults.
+
 ## Web UI
 
 ### Start the server
