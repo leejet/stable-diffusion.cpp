@@ -30,4 +30,3 @@ applications that integrate it as an image generation backend.
 - [NodeTool](https://github.com/nodetool-ai/nodetool)
 - [Quo](https://github.com/quo-ai/quo)
 - [Prisme](https://github.com/d3Ita/prisme)
-- [AmuseAI](https://github.com/saddam213/AmuseAI)
