@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "nucleus-image",
+  "name": "Nucleus Image (Sparse MoE)",
+  "description": "First sparse MoE image DiT (17B total, ~2B active). Keep resolution at 768x768 or below on 16 GB GPUs.",
+  "model_url": "https://huggingface.co/NucleusAI/Nucleus-Image",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Qwen 3 VL 8B Text Encoder"
+    },
+    {
+      "id": "vae",
+      "required": true,
+      "label": "Qwen Image VAE"
+    }
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "scheduler": "discrete",
+    "cfg_scale": 4.5,
+    "steps": 24,
+    "width": 768,
+    "height": 768
+  },
+  "features": [
+    "img2img"
+  ]
+}

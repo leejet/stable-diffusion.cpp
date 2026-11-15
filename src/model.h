@@ -72,6 +72,7 @@ enum SDVersion {
     VERSION_CHROMA,
     VERSION_P_H3_IMAGE,
     VERSION_MINIMAX_H3_IMAGE,
+    VERSION_NUCLEUS_IMAGE,
     VERSION_COUNT,
 };
 
@@ -173,6 +174,10 @@ static inline bool sd_version_is_minimax_h3(SDVersion version) {
 
 static inline bool sd_version_is_minimax_h3_image(SDVersion version) {
     return version == VERSION_P_H3_IMAGE || version == VERSION_MINIMAX_H3_IMAGE;
+}
+
+static inline bool sd_version_is_nucleus_image(SDVersion version) {
+    return version == VERSION_NUCLEUS_IMAGE;
 }
 
 static inline bool sd_version_is_wan(SDVersion version) {
