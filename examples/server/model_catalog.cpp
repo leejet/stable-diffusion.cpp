@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <set>
 #include <sstream>
@@ -366,6 +367,398 @@ json resolve_recipe_features(const json& recipe) {
     return features;
 }
 
+// ---------------------------------------------------------------------------
+// INI recipe files for --recipes (llama.cpp models.ini dialect)
+//
+//   # comment (full-line or trailing; ';' also works)
+//   [recipe-id]
+//   key = value
+//
+// Every named section is one recipe; the section name is the recipe id. A
+// file may hold multiple recipes. An optional [*] section supplies values
+// shared by every recipe in the file; section-local keys take precedence.
+//
+// Key routing (after the [*] merge):
+//   name, description, model_url, size_multiple, schema_version  top level
+//   slots, required_slots, features, disabled_features           comma lists
+//   label.<slot>, category.<slot>                                per-slot options
+//   required_any.<n> (1-based, contiguous)                       at-least-one groups
+//   backend, vae_format, model_args, params_backend              -> context
+//   <declared slot id>                                           -> models
+//   anything else                                                -> defaults
+//     (validated upstream; custom_sigmas is a float list)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct IniEntry {
+    std::string key;
+    std::string value;
+};
+
+struct IniSection {
+    std::string name;
+    std::vector<IniEntry> entries;
+};
+
+static std::string ini_trim(const std::string& s) {
+    static const char* ws = " \t\r";
+    const auto b = s.find_first_not_of(ws);
+    if (b == std::string::npos)
+        return {};
+    const auto e = s.find_last_not_of(ws);
+    return s.substr(b, e - b + 1);
+}
+
+static bool ini_ident_start_char(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+}
+
+static bool ini_ident_char(char c) {
+    return ini_ident_start_char(c) || (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-';
+}
+
+static std::vector<std::string> ini_split_list(const std::string& text, const std::string& what, const std::string& where) {
+    std::vector<std::string> out;
+    std::istringstream in(text);
+    std::string item;
+    while (std::getline(in, item, ',')) {
+        const auto value = ini_trim(item);
+        if (value.empty())
+            throw std::runtime_error(where + ": empty entry in " + what + " list");
+        out.push_back(std::move(value));
+    }
+    if (out.empty())
+        throw std::runtime_error(where + ": missing " + what + " list");
+    return out;
+}
+
+static int ini_parse_int(const std::string& text, const std::string& what, const std::string& where) {
+    try {
+        size_t consumed = 0;
+        const int value = std::stoi(text, &consumed);
+        if (consumed != text.size())
+            throw std::out_of_range("");
+        return value;
+    } catch (const std::exception&) {
+        throw std::runtime_error(where + ": " + what + " must be an integer, got '" + text + "'");
+    }
+}
+
+static std::vector<IniSection> ini_parse_text(const std::string& text, const std::string& where) {
+    std::vector<std::string> lines;
+    {
+        std::istringstream in(text);
+        std::string line;
+        while (std::getline(in, line))
+            lines.push_back(line);
+    }
+    std::vector<IniSection> sections;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const std::string where_line = where + ":" + std::to_string(i + 1);
+        const auto line = ini_trim(lines[i]);
+        if (line.empty() || line[0] == '#' || line[0] == ';')
+            continue;
+        if (line.front() == '[') {
+            const auto close = line.find(']');
+            if (close == std::string::npos)
+                throw std::runtime_error(where_line + ": unterminated section header");
+            const auto name = ini_trim(line.substr(1, close - 1));
+            const auto after = ini_trim(line.substr(close + 1));
+            if (!after.empty() && after[0] != '#' && after[0] != ';')
+                throw std::runtime_error(where_line + ": unexpected characters after section header");
+            if (name.empty())
+                throw std::runtime_error(where_line + ": empty section name");
+            for (const auto& section : sections)
+                if (section.name == name)
+                    throw std::runtime_error(where_line + ": duplicate section [" + name + "]");
+            sections.push_back({name, {}});
+            continue;
+        }
+        const auto eq = line.find('=');
+        if (eq == std::string::npos)
+            throw std::runtime_error(where_line + ": expected 'key = value'");
+        const auto key = ini_trim(line.substr(0, eq));
+        if (key.empty() || !ini_ident_start_char(key[0]) ||
+            !std::all_of(key.begin() + 1, key.end(), [](unsigned char c) { return ini_ident_char(c); }))
+            throw std::runtime_error(where_line + ": invalid key '" + key + "'");
+        std::string value = line.substr(eq + 1);
+        for (size_t c = 0; c < value.size(); ++c) {
+            if ((value[c] == '#' || value[c] == ';') && c > 0 && (value[c - 1] == ' ' || value[c - 1] == '\t')) {
+                value = value.substr(0, c);
+                break;
+            }
+        }
+        value = ini_trim(value);
+        if (sections.empty())
+            throw std::runtime_error(where_line + ": key '" + key + "' before any section header");
+        auto& section = sections.back();
+        for (const auto& entry : section.entries)
+            if (entry.key == key)
+                throw std::runtime_error(where_line + ": duplicate key '" + key + "' in section [" + section.name + "]");
+        section.entries.push_back({key, std::move(value)});
+    }
+    return sections;
+}
+
+static const std::set<std::string> k_ini_top_level_keys = {
+    "schema_version", "name", "description", "model_url", "size_multiple",
+    "slots", "required_slots", "features", "disabled_features",
+};
+
+static const std::set<std::string> k_ini_context_keys = {
+    "backend", "vae_format", "model_args", "params_backend",
+};
+
+static const std::set<std::string> k_ini_string_default_keys = {
+    "sampling_method", "scheduler", "high_noise_sampling_method", "high_noise_scheduler",
+};
+
+static json ini_to_json_number(const std::string& text, const std::string& what, const std::string& where) {
+    try {
+        size_t consumed = 0;
+        const long long value = std::stoll(text, &consumed);
+        if (consumed == text.size())
+            return json(value);
+    } catch (const std::exception&) {}
+    try {
+        size_t consumed = 0;
+        const double value = std::stod(text, &consumed);
+        if (consumed == text.size())
+            return json(value);
+    } catch (const std::exception&) {}
+    throw std::runtime_error(where + ": " + what + " must be a number, got '" + text + "'");
+}
+
+// Any key not claimed by the routing in ini_section_to_recipe() is passed
+// through to `defaults` and validated by the upstream apply_recipe_defaults()
+// ("unknown field: X"), so new upstream default keys work from INI without
+// touching this file. `k_ini_string_default_keys` marks the string-valued
+// ones; `custom_sigmas` is a float list; everything else is a number.
+
+static json ini_section_to_recipe(const std::string& where, const IniSection& section,
+                                  const std::map<std::string, std::string>* base) {
+    // Merge shared [*] values under the section's own keys (section wins).
+    std::map<std::string, std::string> kv;
+    if (base)
+        kv = *base;
+    for (const auto& entry : section.entries)
+        kv[entry.key] = entry.value;
+    const std::string section_where = where + " [" + section.name + "]";
+    const auto fail = [&section_where](const std::string& message) {
+        throw std::runtime_error(section_where + ": " + message);
+    };
+    const auto has = [&kv](const std::string& key) { return kv.count(key) > 0; };
+    const auto get = [&kv, fail](const std::string& key) -> const std::string& {
+        const auto it = kv.find(key);
+        if (it == kv.end())
+            fail("missing required key '" + key + "'");
+        return it->second;
+    };
+
+    // Slot declarations (order preserved for the UI).
+    std::vector<std::string> slot_ids;
+    if (!has("slots"))
+        fail("missing 'slots' list");
+    slot_ids = ini_split_list(get("slots"), "slots", section_where);
+    std::set<std::string> declared;
+    for (const auto& id : slot_ids) {
+        if (!find_model_slot(id))
+            fail("unknown slot id '" + id + "'");
+        if (!declared.insert(id == "taesd" ? "tae" : id).second)
+            fail("duplicate slot '" + id + "'");
+    }
+    std::set<std::string> required_slots;
+    if (has("required_slots")) {
+        for (const auto& id : ini_split_list(get("required_slots"), "required_slots", section_where)) {
+            if (!declared.count(id == "taesd" ? "tae" : id))
+                fail("required_slots references undeclared slot '" + id + "'");
+            required_slots.insert(id == "taesd" ? "tae" : id);
+        }
+    }
+    json slots = json::array();
+    for (const auto& id : slot_ids) {
+        json slot = {{"id", id}, {"required", required_slots.count(id == "taesd" ? "tae" : id) > 0}};
+        if (has("label." + id))
+            slot["label"] = get("label." + id);
+        if (has("category." + id))
+            slot["category"] = get("category." + id);
+        slots.push_back(std::move(slot));
+    }
+
+    // At-least-one slot groups: required_any.1 .. required_any.N, contiguous from 1.
+    json required_any = json::array();
+    {
+        std::map<int, std::string> groups;
+        for (const auto& [key, value] : kv) {
+            const std::string prefix = "required_any.";
+            if (key.rfind(prefix, 0) != 0)
+                continue;
+            const auto index_text = key.substr(prefix.size());
+            int index = 0;
+            for (const char c : index_text) {
+                if (c < '0' || c > '9')
+                    fail("required_any index '" + index_text + "' must be a positive integer");
+                index = index * 10 + (c - '0');
+                if (index > 32)
+                    break; // avoid signed overflow on huge indices
+            }
+            if (index < 1 || index > 32)
+                fail("required_any index '" + index_text + "' must be in 1..32");
+            if (!groups.emplace(index, value).second)
+                fail("duplicate required_any." + index_text + "");
+        }
+        int max_index = 0;
+        for (const auto& [index, value] : groups)
+            max_index = std::max(max_index, index);
+        for (int i = 1; i <= max_index; ++i) {
+            auto it = groups.find(i);
+            if (it == groups.end())
+                fail("required_any indices must be contiguous from 1; missing required_any." + std::to_string(i));
+            json group = json::array();
+            for (const auto& id : ini_split_list(it->second, "required_any", section_where)) {
+                if (!declared.count(id == "taesd" ? "tae" : id))
+                    fail("required_any." + std::to_string(i) + " references undeclared slot '" + id + "'");
+                group.push_back(id);
+            }
+            required_any.push_back(std::move(group));
+        }
+    }
+
+    json recipe;
+    recipe["schema_version"] = has("schema_version") ? ini_parse_int(get("schema_version"), "schema_version", section_where) : 1;
+    recipe["id"]             = section.name;
+    if (!has("name"))
+        fail("missing 'name'");
+    recipe["name"] = get("name");
+    if (has("description"))
+        recipe["description"] = get("description");
+    if (has("model_url"))
+        recipe["model_url"] = get("model_url");
+    if (has("size_multiple"))
+        recipe["size_multiple"] = ini_parse_int(get("size_multiple"), "size_multiple", section_where);
+    recipe["slots"] = std::move(slots);
+    if (!required_any.empty())
+        recipe["required_any"] = std::move(required_any);
+
+    json context  = json::object();
+    json defaults = json::object();
+    json models   = json::object();
+
+    for (const auto& [key, value] : kv) {
+        if (k_ini_context_keys.count(key)) {
+            context[key] = value;
+        } else if (key.rfind("label.", 0) == 0 || key.rfind("category.", 0) == 0) {
+            const auto slot_id = key.substr(key.find('.') + 1);
+            if (!declared.count(slot_id == "taesd" ? "tae" : slot_id))
+                fail(key + " references undeclared slot '" + slot_id + "'");
+            // Consumed while building `slots` above.
+        } else if (key.rfind("required_any.", 0) == 0 || k_ini_top_level_keys.count(key)) {
+            // Consumed above.
+        } else if (declared.count(key == "taesd" ? "tae" : key) > 0) {
+            if (models.count(key == "taesd" ? "tae" : key))
+                fail("duplicate model mapping for slot '" + key + "'");
+            models[key] = value;
+        } else {
+            // Generation defaults, passed through for upstream validation.
+            if (key == "custom_sigmas") {
+                json sigmas = json::array();
+                for (const auto& item : ini_split_list(value, "custom_sigmas", section_where))
+                    sigmas.push_back(ini_to_json_number(item, "custom_sigmas entry", section_where));
+                defaults[key] = std::move(sigmas);
+            } else if (k_ini_string_default_keys.count(key)) {
+                defaults[key] = value;
+            } else {
+                defaults[key] = ini_to_json_number(value, key, section_where);
+            }
+        }
+    }
+    if (!context.empty())
+        recipe["context"] = std::move(context);
+    if (!defaults.empty())
+        recipe["defaults"] = std::move(defaults);
+    if (!models.empty())
+        recipe["models"] = std::move(models);
+
+    for (const char* list_key : {"features", "disabled_features"}) {
+        if (!has(list_key))
+            continue;
+        json list = json::array();
+        for (const auto& feature : ini_split_list(get(list_key), list_key, section_where))
+            list.push_back(feature);
+        recipe[list_key] = std::move(list);
+    }
+    return recipe;
+}
+
+// Strip a UTF-8 BOM and reject non-UTF-8 bytes before parsing. A BOM on the
+// first line would otherwise break section-header detection, and raw bytes
+// embedded in error messages would make catalog_errors fail to serialize
+// to JSON (nlohmann dump() throws on invalid UTF-8).
+static void ini_prepare_content(std::string& text, const std::string& where) {
+    static const std::string bom = "\xEF\xBB\xBF";
+    if (text.rfind(bom, 0) == 0)
+        text.erase(0, bom.size());
+    size_t i = 0;
+    const size_t n = text.size();
+    auto invalid = [where, &i]() { throw std::runtime_error(where + ": invalid UTF-8 at byte " + std::to_string(i)); };
+    while (i < n) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        size_t len = 0;
+        if (c < 0x80)
+            len = 1;
+        else if ((c & 0xE0) == 0xC0) {
+            if (c < 0xC2) // also rejects overlong encodings
+                invalid();
+            len = 2;
+        } else if ((c & 0xF0) == 0xE0)
+            len = 3;
+        else if ((c & 0xF8) == 0xF0) {
+            if (c > 0xF4)
+                invalid();
+            len = 4;
+        } else
+            invalid();
+        if (i + len > n)
+            invalid();
+        for (size_t k = 1; k < len; ++k)
+            if ((static_cast<unsigned char>(text[i + k]) & 0xC0) != 0x80)
+                invalid();
+        i += len;
+    }
+}
+
+// One file may hold several recipes; each named section becomes one. A
+// failing section reports its own (already-attributed) error and is skipped
+// so valid siblings still load. File-level syntax errors from
+// ini_parse_text remain whole-file failures. The optional [*] section is
+// merged underneath every section (section wins) regardless of where it
+// appears in the file.
+static std::vector<json> ini_file_to_recipes(const std::string& text, const std::string& where,
+                                             const std::function<void(const std::string&)>& report_error) {
+    std::string contents = text;
+    ini_prepare_content(contents, where);
+    const auto sections = ini_parse_text(contents, where);
+    std::map<std::string, std::string> base;
+    for (const auto& section : sections)
+        if (section.name == "*")
+            for (const auto& entry : section.entries)
+                base[entry.key] = entry.value;
+    std::vector<json> recipes;
+    for (const auto& section : sections) {
+        if (section.name == "*")
+            continue;
+        try {
+            recipes.push_back(ini_section_to_recipe(where, section, base.empty() ? nullptr : &base));
+        } catch (const std::exception& e) {
+            report_error(e.what());
+        }
+    }
+    return recipes;
+}
+
+} // namespace
+
 json model_generation_features(const ServerRuntime& runtime) {
     if (!runtime.sd_ctx || runtime.models->active_recipe.is_null()) {
         json features = k_recipe_features;
@@ -615,6 +1008,71 @@ void refresh_model_catalog(ServerRuntime& runtime) {
             } catch (const std::exception& e) {
                 report(source.id + "/" + category, e.what());
             }
+        }
+    }
+    // Explicit --recipes files take precedence over recipes directories. Each
+    // .ini file may hold several recipes (one per section); .json holds one.
+    {
+        std::map<std::string, json> cli_recipes;
+        auto fail_cli = [&](const std::string& file, const std::string& message) {
+            report(file, message);
+        };
+        for (const auto& recipe_path_text : runtime.svr_params->recipe_files) {
+            const fs::path recipe_path = fs::u8path(recipe_path_text);
+            const std::string display  = recipe_path.generic_u8string();
+            try {
+                std::error_code path_error;
+                const fs::path canonical = fs::canonical(recipe_path, path_error);
+                if (path_error)
+                    throw std::runtime_error(path_error.message());
+                if (!fs::is_regular_file(canonical))
+                    throw std::runtime_error("recipe file is not a regular file");
+                if (fs::file_size(canonical) > 1024 * 1024)
+                    throw std::runtime_error("recipe exceeds 1 MiB");
+                std::ifstream input(canonical, std::ios::binary);
+                if (!input.good())
+                    throw std::runtime_error("failed to open recipe file");
+                std::vector<json> file_recipes;
+                if (canonical.extension() == ".json") {
+                    json recipe;
+                    input >> recipe;
+                    file_recipes.push_back(std::move(recipe));
+                } else if (canonical.extension() == ".ini") {
+                    const std::string contents((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+                    file_recipes = ini_file_to_recipes(contents, display, [&report, &display](const std::string& message) {
+                        report(display, message);
+                    });
+                } else {
+                    throw std::runtime_error("recipe file must be .json or .ini");
+                }
+                for (auto& recipe : file_recipes) {
+                    auto id_it = recipe.find("id");
+                    const std::string id = (id_it != recipe.end() && id_it->is_string()) ? id_it->get<std::string>() : "";
+                    try {
+                        recipe = normalize_recipe(std::move(recipe));
+                    } catch (const std::exception& e) {
+                        // One invalid recipe must not drop the rest of the file.
+                        fail_cli(display, id.empty() ? e.what() : "[" + id + "] " + e.what());
+                        continue;
+                    }
+                    recipe["source"] = "user";
+                    recipe["file"]   = recipe_path.filename().u8string();
+                    recipe["root"]   = "--recipes";
+                    if (cli_recipes.count(id)) {
+                        // First definition wins (matches the directory scan).
+                        fail_cli(display, "duplicate recipe id across --recipes files: " + id);
+                        continue;
+                    }
+                    cli_recipes[id] = std::move(recipe);
+                }
+            } catch (const std::exception& e) {
+                fail_cli(display, e.what());
+            }
+        }
+        for (auto& item : cli_recipes) {
+            if (recipes.count(item.first))
+                LOG_WARN("recipe '%s' from --recipes overrides an earlier source", item.first.c_str());
+            recipes[item.first] = std::move(item.second);
         }
     }
     std::map<std::pair<std::string, std::string>, size_t> names;
