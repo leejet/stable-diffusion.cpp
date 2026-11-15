@@ -511,6 +511,12 @@ namespace sd::pipeline {
         // unlike img2img which trims from a fixed step count.
         int scheduler_steps = static_cast<int>(effective_steps / hires.denoising_strength);
         scheduler_steps     = std::max(1, scheduler_steps);
+        // Truncation maps every denoising_strength in (n / (n + 1), 1) back to n scheduler steps, so the trim below drops
+        // no sigma at all and the second pass restarts from sigma_max, discarding the upscaled latent. Keep at least one
+        // trimmed sigma; denoising_strength = 1 is the intentional full-denoise case and must keep starting at sigma_max.
+        if (scheduler_steps <= effective_steps && hires.denoising_strength < 1.0f) {
+            scheduler_steps = effective_steps + 1;
+        }
 
         scheduler_t scheduler     = resolve_scheduler(sd,
                                                       sample_params.scheduler,
