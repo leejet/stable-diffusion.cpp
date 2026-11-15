@@ -20,6 +20,7 @@ const std::vector<ModelDefinition>& moss_image_definitions() {
         ModelDefinition definition;
         definition.version                        = VERSION_MOSS_IMAGE;
         definition.geometry                       = {1, 128, 3};
+        definition.ref_image_preset               = "moss_edit";
         definition.name                           = "MOSS-Image";
         definition.traits.is_dit                  = true;
         definition.traits.vae_kind                = ModelVAEKind::FLUX2;

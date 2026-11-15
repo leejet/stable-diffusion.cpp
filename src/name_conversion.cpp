@@ -1828,7 +1828,8 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
             if (starts_with(name, "down_blocks.") || starts_with(name, "up_blocks.") ||
                 starts_with(name, "mid_block.") || starts_with(name, "conv_in.") ||
                 starts_with(name, "conv_out.") || starts_with(name, "time_embedding.") ||
-                starts_with(name, "conv_norm_out.")) {
+                starts_with(name, "conv_norm_out.") ||
+                (version == VERSION_MOSS_IMAGE && starts_with(name, "layers."))) {
                 const std::string& canonical_prefix = diffuison_model_prefix_vec.front();
                 name                                = convert_diffusion_model_name(name, canonical_prefix, version);
                 name                                = canonical_prefix + name;

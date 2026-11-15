@@ -2,12 +2,14 @@
 #define __SD_MODEL_ADAPTER_LORA_HPP__
 
 #include <cmath>
+#include <cstring>
 #include <mutex>
 #include "core/ggml_extend.h"
 #include "core/ggml_extend_backend.h"
 #include "core/ggml_runner.h"
 #include "core/ggml_tensor_utils.h"
 #include "core/util.h"
+#include "json.hpp"
 #include "model.h"
 #include "model/adapter/lora_ops.h"
 #include "model_loader.h"
@@ -20,6 +22,9 @@ struct LoraModel : public GGMLRunner {
     std::string lora_id;
     float multiplier     = 1.0f;
     float metadata_alpha = -1.f;
+    // Per-module alpha from "adapter_config" metadata, keyed by the model tensor base name
+    // (same name conversion as the lora tensors). Takes precedence over metadata_alpha.
+    std::map<std::string, float> module_alphas;
     std::unordered_map<std::string, ggml_tensor*> lora_tensors;
     std::map<ggml_tensor*, ggml_tensor*> original_tensor_to_final_tensor;
     std::set<std::string> applied_lora_tensors;
@@ -83,6 +88,65 @@ struct LoraModel : public GGMLRunner {
             }
             LOG_VERBOSE("LoRA '%s' uses metadata alpha %.6g when tensor alpha/scale is absent", file_path.c_str(), metadata_alpha);
         }
+        // MOSS-Image Edit adapters (chinoll/Moss-Image-Edit) carry alpha/rank in an
+        // "adapter_config" JSON string in the safetensors metadata instead of .alpha tensors.
+        // Non-matching "adapter_config" keys from other tools are left alone.
+        const auto adapter_config = metadata.find("adapter_config");
+        if (adapter_config != metadata.end() && metadata_alpha < 0.f && metadata.find("baked_scale") == metadata.end()) {
+            try {
+                auto cfg = nlohmann::json::parse(adapter_config->second);
+                if (cfg.value("format", "") == "moss-edit-lora" && cfg.value("format_version", 0) == 1) {
+                    float alpha  = -1.f;
+                    int64_t rank = -1;
+                    bool uniform = true;
+                    size_t valid_modules = 0;
+                    if (cfg.contains("modules") && cfg["modules"].is_object()) {
+                        for (const auto& [target, spec] : cfg["modules"].items()) {
+                            auto a_it = spec.find("alpha");
+                            auto r_it = spec.find("rank");
+                            if (a_it == spec.end() || !a_it->is_number() || r_it == spec.end() || !r_it->is_number()) {
+                                LOG_WARN("adapter_config module '%s' has a missing or non-numeric alpha/rank; using the default scale for it", target.c_str());
+                                continue;
+                            }
+                            float a   = a_it->get<float>();
+                            int64_t r = r_it->get<int64_t>();
+                            if (alpha < 0.f) {
+                                alpha = a;
+                                rank  = r;
+                            } else if (a != alpha || r != rank) {
+                                uniform = false;
+                            }
+                            // Convert the module key through the same path as the lora tensors so
+                            // it matches the model tensor base name used by the apply sites below.
+                            std::string name = convert_tensor_name("lora." + target + ".lora_A", source_version);
+                            if (starts_with(name, "lora.") && ends_with(name, ".lora_down")) {
+                                name = name.substr(std::strlen("lora."), name.size() - std::strlen("lora.") - std::strlen(".lora_down"));
+                                module_alphas[name] = a;
+                            }
+                            ++valid_modules;
+                        }
+                    }
+                    if (valid_modules == 0) {
+                        LOG_WARN("adapter_config in '%s' claims format moss-edit-lora but has no modules with a usable alpha/rank; LoRA will use the default scale", file_path.c_str());
+                    } else if (module_alphas.empty()) {
+                        // all modules parsed, but none matched a known tensor name: the uniform
+                        // alpha below is a guess, not a per-module value
+                        LOG_WARN("adapter_config in '%s' has %zu modules but none converted to known tensor names; falling back to uniform alpha %.6g", file_path.c_str(), valid_modules, alpha);
+                        metadata_alpha = alpha;
+                    } else {
+                        // fallback for any module whose key fails to convert;
+                        metadata_alpha = alpha;
+                        if (uniform) {
+                            LOG_DEBUG("MOSS edit lora: adapter_config alpha=%.6g rank=%lld (%zu modules)", alpha, (long long)rank, valid_modules);
+                        } else {
+                            LOG_DEBUG("MOSS edit lora: adapter_config has non-uniform alpha/rank (%zu modules); using per-module alpha", valid_modules);
+                        }
+                    }
+                }
+            } catch (const std::exception& e) {
+                LOG_WARN("failed to parse adapter_config metadata in '%s': %s", file_path.c_str(), e.what());
+            }
+        }
         if (sd_version_is_minimax_h3(source_version)) {
             for (const auto& entry : model_manager->loader().file_tensors(source_file)) {
                 const auto name = convert_tensor_name(entry.first, VERSION_COUNT);
@@ -134,6 +198,16 @@ struct LoraModel : public GGMLRunner {
         return found != scalar_values.end() ? found->second : ggml_ext_backend_tensor_get_f32(tensor);
     }
 
+    // Scale for a module: per-module alpha from "adapter_config" when present,
+    // else the uniform metadata alpha, else 1. Rank comes from the tensor shape.
+    float module_alpha_scale(const std::string& base_name, int64_t rank) const {
+        auto found = module_alphas.find(base_name);
+        if (found != module_alphas.end() && found->second >= 0.f) {
+            return found->second / rank;
+        }
+        return metadata_alpha >= 0.f ? metadata_alpha / rank : 1.f;
+    }
+
     void release_loaded_tensors() {
         runner_end();
         if (auto manager = std::dynamic_pointer_cast<ModelManager>(residency_manager.lock())) {
@@ -150,6 +224,7 @@ struct LoraModel : public GGMLRunner {
         metadata_alpha = -1.f;
         skipped_incompatible_lora_tensors.clear();
         warned_incompatible_model_tensors.clear();
+        module_alphas.clear();
         applied             = false;
         tensor_preprocessed = false;
     }
@@ -273,7 +348,7 @@ struct LoraModel : public GGMLRunner {
             float scale_value = 1.0f;
 
             int64_t rank = lora_down->ne[ggml_n_dims(lora_down) - 1];
-            scale_value  = metadata_alpha >= 0.f ? metadata_alpha / rank : 1.f;
+            scale_value  = module_alpha_scale(key, rank);
             iter         = lora_tensors.find(scale_name);
             if (iter != lora_tensors.end()) {
                 scale_value = scalar_value(iter->second);
@@ -840,7 +915,7 @@ struct LoraModel : public GGMLRunner {
             std::string scale_tensor_name;
 
             int64_t rank = lora_down->ne[ggml_n_dims(lora_down) - 1];
-            scale_value  = metadata_alpha >= 0.f ? metadata_alpha / rank : 1.f;
+            scale_value  = module_alpha_scale(key, rank);
             iter         = lora_tensors.find(scale_name);
             if (iter != lora_tensors.end()) {
                 scale_value       = scalar_value(iter->second);
