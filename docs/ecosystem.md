@@ -8,6 +8,7 @@ These projects wrap `stable-diffusion.cpp` for easier use in other languages/fra
 * Golang (cgo): [Binozo/GoStableDiffusion](https://github.com/Binozo/GoStableDiffusion)
 * Golang (non-cgo): [l8bloom/gosd](https://github.com/l8bloom/gosd)
 * C#: [DarthAffe/StableDiffusion.NET](https://github.com/DarthAffe/StableDiffusion.NET)
+* C#: [TensorStack.StableDiffusionCpp](https://github.com/saddam213/TensorStack/tree/master/TensorStack.StableDiffusionCpp)
 * Python: [william-murray1204/stable-diffusion-cpp-python](https://github.com/william-murray1204/stable-diffusion-cpp-python)
 * Rust: [newfla/diffusion-rs](https://github.com/newfla/diffusion-rs)
 * Flutter/Dart: [rmatif/Local-Diffusion](https://github.com/rmatif/Local-Diffusion)
