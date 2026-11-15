@@ -805,6 +805,50 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         res.set_content(r.dump(), "application/json");
     });
 
+    // A1111 clients (e.g. SDAI) fetch these during setup and abort on 404. sd-server has no
+    // equivalent concept, so they report "nothing available" in A1111's response shapes.
+    routes.get("/sdapi/v1/embeddings", [](const httplib::Request&, httplib::Response& res) {
+        json r;
+        r["loaded"]  = json::object();
+        r["skipped"] = json::object();
+        res.set_content(r.dump(), "application/json");
+    });
+
+    for (const char* path : {"/sdapi/v1/hypernetworks",
+                             "/sdapi/v1/sd-modules",
+                             "/sdapi/v1/extensions",
+                             "/sdapi/v1/script-info"}) {
+        routes.get(path, [](const httplib::Request&, httplib::Response& res) {
+            res.set_content(json::array().dump(), "application/json");
+        });
+    }
+
+    routes.get("/sdapi/v1/scripts", [](const httplib::Request&, httplib::Response& res) {
+        json r;
+        r["txt2img"] = json::array();
+        r["img2img"] = json::array();
+        res.set_content(r.dump(), "application/json");
+    });
+
+    // Server options are fixed at launch; accept and ignore updates so clients that save
+    // settings before generating keep working.
+    routes.post("/sdapi/v1/options", [](const httplib::Request&, httplib::Response& res) {
+        res.set_content(json::object().dump(), "application/json");
+    });
+
+    routes.post("/sdapi/v1/interrupt", [runtime](const httplib::Request&, httplib::Response& res) {
+        // Hold the preview lock through the cancel: the generation's preview guard clears
+        // `active` under this lock before sd_ctx_mutex is released, so the next queued
+        // generation cannot start (and be cancelled by mistake) between check and cancel.
+        // protect() holds runtime_mutex (shared) for this handler, so sd_ctx cannot be
+        // unloaded underneath us. sd_cancel_generation only stores an atomic flag.
+        std::lock_guard<std::mutex> lock(g_preview.mutex);
+        if (g_preview.active && runtime->sd_ctx) {
+            sd_cancel_generation(runtime->sd_ctx, SD_CANCEL_ALL);
+        }
+        res.set_content(json::object().dump(), "application/json");
+    });
+
     routes.get("/sdapi/v1/progress", [](const httplib::Request& req, httplib::Response& res) {
         bool skip_current_image = false;
         bool has_id_param       = req.has_param("id_task");
