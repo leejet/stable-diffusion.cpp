@@ -76,9 +76,10 @@ void sd::free_video_generation_result(sd::VideoGenerationResult* result) {
 }
 
 static sd::api::TensorRef consume_image(sd::Image& image) {
+    std::vector<int64_t> shape{image.channel, image.width, image.height};
     auto* data = image.data;
     image.data = nullptr;
-    return sd::api::own_tensor(SD_TENSOR_U8, {image.channel, image.width, image.height}, data);
+    return sd::api::own_tensor(SD_TENSOR_U8, std::move(shape), data);
 }
 
 bool sd::make_image_result(ImageGenerationResult* images, sd_result_t** result_out) {
@@ -123,9 +124,10 @@ bool sd::make_video_result(VideoGenerationResult* video, sd_result_t** result_ou
     result->generation_infos.emplace_back(video->generation_info ? video->generation_info : "");
     if (video->audio) {
         auto& audio          = *video->audio;
+        std::vector<int64_t> shape{audio.channels, static_cast<int64_t>(audio.sample_count)};
         auto* data           = audio.data;
         audio.data           = nullptr;
-        result->audio_tensor = sd::api::own_tensor(SD_TENSOR_F32, {audio.channels, static_cast<int64_t>(audio.sample_count)}, data);
+        result->audio_tensor = sd::api::own_tensor(SD_TENSOR_F32, std::move(shape), data);
         result->audio        = {audio.sample_rate, result->audio_tensor.get()};
     }
     *result_out = result.release();

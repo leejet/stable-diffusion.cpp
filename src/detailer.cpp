@@ -989,6 +989,8 @@ static bool run_adetail(sd_adetailer_t* context, sd_ctx_t* sd_ctx, sd::Image inp
         generation.pulid_params     = {};
         generation.hires.enabled    = false;
         generation.image_preprocess = {};
+
+        generation.sample_params.guidance.img_cfg = INFINITY;
         if (params.steps > 0) {
             generation.sample_params.sample_steps        = params.steps;
             generation.sample_params.custom_sigmas       = nullptr;

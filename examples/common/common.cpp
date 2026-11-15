@@ -1418,7 +1418,7 @@ ArgOptions SDGenerationParams::get_options() {
             return -1;
         }
         std::string layers_str = argv[index];
-        if (layers_str[0] != '[' || layers_str[layers_str.size() - 1] != ']') {
+        if (layers_str.size() < 2 || layers_str.front() != '[' || layers_str.back() != ']') {
             return -1;
         }
 
@@ -1431,8 +1431,12 @@ ArgOptions SDGenerationParams::get_options() {
         std::vector<int> layers;
         for (const auto& token : tokens) {
             try {
-                layers.push_back(std::stoi(token));
-            } catch (const std::invalid_argument&) {
+                size_t used     = 0;
+                const int layer = std::stoi(token, &used);
+                if (used != token.size())
+                    return -1;
+                layers.push_back(layer);
+            } catch (const std::exception&) {
                 return -1;
             }
         }
@@ -1445,7 +1449,7 @@ ArgOptions SDGenerationParams::get_options() {
             return -1;
         }
         std::string layers_str = argv[index];
-        if (layers_str[0] != '[' || layers_str[layers_str.size() - 1] != ']') {
+        if (layers_str.size() < 2 || layers_str.front() != '[' || layers_str.back() != ']') {
             return -1;
         }
 
@@ -1458,8 +1462,12 @@ ArgOptions SDGenerationParams::get_options() {
         std::vector<int> layers;
         for (const auto& token : tokens) {
             try {
-                layers.push_back(std::stoi(token));
-            } catch (const std::invalid_argument&) {
+                size_t used     = 0;
+                const int layer = std::stoi(token, &used);
+                if (used != token.size())
+                    return -1;
+                layers.push_back(layer);
+            } catch (const std::exception&) {
                 return -1;
             }
         }
@@ -2295,6 +2303,20 @@ bool SDGenerationParams::from_json_str(
                                  high_noise_skip_layers,
                                  nullptr);
     }
+
+    auto merge_shared_sample_input = [&](const char* key, auto member) {
+        const auto base = j.find("sample_params");
+        const auto high = j.find("high_noise_sample_params");
+        if (base != j.end() && base->is_object() && base->contains(key)) {
+            if (base->at(key).is_null())
+                (high_noise_sample_params.*member).reset();
+        } else if (high != j.end() && high->is_object() && high->contains(key)) {
+            sample_params.*member = high_noise_sample_params.*member;
+        }
+    };
+    merge_shared_sample_input("scheduler", &SDSampleParams::scheduler);
+    merge_shared_sample_input("flow_shift", &SDSampleParams::flow_shift);
+    merge_shared_sample_input("shifted_timestep", &SDSampleParams::shifted_timestep);
 
     if (j.contains("vae_tiling_params") && j["vae_tiling_params"].is_object()) {
         const json& tiling_json = j["vae_tiling_params"];

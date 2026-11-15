@@ -241,14 +241,14 @@ static void apply_recipe_defaults(const json& defaults, SDGenerationParams& para
             if (!params.sample_params.guidance.distilled_guidance)
                 params.sample_params.guidance.distilled_guidance = value;
         if (std::string(key) == "flow_shift")
-            if (!params.sample_params.flow_shift)
+            if (!params.sample_params.flow_shift && !params.high_noise_sample_params.flow_shift)
                 params.sample_params.flow_shift = value;
         if (std::string(key) == "high_noise_cfg_scale")
             if (!params.high_noise_sample_params.guidance.txt_cfg)
                 params.high_noise_sample_params.guidance.txt_cfg = value;
         if (std::string(key) == "high_noise_flow_shift")
-            if (!params.sample_params.flow_shift)
-                params.sample_params.flow_shift = value;
+            if (!params.sample_params.flow_shift && !params.high_noise_sample_params.flow_shift)
+                params.high_noise_sample_params.flow_shift = value;
     }
     if (defaults.contains("custom_sigmas")) {
         const auto& sigmas = defaults.at("custom_sigmas");
@@ -274,11 +274,11 @@ static void apply_recipe_defaults(const json& defaults, SDGenerationParams& para
     for (const char* key : {"scheduler", "high_noise_scheduler"}) {
         if (!defaults.contains(key))
             continue;
-        auto& sample    = params.sample_params;
+        auto& sample    = std::string(key) == "scheduler" ? params.sample_params : params.high_noise_sample_params;
         const auto name = defaults.at(key).get<std::string>();
         if (!example_options::contains(example_options::schedulers, name) && name != "normal")
             throw std::runtime_error(std::string("unknown ") + key);
-        if (!sample.scheduler)
+        if (!params.sample_params.scheduler && !params.high_noise_sample_params.scheduler)
             sample.scheduler = name;
     }
 }

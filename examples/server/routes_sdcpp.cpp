@@ -516,8 +516,11 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 return;
             }
             const auto tile_size = body.value("tile_size", runtime->default_gen_params->upscale_tile_size);
-            if (tile_size && *tile_size < 32)
-                throw std::invalid_argument("tile_size must be at least 32");
+            if (tile_size && *tile_size < 32) {
+                res.status = 400;
+                res.set_content(json({{"error", "tile_size must be at least 32"}}).dump(), "application/json");
+                return;
+            }
             const int repeats        = std::clamp(body.value("repeats", 1), 1, 4);
             const std::string wanted = body.value("upscaler", std::string());
 
