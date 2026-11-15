@@ -1712,7 +1712,8 @@ High-noise sampling fields:
 
 The two video stages share the scheduler, flow shift and timestep shifting.
 `high_noise_sample_params.scheduler`, `.flow_shift` and `.shifted_timestep`
-are accepted as aliases for those shared settings. Within one request, a
+are accepted as aliases for those shared settings in video requests. Image
+requests ignore these high-noise fields. Within one video request, a
 corresponding `sample_params` field takes precedence. Request aliases override
 inherited startup and recipe values; `null` clears the inherited shared setting.
 

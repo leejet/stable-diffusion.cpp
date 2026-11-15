@@ -452,6 +452,21 @@ static bool parse_vid_gen_request(const json& body,
         return false;
     }
 
+    auto& params                   = request.gen_params;
+    auto merge_shared_sample_input = [&](const char* key, auto member) {
+        const auto base = body.find("sample_params");
+        const auto high = body.find("high_noise_sample_params");
+        if (base != body.end() && base->is_object() && base->contains(key)) {
+            if (base->at(key).is_null())
+                (params.high_noise_sample_params.*member).reset();
+        } else if (high != body.end() && high->is_object() && high->contains(key)) {
+            params.sample_params.*member = params.high_noise_sample_params.*member;
+        }
+    };
+    merge_shared_sample_input("scheduler", &SDSampleParams::scheduler);
+    merge_shared_sample_input("flow_shift", &SDSampleParams::flow_shift);
+    merge_shared_sample_input("shifted_timestep", &SDSampleParams::shifted_timestep);
+
     std::string output_format = body.value("output_format", "webm");
     int output_compression    = body.value("output_compression", 100);
     if (!assign_output_options(request, output_format, output_compression, error_message)) {

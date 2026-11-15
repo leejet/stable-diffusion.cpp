@@ -123,7 +123,7 @@ bool sd::make_video_result(VideoGenerationResult* video, sd_result_t** result_ou
         result->images.push_back(consume_image(video->frames[i]));
     result->generation_infos.emplace_back(video->generation_info ? video->generation_info : "");
     if (video->audio) {
-        auto& audio          = *video->audio;
+        auto& audio = *video->audio;
         std::vector<int64_t> shape{audio.channels, static_cast<int64_t>(audio.sample_count)};
         auto* data           = audio.data;
         audio.data           = nullptr;

@@ -2304,20 +2304,6 @@ bool SDGenerationParams::from_json_str(
                                  nullptr);
     }
 
-    auto merge_shared_sample_input = [&](const char* key, auto member) {
-        const auto base = j.find("sample_params");
-        const auto high = j.find("high_noise_sample_params");
-        if (base != j.end() && base->is_object() && base->contains(key)) {
-            if (base->at(key).is_null())
-                (high_noise_sample_params.*member).reset();
-        } else if (high != j.end() && high->is_object() && high->contains(key)) {
-            sample_params.*member = high_noise_sample_params.*member;
-        }
-    };
-    merge_shared_sample_input("scheduler", &SDSampleParams::scheduler);
-    merge_shared_sample_input("flow_shift", &SDSampleParams::flow_shift);
-    merge_shared_sample_input("shifted_timestep", &SDSampleParams::shifted_timestep);
-
     if (j.contains("vae_tiling_params") && j["vae_tiling_params"].is_object()) {
         const json& tiling_json = j["vae_tiling_params"];
         load_json_input(tiling_json, "enabled", vae_tiling_params.enabled);
