@@ -90,6 +90,7 @@ protected:
 
     size_t add_file_path(const std::string& file_path);
     void add_tensor_storage(const TensorStorage& tensor_storage);
+    bool validate_int8_tensorwise_scales();
 
     bool init_from_gguf_file(const std::string& file_path, const std::string& prefix = "");
     bool init_from_safetensors_file(const std::string& file_path, const std::string& prefix = "");
