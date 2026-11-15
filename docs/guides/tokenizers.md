@@ -52,15 +52,17 @@ sd-cli --diffusion-model sd3.gguf --clip_l clip_l.safetensors \
   -p "a cat"
 ```
 
-The C API accepts the same string in `sd_ctx_params_t::tokenizer`. A null or
+The C API accepts the same string through the `tokenizer` context-option key. An unset or
 empty value keeps an embedded tokenizer where available; PiD and Lens require
 a nonempty main tokenizer path. The CLI passes the string through;
 `TokenizerConfig` parses and validates it when text encoders are initialized.
 
 ```c
-sd_ctx_params_t params;
-sd_ctx_params_init(&params);
-params.tokenizer = "clip-l=tokenizer_clip.json,clip-g=tokenizer_clip.json";
+sd_ctx_opt_t* opt = sd_ctx_opt_create();
+sd_status_t status = sd_opt_set_string(opt, "tokenizer",
+    "clip-l=tokenizer_clip.json,clip-g=tokenizer_clip.json");
+/* Set model paths, then call sd_ctx_create(opt, &ctx). */
+sd_opt_free(opt);
 ```
 
 Rebuild applications against the updated public header when using the updated

@@ -229,6 +229,9 @@ values reflect these declarations. A loaded recipe is snapshotted: refreshing
 recipe files does not change the active context's capabilities until reloading.
 Command-line preloading uses the runtime-only all-features recipe instead of model-family inference
 and component paths; variant-specific recipe declarations are more precise.
+Known high-noise sampling settings and `moe_boundary` are ignored when no
+high-noise stage is loaded, and `vace_strength` is ignored by non-VACE models.
+Actual control-frame inputs still require VACE.
 
 These declarations govern the Web UI and advertised capabilities, not API
 request validation. Existing generation APIs continue accepting their existing
@@ -1282,7 +1285,7 @@ and `ref_images[]`. RGB-only models drop it, so sending RGBA is safe for every m
 
 If omitted or null:
 
-- single-image fields map to an empty `sd_image_t`
+- single-image fields clear the corresponding image tensor
 - array fields map to an empty C-style array, represented as `pointer = nullptr` and `count = 0`
 
 ### Field Mapping Summary
@@ -1645,7 +1648,7 @@ Frame ordering rules:
 
 If omitted or null:
 
-- single-image fields map to an empty `sd_image_t`
+- single-image fields clear the corresponding image tensor
 - array fields map to an empty C-style array, represented as `pointer = nullptr` and `count = 0`
 
 ### Field Mapping Summary
@@ -1706,6 +1709,13 @@ Sampling fields:
 | `sample_params.guidance.slg.scale` | `number` |
 
 High-noise sampling fields:
+
+The two video stages share the scheduler, flow shift and timestep shifting.
+`high_noise_sample_params.scheduler`, `.flow_shift` and `.shifted_timestep`
+are accepted as aliases for those shared settings in video requests. Image
+requests ignore these high-noise fields. Within one video request, a
+corresponding `sample_params` field takes precedence. Request aliases override
+inherited startup and recipe values; `null` clears the inherited shared setting.
 
 | Field | Type |
 | --- | --- |

@@ -273,8 +273,8 @@ flags are deprecated and emit a warning, but remain supported when
 `--conv-direct` is omitted. Use `--conv-direct auto,diffusion=on,controlnet=on`
 and `--conv-direct auto,vae=on`, respectively. An explicit
 `--conv-direct` takes precedence over both legacy flags regardless of order.
-Library callers can set the appended `sd_ctx_params_t::conv_direct_mode` field
-to the same string; null or empty selects `auto` while honoring legacy true
+Library callers can set the `conv_direct_mode` context-option key with
+`sd_opt_set_string()` to the same string; unset or empty selects `auto` while honoring legacy true
 flags. The context copies the string.
 
 ## Flash attention (`--flash-attn on|off|auto`)
@@ -339,9 +339,10 @@ row-split configurations, which can fall back to layer split during initializati
 Use `--flash-attn on` and `--flash-attn off,diffusion=on`, respectively.
 Both aliases write the same mode string as `--flash-attn`; the last occurrence
 of any of these options wins. Library callers
-can set `sd_ctx_params_t::flash_attn_mode` to the same string, including
+can set the `flash_attn_mode` context-option key with `sd_opt_set_string()`
+to the same string, including
 `"on"`, `"off"`, `"auto"`, or `"auto,te=off,vae=on"`.
-A null or empty string uses automatic selection unless a
+An unset or empty string uses automatic selection unless a
 legacy `flash_attn` or `diffusion_flash_attn` boolean is set. The context copies
 the string; no new enum is required.
 

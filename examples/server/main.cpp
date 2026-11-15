@@ -52,8 +52,6 @@ static void parse_args(int argc,
         exit(ctx_params.print_devices() ? 0 : 1);
     }
 
-    const bool random_seed_requested = default_gen_params.seed < 0;
-
     if (!svr_params.resolve_and_validate() ||
         !ctx_params.resolve_and_validate(ctx_params.model_path.empty() && ctx_params.diffusion_model_path.empty() ? METADATA : IMG_GEN) ||
         !default_gen_params.resolve_and_validate(IMG_GEN,
@@ -61,10 +59,6 @@ static void parse_args(int argc,
                                                  ctx_params.hires_upscalers_dir)) {
         print_usage(argv[0], options_vec);
         exit(1);
-    }
-
-    if (random_seed_requested) {
-        default_gen_params.seed = -1;
     }
 }
 
@@ -93,16 +87,16 @@ int main(int argc, const char** argv) {
     LOG_DEBUG("%s", ctx_params.to_string().c_str());
     LOG_DEBUG("%s", default_gen_params.to_string().c_str());
 
-    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t();
+    SDOptPtr sd_ctx_params = ctx_params.to_context_opt();
     ServerModels models;
     if (!ctx_params.model_path.empty() || !ctx_params.diffusion_model_path.empty()) {
         const auto started = std::chrono::steady_clock::now();
-        models.context.reset(new_sd_ctx(&sd_ctx_params));
+        models.context.reset(create_sd_context(sd_ctx_params));
         models.status["load_elapsed_seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     }
 
     if ((!ctx_params.model_path.empty() || !ctx_params.diffusion_model_path.empty()) && !models.context) {
-        LOG_ERROR("new_sd_ctx_t failed");
+        LOG_ERROR("sd_ctx_create failed");
         return 1;
     }
 

@@ -5,11 +5,11 @@ Caching methods accelerate diffusion inference by reusing intermediate computati
 ### Conditioning Cache
 
 Conditioning results are cached per model context using an LRU cache. The default
-capacity is **0 (disabled) for `sd-cli`** and **4 entries for `sd-server` and the C
-API**. Set `--conditioning-cache-size N` to change the limit; `0` disables caching.
-For example, `sd-cli -m model.safetensors -p "a cat" --conditioning-cache-size 4`
-enables the cache in the CLI. The C API option is
-`sd_ctx_params_t::conditioning_cache_size`, initialized by `sd_ctx_params_init()`.
+capacity is **4 entries for `sd-cli`, `sd-server` and the C API**.
+Set `--conditioning-cache-size N` to change the limit; `0` disables caching.
+For example, `sd-cli -m model.safetensors -p "a cat" --conditioning-cache-size 8`
+increases the CLI cache capacity to 8 entries. The C API option is
+`conditioning_cache_size`, set with `sd_opt_set_int()` on context options.
 This cache is independent of the diffusion-step `--cache-mode` options below.
 
 ### Cache Modes

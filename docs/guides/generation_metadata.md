@@ -1,30 +1,31 @@
 # Generation results and metadata
 
-`generate_image()`, `generate_video()`, `adetail_image()` and `upscale()` return
-owned results containing the media and its generation record. This is a breaking
-C API change: applications and bindings must update their calls and rebuild.
+`sd_generate_image()`, `sd_generate_video()`, `sd_adetail()`, `sd_upscale()` and
+`sd_upscale_video()` return opaque `sd_result_t` objects containing generated media
+and generation metadata. See the [C API guide](c_api.md) for option creation and
+migration from the removed parameter/result structures.
 
 ```c
-sd_img_gen_params_t params;
-sd_img_gen_params_init(&params);
-params.prompt = "a small house";
-
-sd_image_generation_result_t* result = NULL;
-if (generate_image(ctx, &params, &result)) {
-    for (int i = 0; i < result->count; ++i) {
-        const sd_image_result_t* item = &result->items[i];
-        /* Consume item->image and item->generation_info together. */
+sd_img_gen_opt_t* opt = sd_img_gen_opt_create();
+sd_result_t* result = NULL;
+if (opt && sd_opt_set_string(opt, "prompt", "a small house") == SD_STATUS_OK &&
+    sd_generate_image(ctx, opt, &result) == SD_STATUS_OK) {
+    for (size_t i = 0; i < sd_result_get_image_count(result); ++i) {
+        const sd_tensor_t* image = sd_result_get_image(result, i);
+        const char* info = sd_result_get_generation_info(result, i);
+        /* Consume image and info together. */
     }
-    free_sd_image_generation_result(result);
 }
+sd_result_free(result);
+sd_opt_free(opt);
 ```
 
-`result_out` is required and is set to `NULL` on failure. A successful result
-owns its pixels and UTF-8 JSON strings. The video result additionally owns its
-audio and contains the effective `fps` and `frame_count`. Results remain valid
-after freeing the generation context. Use the matching library result destructor;
-do not separately free fields unless transferring ownership and clearing them.
-Both result destructors accept `NULL`.
+`result_out` is required and set to `NULL` on failure. Successful results own
+their pixels, audio and UTF-8 JSON independently of the generation context.
+Video results expose effective FPS and frame count through accessors; each valid
+frame index returns the shared video generation record. Result views are borrowed
+until `sd_result_free()`. Use `sd_tensor_retain()` to keep media independently,
+and release the retained handle with `sd_tensor_free()`. Free functions accept `NULL`.
 
 ## Reproduction parameters
 
@@ -33,7 +34,7 @@ same loaded context and the same input images, masks, reference media and other
 assets. It is created after `GenerationRequest` resolves the request, before
 preprocessing or sampling. A failed call returns no result or metadata.
 
-Fields follow the C generation parameter structs: `prompt`, `negative_prompt`,
+The JSON schema retains its established generation field names: `prompt`, `negative_prompt`,
 `width`, `height`, `seed`, `sample_params`, `hires`, `cache`,
 `vae_tiling_params`, `image_preprocess`, and the image/video-specific options.
 `kind` distinguishes image and video parameters. There is no inferred `task`.
@@ -77,10 +78,10 @@ and shares them across a batch. With a stochastic VAE encoder, replaying a later
 image alone using its sampling seed can change those input latents. Per-image
 seeds therefore do not guarantee independent reproduction for these paths.
 
-To replay a record, initialize the matching C parameter struct, populate its
-fields from the JSON, restore the same input buffers, and call generation with
-the same context. Keep custom-sigma/SLG arrays and string storage alive for the
-call. Paths supplied as generation parameters (LoRAs, hires models and identity
+To replay a record, create image/video options, translate JSON fields to the documented C API
+keys, restore the same input buffers, and call generation with the same context.
+Setters copy strings and numeric arrays and retain media tensors; keep options alive
+for the call. Paths supplied as generation parameters (LoRAs, hires models and identity
 embeddings) are retained. `models` identifies successfully loaded context model
 files by component (`model`, `diffusion_model`, `clip_l`, `vae`, etc.), using
 filenames with extensions and omitting directories. Optional components disabled
