@@ -393,14 +393,20 @@ ArgOptions SDSvrParams::get_options() {
         return -1;
     };
 
+    // split_list adds the comma-separated entries of arg to out; a list
+    // without any entry (like ",") is an error, so a restriction can't
+    // silently turn into none.
     auto split_list = [](const char* arg, std::vector<std::string>& out) {
         std::stringstream ss(arg);
         std::string item;
+        size_t added = 0;
         while (std::getline(ss, item, ',')) {
             if (!item.empty()) {
                 out.push_back(item);
+                added++;
             }
         }
+        return added > 0;
     };
 
     options.manual_options = {
@@ -409,7 +415,10 @@ ArgOptions SDSvrParams::get_options() {
          [this, split_list](int argc, const char** argv, int index) {
              if (++index >= argc || argv[index][0] == '\0')
                  return -1;
-             split_list(argv[index], api_keys);
+             if (!split_list(argv[index], api_keys)) {
+                 LOG_ERROR("error: --api-key needs at least one key");
+                 return -1;
+             }
              return 1;
          }},
         {"", "--api-key-file", "file with API keys, one per line (keeps them off the command line)",
@@ -423,7 +432,10 @@ ArgOptions SDSvrParams::get_options() {
          [this, split_list](int argc, const char** argv, int index) {
              if (++index >= argc || argv[index][0] == '\0')
                  return -1;
-             split_list(argv[index], cors_origins);
+             if (!split_list(argv[index], cors_origins)) {
+                 LOG_ERROR("error: --cors-origins needs at least one origin");
+                 return -1;
+             }
              return 1;
          }},
         {"", "--model-dir", "model root; repeat to search multiple directories (default: models)",
@@ -477,6 +489,7 @@ bool SDSvrParams::resolve_and_validate() {
             return false;
         }
         std::string line;
+        const size_t before = api_keys.size();
         while (std::getline(file, line)) {
             line.erase(line.find_last_not_of(" \t\r\n") + 1);
             line.erase(0, line.find_first_not_of(" \t"));
@@ -484,7 +497,7 @@ bool SDSvrParams::resolve_and_validate() {
                 api_keys.push_back(line);
             }
         }
-        if (api_keys.empty()) {
+        if (api_keys.size() == before) {
             LOG_ERROR("error: api_key_file has no keys: %s", api_key_file.c_str());
             return false;
         }

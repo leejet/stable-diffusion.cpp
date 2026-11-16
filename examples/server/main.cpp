@@ -160,7 +160,10 @@ int main(int argc, const char** argv) {
             res.set_header("Access-Control-Allow-Origin", origin.empty() ? "*" : origin);
             res.set_header("Access-Control-Allow-Credentials", "true");
             res.set_header("Access-Control-Allow-Methods", "*");
-            res.set_header("Access-Control-Allow-Headers", "*");
+            // With credentials, browsers take "*" literally and never let
+            // Authorization through a wildcard: name the headers asked for.
+            std::string headers = req.get_header_value("Access-Control-Request-Headers");
+            res.set_header("Access-Control-Allow-Headers", headers.empty() ? "*" : headers);
         }
 
         if (req.method == "OPTIONS") {
