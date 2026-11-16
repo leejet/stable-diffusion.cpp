@@ -507,6 +507,15 @@ namespace sd::pipeline {
         // unlike img2img which trims from a fixed step count.
         int scheduler_steps = static_cast<int>(effective_steps / hires.denoising_strength);
         scheduler_steps     = std::max(1, scheduler_steps);
+        // Truncation maps every denoising_strength in (n / (n + 1), 1) back to n scheduler steps, so the trim below drops
+        // no sigma at all and the second pass restarts from sigma_max, discarding the upscaled latent. Keep at least one
+        // trimmed sigma; denoising_strength = 1 is the intentional full-denoise case and must keep starting at sigma_max.
+        // The trim starts at scheduler_steps - effective_steps, so the returned schedule always holds exactly
+        // effective_steps intervals whatever scheduler_steps is (#2227, #2244): this bump moves the starting sigma, it
+        // does not add a sampling step.
+        if (scheduler_steps <= effective_steps && hires.denoising_strength < 1.0f) {
+            scheduler_steps = effective_steps + 1;
+        }
 
         scheduler_t scheduler     = sample_params.scheduler;
         std::vector<float> sigmas = sd->denoiser->get_sigmas(scheduler_steps,
@@ -517,8 +526,19 @@ namespace sd::pipeline {
         if (scheduler_steps_out != nullptr) {
             *scheduler_steps_out = scheduler_steps;
         }
-        return std::vector<float>(sigmas.begin() + std::max(0, scheduler_steps - effective_steps),
-                                  sigmas.end());
+        std::vector<float> refine_sigmas(sigmas.begin() + std::max(0, scheduler_steps - effective_steps),
+                                         sigmas.end());
+        // The trim always keeps a suffix, so the starting sigma depends on effective_steps alone. With effective_steps = 1
+        // it is the last sigma before the terminal zero, which no scheduler_steps can raise. Report the under-refinement
+        // instead of silently returning a schedule that barely changes the upscaled latent.
+        if (refine_sigmas.size() > 1 && refine_sigmas.front() < hires.denoising_strength) {
+            LOG_WARN("hires refine starts at sigma %.4f over %d step(s), less than the requested denoising strength "
+                     "%.2f; the upscaled latent will barely be refined (increase --hires-steps)",
+                     refine_sigmas.front(),
+                     effective_steps,
+                     hires.denoising_strength);
+        }
+        return refine_sigmas;
     }
 
 }  // namespace sd::pipeline
