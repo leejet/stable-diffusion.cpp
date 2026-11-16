@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
@@ -60,6 +61,20 @@ static void parse_args(int argc,
         print_usage(argv[0], options_vec);
         exit(1);
     }
+}
+
+// api_key_matches compares in constant time, so the answer's timing
+// doesn't tell how much of a key was right.
+static bool api_key_matches(const std::vector<std::string>& keys, const std::string& key) {
+    bool found = false;
+    for (const auto& k : keys) {
+        unsigned char diff = k.size() != key.size();
+        for (size_t i = 0; i < k.size(); i++) {
+            diff |= static_cast<unsigned char>(k[i] ^ (i < key.size() ? key[i] : 0));
+        }
+        found |= diff == 0;
+    }
+    return found;
 }
 
 void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
@@ -136,19 +151,40 @@ int main(int argc, const char** argv) {
 
     httplib::Server svr;
 
-    svr.set_pre_routing_handler([](const httplib::Request& req, httplib::Response& res) {
-        std::string origin = req.get_header_value("Origin");
-        if (origin.empty()) {
-            origin = "*";
+    svr.set_pre_routing_handler([&svr_params](const httplib::Request& req, httplib::Response& res) {
+        // CORS: with --cors-origins only those origins get the headers, so a
+        // browser keeps other web pages out; without it, any origin (as before).
+        const auto& allowed = svr_params.cors_origins;
+        std::string origin  = req.get_header_value("Origin");
+        if (allowed.empty() || std::find(allowed.begin(), allowed.end(), origin) != allowed.end()) {
+            res.set_header("Access-Control-Allow-Origin", origin.empty() ? "*" : origin);
+            res.set_header("Access-Control-Allow-Credentials", "true");
+            res.set_header("Access-Control-Allow-Methods", "*");
+            // With credentials, browsers take "*" literally and never let
+            // Authorization through a wildcard: name the headers asked for.
+            std::string headers = req.get_header_value("Access-Control-Request-Headers");
+            res.set_header("Access-Control-Allow-Headers", headers.empty() ? "*" : headers);
         }
-        res.set_header("Access-Control-Allow-Origin", origin);
-        res.set_header("Access-Control-Allow-Credentials", "true");
-        res.set_header("Access-Control-Allow-Methods", "*");
-        res.set_header("Access-Control-Allow-Headers", "*");
 
         if (req.method == "OPTIONS") {
             res.status = 204;
             return httplib::Server::HandlerResponse::Handled;
+        }
+
+        // API key: every request but the web page itself needs one.
+        if (!svr_params.api_keys.empty() && !(req.method == "GET" && req.path == "/")) {
+            std::string key = req.get_header_value("X-Api-Key");
+            const std::string auth = req.get_header_value("Authorization");
+            const std::string bearer = "Bearer ";
+            if (key.empty() && auth.compare(0, bearer.size(), bearer) == 0) {
+                key = auth.substr(bearer.size());
+            }
+            if (!api_key_matches(svr_params.api_keys, key)) {
+                res.status = 401;
+                res.set_content(R"({"error":{"code":401,"message":"Invalid API Key","type":"authentication_error"}})",
+                                "application/json");
+                return httplib::Server::HandlerResponse::Handled;
+            }
         }
         return httplib::Server::HandlerResponse::Unhandled;
     });
