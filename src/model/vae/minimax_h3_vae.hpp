@@ -100,8 +100,15 @@ namespace MiniMaxH3VAE {
                 return value;
             };
 
-            x                = reflect_pad(x, 0, std::get<2>(temporal_padding));
-            x                = reflect_pad(x, 1, std::get<1>(temporal_padding));
+            if (std::get<1>(temporal_padding) != 0 || std::get<2>(temporal_padding) != 0) {
+                const int64_t frames   = x->ne[2];
+                const int64_t channels = x->ne[3];
+                // Keep spatial padding in one outer slice to avoid per-channel CUDA launches.
+                x = ggml_reshape_3d(ctx->ggml_ctx, ggml_ext_cont(ctx, x), x->ne[0], x->ne[1], frames * channels);
+                x = reflect_pad(x, 0, std::get<2>(temporal_padding));
+                x = reflect_pad(x, 1, std::get<1>(temporal_padding));
+                x = ggml_reshape_4d(ctx->ggml_ctx, x, x->ne[0], x->ne[1], frames, channels);
+            }
             int temporal_pad = std::get<0>(temporal_padding) * 2;
             if (temporal_pad > 0) {
                 x = ggml_ext_pad_ext(ctx,
