@@ -26,6 +26,11 @@ struct SDSvrParams {
     int completed_ttl_seconds = 600;
     std::string serve_html_path;
     std::vector<std::string> model_dirs;
+    // Access: keys clients must send, and the web origins that may call the
+    // server. Empty: no key needed, any origin (as before).
+    std::vector<std::string> api_keys;
+    std::string api_key_file;
+    std::vector<std::string> cors_origins;
     bool normal_exit         = false;
     sd_log_level_t log_level = SD_LOG_INFO;
     bool color               = false;

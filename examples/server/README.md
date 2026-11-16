@@ -420,6 +420,17 @@ configured defaults.
 | `--max-pending-jobs <count>` | `64` | Maximum async jobs queued or generating |
 | `--completed-ttl-seconds <seconds>` | `600` | Retention time for completed async jobs |
 
+### Access
+
+By default any program on the machine, and any web page open in a browser on
+it, can call the server. To limit that:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--api-key <key>` | none | Key clients must send as `Authorization: Bearer <key>` or `X-Api-Key: <key>`; comma-separated for several. Requests without a valid key get `401`. The web page at `/` stays open. |
+| `--api-key-file <file>` | none | The same, one key per line, so keys don't show in the process list |
+| `--cors-origins <origins>` | any | Web origins allowed to call the server, comma-separated; others get no CORS headers, so browsers keep their pages out |
+
 ### Logging
 
 Logging defaults to `info`. Use `--log-level <level>` to select `debug`, `verbose`,

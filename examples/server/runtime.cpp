@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <regex>
 #include <sstream>
@@ -392,8 +393,39 @@ ArgOptions SDSvrParams::get_options() {
         return -1;
     };
 
+    auto split_list = [](const char* arg, std::vector<std::string>& out) {
+        std::stringstream ss(arg);
+        std::string item;
+        while (std::getline(ss, item, ',')) {
+            if (!item.empty()) {
+                out.push_back(item);
+            }
+        }
+    };
+
     options.manual_options = {
         {"-h", "--help", "show this help message and exit", on_help_arg},
+        {"", "--api-key", "API key clients must send (Authorization: Bearer KEY or X-Api-Key); comma-separated for several",
+         [this, split_list](int argc, const char** argv, int index) {
+             if (++index >= argc || argv[index][0] == '\0')
+                 return -1;
+             split_list(argv[index], api_keys);
+             return 1;
+         }},
+        {"", "--api-key-file", "file with API keys, one per line (keeps them off the command line)",
+         [this](int argc, const char** argv, int index) {
+             if (++index >= argc || argv[index][0] == '\0')
+                 return -1;
+             api_key_file = argv_to_utf8(index, argv);
+             return 1;
+         }},
+        {"", "--cors-origins", "web origins allowed to call the server, comma-separated (default: any)",
+         [this, split_list](int argc, const char** argv, int index) {
+             if (++index >= argc || argv[index][0] == '\0')
+                 return -1;
+             split_list(argv[index], cors_origins);
+             return 1;
+         }},
         {"", "--model-dir", "model root; repeat to search multiple directories (default: models)",
          [this](int argc, const char** argv, int index) {
              if (++index >= argc || argv[index][0] == '\0')
@@ -438,6 +470,25 @@ bool SDSvrParams::resolve_and_validate() {
     if (!validate()) {
         return false;
     }
+    if (!api_key_file.empty()) {
+        std::ifstream file(fs::u8path(api_key_file));
+        if (!file) {
+            LOG_ERROR("error: can't read api_key_file: %s", api_key_file.c_str());
+            return false;
+        }
+        std::string line;
+        while (std::getline(file, line)) {
+            line.erase(line.find_last_not_of(" \t\r\n") + 1);
+            line.erase(0, line.find_first_not_of(" \t"));
+            if (!line.empty()) {
+                api_keys.push_back(line);
+            }
+        }
+        if (api_keys.empty()) {
+            LOG_ERROR("error: api_key_file has no keys: %s", api_key_file.c_str());
+            return false;
+        }
+    }
     return true;
 }
 
@@ -450,6 +501,8 @@ std::string SDSvrParams::to_string() const {
         << "  max_pending_jobs: " << max_pending_jobs << ",\n"
         << "  completed_ttl_seconds: " << completed_ttl_seconds << ",\n"
         << "  serve_html_path: \"" << serve_html_path << "\",\n"
+        << "  api_keys: " << api_keys.size() << ",\n"
+        << "  cors_origins: " << cors_origins.size() << ",\n"
         << "}";
     return oss.str();
 }
