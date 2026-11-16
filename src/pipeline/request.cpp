@@ -514,6 +514,9 @@ namespace sd::pipeline {
         // Truncation maps every denoising_strength in (n / (n + 1), 1) back to n scheduler steps, so the trim below drops
         // no sigma at all and the second pass restarts from sigma_max, discarding the upscaled latent. Keep at least one
         // trimmed sigma; denoising_strength = 1 is the intentional full-denoise case and must keep starting at sigma_max.
+        // The trim starts at scheduler_steps - effective_steps, so the returned schedule always holds exactly
+        // effective_steps intervals whatever scheduler_steps is (#2227, #2244): this bump moves the starting sigma, it
+        // does not add a sampling step.
         if (scheduler_steps <= effective_steps && hires.denoising_strength < 1.0f) {
             scheduler_steps = effective_steps + 1;
         }
