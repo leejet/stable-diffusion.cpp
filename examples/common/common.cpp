@@ -851,12 +851,18 @@ void SDContextParams::build_embedding_map() {
     std::vector<std::pair<std::string, std::string>> rel_entries;
     std::vector<std::pair<std::string, std::string>> stem_entries;
     std::error_code ec;
-    for (auto it = fs::recursive_directory_iterator(embedding_dir_path, ec);
-         it != fs::recursive_directory_iterator();
-         it.increment(ec)) {
+    fs::recursive_directory_iterator end;
+    // skip_permission_denied keeps readable siblings discoverable when a
+    // subdirectory is inaccessible; other traversal errors are reported below.
+    fs::recursive_directory_iterator it(embedding_dir_path, fs::directory_options::skip_permission_denied, ec);
+    if (ec) {
+        LOG_WARN("failed to scan embedding dir '%s': %s", embedding_dir.c_str(), ec.message().c_str());
+        return;
+    }
+    for (; it != end; it.increment(ec)) {
         if (ec) {
-            ec.clear();
-            continue;
+            LOG_WARN("error scanning embedding dir '%s': %s", embedding_dir.c_str(), ec.message().c_str());
+            break;
         }
         const auto& p = *it;
         std::error_code file_ec;
