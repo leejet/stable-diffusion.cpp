@@ -834,6 +834,7 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 res.set_content(R"({"error":"job queue state changed before cancellation"})", "application/json");
                 return;
             }
+            mark_model_activity(*runtime);
             res.status = 200;
             res.set_content(make_async_job_json(manager, job).dump(), "application/json");
             return;

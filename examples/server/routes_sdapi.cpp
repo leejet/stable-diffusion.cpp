@@ -786,7 +786,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         entry["sha256"]     = "8888888888888888888888888888888888888888888888888888888888888888";
         entry["config"]     = nullptr;
         json r              = json::array();
-        if (runtime->sd_ctx) {
+        if (runtime->sd_ctx || runtime->models->sleeping) {
             r.push_back(entry);
         }
         res.set_content(r.dump(), "application/json");

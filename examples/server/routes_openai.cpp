@@ -7,6 +7,7 @@
 #include "common/common.h"
 #include "common/media_io.h"
 #include "common/resource_owners.hpp"
+#include "model_catalog.h"
 
 static std::string extract_and_remove_sd_cpp_extra_args(std::string& text) {
     std::regex re("<sd_cpp_extra_args>(.*?)</sd_cpp_extra_args>");
@@ -248,7 +249,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
     routes.get("/v1/models", [runtime](const httplib::Request&, httplib::Response& res) {
         json r;
         r["data"] = json::array();
-        if (runtime->sd_ctx) {
+        if (runtime->sd_ctx || runtime->models->sleeping) {
             r["data"].push_back({{"id", "sd-cpp-local"}, {"object", "model"}, {"owned_by", "local"}});
         }
         res.set_content(r.dump(), "application/json");

@@ -79,12 +79,31 @@ Recipe defaults apply when a generation request omits the corresponding
 parameters. Image editing endpoints retain their existing input-image size
 inference when dimensions are omitted.
 
-Without a loaded model, generation endpoints return HTTP 503 with
+When `--sleep-idle-seconds N` (alias `--ttl N`) is positive, the server unloads
+the model context after N idle seconds and reports `state: "sleeping"`. All six
+image/video generation endpoints automatically wake a sleeping model before
+validating and executing the request. The triggering request waits for loading;
+concurrent generation requests share that reload. Resolved startup or recipe
+configuration and generation defaults are preserved. Polling does not wake the
+model or extend its idle lifetime. Explicit unloading disables automatic waking.
+Status includes `sleep_idle_seconds` (0 means disabled). See
+[idle model unloading](README.md#idle-model-unloading) for timing and failures.
+
+`POST /sdcpp/v1/models/settings` accepts
+`{"sleep_idle_seconds": 300}`. The value must be an integer from 0 through
+2147483647; invalid bodies return HTTP 400 (`invalid_model_settings`). The
+response is the current model status. Updates apply to all clients, reset the
+idle interval, and do not load or unload a model immediately. They may be made
+during generation and last until server restart, when the startup value is
+restored. Setting 0 disables future idle unloading without waking a sleeping
+model.
+
+Without a loaded or sleeping model, generation endpoints return HTTP 503 with
 `{"error":"No model is loaded","code":"model_not_loaded"}`.
 While loading/unloading, endpoints that access the context return HTTP 503
 with `code: "model_loading"`. These errors retain the existing string-valued
 `error` field. Job polling/cancellation, catalog queries and model status remain
-available during loading. Model lists are empty when no model is loaded;
+available during loading. Model lists retain sleeping models and are empty after explicit unloading;
 `/v1/models` retains the `sd-cpp-local` ID when ready.
 
 | Method | Endpoint | Response / behavior |
@@ -145,13 +164,17 @@ failure returns HTTP 422 (`model_load_failed`) and leaves no active context.
 The load HTTP request waits for completion; a separate client can poll status
 while it runs. Refreshing the catalog never modifies an already loaded context.
 
-Status uses `state: empty | loading | ready | error`, `recipe` (ID or null),
+Status uses `state: empty | loading | ready | sleeping | error`, `recipe` (ID or null),
 `models` (slot-to-file-ID mapping), and `error` (string or null). A monotonically
 increasing `revision` identifies runtime transitions within this server process.
 Command-line preloading keeps `origin: command_line` and `recipe: null` for
 compatibility, and adds `runtime_recipe`: a read-only `@command-line` recipe
-with all feature declarations enabled. It is only available while that context
-is loaded and cannot be submitted to `models/load`. The UI selects it by default
+with all feature declarations enabled. Status also exposes `command_line_recipe`
+whenever startup model arguments were supplied, including after explicit unload
+or switching models. `models/load` accepts `{"recipe":"@command-line","models":{}}`
+to restore the saved startup context and generation defaults; component overrides
+are rejected for this recipe. `runtime_recipe` continues to describe only an
+active or sleeping command-line model. The UI selects it by default
 and uses command-line generation defaults, not defaults from a catalog recipe.
 Capabilities also include this status as an additive `runtime` field.
 

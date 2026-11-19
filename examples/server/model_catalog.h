@@ -1,6 +1,7 @@
 #ifndef __SD_EXAMPLES_SERVER_MODEL_CATALOG_H__
 #define __SD_EXAMPLES_SERVER_MODEL_CATALOG_H__
 
+#include <atomic>
 #include <chrono>
 #include <map>
 #include <mutex>
@@ -30,23 +31,34 @@ std::vector<ModelRoot> get_model_roots(const SDSvrParams& params);
 std::vector<std::filesystem::path> model_category_directories(const ModelRoot& root, const std::string& category);
 
 struct ServerModels {
+    std::mutex admission_mutex;
     std::shared_mutex runtime_mutex;
     std::mutex catalog_mutex;
     std::mutex status_mutex;
     SDCtxPtr context;
     SDContextParams base_context;
     SDGenerationParams base_defaults;
+    SDContextParams command_line_context;
+    SDGenerationParams command_line_defaults;
+    json command_line_recipe = nullptr;
+    std::atomic<int> sleep_idle_seconds{0};
     std::map<std::string, json> recipes;
     std::map<std::string, ModelFile> files;
     std::chrono::steady_clock::time_point load_started_at;
-    json active_recipe  = nullptr;
-    json catalog_errors = json::array();
-    json status         = {{"state", "empty"}, {"recipe", nullptr}, {"models", json::object()}, {"error", nullptr}, {"load_elapsed_seconds", nullptr}};
+    std::atomic<int64_t> last_activity_ms{0};
+    bool sleeping                = false;
+    bool sleeping_supports_image = false;
+    bool sleeping_supports_video = false;
+    json active_recipe           = nullptr;
+    json catalog_errors          = json::array();
+    json status                  = {{"state", "empty"}, {"recipe", nullptr}, {"models", json::object()}, {"error", nullptr}, {"load_elapsed_seconds", nullptr}};
 };
 
 void refresh_model_catalog(ServerRuntime& runtime);
 json model_status(ServerRuntime& runtime);
 void initialize_server_models(ServerRuntime& runtime);
+void mark_model_activity(ServerRuntime& runtime);
+void sleep_idle_model(ServerRuntime& runtime);
 
 json resolve_recipe_features(const json& recipe);
 json model_generation_features(const ServerRuntime& runtime);

@@ -11,6 +11,7 @@
 #include "common/log.h"
 #include "common/media_io.h"
 #include "common/resource_owners.hpp"
+#include "model_catalog.h"
 
 class JobCancellationMonitor {
     std::mutex mutex_;
@@ -486,7 +487,11 @@ void async_job_worker(ServerRuntime& runtime) {
         std::shared_ptr<AsyncGenerationJob> job;
         {
             std::unique_lock<std::mutex> lock(manager.mutex);
-            manager.cv.wait(lock, [&]() { return manager.stop || !manager.queue.empty(); });
+            if (!manager.cv.wait_for(lock, std::chrono::seconds(1), [&]() { return manager.stop || !manager.queue.empty(); })) {
+                lock.unlock();
+                sleep_idle_model(runtime);
+                continue;
+            }
 
             if (manager.stop && manager.queue.empty()) {
                 break;
@@ -542,6 +547,7 @@ void async_job_worker(ServerRuntime& runtime) {
                 continue;
             }
 
+            mark_model_activity(runtime);
             job->completed_at = unix_timestamp_now_ms();
             finish_job_progress(*job);
             if (job->cancel_requested.load()) {

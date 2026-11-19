@@ -411,6 +411,63 @@ values containing spaces as quoted invocation arguments instead. `MODEL_DIR`
 itself supports spaces in both scripts. A leading `--version` bypasses the
 configured defaults.
 
+### Idle model unloading
+
+Use `--sleep-idle-seconds 300` (or `--ttl 300`) to unload the model after five
+minutes without generation activity. The default, `0`, disables idle unloading.
+Negative values are rejected. For example:
+
+```sh
+sd-server -m /models/model.safetensors --backend cuda0 --params-backend cuda0 --ttl 300
+```
+
+Change the running timeout without restarting with
+`POST /sdcpp/v1/models/settings` and a JSON body such as
+`{"sleep_idle_seconds":300}`. The update applies to all clients and starts a
+fresh idle interval. Restarting restores the startup argument. Setting `0`
+disables future idle unloading; a model already asleep stays asleep until
+requested.
+
+After an explicit unload or a failed reload, use
+`POST /sdcpp/v1/models/load` with the selected recipe and component file IDs.
+For a model supplied through startup arguments, send
+`{"recipe":"@command-line","models":{}}` to restore the saved command-line
+configuration. Wait for a successful load response before submitting generation.
+See [model management](api.md#model-management) for recipe load examples.
+
+The editable **Model idle timeout (TTL)** setting and **Load & Generate** button
+are provided by the [companion Web UI change](https://github.com/leejet/sdcpp-webui/pull/11).
+They are not included in this revision's bundled frontend. With that UI change,
+**Load & Generate** loads the selected recipe and component files before
+submitting the current prompt, preserving generation settings. It also keeps
+the saved **Command-line model** selectable after unload or switching recipes.
+
+The server remains running and automatically reloads the model before handling
+the next image or video generation request, including OpenAI and WebUI-compatible
+requests from clients such as Open WebUI. The first request after sleep waits for
+model initialization; clients must allow enough time for this reload. Concurrent
+generation requests share one reload.
+
+Active requests and queued/running generation jobs prevent unloading. The idle
+timer starts at model initialization and resets when a generation request or job
+finishes, including failures and cancellation. Status, model-list and progress
+polling do not reset the timer or wake the model. The worker checks for idle
+unloading once per second, so the timeout is approximate.
+
+Sleep destroys the complete model context, releasing its VRAM and system RAM
+allocations, while retaining resolved model paths, backend settings, recipe
+metadata and generation defaults for reloading. This also works with models
+loaded through startup arguments, without creating a recipe. Model files must
+remain available at the same paths. Operating-system file caches and GPU driver
+allocations are outside the model context's lifetime.
+
+`GET /sdcpp/v1/models/status` reports `state: "sleeping"` after idle unloading.
+Sleeping models remain listed by the compatibility model-list endpoints.
+An explicit `POST /sdcpp/v1/models/unload` clears the sleeping configuration and
+disables automatic waking until another model is loaded. If automatic reloading
+fails, the triggering request returns HTTP 422 with `code: "model_load_failed"`;
+status reports `error`, and recovery requires an explicit model load or restart.
+
 ### Network and job queue
 
 | Option | Default | Purpose |
