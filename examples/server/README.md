@@ -421,17 +421,26 @@ Negative values are rejected. For example:
 sd-server -m /models/model.safetensors --backend cuda0 --params-backend cuda0 --ttl 300
 ```
 
-The web UI Settings page displays the current **Model idle timeout (TTL)** and
-allows changing it without restarting. **Apply timeout** updates the running
-server for all clients and starts a fresh idle interval. Restarting restores the
-startup argument. Setting `0` disables future idle unloading; a model already
-asleep stays asleep until requested.
+Change the running timeout without restarting with
+`POST /sdcpp/v1/models/settings` and a JSON body such as
+`{"sleep_idle_seconds":300}`. The update applies to all clients and starts a
+fresh idle interval. Restarting restores the startup argument. Setting `0`
+disables future idle unloading; a model already asleep stays asleep until
+requested.
 
-When the selected model is asleep or unloaded, the prompt button becomes
-**Load & Generate**. It loads the selected recipe and component files before
-submitting the current prompt, preserving the current generation settings. The
-saved **Command-line model** remains selectable after an explicit unload or a
-switch to another recipe and can be loaded the same way.
+After an explicit unload or a failed reload, use
+`POST /sdcpp/v1/models/load` with the selected recipe and component file IDs.
+For a model supplied through startup arguments, send
+`{"recipe":"@command-line","models":{}}` to restore the saved command-line
+configuration. Wait for a successful load response before submitting generation.
+See [model management](api.md#model-management) for recipe load examples.
+
+The editable **Model idle timeout (TTL)** setting and **Load & Generate** button
+are provided by the [companion Web UI change](https://github.com/leejet/sdcpp-webui/pull/11).
+They are not included in this revision's bundled frontend. With that UI change,
+**Load & Generate** loads the selected recipe and component files before
+submitting the current prompt, preserving generation settings. It also keeps
+the saved **Command-line model** selectable after unload or switching recipes.
 
 The server remains running and automatically reloads the model before handling
 the next image or video generation request, including OpenAI and WebUI-compatible
