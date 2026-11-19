@@ -35,10 +35,12 @@ namespace sd_i8_gated {
         }
     };
 
-    template <int M, int N, int WM>
+    template <int M, int N, int WM, int Stages = 4, int Band = 1>
     struct TileConfig {
-        using Tile = cutlass::gemm::GemmShape<M, N, 64>;
-        using Warp = cutlass::gemm::GemmShape<WM, 64, 64>;
+        using Tile                   = cutlass::gemm::GemmShape<M, N, 64>;
+        using Warp                   = cutlass::gemm::GemmShape<WM, 64, 64>;
+        static constexpr int kStages = Stages;
+        static constexpr int kBand   = Band;
     };
 
     enum Tile {
@@ -100,7 +102,7 @@ namespace sd_i8_gated {
     struct KernelTypes {
         using Tile         = typename Config::Tile;
         using Warp         = typename Config::Warp;
-        using Swizzle      = std::conditional_t<stream_k, BandedStreamK, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>>;
+        using Swizzle      = std::conditional_t<stream_k, BandedStreamK, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<Config::kBand>>;
         using Map          = cutlass::epilogue::threadblock::OutputTileThreadLayout<Tile, Warp, float, 4, 1>;
         using Col          = cutlass::epilogue::threadblock::VisitorColBroadcast<Map, float, cute::Stride<cute::_1, cute::_0, int>>;
         using Row          = cutlass::epilogue::threadblock::VisitorRowBroadcast<Map, float, cute::Stride<cute::_0, cute::_1, int>>;
@@ -139,7 +141,7 @@ namespace sd_i8_gated {
             cutlass::gemm::GemmShape<16, 8, 32>,
             Epilogue,
             Swizzle,
-            4,
+            Config::kStages,
             cutlass::arch::OpMultiplyAddSaturate>::GemmKernel;
         using Gemm = cutlass::gemm::device::GemmUniversalAdapter<Kernel>;
     };
@@ -147,6 +149,7 @@ namespace sd_i8_gated {
     struct DeviceInfo {
         int ordinal        = -1;
         int major          = 0;
+        int minor          = 0;
         int sms            = 0;
         int threads_per_sm = 0;
         size_t shared      = 0;
@@ -164,7 +167,7 @@ namespace sd_i8_gated {
         int ordinal          = query ? query(device) : -1;
         cudaDeviceProp props = {};
         if (ordinal >= 0 && cudaGetDeviceProperties(&props, ordinal) == cudaSuccess)
-            info = {ordinal, props.major, props.multiProcessorCount, props.maxThreadsPerMultiProcessor, size_t(props.sharedMemPerBlockOptin)};
+            info = {ordinal, props.major, props.minor, props.multiProcessorCount, props.maxThreadsPerMultiProcessor, size_t(props.sharedMemPerBlockOptin)};
         cache.emplace(device, info);
         return info;
     }
@@ -229,6 +232,7 @@ namespace sd_i8_gated {
         size_t kernel_workspace                                                     = 0;
         size_t output_offset                                                        = 0;
         int occupancy                                                               = 0;
+        bool output_scratch                                                         = true;
         ggml_status (*launch)(Plan&, const Operation&, float*, void*, cudaStream_t) = nullptr;
     };
     template <class Types>
@@ -285,6 +289,10 @@ namespace sd_i8_gated {
         return op.rows >= 8192 ? configure<Config, false, true>(op, plan) : configure<Config, false, false>(op, plan);
     }
     static bool configure(const Operation& op, Plan& plan) {
+        if (plan.device.major == 8 && plan.device.minor == 9 && op.scale == 1.f &&
+            op.rows >= 4096 && op.rows < 8192 && op.n == 3072 && (op.k == 3072 || op.k == 8192) &&
+            configure<TileConfig<128, 128, 64, 3, 4>, false, false>(op, plan))
+            return true;
         auto try_tile = [&](Tile tile) {
             switch (tile) {
                 case TILE_128_256:
@@ -397,23 +405,49 @@ namespace sd_i8_gated {
         return configure(describe(nodes, count), plan) ? count : 0;
 #endif
     }
-    static ggml_status prepare(ggml_backend_t backend, ggml_tensor* const* nodes, int count, void** state, size_t* workspace, void*) {
-        auto* plan   = new Plan;
-        *state       = plan;
-        plan->device = device_info(ggml_backend_get_device(backend));
-        if (!configure(describe(nodes, count), *plan))
-            return GGML_STATUS_FAILED;
-        *workspace = plan->output_offset + ggml_nbytes(nodes[count - 1]);
-        return GGML_STATUS_SUCCESS;
-    }
-    static void destroy(void* state, void*) {
-        delete static_cast<Plan*>(state);
+    static uintptr_t address(const ggml_tensor* tensor) {
+        size_t offset = 0;
+        while (tensor && !tensor->data && tensor->view_src) {
+            offset += tensor->view_offs;
+            tensor = tensor->view_src;
+        }
+        return tensor && tensor->data ? reinterpret_cast<uintptr_t>(tensor->data) + offset : 0;
     }
     static bool overlaps(const ggml_tensor* a, const ggml_tensor* b) {
         if (!b)
             return false;
-        const auto x = reinterpret_cast<uintptr_t>(a->data), y = reinterpret_cast<uintptr_t>(b->data);
+        const auto x = address(a), y = address(b);
+        if (!x || !y)
+            return false;
         return x <= y ? y - x < ggml_nbytes(a) : x - y < ggml_nbytes(b);
+    }
+    static bool needs_scratch(const ggml_tensor* dst, const Operation& op) {
+        if (address(dst) % 16 != 0)
+            return true;
+        for (const auto* input : {op.mat.weight, op.mat.input, op.mat.input_scale, op.mat.weight_scale, op.gate, op.residual, op.prefix}) {
+            if (input == op.residual && !op.prefix && address(input) == address(dst))
+                continue;
+            if (overlaps(dst, input))
+                return true;
+        }
+        return false;
+    }
+    static ggml_status prepare(ggml_backend_t backend, ggml_tensor* const* nodes, int count, void** state, size_t* workspace, void*) {
+        auto* plan    = new Plan;
+        *state        = plan;
+        plan->device  = device_info(ggml_backend_get_device(backend));
+        const auto op = describe(nodes, count);
+        if (!configure(op, *plan))
+            return GGML_STATUS_FAILED;
+        // Fusion dependencies keep external inputs live until this output is allocated.
+        const auto* dst         = nodes[count - 1];
+        const bool fresh_output = !dst->data && !dst->buffer && !dst->view_src;
+        plan->output_scratch    = !fresh_output && !(dst->data && !needs_scratch(dst, op));
+        *workspace              = plan->output_offset + (plan->output_scratch ? ggml_nbytes(dst) : 0);
+        return GGML_STATUS_SUCCESS;
+    }
+    static void destroy(void* state, void*) {
+        delete static_cast<Plan*>(state);
     }
     static ggml_status execute(const ggml_ext_execution_context* execution, ggml_tensor* const* nodes, int count, void* state, void*) {
         auto& plan    = *static_cast<Plan*>(state);
@@ -424,14 +458,11 @@ namespace sd_i8_gated {
         ggml_ext_cuda_context context;
         if (!query || !query(execution->backend, &context) || context.device != plan.device.ordinal)
             return GGML_STATUS_FAILED;
-        auto stream   = static_cast<cudaStream_t>(context.stream);
-        auto* scratch = static_cast<char*>(ggml_backend_buffer_get_base(execution->workspace));
-        bool alias    = reinterpret_cast<uintptr_t>(dst->data) % 16 != 0;
-        for (const auto* input : {op.mat.weight, op.mat.input, op.mat.input_scale, op.mat.weight_scale, op.gate, op.residual, op.prefix}) {
-            if (input == op.residual && !op.prefix && input->data == dst->data)
-                continue;
-            alias |= overlaps(dst, input);
-        }
+        auto stream      = static_cast<cudaStream_t>(context.stream);
+        auto* scratch    = execution->workspace ? static_cast<char*>(ggml_backend_buffer_get_base(execution->workspace)) : nullptr;
+        const bool alias = needs_scratch(dst, op);
+        if (alias && !plan.output_scratch)
+            return GGML_STATUS_FAILED;
         auto* output              = alias ? scratch + plan.output_offset : static_cast<char*>(dst->data);
         const size_t prefix_bytes = op.prefix ? ggml_nbytes(op.prefix) : 0;
         auto status               = plan.launch(plan, op, reinterpret_cast<float*>(output + prefix_bytes), scratch, stream);

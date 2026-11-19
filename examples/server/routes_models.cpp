@@ -82,8 +82,8 @@ static bool wake_model(ServerRuntime& runtime, std::string& error) {
     }
     LOG_INFO("Reloading model for generation request");
     try {
-        auto params = runtime.ctx_params->to_sd_ctx_params_t();
-        models.context.reset(new_sd_ctx(&params));
+        auto params = runtime.ctx_params->to_context_opt();
+        models.context.reset(create_sd_context(params));
         if (!models.context)
             throw std::runtime_error("Model initialization failed; check the server log for component compatibility and memory errors");
         runtime.sd_ctx = models.context.get();
@@ -246,8 +246,8 @@ static void change_model(ServerRuntime& runtime, const httplib::Request& req, ht
         *runtime.ctx_params         = unload ? models.base_context : std::move(context);
         *runtime.default_gen_params = unload ? models.base_defaults : std::move(defaults);
         if (!unload) {
-            auto params = runtime.ctx_params->to_sd_ctx_params_t();
-            models.context.reset(new_sd_ctx(&params));
+            auto params = runtime.ctx_params->to_context_opt();
+            models.context.reset(create_sd_context(params));
             if (!models.context) {
                 throw std::runtime_error("Model initialization failed; check the server log for component compatibility and memory errors");
             }

@@ -16,7 +16,7 @@ logs/
 *.exe
 *.gguf
 output*.png
-models*
+/models*
 *.log
 preview.png
 .claude/

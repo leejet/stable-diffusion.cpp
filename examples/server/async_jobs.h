@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -29,6 +30,17 @@ enum class AsyncJobStatus {
 const char* async_job_kind_name(AsyncJobKind kind);
 const char* async_job_status_name(AsyncJobStatus status);
 
+struct AsyncJobProgress {
+    std::string stage = "queued";
+    std::string detail;
+    std::string unit;
+    int sample_pass                                     = 0;
+    int64_t completed                                   = 0;
+    int64_t total                                       = 0;
+    std::chrono::steady_clock::time_point stage_started = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point finished{};
+};
+
 struct AsyncGenerationJob {
     std::string id;
     AsyncJobKind kind     = AsyncJobKind::ImgGen;
@@ -47,6 +59,8 @@ struct AsyncGenerationJob {
     int result_fps         = 0;
     std::string error_code;
     std::string error_message;
+    mutable std::mutex progress_mutex;
+    AsyncJobProgress progress;
     mutable std::mutex preview_mutex;
     std::string preview_b64;
     int preview_pass          = 0;

@@ -1,0 +1,189 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+#extension GL_EXT_integer_dot_product : require
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform parameter {
+    uint n;
+    uint rows;
+    uint k;
+    uint has_bias;
+}
+p;
+
+layout(binding = 0, std430) readonly buffer W {
+    int data_w[];
+};
+layout(binding = 1, std430) readonly buffer A {
+    int data_a[];
+};
+layout(binding = 2, std430) readonly buffer WS {
+    float data_ws[];
+};
+layout(binding = 3, std430) readonly buffer AS {
+    float data_as[];
+};
+layout(binding = 4, std430) readonly buffer B {
+    float data_b[];
+};
+layout(binding = 5, std430) writeonly buffer D {
+    float data_d[];
+};
+
+shared int w_dec[2][16 * 64];
+shared int x_tile[2][32 * 16];
+shared int sum_p[2][16 * 8];
+
+void interleave_pair(int a, int b, uint buf, uint li) {
+    const uint a0       = uint(a);
+    const uint b0       = uint(b);
+    x_tile[buf][li + 0] = int((a0 & 0x000000FFu) | ((a0 >> 8) & 0x0000FF00u) | ((b0 << 16) & 0x00FF0000u) | ((b0 << 8) & 0xFF000000u));
+    x_tile[buf][li + 1] = int(((a0 >> 8) & 0x000000FFu) | ((a0 >> 16) & 0x0000FF00u) | ((b0 << 8) & 0x00FF0000u) | (b0 & 0xFF000000u));
+}
+
+void main() {
+    const uint out_base = gl_WorkGroupID.x * 64u;
+    const uint lx       = gl_LocalInvocationID.x;
+    const uint ly       = gl_LocalInvocationID.y;
+    const uint idx      = gl_LocalInvocationIndex;
+    const uint w_words  = p.k / 8u;
+    const uint a_words  = p.k / 4u;
+    const uint groups   = p.k / 16u;
+
+    const uint dc   = idx & 63u;
+    const uint dw   = idx >> 6u;
+    const uint ocol = out_base + dc;
+
+    const uint fl = lx & 7u;
+    const uint ft = lx >> 3u;
+    const uint fr = ft == 0u ? gl_WorkGroupID.y * 32u + ly : gl_WorkGroupID.y * 32u + ly + 16u;
+    const uint tr = ft * 16u + ly;
+    int my_sum    = 0;
+    int acc0a     = 0;
+    int acc0b     = 0;
+    int acc1a     = 0;
+    int acc1b     = 0;
+    int acc2a     = 0;
+    int acc2b     = 0;
+    int acc3a     = 0;
+    int acc3b     = 0;
+    int acc4a     = 0;
+    int acc4b     = 0;
+    int acc5a     = 0;
+    int acc5b     = 0;
+    int acc6a     = 0;
+    int acc6b     = 0;
+    int acc7a     = 0;
+    int acc7b     = 0;
+
+    {
+        [[unroll]] for (uint j = 0; j < 2; ++j) {
+            const uint pw                    = dw * 2 + j;
+            const uint widx                  = pw;
+            const uint wv                    = ocol < p.n && widx < w_words
+                                                   ? uint(data_w[ocol * w_words + widx])
+                                                   : 0u;
+            w_dec[0][(pw * 2 + 0) * 64 + dc] = int((wv & 0x0F0F0F0Fu) ^ 0x08080808u);
+            w_dec[0][(pw * 2 + 1) * 64 + dc] = int(((wv >> 4) & 0x0F0F0F0Fu) ^ 0x08080808u);
+        }
+        const uint gi = fl >> 1u;
+        const uint xb = gi * 4u + (fl & 1u) * 2u;
+        const int a   = fr < p.rows && xb < a_words ? data_a[fr * a_words + xb] : 0;
+        const int b   = fr < p.rows && xb + 1u < a_words ? data_a[fr * a_words + xb + 1u] : 0;
+        interleave_pair(a, b, 0, tr * 16u + (fl >> 1u) * 4u + (fl & 1u) * 2u);
+        my_sum += int(dotPacked4x8EXT(a, int(0x01010101))) + int(dotPacked4x8EXT(b, int(0x01010101)));
+    }
+    barrier();
+
+    for (uint gs = 0; gs < groups; gs += 4) {
+        const uint buf = (gs >> 2) & 1u;
+
+        if (gs + 4 < groups) {
+            const uint nbuf = buf ^ 1u;
+            const uint ngs  = gs + 4;
+            [[unroll]] for (uint j = 0; j < 2; ++j) {
+                const uint pw                       = dw * 2 + j;
+                const uint widx                     = ngs * 2 + pw;
+                const uint wv                       = ocol < p.n && widx < w_words
+                                                          ? uint(data_w[ocol * w_words + widx])
+                                                          : 0u;
+                w_dec[nbuf][(pw * 2 + 0) * 64 + dc] = int((wv & 0x0F0F0F0Fu) ^ 0x08080808u);
+                w_dec[nbuf][(pw * 2 + 1) * 64 + dc] = int(((wv >> 4) & 0x0F0F0F0Fu) ^ 0x08080808u);
+            }
+            const uint gi = ngs + (fl >> 1u);
+            const uint xb = gi * 4u + (fl & 1u) * 2u;
+            const int a   = fr < p.rows && xb < a_words ? data_a[fr * a_words + xb] : 0;
+            const int b   = fr < p.rows && xb + 1u < a_words ? data_a[fr * a_words + xb + 1u] : 0;
+            interleave_pair(a, b, nbuf, tr * 16u + (fl >> 1u) * 4u + (fl & 1u) * 2u);
+            my_sum += int(dotPacked4x8EXT(a, int(0x01010101))) + int(dotPacked4x8EXT(b, int(0x01010101)));
+        }
+
+        [[unroll]] for (uint gl = 0; gl < 4; ++gl) {
+            const int u0e  = x_tile[buf][ly * 16u + gl * 4u + 0u];
+            const int u0o  = x_tile[buf][ly * 16u + gl * 4u + 1u];
+            const int u0e2 = x_tile[buf][ly * 16u + gl * 4u + 2u];
+            const int u0o2 = x_tile[buf][ly * 16u + gl * 4u + 3u];
+            const int u1e  = x_tile[buf][(16u + ly) * 16u + gl * 4u + 0u];
+            const int u1o  = x_tile[buf][(16u + ly) * 16u + gl * 4u + 1u];
+            const int u1e2 = x_tile[buf][(16u + ly) * 16u + gl * 4u + 2u];
+            const int u1o2 = x_tile[buf][(16u + ly) * 16u + gl * 4u + 3u];
+            [[unroll]] for (uint jp = 0; jp < 2; ++jp) {
+                const int ue0 = jp == 0u ? u0e : u0e2;
+                const int uo0 = jp == 0u ? u0o : u0o2;
+                const int ue1 = jp == 0u ? u1e : u1e2;
+                const int uo1 = jp == 0u ? u1o : u1o2;
+                const uint we = (gl * 4u + jp * 2u) * 64u;
+                const uint wo = we + 64u;
+                acc0a += int(dotPacked4x8EXT(w_dec[buf][we + lx], ue0));
+                acc1a += int(dotPacked4x8EXT(w_dec[buf][we + 16u + lx], ue0));
+                acc2a += int(dotPacked4x8EXT(w_dec[buf][we + 32u + lx], ue0));
+                acc3a += int(dotPacked4x8EXT(w_dec[buf][we + 48u + lx], ue0));
+                acc0b += int(dotPacked4x8EXT(w_dec[buf][wo + lx], uo0));
+                acc1b += int(dotPacked4x8EXT(w_dec[buf][wo + 16u + lx], uo0));
+                acc2b += int(dotPacked4x8EXT(w_dec[buf][wo + 32u + lx], uo0));
+                acc3b += int(dotPacked4x8EXT(w_dec[buf][wo + 48u + lx], uo0));
+                acc4a += int(dotPacked4x8EXT(w_dec[buf][we + lx], ue1));
+                acc5a += int(dotPacked4x8EXT(w_dec[buf][we + 16u + lx], ue1));
+                acc6a += int(dotPacked4x8EXT(w_dec[buf][we + 32u + lx], ue1));
+                acc7a += int(dotPacked4x8EXT(w_dec[buf][we + 48u + lx], ue1));
+                acc4b += int(dotPacked4x8EXT(w_dec[buf][wo + lx], uo1));
+                acc5b += int(dotPacked4x8EXT(w_dec[buf][wo + 16u + lx], uo1));
+                acc6b += int(dotPacked4x8EXT(w_dec[buf][wo + 32u + lx], uo1));
+                acc7b += int(dotPacked4x8EXT(w_dec[buf][wo + 48u + lx], uo1));
+            }
+        }
+        barrier();
+    }
+
+    sum_p[ft][ly * 8u + fl] = my_sum;
+    barrier();
+    int sum0 = 0;
+    int sum1 = 0;
+    [[unroll]] for (uint i = 0; i < 8; ++i) {
+        sum0 += sum_p[0][ly * 8u + i];
+        sum1 += sum_p[1][ly * 8u + i];
+    }
+
+    const int accv[2][4] = {
+        {acc0a + acc0b, acc1a + acc1b, acc2a + acc2b, acc3a + acc3b},
+        {acc4a + acc4b, acc5a + acc5b, acc6a + acc6b, acc7a + acc7b},
+    };
+    const int sumv[2] = {sum0, sum1};
+    [[unroll]] for (uint t = 0; t < 2u; ++t) {
+        const uint rt = gl_WorkGroupID.y * 32u + ly + t * 16u;
+        if (rt < p.rows) {
+            [[unroll]] for (uint j = 0; j < 4; ++j) {
+                const uint oj = out_base + j * 16u + lx;
+                if (oj < p.n) {
+                    float value = float(accv[t][j] - 8 * sumv[t]) * data_as[rt] * data_ws[oj];
+                    if (p.has_bias != 0) {
+                        value += data_b[oj];
+                    }
+                    data_d[rt * p.n + oj] = value;
+                }
+            }
+        }
+    }
+}

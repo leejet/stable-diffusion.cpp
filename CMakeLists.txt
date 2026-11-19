@@ -9,13 +9,28 @@ if (NOT XCODE AND NOT MSVC AND NOT CMAKE_BUILD_TYPE)
 endif()
 
 if (MSVC)
+    cmake_host_system_information(RESULT SD_LOGICAL_CORES QUERY NUMBER_OF_LOGICAL_CORES)
+    if (SD_LOGICAL_CORES GREATER 8)
+        math(EXPR SD_DEFAULT_MSVC_MP_COUNT "${SD_LOGICAL_CORES} - 2")
+    elseif (SD_LOGICAL_CORES GREATER 2)
+        math(EXPR SD_DEFAULT_MSVC_MP_COUNT "${SD_LOGICAL_CORES} - 1")
+    else()
+        set(SD_DEFAULT_MSVC_MP_COUNT "${SD_LOGICAL_CORES}")
+    endif()
+    if (NOT SD_DEFAULT_MSVC_MP_COUNT GREATER 0)
+        set(SD_DEFAULT_MSVC_MP_COUNT 1)
+    endif()
+    set(SD_MSVC_MP_COUNT "${SD_DEFAULT_MSVC_MP_COUNT}" CACHE STRING "Maximum parallel MSVC compilations per project")
+    if (NOT SD_MSVC_MP_COUNT MATCHES "^[1-9][0-9]*$" OR SD_MSVC_MP_COUNT GREATER 65536)
+        message(FATAL_ERROR "SD_MSVC_MP_COUNT must be an integer between 1 and 65536")
+    endif()
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
     add_compile_definitions(_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING)
     # /MP is MSVC-only: icx rejects it outright once offloading is enabled.
     add_compile_options(
-        $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:MSVC>>:/MP>
+        $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:MSVC>>:/MP${SD_MSVC_MP_COUNT}>
         $<$<COMPILE_LANGUAGE:C>:/utf-8>
-        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/MP>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/MP${SD_MSVC_MP_COUNT}>
         $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
     )
 endif()
@@ -111,6 +126,12 @@ if(SD_CUDA)
 endif()
 
 if(SD_METAL)
+    if(NOT SD_USE_UPSTREAM_GGML)
+        if(CMAKE_VERSION VERSION_LESS 3.16)
+            message(FATAL_ERROR "SD_METAL with SD_USE_UPSTREAM_GGML=OFF requires CMake 3.16 or later for OBJC and OBJCXX support")
+        endif()
+        enable_language(OBJC OBJCXX)
+    endif()
     message("-- Use Metal as backend stable-diffusion")
     set(GGML_METAL ON)
 endif()
@@ -219,6 +240,8 @@ file(GLOB SD_LIB_SOURCES CONFIGURE_DEPENDS
     "src/*.h"
     "src/*.cpp"
     "src/*.hpp"
+    "src/api/*.h"
+    "src/api/*.cpp"
     "src/conditioning/*.h"
     "src/conditioning/*.cpp"
     "src/conditioning/*.hpp"
@@ -347,8 +370,15 @@ if (SD_CUDA)
     set_property(SOURCE src/core/ggml_extend_backend.cpp APPEND PROPERTY COMPILE_DEFINITIONS SD_USE_CUDA)
     if (NOT SD_USE_UPSTREAM_GGML)
         include(cmake/cutlass.cmake)
+        if (TARGET ggml-cuda)
+            # ggml resolves CUDA architectures in a child directory scope.
+            get_target_property(CMAKE_CUDA_ARCHITECTURES ggml-cuda CUDA_ARCHITECTURES)
+        endif()
         enable_language(CUDA)
-        set_target_properties(${SD_LIB} PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON)
+        set_target_properties(${SD_LIB} PROPERTIES
+            CUDA_STANDARD 17
+            CUDA_STANDARD_REQUIRED ON
+            CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
         if (SD_CUDA_CUTLASS_PATH)
             target_sources(${SD_LIB} PRIVATE src/core/cuda/cute_attention.cu src/core/cuda/i8_projection.cu src/core/cuda/i8_gated_residual.cu src/core/cuda/i8_gemm.cu src/core/cuda/bf16_gemm.cu)
             set_source_files_properties(src/core/cuda/cute_attention.cu src/core/cuda/i8_projection.cu src/core/cuda/i8_gated_residual.cu src/core/cuda/i8_gemm.cu src/core/cuda/bf16_gemm.cu PROPERTIES
@@ -364,6 +394,11 @@ if (SD_CUDA)
     endif()
 endif()
 set(SD_BACKEND_REGISTRATIONS)
+if (SD_METAL AND NOT SD_USE_UPSTREAM_GGML)
+    add_subdirectory(src/core/metal)
+    target_link_libraries(${SD_LIB} PRIVATE "-framework Foundation" "-framework Metal")
+    list(APPEND SD_BACKEND_REGISTRATIONS sd_ggml_register_metal_i8)
+endif()
 if (NOT SD_USE_UPSTREAM_GGML AND (SD_CUDA OR SD_HIPBLAS OR SD_MUSA))
     if(SD_HIPBLAS)
         include(cmake/hip.cmake)
@@ -398,6 +433,9 @@ target_include_directories(${SD_LIB} PUBLIC include)
 target_include_directories(${SD_LIB} PRIVATE src src/core)
 target_include_directories(${SD_LIB} PUBLIC thirdparty)
 target_compile_features(${SD_LIB} PUBLIC c_std_11 cxx_std_17)
+set_target_properties(${SD_LIB} PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON)
 
 
 if (SD_BUILD_EXAMPLES)

@@ -44,14 +44,18 @@ public:
     }
 };
 
-static void preview_callback(int step, int frame_count, sd_image_t* frames, bool is_noisy, void* data) {
+static void preview_callback(int step, int frame_count, const sd_tensor_t* const* tensors, bool is_noisy, void* data) {
+    std::vector<SDImage> views;
+    for (int i = 0; i < frame_count; ++i)
+        views.push_back(tensor_image_view(tensors[i]));
+    SDImage* frames = views.data();
     (void)is_noisy;
     if (frame_count <= 0 || frames == nullptr || frames[0].data == nullptr) {
         return;
     }
 
     AsyncGenerationJob* job      = static_cast<AsyncGenerationJob*>(data);
-    const sd_image_t& frame      = frames[0];
+    const SDImage& frame         = frames[0];
     const sd_preview_info_t info = sd_get_preview_info();
 
     auto image_bytes = encode_image_to_vector(EncodedImageFormat::PNG,
@@ -74,24 +78,78 @@ static void preview_callback(int step, int frame_count, sd_image_t* frames, bool
 }
 
 static void clear_preview_callback() {
-    sd_set_preview_callback(nullptr, PREVIEW_NONE, 1, false, false, nullptr);
+    sd_set_preview_callback(nullptr, "none", 1, false, false, nullptr);
 }
 
 static void set_preview_callback(AsyncGenerationJob& job) {
-    preview_t mode = str_to_preview(job.kind == AsyncJobKind::ImgGen
-                                        ? job.img_gen.preview_mode.c_str()
-                                        : job.vid_gen.preview_mode.c_str());
-    if (mode == PREVIEW_COUNT || mode == PREVIEW_NONE) {
+    const auto& mode = job.kind == AsyncJobKind::ImgGen ? job.img_gen.preview_mode : job.vid_gen.preview_mode;
+    if (mode == "none")
         return;
-    }
     int interval = job.kind == AsyncJobKind::ImgGen
                        ? job.img_gen.preview_interval
                        : job.vid_gen.preview_interval;
     if (interval <= 0) {
         interval = 1;
     }
-    sd_set_preview_callback(preview_callback, mode, interval, true, false, &job);
+    sd_set_preview_callback(preview_callback, mode.c_str(), interval, true, false, &job);
 }
+
+static void update_job_progress(AsyncGenerationJob& job, const char* stage, const char* detail = "", int sample_pass = -1, int64_t completed = 0, int64_t total = 0, const char* unit = "") {
+    std::lock_guard<std::mutex> lock(job.progress_mutex);
+    auto& progress = job.progress;
+    if (sample_pass < 0) {
+        sample_pass = progress.sample_pass;
+    }
+    if (progress.stage != stage || progress.detail != detail || progress.sample_pass != sample_pass) {
+        progress.stage_started = std::chrono::steady_clock::now();
+    }
+    progress.stage       = stage;
+    progress.detail      = detail;
+    progress.sample_pass = sample_pass;
+    progress.completed   = completed;
+    progress.total       = total;
+    progress.unit        = unit;
+}
+
+static void finish_job_progress(AsyncGenerationJob& job) {
+    std::lock_guard<std::mutex> lock(job.progress_mutex);
+    job.progress.finished = std::chrono::steady_clock::now();
+}
+
+class JobCallbacksGuard {
+    sd_ctx_t* ctx_;
+    AsyncGenerationJob& job_;
+    bool detailing_ = false;
+
+    static void progress_callback(const sd_generation_progress_t* progress, void* data) {
+        auto& guard = *static_cast<JobCallbacksGuard*>(data);
+        update_job_progress(guard.job_, guard.detailing_ ? "adetailer" : progress->stage,
+                            guard.detailing_ ? progress->stage : progress->detail,
+                            progress->sample_pass, progress->completed, progress->total, progress->unit);
+    }
+
+public:
+    JobCallbacksGuard(sd_ctx_t* ctx, AsyncGenerationJob& job)
+        : ctx_(ctx), job_(job) {
+        clear_preview_callback();
+        set_preview_callback(job);
+        sd_set_generation_progress_callback(ctx_, progress_callback, this);
+    }
+
+    ~JobCallbacksGuard() {
+        sd_set_generation_progress_callback(ctx_, nullptr, nullptr);
+        clear_preview_callback();
+    }
+
+    void begin_detailing() {
+        clear_preview_callback();
+        detailing_ = true;
+        update_job_progress(job_, "adetailer");
+    }
+
+    JobCallbacksGuard(const JobCallbacksGuard&)            = delete;
+    JobCallbacksGuard& operator=(const JobCallbacksGuard&) = delete;
+};
 
 const char* async_job_kind_name(AsyncJobKind kind) {
     switch (kind) {
@@ -187,6 +245,7 @@ bool cancel_queued_job(AsyncJobManager& manager, AsyncGenerationJob& job) {
     job.result_fps         = 0;
     job.error_code         = "cancelled";
     job.error_message      = "job cancelled by client";
+    finish_job_progress(job);
     return true;
 }
 
@@ -200,6 +259,24 @@ json make_async_job_json(const AsyncJobManager& manager, const AsyncGenerationJo
     result["started"]          = job.started_at == 0 ? json(nullptr) : json(job.started_at);
     result["completed"]        = job.completed_at == 0 ? json(nullptr) : json(job.completed_at);
     result["queue_position"]   = 0;
+
+    {
+        std::lock_guard<std::mutex> lock(job.progress_mutex);
+        const auto& progress = job.progress;
+        const auto end       = progress.finished == std::chrono::steady_clock::time_point{}
+                                   ? std::chrono::steady_clock::now()
+                                   : progress.finished;
+        result["progress"]   = {
+            {"stage", progress.stage},
+            {"detail", progress.detail},
+            {"pass", progress.sample_pass},
+            {"completed", progress.total > 0 ? json(progress.completed) : json(nullptr)},
+            {"total", progress.total > 0 ? json(progress.total) : json(nullptr)},
+            {"unit", progress.unit.empty() ? json(nullptr) : json(progress.unit)},
+            {"stage_elapsed_ms", std::chrono::duration_cast<std::chrono::milliseconds>(end - progress.stage_started).count()},
+            {"elapsed_ms", job.started_at == 0 ? 0 : std::max<int64_t>(0, (job.completed_at == 0 ? unix_timestamp_now_ms() : job.completed_at) - job.started_at)},
+        };
+    }
 
     if (job.status == AsyncJobStatus::Queued) {
         size_t position = 1;
@@ -268,8 +345,8 @@ bool execute_img_gen_job(ServerRuntime& runtime,
                          std::vector<std::string>& output_images,
                          json& output_info,
                          std::string& error_message) {
-    output_info                = json::array();
-    sd_img_gen_params_t params = job.img_gen.to_sd_img_gen_params_t();
+    output_info     = json::array();
+    SDOptPtr params = job.img_gen.to_image_opt();
 
     SDImageVec results;
 
@@ -279,17 +356,20 @@ bool execute_img_gen_job(ServerRuntime& runtime,
             return false;
         }
         JobCancellationMonitor cancellation(runtime.sd_ctx, job);
-        set_preview_callback(job);
-        sd_image_generation_result_t* generated = nullptr;
-        generate_image(runtime.sd_ctx, &params, &generated);
+        JobCallbacksGuard callbacks(runtime.sd_ctx, job);
+        PromptImageCallbackGuard prompt_images(runtime.sd_ctx, job.img_gen.gen_params);
+        sd_result_t* generated = nullptr;
+        generate_sd_image(runtime.sd_ctx, params, &generated);
         results.adopt(generated, runtime.ctx_params->lora_model_dir);
-        clear_preview_callback();
         if (job.cancel_requested.load()) {
             return false;
         }
-        if (!results.empty() && !apply_server_adetailer(runtime, job.img_gen, params, results)) {
-            error_message = "ADetailer failed";
-            return false;
+        if (!results.empty() && job.img_gen.adetailer_enabled && !runtime.default_gen_params->ad_model_path.empty()) {
+            callbacks.begin_detailing();
+            if (!apply_server_adetailer(runtime, job.img_gen, results)) {
+                error_message = "ADetailer failed";
+                return false;
+            }
         }
     }
 
@@ -306,6 +386,7 @@ bool execute_img_gen_job(ServerRuntime& runtime,
         encoded_format = EncodedImageFormat::WEBP;
     }
 
+    update_job_progress(job, "encoding", "image", -1, 0, num_results, "images");
     for (int i = 0; i < num_results; ++i) {
         if (results[i].data == nullptr) {
             continue;
@@ -326,6 +407,7 @@ bool execute_img_gen_job(ServerRuntime& runtime,
         }
         output_images.push_back(base64_encode(image_bytes));
         output_info.push_back(json::parse(results.generation_info(i)));
+        update_job_progress(job, "encoding", "image", -1, i + 1, num_results, "images");
     }
 
     if (output_images.empty()) {
@@ -344,12 +426,12 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
                          int& output_fps,
                          json& output_info,
                          std::string& error_message) {
-    sd_vid_gen_params_t params = job.vid_gen.to_sd_vid_gen_params_t();
+    SDOptPtr params = job.vid_gen.to_video_opt();
     std::string str_params;
 
     SDImageVec results;
-    int num_results             = 0;
-    sd_audio_t* generated_audio = nullptr;
+    int num_results          = 0;
+    SDAudio* generated_audio = nullptr;
 
     {
         std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
@@ -357,18 +439,18 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
             return false;
         }
         JobCancellationMonitor cancellation(runtime.sd_ctx, job);
-        set_preview_callback(job);
-        sd_video_generation_result_t* generated = nullptr;
-        if (generate_video(runtime.sd_ctx, &params, &generated)) {
-            output_fps       = generated->fps;
-            generated_audio  = generated->audio;
-            generated->audio = nullptr;
+        JobCallbacksGuard callbacks(runtime.sd_ctx, job);
+        PromptImageCallbackGuard prompt_images(runtime.sd_ctx, job.vid_gen.gen_params);
+        sd_result_t* generated = nullptr;
+        if (generate_sd_video(runtime.sd_ctx, params, &generated)) {
+            output_fps      = sd_result_get_fps(generated);
+            generated_audio = retain_result_audio(generated);
+
             results.adopt_video(generated, runtime.ctx_params->lora_model_dir);
             output_info = json::parse(results.generation_info(0));
             if (job.vid_gen.gen_params.embed_image_metadata)
                 str_params = results.generation_info(0);
         }
-        clear_preview_callback();
     }
 
     num_results = results.count();
@@ -378,6 +460,7 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
         return false;
     }
 
+    update_job_progress(job, "encoding", "video");
     std::vector<uint8_t> video_bytes = create_video_from_sd_images_to_vector(job.vid_gen.output_format,
                                                                              results.data(),
                                                                              num_results,
@@ -430,6 +513,7 @@ void async_job_worker(ServerRuntime& runtime) {
             job             = it->second;
             job->status     = AsyncJobStatus::Generating;
             job->started_at = unix_timestamp_now_ms();
+            update_job_progress(*job, "waiting");
         }
 
         std::vector<std::string> output_images;
@@ -465,6 +549,7 @@ void async_job_worker(ServerRuntime& runtime) {
 
             mark_model_activity(runtime);
             job->completed_at = unix_timestamp_now_ms();
+            finish_job_progress(*job);
             if (job->cancel_requested.load()) {
                 job->status        = AsyncJobStatus::Cancelled;
                 job->error_code    = "cancelled";
