@@ -114,6 +114,14 @@ total work is unknown. The canvas keeps the submitted output aspect ratio, and
 stage changes keep the same layout. Editing the next request's resolution does
 not resize the current preview or result.
 
+Settings will offer **Notify me when generation finishes** (upcoming; requires
+a frontend update). When enabled, the UI requests browser notification
+permission and shows a notification when a generation job completes, fails, or
+is cancelled, so you do not need to watch the tab while waiting. The
+preference is saved locally. Notifications require granting browser
+notification permission; if permission was previously denied, reset it in the
+browser's site settings for this site before turning the setting on.
+
 ### LoRAs
 
 To apply a LoRA, open **LoRA**, select a compatible file, and set its
