@@ -19,37 +19,60 @@
 
 namespace fs = std::filesystem;
 
+bool PromptImageCallbackGuard::load_image(const char* source, void* data, const sd_tensor_t** image_out) {
+    auto& guard        = *static_cast<PromptImageCallbackGuard*>(data);
+    const auto& params = guard.params_;
+    const auto it      = params.prompt_images.find(source);
+    if (it == params.prompt_images.end()) {
+        LOG_ERROR("Unknown prompt image ID: %s", source);
+        return false;
+    }
+    guard.image_tensor_ = image_tensor(it->second.get());
+    *image_out          = guard.image_tensor_.get();
+    return *image_out != nullptr;
+}
+
+PromptImageCallbackGuard::PromptImageCallbackGuard(sd_ctx_t* ctx, const SDGenerationParams& params)
+    : ctx_(ctx), params_(params) {
+    sd_set_prompt_image_callback(ctx_, load_image, this);
+}
+
+PromptImageCallbackGuard::~PromptImageCallbackGuard() {
+    sd_set_prompt_image_callback(ctx_, nullptr, nullptr);
+}
+
 bool validate_server_img_gen_request(const ServerRuntime& runtime,
                                      const ImgGenJobRequest& request,
                                      std::string& error_message) {
-    auto dimensions_valid = [&](double width, double height) {
-        if (!std::isfinite(width) || !std::isfinite(height) ||
-            width < 1 || height < 1 || width > k_max_generation_dimension || height > k_max_generation_dimension) {
-            error_message = "generation width and height must be between 1 and " + std::to_string(k_max_generation_dimension);
+    auto within_dimension_limit = [&](double value) {
+        if (!std::isfinite(value) || value > k_max_generation_dimension) {
+            error_message = "generation dimensions must not exceed " + std::to_string(k_max_generation_dimension);
             return false;
         }
         return true;
     };
     const auto& params = request.gen_params;
-    const int width    = params.get_resolved_width();
-    const int height   = params.get_resolved_height();
-    if (!dimensions_valid(width, height)) {
+    if ((params.width && !within_dimension_limit(*params.width)) ||
+        (params.height && !within_dimension_limit(*params.height)))
         return false;
-    }
-    if (params.hires_enabled) {
-        const double hires_width  = params.hires_width > 0 ? params.hires_width : params.hires_height > 0 ? params.hires_height
-                                                                                                          : std::round(width * params.hires_scale);
-        const double hires_height = params.hires_height > 0 ? params.hires_height : params.hires_width > 0 ? params.hires_width
-                                                                                                           : std::round(height * params.hires_scale);
-        if (!dimensions_valid(hires_width, hires_height)) {
+    if (params.hires_enabled.value_or(false)) {
+        if ((params.hires_width && !within_dimension_limit(*params.hires_width)) ||
+            (params.hires_height && !within_dimension_limit(*params.hires_height)))
             return false;
+        if (params.hires_width.value_or(0) <= 0 && params.hires_height.value_or(0) <= 0) {
+            // Use the documented library defaults for this resource-policy check only.
+            const float scale = params.hires_scale.value_or(2.f);
+            if (!within_dimension_limit(std::round(params.width.value_or(512) * scale)) ||
+                !within_dimension_limit(std::round(params.height.value_or(512) * scale)))
+                return false;
         }
     }
     if (!request.adetailer_enabled || runtime.default_gen_params->ad_model_path.empty()) {
         return true;
     }
     auto pass_valid = [&](const ServerADetailerPass& pass) {
-        if (!dimensions_valid(pass.width, pass.height)) {
+        if ((pass.width && !within_dimension_limit(*pass.width)) ||
+            (pass.height && !within_dimension_limit(*pass.height))) {
             return false;
         }
         // Match the native key normalization, but leave full option parsing to ADetailer.
@@ -94,10 +117,9 @@ bool validate_server_img_gen_request(const ServerRuntime& runtime,
 }
 
 bool apply_server_adetailer(ServerRuntime& runtime,
-                            const ImgGenJobRequest& request,
-                            const sd_img_gen_params_t& params,
+                            ImgGenJobRequest& request,
                             SDImageVec& results) {
-    const auto& gen_params    = request.gen_params;
+    auto& gen_params          = request.gen_params;
     const auto& ad_model_path = runtime.default_gen_params->ad_model_path;
     if (!request.adetailer_enabled || ad_model_path.empty()) {
         return true;
@@ -117,53 +139,54 @@ bool apply_server_adetailer(ServerRuntime& runtime,
         passes.push_back(std::move(pass));
     }
 
-    ADetailerCtxPtr ad_ctx(new_adetailer_ctx(ad_model_path.c_str(),
-                                             runtime.ctx_params->n_threads,
-                                             runtime.ctx_params->effective_backend.c_str(),
-                                             runtime.ctx_params->effective_params_backend.c_str()));
+    ADetailerCtxPtr ad_ctx(create_sd_adetailer(ad_model_path.c_str(),
+                                               runtime.ctx_params->n_threads,
+                                               runtime.ctx_params->effective_backend.c_str(),
+                                               runtime.ctx_params->effective_params_backend.c_str()));
     if (ad_ctx == nullptr) {
-        LOG_ERROR("new_adetailer_ctx failed");
+        LOG_ERROR("sd_adetailer_create failed");
         return false;
     }
 
     for (const auto& pass : passes) {
-        sd_adetailer_params_t ad_params{};
-        ad_params.prompt          = pass.prompt.empty() ? nullptr : pass.prompt.c_str();
-        ad_params.negative_prompt = pass.negative_prompt.empty() ? nullptr : pass.negative_prompt.c_str();
-        ad_params.extra_ad_args   = pass.extra_args.c_str();
         for (int i = 0; i < results.count(); ++i) {
             if (results[i].data == nullptr) {
                 continue;
             }
-            sd_img_gen_params_t ad_generation_params = params;
-            ad_generation_params.seed                = generation_seed(results.generation_info(i));
-            ad_generation_params.width               = pass.width;
-            ad_generation_params.height              = pass.height;
-            ad_generation_params.strength            = pass.strength;
-            if (pass.clip_skip > 0) {
-                ad_generation_params.clip_skip = pass.clip_skip;
+            SDOptBuilder ad_options(gen_params.to_image_opt(true).release());
+            ad_options.unset("width");
+            ad_options.unset("height");
+            ad_options.unset("strength");
+            ad_options.set_string("adetail.prompt", pass.prompt);
+            ad_options.set_string("adetail.negative_prompt", pass.negative_prompt);
+            ad_options.set_string("adetail.args", pass.extra_args);
+            ad_options.set_int("seed", generation_seed(results.generation_info(i)));
+            ad_options.set_int("width", pass.width);
+            ad_options.set_int("height", pass.height);
+            ad_options.set_float("strength", pass.strength);
+            if (pass.clip_skip) {
+                ad_options.set_int("clip_skip", pass.clip_skip);
             }
             if (pass.automatic_scheduler) {
-                ad_generation_params.sample_params.scheduler = SCHEDULER_COUNT;
+                ad_options.set_string("sample.scheduler", "auto");
             }
 
-            sd_image_generation_result_t* detailed = nullptr;
-            if (!adetail_image(ad_ctx.get(),
-                               runtime.sd_ctx,
-                               results[i],
-                               &ad_params,
-                               &ad_generation_params,
-                               &detailed) ||
-                detailed == nullptr || detailed->count <= 0 || detailed->items[0].image.data == nullptr) {
-                free_sd_image_generation_result(detailed);
+            sd_result_t* detailed = nullptr;
+            if (!adetail_sd_image(ad_ctx.get(),
+                                  runtime.sd_ctx,
+                                  results[i],
+                                  ad_options.finish(),
+                                  &detailed) ||
+                detailed == nullptr || sd_result_get_image_count(detailed) <= 0 || sd_tensor_data(sd_result_get_image(detailed, 0)) == nullptr) {
+                sd_result_free(detailed);
                 LOG_ERROR("ADetailer failed for image %d", i + 1);
                 return false;
             }
-            results.append_generation_info(i, detailed->items[0].generation_info, runtime.ctx_params->lora_model_dir);
-            free(results[i].data);
-            results[i]               = detailed->items[0].image;
-            detailed->items[0].image = {};
-            free_sd_image_generation_result(detailed);
+            results.append_generation_info(i, sd_result_get_generation_info(detailed, 0), runtime.ctx_params->lora_model_dir);
+            sd_image_free(&results[i]);
+            results[i] = take_result_image(detailed, 0);
+
+            sd_result_free(detailed);
         }
     }
     return true;
@@ -562,7 +585,7 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
                 });
                 upscaler_entry.image_upscale_factor = previous != previous_cache.end()
                                                           ? previous->image_upscale_factor
-                                                          : get_upscaler_model_scale(upscaler_entry.fullpath.c_str());
+                                                          : sd_upscaler_probe_scale(upscaler_entry.fullpath.c_str());
                 if (upscaler_entry.image_upscale_factor > 0) {
                     upscaler_entry.scale      = upscaler_entry.image_upscale_factor;
                     upscaler_entry.model_name = "ESRGAN_" + std::to_string(upscaler_entry.scale) + "x";

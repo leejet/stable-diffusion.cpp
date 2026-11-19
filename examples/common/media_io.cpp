@@ -409,7 +409,7 @@ bool extract_vp8_frame_from_webp(const std::vector<uint8_t>& webp_data, std::vec
     return false;
 }
 
-bool encode_sd_image_to_vp8_frame(const sd_image_t& image, int quality, std::vector<uint8_t>& vp8_frame) {
+bool encode_sd_image_to_vp8_frame(const SDImage& image, int quality, std::vector<uint8_t>& vp8_frame) {
     if (image.data == nullptr || image.width == 0 || image.height == 0) {
         return false;
     }
@@ -659,7 +659,7 @@ void write_fourcc(std::vector<uint8_t>& data, const char* fourcc) {
     data.insert(data.end(), fourcc, fourcc + 4);
 }
 
-static std::vector<uint8_t> audio_to_pcm16_bytes(const sd_audio_t* audio) {
+static std::vector<uint8_t> audio_to_pcm16_bytes(const SDAudio* audio) {
     if (audio == nullptr || audio->data == nullptr || audio->sample_count == 0 || audio->channels == 0 || audio->sample_rate == 0) {
         return {};
     }
@@ -674,7 +674,7 @@ static std::vector<uint8_t> audio_to_pcm16_bytes(const sd_audio_t* audio) {
     return bytes;
 }
 
-static std::pair<uint64_t, uint64_t> audio_sample_range_for_video_frame(const sd_audio_t* audio, int frame_idx, int num_frames, int fps) {
+static std::pair<uint64_t, uint64_t> audio_sample_range_for_video_frame(const SDAudio* audio, int frame_idx, int num_frames, int fps) {
     if (audio == nullptr || fps <= 0 || num_frames <= 0) {
         return {0, 0};
     }
@@ -783,7 +783,7 @@ uint8_t* load_image_from_file(const char* image_path,
     return load_image_common(false, image_path, 0, width, height, expected_width, expected_height, expected_channel, out_channel);
 }
 
-bool load_sd_image_from_file(sd_image_t* image,
+bool load_sd_image_from_file(SDImage* image,
                              const char* image_path,
                              int expected_width,
                              int expected_height,
@@ -836,7 +836,7 @@ static void append_avi_metadata(std::vector<uint8_t>& data, const std::string& p
     size_t start_pos = data.size();
 }
 
-std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(sd_image_t* images, int num_images, int fps, int quality, const sd_audio_t* audio, const std::string& parameters) {
+std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(SDImage* images, int num_images, int fps, int quality, const SDAudio* audio, const std::string& parameters) {
     if (num_images == 0) {
         fprintf(stderr, "Error: Image array is empty.\n");
         return {};
@@ -1043,7 +1043,7 @@ std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(sd_image_t* images
     return avi_data;
 }
 
-int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality, const sd_audio_t* audio, const std::string& parameters) {
+int create_mjpg_avi_from_sd_images(const char* filename, SDImage* images, int num_images, int fps, int quality, const SDAudio* audio, const std::string& parameters) {
     std::vector<uint8_t> avi_data = create_mjpg_avi_from_sd_images_to_vector(images, num_images, fps, quality, audio, parameters);
     if (avi_data.empty()) {
         return -1;
@@ -1056,7 +1056,7 @@ int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int
 }
 
 #ifdef SD_USE_WEBP
-std::vector<uint8_t> create_animated_webp_from_sd_images_to_vector(sd_image_t* images, int num_images, int fps, int quality) {
+std::vector<uint8_t> create_animated_webp_from_sd_images_to_vector(SDImage* images, int num_images, int fps, int quality) {
     if (num_images == 0) {
         fprintf(stderr, "Error: Image array is empty.\n");
         return {};
@@ -1102,7 +1102,7 @@ std::vector<uint8_t> create_animated_webp_from_sd_images_to_vector(sd_image_t* i
     int timestamp_ms            = 0;
 
     for (int i = 0; i < num_images; ++i) {
-        const sd_image_t& image = images[i];
+        const SDImage& image = images[i];
         if (static_cast<int>(image.width) != width || static_cast<int>(image.height) != height) {
             fprintf(stderr, "Error: Frame dimensions do not match.\n");
             return {};
@@ -1160,7 +1160,7 @@ std::vector<uint8_t> create_animated_webp_from_sd_images_to_vector(sd_image_t* i
     return std::vector<uint8_t>(webp_data.data.bytes, webp_data.data.bytes + webp_data.data.size);
 }
 
-int create_animated_webp_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality) {
+int create_animated_webp_from_sd_images(const char* filename, SDImage* images, int num_images, int fps, int quality) {
     std::vector<uint8_t> webp_data = create_animated_webp_from_sd_images_to_vector(images, num_images, fps, quality);
     if (webp_data.empty()) {
         return -1;
@@ -1174,7 +1174,7 @@ int create_animated_webp_from_sd_images(const char* filename, sd_image_t* images
 #endif
 
 #ifdef SD_USE_WEBM
-std::vector<uint8_t> create_webm_from_sd_images_to_vector(sd_image_t* images, int num_images, int fps, int quality, const sd_audio_t* audio, const std::string& parameters) {
+std::vector<uint8_t> create_webm_from_sd_images_to_vector(SDImage* images, int num_images, int fps, int quality, const SDAudio* audio, const std::string& parameters) {
     if (num_images == 0) {
         fprintf(stderr, "Error: Image array is empty.\n");
         return {};
@@ -1261,7 +1261,7 @@ std::vector<uint8_t> create_webm_from_sd_images_to_vector(sd_image_t* images, in
         uint64_t timestamp_ns = 0;
 
         for (int i = 0; i < num_images; ++i) {
-            const sd_image_t& image = images[i];
+            const SDImage& image = images[i];
             if (static_cast<int>(image.width) != width || static_cast<int>(image.height) != height) {
                 fprintf(stderr, "Error: Frame dimensions do not match.\n");
                 return -1;
@@ -1314,7 +1314,7 @@ std::vector<uint8_t> create_webm_from_sd_images_to_vector(sd_image_t* images, in
     return writer.data();
 }
 
-int create_webm_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality, const sd_audio_t* audio, const std::string& parameters) {
+int create_webm_from_sd_images(const char* filename, SDImage* images, int num_images, int fps, int quality, const SDAudio* audio, const std::string& parameters) {
     std::vector<uint8_t> webm_data = create_webm_from_sd_images_to_vector(images, num_images, fps, quality, audio, parameters);
     if (webm_data.empty()) {
         return -1;
@@ -1328,11 +1328,11 @@ int create_webm_from_sd_images(const char* filename, sd_image_t* images, int num
 #endif
 
 std::vector<uint8_t> create_video_from_sd_images_to_vector(const std::string& output_format,
-                                                           sd_image_t* images,
+                                                           SDImage* images,
                                                            int num_images,
                                                            int fps,
                                                            int quality,
-                                                           const sd_audio_t* audio,
+                                                           const SDAudio* audio,
                                                            const std::string& parameters) {
     std::string format = output_format;
     std::transform(format.begin(), format.end(), format.begin(),
@@ -1359,7 +1359,7 @@ std::vector<uint8_t> create_video_from_sd_images_to_vector(const std::string& ou
     return create_mjpg_avi_from_sd_images_to_vector(images, num_images, fps, quality, audio, parameters);
 }
 
-int create_video_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality, const sd_audio_t* audio, const std::string& parameters) {
+int create_video_from_sd_images(const char* filename, SDImage* images, int num_images, int fps, int quality, const SDAudio* audio, const std::string& parameters) {
     std::string path                = filename ? filename : "";
     auto pos                        = path.find_last_of('.');
     std::string ext                 = pos == std::string::npos ? "" : path.substr(pos);

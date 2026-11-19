@@ -15,7 +15,7 @@ namespace fs = std::filesystem;
 
 static constexpr uint32_t k_max_upscale_dimension = 8192;
 
-static bool valid_upscale_dimensions(const sd_image_t& image, int factor, int repeats) {
+static bool valid_upscale_dimensions(const SDImage& image, int factor, int repeats) {
     if (image.width == 0 || image.height == 0 || factor < 1 || repeats < 1 || repeats > 4) {
         return false;
     }
@@ -31,51 +31,20 @@ static bool valid_upscale_dimensions(const sd_image_t& image, int factor, int re
     return true;
 }
 
-static bool parse_cache_mode(const std::string& mode_str, sd_cache_mode_t& mode_out) {
-    if (mode_str == "disabled") {
-        mode_out = SD_CACHE_DISABLED;
-        return true;
-    }
-    if (mode_str == "easycache") {
-        mode_out = SD_CACHE_EASYCACHE;
-        return true;
-    }
-    if (mode_str == "ucache") {
-        mode_out = SD_CACHE_UCACHE;
-        return true;
-    }
-    if (mode_str == "dbcache") {
-        mode_out = SD_CACHE_DBCACHE;
-        return true;
-    }
-    if (mode_str == "taylorseer") {
-        mode_out = SD_CACHE_TAYLORSEER;
-        return true;
-    }
-    if (mode_str == "cache-dit") {
-        mode_out = SD_CACHE_CACHE_DIT;
-        return true;
-    }
-    if (mode_str == "spectrum") {
-        mode_out = SD_CACHE_SPECTRUM;
-        return true;
-    }
-    return false;
+static bool parse_cache_mode(const std::string& value, std::string& mode) {
+    const std::string canonical = value == "cache-dit" ? "cache_dit" : value;
+    SDOptPtr opt(sd_img_gen_opt_create());
+    if (!opt || sd_opt_set_string(opt.get(), "cache.mode", canonical.c_str()) != SD_STATUS_OK)
+        return false;
+    mode = canonical;
+    return true;
 }
 
-static json finite_number_or_null(float value) {
-    return std::isfinite(value) ? json(value) : json(nullptr);
+static json finite_number_or_null(const std::optional<float>& value) {
+    return value && std::isfinite(*value) ? json(*value) : json(nullptr);
 }
 
-static const char* capability_scheduler_name(enum scheduler_t scheduler) {
-    return scheduler < SCHEDULER_COUNT ? sd_scheduler_name(scheduler) : "default";
-}
-
-static const char* capability_sample_method_name(enum sample_method_t sample_method) {
-    return sample_method < SAMPLE_METHOD_COUNT ? sd_sample_method_name(sample_method) : "default";
-}
-
-static json make_vae_tiling_json(const sd_tiling_params_t& params) {
+static json make_vae_tiling_json(const SDTilingParams& params) {
     return {
         {"enabled", params.enabled},
         {"temporal_tiling", params.temporal_tiling},
@@ -99,11 +68,11 @@ static fs::path resolve_display_model_path(const ServerRuntime& runtime) {
     return {};
 }
 
-static json make_sample_params_json(const sd_sample_params_t& sample_params, const std::vector<int>& skip_layers, const std::vector<float>& custom_sigmas = {}) {
+static json make_sample_params_json(const SDSampleParams& sample_params, const std::optional<std::vector<int>>& skip_layers, const std::optional<std::vector<float>>& custom_sigmas = {}) {
     const auto& guidance = sample_params.guidance;
     return {
-        {"scheduler", capability_scheduler_name(sample_params.scheduler)},
-        {"sample_method", capability_sample_method_name(sample_params.sample_method)},
+        {"scheduler", sample_params.scheduler},
+        {"sample_method", sample_params.sample_method},
         {"sample_steps", sample_params.sample_steps},
         {"custom_sigmas", custom_sigmas},
         {"eta", finite_number_or_null(sample_params.eta)},
@@ -144,8 +113,8 @@ static json make_img_gen_defaults_json(const SDGenerationParams& defaults, const
         {"prompt", defaults.prompt},
         {"negative_prompt", defaults.negative_prompt},
         {"clip_skip", defaults.clip_skip},
-        {"width", defaults.width > 0 ? defaults.width : 512},
-        {"height", defaults.height > 0 ? defaults.height : 512},
+        {"width", defaults.width},
+        {"height", defaults.height},
         {"strength", defaults.strength},
         {"seed", defaults.seed},
         {"batch_count", defaults.batch_count},
@@ -173,8 +142,8 @@ static json make_vid_gen_defaults_json(const SDGenerationParams& defaults, const
         {"prompt", defaults.prompt},
         {"negative_prompt", defaults.negative_prompt},
         {"clip_skip", defaults.clip_skip},
-        {"width", defaults.width > 0 ? defaults.width : 512},
-        {"height", defaults.height > 0 ? defaults.height : 512},
+        {"width", defaults.width},
+        {"height", defaults.height},
         {"strength", defaults.strength},
         {"seed", defaults.seed},
         {"video_frames", defaults.video_frames},
@@ -234,8 +203,8 @@ static json make_vid_gen_features_json() {
 
 static json make_preview_modes_json() {
     json modes = json::array();
-    for (int i = 0; i < PREVIEW_COUNT; ++i) {
-        modes.push_back(sd_preview_name((preview_t)i));
+    for (const char* name : example_options::preview_modes) {
+        modes.push_back(name);
     }
     return modes;
 }
@@ -258,13 +227,13 @@ static json make_capabilities_json(ServerRuntime& runtime) {
     json available_upscalers  = json::array();
     json supported_modes      = json::array();
 
-    for (int i = 0; i < SAMPLE_METHOD_COUNT; ++i) {
-        samplers.push_back(sd_sample_method_name((sample_method_t)i));
+    for (const char* name : example_options::sample_methods) {
+        samplers.push_back(name);
     }
 
-    for (int i = 0; i < SCHEDULER_COUNT; ++i) {
-        schedulers.push_back(sd_scheduler_name((scheduler_t)i));
-        if (i == DISCRETE_SCHEDULER) {
+    for (const std::string name : example_options::schedulers) {
+        schedulers.push_back(name);
+        if (name == "discrete") {
             schedulers.push_back("normal");
         }
     }
@@ -483,6 +452,21 @@ static bool parse_vid_gen_request(const json& body,
         return false;
     }
 
+    auto& params                   = request.gen_params;
+    auto merge_shared_sample_input = [&](const char* key, auto member) {
+        const auto base = body.find("sample_params");
+        const auto high = body.find("high_noise_sample_params");
+        if (base != body.end() && base->is_object() && base->contains(key)) {
+            if (base->at(key).is_null())
+                (params.high_noise_sample_params.*member).reset();
+        } else if (high != body.end() && high->is_object() && high->contains(key)) {
+            params.sample_params.*member = params.high_noise_sample_params.*member;
+        }
+    };
+    merge_shared_sample_input("scheduler", &SDSampleParams::scheduler);
+    merge_shared_sample_input("flow_shift", &SDSampleParams::flow_shift);
+    merge_shared_sample_input("shifted_timestep", &SDSampleParams::shifted_timestep);
+
     std::string output_format = body.value("output_format", "webm");
     int output_compression    = body.value("output_compression", 100);
     if (!assign_output_options(request, output_format, output_compression, error_message)) {
@@ -546,7 +530,12 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 res.set_content(json({{"error", error_message}}).dump(), "application/json");
                 return;
             }
-            const int tile_size      = std::max(32, body.value("tile_size", runtime->default_gen_params->upscale_tile_size));
+            const auto tile_size = body.value("tile_size", runtime->default_gen_params->upscale_tile_size);
+            if (tile_size && *tile_size < 32) {
+                res.status = 400;
+                res.set_content(json({{"error", "tile_size must be at least 32"}}).dump(), "application/json");
+                return;
+            }
             const int repeats        = std::clamp(body.value("repeats", 1), 1, 4);
             const std::string wanted = body.value("upscaler", std::string());
 
@@ -597,18 +586,18 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             // One GPU: an upscale must not run while a generation is using it.
             std::lock_guard<std::mutex> ctx_lock(*runtime->sd_ctx_mutex);
-            UpscalerCtxPtr upscaler_ctx(new_upscaler_ctx(model_path.c_str(),
-                                                         runtime->ctx_params->diffusion_conv_direct,
-                                                         runtime->ctx_params->n_threads,
-                                                         tile_size,
-                                                         runtime->ctx_params->backend.c_str(),
-                                                         runtime->ctx_params->params_backend.c_str()));
+            UpscalerCtxPtr upscaler_ctx(create_sd_upscaler(model_path.c_str(),
+                                                           runtime->ctx_params->diffusion_conv_direct,
+                                                           runtime->ctx_params->n_threads,
+                                                           tile_size,
+                                                           runtime->ctx_params->backend ? runtime->ctx_params->backend->c_str() : nullptr,
+                                                           runtime->ctx_params->params_backend ? runtime->ctx_params->params_backend->c_str() : nullptr));
             if (upscaler_ctx == nullptr) {
                 res.status = 500;
                 res.set_content(R"({"error":"the upscaler model could not be loaded"})", "application/json");
                 return;
             }
-            const int factor = get_upscale_factor(upscaler_ctx.get());
+            const int factor = sd_upscaler_get_scale(upscaler_ctx.get());
             // The model file may have changed since its metadata was cached.
             if (!valid_upscale_dimensions(input.get(), factor, repeats)) {
                 res.status = 400;
@@ -619,24 +608,24 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             SDImageOwner current(input.release());
             std::string generation_info;
             for (int i = 0; i < repeats; ++i) {
-                sd_image_generation_result_t* generated = nullptr;
-                if (!upscale(upscaler_ctx.get(), current.get(), (uint32_t)factor, &generated) ||
-                    !generated || generated->count <= 0 || generated->items[0].image.data == nullptr) {
-                    free_sd_image_generation_result(generated);
+                sd_result_t* generated = nullptr;
+                if (!upscale_sd_image(upscaler_ctx.get(), current.get(), &generated) ||
+                    !generated || sd_result_get_image_count(generated) <= 0 || sd_tensor_data(sd_result_get_image(generated, 0)) == nullptr) {
+                    sd_result_free(generated);
                     res.status = 500;
                     res.set_content(R"({"error":"upscale failed"})", "application/json");
                     return;
                 }
-                generation_info           = merge_generation_info(generation_info, generated->items[0].generation_info);
-                sd_image_t produced       = generated->items[0].image;
-                generated->items[0].image = {};
-                free_sd_image_generation_result(generated);
+                generation_info  = merge_generation_info(generation_info, sd_result_get_generation_info(generated, 0));
+                SDImage produced = take_result_image(generated, 0);
+
+                sd_result_free(generated);
                 current.reset(produced);
             }
 
             const std::string& format = output_options.output_format;
             const int compression     = output_options.output_compression;
-            const sd_image_t result   = current.get();
+            const SDImage result      = current.get();
             auto image_bytes          = encode_image_to_vector(format == "jpeg"   ? EncodedImageFormat::JPEG
                                                                : format == "webp" ? EncodedImageFormat::WEBP
                                                                                   : EncodedImageFormat::PNG,

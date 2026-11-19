@@ -73,10 +73,10 @@ struct ServerADetailerPass {
     std::string prompt;
     std::string negative_prompt;
     std::string extra_args;
-    int width                = 512;
-    int height               = 512;
-    float strength           = 0.4f;
-    int clip_skip            = -1;
+    std::optional<int> width;
+    std::optional<int> height;
+    std::optional<float> strength;
+    std::optional<int> clip_skip;
     bool automatic_scheduler = false;
 };
 
@@ -89,9 +89,21 @@ struct ImgGenJobRequest {
     bool adetailer_enabled    = true;
     std::vector<ServerADetailerPass> adetailer_passes;
 
-    sd_img_gen_params_t to_sd_img_gen_params_t() {
-        return gen_params.to_sd_img_gen_params_t();
-    }
+    SDOptPtr to_image_opt() { return gen_params.to_image_opt(); }
+};
+
+class PromptImageCallbackGuard {
+    sd_ctx_t* ctx_;
+    const SDGenerationParams& params_;
+    SDTensorPtr image_tensor_;
+
+    static bool load_image(const char* source, void* data, const sd_tensor_t** image_out);
+
+public:
+    PromptImageCallbackGuard(sd_ctx_t* ctx, const SDGenerationParams& params);
+    ~PromptImageCallbackGuard();
+    PromptImageCallbackGuard(const PromptImageCallbackGuard&)            = delete;
+    PromptImageCallbackGuard& operator=(const PromptImageCallbackGuard&) = delete;
 };
 
 constexpr int k_max_generation_dimension = 4096;
@@ -108,9 +120,7 @@ struct VidGenJobRequest {
     std::string preview_mode  = "none";
     int preview_interval      = 1;
 
-    sd_vid_gen_params_t to_sd_vid_gen_params_t() {
-        return gen_params.to_sd_vid_gen_params_t();
-    }
+    SDOptPtr to_video_opt() { return gen_params.to_video_opt(); }
 };
 
 std::string base64_encode(const std::vector<uint8_t>& bytes);
@@ -134,6 +144,5 @@ std::string get_lora_full_path(ServerRuntime& rt, const std::string& path);
 void refresh_upscaler_cache(ServerRuntime& rt);
 int64_t unix_timestamp_now_ms();
 bool apply_server_adetailer(ServerRuntime& runtime,
-                            const ImgGenJobRequest& request,
-                            const sd_img_gen_params_t& params,
+                            ImgGenJobRequest& request,
                             SDImageVec& results);
