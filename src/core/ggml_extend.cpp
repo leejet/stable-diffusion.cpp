@@ -541,36 +541,6 @@ ggml_tensor* ggml_ext_conv_3d(GGMLRunnerContext* runner_ctx,
     return x;
 }
 
-std::vector<ggml_tensor*> ggml_ext_split_qkv(GGMLRunnerContext* runner_ctx, ggml_tensor* qkv) {
-    auto ctx = runner_ctx->ggml_ctx;
-    qkv      = ggml_reshape_4d(ctx, qkv, qkv->ne[0] / 3, 3, qkv->ne[1], qkv->ne[2]);  // [N, L, 3, C]
-    qkv      = ggml_cont(ctx, ggml_permute(ctx, qkv, 0, 3, 1, 2));                    // [3, N, L, C]
-
-    int64_t offset = qkv->nb[2] * qkv->ne[2];
-    auto q         = ggml_view_3d(ctx, qkv, qkv->ne[0], qkv->ne[1], qkv->ne[2], qkv->nb[1], qkv->nb[2], offset * 0);  // [N, L, C]
-    auto k         = ggml_view_3d(ctx, qkv, qkv->ne[0], qkv->ne[1], qkv->ne[2], qkv->nb[1], qkv->nb[2], offset * 1);  // [N, L, C]
-    auto v         = ggml_view_3d(ctx, qkv, qkv->ne[0], qkv->ne[1], qkv->ne[2], qkv->nb[1], qkv->nb[2], offset * 2);  // [N, L, C]
-    return {q, k, v};
-}
-
-std::vector<ggml_tensor*> ggml_ext_split_image_qkv(GGMLRunnerContext* runner_ctx, ggml_tensor* qkv) {
-    auto ctx    = runner_ctx->ggml_ctx;
-    int64_t W   = qkv->ne[0];
-    int64_t H   = qkv->ne[1];
-    int64_t C   = qkv->ne[2] / 3;
-    int64_t N   = qkv->ne[3];
-    int64_t nb1 = qkv->nb[1];
-    int64_t nb2 = qkv->nb[2];
-    qkv         = ggml_reshape_4d(ctx, qkv, W * H, C, 3, N);                            // [N, 3, C, H*W]
-    qkv         = ggml_cont(ctx, ggml_ext_torch_permute(runner_ctx, qkv, 0, 1, 3, 2));  // [3, N, C, H*W]
-
-    int64_t offset = qkv->nb[2] * qkv->ne[2];
-    auto q         = ggml_view_4d(ctx, qkv, W, H, C, N, nb1, nb2, qkv->nb[2], offset * 0);  // [N, C, H, W]
-    auto k         = ggml_view_4d(ctx, qkv, W, H, C, N, nb1, nb2, qkv->nb[2], offset * 1);  // [N, C, H, W]
-    auto v         = ggml_view_4d(ctx, qkv, W, H, C, N, nb1, nb2, qkv->nb[2], offset * 2);  // [N, C, H, W]
-    return {q, k, v};
-}
-
 ggml_tensor* ggml_ext_full(GGMLRunnerContext* runner_ctx,
                            float value,
                            int64_t ne0,

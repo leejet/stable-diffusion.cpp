@@ -910,7 +910,7 @@ public:
         if (proj_in) {
             auto in_proj = std::dynamic_pointer_cast<Linear>(blocks[in_proj_name]);
             auto qkv     = in_proj->forward(ctx, x);
-            auto qkv_vec = ggml_ext_split_qkv(ctx, qkv);
+            auto qkv_vec = ggml_ext_chunk(ctx, qkv, 3, 0);
             q            = qkv_vec[0];
             k            = qkv_vec[1];
             v            = qkv_vec[2];

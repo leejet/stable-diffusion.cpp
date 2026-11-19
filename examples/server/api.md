@@ -11,6 +11,14 @@ The server currently exposes three API families:
 The `sdcpp API` is the native API surface.
 Its request schema is the same schema used by `sd_cpp_extra_args`.
 
+Image and video requests can include interleaved images in `prompt` or
+`negative_prompt` using `<image:ID>`. The native `sdcpp API` accepts a
+`prompt_images` object mapping each ID to a base64 image or image data URI.
+For `OpenAI API` and `sdapi`, pass `prompt_images` through `sd_cpp_extra_args`
+embedded inside `prompt`. IDs are resolved against that request's images.
+See [images in prompts](../../docs/guides/prompt_images.md) for examples and supported
+LLM encoders.
+
 Global LoRA rule:
 
 - Server APIs do not parse LoRA tags embedded inside `prompt`.
@@ -221,6 +229,9 @@ values reflect these declarations. A loaded recipe is snapshotted: refreshing
 recipe files does not change the active context's capabilities until reloading.
 Command-line preloading uses the runtime-only all-features recipe instead of model-family inference
 and component paths; variant-specific recipe declarations are more precise.
+Known high-noise sampling settings and `moe_boundary` are ignored when no
+high-noise stage is loaded, and `vace_strength` is ignored by non-VACE models.
+Actual control-frame inputs still require VACE.
 
 These declarations govern the Web UI and advertised capabilities, not API
 request validation. Existing generation APIs continue accepting their existing
@@ -975,7 +986,7 @@ Shared default fields used by both `img_gen` and `vid_gen`:
 | `output_format` | `string` |
 | `output_compression` | `integer` |
 
-`vae_tiling_params.tile_size_w` and `tile_size_h` are in **image pixels**, with `0` selecting the 256-pixel default. Both encode and decode use these sizes without an encoding multiplier. Positive `rel_size_w`/`rel_size_h` values override the corresponding absolute size: values up to 1 are dimension fractions, and values greater than 1 are target tile counts. Set `enabled` to use spatial tiling. Sizes are aligned down to the VAE scale factor and capped at the input dimensions; explicit sizes below the minimum supported tile size are rejected. These fields previously used latent units; see [VAE tiling](../../docs/performance.md#use-vae-tiling-to-reduce-encode-and-decode-memory-usage) for migration and OOM retry behavior.
+`vae_tiling_params.tile_size_w` and `tile_size_h` are in **image pixels**, with `0` selecting the 256-pixel default. Both encode and decode use these sizes without an encoding multiplier. Positive `rel_size_w`/`rel_size_h` values override the corresponding absolute size: values up to 1 are dimension fractions, and values greater than 1 are target tile counts. Set `enabled` to use spatial tiling. Sizes are aligned down to the VAE scale factor and capped at the input dimensions; explicit sizes below the minimum supported tile size are rejected. These fields previously used latent units; see [VAE tiling](../../docs/guides/performance.md#use-vae-tiling-to-reduce-encode-and-decode-memory-usage) for migration and OOM retry behavior.
 
 `vae_tiling_params.extra_tiling_args` accepts a key=value list. Supported video VAEs accept `temporal_tile_frames` (alias `temporal_tile_size`, default `4`) and `temporal_tile_overlap` (default `1`). Wan2.2 TI2V 5B uses `temporal_decode_frames` (default `1`) to decode multiple latent frames per forward pass, trading additional memory for throughput; other model versions ignore this option.
 LTX and Wan preserve causal state between temporal tiles. Hunyuan Video and TAEHV use overlap blending. MiniMax H3 keeps its model-specific fixed temporal windows because its latent-to-frame mapping is non-linear.
@@ -1247,7 +1258,7 @@ Example:
 
 Native image/video requests and SDAPI accept `image_preprocess` as a rule string
 or array of rule strings. OpenAI-compatible requests can supply it in
-`sd_cpp_extra_args`. See [Image preprocessing](../../docs/image_preprocessing.md)
+`sd_cpp_extra_args`. See [Image preprocessing](../../docs/guides/image_preprocessing.md)
 for one-time input geometry, native-resolution decoding, mask alignment, and
 `canny=true` for edge detection on any supported image input.
 
@@ -1274,7 +1285,7 @@ and `ref_images[]`. RGB-only models drop it, so sending RGBA is safe for every m
 
 If omitted or null:
 
-- single-image fields map to an empty `sd_image_t`
+- single-image fields clear the corresponding image tensor
 - array fields map to an empty C-style array, represented as `pointer = nullptr` and `count = 0`
 
 ### Field Mapping Summary
@@ -1608,7 +1619,7 @@ Example:
 - Other video model families currently ignore `ref_images`.
 - `features_by_mode.vid_gen` does not currently advertise `ref_images`; its absence is not an indication that MiniMax-H3 reference images are unsupported.
 
-See [MiniMax-H3 reference conditioning](../../docs/minimax_h3.md#reference-to-audio-video-conditioning) for model requirements and prompt examples.
+See [MiniMax-H3 reference conditioning](../../docs/models/minimax_h3.md#reference-to-audio-video-conditioning) for model requirements and prompt examples.
 
 ### LoRA Rules
 
@@ -1637,7 +1648,7 @@ Frame ordering rules:
 
 If omitted or null:
 
-- single-image fields map to an empty `sd_image_t`
+- single-image fields clear the corresponding image tensor
 - array fields map to an empty C-style array, represented as `pointer = nullptr` and `count = 0`
 
 ### Field Mapping Summary
@@ -1698,6 +1709,13 @@ Sampling fields:
 | `sample_params.guidance.slg.scale` | `number` |
 
 High-noise sampling fields:
+
+The two video stages share the scheduler, flow shift and timestep shifting.
+`high_noise_sample_params.scheduler`, `.flow_shift` and `.shifted_timestep`
+are accepted as aliases for those shared settings in video requests. Image
+requests ignore these high-noise fields. Within one video request, a
+corresponding `sample_params` field takes precedence. Request aliases override
+inherited startup and recipe values; `null` clears the inherited shared setting.
 
 | Field | Type |
 | --- | --- |
@@ -1903,5 +1921,5 @@ result items and OpenAI image items contain the parameter snapshot with each
 image's actual seed and without `batch_count`. Native video
 results contain the video request snapshot. SD API `info.generation_info` is an array
 aligned with `info.infotexts` and `info.all_seeds`; the outer `parameters` field
-remains the request echo. See [generation metadata](../../docs/generation_metadata.md)
+remains the request echo. See [generation metadata](../../docs/guides/generation_metadata.md)
 for field semantics, postprocessing and container storage.

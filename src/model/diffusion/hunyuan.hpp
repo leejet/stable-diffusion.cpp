@@ -50,7 +50,7 @@ namespace Hunyuan {
 
             // self attn
             auto qkv     = self_attn_qkv->forward(ctx, norm1->forward(ctx, txt));
-            auto qkv_vec = ggml_ext_split_qkv(ctx, qkv);
+            auto qkv_vec = ggml_ext_chunk(ctx, qkv, 3, 0);
             auto q       = qkv_vec[0];
             auto k       = qkv_vec[1];
             auto v       = qkv_vec[2];

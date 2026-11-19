@@ -623,7 +623,7 @@ namespace WAN {
             const int64_t w = x->ne[0];
 
             auto qkv     = to_qkv->forward(ctx, x);
-            auto qkv_vec = ggml_ext_split_image_qkv(ctx, qkv);
+            auto qkv_vec = ggml_ext_chunk(ctx, qkv, 3, 2);
 
             auto q = qkv_vec[0];
             q      = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, q, 2, 0, 1, 3));  // [t, h, w, c]

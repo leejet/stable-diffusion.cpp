@@ -576,7 +576,7 @@ namespace Qwen {
                 result = run(cache);
             }
             if (result.empty() && last_compute_status() == GGML_STATUS_ALLOC_FAILED &&
-                (cache.mode != QwenImage21PrefixCache::Mode::NONE || !cache_.empty())) {
+                (cache.mode != QwenImage21PrefixCache::Mode::NONE || has_cache_tensors())) {
                 // The failed graph has ended before persistent inputs are released.
                 free_cache_ctx_and_buffer();
                 prefix_cache_disabled = true;

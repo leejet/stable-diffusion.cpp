@@ -40,7 +40,13 @@ namespace SD_CUDA_NAMESPACE {
             return __fadd_rn(__fadd_rn(__fadd_rn(a, b), c), d);
         }
 
-        template <bool swiglu, bool dequantize = false, bool normalize = false, bool scaled = false, bool warp_rotation = false, typename T = float, bool sigmoid_gate = false, bool rms_modulation = false, bool modulate = false>
+        static __device__ __forceinline__ float situ(float gate, float up) {
+            const float a = __fmul_rn(tanhf(__fmul_rn(0.25f, gate)), 4.0f);
+            const float b = __fmul_rn(tanhf(__fmul_rn(1.0f / 25.0f, up)), 25.0f);
+            return __fmul_rn(__fmul_rn(a, 1.0f / (1.0f + expf(-gate))), b);
+        }
+
+        template <bool swiglu, bool dequantize = false, bool normalize = false, bool scaled = false, bool warp_rotation = false, typename T = float, bool sigmoid_gate = false, bool rms_modulation = false, bool modulate = false, bool situ_gate = false>
         __global__ void quantize(
             const T* src,
             int8_t* dst,
@@ -119,14 +125,18 @@ namespace SD_CUDA_NAMESPACE {
                             if constexpr (dequantize) {
                                 gate_value = (float)((const int32_t*)src_row)[i] * activation_scales[row];
                                 up_value   = (float)((const int32_t*)up)[row * up_stride + i] * activation_scales[row];
-                                gate_value *= weight_scales[i];
-                                up_value *= weight_scales[k + i];
+                                gate_value *= weight_scales[(situ_gate ? k : 0) + i];
+                                up_value *= weight_scales[(situ_gate ? 0 : k) + i];
                             } else {
                                 gate_value = src_row[i];
                                 up_value   = up[row * up_stride + i];
                             }
-                            const float activated = sigmoid_gate ? 1.0f / (1.0f + expf(-gate_value)) : (gate_value / (1.0f + expf(-gate_value)));
-                            v[j]                  = (activated * up_value) * (1.0f / 16.0f);
+                            if constexpr (situ_gate) {
+                                v[j] = situ(gate_value, up_value) * (1.0f / 16.0f);
+                            } else {
+                                const float activated = sigmoid_gate ? 1.0f / (1.0f + expf(-gate_value)) : (gate_value / (1.0f + expf(-gate_value)));
+                                v[j]                  = (activated * up_value) * (1.0f / 16.0f);
+                            }
                         }
                     }
                     // One logical warp owns H256, keeping every butterfly in registers.
