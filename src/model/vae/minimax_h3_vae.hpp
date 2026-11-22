@@ -100,8 +100,15 @@ namespace MiniMaxH3VAE {
                 return value;
             };
 
-            x                = reflect_pad(x, 0, std::get<2>(temporal_padding));
-            x                = reflect_pad(x, 1, std::get<1>(temporal_padding));
+            if (std::get<1>(temporal_padding) != 0 || std::get<2>(temporal_padding) != 0) {
+                const int64_t frames   = x->ne[2];
+                const int64_t channels = x->ne[3];
+                // Keep spatial padding in one outer slice to avoid per-channel CUDA launches.
+                x = ggml_reshape_3d(ctx->ggml_ctx, ggml_ext_cont(ctx, x), x->ne[0], x->ne[1], frames * channels);
+                x = reflect_pad(x, 0, std::get<2>(temporal_padding));
+                x = reflect_pad(x, 1, std::get<1>(temporal_padding));
+                x = ggml_reshape_4d(ctx->ggml_ctx, x, x->ne[0], x->ne[1], frames, channels);
+            }
             int temporal_pad = std::get<0>(temporal_padding) * 2;
             if (temporal_pad > 0) {
                 x = ggml_ext_pad_ext(ctx,
@@ -167,10 +174,14 @@ namespace MiniMaxH3VAE {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             if (spatial_stride == 2) {
                 GGML_ASSERT(x->ne[0] > 1 && x->ne[1] > 1);
-                auto right  = ggml_ext_slice(ctx, x, 0, x->ne[0] - 2, x->ne[0] - 1);
-                x           = ggml_concat(ctx->ggml_ctx, x, right, 0);
-                auto bottom = ggml_ext_slice(ctx, x, 1, x->ne[1] - 2, x->ne[1] - 1);
-                x           = ggml_concat(ctx->ggml_ctx, x, bottom, 1);
+                const int64_t frames   = x->ne[2];
+                const int64_t channels = x->ne[3];
+                x                      = ggml_reshape_3d(ctx->ggml_ctx, ggml_ext_cont(ctx, x), x->ne[0], x->ne[1], frames * channels);
+                auto right             = ggml_ext_slice(ctx, x, 0, x->ne[0] - 2, x->ne[0] - 1);
+                x                      = ggml_concat(ctx->ggml_ctx, x, right, 0);
+                auto bottom            = ggml_ext_slice(ctx, x, 1, x->ne[1] - 2, x->ne[1] - 1);
+                x                      = ggml_concat(ctx->ggml_ctx, x, bottom, 1);
+                x                      = ggml_reshape_4d(ctx->ggml_ctx, x, x->ne[0], x->ne[1], frames, channels);
             }
             return std::dynamic_pointer_cast<CausalConv3d>(blocks["conv"])->forward(ctx, x);
         }
