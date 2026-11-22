@@ -1,0 +1,42 @@
+# version: 0.0.0
+# docs/models/flux.md — Flux-dev q8_0 with LoRA
+
+var {
+    model_path = "../models/diffusion_models/flux1-dev-q8_0.gguf"
+    clip_l_path = "../models/text_encoders/clip_l.safetensors"
+    t5_path = "../models/text_encoders/t5xxl_fp16.safetensors"
+    vae_path = "../models/vae/ae.sft"
+    lora_0_path = "../models/loras/realism_lora_comfy_converted.safetensors"
+
+    output_path = "output.png"
+
+    prompt = "a lovely cat holding a sign says 'flux.cpp'"
+
+    seed = 42
+    rng_type = "cuda"
+    width = 512
+    height = 512
+
+    steps = 20
+    method = "euler"
+    scheduler = "flux"
+}
+
+fn main() {
+    base_model = load_dit(model_path, family = "flux")
+    text = load_text_encoder(clip_l_path, backend = "cpu", clip_l_path = clip_l_path, family = "flux", t5_path = t5_path)
+    vae = load_vae(vae_path, family = "flux")
+
+    lora_0 = load_lora(lora_0_path)
+    model = apply_lora(base_model, lora_0)
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    condition = encode_prompt(text, prompt, width = width, height = height)
+    predict = predictor(model, condition)
+    sigmas = make_sigmas(predict, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(predict, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = predict, method = method, rng = rng)
+    image = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

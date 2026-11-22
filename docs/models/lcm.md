@@ -12,8 +12,6 @@ The example below applies an LCM-LoRA to SD 1.5.
 
 ## Usage
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
-
 ### Web UI
 
 Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
@@ -33,7 +31,37 @@ Select optional components when required by your checkpoint or task.
 Select the matching LCM checkpoint or apply a compatible LCM-LoRA, then set the
 sampling method, CFG, and steps for that model.
 
-### CLI
+### DGL
+
+| Example | Description |
+| --- | --- |
+| [LCM-LoRA with SD 1.5](../dgl/lcm/lcm-lora-sd1-5.dgl) | Apply the acceleration LoRA before sampling. |
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\lcm\lcm-lora-sd1-5.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/lcm/lcm-lora-sd1-5.dgl
+```
+
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+### Legacy CLI
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 #### LCM-LoRA with SD 1.5
 

@@ -129,6 +129,35 @@ To apply a LoRA, open **LoRA**, select a compatible file, and set its
 requests use this selector; prompt tags such as `<lora:name:1>` are CLI syntax
 and are not parsed by the native server API.
 
+### DGL editor
+
+Open the Web UI using the local server address and select **DGL** in the header.
+Select a saved script or choose **New**. **Duplicate** saves a copy of the
+current editor text under a new name. Edit **File name** before saving to save
+under a different name. **Run** submits the editor text to the generation queue,
+so you can run unsaved edits. The results panel shows text, scalar and tensor
+information and returned encoded media. PNG appears as an image, WebM as a
+video player, and AVI as a download. WebM encoding is silent; use AVI for
+a PCM16 soundtrack.
+
+Use `image::encode` or `video::encode` and return their `{data, mime_type}`
+dicts, either directly or as named fields of the root dict. To save the same
+encoded output, call `media::save("output/cover.png", cover)` before returning
+it. Saving is optional. The job result contains the same encoded bytes, and
+polling does not encode them again. Tensor frames can be inspected separately
+with **Inspect tensor frames**; they are not fetched automatically.
+
+DGL jobs share an execution context for the lifetime of the server. Compatible
+scripts can reuse loaded model components across runs. The context can release
+idle weights under memory pressure.
+
+Scripts are listed and saved in the server's working directory under
+`dgl/` by default. Use `--dgl-dir` to select another directory. Script paths
+are relative to the server's working directory. Model files and their
+dependencies must reside under one of the configured `--model-dir` roots.
+Write results under `output/` in the working directory. For example,
+`image::save("output/result.png", image)` saves a PNG.
+
 ## Model management
 
 ### Model directories
@@ -251,6 +280,10 @@ Image 2.1 uses the same recipe for its full VAE and TAEQI2.1 alternatives.
 ### Models loaded at startup
 
 You can pass the same model-loading arguments used by `sd-cli` to `sd-server`.
+Explicit model paths can be outside `--model-dir`. A startup model directory
+includes the dependencies inside that directory. A startup shard index also
+permits the shards it names within the index directory. Native generation accepts
+LoRAs from `--lora-model-dir` and upscalers from `--hires-upscalers-dir`.
 For example, run this Z-Image Turbo configuration from the build directory:
 
 **Windows (PowerShell)**
@@ -292,27 +325,11 @@ removed when the command-line context is unloaded or replaced.
 
 #### Identity inputs
 
-The browser currently has no PhotoMaker identity-image or PuLID identity-embedding
-upload control. Prepare the inputs using the
+PhotoMaker and PuLID use the **DGL editor**. Prepare the inputs using the
 [PhotoMaker](../../docs/models/photo_maker.md) or [PuLID](../../docs/models/pulid.md)
-guide, then supply them when starting the server. From the build directory, for example:
-
-**Windows (PowerShell)**
-
-```powershell
-.\bin\Release\sd-server.exe --model-dir ..\models --pm-id-images-dir ..\inputs\identity
-```
-
-**Linux/macOS**
-
-```sh
-./bin/sd-server --model-dir ../models --pm-id-images-dir ../inputs/identity
-```
-
-Select the PhotoMaker recipe and weights in the browser. For PhotoMaker v2, also
-pass `--pm-id-embed-path` with the prepared embedding file. For PuLID, use
-`--pulid-id-embedding` instead of the PhotoMaker input argument, then select the
-PuLID recipe and weights. These startup inputs are inherited by generation requests.
+guide, then set model and identity-input paths in the corresponding script.
+The former identity-input startup arguments have been removed. Scripts read
+their own inputs under the server's file-access rules.
 
 #### Sharded checkpoints
 
@@ -425,6 +442,7 @@ configured defaults.
 | --- | --- | --- |
 | `--listen-ip <ip>` | `127.0.0.1` | Server listen address |
 | `--listen-port <port>` | `1234` | Server listen port |
+| `--dgl-dir <path>` | `dgl` | Script directory for the local DGL editor |
 | `--max-pending-jobs <count>` | `64` | Maximum async jobs queued or generating |
 | `--completed-ttl-seconds <seconds>` | `600` | Retention time for completed async jobs |
 

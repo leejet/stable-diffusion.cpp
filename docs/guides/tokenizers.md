@@ -1,5 +1,9 @@
 # JSON tokenizers
 
+DGL versions of the generation examples are linked below. Edit each script's
+`var` block and follow the [DGL run instructions](../dgl/README.md).
+
+
 Use a Hugging Face `tokenizer.json` to supply the tokenizer vocabulary, merges,
 added tokens, and processing stages. **PiD (including PiD 1.5) and Lens (including
 Lens Turbo) require an external JSON**; their Gemma 2 and GPT-OSS tokenizers are
@@ -10,6 +14,7 @@ models keep their embedded tokenizer when this option is omitted.
 sd-cli --diffusion-model model.gguf --llm text_encoder.gguf \
   --tokenizer tokenizer_gemma2.json --vae vae.safetensors -p "a cat"
 ```
+
 
 Choose the JSON belonging to the text encoder checkpoint. Checking that IDs fit
 the embedding table does not establish that two vocabularies have the same
@@ -51,6 +56,7 @@ sd-cli --diffusion-model sd3.gguf --clip_l clip_l.safetensors \
   --tokenizer clip-l=tokenizer_clip.json,clip-g=tokenizer_clip.json \
   -p "a cat"
 ```
+
 
 The C API accepts the same string through the `tokenizer` context-option key. An unset or
 empty value keeps an embedded tokenizer where available; PiD and Lens require

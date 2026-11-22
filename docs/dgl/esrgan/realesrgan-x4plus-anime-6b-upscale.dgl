@@ -1,0 +1,17 @@
+# version: 0.0.0
+# docs/models/esrgan.md — standalone image upscaling
+
+var {
+    upscaler_path = "../models/upscale_models/RealESRGAN_x4plus_anime_6B.pth"
+
+    input_path = "input.png"
+    output_path = "upscaled.png"
+}
+
+fn main() {
+    upscaler = load_upscaler(upscaler_path)
+    image = image::load(input_path)
+    output = upscale(upscaler, image)
+    image::save(output_path, output)
+    return output
+}

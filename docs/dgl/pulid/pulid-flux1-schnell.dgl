@@ -1,0 +1,41 @@
+# version: 0.0.0
+# docs/models/pulid.md — CLI
+
+var {
+    dit_path = "../models/diffusion_models/flux1-schnell-Q4_K_S.gguf"
+    pulid_path = "../models/pulid/pulid_flux_v0.9.1.safetensors"
+    encoder_path = "../models/text_encoders/t5xxl_fp16.safetensors"
+    clip_l_path = "../models/text_encoders/clip_l.safetensors"
+    vae_path = "../models/vae/ae.safetensors"
+
+    identity_path = "../inputs/source.pulidembd"
+    output_path = "out.png"
+
+    prompt = "candid photograph of a young woman on a beach at sunset"
+
+    seed = 42
+    width = 512
+    height = 512
+
+    steps = 4
+    method = "euler"
+    scheduler = "flux"
+}
+
+fn main() {
+    dit = load_dit(dit_path)
+    pulid = pulid::load(pulid_path)
+    text = load_text_encoder(encoder_path, family = "flux", clip_l_path = clip_l_path, backend = "cpu")
+    vae = load_vae(vae_path, family = "flux")
+    identity = pulid::load_embedding(identity_path)
+    condition = pulid::apply(encode_prompt(text, prompt), pulid, identity, strength = 1.0)
+    predict = predictor(dit, condition)
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    sigmas = make_sigmas(predict, latent = base, scheduler = scheduler, steps = steps)
+    rng = make_rng("cuda", seed = seed)
+    start = add_noise(predict, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = predict, method = method, rng = rng)
+    image = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return { image = image, latent = latent }
+}

@@ -18,12 +18,13 @@
 
 extern sd_log_level_t log_level;
 extern bool log_color;
+extern FILE* log_stream;
 
 std::string sd_basename(const std::string& path);
 void print_utf8(FILE* stream, const char* utf8);
 const char* log_level_name(sd_log_level_t level);
 bool parse_log_level(const std::string& name, sd_log_level_t& level);
-void log_print(sd_log_level_t level, const char* log, sd_log_level_t min_level, bool color);
+void log_print(sd_log_level_t level, const char* log, sd_log_level_t min_level, bool color, FILE* stream = nullptr);
 void example_log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...);
 
 #define LOG_DEBUG(format, ...) example_log_printf(SD_LOG_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)

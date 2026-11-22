@@ -2,6 +2,7 @@
 #define __SD_MODEL_UPSCALER_FLASH_VSR_HPP__
 
 #include "model/common/vsr.hpp"
+#include "model/vae/vae.hpp"
 
 namespace RelayVSR {
 
@@ -194,7 +195,7 @@ namespace RelayVSR {
         }
     };
 
-    struct FlashVSRRunner : GGMLRunner {
+    struct FlashVSRRunner : FakeVAE {
         FlashVSRConfig config;
         FlashVSRConditionNet model;
         VSR::GraphInputs inputs;
@@ -202,11 +203,14 @@ namespace RelayVSR {
         bool history = false;
 
         FlashVSRRunner(ggml_backend_t backend, const String2TensorStorage& weights, int scale, std::shared_ptr<DeviceResidencyManager> manager)
-            : GGMLRunner(backend, manager), config(FlashVSRConfig::detect_from_weights(weights, "flash", scale)), model(config) {
+            : FakeVAE(VERSION_RELAY_VSR, backend, manager), config(FlashVSRConfig::detect_from_weights(weights, "flash", scale)), model(config) {
             model.init(params_ctx, weights, "flash");
         }
         std::string get_desc() override { return "RelayVSR Flash"; }
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) { model.get_param_tensors(tensors, "flash"); }
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override { model.get_param_tensors(tensors, "flash"); }
+        sd::Tensor<float> _compute(int, const sd::Tensor<float>&, bool) override {
+            throw std::runtime_error("RelayVSR Flash requires relayvsr::decode with the low-quality frames");
+        }
         void reset() {
             runner_end();
             free_cache_ctx_and_buffer();

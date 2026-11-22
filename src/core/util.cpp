@@ -624,7 +624,36 @@ void pretty_progress(int step, int steps, float time) {
     print_progress_line(step, steps, sd_format("%.2f%s", speed, unit), '=', true, remainder_text);
 }
 
+static thread_local void (*byte_progress_callback)(int, int, void*) = nullptr;
+static thread_local void* byte_progress_data                        = nullptr;
+static thread_local bool byte_progress_console                      = false;
+
+sd::ByteProgressConsoleScope::ByteProgressConsoleScope(bool enabled)
+    : previous_(byte_progress_console) {
+    byte_progress_console = enabled;
+}
+
+sd::ByteProgressConsoleScope::~ByteProgressConsoleScope() {
+    byte_progress_console = previous_;
+}
+
+sd::ByteProgressScope::ByteProgressScope(Callback callback, void* data)
+    : previous_callback_(byte_progress_callback), previous_data_(byte_progress_data) {
+    byte_progress_callback = callback;
+    byte_progress_data     = data;
+}
+
+sd::ByteProgressScope::~ByteProgressScope() {
+    byte_progress_callback = previous_callback_;
+    byte_progress_data     = previous_data_;
+}
+
 void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds) {
+    if (byte_progress_callback) {
+        byte_progress_callback(step, steps, byte_progress_data);
+        if (!byte_progress_console)
+            return;
+    }
     if (sd_progress_cb) {
         float time = elapsed_seconds / (step + 1e-6f);
         sd_progress_cb(step, steps, time, sd_progress_cb_data);

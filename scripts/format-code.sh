@@ -16,7 +16,11 @@ for f in src/*.cpp src/*.h src/*.hpp \
          src/core/probe/*.cpp src/core/probe/*.h \
          src/core/vulkan/*.cpp src/core/vulkan/*.h src/core/vulkan/shaders/*.comp \
          src/extensions/*.cpp src/extensions/*.h src/extensions/*.hpp \
-         src/pipeline/*.cpp src/pipeline/*.h \
+         src/dgl/*.cpp src/dgl/*.h \
+         src/dgl/syntax/*.cpp src/dgl/syntax/*.h \
+         src/dgl/bindings/*.cpp src/dgl/bindings/*.h \
+         src/dgl/models/*.cpp src/dgl/models/*.h \
+         src/dgl/ops/*.cpp src/dgl/ops/*.h \
          src/runtime/*.cpp src/runtime/*.h src/runtime/*.hpp \
          src/model/*/*.cpp src/model/*/*.h src/model/*/*.hpp \
          src/tokenizers/*.h src/tokenizers/*.cpp \

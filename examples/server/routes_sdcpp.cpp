@@ -119,9 +119,6 @@ static json make_img_gen_defaults_json(const SDGenerationParams& defaults, const
         {"seed", defaults.seed},
         {"batch_count", defaults.batch_count},
         {"qwen_image_layers", defaults.qwen_image_layers},
-        {"ref_image_args", defaults.ref_image_args},
-        {"image_preprocess", defaults.image_preprocess},
-        {"increase_ref_index", defaults.increase_ref_index},
         {"control_strength", defaults.control_strength},
         {"control_type", defaults.control_type},
         {"ip_adapter_strength", defaults.ip_adapter_strength},
@@ -147,8 +144,6 @@ static json make_vid_gen_defaults_json(const SDGenerationParams& defaults, const
         {"strength", defaults.strength},
         {"seed", defaults.seed},
         {"video_frames", defaults.video_frames},
-        {"image_preprocess", defaults.image_preprocess},
-        {"ref_image_args", defaults.ref_image_args},
         {"fps", defaults.fps},
         {"moe_boundary", defaults.moe_boundary},
         {"vace_strength", defaults.vace_strength},
@@ -170,7 +165,7 @@ static json make_img_gen_features_json() {
         {"init_image", true},
         {"mask_image", true},
         {"control_image", true},
-        {"ip_adapter_image", true},
+        {"ip_adapter_image", false},
         {"ref_images", true},
         {"lora", true},
         {"vae_tiling", true},
@@ -191,7 +186,7 @@ static json make_vid_gen_features_json() {
         {"ref_videos", true},
         {"ref_audios", true},
         {"ref_video_audios", true},
-        {"high_noise_sample_params", true},
+        {"high_noise_sample_params", false},
         {"lora", true},
         {"vae_tiling", true},
         {"cache", true},
@@ -332,9 +327,7 @@ static json make_capabilities_json(ServerRuntime& runtime) {
                            std::string(key) == "ref_video_audios")))
                 features[key] = generation_features.at(key);
         }
-        if (video)
-            features["high_noise_sample_params"] = generation_features.at("high_noise");
-        else {
+        if (!video) {
             features["mask_image"]       = generation_features.at("mask_image").get<bool>() && generation_features.at("img2img").get<bool>();
             features["control_image"]    = generation_features.at("controlnet").get<bool>() || generation_features.at("control_image").get<bool>();
             features["ip_adapter_image"] = generation_features.at("ip_adapter");
@@ -607,21 +600,16 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             SDImageOwner current(input.release());
             std::string generation_info;
-            for (int i = 0; i < repeats; ++i) {
-                sd_result_t* generated = nullptr;
-                if (!upscale_sd_image(upscaler_ctx.get(), current.get(), &generated) ||
-                    !generated || sd_result_get_image_count(generated) <= 0 || sd_tensor_data(sd_result_get_image(generated, 0)) == nullptr) {
-                    sd_result_free(generated);
-                    res.status = 500;
-                    res.set_content(R"({"error":"upscale failed"})", "application/json");
-                    return;
-                }
-                generation_info  = merge_generation_info(generation_info, sd_result_get_generation_info(generated, 0));
-                SDImage produced = take_result_image(generated, 0);
-
+            sd_result_t* generated = nullptr;
+            if (!upscale_sd_image(upscaler_ctx.get(), current.get(), &generated, repeats) || !generated) {
                 sd_result_free(generated);
-                current.reset(produced);
+                res.status = 500;
+                res.set_content(R"({"error":"upscale failed"})", "application/json");
+                return;
             }
+            generation_info = sd_result_get_generation_info(generated, 0);
+            current.reset(take_result_image(generated, 0));
+            sd_result_free(generated);
 
             const std::string& format = output_options.output_format;
             const int compression     = output_options.output_compression;
@@ -642,7 +630,7 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             }
 
             json out;
-            out["generation_info"] = json::parse(generation_info);
+            out["generation_info"] = generation_info;
             out["upscaler"]        = used_name;
             out["scale"]           = factor;
             out["repeats"]         = repeats;
@@ -794,6 +782,11 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
         std::string job_id = req.matches[1];
         auto it            = manager.jobs.find(job_id);
+        if (it != manager.jobs.end() && it->second->kind == AsyncJobKind::Dgl) {
+            res.status = 404;
+            res.set_content(R"({"error":"job not found"})", "application/json");
+            return;
+        }
         if (it == manager.jobs.end()) {
             if (manager.expired_jobs.find(job_id) != manager.expired_jobs.end()) {
                 res.status = 410;
@@ -828,6 +821,11 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         }
 
         auto& job = *it->second;
+        if (job.kind == AsyncJobKind::Dgl) {
+            res.status = 404;
+            res.set_content(R"({"error":"job not found"})", "application/json");
+            return;
+        }
         if (job.status == AsyncJobStatus::Queued) {
             if (!cancel_queued_job(manager, job)) {
                 res.status = 409;

@@ -1,25 +1,29 @@
 #include "model/diffusion/z_image.hpp"
 #include "conditioning/conditioner.hpp"
+#include "model_build_context.h"
 #include "model_definition.h"
-#include "pipeline/model_builders.h"
 
 static bool build_z_image(const sd::model_builders::Context& ctx, const TokenizerConfig& tokenizers, sd::model_builders::CoreRunners& result) {
     const auto* sd_ctx_params      = &ctx.params;
     const auto& tensor_storage_map = ctx.tensor_storage_map;
     const auto version             = ctx.version;
     const auto& weight_manager     = ctx.weight_manager;
-    result.conditioner             = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
-                                                                   tensor_storage_map,
-                                                                   version,
-                                                                   "",
-                                                                   false,
-                                                                   weight_manager,
-                                                                   tokenizers);
-    result.diffusion               = std::make_shared<ZImage::ZImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
-                                                                            tensor_storage_map,
-                                                                            "model.diffusion_model",
-                                                                            version,
-                                                                            weight_manager);
+    if (ctx.build_conditioner) {
+        result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
+                                                           tensor_storage_map,
+                                                           version,
+                                                           "",
+                                                           false,
+                                                           weight_manager,
+                                                           tokenizers);
+    }
+    if (ctx.build_diffusion) {
+        result.diffusion = std::make_shared<ZImage::ZImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                  tensor_storage_map,
+                                                                  "model.diffusion_model",
+                                                                  version,
+                                                                  weight_manager);
+    }
     return true;
 }
 
@@ -31,6 +35,7 @@ const std::vector<ModelDefinition>& z_image_definitions() {
             definition.version                        = VERSION_Z_IMAGE;
             definition.geometry                       = {1, 16, 3};
             definition.name                           = "Z-Image";
+            definition.id                             = "z_image";
             definition.traits.is_dit                  = true;
             definition.traits.vae_kind                = ModelVAEKind::FLUX;
             definition.sampling                       = {FLOW_PRED, 3.f};

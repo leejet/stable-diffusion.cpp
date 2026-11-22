@@ -1,0 +1,65 @@
+# version: 0.0.0
+# docs/models/minimax_h3.md — Text-to-audio-video
+
+var {
+    model_path = "../models/diffusion_models/minimax_h3_fl2va-Q4_K_M.gguf"
+    text_path = "../models/text_encoders/qwen3vl_32b_minimax_h3-Q4_K_M.gguf"
+    vae_path = "../models/vae/minimax_h3_video_vae_fp16.safetensors"
+    audio_vae_path = "../models/vae/minimax_h3_audio_vae_fp32.safetensors"
+
+    output_path = "output.avi"
+
+    prompt = "A cute American Shorthair silver tabby kitten surfs on a tropical ocean wave, riding a white surfboard with the clear text 'sd.cpp' on it. Cinematic tracking shot, realistic water, bright sunlight, smooth motion, and consistent character appearance. Add upbeat tropical surf-rock background music with cheerful drums and guitar, synchronized with the kitten鈥檚 energetic surfing."
+
+    seed = 42
+    rng_type = "cpu"
+    width = 864
+    height = 480
+    frames = 56
+    fps = 24
+
+    steps = 20
+    method = "euler"
+    scheduler = "discrete"
+    audio_scale = 4
+}
+
+fn pack_av(video, audio, audio_scale) {
+    shape = tensor::shape(video)
+    count = tensor::numel(audio)
+    tail_channels = math::ceil_div(count, shape[0] * shape[1] * shape[2])
+    tail_shape = [shape[0], shape[1], shape[2], tail_channels, 1]
+    flat = tensor::reshape(tensor::mul(audio, audio_scale), [count])
+    padded = tensor::pad(flat, [0, math::product(tail_shape) - count])
+    return tensor::concat([video, tensor::reshape(padded, tail_shape)], axis = 3)
+}
+
+fn unpack_audio(packed, channels, audio_shape, audio_scale) {
+    tail = packed[:, :, :, channels:]
+    flat = tensor::reshape(tail, [tensor::numel(tail)])
+    return tensor::div(tensor::reshape(flat[:math::product(audio_shape)], audio_shape), audio_scale)
+}
+
+fn main() {
+    model = load_dit(model_path, family = "minimax_h3", params_backend = "cpu")
+    text = load_text_encoder(text_path, family = "minimax_h3", params_backend = "cpu")
+    vae = load_vae(vae_path, family = "minimax_h3", params_backend = "cpu")
+
+    video_base = tensor::zeros(latent_shape(vae, width = width, height = height, frames = frames))
+    audio_vae = load_audio_vae(audio_vae_path, family = "minimax_h3", params_backend = "cpu")
+    audio_shape = audio_latent_shape(audio_vae, frames = frames, fps = fps)
+    base = pack_av(video_base, tensor::zeros(audio_shape), audio_scale = audio_scale)
+
+    condition = encode_prompt(text, prompt, width = width, height = height)
+    predict = predictor(model, condition, audio_length = audio_shape[0])
+    sigmas = make_sigmas(predict, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(predict, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = predict, method = method, rng = rng)
+    video_latent = latent[:, :, :tensor::shape(video_base)[2], :tensor::shape(video_base)[3]]
+    output_frames = vae_decode(vae, dit_to_vae_latents(vae, video_latent))
+    sound_latent = unpack_audio(latent, channels = tensor::shape(video_base)[3], audio_shape = audio_shape, audio_scale = audio_scale)
+    audio = audio_vae_decode(audio_vae, sound_latent)
+    video::save(output_path, {frames = output_frames, fps_num = fps, fps_den = 1}, audio = audio)
+    return {video = {frames = output_frames, fps_num = fps, fps_den = 1}, latent = latent, audio = audio}
+}

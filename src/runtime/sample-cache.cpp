@@ -15,15 +15,15 @@ namespace sd_sample {
         return std::max(0.0f, reuse_threshold);
     }
 
-    bool SampleCacheRuntime::easycache_enabled() const {
+    bool ConditionCacheRuntime::easycache_enabled() const {
         return mode == SampleCacheMode::EASYCACHE;
     }
 
-    bool SampleCacheRuntime::ucache_enabled() const {
+    bool ConditionCacheRuntime::ucache_enabled() const {
         return mode == SampleCacheMode::UCACHE;
     }
 
-    bool SampleCacheRuntime::cachedit_enabled() const {
+    bool ConditionCacheRuntime::cachedit_enabled() const {
         return mode == SampleCacheMode::CACHEDIT;
     }
 
@@ -39,7 +39,7 @@ namespace sd_sample {
                cache_params.start_percent < cache_params.end_percent;
     }
 
-    static void init_easycache_runtime(SampleCacheRuntime& runtime,
+    static void init_easycache_runtime(ConditionCacheRuntime& runtime,
                                        SDVersion version,
                                        const sd::CacheConfig& cache_params,
                                        Denoiser* denoiser) {
@@ -67,7 +67,7 @@ namespace sd_sample {
                  config.end_percent);
     }
 
-    static void init_ucache_runtime(SampleCacheRuntime& runtime,
+    static void init_ucache_runtime(ConditionCacheRuntime& runtime,
                                     SDVersion version,
                                     const sd::CacheConfig& cache_params,
                                     Denoiser* denoiser,
@@ -103,7 +103,7 @@ namespace sd_sample {
                  config.reset_error_on_compute ? "true" : "false");
     }
 
-    static void init_cachedit_runtime(SampleCacheRuntime& runtime,
+    static void init_cachedit_runtime(ConditionCacheRuntime& runtime,
                                       SDVersion version,
                                       const sd::CacheConfig& cache_params,
                                       const std::vector<float>& sigmas) {
@@ -114,8 +114,6 @@ namespace sd_sample {
 
         DBCacheConfig dbcfg;
         dbcfg.enabled                     = (cache_params.mode == SD_CACHE_DBCACHE || cache_params.mode == SD_CACHE_CACHE_DIT);
-        dbcfg.Fn_compute_blocks           = cache_params.Fn_compute_blocks;
-        dbcfg.Bn_compute_blocks           = cache_params.Bn_compute_blocks;
         dbcfg.residual_diff_threshold     = cache_params.residual_diff_threshold;
         dbcfg.max_warmup_steps            = cache_params.max_warmup_steps;
         dbcfg.max_cached_steps            = cache_params.max_cached_steps;
@@ -123,7 +121,6 @@ namespace sd_sample {
         if (cache_params.scm_mask != nullptr && strlen(cache_params.scm_mask) > 0) {
             dbcfg.steps_computation_mask = parse_scm_mask(cache_params.scm_mask);
         }
-        dbcfg.scm_policy_dynamic = cache_params.scm_policy_dynamic;
 
         TaylorSeerConfig tcfg;
         tcfg.enabled             = (cache_params.mode == SD_CACHE_TAYLORSEER || cache_params.mode == SD_CACHE_CACHE_DIT);
@@ -138,10 +135,8 @@ namespace sd_sample {
 
         runtime.cachedit.set_sigmas(sigmas);
         runtime.mode = SampleCacheMode::CACHEDIT;
-        LOG_INFO("CacheDIT enabled - mode: %s, Fn: %d, Bn: %d, threshold: %.3f, warmup: %d",
+        LOG_INFO("Condition cache enabled - mode: %s, threshold: %.3f, warmup: %d",
                  cache_params.mode == SD_CACHE_CACHE_DIT ? "DBCache+TaylorSeer" : (cache_params.mode == SD_CACHE_DBCACHE ? "DBCache" : "TaylorSeer"),
-                 dbcfg.Fn_compute_blocks,
-                 dbcfg.Bn_compute_blocks,
                  dbcfg.residual_diff_threshold,
                  dbcfg.max_warmup_steps);
     }
@@ -155,15 +150,7 @@ namespace sd_sample {
             return;
         }
 
-        SpectrumConfig config;
-        config.w            = cache_params.spectrum_w;
-        config.m            = cache_params.spectrum_m;
-        config.lam          = cache_params.spectrum_lam;
-        config.window_size  = cache_params.spectrum_window_size;
-        config.flex_window  = cache_params.spectrum_flex_window;
-        config.warmup_steps = cache_params.spectrum_warmup_steps;
-        config.stop_percent = cache_params.spectrum_stop_percent;
-
+        auto config        = spectrum_config(cache_params);
         size_t total_steps = sigmas.size() > 0 ? sigmas.size() - 1 : 0;
         runtime.spectrum.init(config, total_steps);
         runtime.spectrum_enabled = true;
@@ -174,11 +161,24 @@ namespace sd_sample {
                  config.warmup_steps, config.stop_percent * 100.0f);
     }
 
-    SampleCacheRuntime init_sample_cache_runtime(SDVersion version,
-                                                 const sd::CacheConfig* cache_params,
-                                                 Denoiser* denoiser,
-                                                 const std::vector<float>& sigmas) {
-        SampleCacheRuntime runtime;
+    SpectrumConfig spectrum_config(const sd::CacheConfig& cache_params) {
+        SpectrumConfig config;
+        config.w            = cache_params.spectrum_w;
+        config.m            = cache_params.spectrum_m;
+        config.lam          = cache_params.spectrum_lam;
+        config.window_size  = cache_params.spectrum_window_size;
+        config.flex_window  = cache_params.spectrum_flex_window;
+        config.warmup_steps = cache_params.spectrum_warmup_steps;
+        config.stop_percent = cache_params.spectrum_stop_percent;
+
+        return config;
+    }
+
+    ConditionCacheRuntime init_condition_cache_runtime(SDVersion version,
+                                                       const sd::CacheConfig* cache_params,
+                                                       Denoiser* denoiser,
+                                                       const std::vector<float>& sigmas) {
+        ConditionCacheRuntime runtime;
         if (cache_params == nullptr || cache_params->mode == SD_CACHE_DISABLED) {
             return runtime;
         }
@@ -202,9 +202,6 @@ namespace sd_sample {
             case SD_CACHE_CACHE_DIT:
                 init_cachedit_runtime(runtime, version, *cache_params, sigmas);
                 break;
-            case SD_CACHE_SPECTRUM:
-                init_spectrum_runtime(runtime, version, *cache_params, sigmas);
-                break;
             default:
                 break;
         }
@@ -212,7 +209,15 @@ namespace sd_sample {
         return runtime;
     }
 
-    SampleStepCacheDispatcher::SampleStepCacheDispatcher(SampleCacheRuntime& runtime, int step, float sigma)
+    SampleCacheRuntime init_sample_cache_runtime(SDVersion version, const sd::CacheConfig* params, Denoiser* denoiser, const std::vector<float>& sigmas) {
+        SampleCacheRuntime runtime;
+        static_cast<ConditionCacheRuntime&>(runtime) = init_condition_cache_runtime(version, params, denoiser, sigmas);
+        if (params && params->mode == SD_CACHE_SPECTRUM)
+            init_spectrum_runtime(runtime, version, *params, sigmas);
+        return runtime;
+    }
+
+    SampleStepCacheDispatcher::SampleStepCacheDispatcher(ConditionCacheRuntime& runtime, int step, float sigma)
         : runtime(runtime), step(step), sigma(sigma), step_index(step > 0 ? (step - 1) : -1) {
         if (step_index < 0) {
             return;
@@ -277,19 +282,45 @@ namespace sd_sample {
     }
 
     void SampleStepCacheDispatcher::invalidate_condition(const void* condition) {
-        if (condition == nullptr) {
-            return;
-        }
+        runtime.invalidate_condition(condition);
+    }
 
-        switch (runtime.mode) {
+    void ConditionCacheRuntime::invalidate_condition(const void* condition) {
+        if (!condition)
+            return;
+        switch (mode) {
             case SampleCacheMode::EASYCACHE:
-                runtime.easycache.cache_diffs.erase(condition);
+                easycache.invalidate_condition(condition);
                 break;
             case SampleCacheMode::UCACHE:
-                runtime.ucache.cache_diffs.erase(condition);
+                ucache.invalidate_condition(condition);
                 break;
             case SampleCacheMode::CACHEDIT:
-                runtime.cachedit.cache_diffs.erase(condition);
+                cachedit.invalidate_condition(condition);
+                break;
+            case SampleCacheMode::NONE:
+                break;
+        }
+    }
+
+    void ConditionCacheRuntime::retain_conditions(const std::vector<const void*>& conditions) {
+        const auto retain = [&](auto& state) {
+            std::vector<const void*> retired;
+            for (const auto& [condition, entry] : state.cache_diffs)
+                if (std::find(conditions.begin(), conditions.end(), condition) == conditions.end())
+                    retired.push_back(condition);
+            for (auto* condition : retired)
+                state.invalidate_condition(condition);
+        };
+        switch (mode) {
+            case SampleCacheMode::EASYCACHE:
+                retain(easycache);
+                break;
+            case SampleCacheMode::UCACHE:
+                retain(ucache);
+                break;
+            case SampleCacheMode::CACHEDIT:
+                retain(cachedit);
                 break;
             case SampleCacheMode::NONE:
                 break;
@@ -311,7 +342,7 @@ namespace sd_sample {
         return false;
     }
 
-    void log_sample_cache_summary(const SampleCacheRuntime& runtime, size_t total_steps) {
+    void log_condition_cache_summary(const ConditionCacheRuntime& runtime, size_t total_steps) {
         if (runtime.easycache_enabled()) {
             if (runtime.easycache.total_steps_skipped > 0 && total_steps > 0) {
                 if (runtime.easycache.total_steps_skipped < static_cast<int>(total_steps)) {
@@ -368,7 +399,10 @@ namespace sd_sample {
                 LOG_INFO("CacheDIT completed without skipping steps");
             }
         }
+    }
 
+    void log_sample_cache_summary(const SampleCacheRuntime& runtime, size_t total_steps) {
+        log_condition_cache_summary(runtime, total_steps);
         if (runtime.spectrum_enabled && runtime.spectrum.total_steps_skipped > 0 && total_steps > 0) {
             double speedup = static_cast<double>(total_steps) /
                              static_cast<double>(total_steps - runtime.spectrum.total_steps_skipped);

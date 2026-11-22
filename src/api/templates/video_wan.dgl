@@ -1,0 +1,206 @@
+# version: 0.0.0
+
+var {
+{{variables}}
+}
+
+{% include "video_helpers" %}
+
+fn main({{inputs}}) {
+    base_model = load_dit(model_path{{model_options}})
+    base_text = load_text_encoder(text_path{{text_options}})
+    vae = {{vae_loader}}(vae_path{{vae_options}})
+{{loras}}
+    model = {{patched_model}}
+    text = {{patched_text}}
+    encode_rng = make_rng(rng_type, seed = seed)
+    video_base = tensor::zeros(latent_shape(vae, width = width, height = height, frames = frames))
+{% if flags.first %}
+    first_frame_pixels = tensor::unsqueeze(image::to_f32(fit_canvas(first_frame, width, height, mode = "nearest"), channels = 3), axis = 2)
+{% endif %}
+{% if flags.last %}
+    last_frame_pixels = tensor::unsqueeze(image::to_f32(fit_canvas(last_frame, width, height, mode = "nearest"), channels = 3), axis = 2)
+{% endif %}
+{% if flags.vace %}
+    control_blank = tensor::full([width, height, frames, 3, 1], 0.5)
+{% if flags.controls %}
+    control_indices = tensor::to_list(tensor::arange(0, control_count))
+    control_parts = map(control_indices, process = control_frame_pixels, args = {frames = control_video, width = width, height = height})
+    control_short = tensor::concat(control_parts, axis = 2)
+    control_pixels = tensor::pad(control_short, [0, 0, 0, 0, 0, frames - tensor::shape(control_short)[2]], value = 0.5)
+{% else %}
+    control_pixels = control_blank
+{% endif %}
+    inactive = vae_to_dit_latents(vae, vae_encode(vae, control_blank, rng = encode_rng{{vae_run_options}}))
+    reactive = vae_to_dit_latents(vae, vae_encode(vae, control_pixels, rng = encode_rng{{vae_run_options}}))
+    vace_shape = tensor::shape(inactive)
+    vace_channels = math::floor(width / vace_shape[0]) * math::floor(height / vace_shape[1])
+    vace_mask = tensor::full([vace_shape[0], vace_shape[1], vace_shape[2], vace_channels, 1], 1)
+    vace_video = tensor::concat([inactive, reactive], axis = 3)
+{% if flags.first %}
+    vace_reference = vae_to_dit_latents(vae, vae_encode(vae, first_frame_pixels, rng = encode_rng{{vae_run_options}}))
+    reference_context = tensor::concat([vace_reference, tensor::zeros_like(vace_reference)], axis = 3)
+    vace_pixels = tensor::concat([reference_context, vace_video], axis = 2)
+    vace_masks = tensor::pad(vace_mask, [0, 0, 0, 0, 1, 0])
+    base = tensor::pad(video_base, [0, 0, 0, 0, 1, 0])
+{% else %}
+    vace_pixels = vace_video
+    vace_masks = vace_mask
+    base = video_base
+{% endif %}
+    vace_context = tensor::concat([vace_pixels, vace_masks], axis = 3)
+{% elif flags.image_condition %}
+    condition_blank = tensor::full([width, height, frames, 3, 1], 0.5)
+{% if flags.first %}
+    condition_first = tensor::replace_slice(condition_blank, first_frame_pixels, axis = 2, start = 0)
+{% else %}
+    condition_first = condition_blank
+{% endif %}
+{% if flags.last %}
+    condition_pixels = tensor::replace_slice(condition_first, last_frame_pixels, axis = 2, start = frames - 1)
+{% else %}
+    condition_pixels = condition_first
+{% endif %}
+    condition_latent = vae_to_dit_latents(vae, vae_encode(vae, condition_pixels, rng = encode_rng{{vae_run_options}}))
+    condition_shape = tensor::shape(condition_latent)
+    mask_blank = tensor::zeros([condition_shape[0], condition_shape[1], condition_shape[2], 4, 1])
+{% if flags.first %}
+    first_mask = tensor::index_fill(mask_blank, axis = 2, indices = [0], value = 1)
+{% else %}
+    first_mask = mask_blank
+{% endif %}
+{% if flags.last %}
+    last_mask = tensor::index_fill(first_mask[:, :, :, 3:4], axis = 2, indices = [condition_shape[2] - 1], value = 1)
+    image_mask = tensor::replace_slice(first_mask, last_mask, axis = 3, start = 3)
+{% else %}
+    image_mask = first_mask
+{% endif %}
+    video_concat = tensor::concat([image_mask, condition_latent], axis = 3)
+    base = video_base
+{% elif flags.frozen %}
+    video_shape = tensor::shape(video_base)
+    mask_blank = tensor::full([video_shape[0], video_shape[1], video_shape[2], 1, 1], 1)
+{% if flags.first %}
+    first_latent = vae_to_dit_latents(vae, vae_encode(vae, first_frame_pixels, rng = encode_rng{{vae_run_options}}))
+    base_first = tensor::replace_slice(video_base, first_latent, axis = 2, start = 0)
+    mask_first = tensor::index_fill(mask_blank, axis = 2, indices = [0], value = 0)
+{% else %}
+    base_first = video_base
+    mask_first = mask_blank
+{% endif %}
+{% if flags.last %}
+    last_latent = vae_to_dit_latents(vae, vae_encode(vae, last_frame_pixels, rng = encode_rng{{vae_run_options}}))
+    base = tensor::replace_slice(base_first, last_latent, axis = 2, start = video_shape[2] - 1)
+    video_mask = tensor::index_fill(mask_first, axis = 2, indices = [video_shape[2] - 1], value = 0)
+{% else %}
+    base = base_first
+    video_mask = mask_first
+{% endif %}
+{% else %}
+    base = video_base
+{% endif %}
+{% if flags.s2v_reference %}
+    reference_video = vae_to_dit_latents(vae, vae_encode(vae, first_frame_pixels, rng = encode_rng{{vae_run_options}}))
+    reference_shape = tensor::shape(reference_video)
+    reference_latent = tensor::reshape(reference_video, reference_shape[:4])
+{% endif %}
+{% if flags.driving_audio %}
+    audio_encoder = load_audio_encoder(audio_encoder_path{{audio_encoder_options}})
+    speech = encode_audio(audio_encoder, driving_audio, sample_rate = sample_rate)
+    audio_embedding = wan::s2v_audio_window(speech, latent_frames = tensor::shape(video_base)[2])
+{% endif %}
+{% if flags.hunyuan %}
+    concat_shape = tensor::shape(video_base)
+    concat_blank = tensor::zeros_like(video_base)
+    mask_blank = tensor::zeros([concat_shape[0], concat_shape[1], concat_shape[2], 1, 1])
+{% if flags.first %}
+    first_latent = vae_to_dit_latents(vae, vae_encode(vae, first_frame_pixels, rng = encode_rng{{vae_run_options}}))
+    concat_first = tensor::replace_slice(concat_blank, first_latent[:, :, :1], axis = 2, start = 0)
+    mask_first = tensor::index_fill(mask_blank, axis = 2, indices = [0], value = 1)
+{% else %}
+    concat_first = concat_blank
+    mask_first = mask_blank
+{% endif %}
+{% if flags.last %}
+    last_latent = vae_to_dit_latents(vae, vae_encode(vae, last_frame_pixels, rng = encode_rng{{vae_run_options}}))
+    concat_latent = tensor::replace_slice(concat_first, last_latent[:, :, :1], axis = 2, start = concat_shape[2] - 1)
+    concat_mask = tensor::index_fill(mask_first, axis = 2, indices = [concat_shape[2] - 1], value = 1)
+{% else %}
+    concat_latent = concat_first
+    concat_mask = mask_first
+{% endif %}
+    video_concat = tensor::concat([concat_latent, concat_mask], axis = 3)
+{% endif %}
+{% if flags.vision %}
+    vision = load_vision_encoder(vision_path{{vision_options}})
+{% if flags.first %}
+    vision_first = encode_vision(vision, image::to_u8(first_frame_pixels[:, :, 0]))
+{% else %}
+    vision_first = encode_vision(vision, image::to_u8(tensor::full([width, height, 3, 1], 0.5)), zero_input = true)
+{% endif %}
+{% if flags.end_vision %}
+{% if flags.last %}
+    vision_end = encode_vision(vision, image::to_u8(last_frame_pixels[:, :, 0]))
+{% else %}
+    vision_end = encode_vision(vision, image::to_u8(tensor::full([width, height, 3, 1], 0.5)), zero_input = true)
+{% endif %}
+    vision_condition = tensor::concat([vision_first, vision_end], axis = 1)
+{% else %}
+    vision_condition = vision_first
+{% endif %}
+{% endif %}
+{% if flags.dual %}
+    high_base = load_dit(high_model_path{{model_options}})
+{{high_loras}}
+{% endif %}
+    positive_text = encode_prompt(text, prompt, width = width, height = height{{prompt_options}})
+{% if flags.encode_negative %}
+    negative_text = encode_prompt(text, negative_prompt, width = width, height = height{{negative_prompt_options}})
+{% else %}
+    negative_text = positive_text
+{% endif %}
+{% if flags.vision %}
+    positive = {crossattn = positive_text.crossattn, vector = vision_condition}
+    negative = {crossattn = negative_text.crossattn, vector = vision_condition}
+{% else %}
+    positive = positive_text
+    negative = negative_text
+{% endif %}
+    pos = predictor(model, positive{{predictor_options}})
+    neg = predictor(model, negative{{negative_predictor_options}})
+    guided = {{guidance_function}}(pos, neg, scale = cfg_scale{{guidance_options}})
+{% if flags.dual %}
+    high_pos = predictor({{high_model}}, positive{{predictor_options}})
+    high_neg = predictor({{high_model}}, negative{{negative_predictor_options}})
+    high_guided = {{guidance_function}}(high_pos, high_neg, scale = cfg_scale{{guidance_options}})
+{% endif %}
+{% if flags.custom_sigmas %}
+    sigmas = tensor::vector(custom_sigmas, dtype = "f32")
+{% else %}
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler{{schedule_options}})
+{% endif %}
+    rng = encode_rng
+{% if flags.shared_rng %}
+    sampler_rng = rng
+{% else %}
+    sampler_rng = make_rng(sampler_rng_type, seed = seed)
+{% endif %}
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+{% if flags.dual %}
+{% if flags.fixed_high_steps %}
+    split = math::min(high_noise_steps, tensor::numel(sigmas) - 1)
+{% else %}
+    split = math::min(tensor::count_nonzero(tensor::threshold(sigmas, threshold = moe_boundary)), tensor::numel(sigmas) - 1)
+{% endif %}
+    handoff = sample(start, sigmas[:split + 1], predict = high_guided, method = method, rng = sampler_rng, eta = eta{{sample_options}})
+    latent = sample(handoff, sigmas[split:], predict = guided, method = method, rng = sampler_rng, eta = eta{{sample_options}})
+{% else %}
+    latent = sample(start, sigmas, predict = guided, method = method, rng = sampler_rng, eta = eta{{sample_options}})
+{% endif %}
+{% if flags.vace_reference %}
+    output_frames = vae_decode(vae, dit_to_vae_latents(vae, latent[:, :, 1:]){{vae_run_options}})
+{% else %}
+    output_frames = vae_decode(vae, dit_to_vae_latents(vae, latent){{vae_run_options}})
+{% endif %}
+    return {video = {frames = output_frames, fps_num = fps, fps_den = 1}, latent = latent, audio = {{audio}}}
+}

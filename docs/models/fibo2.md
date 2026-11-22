@@ -17,8 +17,6 @@ INT8 convrot weights load directly; see [INT8 convrot](../guides/int8_convrot.md
 
 ## Usage
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
-
 ### Web UI
 
 Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
@@ -35,7 +33,39 @@ Slot IDs correspond to CLI component options: `diffusion_model` uses
 `--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
 Select optional components when required by your checkpoint or task.
 
-### CLI
+### DGL
+
+| Example | Description |
+| --- | --- |
+| [Dev: text to image](../dgl/fibo2/fibo2-dev-txt2img.dgl) | Generate an image from a prompt. |
+| [Dev: image editing](../dgl/fibo2/fibo2-dev-edit.dgl) | Edit a reference image. |
+| [Edit Turbo](../dgl/fibo2/fibo2-edit-turbo.dgl) | Image editing with distilled weights. |
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\fibo2\fibo2-dev-txt2img.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/fibo2/fibo2-dev-txt2img.dgl
+```
+
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+### Legacy CLI
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 #### Fibo 2.0 Dev
 
@@ -147,8 +177,9 @@ Edit Turbo is distilled for reference-image editing in 4 steps with CFG 1.
 
 The BF16 files accept the same options. Use dimensions divisible by 16. Repeat `-r` to use multiple reference images; instructions can refer to `<image_1>`, `<image_2>`, etc. See [Image Editing](../guides/edit.md) for reference-image preprocessing options. Separate GGUF text encoders need their vision projector passed with `--llm_vision` for editing.
 
-The automatic `fibo2` reference preset combines `resize_single_ref_to_target=true`, `vae_size_buckets=true`, `vae_center_crop=true`, and `vlm_use_vae_input=true`. A single reference is scaled to cover the output dimensions and center-cropped. Multiple references use dimensions divisible by 16, chosen within ±10% of one megapixel to minimize cropping for each image's aspect ratio; `vae_input_max_pixels` overrides that target area. The VAE and vision encoder receive the same crops, with smaller copies used by the vision encoder. These are generic reference-image options and can be overridden individually: for example, `--ref-image-args vae_center_crop=false` uses direct resizing, while `resize_before_vae=false` skips this automatic crop and resize step entirely.
-
-The vision encoder defaults to `vlm_resize_mode=longest_side,vlm_max_size=768`. Override these with `--ref-image-args`, for example `vlm_max_size=512`, or use `vlm_resize_mode=none` to skip size-based scaling. Vision inputs are still aligned to the encoder's patch grid.
-
-Plain prompts and structured JSON captions are accepted. This integration uses the caption-only text-rendering path (`render_text_images=False`); it does not generate auxiliary glyph images or expand prompts with Bria VGL. Native Fibo mask preprocessing is not connected to `--mask`.
+The default reference policy scales and center-crops a single reference to
+the output dimensions. Multiple references use aspect-ratio buckets near one
+megapixel, aligned to 16 pixels. VAE and vision encoding share those crops;
+the vision encoder uses a smaller copy with a maximum side of 768 pixels.
+Use a [DGL editing workflow](../guides/edit.md#custom-reference-processing) for
+custom geometry or different VAE and vision inputs.

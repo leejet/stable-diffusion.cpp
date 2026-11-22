@@ -474,6 +474,9 @@ namespace HiDreamO1 {
     };
 
     struct HiDreamO1Conditioner : public Conditioner {
+        bool supports_prompt_formatting() const override { return true; }
+        size_t max_reference_images() const override { return std::numeric_limits<size_t>::max(); }
+
         std::shared_ptr<Tokenizer> tokenizer;
         std::shared_ptr<HiDreamO1VisionRunner> vision_runner;
 
@@ -529,11 +532,13 @@ namespace HiDreamO1 {
             std::vector<std::array<int32_t, 3>> image_grids;
             std::vector<int32_t> skip_vision_start;
 
-            std::string prompt = "<|im_start|>user\n";
+            std::string prompt = sd::prompt_templates::with_system("<|im_start|>user\n", conditioner_params.system_prompt);
 
             if (ref_images.empty()) {
                 prompt += conditioner_params.text;
                 prompt += "<|im_end|>\n<|im_start|>assistant\n<|boi_token|><|tms_token|>";
+                if (conditioner_params.raw)
+                    prompt = conditioner_params.text;
                 std::vector<int> input_ids;
                 if (!tokenizer->encode(prompt, input_ids, nullptr)) {
                     return {};
@@ -628,6 +633,8 @@ namespace HiDreamO1 {
 
             prompt += conditioner_params.text;
             prompt += "<|im_end|>\n<|im_start|>assistant\n<|boi_token|><|tms_token|>";
+            if (conditioner_params.raw)
+                prompt = conditioner_params.text;
             std::vector<int> input_ids;
             if (!tokenizer->encode(prompt, input_ids, nullptr)) {
                 return {};

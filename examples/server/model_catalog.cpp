@@ -132,6 +132,56 @@ std::vector<ModelRoot> get_model_roots(const SDSvrParams& params) {
     return roots;
 }
 
+static void add_startup_index_shards(ServerFileAccess& policy, const fs::path& index_path) {
+    std::error_code error;
+    if (!fs::is_regular_file(index_path, error) || error)
+        return;
+    std::ifstream file(index_path);
+    const auto index  = json::parse(file, nullptr, false);
+    const auto shards = index.find("weight_map");
+    if (shards == index.end() || !shards->is_object())
+        return;
+    const auto root = fs::weakly_canonical(index_path.parent_path());
+    for (const auto& entry : *shards) {
+        if (!entry.is_string())
+            continue;
+        const auto path = fs::weakly_canonical((index_path.parent_path() / fs::u8path(entry.get_ref<const std::string&>())).lexically_normal(), error);
+        if (!error && model_path_inside(root, path))
+            policy.configured_files.insert(model_path_key(path));
+    }
+}
+
+void add_startup_model_sources(ServerFileAccess& policy, const SDContextParams& config) {
+    for (const auto& slot : k_model_slots) {
+        const auto& source = config.*slot.field;
+        if (source.empty() || slot.field == &SDContextParams::tokenizer)
+            continue;
+        const auto path     = fs::absolute(fs::u8path(source));
+        const auto resolved = fs::weakly_canonical(path);
+        policy.configured_files.insert(model_path_key(resolved));
+        if (fs::is_directory(resolved))
+            policy.model_bundles.push_back(resolved);
+        else if (path.extension() == ".json")
+            add_startup_index_shards(policy, path);
+    }
+
+    auto add_tokenizer = [&](const std::string& path) {
+        if (!path.empty())
+            policy.configured_files.insert(model_path_key(fs::weakly_canonical(fs::absolute(fs::u8path(path)))));
+    };
+    if (config.tokenizer.find('=') == std::string::npos) {
+        add_tokenizer(config.tokenizer);
+    } else {
+        std::istringstream assignments(config.tokenizer);
+        std::string assignment;
+        while (std::getline(assignments, assignment, ',')) {
+            const auto equal = assignment.find('=');
+            if (equal != std::string::npos)
+                add_tokenizer(assignment.substr(equal + 1));
+        }
+    }
+}
+
 std::vector<fs::path> model_category_directories(const ModelRoot& root, const std::string& category) {
     std::vector<fs::path> directories;
     if (!fs::exists(root.path))
@@ -370,6 +420,8 @@ json resolve_recipe_features(const json& recipe) {
         features[name.get<std::string>()] = true;
     for (const auto& name : recipe.value("disabled_features", json::array()))
         features[name.get<std::string>()] = false;
+    for (const char* name : {"ip_adapter", "slg", "shifted_timestep"})
+        features[name] = false;
     return features;
 }
 

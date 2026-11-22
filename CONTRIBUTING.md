@@ -43,6 +43,12 @@ Link new documentation from [the documentation index](docs/README.md) or
 [the model index](docs/models/README.md), as appropriate. Keep supported model
 entries and their guide links in the project README.
 
+Use **DGL** for the language name in headings, prose, link text, UI labels,
+comments, logs, and diagnostics. Preserve literal spellings in commands, files,
+paths, and protocol or metadata fields, such as `-M dgl`, `.dgl`, `docs/dgl/`,
+and the metadata key `dgl`. Code identifiers follow their existing naming style,
+such as `sd_dgl_run`, `sd::dgl`, `SD_DGL_VALUE_TENSOR`, and `DglWorkspace`.
+
 ### Model Documentation
 
 Every new model or component integration must include a user guide in
@@ -60,7 +66,9 @@ omitting other sections when they have no content:
 - `Model files`, with component, weights/downloads, CLI option, and requirement
   columns. Include tokenizers, projectors, connectors, downloads, conversion, and
   required preprocessing.
-- `Usage`, with `Web UI` and `CLI` subsections where applicable. Link to the
+- `Usage`, with `Web UI`, `DGL`, and `Legacy CLI` subsections in that order
+  where applicable. Group DGL scripts in a task table with descriptive links;
+  put shared run instructions below the table. Link to the
   server's shared Web UI guide and list compatible recipes/components. Group
   complete CLI examples by task or variant within this section; do not add a
   separate `Quick start` or `Examples` section. Keep API usage in its own

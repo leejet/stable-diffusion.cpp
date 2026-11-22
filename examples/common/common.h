@@ -1,7 +1,6 @@
 #ifndef __EXAMPLES_COMMON_COMMON_H__
 #define __EXAMPLES_COMMON_COMMON_H__
 
-#include "generation_metadata.h"
 #include "options.h"
 
 #include <cmath>
@@ -23,16 +22,15 @@ std::string argv_to_utf8(int index, const char** argv);
 #define BOOL_STR(b) ((b) ? "true" : "false")
 
 extern const char* const modes_str[];
-#define SD_ALL_MODES_STR "img_gen, adetailer, vid_gen, convert, upscale, metadata, vid_upscale"
+#define SD_ALL_MODES_STR "img_gen, vid_gen, convert, upscale, metadata, dgl"
 
 enum SDMode {
     IMG_GEN,
-    ADETAILER,
     VID_GEN,
     CONVERT,
     UPSCALE,
     METADATA,
-    VID_UPSCALE,
+    DGL,
     MODE_COUNT
 };
 
@@ -202,6 +200,8 @@ struct SDContextParams {
     bool resolve_and_validate(SDMode mode);
     std::string to_string() const;
     SDOptPtr to_context_opt();
+    bool configure_dgl(sd_dgl_ctx_t* ctx) const;
+    bool register_rpc_devices() const;
 };
 
 struct SDGenerationParams {
@@ -221,7 +221,6 @@ struct SDGenerationParams {
     std::optional<float> strength;
     std::optional<float> control_strength;
     std::optional<float> ip_adapter_strength;
-    bool increase_ref_index   = false;
     bool embed_image_metadata = true;
 
     std::string init_image_path;
@@ -229,7 +228,6 @@ struct SDGenerationParams {
     std::string mask_image_path;
     std::string control_image_path;
     std::optional<std::string> control_type;
-    std::string ip_adapter_image_path;
     std::vector<std::string> ref_image_paths;
     std::vector<std::string> ref_video_paths;
     std::vector<std::string> ref_video_audio_paths;
@@ -257,16 +255,6 @@ struct SDGenerationParams {
     std::optional<float> vace_strength;
     SDTilingParams vae_tiling_params;
     std::string extra_tiling_args;
-
-    std::string ref_image_args;
-    std::string image_preprocess;
-
-    std::string pm_id_images_dir;
-    std::string pm_id_embed_path;
-    std::optional<float> pm_style_strength;
-
-    std::string pulid_id_embedding_path;
-    std::optional<float> pulid_id_weight;
 
     int upscale_repeats = 1;
     std::optional<int> upscale_tile_size;
@@ -305,7 +293,6 @@ struct SDGenerationParams {
     SDImageOwner mask_image;
     SDImageOwner control_image;
     SDImageOwner ip_adapter_image;
-    std::vector<SDImageOwner> pm_id_images;
     std::vector<SDImageOwner> control_frames;
 
     // Media views used while populating the opaque options.
@@ -313,7 +300,6 @@ struct SDGenerationParams {
     std::vector<std::vector<SDImage>> ref_video_frame_views;
     std::vector<SDReferenceVideo> ref_video_views;
     std::vector<SDAudio> ref_audio_views;
-    std::vector<SDImage> pm_id_image_views;
     std::vector<SDImage> control_frame_views;
 
     SDGenerationParams();
@@ -324,7 +310,6 @@ struct SDGenerationParams {
     ArgOptions get_options();
     bool from_json_str(const std::string& json_str,
                        const std::function<std::string(const std::string&)>& lora_path_resolver = {});
-    bool parse_image_preprocess_json(const std::string& json_str);
     bool parse_prompt_images_json(const std::string& json_str);
     bool initialize_cache_params();
     bool extract_and_remove_lora(const std::string& lora_model_dir);
@@ -338,7 +323,7 @@ struct SDGenerationParams {
                               const std::string& lora_model_dir,
                               const std::string& hires_upscalers_dir,
                               bool strict = false);
-    SDOptPtr to_image_opt(bool adetail = false);
+    SDOptPtr to_image_opt();
     SDOptPtr to_video_opt();
     std::string to_string() const;
 };

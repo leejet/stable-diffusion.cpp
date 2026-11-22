@@ -32,8 +32,6 @@ file. For lower VAE memory use, see [tiny autoencoders](taesd.md).
 
 ## Usage
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
-
 ### Web UI
 
 Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
@@ -56,7 +54,71 @@ Slot IDs correspond to CLI component options: `diffusion_model` uses
 `--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
 Select optional components when required by your checkpoint or task.
 
-### CLI
+### DGL
+
+The Wan text encoder zeros UMT5 padding embeddings before returning the prompt
+condition, matching the model's fixed-length text input. This also applies to
+CLI and C API generation through dgl.
+
+#### Wan 2.1
+
+| Example | Description |
+| --- | --- |
+| [Text to video, 1.3B](../dgl/wan/wan2-1-t2v-1-3b.dgl) | Wan 2.1 T2V. |
+| [Text to video, 14B](../dgl/wan/wan2-1-t2v-14b.dgl) | Wan 2.1 T2V. |
+| [Image to video, 14B](../dgl/wan/wan2-1-i2v-14b.dgl) | Wan 2.1 I2V, 480p. |
+| [First/last-frame conditioning, 14B](../dgl/wan/wan2-1-first-last-frame-14b.dgl) | Wan 2.1 FLF2V, 720p. |
+
+#### Wan 2.2
+
+| Example | Description |
+| --- | --- |
+| [Text to video, A14B](../dgl/wan/wan2-2-t2v-a14b.dgl) | Switch between high- and low-noise experts. |
+| [Image to video, A14B](../dgl/wan/wan2-2-i2v-a14b.dgl) | Use the matching I2V experts. |
+| [Speech to video, 14B](../dgl/wan/wan2-2-s2v-14b.dgl) | Condition a speaker image with audio features. |
+| [Single-image generation, A14B](../dgl/wan/wan2-2-t2v-a14b-image.dgl) | Run T2V experts with one output frame. |
+| [Text to video with LoRA](../dgl/wan/wan2-2-t2v-a14b-lora.dgl) | Patch the diffusion experts before sampling. |
+| [TI2V 5B: text to video](../dgl/wan/wan2-2-ti2v-5b-txt2video.dgl) | Generate without an initial image. |
+| [TI2V 5B: image to video](../dgl/wan/wan2-2-ti2v-5b-img2video.dgl) | Condition the initial frame. |
+| [First/last-frame conditioning, A14B](../dgl/wan/wan2-2-first-last-frame-a14b.dgl) | Use the Wan 2.2 I2V experts. |
+
+#### VACE
+
+| Example | Description |
+| --- | --- |
+| [VACE 1.3B: text to video](../dgl/wan/wan2-1-vace-1-3b-txt2video.dgl) | Generate without control frames. |
+| [VACE 1.3B: reference to video](../dgl/wan/wan2-1-vace-1-3b-ref2video.dgl) | Condition a reference image. |
+| [VACE 1.3B: video to video](../dgl/wan/wan2-1-vace-1-3b-video2video.dgl) | Condition control frames. |
+| [VACE 14B: text to video](../dgl/wan/wan2-1-vace-14b-txt2video.dgl) | Generate without control frames. |
+| [VACE 14B: reference to video](../dgl/wan/wan2-1-vace-14b-ref2video.dgl) | Condition a reference image. |
+| [VACE 14B: video to video](../dgl/wan/wan2-1-vace-14b-video2video.dgl) | Condition control frames. |
+| [VACE Fun A14B: reference to video](../dgl/wan/wan2-2-vace-fun-a14b-ref2video.dgl) | Use Wan 2.2 VACE experts. |
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\wan\wan2-1-t2v-1-3b.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/wan/wan2-1-t2v-1-3b.dgl
+```
+
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+### Legacy CLI
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 #### Wan2.1 T2V 1.3B
 
@@ -208,8 +270,6 @@ Select optional components when required by your checkpoint or task.
   --cfg-scale 3.5 `
   --sampling-method euler `
   --steps 10 `
-  --high-noise-cfg-scale 3.5 `
-  --high-noise-sampling-method euler `
   --high-noise-steps 8 `
   --flow-shift 3.0 `
   -W 832 `
@@ -233,8 +293,6 @@ Select optional components when required by your checkpoint or task.
   --cfg-scale 3.5 \
   --sampling-method euler \
   --steps 10 \
-  --high-noise-cfg-scale 3.5 \
-  --high-noise-sampling-method euler \
   --high-noise-steps 8 \
   --flow-shift 3.0 \
   -W 832 \
@@ -263,8 +321,6 @@ Select optional components when required by your checkpoint or task.
   --cfg-scale 3.5 `
   --sampling-method euler `
   --steps 10 `
-  --high-noise-cfg-scale 3.5 `
-  --high-noise-sampling-method euler `
   --high-noise-steps 8 `
   --flow-shift 3.0 `
   -W 832 `
@@ -290,8 +346,6 @@ Select optional components when required by your checkpoint or task.
   --cfg-scale 3.5 \
   --sampling-method euler \
   --steps 10 \
-  --high-noise-cfg-scale 3.5 \
-  --high-noise-sampling-method euler \
   --high-noise-steps 8 \
   --flow-shift 3.0 \
   -W 832 \
@@ -420,8 +474,6 @@ Notes:
   --cfg-scale 3.5 `
   --sampling-method euler `
   --steps 10 `
-  --high-noise-cfg-scale 3.5 `
-  --high-noise-sampling-method euler `
   --high-noise-steps 8 `
   --flow-shift 3.0 `
   -W 832 `
@@ -444,8 +496,6 @@ Notes:
   --cfg-scale 3.5 \
   --sampling-method euler \
   --steps 10 \
-  --high-noise-cfg-scale 3.5 \
-  --high-noise-sampling-method euler \
   --high-noise-steps 8 \
   --flow-shift 3.0 \
   -W 832 \
@@ -473,8 +523,6 @@ Notes:
   --cfg-scale 3.5 `
   --sampling-method euler `
   --steps 4 `
-  --high-noise-cfg-scale 3.5 `
-  --high-noise-sampling-method euler `
   --high-noise-steps 4 `
   --flow-shift 3.0 `
   -W 832 `
@@ -499,8 +547,6 @@ Notes:
   --cfg-scale 3.5 \
   --sampling-method euler \
   --steps 4 \
-  --high-noise-cfg-scale 3.5 \
-  --high-noise-sampling-method euler \
   --high-noise-steps 4 \
   --flow-shift 3.0 \
   -W 832 \
@@ -674,8 +720,6 @@ TI2V 5B can decode multiple latent frames together when temporal tiling is enabl
   --cfg-scale 3.5 `
   --sampling-method euler `
   --steps 10 `
-  --high-noise-cfg-scale 3.5 `
-  --high-noise-sampling-method euler `
   --high-noise-steps 8 `
   --flow-shift 3.0 `
   -W 480 `
@@ -701,8 +745,6 @@ TI2V 5B can decode multiple latent frames together when temporal tiling is enabl
   --cfg-scale 3.5 \
   --sampling-method euler \
   --steps 10 \
-  --high-noise-cfg-scale 3.5 \
-  --high-noise-sampling-method euler \
   --high-noise-steps 8 \
   --flow-shift 3.0 \
   -W 480 \
@@ -803,6 +845,12 @@ TI2V 5B can decode multiple latent frames together when temporal tiling is enabl
 <video src=../../assets/wan/Wan2.1_1.3B_vace_r2v.mp4 controls="controls" muted="muted" type="video/mp4"></video>
 
 ##### V2V
+
+`--control-video` accepts a frame directory or a video file (AVI, WebP or
+this project's independent-frame VP8 WebM). Files are decoded at the requested
+`--fps` (default 16), without audio; `--video-frames` limits decoded frames
+after resampling. Missing frames are padded by the existing VACE workflow.
+See [DGL media I/O](../dgl.md) for codec restrictions.
 
 **Windows (PowerShell)**
 
@@ -1009,8 +1057,6 @@ for the reference image, same as Wan2.1 VACE.
   --cfg-scale 3.5 `
   --sampling-method euler `
   --steps 10 `
-  --high-noise-cfg-scale 3.5 `
-  --high-noise-sampling-method euler `
   --high-noise-steps 8 `
   -W 832 `
   -H 480 `
@@ -1034,8 +1080,6 @@ for the reference image, same as Wan2.1 VACE.
   --cfg-scale 3.5 \
   --sampling-method euler \
   --steps 10 \
-  --high-noise-cfg-scale 3.5 \
-  --high-noise-sampling-method euler \
   --high-noise-steps 8 \
   -W 832 \
   -H 480 \
@@ -1055,6 +1099,12 @@ video, like Wan2.1 VACE t2v).
 > encode can exceed the budget otherwise.
 
 ## Notes and limitations
+
+Dual experts share CFG, sampler, scheduler and flow shift. By default,
+`--high-noise-steps -1` splits `--steps` at `--moe-boundary`. A nonnegative
+`--high-noise-steps` instead adds that many high-noise steps before the
+`--steps` low-noise steps; `0` runs only the low-noise model.
+Use a DGL script for independently configured experts.
 
 Wan models require `-M vid_gen`, including single-frame generation. `--video-frames` alone does not select video mode. Library callers must use `generate_video()` instead of `generate_image()`.
 

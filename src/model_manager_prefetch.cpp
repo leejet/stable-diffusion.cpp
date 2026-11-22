@@ -83,7 +83,21 @@ bool ModelManager::populate_prefetch_block(PrefetchBlock& block) {
         return false;
     }
     const size_t alignment = ggml_backend_buft_get_alignment(buffer_type);
-    size_t backend_limit   = ggml_backend_buft_get_max_size(buffer_type);
+    bool host_capacity     = ggml_backend_buft_is_host(buffer_type);
+#ifdef _WIN32
+    host_capacity |= sd_backend_is(block.compute_backend, "CUDA");
+#endif
+    if (retain_weights_ && host_capacity) {
+        size_t bytes = 0;
+        for (const auto* state : block.states) {
+            const auto padded = GGML_PAD(ggml_backend_buft_get_alloc_size(buffer_type, state->tensor), alignment);
+            bytes += std::min(padded, SIZE_MAX - bytes);
+        }
+        const bool host = ggml_backend_buft_is_host(buffer_type);
+        if (!ensure_host_capacity(host ? bytes : 0, block.states, host, host ? 0 : bytes))
+            return false;
+    }
+    size_t backend_limit = ggml_backend_buft_get_max_size(buffer_type);
     if (!ggml_backend_buft_is_host(buffer_type) &&
         (backend_limit == 0 || backend_limit > MAX_RESIDENCY_BLOCK_BYTES)) {
         backend_limit = MAX_RESIDENCY_BLOCK_BYTES;

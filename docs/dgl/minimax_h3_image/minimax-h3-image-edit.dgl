@@ -1,0 +1,73 @@
+# version: 0.0.0
+# docs/models/minimax_h3_image.md — Reference-image editing
+
+var {
+    model_path = "../models/diffusion_models/minimax_h3_image_pruned_bf16.safetensors"
+    text_path = "../models/text_encoders/qwen3vl_32b_minimax_h3-Q4_K_M.gguf"
+    vae_path = "../models/vae/minimax_h3_image_vae_fp16.safetensors"
+
+    reference_0_path = "../inputs/ernie_image/turbo_example.png"
+    output_path = "output.png"
+
+    prompt = "Edit <Picture 1>. Put a red scarf on the cat, preserving its face and the background."
+
+    seed = 42
+    rng_type = "cpu"
+    width = 1024
+    height = 1024
+
+    method = "euler"
+    custom_sigmas = [1.0, 0.9675236940383911, 0.8875485062599182, 0.75, 0.5327739119529724, 0.23200887441635132, 0.0]
+}
+
+fn h3_image_reference_noise(latent, seed) {
+    shape = tensor::shape(latent)
+    patches = tensor::zeros([2, 2, shape[-2], math::floor(shape[0] / 2), math::floor(shape[1] / 2)])
+    rng = make_rng("cpu", seed = seed)
+    noise = tensor::reshape(tensor::permute(tensor::randn_like(patches, rng = rng), [0, 3, 1, 4, 2]), shape)
+    return tensor::lerp(latent, noise, 0.001)
+}
+
+fn sqrt_step(estimate, index, value) {
+    return (estimate + value / estimate) / 2
+}
+
+fn positive_sqrt(value) {
+    return fold(tensor::to_list(tensor::arange(0, 32)), value + 1.0, process = sqrt_step, value = value)
+}
+
+fn fit_reference_area(input, area, factor, mode) {
+    shape = tensor::shape(input)
+    width = positive_sqrt(area * shape[0] / shape[1])
+    rounded = [math::round(width / factor) * factor, math::round(width * shape[1] / shape[0] / factor) * factor]
+    size = tensor::maximum(tensor::vector(rounded, dtype = "i64"), tensor::full([2], factor, dtype = "i64"))
+    return tensor::interpolate(input, size = size, mode = mode)
+}
+
+fn main() {
+    reference_0 = image::load(reference_0_path)
+
+    model = load_dit(model_path, family = "minimax_h3_image", flash_attn_mode = "on", params_backend = "cpu")
+    text = load_text_encoder(text_path, family = "minimax_h3_image", params_backend = "cpu")
+    vae = load_vae(vae_path, family = "minimax_h3_image", params_backend = "cpu")
+
+    encode_rng = make_rng(rng_type, seed = seed)
+    image_base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    base = tensor::unsqueeze(image_base, axis = 2)
+    reference_0_original = image::to_f32(reference_0, channels = 3)
+    reference_0_short = math::min(tensor::shape(reference_0_original)[0], tensor::shape(reference_0_original)[1])
+    reference_0_side = math::min(2048, -math::min(-1024, -reference_0_short))
+    reference_0_pixels = fit_reference_area(reference_0_original, tensor::shape(reference_0_original)[0] * tensor::shape(reference_0_original)[1] * reference_0_side * reference_0_side / (reference_0_short * reference_0_short), 32, mode = "lanczos")
+    reference_latent_0_raw = vae_to_dit_latents(vae, vae_encode(vae, reference_0_pixels, rng = encode_rng, tiling = tiling()))
+    reference_latent_0 = h3_image_reference_noise(reference_latent_0_raw, seed)
+
+    condition = encode_prompt(text, prompt, width = width, height = height, media = [reference_0_original])
+    predict = predictor(model, condition, video_sigma_shift = 1, reference_blocks = [{kind = "image", video = 0}], ref_latents = [reference_latent_0], ref_index_mode = "increase")
+    sigmas = tensor::vector(custom_sigmas, dtype = "f32")
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(predict, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = predict, method = method, rng = rng)
+    image = vae_decode(vae, dit_to_vae_latents(vae, latent), tiling = tiling())
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

@@ -1,0 +1,69 @@
+# version: 0.0.0
+# docs/models/ltx2.md — LTX-2.5 dev T2V
+
+var {
+    model_path = "../models/diffusion_models/ltx-2.5-22b-dev-transformer-Q8_0.gguf"
+    text_path = "../models/text_encoders/gemma4-12b-with-proj-ltx-2.5-Q8_0.gguf"
+    vae_path = "../models/vae/ltx-2.5-video-vae-conv-bf16.safetensors"
+    audio_vae_path = "../models/vae/ltx-2.5-audio-vae-bf16.safetensors"
+
+    output_path = "t2v.avi"
+
+    prompt = "A wide aerial shot of a red vintage convertible driving along a coastal cliff road at sunset, waves crashing below"
+    negative_prompt = "worst quality, low quality, blurry, distorted, artifacts"
+
+    seed = 42
+    rng_type = "cuda"
+    width = 1280
+    height = 736
+    frames = 121
+    fps = 24
+
+    steps = 20
+    cfg_scale = 3.0
+    method = "euler"
+    scheduler = "ltx2"
+    audio_scale = 1
+}
+
+fn pack_av(video, audio, audio_scale) {
+    shape = tensor::shape(video)
+    count = tensor::numel(audio)
+    tail_channels = math::ceil_div(count, shape[0] * shape[1] * shape[2])
+    tail_shape = [shape[0], shape[1], shape[2], tail_channels, 1]
+    flat = tensor::reshape(tensor::mul(audio, audio_scale), [count])
+    padded = tensor::pad(flat, [0, math::product(tail_shape) - count])
+    return tensor::concat([video, tensor::reshape(padded, tail_shape)], axis = 3)
+}
+
+fn unpack_audio(packed, channels, audio_shape, audio_scale) {
+    tail = packed[:, :, :, channels:]
+    flat = tensor::reshape(tail, [tensor::numel(tail)])
+    return tensor::div(tensor::reshape(flat[:math::product(audio_shape)], audio_shape), audio_scale)
+}
+
+fn main() {
+    model = load_dit(model_path, family = "ltxav", params_backend = "cpu")
+    text = load_text_encoder(text_path, family = "ltxav", params_backend = "cpu", projection_path = model_path)
+    vae = load_vae(vae_path, family = "ltxav", params_backend = "cpu")
+
+    video_base = tensor::zeros(latent_shape(vae, width = width, height = height, frames = frames))
+    audio_vae = load_audio_vae(audio_vae_path, family = "ltxav", params_backend = "cpu")
+    audio_shape = audio_latent_shape(audio_vae, frames = frames, fps = fps)
+    base = pack_av(video_base, tensor::zeros(audio_shape), audio_scale = audio_scale)
+    positive = encode_prompt(text, prompt, width = width, height = height)
+    negative = encode_prompt(text, negative_prompt, width = width, height = height)
+    pos = predictor(model, positive, audio_length = audio_shape[1], fps = fps)
+    neg = predictor(model, negative, audio_length = audio_shape[1], fps = fps)
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    video_latent = latent[:, :, :tensor::shape(video_base)[2], :tensor::shape(video_base)[3]]
+    output_frames = vae_decode(vae, dit_to_vae_latents(vae, video_latent))
+    sound_latent = unpack_audio(latent, channels = tensor::shape(video_base)[3], audio_shape = audio_shape, audio_scale = audio_scale)
+    audio = audio_vae_decode(audio_vae, sound_latent)
+    video::save(output_path, {frames = output_frames, fps_num = fps, fps_den = 1}, audio = audio)
+    return {video = {frames = output_frames, fps_num = fps, fps_den = 1}, latent = latent, audio = audio}
+}

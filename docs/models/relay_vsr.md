@@ -1,19 +1,21 @@
 # RelayVSR
 
 [RelayVSR](https://github.com/kopperx/RelayVSR) upscales images and videos by
-2x or 4x with `-M vid_upscale`.
+2x or 4x through separately loaded diffusion and VAE components.
+
+**Currently supported only through dgl.**
 
 ## Model files
 
-| Component | Weights and downloads | CLI option | Requirement |
+| Component | Weights and downloads | DGL usage | Requirement |
 | --- | --- | --- | --- |
-| RelayVSR diffusion model | [ComfyUI RelayVSR](https://huggingface.co/Comfy-Org/RelayVSR) | `--diffusion-model` | Match the requested 2x or 4x scale |
-| RelayVSR VAE | Matching scale-specific VAE from the same repository | `--vae` | Required; ordinary Wan VAE is incompatible |
+| RelayVSR diffusion model | [ComfyUI RelayVSR](https://huggingface.co/Comfy-Org/RelayVSR) | `load_dit` | Match the requested 2x or 4x scale |
+| RelayVSR VAE | Matching scale-specific VAE from the same repository | `load_vae` | Required; ordinary Wan VAE is incompatible |
 
 [ComfyUI safetensors weights](https://huggingface.co/Comfy-Org/RelayVSR) load
 directly. Select the matching pair for the requested scale:
 
-| `--upscale-factor` | `--diffusion-model` | `--vae` |
+| Scale | `load_dit` | `load_vae` |
 | --- | --- | --- |
 | 2 | `relayvsr_x2_lightx2v_int8_convrot.safetensors` | `relayvsr_flash_vae_x2_fp32.safetensors` |
 | 4 | `relayvsr_x4_int8_convrot.safetensors` | `relayvsr_flash_vae_x4_fp32.safetensors` |
@@ -22,60 +24,54 @@ No separate text encoder or ordinary Wan VAE is needed.
 
 ## Usage
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
+### DGL
 
-### CLI
+| Example | Description |
+| --- | --- |
+| [Upscale a video](../dgl/relay_vsr/relayvsr-x2-video-upscale.dgl) | Process overlapping windows with the 2x model. |
+| [Upscale an image](../dgl/relay_vsr/relayvsr-x2-image-upscale.dgl) | Run the same 2x model on one image. |
 
-For a video, extract numbered frames into a directory, then run:
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
 
 **Windows (PowerShell)**
 
 ```powershell
-.\bin\Release\sd-cli.exe `
-  -M vid_upscale `
-  --diffusion-model ..\models\diffusion_models\relayvsr_x2_lightx2v_int8_convrot.safetensors `
-  --vae ..\models\vae\relayvsr_flash_vae_x2_fp32.safetensors `
-  --input-frames input_frames `
-  --upscale-factor 2 `
-  --fps 24 `
-  --vsr-window-size 16 `
-  -s 42 `
-  -o output.avi
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\relay_vsr\relayvsr-x2-video-upscale.dgl
 ```
 
 **Linux/macOS**
 
 ```sh
-./bin/sd-cli \
-  -M vid_upscale \
-  --diffusion-model ../models/diffusion_models/relayvsr_x2_lightx2v_int8_convrot.safetensors \
-  --vae ../models/vae/relayvsr_flash_vae_x2_fp32.safetensors \
-  --input-frames input_frames \
-  --upscale-factor 2 \
-  --fps 24 \
-  --vsr-window-size 16 \
-  -s 42 \
-  -o output.avi
+./bin/sd-cli -M dgl --script ../docs/dgl/relay_vsr/relayvsr-x2-video-upscale.dgl
 ```
 
-Frames are read in filename order. Set `--fps` to the source video's frame rate.
-Video outputs support AVI, WebM, and animated WebP. To save individual frames,
-use an output pattern such as `-o output/%04d.png`.
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
 
-For a single image, replace `--input-frames input_frames` with `-i input.png`
-and use `-o output.png` (or JPEG/WebP). No FPS setting is needed for an image.
-`-i` / `--init-img` and `--input-frames` are mutually exclusive.
+Set `input_path` to a numbered-frame directory or a video supported by
+`video::load`.
+
+Frame directories are read in filename order. Set the script's `fps` to the
+desired output rate. `video::save` writes AVI and receives the original audio
+separately. The [single-image script](../dgl/relay_vsr/relayvsr-x2-image-upscale.dgl)
+uses `image::load` / `image::save` instead.
 
 ## Notes and limitations
 
-- `--upscale-factor` is required. Use 2 or 4 with the corresponding weights.
-  Output width and height are exactly the input dimensions times the scale.
-- `--vsr-window-size` sets the reference-frame window, including both endpoints.
-  The default 16 selects reference frames 0, 15, 30, and so on, and always
-  includes the final frame. Every input frame appears once in the output.
-- `--flash-attn auto` and `--conv-direct auto` are enabled by default. See
-  [backend selection](../guides/backend.md) to choose a device or weight placement.
-- Sampler, scheduler, and step settings do not configure RelayVSR.
-  `--vsr-temporal-chunk-size` is a SeedVR2 option.
-- Long videos require enough system memory to hold the input and output frames.
-  Audio is not copied to the output.
+- Choose matching 2× or 4× diffusion/VAE weights. Their architecture determines
+  the output scale; ordinary Wan VAE weights are incompatible.
+- `window_size = 16` splits the input into windows with one overlapping frame.
+  The script samples endpoint keyframes for each window, decodes against the
+  source frames, then joins windows by dropping duplicate overlap frames.
+- Sampling is an explicit one-step flow with `[1, 0]` sigmas and Euler. There
+  is no separate native video-upscale sampler configuration.
+- Loader attention and convolution settings use their normal auto defaults.
+  See [backend selection](../guides/backend.md) for placement.
+- `video::load` limits decoded input to 256 MiB. Window outputs use the general
+  1 GiB tensor limit, and joined video may use up to 4 GiB. Long clips or large
+  frames need a more granular input/output program.

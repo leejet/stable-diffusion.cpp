@@ -4,6 +4,7 @@
 #include <array>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "tokenizer.h"
 
@@ -20,6 +21,9 @@ private:
 public:
     TokenizerConfig() = default;
     explicit TokenizerConfig(const char* config);
+    explicit TokenizerConfig(std::array<std::string, 3> paths)
+        : paths_(std::move(paths)) {}
+    const std::array<std::string, 3>& paths() const { return paths_; }
     bool has(Slot slot) const;
     std::shared_ptr<Tokenizer> create(Slot slot, int64_t embedding_rows, int padding_id, bool pad_left = false, bool clip = false) const;
     void validate_usage() const;

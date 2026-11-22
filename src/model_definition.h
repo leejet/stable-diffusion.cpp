@@ -4,6 +4,7 @@
 #include "core/option_types.h"
 
 #include <limits>
+#include <string_view>
 #include "model.h"
 #include "stable-diffusion.h"
 
@@ -36,14 +37,15 @@ struct ModelGeometry {
 struct ModelDefinition {
     SDVersion version = VERSION_COUNT;
     const char* name  = nullptr;
+    const char* id    = nullptr;
     ModelTraits traits;
     ModelSamplingPolicy sampling;
     ModelGeometry geometry;
-    const char* ref_image_preset                                                                                = "default";
     void (*configure_vae)(const sd::model_builders::Context&, const sd::model_builders::VAEOptions&, VAE&)      = nullptr;
     bool (*build)(const sd::model_builders::Context&, const TokenizerConfig&, sd::model_builders::CoreRunners&) = nullptr;
 };
 
 const ModelDefinition* find_model_definition(SDVersion version);
+const ModelDefinition* find_model_definition(std::string_view id);
 
 #endif  // __SD_MODEL_DEFINITION_H__

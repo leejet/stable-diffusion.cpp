@@ -1,0 +1,52 @@
+# version: 0.0.0
+# docs/models/photo_maker.md — PhotoMaker Version 2
+
+var {
+    weights = "../models/checkpoints/sdxlUnstableDiffusers_v11.safetensors"
+    model_path = "../models/photomaker/photomaker-v2.safetensors"
+    vae_path = "../models/vae/sdxl_vae.safetensors"
+
+    image_dir = "../inputs/photomaker_examples/scarletthead_woman"
+    embedding_path = "../inputs/photomaker_examples/scarletthead_woman/id_embeds.npy"
+    output_path = "output.png"
+
+    prompt = "a girl img, retro futurism, retro game art style but extremely beautiful, intricate details, masterpiece, best quality, space-themed, cosmic, celestial, stars, galaxies, nebulas, planets, science fiction, highly detailed"
+    negative_prompt = "realistic, photo-realistic, worst quality, greyscale, bad anatomy, bad hands, error, text"
+
+    seed = 42
+    width = 1024
+    height = 1024
+
+    steps = 50
+    cfg_scale = 5.0
+    method = "euler"
+    scheduler = "discrete"
+    style_strength = 10.0
+}
+
+fn main() {
+    base_unet = load_unet(weights)
+    text = load_text_encoder(weights)
+    vae = load_vae(vae_path, conv_scale = 0.03125, backend = "cpu")
+    photomaker = photomaker::load(model_path, family = "sdxl")
+    images = image::load_dir(image_dir)
+    identity = tensor::load(embedding_path)
+    photomaker_lora = load_lora(model_path)
+    unet = apply_lora(base_unet, photomaker_lora)
+    tokens = photomaker::encode_images(photomaker, images, id_embedding = identity)
+    conditions = photomaker::encode_prompt(text, prompt, tokens, width = width, height = height)
+    fused = photomaker::apply(conditions.condition, photomaker, tokens, conditions.mask)
+    plain_predictor = predictor(unet, conditions.plain)
+    identity_predictor = predictor(unet, fused)
+    pos = switch_predictor(plain_predictor, identity_predictor, after_steps = math::floor(steps * style_strength / 100))
+    neg = predictor(unet, encode_prompt(text, negative_prompt, width = width, height = height))
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng("cuda", seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    output = vae_decode(vae, unet_to_vae_latents(vae, latent))
+    image::save(output_path, output)
+    return output
+}

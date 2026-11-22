@@ -1385,10 +1385,14 @@ struct MingImageFlowDenoiser : DiscreteFlowDenoiser {
         return time_snr_shift(std::isfinite(shift) ? shift : resolution_shift, (t + 1.f) / 1000.f);
     }
 
-    std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler, SDVersion version, const char* extra_sample_args = nullptr) override {
+    void set_sequence_length(int image_seq_len) {
         const float tokens = static_cast<float>(image_seq_len) / 4.f;
         const float mu     = tokens >= 4096.f ? 1.35f : 0.5f + (tokens - 256.f) * (1.15f - 0.5f) / (4096.f - 256.f);
         resolution_shift   = std::exp(mu);
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler, SDVersion version, const char* extra_sample_args = nullptr) override {
+        set_sequence_length(image_seq_len);
         if (scheduler != DISCRETE_SCHEDULER) {
             return DiscreteFlowDenoiser::get_sigmas(n, image_seq_len, scheduler, version, extra_sample_args);
         }

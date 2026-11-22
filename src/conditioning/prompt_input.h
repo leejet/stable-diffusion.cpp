@@ -13,7 +13,8 @@ namespace sd {
 
     struct PromptPart {
         enum class Type { TEXT,
-                          IMAGE };
+                          IMAGE,
+                          EMBEDDING };
 
         Type type = Type::TEXT;
         std::string content;
@@ -26,7 +27,7 @@ namespace sd {
 
     class PromptInputTemplate {
         const PromptInput* input_;
-        std::map<std::string, size_t> image_markers_;
+        std::map<std::string, size_t> markers_;
 
     public:
         std::string text;
@@ -35,7 +36,7 @@ namespace sd {
         PromptInput expand(const std::string& formatted_text, float weight = 1.f) const;
     };
 
-    PromptInput parse_prompt_input(const std::string& text);
+    PromptInput parse_prompt_input(const std::string& text, bool allow_embeddings = false);
     bool prompt_has_images(const PromptInput& input);
     std::string prompt_input_text(const PromptInput& input);
     bool resolve_prompt_images(PromptInput& input, const PromptImageLoader& loader);

@@ -226,12 +226,8 @@ static bool execute_sync_img_gen_request(ServerRuntime& runtime,
         PromptImageCallbackGuard prompt_images(runtime.sd_ctx, request.gen_params);
         sd_result_t* generated = nullptr;
         generate_sd_image(runtime.sd_ctx, img_gen_params, &generated);
-        results.adopt(generated, runtime.ctx_params->lora_model_dir);
+        results.adopt(generated);
         num_results = results.count();
-        if (!results.empty() && !apply_server_adetailer(runtime, request, results)) {
-            error_message = "ADetailer failed";
-            return false;
-        }
     }
 
     if (results.empty()) {
@@ -311,7 +307,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
                 json item;
                 item["b64_json"]        = base64_encode(image_bytes);
-                item["generation_info"] = json::parse(results.generation_info(i));
+                item["generation_info"] = results.generation_info(i);
                 out["data"].push_back(item);
             }
 
@@ -375,7 +371,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                                                             request.output_compression);
                 json item;
                 item["b64_json"]        = base64_encode(image_bytes);
-                item["generation_info"] = json::parse(results.generation_info(i));
+                item["generation_info"] = results.generation_info(i);
                 out["data"].push_back(item);
             }
 

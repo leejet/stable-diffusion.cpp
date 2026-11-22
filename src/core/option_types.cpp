@@ -113,7 +113,7 @@ static constexpr const char* prediction_to_str[] = {
     "eps",
     "v",
     "edm_v",
-    "sd3_flow",
+    "flow",
     "flux_flow",
     "sefi_flow",
     "minit2i_flow",

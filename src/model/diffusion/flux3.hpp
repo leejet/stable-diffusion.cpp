@@ -207,7 +207,7 @@ namespace Flux3 {
         }
 
         sd::Tensor<float> compute(int n_threads, const DiffusionParams& params) override {
-            if (params.ref_latents && params.ref_image_params.pass_to_dit && params.ref_latents->size() > 10) {
+            if (params.ref_latents && params.ref_latents->size() > 10) {
                 LOG_ERROR("FLUX.3 supports at most 10 reference images");
                 return {};
             }
@@ -222,7 +222,7 @@ namespace Flux3 {
                 GGML_ASSERT(x->ne[3] == 1 && text->ne[2] == 1);
                 std::vector<ggml_tensor*> refs;
                 ggml_tensor* references = nullptr;
-                if (params.ref_latents && params.ref_image_params.pass_to_dit) {
+                if (params.ref_latents) {
                     for (const auto& ref : *params.ref_latents) {
                         auto r = make_input(ref);
                         refs.push_back(r);

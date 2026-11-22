@@ -20,24 +20,10 @@ namespace sd {
         const char* extra_tiling_args;
     };
 
-    struct ImagePreprocessConfig {
-        // Semicolon-separated target=...,key=value rules. NULL preserves defaults.
-        const char* rules;
-    };
-
-    struct SLGConfig {
-        int* layers;
-        size_t layer_count;
-        float layer_start;
-        float layer_end;
-        float scale;
-    };
-
     struct GuidanceConfig {
         float txt_cfg;
         float img_cfg;
         float distilled_guidance;
-        sd::SLGConfig slg;
     };
 
     struct SampleConfig {
@@ -46,25 +32,12 @@ namespace sd {
         enum sample_method_t sample_method;
         int sample_steps;
         float eta;
-        int shifted_timestep;
         float* custom_sigmas;
         int custom_sigmas_count;
         float flow_shift;
         const char* extra_sample_args;
 
         SampleConfig();
-    };
-
-    struct PhotoMakerConfig {
-        sd::Image* id_images;
-        int id_images_count;
-        const char* id_embed_path;
-        float style_strength;
-    };
-
-    struct PuLIDConfig {
-        const char* id_embedding_path;
-        float id_weight;
     };
 
     struct CacheConfig {
@@ -96,22 +69,6 @@ namespace sd {
         CacheConfig();
     };
 
-    struct HiresConfig {
-        bool enabled;
-        enum sd_hires_upscaler_t upscaler;
-        const char* model_path;
-        float scale;
-        int target_width;
-        int target_height;
-        int steps;
-        float denoising_strength;
-        int upscale_tile_size;
-        float* custom_sigmas;
-        int custom_sigmas_count;
-
-        HiresConfig();
-    };
-
     struct ContextConfig {
         const char* model_path{};
         const char* clip_l_path{};
@@ -129,12 +86,8 @@ namespace sd {
         const char* audio_encoder_path{};
         const char* taesd_path{};
         const char* control_net_path{};
-        const char* ip_adapter_path{};
-        const char* motion_module_path{};
         const sd_embedding_t* embeddings{};
         uint32_t embedding_count{};
-        const char* photo_maker_path{};
-        const char* pulid_weights_path{};
         const char* tensor_type_rules{};
         int n_threads{};
         enum sd_type_t wtype {};
@@ -150,7 +103,8 @@ namespace sd {
         bool vae_conv_direct{};
         bool force_sdxl_vae_conv_scale{};
         enum sd_vae_format_t vae_format {};
-        const char* max_vram{};   // Optional per-device GiB budget for managed weights and runner buffers; 0 uses live free VRAM without an explicit budget
+        const char* max_vram{};  // Optional per-device GiB budget for managed weights and runner buffers; 0 uses live free VRAM without an explicit budget
+        const char* max_ram{};
         bool disable_prefetch{};  // Disable asynchronous next-segment weight prefetch
         bool eager_load{};        // Load all params into the params backend at model-load time instead of lazily on first use
         const char* backend{};
@@ -172,6 +126,20 @@ namespace sd {
         ContextConfig();
     };
 
+    struct HiresConfig {
+        bool enabled         = false;
+        const char* upscaler = "latent";
+        const char* model_path{};
+        float scale = 2.f;
+        int target_width{};
+        int target_height{};
+        int steps{};
+        float denoising_strength = 0.7f;
+        int upscale_tile_size    = 128;
+        float* custom_sigmas{};
+        int custom_sigmas_count{};
+    };
+
     struct ImageConfig {
         const sd_lora_t* loras{};
         uint32_t lora_count{};
@@ -181,7 +149,6 @@ namespace sd {
         sd::Image init_image{};
         sd::Image* ref_images{};
         int ref_images_count{};
-        const char* ref_image_args{};
         sd::Image mask_image{};
         int width{};
         int height{};
@@ -191,17 +158,12 @@ namespace sd {
         int batch_count{};
         sd::Image control_image{};
         float control_strength{};
-        sd::Image ip_adapter_image{};
-        float ip_adapter_strength{};
-        sd::PhotoMakerConfig pm_params{};
-        sd::PuLIDConfig pulid_params{};
         sd::TilingConfig vae_tiling_params{};
         sd::CacheConfig cache{};
-        sd::HiresConfig hires{};
+        HiresConfig hires{};
         int qwen_image_layers{};
         bool circular_x{};
         bool circular_y{};
-        sd::ImagePreprocessConfig image_preprocess{};
         enum sd_control_type_t control_type {};
 
         ImageConfig();
@@ -226,8 +188,8 @@ namespace sd {
         int width{};
         int height{};
         sd::SampleConfig sample_params{};
-        sd::SampleConfig high_noise_sample_params{};
         float moe_boundary{};
+        int high_noise_steps = -1;
         float strength{};
         int64_t seed{};
         int video_frames{};
@@ -235,52 +197,18 @@ namespace sd {
         float vace_strength{};
         sd::TilingConfig vae_tiling_params{};
         sd::CacheConfig cache{};
-        sd::HiresConfig hires{};
+        HiresConfig hires{};
         bool circular_x{};
         bool circular_y{};
-        sd::ImagePreprocessConfig image_preprocess{};
-        const char* ref_image_args{};
 
         VideoConfig();
-    };
-
-    struct VideoUpscalerConfig {
-        const char* diffusion_model_path{};
-        const char* vae_path{};
-        // Explicit output scale; RelayVSR requires 2 or 4 matching both checkpoints.
-        int upscale_factor{};
-        int n_threads{};
-        const char* backend{};
-        const char* params_backend{};
-        // auto/on/off or diffusion/vae assignments; null selects auto.
-        const char* flash_attn_mode{};
-        const char* conv_direct_mode{};
-    };
-
-    struct VideoUpscaleConfig {
-        const sd::Image* frames{};
-        int frame_count{};
-        int fps      = 24;
-        int64_t seed = 42;
-        // RelayVSR reference window, including both endpoints; defaults to 16.
-        int window_size = 16;
-        // SeedVR2 independent temporal chunks in input frames (1 or 4n+1); defaults to 5.
-        int temporal_chunk_size = 5;
-    };
-
-    struct ADetailConfig {
-        const char* prompt{};
-        const char* negative_prompt{};
-        const char* extra_ad_args{};
     };
 
     struct PostprocessConfig {
         sd::Image image{};
         bool conv_direct = false;
         int tile_size    = 128;
-        VideoUpscalerConfig video_upscaler;
-        VideoUpscaleConfig video_upscale;
-        ADetailConfig adetail;
+        int repeats      = 1;
     };
 
     struct OptConfig {

@@ -1,166 +1,98 @@
 # Generation results and metadata
 
-`sd_generate_image()`, `sd_generate_video()`, `sd_adetail()`, `sd_upscale()` and
-`sd_upscale_video()` return opaque `sd_result_t` objects containing generated media
-and generation metadata. See the [C API guide](c_api.md) for option creation and
-migration from the removed parameter/result structures.
+`sd_generate_image()`, `sd_generate_video()` and `sd_upscale()` all execute dgl.
+`sd_result_get_generation_info(result, index)` returns the exact UTF-8 program
+submitted to the DGL compiler. It is not a JSON parameter snapshot.
 
-```c
-sd_img_gen_opt_t* opt = sd_img_gen_opt_create();
-sd_result_t* result = NULL;
-if (opt && sd_opt_set_string(opt, "prompt", "a small house") == SD_STATUS_OK &&
-    sd_generate_image(ctx, opt, &result) == SD_STATUS_OK) {
-    for (size_t i = 0; i < sd_result_get_image_count(result); ++i) {
-        const sd_tensor_t* image = sd_result_get_image(result, i);
-        const char* info = sd_result_get_generation_info(result, i);
-        /* Consume image and info together. */
-    }
-}
-sd_result_free(result);
-sd_opt_free(opt);
-```
+Debug logging also prints the actual compiled program immediately before
+execution. Use `--log-level debug` in the CLI. Each image in a batch
+logs its own resolved program and seed. Source logging is independent of file
+metadata embedding; tensor bindings remain separate inputs and are not dumped.
 
-`result_out` is required and set to `NULL` on failure. Successful results own
-their pixels, audio and UTF-8 JSON independently of the generation context.
-Video results expose effective FPS and frame count through accessors; each valid
-frame index returns the shared video generation record. Result views are borrowed
-until `sd_result_free()`. Use `sd_tensor_retain()` to keep media independently,
-and release the retained handle with `sd_tensor_free()`. Free functions accept `NULL`.
+## Results and rerunning
 
-## Reproduction parameters
+Each generated image records its actual seed and executed source. Image batches
+execute individual programs in the same context, reusing loaded models. Multiple
+layers decoded from one latent share the same source. A video records one
+program for the entire sequence, returned for every valid frame index.
+Partial batch cancellation returns records only for completed images; full
+cancellation returns no result.
 
-The `sdcpp.generation/v1` JSON is a snapshot of generation parameters for the
-same loaded context and the same input images, masks, reference media and other
-assets. It is created after `GenerationRequest` resolves the request, before
-preprocessing or sampling. A failed call returns no result or metadata.
+Rerun a self-contained program through `sd-cli -M dgl --script FILE` or the
+DGL C API. Programs with `fn main(input_image, ...)` require the original host
+tensor bindings through the DGL C API. Generated programs retain component paths,
+resolved options and ordinary LoRA application order. They do not embed model
+weights or input media. Keep the same files, inputs and backends when comparing
+numerical results.
 
-The JSON schema retains its established generation field names: `prompt`, `negative_prompt`,
-`width`, `height`, `seed`, `sample_params`, `hires`, `cache`,
-`vae_tiling_params`, `image_preprocess`, and the image/video-specific options.
-`kind` distinguishes image and video parameters. There is no inferred `task`.
-Enums use their API string names. Seeds are decimal strings to preserve their
-full integer range. Omitted optional fields retain the parameter initializer's
-defaults, including automatic values represented by infinity in the C API.
+Standalone image upscaling records the complete DGL operation, including every
+requested repeat. No source diffusion settings are invented for an imported
+image. There is no postprocessing JSON merge or separate replay mode.
 
-Disabled optional features are omitted entirely: `cache`, `hires`, VAE tiling,
-zero/nonpositive `shifted_timestep`, inactive SLG, false circular axes, and empty
-preprocessing/reference arguments. SLG layers remain present when `slg_uncond`
-is enabled even with zero SLG scale. Enabled caches store their mode's parameters;
-TaylorSeer retains the shared DBCache thresholds and limits used by the runtime.
-Image CFG at its neutral value of 1 is omitted and resolves back to 1 by default.
+## WebUI infotext
 
-Image strength, ControlNet/IP-Adapter strength and PhotoMaker settings are stored
-when their corresponding input images are supplied. PuLID requires an embedding
-path. Layer count is stored for layered generation; video VACE and high-noise
-settings require those models. High-noise settings omit scheduler, custom sigmas,
-flow shift and timestep shifting because that pass shares the base configuration.
-Explicit nonempty argument strings are retained without rewriting their contents.
-Core sampling values such as seed, sampler, scheduler, steps and guidance remain
-explicit even when equal to their defaults. ADetailer always retains its inpaint
-strength because its input crops are created later.
-Model-required VAE tiling is resolved before serialization, so forced tiling
-(such as MiniMax-H3) remains present even if the caller did not enable it.
+CLI and server derive WebUI infotext from the DGL source on a best-effort basis.
+Known image flows can expose prompts, seed, dimensions, sampler, scheduler,
+steps, CFG, strength, components and ordinary LoRAs. Ambiguous multi-stage fields
+are omitted. Conversion never changes the executed source or causes inference
+to fail. Standalone upscaling can have empty infotext.
 
-The request fixes the seed, dimensions, clip skip, guidance, sampler, scheduler
-and eta before taking the snapshot. `custom_sigmas` is stored only when supplied
-as an input. Automatically computed schedules, preprocessing transforms,
-conditioning/cache decisions, detector regions and output statistics are not
-stored: they are recomputed from the same parameters and inputs.
+`sd_get_generation_metadata(source)` returns UTF-8 JSON containing these
+parameters and an `infotext` field in one call. It does not execute the program
+or read model files. Unrecognized image flows return `{}`. The returned string
+is borrowed until the next call on the same thread; copy or parse it before then.
+A null result indicates an API error available through `sd_get_last_error()`.
 
-Each image records the seed used to sample its latent. `batch_count` is omitted;
-replay image parameters with `batch_count = 1`. Layers or frames decoded from
-the same latent share its seed, so layered generation reproduces that group of
-layers. Video frames share the video request. Partial batch cancellation returns
-metadata only for completed outputs. Full cancellation returns no result.
-
-The current image pipeline prepares input latents once using the starting seed
-and shares them across a batch. With a stochastic VAE encoder, replaying a later
-image alone using its sampling seed can change those input latents. Per-image
-seeds therefore do not guarantee independent reproduction for these paths.
-
-To replay a record, create image/video options, translate JSON fields to the documented C API
-keys, restore the same input buffers, and call generation with the same context.
-Setters copy strings and numeric arrays and retain media tensors; keep options alive
-for the call. Paths supplied as generation parameters (LoRAs, hires models and identity
-embeddings) are retained. `models` identifies successfully loaded context model
-files by component (`model`, `diffusion_model`, `clip_l`, `vae`, etc.), using
-filenames with extensions and omitting directories. Optional components disabled
-for the request and preview-only TAE are omitted. WebUI text includes `Model`
-(the diffusion model when supplied separately, otherwise the checkpoint, without
-the extension) and `VAE` for a separate active VAE. These names are identifiers,
-not hashes or sufficient configuration to rebuild a context; replay still requires
-the same model files and context settings. The JSON does not embed media buffers
-or model weights.
-
-When `--lora-model-dir` is configured, CLI/server output records express LoRA
-paths relative to that directory, preserving subdirectories and file extensions
-and using `/` separators. This applies to file metadata, API responses and
-ADetailer records. Resolve these paths against the same LoRA directory before
-passing them back to the C API. Core results retain the supplied loading paths.
-Files outside the directory retain `..` components; paths on another volume,
-or records without a configured LoRA directory, retain their original paths.
-
-## Postprocessing
-
-Upscale records `upscale.upscale_factor`. ADetailer records `adetailer` and
-`inpaint_params`, with a concrete starting seed chosen before detection. These
-operations require the same upscaler/detector context and source image on replay.
-They do not store detection results or per-region generation traces.
-
-The CLI/server append operation parameter snapshots to `postprocess` in call
-order. The source generation parameters remain unchanged. Frame postprocessing
-uses the same operation parameters for each video frame. Standalone
-postprocessing does not invent source diffusion parameters for an input image.
+Native server `generation_info` values are DGL strings. WebUI-compatible routes
+also fill `infotexts` separately. Clients must not parse the DGL string as JSON.
 
 ## File metadata
 
-Image encoders accept the native record and derive WebUI infotext from it.
-Images use the existing metadata locations and combined text layout:
-`<WebUI infotext>, SDCPP: <native JSON>`. Standalone postprocessing without
-source diffusion parameters stores only native JSON. Video metadata stores
-only native JSON.
+The CLI and server image writers store native DGL and WebUI text separately:
 
-| Container | Metadata location |
-| --- | --- |
-| PNG | `tEXt`, keyword `parameters` |
-| JPEG | COM segment, `parameters` label followed by a NUL byte |
-| WebP image / animated WebP | XMP property `sdcpp:parameters` |
-| AVI | RIFF INFO `ICMT` |
-| WebM | `COMMENT` tag |
+| Container | DGL source | WebUI text |
+| --- | --- | --- |
+| PNG | UTF-8 `iTXt`, keyword `dgl` | UTF-8 `iTXt`, keyword `parameters` |
+| JPEG | COM segment labeled `dgl` | COM segment labeled `parameters` |
+| WebP / animated WebP | XMP `sdcpp:dgl` | XMP `sdcpp:parameters` |
+| AVI | RIFF INFO `ICMT` | Not stored separately |
+| WebM / Matroska | `COMMENT` tag | Not stored separately |
 
-Inspect images or videos with `sd-cli -M metadata --image <file>`; the same
-command supports all containers above, with `--metadata-format json` for a
-structured report. Video metadata inspection does not require a model or video
-decoder.
-Matroska containers are also supported, including `.webm` outputs whose audio
-codec causes the muxer to select the Matroska document type.
+Video comments contain the DGL program. The XMP namespace is
+`https://github.com/leejet/stable-diffusion.cpp/ns/1.0/`.
+JPEG labels and values are separated by NUL bytes. A JPEG COM payload is limited
+to 65,533 bytes including labels and terminators; an oversized record makes
+encoding fail rather than silently truncating the program. Other container
+capacity checks follow the same rule.
 
-The XMP namespace is `https://github.com/leejet/stable-diffusion.cpp/ns/1.0/`.
-PNG and JPEG retain the existing UTF-8 text payload convention. Memory encoding
-and file saving use the same implementation. The core result and API
-`generation_info` fields remain pure JSON; the combined layout applies only
-to embedded image metadata.
+Memory encoding and file saving use the same metadata writer. Disabling metadata
+still disables embedding. Previously generated files with combined WebUI text
+and `SDCPP:` JSON remain readable.
 
-WebUI conversion is lossy: known samplers and schedules have explicit name
-mappings; unsupported ones use `SDCPP Sampler`/`SDCPP Schedule` fields. Hires
-keeps the base request size and separate configured hires size/steps. The native
-record retains the full generation parameters. Standalone postprocessing has no WebUI
-infotext because its original diffusion settings are unknown.
+DGL `image::save` (PNG) and `video::save` (AVI) also embed the exact program
+source by default, using `dgl` and `ICMT` respectively. `image::encode` and
+`video::encode` embed it during encoding; `media::save` writes those bytes
+unchanged. WebM uses the `COMMENT` tag. These script functions store the program
+itself without deriving WebUI infotext. Set the DGL context
+option `embed_metadata` to `off` to omit it; `sd-cli -M dgl` forwards
+`--disable-image-metadata` to that option. The switch also disables embedding
+in the ordinary CLI image and video output paths. It does not affect tensor
+data or the source returned by `sd_result_get_generation_info`.
 
-WebUI prompt text appends ordinary LoRAs as `<lora:filename_without_extension:weight>`.
-Directory components are omitted to match WebUI's filename lookup; the native
-`loras` array retains relative paths and weights. High-noise-only LoRAs and names
-that cannot be represented by this tag syntax remain in the native record only.
-The native prompt is not modified, and postprocessing LoRAs are not added to the
-source generation prompt.
+Inspect metadata with `sd-cli -M metadata --image FILE`, optionally adding
+`--metadata-format json` for a structured report. This command reads container
+metadata without loading a model.
 
-JPEG requires the COM payload, including the label and terminating NUL bytes,
-to fit within 65,533 bytes. Larger records fail encoding with an error rather
-than being truncated. Use PNG or WebP for larger records.
+The C API provides the same reader through `sd_read_metadata(path, flags)`.
+Use zero for the default text report, or combine `SD_METADATA_READ_JSON`,
+`SD_METADATA_READ_RAW`, `SD_METADATA_READ_BRIEF` and
+`SD_METADATA_READ_STRUCTURAL`. A null return indicates an error; inspect
+`sd_get_last_error()`. The returned UTF-8 report is borrowed until the next
+call to this function on the same thread.
 
-Disabling file metadata omits both image representations, but does not disable
-the core generation record or its API response. Native async image results and
-OpenAI image response items contain `generation_info`; video results contain a
-sequence-level `generation_info`. The SD API `info` object contains per-output
-`generation_info` alongside derived `infotexts` and each image's seed. Its outer
-`parameters` field continues to echo the request.
+For applications that encode their own files, `sd_get_metadata_chunk()` builds
+PNG iTXt chunks, JPEG COM segments, XMP text or an AVI INFO chunk. It returns
+borrowed bytes and their exact size; copy them before the next call on the same
+thread. PNG chunks are inserted after IHDR, JPEG segments after SOI, XMP is
+stored in the container's XMP field, and AVI INFO is a RIFF chunk. Empty source
+returns an empty chunk. This function does not write a file.

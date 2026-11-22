@@ -38,7 +38,7 @@ struct PH3ImageTextConnector : public UnaryBlock {
 
 struct PH3ImageTextConnectorRunner : public GGMLRunner {
     PH3ImageTextConnector model;
-    static constexpr const char* prefix = "text_encoders.ph3_image_connector";
+    static constexpr const char* prefix = "text_encoders.connector";
 
     PH3ImageTextConnectorRunner(ggml_backend_t backend,
                                 const String2TensorStorage& tensor_storage_map,

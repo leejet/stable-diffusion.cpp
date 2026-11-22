@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 
+#include "core/file_access.h"
 #include "core/util.h"
 #include "hf_tokenizer.h"
 
@@ -52,6 +53,7 @@ std::shared_ptr<Tokenizer> TokenizerConfig::create(Slot slot, int64_t embedding_
         return nullptr;
     }
     try {
+        sd::require_file_access(paths_[slot], SD_DGL_FILE_READ_MODEL);
         auto tokenizer = std::make_shared<HFTokenizer>(paths_[slot]);
         tokenizer->set_padding(padding_id, pad_left);
         tokenizer->validate_vocab_size(embedding_rows);

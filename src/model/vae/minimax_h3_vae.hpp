@@ -698,12 +698,16 @@ namespace MiniMaxH3VAE {
         }
 
         sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output,
-                                                std::shared_ptr<RNG> rng) override {
-            SD_UNUSED(rng);
+                                                std::shared_ptr<RNG> rng,
+                                                VAEPosterior posterior,
+                                                bool use_supplied_rng) override {
             if (config.patch_size_t == 1) {
-                auto mean   = sd::ops::slice(vae_output, 3, 0, 24);
-                auto logvar = sd::ops::slice(vae_output, 3, 24, 48);
-                auto noise  = MT19937RNG(42).randn(static_cast<uint32_t>(mean.numel()));
+                auto mean = sd::ops::slice(vae_output, 3, 0, 24);
+                if (posterior == VAEPosterior::Mode)
+                    return mean;
+                auto logvar      = sd::ops::slice(vae_output, 3, 24, 48);
+                const auto count = static_cast<uint32_t>(mean.numel());
+                auto noise       = use_supplied_rng ? rng->randn(count) : MT19937RNG(42).randn(count);
                 for (int64_t i = 0; i < mean.numel(); ++i) {
                     mean[i] += std::exp(0.5f * std::clamp(logvar[i], -30.f, 20.f)) * noise[i];
                 }
