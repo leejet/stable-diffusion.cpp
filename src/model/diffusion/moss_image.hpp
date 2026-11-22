@@ -2,7 +2,6 @@
 #define __SD_MODEL_DIFFUSION_MOSS_IMAGE_HPP__
 
 #include <algorithm>
-#include <array>
 #include <cinttypes>
 #include <stdexcept>
 
@@ -95,6 +94,26 @@ namespace MOSSImage {
         }
     };
 
+    static ggml_tensor* attend(GGMLRunnerContext* ctx, ggml_tensor* q, ggml_tensor* k, ggml_tensor* v, ggml_tensor* pe, int64_t ref_start) {
+        const int64_t tokens = q->ne[2];
+        if (ref_start == tokens) {
+            return Rope::attention(ctx, q, k, v, pe, nullptr, 1.f, false);
+        }
+
+        const int64_t heads = q->ne[1];
+        q                   = Rope::apply_rope(ctx, q, pe, false);
+        k                   = Rope::apply_rope(ctx, k, pe, false);
+        // Image and text queries see the whole sequence. Reference queries see only references.
+        auto attention = [&](ggml_tensor* query, ggml_tensor* key, ggml_tensor* value) {
+            return ggml_ext_attention_ext(ctx, query, key, value, heads, nullptr, true, ctx->flash_attn_enabled);
+        };
+        auto body = attention(ggml_ext_slice(ctx, q, 1, 0, ref_start, false), k, v);
+        auto refs = attention(ggml_ext_slice(ctx, q, 1, ref_start, tokens, false),
+                              ggml_ext_slice(ctx, k, 1, ref_start, tokens, false),
+                              ggml_ext_slice(ctx, v, 2, ref_start, tokens, false));
+        return ggml_concat(ctx->ggml_ctx, body, refs, 1);
+    }
+
     struct Block : public GGMLBlock {
         MOSSImageConfig config;
 
@@ -110,13 +129,12 @@ namespace MOSSImage {
             blocks["proj.ffn_down"]    = std::make_shared<Linear>(config.ffn_dim, config.dim, false);
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* pe, const std::array<ggml_tensor*, 6>& mod, int64_t ref_start = -1) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* pe, const std::vector<ggml_tensor*>& mod, int64_t ref_start) {
             auto c      = ctx->ggml_ctx;
             auto linear = [&](const char* name, ggml_tensor* h) { return std::dynamic_pointer_cast<Linear>(blocks[name])->forward(ctx, h); };
             auto norm   = [&](const char* name, ggml_tensor* h) { return std::dynamic_pointer_cast<RMSNorm>(blocks[name])->forward(ctx, h); };
-            auto part   = [&](int i) { return mod[i]; };
             auto y      = norm("norm1", x);
-            y           = ggml_ext_modulate(ctx, y, part(0), part(1));
+            y           = ggml_ext_modulate(ctx, y, mod[0], mod[1]);
             auto qkv    = linear("proj.qkv", y);
             auto split  = [&](int i) {
                 return ggml_view_4d(c, qkv, config.head_dim, config.dim / config.head_dim, x->ne[1], x->ne[2],
@@ -125,16 +143,16 @@ namespace MOSSImage {
             auto q       = norm("q_norm", split(0));
             auto k       = norm("k_norm", split(1));
             auto v       = split(2);
-            y            = Rope::attention(ctx, q, k, v, pe, nullptr, 1.f, false, ref_start);
+            y            = attend(ctx, q, k, v, pe, ref_start);
             y            = linear("proj.o", y);
-            y            = ggml_mul(c, y, part(2));
+            y            = ggml_mul(c, y, mod[2]);
             x            = ggml_add(c, x, y);
             y            = norm("norm2", x);
-            y            = ggml_ext_modulate(ctx, y, part(3), part(4));
+            y            = ggml_ext_modulate(ctx, y, mod[3], mod[4]);
             auto up_gate = linear("proj.ffn_up_gate", y);
             y            = ggml_ext_situ(ctx, up_gate);
             y            = linear("proj.ffn_down", y);
-            y            = ggml_mul(c, y, part(5));
+            y            = ggml_mul(c, y, mod[5]);
             return ggml_add(c, x, y);
         }
     };
@@ -160,51 +178,38 @@ namespace MOSSImage {
             blocks["final_linear_video"] = std::make_shared<Linear>(config.dim, config.channels, false);
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* image, ggml_tensor* time, ggml_tensor* time_0, ggml_tensor* text, ggml_tensor* pe, const std::vector<int>& skip, const std::vector<ggml_tensor*>& refs) {
-            auto c            = ctx->ggml_ctx;
-            auto linear       = [&](const char* name, ggml_tensor* h) { return std::dynamic_pointer_cast<Linear>(blocks[name])->forward(ctx, h); };
-            int64_t image_len = image->ne[0] * image->ne[1];
-            auto pixels       = ggml_reshape_3d(c, image, image_len, image->ne[2], image->ne[3]);
-            auto x            = linear("video_embedder", ggml_cont(c, ggml_transpose(c, pixels)));
-            text              = linear("text_embedder.proj", text);
-            auto text_pe      = ggml_ext_slice(ctx, pe, 3, image_len, image_len + text->ne[1], false);
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* image, ggml_tensor* time, ggml_tensor* text, ggml_tensor* pe, const std::vector<int>& skip, const std::vector<ggml_tensor*>& refs, ggml_tensor* modulation_rows) {
+            auto c           = ctx->ggml_ctx;
+            auto linear      = [&](const char* name, ggml_tensor* h) { return std::dynamic_pointer_cast<Linear>(blocks[name])->forward(ctx, h); };
+            auto embed_image = [&](ggml_tensor* latent) {
+                auto pixels = ggml_reshape_3d(c, latent, latent->ne[0] * latent->ne[1], latent->ne[2], latent->ne[3]);
+                return linear("video_embedder", ggml_cont(c, ggml_transpose(c, pixels)));
+            };
+            auto x                  = embed_image(image);
+            const int64_t image_len = x->ne[1];
+            text                    = linear("text_embedder.proj", text);
+            auto text_pe            = ggml_ext_slice(ctx, pe, 3, image_len, image_len + text->ne[1], false);
             for (int i = 0; i < 2; ++i) {
                 text = std::dynamic_pointer_cast<TextBlock>(blocks["text_embedder.blocks." + std::to_string(i)])->forward(ctx, text, text_pe);
             }
-            time      = linear("time_embedding.2", ggml_silu(c, linear("time_embedding.0", time)));
-            auto head = linear("video_head_modulation", time);
-            x                      = ggml_concat(c, x, text, 1);
-            const int64_t body_len = x->ne[1];
+            x                       = ggml_concat(c, x, text, 1);
+            const int64_t ref_start = x->ne[1];
             for (auto* ref : refs) {
-                auto pixels_ref = ggml_reshape_3d(c, ref, ref->ne[0] * ref->ne[1], ref->ne[2], ref->ne[3]);
-                pixels_ref      = ggml_cont(c, ggml_transpose(c, pixels_ref));
-                x               = ggml_concat(c, x, linear("video_embedder", pixels_ref), 1);
+                x = ggml_concat(c, x, embed_image(ref), 1);
             }
-            const int64_t ref_len = x->ne[1] - body_len;
 
-            // Reference tokens use the clean-image timestep while image and text use the sampling timestep.
-            auto mod0 = time_0 != nullptr
-                            ? linear("shared_block_modulation",
-                                     linear("time_embedding.2", ggml_silu(c, linear("time_embedding.0", time_0))))
-                            : nullptr;
-            auto mod  = linear("shared_block_modulation", time);
-            std::array<ggml_tensor*, 6> parts;
-            for (int i = 0; i < 6; ++i) {
-                parts[i] = ggml_ext_slice(ctx, mod, 0, i * config.dim, (i + 1) * config.dim, false);
-                if (mod0 != nullptr) {
-                    auto seg = [&](ggml_tensor* vec, int64_t len) {
-                        return ggml_repeat(c, ggml_reshape_3d(c, vec, config.dim, 1, 1),
-                                           ggml_new_tensor_3d(c, GGML_TYPE_F32, config.dim, len, 1));
-                    };
-                    auto refp = ggml_ext_slice(ctx, mod0, 0, i * config.dim, (i + 1) * config.dim, false);
-                    parts[i]  = ggml_concat(c, seg(parts[i], body_len), seg(refp, ref_len), 1);
+            time       = linear("time_embedding.2", ggml_silu(c, linear("time_embedding.0", time)));
+            auto head  = linear("video_head_modulation", ggml_ext_slice(ctx, time, 1, 0, 1, false));
+            auto parts = ggml_ext_chunk(ctx, linear("shared_block_modulation", time), 6, 0, false);
+            for (auto*& part : parts) {
+                if (modulation_rows) {
+                    part = ggml_get_rows(c, part, modulation_rows);
                 }
                 if (ctx->graph != nullptr) {
-                    ggml_build_forward_expand(ctx->graph, parts[i]);
+                    ggml_build_forward_expand(ctx->graph, part);
                 }
             }
 
-            const int64_t ref_start = refs.empty() ? -1 : body_len;
             for (int64_t i = 0; i < config.depth; ++i) {
                 if (std::find(skip.begin(), skip.end(), i) == skip.end()) {
                     x = std::dynamic_pointer_cast<Block>(blocks["layers." + std::to_string(i)])->forward(ctx, x, pe, parts, ref_start);
@@ -226,7 +231,6 @@ namespace MOSSImage {
         MOSSImageConfig config;
         Model model;
         std::vector<float> time_data;
-        std::vector<float> time0_data;
 
         MOSSImageRunner(ggml_backend_t backend, const String2TensorStorage& weights, const std::string& prefix, std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : DiffusionModelRunner(backend, prefix, weight_manager), config(MOSSImageConfig::detect_from_weights(weights, prefix)), model(config) {
@@ -249,90 +253,78 @@ namespace MOSSImage {
                     skip = *extra->skip_layers;
                 }
             }
-            if (inputs.ref_latents != nullptr) {
-                for (const auto& ref : *inputs.ref_latents) {
+            const auto* references = inputs.ref_latents;
+            if (references) {
+                for (const auto& ref : *references) {
                     if (ref.empty() || ref.dim() != 4 || ref.shape()[2] != config.channels || ref.shape()[3] != 1) {
                         throw std::runtime_error("MOSS-Image reference latents must have shape [width, height, channels, 1] with the model's latent channel count");
                     }
                 }
             }
+            sd::Tensor<int32_t> modulation_rows;
             auto graph = [&]() {
                 auto gf   = new_graph_custom(65536);
                 auto x    = make_input(*inputs.x);
                 auto text = make_input(*inputs.context);
                 GGML_ASSERT(x->ne[3] == 1 && x->ne[2] == config.channels && text->ne[0] == config.text_dim);
-                int64_t h = x->ne[1], w = x->ne[0], nt = text->ne[1];
-                std::vector<ggml_tensor*> refs;
-                if (inputs.ref_latents != nullptr) {
-                    for (const auto& ref : *inputs.ref_latents) {
-                        refs.push_back(make_input(ref));
-                    }
-                }
-                int64_t ref_tokens = 0;
-                for (const auto& ref : refs) {
-                    ref_tokens += ref->ne[1] * ref->ne[0];
-                }
+                const auto h = x->ne[1], w = x->ne[0], nt = text->ne[1];
+                const auto ref_start = h * w + nt;
+                auto tokens          = ref_start;
                 sd::PECacheKey pe_key("moss_image.pe");
                 pe_key.add(h).add(w).add(nt).add(config.head_dim).add(circular_x_enabled).add(circular_y_enabled);
-                for (const auto& ref : refs) {
-                    pe_key.add(ref->ne[1]).add(ref->ne[0]);
+                std::vector<ggml_tensor*> refs;
+                if (references) {
+                    for (const auto& ref : *references) {
+                        refs.push_back(make_input(ref));
+                        pe_key.add(ref.shape()[1]).add(ref.shape()[0]);
+                        tokens += ref.shape()[1] * ref.shape()[0];
+                    }
                 }
                 auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
                     Rope::Embedding embedding;
-                    embedding.positions.append_image(static_cast<int>(h), static_cast<int>(w));
-                    embedding.positions.images.back().height_axis = 2;
-                    embedding.positions.images.back().width_axis  = 3;
+                    embedding.ids.reserve(tokens);
+                    auto append_image = [&](int64_t height, int64_t width, float ref_index, float text_position) {
+                        embedding.positions.append_image(static_cast<int>(height), static_cast<int>(width));
+                        auto& region       = embedding.positions.images.back();
+                        region.height_axis = 2;
+                        region.width_axis  = 3;
+                        for (int64_t i = 0; i < height * width; ++i) {
+                            embedding.ids.push_back({ref_index, text_position,
+                                                     float(i / width) - float(height - 1) / 2.f,
+                                                     float(i % width) - float(width - 1) / 2.f});
+                        }
+                    };
+                    append_image(h, w, 0.f, float(nt));
                     embedding.positions.append_tokens(nt);
-                    for (const auto& ref : refs) {
-                        embedding.positions.append_image(static_cast<int>(ref->ne[1]), static_cast<int>(ref->ne[0]));
-                        embedding.positions.images.back().height_axis = 2;
-                        embedding.positions.images.back().width_axis  = 3;
+                    for (int64_t i = 0; i < nt; ++i) {
+                        embedding.ids.push_back({0.f, float(i), 0.f, 0.f});
                     }
-                    int64_t body = h * w + nt;
-                    for (int64_t token = 0; token < body; ++token) {
-                        float pos[4] = {0.f, float(token - h * w), 0.f, 0.f};
-                        if (token < h * w) {
-                            pos[1] = float(nt);
-                            pos[2] = float(token / w) - float(h - 1) / 2.f;
-                            pos[3] = float(token % w) - float(w - 1) / 2.f;
-                        }
-                        embedding.ids.push_back({pos[0], pos[1], pos[2], pos[3]});
+                    for (size_t i = 0; i < refs.size(); ++i) {
+                        append_image(refs[i]->ne[1], refs[i]->ne[0], float(i + 1), 0.f);
                     }
-                    // ref i owns r-index i+1 with f=0, centered in h/w, on its own PE rows so a
-                    // later Scale-ROPE on the generated image cannot corrupt the ref frequencies.
-                    for (int64_t ri = 0; ri < (int64_t)refs.size(); ++ri) {
-                        const int64_t rh = refs[ri]->ne[1], rw = refs[ri]->ne[0];
-                        for (int64_t t = 0; t < rh * rw; ++t) {
-                            float pos[4] = {float(ri + 1), 0.f,
-                                            float(t / rw) - float(rh - 1) / 2.f,
-                                            float(t % rw) - float(rw - 1) / 2.f};
-                            embedding.ids.push_back({pos[0], pos[1], pos[2], pos[3]});
-                        }
-                    }
-                    GGML_ASSERT((int64_t)embedding.ids.size() == body + ref_tokens);
                     embedding.values = Rope::embed_nd(embedding.ids, 1, 10000.f, std::vector<int>(4, static_cast<int>(config.head_dim / 4)), embedding.layout, &embedding.frequencies);
-                    auto values      = finish_rope_pe(std::move(embedding));
-                    return sd::Tensor<float>({2, 2, config.head_dim / 2, body + ref_tokens}, std::move(values));
+                    return sd::Tensor<float>({2, 2, config.head_dim / 2, tokens}, finish_rope_pe(std::move(embedding)));
                 }));
-                time_data.resize(config.freq_dim);
-                for (int64_t i = 0; i < config.freq_dim / 2; ++i) {
-                    double angle                       = inputs.timesteps->values()[0] * std::pow(10000.0, -double(i) / double(config.freq_dim / 2));
-                    time_data[i]                       = float(std::cos(angle));
-                    time_data[i + config.freq_dim / 2] = float(std::sin(angle));
+                const auto half      = config.freq_dim / 2;
+                const int time_count = refs.empty() ? 1 : 2;
+                time_data.assign(time_count * config.freq_dim, 0.f);
+                for (int64_t i = 0; i < half; ++i) {
+                    const double angle  = inputs.timesteps->values()[0] * std::pow(10000.0, -double(i) / double(half));
+                    time_data[i]        = float(std::cos(angle));
+                    time_data[i + half] = float(std::sin(angle));
                 }
-                auto time = ggml_new_tensor_3d(compute_ctx, GGML_TYPE_F32, config.freq_dim, 1, 1);
-                set_backend_tensor_data(time, time_data.data());
-                // timestep_embedding(0) = [1 x freq_dim/2, 0 x freq_dim/2] (cos(0)=1, sin(0)=0).
-                // Not built as ggml_scale(time, 0) — that would zero the cos half as well.
-                ggml_tensor* time_0 = nullptr;
+                ggml_tensor* rows = nullptr;
                 if (!refs.empty()) {
-                    time0_data.assign(config.freq_dim / 2, 1.f);
-                    time0_data.resize(config.freq_dim, 0.f);
-                    time_0 = ggml_new_tensor_3d(compute_ctx, GGML_TYPE_F32, config.freq_dim, 1, 1);
-                    set_backend_tensor_data(time_0, time0_data.data());
+                    // The second row is the timestep-zero embedding for reference tokens.
+                    std::fill_n(time_data.begin() + config.freq_dim, half, 1.f);
+                    modulation_rows = sd::Tensor<int32_t>::zeros({tokens});
+                    std::fill_n(modulation_rows.data() + ref_start, tokens - ref_start, 1);
+                    rows = make_input(modulation_rows);
                 }
+                auto time = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, config.freq_dim, time_count);
+                set_backend_tensor_data(time, time_data.data());
                 auto ctx = get_context(gf);
-                ggml_build_forward_expand(gf, model.forward(&ctx, x, time, time_0, text, pe, skip, refs));
+                ggml_build_forward_expand(gf, model.forward(&ctx, x, time, text, pe, skip, refs, rows));
                 return gf;
             };
             return restore_trailing_singleton_dims(GGMLRunner::compute(graph, n_threads, false), inputs.x->dim());

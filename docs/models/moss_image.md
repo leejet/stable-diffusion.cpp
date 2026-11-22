@@ -53,6 +53,12 @@ to 16 before encoding with the FLUX.2 VAE. Both predictor branches receive the
 same reference latents at timestep zero. Use `(phrase:1.2)` to weight a phrase
 in the prompt.
 
+The editing examples use the `moss-edit-lora` format. MOSS-Image-Edit-HQ publishes
+an `armV5-moss-edit-lora.safetensors` export for this workflow with MOSS-Image SFT.
+Its native `weights/armV5/armV5.safetensors` file uses the ai-toolkit workflow,
+which also sends reference images to the vision encoder and uses different
+diffusion position indices. [MOSS-Image-Edit-HQ model card](https://huggingface.co/akhaliq/MOSS-Image-Edit-HQ#use-in-comfyui)
+
 #### Run a script
 
 Edit paths, prompts and settings in the script's `var` block, then run from
