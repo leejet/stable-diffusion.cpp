@@ -1,5 +1,6 @@
 #include "dgl/bindings/components.h"
 
+#include <climits>
 #include <cmath>
 #include <type_traits>
 
