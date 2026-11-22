@@ -46,10 +46,19 @@ struct SpectrumState {
         return (step_cnt / 50.0f) * 2.0f - 1.0f;
     }
 
-    bool should_predict() {
-        if (cnt < config.warmup_steps)
+    void reset_history() {
+        H_buf.clear();
+        T_buf.clear();
+        num_cached = 0;
+        curr_ws    = float(config.window_size);
+    }
+
+    bool should_predict() const { return should_predict(cnt, stop_step > 0); }
+
+    bool should_predict(int logical_step, bool stop_enabled = true) const {
+        if (logical_step < config.warmup_steps)
             return false;
-        if (stop_step > 0 && cnt >= stop_step)
+        if (stop_enabled && logical_step >= stop_step)
             return false;
         if ((int)H_buf.size() < 2)
             return false;
@@ -58,28 +67,32 @@ struct SpectrumState {
         return (num_cached + 1) % ws != 0;
     }
 
-    void update(const sd::Tensor<float>& denoised) {
+    void update(const sd::Tensor<float>& denoised) { update(denoised, cnt); }
+
+    void update(const sd::Tensor<float>& denoised, int logical_step) {
         H_buf.emplace_back(denoised.data(), denoised.data() + denoised.numel());
-        T_buf.push_back(taus(cnt));
+        T_buf.push_back(taus(logical_step));
 
         while ((int)H_buf.size() > K) {
             H_buf.erase(H_buf.begin());
             T_buf.erase(T_buf.begin());
         }
 
-        if (cnt >= config.warmup_steps)
+        if (logical_step >= config.warmup_steps)
             curr_ws += config.flex_window;
 
         num_cached = 0;
-        cnt++;
+        cnt        = logical_step + 1;
     }
 
-    void predict(sd::Tensor<float>* denoised) {
+    void predict(sd::Tensor<float>* denoised) { predict(denoised, cnt); }
+
+    void predict(sd::Tensor<float>* denoised, int logical_step) {
         GGML_ASSERT(denoised != nullptr);
         int64_t F    = (int64_t)H_buf[0].size();
         int K_curr   = (int)H_buf.size();
         int M1       = config.m + 1;
-        float tau_at = taus(cnt);
+        float tau_at = taus(logical_step);
 
         std::vector<float> X(K_curr * M1);
         for (int i = 0; i < K_curr; i++) {
@@ -143,7 +156,7 @@ struct SpectrumState {
 
         num_cached++;
         total_steps_skipped++;
-        cnt++;
+        cnt = logical_step + 1;
     }
 
 private:

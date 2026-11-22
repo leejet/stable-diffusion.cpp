@@ -1,0 +1,39 @@
+# version: 0.0.0
+# docs/models/lcm.md — LCM-LoRA with SD 1.5
+
+var {
+    model_path = "../models/checkpoints/v1-5-pruned-emaonly.safetensors"
+    lora_0_path = "../models/loras/lcm-lora-sdv1-5.safetensors"
+
+    output_path = "output.png"
+
+    prompt = "a lovely cat"
+
+    seed = 42
+    rng_type = "cuda"
+    width = 512
+    height = 512
+
+    steps = 4
+    method = "euler_a"
+    scheduler = "discrete"
+}
+
+fn main() {
+    base_model = load_unet(model_path, family = "sd1")
+    text = load_text_encoder(model_path, family = "sd1")
+    vae = load_vae(model_path, family = "sd1")
+
+    lora_0 = load_lora(lora_0_path)
+    model = apply_lora(base_model, lora_0)
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    condition = encode_prompt(text, prompt, width = width, height = height)
+    predict = predictor(model, condition)
+    sigmas = make_sigmas(predict, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(predict, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = predict, method = method, rng = rng)
+    image = vae_decode(vae, unet_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

@@ -4,6 +4,7 @@
 #include <chrono>
 #include <map>
 #include <mutex>
+#include <set>
 #include <shared_mutex>
 #include <string>
 
@@ -29,10 +30,18 @@ ModelRoot make_model_root(const std::filesystem::path& path, bool primary);
 std::vector<ModelRoot> get_model_roots(const SDSvrParams& params);
 std::vector<std::filesystem::path> model_category_directories(const ModelRoot& root, const std::string& category);
 
+struct ServerFileAccess {
+    std::vector<ModelRoot> models;
+    std::filesystem::path output;
+    std::vector<std::filesystem::path> model_bundles;
+    std::set<std::string> configured_files;
+};
+
 struct ServerModels {
     std::shared_mutex runtime_mutex;
     std::mutex catalog_mutex;
     std::mutex status_mutex;
+    ServerFileAccess file_access;
     SDCtxPtr context;
     SDContextParams base_context;
     SDGenerationParams base_defaults;
@@ -60,5 +69,6 @@ void prepare_model_load(ServerRuntime& runtime, json& body, SDContextParams& con
 // stay stable if a model directory symlink is retargeted inside the configured
 // root, so the idempotent-load check compares the resolved paths too.
 bool component_paths_match(const SDContextParams& a, const SDContextParams& b);
+void add_startup_model_sources(ServerFileAccess& policy, const SDContextParams& config);
 
 #endif

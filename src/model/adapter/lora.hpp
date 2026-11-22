@@ -40,18 +40,23 @@ struct LoraModel : public GGMLRunner {
 
     typedef std::function<bool(const std::string&)> filter_t;
 
+    const std::shared_ptr<ModelManager::ResourceHandle> weights;
+
     LoraModel(const std::string& id, ggml_backend_t backend, ggml_backend_t params, std::shared_ptr<ModelManager> manager, ModelLoader::FileId file, SDVersion version, ModelManager::ResidencyMode mode = ModelManager::ResidencyMode::ParamBackend, bool follow_compute = false)
-        : GGMLRunner(backend, manager), lora_id(id), params_backend(params), source_file(file), source_version(version), residency_mode(mode), params_follow_compute(follow_compute) {
-        load_failed = source_file == 0 || manager == nullptr || manager->loader().file_revision(source_file) == 0;
+        : LoraModel(id, backend, params, manager ? std::make_shared<ModelManager::ResourceHandle>(std::move(manager), 0) : nullptr, file, version, mode, follow_compute) {}
+
+    LoraModel(const std::string& id, ggml_backend_t backend, ggml_backend_t params, std::shared_ptr<ModelManager::ResourceHandle> resource, ModelLoader::FileId file, SDVersion version, ModelManager::ResidencyMode mode = ModelManager::ResidencyMode::ParamBackend, bool follow_compute = false)
+        : GGMLRunner(backend, resource), lora_id(id), params_backend(params), source_file(file), source_version(version), residency_mode(mode), params_follow_compute(follow_compute), weights(std::move(resource)) {
+        load_failed = source_file == 0 || weights == nullptr || weights->loader().file_revision(source_file) == 0;
         if (!load_failed) {
-            file_path = manager->loader().file_path(source_file);
+            file_path = weights->loader().file_path(source_file);
         }
     }
 
     ~LoraModel() override {
         runner_end();
-        if (auto manager = std::dynamic_pointer_cast<ModelManager>(residency_manager.lock())) {
-            GGML_ASSERT(manager->unregister_param_tensors(registered_params));
+        if (weights) {
+            GGML_ASSERT(weights->unregister_param_tensors(registered_params));
         }
     }
 
@@ -59,15 +64,16 @@ struct LoraModel : public GGMLRunner {
         return "lora";
     }
 
+    ggml_backend_t backend() const { return runtime_backend; }
+
     bool init_params(int n_threads, filter_t filter = nullptr) {
-        auto model_manager = std::dynamic_pointer_cast<ModelManager>(residency_manager.lock());
-        if (model_manager == nullptr)
+        if (!weights)
             return false;
         if (load_failed || !registered_params.empty())
             return false;
-        model_manager->set_n_threads(n_threads);
+        weights->set_n_threads(n_threads);
         metadata_alpha      = -1.f;
-        const auto metadata = model_manager->loader().file_metadata(source_file);
+        const auto metadata = weights->loader().file_metadata(source_file);
         const auto alpha    = metadata.find("alpha");
         // Converters that write "baked_scale" have already folded alpha / rank into lora_up.
         if (alpha != metadata.end() && metadata.find("baked_scale") == metadata.end()) {
@@ -84,7 +90,7 @@ struct LoraModel : public GGMLRunner {
             LOG_VERBOSE("LoRA '%s' uses metadata alpha %.6g when tensor alpha/scale is absent", file_path.c_str(), metadata_alpha);
         }
         if (sd_version_is_minimax_h3(source_version)) {
-            for (const auto& entry : model_manager->loader().file_tensors(source_file)) {
+            for (const auto& entry : weights->loader().file_tensors(source_file)) {
                 const auto name = convert_tensor_name(entry.first, VERSION_COUNT);
                 if (ends_with(name, ".ff.net.0.proj.weight.lora_up")) {
                     // Diffusers SwiGLU stores [value, gate]; MiniMax-H3 uses [gate, value].
@@ -92,7 +98,7 @@ struct LoraModel : public GGMLRunner {
                 }
             }
         }
-        const auto sources = model_manager->loader().file_tensors(source_file, source_version);
+        const auto sources = weights->loader().file_tensors(source_file, source_version);
         std::map<std::string, ggml_tensor*> tensors;
         std::map<std::string, ggml_tensor*> scalars;
         std::set<std::string> scalar_names;
@@ -117,16 +123,16 @@ struct LoraModel : public GGMLRunner {
                 *dst       = found == scalars.end() ? nullptr : found->second;
                 return true;
             };
-            if (!model_manager->loader().load_file_tensors(source_file, source_version, callback, scalar_names))
+            if (!weights->loader().load_file_tensors(source_file, source_version, callback, scalar_names))
                 return false;
         }
-        if (!model_manager->register_param_tensors(ModelComponent::LoRA, tensors, residency_mode,
-                                                   runtime_backend, params_backend, nullptr, false, params_follow_compute,
-                                                   nullptr, source_file, source_version))
+        if (!weights->register_param_tensors(ModelComponent::LoRA, tensors, residency_mode,
+                                             runtime_backend, params_backend, nullptr, false, params_follow_compute,
+                                             nullptr, source_file, source_version))
             return false;
         for (const auto& entry : tensors)
             registered_params.push_back(entry.second);
-        return model_manager->validate_registered_tensors();
+        return weights->validate_registered_tensors();
     }
 
     float scalar_value(ggml_tensor* tensor) const {
@@ -136,8 +142,8 @@ struct LoraModel : public GGMLRunner {
 
     void release_loaded_tensors() {
         runner_end();
-        if (auto manager = std::dynamic_pointer_cast<ModelManager>(residency_manager.lock())) {
-            GGML_ASSERT(manager->unregister_param_tensors(registered_params));
+        if (weights) {
+            GGML_ASSERT(weights->unregister_param_tensors(registered_params));
         }
         registered_params.clear();
         free_params_ctx();

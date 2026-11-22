@@ -1,0 +1,63 @@
+# version: 0.0.0
+# docs/models/wan.md — I2V
+
+var {
+    model_path = "../models/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors"
+    text_path = "../models/text_encoders/umt5-xxl-encoder-Q8_0.gguf"
+    vae_path = "../models/vae/wan2.2_vae.safetensors"
+
+    first_frame_path = "../inputs/cat_with_sd_cpp_42.png"
+    output_path = "output.avi"
+
+    prompt = "a lovely cat"
+    negative_prompt = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+
+    seed = 42
+    rng_type = "cuda"
+    width = 480
+    height = 832
+    frames = 33
+    fps = 16
+
+    steps = 20
+    cfg_scale = 6.0
+    method = "euler"
+    scheduler = "discrete"
+}
+
+fn fit_canvas(input, width, height, mode) {
+    shape = tensor::shape(input)
+    crop_width = math::min(shape[1], math::floor(shape[2] * width / height))
+    crop_height = math::min(shape[2], math::floor(shape[1] * height / width))
+    start = [math::floor((shape[1] - crop_width) / 2), math::floor((shape[2] - crop_height) / 2)]
+    cropped = tensor::crop(input, axes = [1, 2], start = start, size = [crop_width, crop_height])
+    return tensor::interpolate(cropped, size = [width, height], axes = [1, 2], mode = mode)
+}
+
+fn main() {
+    first_frame = image::load(first_frame_path)
+
+    model = load_dit(model_path, family = "wan2_2_ti2v", params_backend = "cpu")
+    text = load_text_encoder(text_path, family = "wan2_2_ti2v", params_backend = "cpu", t5_path = text_path)
+    vae = load_vae(vae_path, family = "wan2_2_ti2v", params_backend = "cpu")
+
+    rng = make_rng(rng_type, seed = seed)
+    video_base = tensor::zeros(latent_shape(vae, width = width, height = height, frames = frames))
+    first_frame_pixels = tensor::unsqueeze(image::to_f32(fit_canvas(first_frame, width, height, mode = "nearest"), channels = 3), axis = 2)
+    video_shape = tensor::shape(video_base)
+    mask_blank = tensor::full([video_shape[0], video_shape[1], video_shape[2], 1, 1], 1)
+    first_latent = vae_to_dit_latents(vae, vae_encode(vae, first_frame_pixels, rng = rng))
+    base = tensor::replace_slice(video_base, first_latent, axis = 2, start = 0)
+    video_mask = tensor::index_fill(mask_blank, axis = 2, indices = [0], value = 0)
+    positive = encode_prompt(text, prompt, width = width, height = height)
+    negative = encode_prompt(text, negative_prompt, width = width, height = height)
+    pos = predictor(model, positive)
+    neg = predictor(model, negative)
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler, flow_shift = 3.0)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng, base = base, denoise_mask = video_mask, mask_input = true)
+    output_frames = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    video::save(output_path, {frames = output_frames, fps_num = fps, fps_den = 1}, audio = {})
+    return {video = {frames = output_frames, fps_num = fps, fps_den = 1}, latent = latent, audio = {}}
+}

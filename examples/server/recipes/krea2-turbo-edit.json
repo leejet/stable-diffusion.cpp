@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "krea2-turbo-edit",
   "name": "Krea 2 Turbo Edit (LoRA)",
-  "description": "Requires a matching Ostris-compatible community editing LoRA. Apply it after loading and supply reference images; uses the krea2_ostris_edit preset. Select a separate vision projector when it is not bundled in the text encoder.",
+  "description": "Select a matching Ostris-compatible community editing LoRA separately and supply reference images. References go through both the vision encoder and VAE; the recipe does not load the LoRA automatically. Select a separate vision projector when it is not bundled in the text encoder.",
   "model_url": "https://huggingface.co/krea/Krea-2-Turbo",
   "slots": [
     {

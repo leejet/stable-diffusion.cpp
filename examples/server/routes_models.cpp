@@ -117,6 +117,7 @@ static void change_model(ServerRuntime& runtime, const httplib::Request& req, ht
             if (!models.context) {
                 throw std::runtime_error("Model initialization failed; check the server log for component compatibility and memory errors");
             }
+            prepare_native_context(models, *runtime.svr_params, *runtime.ctx_params);
             runtime.sd_ctx       = models.context.get();
             models.active_recipe = std::move(loaded_recipe);
         }

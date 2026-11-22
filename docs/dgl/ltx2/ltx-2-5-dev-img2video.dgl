@@ -1,0 +1,91 @@
+# version: 0.0.0
+# docs/models/ltx2.md — LTX-2.5 dev I2V
+
+var {
+    model_path = "../models/diffusion_models/ltx-2.5-22b-dev-transformer-Q8_0.gguf"
+    text_path = "../models/text_encoders/gemma4-12b-with-proj-ltx-2.5-Q8_0.gguf"
+    vae_path = "../models/vae/ltx-2.5-video-vae-conv-bf16.safetensors"
+    audio_vae_path = "../models/vae/ltx-2.5-audio-vae-bf16.safetensors"
+
+    first_frame_path = "../inputs/ernie_image/turbo_example.png"
+    output_path = "i2v.avi"
+
+    prompt = "a lovely cat blinking slowly, gentle camera push in"
+    negative_prompt = ""
+
+    seed = 42
+    rng_type = "cuda"
+    width = 1280
+    height = 736
+    frames = 121
+    fps = 16
+
+    steps = 20
+    cfg_scale = 3.0
+    method = "euler"
+    scheduler = "ltx2"
+    strength = 0.75
+    audio_scale = 1
+}
+
+fn fit_canvas(input, width, height, mode) {
+    shape = tensor::shape(input)
+    crop_width = math::min(shape[1], math::floor(shape[2] * width / height))
+    crop_height = math::min(shape[2], math::floor(shape[1] * height / width))
+    start = [math::floor((shape[1] - crop_width) / 2), math::floor((shape[2] - crop_height) / 2)]
+    cropped = tensor::crop(input, axes = [1, 2], start = start, size = [crop_width, crop_height])
+    return tensor::interpolate(cropped, size = [width, height], axes = [1, 2], mode = mode)
+}
+
+fn pack_av(video, audio, audio_scale) {
+    shape = tensor::shape(video)
+    count = tensor::numel(audio)
+    tail_channels = math::ceil_div(count, shape[0] * shape[1] * shape[2])
+    tail_shape = [shape[0], shape[1], shape[2], tail_channels, 1]
+    flat = tensor::reshape(tensor::mul(audio, audio_scale), [count])
+    padded = tensor::pad(flat, [0, math::product(tail_shape) - count])
+    return tensor::concat([video, tensor::reshape(padded, tail_shape)], axis = 3)
+}
+
+fn unpack_audio(packed, channels, audio_shape, audio_scale) {
+    tail = packed[:, :, :, channels:]
+    flat = tensor::reshape(tail, [tensor::numel(tail)])
+    return tensor::div(tensor::reshape(flat[:math::product(audio_shape)], audio_shape), audio_scale)
+}
+
+fn main() {
+    first_frame = image::load(first_frame_path)
+
+    model = load_dit(model_path, family = "ltxav", params_backend = "cpu")
+    text = load_text_encoder(text_path, family = "ltxav", params_backend = "cpu", projection_path = model_path)
+    vae = load_vae(vae_path, family = "ltxav", params_backend = "cpu")
+
+    rng = make_rng(rng_type, seed = seed)
+    video_base = tensor::zeros(latent_shape(vae, width = width, height = height, frames = frames))
+    first_frame_pixels = tensor::unsqueeze(image::to_f32(fit_canvas(first_frame, width, height, mode = "nearest"), channels = 3), axis = 2)
+    video_shape = tensor::shape(video_base)
+    video_mask = tensor::full([video_shape[0], video_shape[1], video_shape[2], 1, 1], 1)
+    first_latent = vae_to_dit_latents(vae, vae_encode(vae, first_frame_pixels, rng = rng))
+    video_conditioned = tensor::replace_slice(video_base, first_latent, axis = 2, start = 0)
+    mask_conditioned = tensor::index_fill(video_mask, axis = 2, indices = [0], value = 1 - strength)
+    audio_vae = load_audio_vae(audio_vae_path, family = "ltxav", params_backend = "cpu")
+    audio_shape = audio_latent_shape(audio_vae, frames = frames, fps = fps)
+    base = pack_av(video_conditioned, tensor::zeros(audio_shape), audio_scale = audio_scale)
+    packed_shape = tensor::shape(base)
+    full_video_mask = tensor::broadcast_to(mask_conditioned, tensor::shape(video_conditioned))
+    packed_mask = tensor::concat([full_video_mask, tensor::full([packed_shape[0], packed_shape[1], packed_shape[2], packed_shape[3] - video_shape[3], 1], 1)], axis = 3)
+    positive = encode_prompt(text, prompt, width = width, height = height)
+    negative = encode_prompt(text, negative_prompt, width = width, height = height)
+    pos = predictor(model, positive, audio_length = audio_shape[1], fps = fps)
+    neg = predictor(model, negative, audio_length = audio_shape[1], fps = fps)
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng, base = base, denoise_mask = packed_mask, mask_input = true)
+    video_latent = latent[:, :, :tensor::shape(video_base)[2], :tensor::shape(video_base)[3]]
+    output_frames = vae_decode(vae, dit_to_vae_latents(vae, video_latent))
+    sound_latent = unpack_audio(latent, channels = tensor::shape(video_base)[3], audio_shape = audio_shape, audio_scale = audio_scale)
+    audio = audio_vae_decode(audio_vae, sound_latent)
+    video::save(output_path, {frames = output_frames, fps_num = fps, fps_den = 1}, audio = audio)
+    return {video = {frames = output_frames, fps_num = fps, fps_den = 1}, latent = latent, audio = audio}
+}

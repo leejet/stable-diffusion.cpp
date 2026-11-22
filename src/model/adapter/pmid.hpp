@@ -320,18 +320,13 @@ struct PhotoMakerIDEncoderBlock : public CLIPVisionModelProjection {
         blocks["fuse_module"]         = std::shared_ptr<GGMLBlock>(new FuseModule(2048));
     }
 
-    ggml_tensor* forward(GGMLRunnerContext* ctx,
-                         ggml_tensor* id_pixel_values,
-                         ggml_tensor* prompt_embeds,
-                         ggml_tensor* class_tokens_mask,
-                         ggml_tensor* class_tokens_mask_pos,
-                         ggml_tensor* left,
-                         ggml_tensor* right) {
+    FuseModule& fusion() { return *std::static_pointer_cast<FuseModule>(blocks.at("fuse_module")); }
+
+    ggml_tensor* project(GGMLRunnerContext* ctx, ggml_tensor* id_pixel_values) {
         // x: [N, channels, h, w]
         auto vision_model        = std::dynamic_pointer_cast<CLIPVisionModel>(blocks["vision_model"]);
         auto visual_projection   = std::dynamic_pointer_cast<CLIPProjection>(blocks["visual_projection"]);
         auto visual_projection_2 = std::dynamic_pointer_cast<Linear>(blocks["visual_projection_2"]);
-        auto fuse_module         = std::dynamic_pointer_cast<FuseModule>(blocks["fuse_module"]);
 
         ggml_tensor* shared_id_embeds = vision_model->forward(ctx, id_pixel_values);          // [N, hidden_size]
         ggml_tensor* id_embeds        = visual_projection->forward(ctx, shared_id_embeds);    // [N, proj_dim(768)]
@@ -343,13 +338,7 @@ struct PhotoMakerIDEncoderBlock : public CLIPVisionModelProjection {
         id_embeds = ggml_concat(ctx->ggml_ctx, id_embeds, id_embeds_2, 2);  // [batch_size, seq_length, 1, 2048] check whether concat at dim 2 is right
         id_embeds = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, id_embeds, 1, 2, 0, 3));
 
-        ggml_tensor* updated_prompt_embeds = fuse_module->forward(ctx,
-                                                                  prompt_embeds,
-                                                                  id_embeds,
-                                                                  class_tokens_mask,
-                                                                  class_tokens_mask_pos,
-                                                                  left, right);
-        return updated_prompt_embeds;
+        return id_embeds;
     }
 };
 
@@ -368,30 +357,16 @@ struct PhotoMakerIDEncoder_CLIPInsightfaceExtendtokenBlock : public CLIPVisionMo
                                                                                         num_tokens));
     }
 
-    ggml_tensor* forward(GGMLRunnerContext* ctx,
-                         ggml_tensor* id_pixel_values,
-                         ggml_tensor* prompt_embeds,
-                         ggml_tensor* class_tokens_mask,
-                         ggml_tensor* class_tokens_mask_pos,
-                         ggml_tensor* id_embeds,
-                         ggml_tensor* left,
-                         ggml_tensor* right) {
+    FuseModule& fusion() { return *std::static_pointer_cast<FuseModule>(blocks.at("fuse_module")); }
+
+    ggml_tensor* project(GGMLRunnerContext* ctx, ggml_tensor* id_pixel_values, ggml_tensor* id_embeds) {
         // x: [N, channels, h, w]
         auto vision_model      = std::dynamic_pointer_cast<CLIPVisionModel>(blocks["vision_model"]);
-        auto fuse_module       = std::dynamic_pointer_cast<FuseModule>(blocks["fuse_module"]);
         auto qformer_perceiver = std::dynamic_pointer_cast<QFormerPerceiver>(blocks["qformer_perceiver"]);
 
         // ggml_tensor* last_hidden_state = vision_model->forward(ctx, id_pixel_values);          // [N, hidden_size]
         ggml_tensor* last_hidden_state = vision_model->forward(ctx, id_pixel_values, false);  // [N, hidden_size]
-        id_embeds                      = qformer_perceiver->forward(ctx, id_embeds, last_hidden_state);
-
-        ggml_tensor* updated_prompt_embeds = fuse_module->forward(ctx,
-                                                                  prompt_embeds,
-                                                                  id_embeds,
-                                                                  class_tokens_mask,
-                                                                  class_tokens_mask_pos,
-                                                                  left, right);
-        return updated_prompt_embeds;
+        return qformer_perceiver->forward(ctx, id_embeds, last_hidden_state);
     }
 };
 
@@ -439,7 +414,7 @@ public:
         return pm_version;
     }
 
-    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix = "pmid") {
         if (pm_version == PM_VERSION_1)
             id_encoder.get_param_tensors(tensors, prefix);
         else if (pm_version == PM_VERSION_2)
@@ -448,7 +423,7 @@ public:
 
     ggml_cgraph* build_graph(const sd::Tensor<float>& id_pixel_values_tensor,
                              const sd::Tensor<float>& prompt_embeds_tensor,
-                             std::vector<bool>& class_tokens_mask,
+                             const std::vector<bool>& class_tokens_mask,
                              const sd::Tensor<float>& id_embeds_tensor = {}) {
         ctm.clear();
         ctmf16.clear();
@@ -462,9 +437,8 @@ public:
 
         ggml_cgraph* gf = ggml_new_graph(compute_ctx);
 
-        ggml_tensor* id_pixel_values = make_input(id_pixel_values_tensor);
-        ggml_tensor* prompt_embeds   = make_input(prompt_embeds_tensor);
-        ggml_tensor* id_embeds       = make_optional_input(id_embeds_tensor);
+        ggml_tensor* prompt_embeds = make_input(prompt_embeds_tensor);
+        ggml_tensor* id_embeds     = make_optional_input(id_embeds_tensor);
 
         int64_t hidden_size = prompt_embeds->ne[0];
         int64_t seq_length  = prompt_embeds->ne[1];
@@ -528,23 +502,12 @@ public:
                 }
             }
         }
-        ggml_tensor* updated_prompt_embeds = nullptr;
-        if (pm_version == PM_VERSION_1)
-            updated_prompt_embeds = id_encoder.forward(&runner_ctx,
-                                                       id_pixel_values,
-                                                       prompt_embeds,
-                                                       class_tokens_mask_d,
-                                                       class_tokens_mask_pos,
-                                                       left, right);
-        else if (pm_version == PM_VERSION_2)
-            updated_prompt_embeds = id_encoder2.forward(&runner_ctx,
-                                                        id_pixel_values,
-                                                        prompt_embeds,
-                                                        class_tokens_mask_d,
-                                                        class_tokens_mask_pos,
-                                                        id_embeds,
-                                                        left, right);
-
+        if (!id_pixel_values_tensor.empty()) {
+            id_embeds = project(runner_ctx, make_input(id_pixel_values_tensor), id_embeds);
+        }
+        auto& fusion                = pm_version == PM_VERSION_1 ? id_encoder.fusion() : id_encoder2.fusion();
+        auto* updated_prompt_embeds = fusion.forward(&runner_ctx, prompt_embeds, id_embeds,
+                                                     class_tokens_mask_d, class_tokens_mask_pos, left, right);
         ggml_build_forward_expand(gf, updated_prompt_embeds);
 
         return gf;
@@ -554,12 +517,29 @@ public:
                               const sd::Tensor<float>& id_pixel_values,
                               const sd::Tensor<float>& prompt_embeds,
                               const sd::Tensor<float>& id_embeds,
-                              std::vector<bool>& class_tokens_mask) {
+                              const std::vector<bool>& class_tokens_mask) {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(id_pixel_values, prompt_embeds, class_tokens_mask, id_embeds);
         };
 
         return take_or_empty(GGMLRunner::compute(get_graph, n_threads, true));
+    }
+
+    sd::Tensor<float> compute_tokens(int n_threads, const sd::Tensor<float>& pixels, const sd::Tensor<float>& embedding) {
+        auto get_graph = [&]() {
+            auto* graph  = new_graph_custom(4096);
+            auto ctx     = get_context();
+            auto* tokens = project(ctx, make_input(pixels), make_optional_input(embedding));
+            tokens       = ggml_reshape_2d(ctx.ggml_ctx, tokens, tokens->ne[0], ggml_nelements(tokens) / tokens->ne[0]);
+            ggml_build_forward_expand(graph, tokens);
+            return graph;
+        };
+        return take_or_empty(GGMLRunner::compute(get_graph, n_threads, true));
+    }
+
+private:
+    ggml_tensor* project(GGMLRunnerContext& ctx, ggml_tensor* pixels, ggml_tensor* embedding) {
+        return pm_version == PM_VERSION_1 ? id_encoder.project(&ctx, pixels) : id_encoder2.project(&ctx, pixels, embedding);
     }
 };
 

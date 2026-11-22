@@ -9,14 +9,8 @@ if (NOT XCODE AND NOT MSVC AND NOT CMAKE_BUILD_TYPE)
 endif()
 
 if (MSVC)
-    cmake_host_system_information(RESULT SD_LOGICAL_CORES QUERY NUMBER_OF_LOGICAL_CORES)
-    if (SD_LOGICAL_CORES GREATER 8)
-        math(EXPR SD_DEFAULT_MSVC_MP_COUNT "${SD_LOGICAL_CORES} - 2")
-    elseif (SD_LOGICAL_CORES GREATER 2)
-        math(EXPR SD_DEFAULT_MSVC_MP_COUNT "${SD_LOGICAL_CORES} - 1")
-    else()
-        set(SD_DEFAULT_MSVC_MP_COUNT "${SD_LOGICAL_CORES}")
-    endif()
+    cmake_host_system_information(RESULT SD_PHYSICAL_CORES QUERY NUMBER_OF_PHYSICAL_CORES)
+    set(SD_DEFAULT_MSVC_MP_COUNT "${SD_PHYSICAL_CORES}")
     if (NOT SD_DEFAULT_MSVC_MP_COUNT GREATER 0)
         set(SD_DEFAULT_MSVC_MP_COUNT 1)
     endif()
@@ -24,6 +18,7 @@ if (MSVC)
     if (NOT SD_MSVC_MP_COUNT MATCHES "^[1-9][0-9]*$" OR SD_MSVC_MP_COUNT GREATER 65536)
         message(FATAL_ERROR "SD_MSVC_MP_COUNT must be an integer between 1 and 65536")
     endif()
+    message("-- SD_MSVC_MP_COUNT: ${SD_MSVC_MP_COUNT}")
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
     add_compile_definitions(_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING)
     # /MP is MSVC-only: icx rejects it outright once offloading is enabled.
@@ -98,7 +93,7 @@ endif()
 option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
 option(SD_WEBP                       "sd: enable WebP image I/O support" ${SD_WEBP_DEFAULT})
 option(SD_USE_SYSTEM_WEBP            "sd: link against system libwebp" OFF)
-option(SD_WEBM                       "sd: enable WebM video output support" ${SD_WEBM_DEFAULT})
+option(SD_WEBM                       "sd: enable WebM video I/O support" ${SD_WEBM_DEFAULT})
 option(SD_USE_SYSTEM_WEBM            "sd: link against system libwebm" OFF)
 option(SD_CUDA                       "sd: cuda backend" OFF)
 option(SD_HIPBLAS                    "sd: rocm backend" OFF)
@@ -184,13 +179,21 @@ if(SD_WEBP)
                     "Expected WebP::libwebpmux or WebP::webpmux."
                 )
             endif()
+            if(TARGET WebP::webpdemux)
+                add_library(webpdemux ALIAS WebP::webpdemux)
+            elseif(TARGET WebP::libwebpdemux)
+                add_library(webpdemux ALIAS WebP::libwebpdemux)
+            else()
+                message(FATAL_ERROR "System WebP package must provide WebP::webpdemux or WebP::libwebpdemux.")
+            endif()
         else()
             find_package(PkgConfig REQUIRED)
             pkg_check_modules(WebP REQUIRED IMPORTED_TARGET GLOBAL libwebp)
             pkg_check_modules(WebPMux REQUIRED IMPORTED_TARGET GLOBAL libwebpmux)
-            link_libraries(PkgConfig::WebP)
-            link_libraries(PkgConfig::WebPMux)
+            pkg_check_modules(WebPDemux REQUIRED IMPORTED_TARGET GLOBAL libwebpdemux)
+            add_library(webp ALIAS PkgConfig::WebP)
             add_library(libwebpmux ALIAS PkgConfig::WebPMux)
+            add_library(webpdemux ALIAS PkgConfig::WebPDemux)
         endif()
     endif()
 endif()
@@ -210,7 +213,7 @@ if(SD_WEBM)
             pkg_check_modules(WebM REQUIRED IMPORTED_TARGET GLOBAL libwebm)
         endif()
         if(PkgConfig_FOUND AND WebM_FOUND)
-            link_libraries(PkgConfig::WebM)
+            add_library(webm ALIAS PkgConfig::WebM)
         else()
             find_path(WEBM_INCLUDE_DIR
                 NAMES mkvmuxer/mkvmuxer.h mkvparser/mkvparser.h common/webmids.h
@@ -236,6 +239,17 @@ endif ()
 
 set(SD_LIB stable-diffusion)
 
+file(GLOB SD_API_TEMPLATES CONFIGURE_DEPENDS "src/api/templates/*.dgl")
+set(SD_API_TEMPLATE_CONTENT "#ifndef __SD_API_TEMPLATES_H__\n#define __SD_API_TEMPLATES_H__\n#include <map>\n#include <string>\n#include <string_view>\nnamespace sd::api::templates {\ninline const std::map<std::string, std::string_view> sources = {\n")
+foreach(SD_API_TEMPLATE IN LISTS SD_API_TEMPLATES)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SD_API_TEMPLATE}")
+    get_filename_component(SD_API_TEMPLATE_NAME "${SD_API_TEMPLATE}" NAME_WE)
+    file(READ "${SD_API_TEMPLATE}" SD_API_TEMPLATE_TEXT)
+    string(APPEND SD_API_TEMPLATE_CONTENT "{\"${SD_API_TEMPLATE_NAME}\", R\"SD_DGL(${SD_API_TEMPLATE_TEXT})SD_DGL\"},\n")
+endforeach()
+string(APPEND SD_API_TEMPLATE_CONTENT "};\n}\n#endif\n")
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/api_templates.h" CONTENT "${SD_API_TEMPLATE_CONTENT}")
+
 file(GLOB SD_LIB_SOURCES CONFIGURE_DEPENDS
     "src/*.h"
     "src/*.cpp"
@@ -255,11 +269,19 @@ file(GLOB SD_LIB_SOURCES CONFIGURE_DEPENDS
     "src/extensions/*.h"
     "src/extensions/*.cpp"
     "src/extensions/*.hpp"
+    "src/dgl/*.h"
+    "src/dgl/*.cpp"
+    "src/dgl/syntax/*.h"
+    "src/dgl/syntax/*.cpp"
+    "src/dgl/bindings/*.h"
+    "src/dgl/bindings/*.cpp"
+    "src/dgl/models/*.h"
+    "src/dgl/models/*.cpp"
+    "src/dgl/ops/*.h"
+    "src/dgl/ops/*.cpp"
     "src/model/*/*.h"
     "src/model/*/*.cpp"
     "src/model/*/*.hpp"
-    "src/pipeline/*.h"
-    "src/pipeline/*.cpp"
     "src/runtime/*.h"
     "src/runtime/*.cpp"
     "src/runtime/*.hpp"
@@ -363,6 +385,14 @@ target_link_libraries(${SD_LIB} PUBLIC ggml)
 find_package(Threads REQUIRED)
 target_link_libraries(${SD_LIB} PRIVATE Threads::Threads)
 target_link_libraries(${SD_LIB} PRIVATE onig sd-utf8proc)
+if(SD_WEBP)
+    target_compile_definitions(${SD_LIB} PRIVATE SD_USE_WEBP)
+    target_link_libraries(${SD_LIB} PRIVATE webp webpdemux)
+endif()
+if(SD_WEBM)
+    target_compile_definitions(${SD_LIB} PRIVATE SD_USE_WEBM)
+    target_link_libraries(${SD_LIB} PRIVATE webm)
+endif()
 if (SD_CUDA)
     find_package(CUDAToolkit REQUIRED)
     # Keep the driver stub on downstream link lines when no driver is installed.
@@ -430,7 +460,7 @@ if (SD_HIPBLAS)
     endif()
 endif()
 target_include_directories(${SD_LIB} PUBLIC include)
-target_include_directories(${SD_LIB} PRIVATE src src/core)
+target_include_directories(${SD_LIB} PRIVATE src src/core "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_include_directories(${SD_LIB} PUBLIC thirdparty)
 target_compile_features(${SD_LIB} PUBLIC c_std_11 cxx_std_17)
 set_target_properties(${SD_LIB} PROPERTIES
@@ -441,6 +471,7 @@ set_target_properties(${SD_LIB} PROPERTIES
 if (SD_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
+
 
 
 
@@ -459,12 +490,9 @@ set(SD_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of h
 set(SD_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
 set(SD_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")
 
-set(SD_PUBLIC_HEADERS
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/stable-diffusion.h)
-
 set_target_properties(${SD_LIB}
     PROPERTIES
-        PUBLIC_HEADER "${SD_PUBLIC_HEADERS}")
+        PUBLIC_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/include/stable-diffusion.h")
 
 
 install(TARGETS ${SD_LIB}

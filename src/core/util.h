@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "core/option_types.h"
+#include "core/progress.h"
 #include "core/tensor.hpp"
 #include "ggml-backend.h"
 #include "stable-diffusion.h"
@@ -86,9 +87,6 @@ KeyValueArgs parse_key_value_args(const std::string& args, const char* context =
 bool parse_strict_float(const std::string& text, float& value);
 bool parse_strict_int(const std::string& text, int& value);
 bool parse_strict_bool(const std::string& text, bool& value);
-
-void pretty_progress(int step, int steps, float time);
-void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds);
 
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...);
 void sd_ggml_log_callback(ggml_log_level level, const char* text, void*);

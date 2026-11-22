@@ -13,6 +13,9 @@ P-H3-Image supports text-to-image and reference-image editing. It uses a MiniMax
 
 Alternatively, reuse Qwen3-VL-4B, including its vision tower, with the [separate text connector](https://huggingface.co/PrunaAI/P-H3-Image/blob/main/text_connector/diffusion_pytorch_model.safetensors). Save the connector as `p-h3-image_text_connector.safetensors` and pass it with `--embeddings-connectors`.
 
+In DGL, set `family = "p_h3_image"` on the separately loaded DiT, text encoder,
+and VAE. Pass the connector to `load_text_encoder` with `connectors_path`.
+
 The MiniMax-H3 Qwen3-VL-32B encoder does not need a text connector. To use it in
 either example below, omit `--embeddings-connectors` and replace `--llm` with:
 
@@ -35,8 +38,6 @@ Use the P-H3 image VAE; the MiniMax-H3 video VAE is not compatible. No audio VAE
 
 ## Usage
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
-
 ### Web UI
 
 Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
@@ -52,7 +53,38 @@ Slot IDs correspond to CLI component options: `diffusion_model` uses
 `--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
 Select optional components when required by your checkpoint or task.
 
-### CLI
+### DGL
+
+| Example | Description |
+| --- | --- |
+| [Text to image](../dgl/p_h3_image/p-h3-image-txt2img.dgl) | P-H3-Image generation. |
+| [Image editing](../dgl/p_h3_image/p-h3-image-edit.dgl) | Edit a reference image. |
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\p_h3_image\p-h3-image-txt2img.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/p_h3_image/p-h3-image-txt2img.dgl
+```
+
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+### Legacy CLI
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 #### Text-to-image
 

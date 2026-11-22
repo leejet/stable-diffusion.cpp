@@ -1,0 +1,16 @@
+{% if flags.reference_image_guidance %}
+    unconditional_text = encode_prompt(text, {{negative_prompt_input}}, width = width, height = height{{unconditional_prompt_options}})
+{% endif %}
+{% if flags.controlnet %}
+    controlled_positive = controlnet::apply(positive, control_model, {{control_hint}}, strength = control_strength, type = {{control_type}})
+    controlled_negative = controlnet::apply(negative, control_model, {{control_hint}}, strength = control_strength, type = {{control_type}})
+{% if flags.reference_image_guidance %}
+    controlled_unconditional = controlnet::apply(unconditional_text, control_model, {{control_hint}}, strength = control_strength, type = {{control_type}})
+{% endif %}
+{% endif %}
+    pos = predictor(model, {{positive_condition}}{{predictor_options}})
+    neg = predictor({{negative_model}}, {{negative_condition}}{{negative_predictor_options}})
+{% if flags.image_guidance %}
+    image_only = predictor(model, {{image_only_condition}}{{image_only_options}})
+{% endif %}
+    guided = {{guidance_function}}(pos, neg, scale = cfg_scale{{guidance_options}})

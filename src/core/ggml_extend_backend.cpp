@@ -940,6 +940,15 @@ ggml_backend_t SDBackendManager::runtime_backend(SDBackendModule module) {
     return init_cached_backend(primary_device_name(runtime_assignment_.get(module)));
 }
 
+ggml_backend_t SDBackendManager::existing_backend(ggml_backend_dev_t device) const {
+    const auto& backends = shared_backends_ ? *shared_backends_ : backends_;
+    for (const auto& entry : backends) {
+        if (ggml_backend_get_device(entry.second.get()) == device)
+            return entry.second.get();
+    }
+    return nullptr;
+}
+
 std::vector<ggml_backend_t> SDBackendManager::runtime_backends(SDBackendModule module) {
     std::vector<ggml_backend_t> backends;
     for (const std::string& name : split_device_list(runtime_assignment_.get(module))) {
@@ -1154,13 +1163,14 @@ bool SDBackendManager::validate(std::string* error) const {
 }
 
 ggml_backend_t SDBackendManager::init_cached_backend(const std::string& name) {
+    auto& backends         = shared_backends_ ? *shared_backends_ : backends_;
     std::string resolved   = sd_backend_resolve_name(name);
     std::string key        = lower_copy(resolved);
     ggml_backend_t backend = nullptr;
 
     if (!key.empty()) {
-        auto it = backends_.find(key);
-        if (it != backends_.end()) {
+        auto it = backends.find(key);
+        if (it != backends.end()) {
             return it->second.get();
         }
     } else if (!is_default_backend_token(name)) {
@@ -1179,15 +1189,15 @@ ggml_backend_t SDBackendManager::init_cached_backend(const std::string& name) {
         actual_key = !key.empty() ? key : lower_copy(trim_copy(name));
     }
 
-    auto it = backends_.find(actual_key);
-    if (it != backends_.end()) {
+    auto it = backends.find(actual_key);
+    if (it != backends.end()) {
         ggml_backend_free(backend);
         return it->second.get();
     }
 
     SDBackendHandle handle(backend);
     sd_ggml_register_extensions(backend);
-    backends_.emplace(actual_key, std::move(handle));
+    backends.emplace(actual_key, std::move(handle));
     return backend;
 }
 

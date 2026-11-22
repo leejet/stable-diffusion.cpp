@@ -13,9 +13,12 @@ MOSS-Image uses a 5B diffusion transformer, the FLUX.2 VAE, and Qwen3.5 9B as th
 
 Pass the external `tokenizer.json` with `--tokenizer`; Qwen3.5 uses a different vocabulary from the embedded Qwen tokenizer.
 
-## Usage
+For [inline prompt images](../guides/prompt_images.md), use a matching Qwen3.5
+vision projector. Pass it with `--llm_vision` in the CLI or `vision_path` on
+`load_text_encoder` in dgl. See the
+[DGL example](../dgl/moss_image/moss-image-sft-inline-images.dgl).
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
+## Usage
 
 ### Web UI
 
@@ -33,7 +36,39 @@ Slot IDs correspond to CLI component options: `diffusion_model` uses
 `--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
 Select optional components when required by your checkpoint or task.
 
-### CLI
+### DGL
+
+| Example | Description |
+| --- | --- |
+| [Base: text to image](../dgl/moss_image/moss-image-base-txt2img.dgl) | MOSS-Image Base. |
+| [SFT: text to image](../dgl/moss_image/moss-image-sft-txt2img.dgl) | MOSS-Image SFT. |
+| [Inline images](../dgl/moss_image/moss-image-sft-inline-images.dgl) | Insert named images into the prompt. |
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\moss_image\moss-image-base-txt2img.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/moss_image/moss-image-base-txt2img.dgl
+```
+
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+### Legacy CLI
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 #### MOSS-Image Base
 
@@ -105,4 +140,4 @@ Select optional components when required by your checkpoint or task.
 
 <img src="../../assets/moss/sft.png" />
 
-Use dimensions divisible by 16. The default discrete scheduler uses the upstream time shift of 5. Use `--flow-shift` to override it. The negative CFG branch skips DiT layer 22 (zero-based), matching the upstream pipeline.
+Use dimensions divisible by 16. The default discrete scheduler uses the upstream time shift of 5. Use `--flow-shift` to override it. The CLI and C API set `skip_layers = [22]` on the negative predictor when translating requests to DGL, matching the upstream pipeline. Handwritten DGL scripts specify this zero-based layer index explicitly, as shown in the examples.

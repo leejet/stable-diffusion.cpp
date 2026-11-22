@@ -12,14 +12,42 @@ using `<lora:NAME:STRENGTH>` in the prompt.
 
 ## Usage
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
-
 ### Web UI
 
 Load a compatible base model with its recipe, then select the LoRA for generation.
 See [Web UI guide](../../examples/server/README.md#web-ui) for the shared workflow.
 
-### CLI
+### DGL
+
+| Example | Description |
+| --- | --- |
+| [SD 1.5 with LoRA](../dgl/lora/sd1-5-lora.dgl) | Apply the same LoRA to the UNet and text encoder. |
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\lora\sd1-5-lora.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/lora/sd1-5-lora.dgl
+```
+
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+### Legacy CLI
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 **Windows (PowerShell)**
 

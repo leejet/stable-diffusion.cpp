@@ -12,8 +12,6 @@ Anima generates images from text using a Qwen3 text encoder and a compatible Qwe
 
 ## Usage
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
-
 ### Web UI
 
 Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
@@ -24,12 +22,47 @@ Use the files and compatibility requirements in [Model files](#model-files).
 | Recipe | Component slots |
 | --- | --- |
 | Anima (`anima`) | `diffusion_model`, `llm`, `vae`, `tae` |
+| Anima Edit (`anima-edit`) | `diffusion_model`, `llm`, `vae`, `tae` |
 
 Slot IDs correspond to CLI component options: `diffusion_model` uses
 `--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
 Select optional components when required by your checkpoint or task.
 
-### CLI
+For Anima Edit, select a matching community editing LoRA separately and provide
+reference images. The references are VAE-encoded for diffusion conditioning;
+selecting the recipe does not load the LoRA automatically.
+
+### DGL
+
+| Example | Description |
+| --- | --- |
+| [Text to image](../dgl/anima/anima-preview-txt2img.dgl) | Anima Preview. |
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\anima\anima-preview-txt2img.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/anima/anima-preview-txt2img.dgl
+```
+
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+### Legacy CLI
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 **Windows (PowerShell)**
 

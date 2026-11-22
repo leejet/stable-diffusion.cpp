@@ -1,5 +1,9 @@
 # INT8 Convrot Safetensors
 
+DGL versions of the generation examples are linked below. Edit each script's
+`var` block and follow the [DGL run instructions](../dgl/README.md).
+
+
 sd.cpp can load and execute ComfyUI `int8_tensorwise` safetensors with `convrot` metadata directly. The stored INT8 weights are not converted to another weight type at load time.
 
 This uses sd.cpp's INT8 tensorwise/convrot operators through the patched GGML

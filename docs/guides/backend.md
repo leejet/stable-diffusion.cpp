@@ -1,5 +1,9 @@
 # Backend selection
 
+DGL versions of the generation examples are linked below. Edit each script's
+`var` block and follow the [DGL run instructions](../dgl/README.md).
+
+
 `stable-diffusion.cpp` has two backend assignments:
 
 - `--backend` selects the runtime backend used to execute model graphs.
@@ -16,6 +20,7 @@ A backend assignment can be a single backend name:
 sd-cli -m model.safetensors -p "a cat" --backend cpu
 ```
 
+
 This applies to every module that does not have a more specific assignment.
 
 Assignments can also target individual modules:
@@ -24,11 +29,13 @@ Assignments can also target individual modules:
 sd-cli -m model.safetensors -p "a cat" --backend te=cpu,vae=cuda0,diffusion=vulkan0
 ```
 
+
 The same syntax is used for parameter placement:
 
 ```shell
 sd-cli -m model.safetensors -p "a cat" --backend cuda0 --params-backend te=cpu,vae=cpu
 ```
+
 
 `--params-backend` also accepts the special value `disk`:
 
@@ -36,11 +43,13 @@ sd-cli -m model.safetensors -p "a cat" --backend cuda0 --params-backend te=cpu,v
 sd-cli -m model.safetensors -p "a cat" --backend cuda0 --params-backend disk
 ```
 
+
 `--max-vram` can target resolved backend/device names:
 
 ```shell
 sd-cli -m model.safetensors -p "a cat" --backend diffusion=cuda0,vae=vulkan0 --max-vram cuda0=6,vulkan0=2
 ```
+
 
 The value is a shared per-device budget for managed weights and registered
 runner compute/cache buffers. Live free memory can lower the effective limit
@@ -56,6 +65,7 @@ Module names are case-insensitive. Hyphens and underscores in module names are i
 sd-cli -m model.safetensors -p "a cat" --backend all=cuda0,te=cpu
 ```
 
+
 ## Multiple devices per module (layer split)
 
 A `--backend` module assignment can list several devices separated by `&`:
@@ -63,6 +73,7 @@ A `--backend` module assignment can list several devices separated by `&`:
 ```shell
 sd-cli -m model.safetensors -p "a cat" --backend "diffusion=cuda0&cuda1"
 ```
+
 
 The module's transformer blocks are then distributed across the listed devices
 in contiguous ranges sized proportionally to each device's free memory (minus a
@@ -101,6 +112,7 @@ per-module assignments:
 sd-cli -m model.safetensors -p "a cat" --backend "diffusion=cuda0&cuda1" --split-mode row
 sd-cli -m model.safetensors -p "a cat" --backend "diffusion=cuda0&cuda1,te=cuda0&cuda1" --split-mode diffusion=row,te=layer
 ```
+
 
 In row mode the module keeps executing on its main (first listed) device, but
 its transformer-block matmul weights are allocated in the backend's row-split
@@ -150,6 +162,7 @@ sd-cli -m model.safetensors -p "a cat" --backend cuda0
 sd-cli -m model.safetensors -p "a cat" --backend diffusion=cuda0,te=cpu,vae=cuda1
 sd-cli -m model.safetensors -p "a cat" --auto-fit off
 ```
+
 
 Budgets reuse `--max-vram`: a positive per-device value caps what auto-fit
 plans with on that device, a negative value means "free memory minus that many
@@ -241,6 +254,7 @@ sd-cli -m model.safetensors -p "a cat" --conv-direct auto,vae=off
 sd-cli -m model.safetensors -p "a cat" --conv-direct off,diffusion=on
 ```
 
+
 - `on` requests direct 2D and 3D convolution.
 - `off` uses the existing im2col-based convolution paths.
 - `auto` first checks support for a representative F16-weight/F32-input direct
@@ -290,6 +304,7 @@ The option also accepts module assignments, using the same module aliases as
 sd-cli -m model.safetensors -p "a cat" --flash-attn auto,te=off,vae=on
 sd-cli -m model.safetensors -p "a cat" --flash-attn off,diffusion=auto
 ```
+
 
 Supported modules are `diffusion`, `te`, `clip_vision`, `vae`, `controlnet`, and
 `audio_encoder`. Modules without an assignment use the default (`auto` if no
@@ -351,6 +366,7 @@ sd-cli -m model.safetensors -p "a cat" --flash-attn auto
 sd-cli -m model.safetensors -p "a cat" --flash-attn off
 ```
 
+
 ## Modules
 
 | Module | Purpose | Accepted names |
@@ -391,6 +407,7 @@ For example:
 sd-cli -m model.safetensors -p "a cat" --backend cuda0 --params-backend cpu
 ```
 
+
 This runs all modules on `cuda0`, but stores parameters in CPU RAM. During execution, parameters are moved to the runtime backend as needed.
 
 For example:
@@ -398,6 +415,7 @@ For example:
 ```shell
 sd-cli -m model.safetensors -p "a cat" --backend cuda0 --params-backend disk
 ```
+
 
 This runs all modules on `cuda0`, reloads parameters from the model file as needed, and releases those parameter buffers after use.
 
@@ -408,6 +426,7 @@ Per-module assignments can be mixed:
 ```shell
 sd-cli -m model.safetensors -p "a cat" --backend diffusion=cuda0,te=cpu,vae=cpu --params-backend diffusion=cuda0,te=cpu,vae=cpu
 ```
+
 
 This keeps text encoding and VAE execution on CPU while the diffusion model runs on GPU.
 

@@ -47,16 +47,22 @@ class ConditioningCache {
                           });
     }
 
+    static bool same_textual_inversion(const std::shared_ptr<sd::TextualInversion>& a,
+                                       const std::shared_ptr<sd::TextualInversion>& b) {
+        if (!a || !b)
+            return a == b;
+        return std::equal(a->sources.begin(), a->sources.end(), b->sources.begin(), b->sources.end(),
+                          [](const ModelLoader::FileStamp& x, const ModelLoader::FileStamp& y) {
+                              return std::tie(x.path, x.size, x.modified, x.exists) == std::tie(y.path, y.size, y.modified, y.exists);
+                          });
+    }
+
     static bool same_params(const ConditionerParams& a, const ConditionerParams& b) {
         const auto fields = [](const ConditionerParams& p) {
-            const auto& r = p.ref_image_params;
-            return std::tie(p.text, p.clip_skip, p.width, p.height, p.zero_out_masked,
-                            r.pass_to_vlm, r.pass_to_dit, r.ref_index_mode,
-                            r.force_ref_timestep_zero, r.resize_before_vae, r.vae_input_max_pixels,
-                            r.vlm_resize_mode, r.vlm_min_size, r.vlm_max_size, r.resize_vae_to_target,
-                            r.ref_image_size);
+            return std::tie(p.text, p.system_prompt, p.raw, p.clip_skip, p.width, p.height, p.zero_out_masked);
         };
         if (fields(a) != fields(b) ||
+            !same_textual_inversion(a.textual_inversion, b.textual_inversion) ||
             (a.prompt_input == nullptr) != (b.prompt_input == nullptr) ||
             (a.ref_images == nullptr) != (b.ref_images == nullptr) ||
             (a.minimax_h3_references == nullptr) != (b.minimax_h3_references == nullptr)) {
@@ -104,6 +110,11 @@ public:
         }
         for (auto it = entries_.begin(); it != entries_.end(); ++it) {
             if (same_params(it->params, params)) {
+                if (it->params.textual_inversion) {
+                    bool changed = false;
+                    if (!ModelLoader::dependencies_changed(it->params.textual_inversion->dependencies, changed) || changed)
+                        continue;
+                }
                 entries_.splice(entries_.begin(), entries_, it);
                 LOG_INFO("conditioning cache hit");
                 return entries_.front().condition;

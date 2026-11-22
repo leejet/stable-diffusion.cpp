@@ -2,6 +2,8 @@
 #define __SD_CORE_PROBE_BACKEND_PROBE_H__
 
 #include <functional>
+#include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -54,6 +56,18 @@ struct BackendProbeResult {
     double reference_ms   = 0.;
     double candidate_ms   = 0.;
     std::string error;
+};
+
+enum class BackendProbeOperation { FlashAttention,
+                                   Conv2D,
+                                   Conv3D };
+
+class BackendProbeCache {
+    std::mutex mutex_;
+    std::map<ggml_backend_t, std::map<std::pair<BackendProbeOperation, int>, bool>> results_;
+
+public:
+    bool supports(BackendProbeOperation operation, ggml_backend_t backend, int n_threads);
 };
 
 BackendProbeResult sd_run_backend_probe(ggml_backend_t backend,

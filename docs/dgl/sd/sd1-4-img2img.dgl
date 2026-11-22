@@ -1,0 +1,63 @@
+# version: 0.0.0
+# docs/models/sd.md — img2img example
+
+var {
+    model_path = "../models/checkpoints/sd-v1-4.ckpt"
+
+    input_image_path = "./output.png"
+    output_path = "img2img_output.png"
+
+    prompt = "cat with blue eyes"
+    negative_prompt = ""
+
+    seed = 42
+    rng_type = "cuda"
+
+    steps = 20
+    strength = 0.4000000059604645
+    cfg_scale = 7.0
+    method = "euler_a"
+    scheduler = "discrete"
+}
+
+fn fit_canvas(input, width, height, mode) {
+    shape = tensor::shape(input)
+    crop_width = math::min(shape[1], math::floor(shape[2] * width / height))
+    crop_height = math::min(shape[2], math::floor(shape[1] * height / width))
+    start = [math::floor((shape[1] - crop_width) / 2), math::floor((shape[2] - crop_height) / 2)]
+    cropped = tensor::crop(input, axes = [1, 2], start = start, size = [crop_width, crop_height])
+    return tensor::interpolate(cropped, size = [width, height], axes = [1, 2], mode = mode)
+}
+
+fn slice_sigmas_by_strength(sigmas, strength) {
+    steps = tensor::numel(sigmas) - 1
+    retained = math::min(math::floor(steps * strength) + 1, steps)
+    return sigmas[steps - retained:]
+}
+
+fn main() {
+    input_image = image::load(input_image_path)
+    width = tensor::shape(input_image)[1]
+    height = tensor::shape(input_image)[2]
+
+    model = load_unet(model_path, family = "sd1")
+    text = load_text_encoder(model_path, family = "sd1")
+    vae = load_vae(model_path, family = "sd1")
+
+    encode_rng = make_rng(rng_type, seed = seed)
+    source = fit_canvas(input_image, width, height, mode = "nearest")
+    base = vae_to_unet_latents(vae, vae_encode(vae, image::to_f32(source, channels = 3), rng = encode_rng))
+    positive = encode_prompt(text, prompt, width = width, height = height)
+    negative = encode_prompt(text, negative_prompt, width = width, height = height)
+    pos = predictor(model, positive)
+    neg = predictor(model, negative)
+    guided = cfg(pos, neg, scale = cfg_scale)
+    full_sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler)
+    sigmas = slice_sigmas_by_strength(full_sigmas, strength)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    image = vae_decode(vae, unet_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

@@ -2,6 +2,7 @@
 #define __SD_MODEL_DIFFUSION_RELAY_VSR_HPP__
 
 #include "model/common/vsr.hpp"
+#include "model/diffusion/model.hpp"
 
 namespace RelayVSR {
 
@@ -194,7 +195,7 @@ namespace RelayVSR {
             blocks["proj_out"] = std::make_shared<Linear>(config.dim, config.in_channels * 4);
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* latent, ggml_tensor* lq, ggml_tensor* timestep, ggml_tensor* qpe, ggml_tensor* kpe, const VSR::LocalAttention& local) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* latent, ggml_tensor* lq, ggml_tensor* timestep, ggml_tensor* qpe, ggml_tensor* kpe, const VSR::LocalAttention& local, ggml_tensor* prompt) {
             auto patch_embedding                           = std::dynamic_pointer_cast<Conv3d>(blocks["patch_embedding"]);
             auto condition_embedder_time_embedder_linear_1 = std::dynamic_pointer_cast<Linear>(blocks["condition_embedder.time_embedder.linear_1"]);
             auto condition_embedder_time_embedder_linear_2 = std::dynamic_pointer_cast<Linear>(blocks["condition_embedder.time_embedder.linear_2"]);
@@ -212,7 +213,7 @@ namespace RelayVSR {
             e         = condition_embedder_time_embedder_linear_2->forward(ctx, ggml_silu(c, e));
             auto e0   = condition_embedder_time_proj->forward(ctx, ggml_silu(c, e));
             e0        = ggml_reshape_3d(c, e0, config_.dim, 6, 1);
-            auto text = condition_embedder_text_embedder_linear_1->forward(ctx, params["prompt_embeds"]);
+            auto text = condition_embedder_text_embedder_linear_1->forward(ctx, prompt ? prompt : params["prompt_embeds"]);
             text      = condition_embedder_text_embedder_linear_2->forward(ctx, ggml_ext_gelu(ctx, text));
             for (int i = 0; i < config_.num_layers; ++i) {
                 auto name = "blocks." + std::to_string(i);
@@ -230,7 +231,7 @@ namespace RelayVSR {
         }
     };
 
-    struct WanVSRRunner : GGMLRunner {
+    struct WanVSRRunner : DiffusionModelRunner {
         WanVSRConfig config;
         WanTransformer3DModel model;
         VSR::GraphInputs inputs;
@@ -239,17 +240,24 @@ namespace RelayVSR {
         int frame = 0;
 
         WanVSRRunner(ggml_backend_t backend, const String2TensorStorage& weights, int scale, std::shared_ptr<DeviceResidencyManager> manager)
-            : GGMLRunner(backend, manager), config(WanVSRConfig::detect_from_weights(weights, "wan", scale)), model(config), timestep({256}) {
+            : DiffusionModelRunner(backend, "wan", manager), config(WanVSRConfig::detect_from_weights(weights, "wan", scale)), model(config), timestep(time_embedding(1000.f)) {
             model.init(params_ctx, weights, "wan");
+        }
+
+        static sd::Tensor<float> time_embedding(float time) {
+            sd::Tensor<float> embedding({256});
             for (int i = 0; i < 128; ++i) {
-                double angle             = 1000.0 * std::pow(10000.0, -double(i) / 128);
-                timestep.data()[i]       = float(std::cos(angle));
-                timestep.data()[i + 128] = float(std::sin(angle));
+                double angle              = double(time) * std::pow(10000.0, -double(i) / 128);
+                embedding.data()[i]       = float(std::cos(angle));
+                embedding.data()[i + 128] = float(std::sin(angle));
             }
+            return embedding;
         }
 
         std::string get_desc() override { return "RelayVSR Wan"; }
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) { model.get_param_tensors(tensors, "wan"); }
+        using DiffusionModelRunner::get_param_tensors;
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override { model.get_param_tensors(tensors, prefix); }
+        sd::Tensor<float> compute(int n_threads, const DiffusionParams& params) override;
         void reset() {
             runner_end();
             free_cache_ctx_and_buffer();
@@ -258,7 +266,7 @@ namespace RelayVSR {
             frame = 0;
         }
 
-        sd::Tensor<float> compute(int n_threads, const sd::Tensor<float>& noise, const sd::Tensor<float>& lq) {
+        sd::Tensor<float> predict_frame(int n_threads, const sd::Tensor<float>& noise, const sd::Tensor<float>& lq, const sd::Tensor<float>& time, const sd::Tensor<float>* prompt = nullptr) {
             int width = int(noise.shape()[0]) / 2, height = int(noise.shape()[1]) / 2;
             int count = std::min(frame + 1, 4);
             if (!attention.count(count))
@@ -274,7 +282,7 @@ namespace RelayVSR {
                     times.push_back(i - origin);
                 auto qpe = inputs.rope(&ctx, width, height, {frame - origin}, {44, 42, 42});
                 auto kpe = inputs.rope(&ctx, width, height, times, {44, 42, 42});
-                auto out = model.forward(&ctx, make_input(noise), make_input(lq), make_input(timestep), qpe, kpe, *attention[count]);
+                auto out = model.forward(&ctx, make_input(noise), make_input(lq), make_input(time), qpe, kpe, *attention[count], prompt ? make_input(*prompt) : nullptr);
                 ggml_build_forward_expand(gf, out);
                 return gf;
             };
@@ -282,6 +290,13 @@ namespace RelayVSR {
             if (prediction.empty())
                 return {};
             ++frame;
+            return prediction;
+        }
+
+        sd::Tensor<float> compute(int n_threads, const sd::Tensor<float>& noise, const sd::Tensor<float>& lq) {
+            auto prediction = predict_frame(n_threads, noise, lq, timestep);
+            if (prediction.empty())
+                return {};
             for (int64_t i = 0; i < prediction.numel(); ++i)
                 prediction.data()[i] = noise.data()[i] - prediction.data()[i];
             return prediction;

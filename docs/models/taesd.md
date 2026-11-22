@@ -93,14 +93,43 @@ curl -L -o ../models/vae/taeqi2_1.safetensors https://huggingface.co/madebyollin
 
 ## Usage
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
-
 ### Web UI
 
 Use a compatible base model recipe that offers the `tae` slot, and select the
 tiny autoencoder matching that model. See [Web UI guide](../../examples/server/README.md#web-ui).
 
-### CLI
+### DGL
+
+The [SD 1.5 example](../dgl/taesd/sd1-5-taesd-preview.dgl) uses TAESD to
+decode the final image and passes the same decoder to `preview(decoder = vae)`.
+Running it with `sd-cli -M dgl` writes the final PNG. To receive intermediate
+images, run it in a host that registers a DGL preview callback in `"tae"` mode.
+See [progress and previews](../dgl.md#progress-preview-and-cancellation).
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\taesd\sd1-5-taesd-preview.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/taesd/sd1-5-taesd-preview.dgl
+```
+
+Add `--check` to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+### Legacy CLI
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 **Windows (PowerShell)**
 

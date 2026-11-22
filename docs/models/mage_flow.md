@@ -12,8 +12,6 @@
 
 ## Usage
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
-
 ### Web UI
 
 Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
@@ -31,7 +29,38 @@ Slot IDs correspond to CLI component options: `diffusion_model` uses
 `--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
 Select optional components when required by your checkpoint or task.
 
-### CLI
+### DGL
+
+| Example | Description |
+| --- | --- |
+| [Text to image](../dgl/mage_flow/mage-flow-turbo-txt2img.dgl) | Mage-Flow Turbo. |
+| [Image editing](../dgl/mage_flow/mage-flow-edit.dgl) | Mage-Flow Edit. |
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\mage_flow\mage-flow-turbo-txt2img.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/mage_flow/mage-flow-turbo-txt2img.dgl
+```
+
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+### Legacy CLI
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 #### Text-to-image
 
@@ -69,7 +98,11 @@ Use 30 steps for Base models and 4 steps with `--cfg-scale 1` for Turbo models. 
 
 #### Image editing
 
-Mage-Flow-Edit accepts one or more reference images. The default `mage_flow` reference preset sends each image to both Qwen3-VL and the diffusion transformer, caps the VLM copy's longest edge at 384 pixels, and keeps the VAE copy at the requested output resolution.
+Mage-Flow-Edit accepts one or more reference images. The CLI and C API send each
+image to both Qwen3-VL and the diffusion transformer. The vision copy follows
+the encoder's native preprocessing and patch alignment; the VAE copy is resized
+to the requested output resolution. Use a [DGL script](../guides/edit.md#custom-reference-processing)
+to customize these two inputs.
 
 For the Turbo edit checkpoint, use 4 steps and `--cfg-scale 1`.
 

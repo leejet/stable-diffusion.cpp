@@ -1,0 +1,42 @@
+# version: 0.0.0
+
+var {
+    weights = "sd15.safetensors"
+    model_path = "control_openpose-fp16.safetensors"
+
+    input_path = "pose.png"
+    output_path = "controlnet.png"
+
+    prompt = "A dancer in a bright studio"
+    negative_prompt = ""
+
+    seed = 42
+    width = 512
+    height = 512
+
+    steps = 20
+    cfg_scale = 7
+    scheduler = "karras"
+}
+
+fn main() {
+    unet = load_unet(weights)
+    text = load_text_encoder(weights)
+    vae = load_vae(weights)
+    control = controlnet::load(model_path, family = "sd1")
+    pose = tensor::interpolate(image::load(input_path), size = [width, height], axes = [1, 2])
+    pixels = image::to_f32(pose, channels = 3)
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    rng = make_rng("cuda", seed = seed)
+    positive = controlnet::apply(encode_prompt(text, prompt), control, pixels)
+    negative = controlnet::apply(encode_prompt(text, negative_prompt), control, pixels)
+    pos = predictor(unet, positive, prediction = "eps")
+    neg = predictor(unet, negative, prediction = "eps")
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, scheduler = scheduler, steps = steps)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, rng = rng)
+    image = vae_decode(vae, unet_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return { image = image, latent = latent }
+}

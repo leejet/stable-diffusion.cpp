@@ -23,6 +23,11 @@
 
 struct GGMLRunnerContext;
 
+struct AttentionProcessor {
+    virtual ~AttentionProcessor()                                                                                                              = default;
+    virtual ggml_tensor* apply(GGMLRunnerContext& ctx, const std::string& layer, ggml_tensor* query, ggml_tensor* output, int64_t heads) const = 0;
+};
+
 struct WeightAdapter {
     struct ForwardParams {
         enum class op_type_t {
@@ -75,6 +80,7 @@ struct GGMLRunnerContext {
     bool flash_attn_enabled                                          = false;
     bool sage_attn_enabled                                           = false;
     float linear_scale                                               = 0.f;
+    float conv_scale                                                 = 0.f;
     float attn_scale                                                 = 0.f;
     bool conv2d_direct_enabled                                       = false;
     bool conv3d_direct_enabled                                       = false;
@@ -82,6 +88,7 @@ struct GGMLRunnerContext {
     bool circular_y_enabled                                          = false;
     ggml_tensor* ip_context                                          = nullptr;
     float ip_scale                                                   = 1.0f;
+    const AttentionProcessor* attn2_processor                        = nullptr;
     std::shared_ptr<WeightAdapter> weight_adapter                    = nullptr;
     std::vector<std::pair<ggml_tensor*, std::string>>* debug_tensors = nullptr;
     std::function<ggml_tensor*(const std::string&)> get_cache_tensor;
@@ -162,6 +169,7 @@ protected:
     bool flash_attn_enabled    = false;
     bool sage_attn_enabled     = false;
     float linear_scale         = 0.f;
+    float conv_scale           = 0.f;
     float attn_scale           = 0.f;
     bool conv2d_direct_enabled = false;
     bool conv3d_direct_enabled = false;
@@ -306,9 +314,10 @@ public:
         }
     }
 
-    void set_scale_overrides(float linear_scale, float attn_scale) {
+    void set_scale_overrides(float linear_scale, float attn_scale, float conv_scale = 0.f) {
         this->linear_scale = linear_scale;
         this->attn_scale   = attn_scale;
+        this->conv_scale   = conv_scale;
     }
 
     void set_conv2d_direct_enabled(bool enabled) {

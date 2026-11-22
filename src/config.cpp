@@ -8,14 +8,8 @@ namespace sd {
         guidance.txt_cfg            = 7.0f;
         guidance.img_cfg            = INFINITY;
         guidance.distilled_guidance = 3.5f;
-        guidance.slg.layers         = nullptr;
-        guidance.slg.layer_count    = 0;
-        guidance.slg.layer_start    = 0.01f;
-        guidance.slg.layer_end      = 0.2f;
-        guidance.slg.scale          = 0.f;
         scheduler                   = SCHEDULER_COUNT;
         sample_method               = SAMPLE_METHOD_COUNT;
-        shifted_timestep            = 0;
         sample_steps                = 20;
         eta                         = INFINITY;
         custom_sigmas               = nullptr;
@@ -51,20 +45,6 @@ namespace sd {
         spectrum_stop_percent       = 0.9f;
     }
 
-    HiresConfig::HiresConfig() {
-        enabled             = false;
-        upscaler            = SD_HIRES_UPSCALER_LATENT;
-        model_path          = nullptr;
-        scale               = 2.f;
-        target_width        = 0;
-        target_height       = 0;
-        steps               = 0;
-        denoising_strength  = 0.7f;
-        upscale_tile_size   = 128;
-        custom_sigmas       = nullptr;
-        custom_sigmas_count = 0;
-    }
-
     ContextConfig::ContextConfig() {
         n_threads                 = sd_get_num_physical_cores();
         conditioning_cache_size   = 4;
@@ -92,42 +72,35 @@ namespace sd {
         auto_fit                  = true;
         rpc_servers               = nullptr;
         model_args                = nullptr;
-        pulid_weights_path        = nullptr;
     }
 
     ImageConfig::ImageConfig() {
-        clip_skip           = -1;
-        ref_images_count    = 0;
-        ref_image_args      = "";
-        width               = 512;
-        height              = 512;
-        strength            = 0.75f;
-        seed                = -1;
-        batch_count         = 1;
-        control_strength    = 0.9f;
-        ip_adapter_strength = 1.0f;
-        qwen_image_layers   = 3;
-        circular_x          = false;
-        circular_y          = false;
-        pm_params           = {nullptr, 0, nullptr, 20.f};
-        pulid_params        = {nullptr, 1.0f};
-        vae_tiling_params   = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
+        clip_skip         = -1;
+        ref_images_count  = 0;
+        width             = 512;
+        height            = 512;
+        strength          = 0.75f;
+        seed              = -1;
+        batch_count       = 1;
+        control_strength  = 0.9f;
+        qwen_image_layers = 3;
+        circular_x        = false;
+        circular_y        = false;
+        vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
     }
 
     VideoConfig::VideoConfig() {
-        high_noise_sample_params.sample_steps = -1;
-        width                                 = 512;
-        height                                = 512;
-        strength                              = 0.75f;
-        seed                                  = -1;
-        video_frames                          = 6;
-        fps                                   = 16;
-        moe_boundary                          = 0.875f;
-        vace_strength                         = 1.f;
-        vae_tiling_params                     = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
-        circular_x                            = false;
-        circular_y                            = false;
-        ref_image_args                        = "";
+        width             = 512;
+        height            = 512;
+        strength          = 0.75f;
+        seed              = -1;
+        video_frames      = 6;
+        fps               = 16;
+        moe_boundary      = 0.875f;
+        vace_strength     = 1.f;
+        vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
+        circular_x        = false;
+        circular_y        = false;
     }
 
 }  // namespace sd

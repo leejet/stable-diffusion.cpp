@@ -1,0 +1,33 @@
+# version: 0.0.0
+
+var {
+{{variables}}
+}
+
+fn main() {
+    model = {{model_loader}}(model_path{{model_options}})
+    text = load_text_encoder(text_path{{text_options}})
+    vae = {{vae_loader}}(vae_path{{vae_options}})
+{% if flags.high_model %}
+    load_dit(high_model_path{{high_model_options}})
+{% endif %}
+{% if flags.negative_model %}
+    load_dit(negative_model_path{{negative_model_options}})
+{% endif %}
+{% if flags.control %}
+    controlnet::load(control_path{{control_options}})
+{% endif %}
+{% if flags.vision %}
+    load_vision_encoder(vision_path{{vision_options}})
+{% endif %}
+{% if flags.audio_encoder %}
+    load_audio_encoder(audio_encoder_path{{audio_encoder_options}})
+{% endif %}
+{% if flags.audio_vae %}
+    load_audio_vae(audio_vae_path{{audio_vae_options}})
+{% endif %}
+{% if flags.preview %}
+    load_tae(preview_path, decode_only = true{{preview_options}})
+{% endif %}
+    return {model = model, text = text, vae = vae}
+}

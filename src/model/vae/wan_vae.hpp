@@ -1347,7 +1347,7 @@ namespace WAN {
             ae.get_param_tensors(tensors, weight_prefix);
         }
 
-        sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) override {
+        sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng, VAEPosterior, bool) override {
             SD_UNUSED(rng);
             return vae_output;
         }
