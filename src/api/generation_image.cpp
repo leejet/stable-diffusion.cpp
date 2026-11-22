@@ -54,9 +54,7 @@ namespace sd::api {
         return pixels;
     }
 
-    static bool qwen_prompt_has_vision(const GenerationTemplate& request) {
-        if (request.definition.version == VERSION_QWEN_IMAGE_LAYERED)
-            return false;
+    static bool prompt_has_vision(const GenerationTemplate& request) {
         const auto* vision_path = request.context.config.context.llm_vision_path;
         if (vision_path && *vision_path)
             return true;
@@ -76,6 +74,11 @@ namespace sd::api {
         const auto refs    = bound_tensors(request.options, "ref_images");
         if (refs.empty() && !sd_version_is_unet_edit(version))
             return;
+        const bool moss_edit  = version == VERSION_MOSS_IMAGE;
+        const bool qwen_edit  = sd_version_is_qwen_image(version) && version != VERSION_QWEN_IMAGE_LAYERED;
+        const bool has_vision = (moss_edit || qwen_edit) && prompt_has_vision(request);
+        if (moss_edit && !has_vision)
+            LOG_INFO("MOSS-Image HQ edit is using text-only prompt conditioning; set llm_vision_path (--llm_vision) to add reference images to Qwen3.5");
         std::string pixels, latents;
         const bool encode = version != VERSION_HIDREAM_O1;
         for (size_t i = 0; i < refs.size(); ++i) {
@@ -94,7 +97,7 @@ namespace sd::api {
             request.fields["negative_predictor_options"] += ", reference_blocks = " + literal(blocks);
             request.fields["reference_predictor_options"] += ", reference_blocks = " + literal(blocks);
         }
-        if ((sd_version_is_qwen_image(version) && qwen_prompt_has_vision(request)) || sd_version_is_minimax_h3_image(version) ||
+        if (has_vision || sd_version_is_minimax_h3_image(version) ||
             version == VERSION_FIBO2 || sd_version_is_llada_image(version) || sd_version_is_krea2(version) ||
             sd_version_is_mage_flow(version) || sd_version_is_longcat(version) || sd_version_is_boogu_image(version)) {
             request.fields["prompt_options"] += ", media = [" + pixels + "]";
@@ -102,7 +105,6 @@ namespace sd::api {
                 request.fields["negative_prompt_options"] += ", media = [" + pixels + "]";
         }
         if (encode && !sd_version_is_unet_edit(version)) {
-            const bool moss_edit = version == VERSION_MOSS_IMAGE;
             const bool increase  = sd_version_is_flux2(version) || sd_version_is_flux3(version) ||
                                   sd_version_is_qwen_image(version) || sd_version_is_minimax_h3_image(version) ||
                                   version == VERSION_FIBO2 || sd_version_is_krea2(version) ||
@@ -111,6 +113,8 @@ namespace sd::api {
                                   literal(version == VERSION_QWEN_IMAGE_LAYERED ? "decrease" : increase ? "increase"
                                                                                                         : "fixed") +
                                   ", force_ref_timestep_zero = " + literal(sd_version_is_llada_image(version) || sd_version_is_krea2(version) || moss_edit);
+            if (moss_edit)
+                options += ", ref_rope_anchor = \"image_start\"";
             request.fields["predictor_options"] += options;
             request.fields["negative_predictor_options"] += options;
             request.fields["reference_predictor_options"] += options;
@@ -191,7 +195,7 @@ namespace sd::api {
         request.flags["reference_image_guidance"] = reference_guidance && image_guidance;
         request.flags["hidream_o1"]               = version == VERSION_HIDREAM_O1;
         request.flags["control_image_guidance"]   = image_guidance && version == VERSION_FLUX_CONTROLS;
-        if (version == VERSION_MOSS_IMAGE && !refs)
+        if (version == VERSION_MOSS_IMAGE)
             request.fields["negative_predictor_options"] += ", skip_layers = [22]";
         if (sd_version_is_sensenova_u1(version)) {
             request.fields["negative_prompt_input"] = "negative_prompt_raw";

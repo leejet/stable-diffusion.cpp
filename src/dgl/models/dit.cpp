@@ -359,6 +359,7 @@ namespace sd::dgl::models {
         params.c_concat                = present(condition.c_concat);
         params.ref_latents             = references.empty() ? &condition.c_ref_images : &references;
         params.ref_index_mode          = options.ref_index_mode;
+        params.ref_rope_anchor         = options.ref_rope_anchor;
         params.force_ref_timestep_zero = options.force_ref_timestep_zero;
         UNetControls unet_controls;
         std::vector<ZImageControlInput> z_image_controls;

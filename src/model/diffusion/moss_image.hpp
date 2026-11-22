@@ -247,12 +247,9 @@ namespace MOSSImage {
                 LOG_ERROR("MOSS-Image requires latents, timesteps and text features");
                 return {};
             }
-            std::vector<int> skip;
-            if (auto extra = std::get_if<SkipLayerDiffusionExtra>(&inputs.extra)) {
-                if (extra->skip_layers) {
-                    skip = *extra->skip_layers;
-                }
-            }
+            const auto* extra = std::get_if<SkipLayerDiffusionExtra>(&inputs.extra);
+            const std::vector<int> no_skips;
+            const auto& skip       = extra && extra->skip_layers ? *extra->skip_layers : no_skips;
             const auto* references = inputs.ref_latents;
             if (references) {
                 for (const auto& ref : *references) {
@@ -270,8 +267,10 @@ namespace MOSSImage {
                 const auto h = x->ne[1], w = x->ne[0], nt = text->ne[1];
                 const auto ref_start = h * w + nt;
                 auto tokens          = ref_start;
+                // ai-toolkit aligns references with image positions. Chinoll aligns them with the start of the text.
+                const auto text_offset = references && !references->empty() && inputs.ref_rope_anchor != Rope::RefRoPEAnchor::TEXT_START ? -nt : 0;
                 sd::PECacheKey pe_key("moss_image.pe");
-                pe_key.add(h).add(w).add(nt).add(config.head_dim).add(circular_x_enabled).add(circular_y_enabled);
+                pe_key.add(h).add(w).add(nt).add(text_offset).add(config.head_dim).add(circular_x_enabled).add(circular_y_enabled);
                 std::vector<ggml_tensor*> refs;
                 if (references) {
                     for (const auto& ref : *references) {
@@ -294,10 +293,10 @@ namespace MOSSImage {
                                                      float(i % width) - float(width - 1) / 2.f});
                         }
                     };
-                    append_image(h, w, 0.f, float(nt));
+                    append_image(h, w, 0.f, float(nt + text_offset));
                     embedding.positions.append_tokens(nt);
                     for (int64_t i = 0; i < nt; ++i) {
-                        embedding.ids.push_back({0.f, float(i), 0.f, 0.f});
+                        embedding.ids.push_back({0.f, float(i + text_offset), 0.f, 0.f});
                     }
                     for (size_t i = 0; i < refs.size(); ++i) {
                         append_image(refs[i]->ne[1], refs[i]->ne[0], float(i + 1), 0.f);

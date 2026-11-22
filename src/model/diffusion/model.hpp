@@ -178,6 +178,7 @@ struct DiffusionParams {
     const sd::Tensor<float>* y                        = nullptr;
     const std::vector<sd::Tensor<float>>* ref_latents = nullptr;
     Rope::RefIndexMode ref_index_mode                 = Rope::RefIndexMode::FIXED;
+    Rope::RefRoPEAnchor ref_rope_anchor               = Rope::RefRoPEAnchor::MODEL_DEFAULT;
     bool force_ref_timestep_zero                      = false;
     DiffusionExtraParams extra                        = std::monostate{};
 };

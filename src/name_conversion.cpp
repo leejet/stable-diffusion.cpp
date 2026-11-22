@@ -1076,6 +1076,8 @@ static std::string convert_diffusers_dit_to_original_pixart(std::string name) {
 }
 
 static std::string convert_moss_image_dit_name(std::string name) {
+    if (starts_with(name, "transformer.layers."))
+        name.erase(0, sizeof("transformer.") - 1);
     static const std::vector<std::pair<std::string, std::string>> name_map = {
         {".proj.q.weight", ".proj.qkv.weight"},
         {".proj.k.weight", ".proj.qkv.weight.1"},

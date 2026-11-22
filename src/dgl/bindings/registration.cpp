@@ -578,6 +578,7 @@ namespace sd::dgl {
              optional_list("ref_latents", Kind::Tensor), optional_list("ref_audios", Kind::Tensor),
              optional_list("reference_blocks", Kind::Dict), optional_list("keyframe_indices", Kind::Integer),
              choice("ref_index_mode", {"fixed", "increase", "decrease"}, "fixed"), optional("force_ref_timestep_zero", Kind::Boolean, false),
+             choice("ref_rope_anchor", {"default", "image_start", "text_start"}, "default"),
              number("guidance", 0, 1000, 3.5), optional_list("skip_layers", Kind::Integer),
              optional("vace_context", Kind::Tensor), number("vace_strength", 0, 100, 1),
              optional("audio_embedding", Kind::Tensor), optional("video_positions", Kind::Tensor),
