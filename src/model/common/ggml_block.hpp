@@ -146,7 +146,6 @@ protected:
     bool force_f32;
     bool force_prec_f32;
     bool has_weight_scale       = false;
-    bool int8_convrot           = false;
     int int8_convrot_group_size = 0;
     float scale;
     std::string prefix;
@@ -154,32 +153,75 @@ protected:
     void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
         this->prefix            = prefix;
         has_weight_scale        = false;
-        int8_convrot            = false;
         int8_convrot_group_size = 0;
+        auto weight_storage     = tensor_storage_map.find(prefix + "weight");
+        const bool w4           = weight_storage != tensor_storage_map.end() && weight_storage->second.w4_convrot_kind;
         enum ggml_type wtype    = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
-        if (in_features % ggml_blck_size(wtype) != 0 || force_f32) {
+        if (!w4 && (in_features % ggml_blck_size(wtype) != 0 || force_f32)) {
             wtype = GGML_TYPE_F32;
         }
-        params["weight"] = ggml_new_tensor_2d(ctx, wtype, in_features, out_features);
+        params["weight"] = ggml_new_tensor_2d(ctx, wtype, w4 ? in_features / 2 : in_features, out_features);
+        if (w4) {
+            params["weight"]->flags |= GGML_TENSOR_FLAG_W4_CONVROT;
+        }
         if (bias) {
             enum ggml_type wtype = GGML_TYPE_F32;
             params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_features);
         }
-        auto weight_storage           = tensor_storage_map.find(prefix + "weight");
         const bool is_int8_tensorwise = weight_storage != tensor_storage_map.end() && weight_storage->second.is_int8_tensorwise;
         auto weight_scale_storage     = tensor_storage_map.find(prefix + "weight_scale");
-        if (weight_scale_storage != tensor_storage_map.end()) {
-            const int64_t scale_nelements = weight_scale_storage->second.nelements();
+        if (w4 || weight_scale_storage != tensor_storage_map.end()) {
+            const int64_t scale_nelements = w4 ? out_features : weight_scale_storage->second.nelements();
             GGML_ASSERT(scale_nelements == 1 || scale_nelements == out_features);
             params["weight_scale"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, scale_nelements);
             has_weight_scale       = true;
         }
-        if (is_int8_tensorwise) {
+        if (is_int8_tensorwise || w4) {
             GGML_ASSERT(wtype == GGML_TYPE_I8);
             GGML_ASSERT(has_weight_scale);
-            int8_convrot            = weight_storage->second.int8_convrot;
-            int8_convrot_group_size = weight_storage->second.int8_convrot_group_size;
+            if (weight_storage->second.int8_convrot) {
+                int8_convrot_group_size = weight_storage->second.int8_convrot_group_size;
+            }
         }
+    }
+
+    ggml_tensor* forward_i8(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* w,
+                            ggml_tensor* weight_scale, ggml_tensor* b, ggml_tensor* tail = nullptr) {
+        const bool w4 = w->flags & GGML_TENSOR_FLAG_W4_CONVROT;
+        auto prepare_input = [&](ggml_tensor* input) {
+            if (input->type != GGML_TYPE_F32) {
+                if (w4) {
+                    return ggml_cast(ctx->ggml_ctx, input, GGML_TYPE_F32);
+                }
+                input = ggml_ext_cast_f32(ctx->ggml_ctx, ctx->backend, input);
+            }
+            return ggml_is_contiguous(input) ? input : ggml_cont(ctx->ggml_ctx, input);
+        };
+        x = prepare_input(x);
+        if (tail) {
+            tail = prepare_input(tail);
+        }
+        if (ctx->weight_adapter && b != nullptr) {
+            b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
+        }
+        auto* out = w4 ? ggml_ext_linear_w4_convrot(ctx->ggml_ctx, x, w, weight_scale, b, int8_convrot_group_size, scale, tail)
+                       : ggml_ext_linear_i8_tensorwise(ctx->ggml_ctx, x, w, weight_scale, b, int8_convrot_group_size, scale);
+        if (ctx->weight_adapter) {
+            WeightAdapter::ForwardParams forward_params;
+            forward_params.op_type               = WeightAdapter::ForwardParams::op_type_t::OP_LINEAR;
+            forward_params.linear.force_prec_f32 = force_prec_f32;
+            forward_params.linear.scale          = scale;
+            auto* lora_input = tail ? ggml_concat(ctx->ggml_ctx, x, tail, 0) : x;
+            ggml_tensor logical_weight;
+            if (w4) {
+                logical_weight = *w;
+                logical_weight.ne[0] = in_features;
+                w = &logical_weight;
+            }
+            out = ctx->weight_adapter->add_lora_to_output(ctx->ggml_ctx, ctx->backend, lora_input, w,
+                                                         out, prefix, forward_params);
+        }
+        return out;
     }
 
 public:
@@ -227,47 +269,7 @@ public:
         ggml_tensor* linear_bias = has_weight_scale ? nullptr : b;
         ggml_tensor* out         = nullptr;
         if (w->type == GGML_TYPE_I8) {
-            if (x->type != GGML_TYPE_F32) {
-                x = ggml_ext_cast_f32(ctx->ggml_ctx, ctx->backend, x);
-            }
-            if (!ggml_is_contiguous(x)) {
-                x = ggml_cont(ctx->ggml_ctx, x);
-            }
-            ggml_tensor* lora_input = x;
-            if (ctx->weight_adapter && b != nullptr) {
-                b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
-            }
-            if (int8_convrot && scale == 1.f) {
-                const auto cache_key = std::make_pair(x, int8_convrot_group_size);
-                auto cached          = ctx->int8_convrot_cache.find(cache_key);
-                if (cached == ctx->int8_convrot_cache.end()) {
-                    GGML_ABORT("I8 convrot is not available in this ggml revision");
-                    ctx->int8_convrot_cache.emplace(cache_key, x);
-                } else {
-                    x = cached->second;
-                }
-            }
-            out = ggml_ext_linear_i8_tensorwise(ctx->ggml_ctx,
-                                                x,
-                                                w,
-                                                weight_scale,
-                                                b,
-                                                int8_convrot ? int8_convrot_group_size : 0,
-                                                scale);
-            if (ctx->weight_adapter) {
-                WeightAdapter::ForwardParams forward_params;
-                forward_params.op_type               = WeightAdapter::ForwardParams::op_type_t::OP_LINEAR;
-                forward_params.linear.force_prec_f32 = force_prec_f32;
-                forward_params.linear.scale          = scale;
-                out                                  = ctx->weight_adapter->add_lora_to_output(ctx->ggml_ctx,
-                                                                                               ctx->backend,
-                                                                                               lora_input,
-                                                                                               w,
-                                                                                               out,
-                                                                                               prefix,
-                                                                                               forward_params);
-            }
-            return out;
+            return forward_i8(ctx, x, w, weight_scale, b);
         }
         if (has_weight_scale) {
             out = ggml_ext_linear(ctx->ggml_ctx, x, w, nullptr, force_prec_f32, scale);
@@ -309,6 +311,9 @@ public:
                                    ggml_tensor* x0,
                                    ggml_tensor* x1) {
         ggml_tensor* w = params["weight"];
+        if (w->flags & GGML_TENSOR_FLAG_W4_CONVROT) {
+            return forward_i8(ctx, x0, w, params["weight_scale"], bias ? params["bias"] : nullptr, x1);
+        }
         const bool segmented_weight = w->type == GGML_TYPE_F8_E4M3 ||
                                       w->type == GGML_TYPE_Q4_0 ||
                                       w->type == GGML_TYPE_MXFP4;

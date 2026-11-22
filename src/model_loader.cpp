@@ -417,7 +417,8 @@ SDVersion ModelLoader::get_sd_version() const {
     TensorStorage token_embedding_weight, input_block_weight, context_ebedding_weight;
 
     if (tensor_storage_map.find("model.diffusion_model.emb_in.image.weight") != tensor_storage_map.end() &&
-        tensor_storage_map.find("model.diffusion_model.txt_mode_blocks.0.q_proj.weight") != tensor_storage_map.end()) {
+        (tensor_storage_map.count("model.diffusion_model.txt_mode_blocks.0.q_proj.weight") ||
+         tensor_storage_map.count("model.diffusion_model.txt_mode_blocks.0.qkv.weight"))) {
         return VERSION_FLUX3;
     }
 
@@ -1493,7 +1494,7 @@ bool ModelLoader::load_tensors(std::map<std::string, ggml_tensor*>& tensors,
 
 bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type) const {
     const std::string& name = tensor_storage.name;
-    if (tensor_storage.is_int8_tensorwise) {
+    if (tensor_storage.is_int8_tensorwise || tensor_storage.w4_convrot_kind) {
         return false;
     }
     if (type != GGML_TYPE_COUNT) {

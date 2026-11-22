@@ -80,6 +80,15 @@ ggml_tensor* ggml_ext_linear_i8_tensorwise(ggml_context* ctx,
                                            int convrot_group_size,
                                            float scale = 1.f);
 
+ggml_tensor* ggml_ext_linear_w4_convrot(ggml_context* ctx,
+                                       ggml_tensor* x,
+                                       ggml_tensor* w,
+                                       ggml_tensor* weight_scale,
+                                       ggml_tensor* bias,
+                                       int group,
+                                       float scale,
+                                       ggml_tensor* tail);
+
 ggml_tensor* ggml_ext_pad_ext(ggml_context* ctx,
                               ggml_backend_t backend,
                               ggml_tensor* x,

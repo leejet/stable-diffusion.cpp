@@ -26,12 +26,12 @@ namespace Flux3 {
                 std::string key = name.substr(prefix.size() + 1);
                 if (key == "txt_in.weight") {
                     detected           = true;
-                    config.context_dim = tensor.ne[0];
+                    config.context_dim = tensor.input_features();
                     config.hidden_size = tensor.ne[1];
                 } else if (key == "emb_in.image.weight") {
-                    config.channels = tensor.ne[0];
+                    config.channels = tensor.input_features();
                 } else if (key == "single_blocks.0.mlp_out.weight") {
-                    config.mlp_dim = tensor.ne[0];
+                    config.mlp_dim = tensor.input_features();
                 } else if (key == "ref_time_in.in_layer.weight") {
                     config.flow_map = true;
                 }
@@ -62,11 +62,16 @@ namespace Flux3 {
     struct Block : public GGMLBlock {
         int heads;
 
-        Block(const Flux3Config& config)
+        Block(const Flux3Config& config, bool fused_qkv)
             : heads(config.heads) {
-            for (const auto* name : {"q_proj", "k_proj", "v_proj", "attn_out"}) {
-                blocks[name] = std::make_shared<Linear>(config.hidden_size, config.hidden_size, false);
+            if (fused_qkv) {
+                blocks["qkv"] = std::make_shared<Linear>(config.hidden_size, 3 * config.hidden_size, false);
+            } else {
+                for (const auto* name : {"q_proj", "k_proj", "v_proj"}) {
+                    blocks[name] = std::make_shared<Linear>(config.hidden_size, config.hidden_size, false);
+                }
             }
+            blocks["attn_out"] = std::make_shared<Linear>(config.hidden_size, config.hidden_size, false);
             blocks["mlp_in"]  = std::make_shared<Linear>(config.hidden_size, 2 * config.mlp_dim, false);
             blocks["mlp_out"] = std::make_shared<Linear>(config.mlp_dim, config.hidden_size, false);
             blocks["norm"]    = std::make_shared<Flux::QKNorm>(config.hidden_size / heads);
@@ -92,10 +97,15 @@ namespace Flux3 {
             auto split = [&](ggml_tensor* v) {
                 return ggml_reshape_4d(gc, v, x->ne[0] / heads, heads, x->ne[1], x->ne[2]);
             };
+            auto qkv = blocks.count("qkv")
+                           ? split_qkv(gc, linear(ctx, "qkv", x_mod))
+                           : std::vector<ggml_tensor*>{linear(ctx, "q_proj", x_mod),
+                                                       linear(ctx, "k_proj", x_mod),
+                                                       linear(ctx, "v_proj", x_mod)};
             auto norm        = std::dynamic_pointer_cast<Flux::QKNorm>(blocks["norm"]);
-            auto q           = norm->query_norm_rope(ctx, split(linear(ctx, "q_proj", x_mod)), pe);
-            auto k           = norm->key_norm_rope(ctx, split(linear(ctx, "k_proj", x_mod)), pe);
-            auto v           = split(linear(ctx, "v_proj", x_mod));
+            auto q           = norm->query_norm_rope(ctx, split(qkv[0]), pe);
+            auto k           = norm->key_norm_rope(ctx, split(qkv[1]), pe);
+            auto v           = split(qkv[2]);
             auto attn        = ggml_ext_attention_ext(gc, ctx->backend, q, k, v, heads, nullptr,
                                                        true, ctx->flash_attn_enabled);
             auto mlp         = ggml_ext_silu_act(gc, linear(ctx, "mlp_in", x_mod));
@@ -118,8 +128,11 @@ namespace Flux3 {
     struct Model : public GGMLBlock {
         Flux3Config config;
 
-        Model(const Flux3Config& config)
+        Model(const Flux3Config& config, const String2TensorStorage& tensors, const std::string& prefix)
             : config(config) {
+            auto add_block = [&](const std::string& name) {
+                blocks[name] = std::make_shared<Block>(config, tensors.count(prefix + "." + name + ".qkv.weight") != 0);
+            };
             blocks["txt_in"]  = std::make_shared<Linear>(config.context_dim, config.hidden_size, false);
             blocks["time_in"] = std::make_shared<Flux::MLPEmbedder>(256, config.hidden_size, false);
             if (config.flow_map) {
@@ -130,14 +143,14 @@ namespace Flux3 {
                 blocks["single_stream_modulations." + mode] = std::make_shared<Flux::Modulation>(config.hidden_size, false, false);
                 const std::string base                      = mode == "txt" ? "txt_mode_blocks." : "content_mode_blocks." + mode + ".";
                 for (int i = 0; i < config.depth; ++i) {
-                    blocks[base + std::to_string(i)] = std::make_shared<Block>(config);
+                    add_block(base + std::to_string(i));
                 }
                 if (mode != "txt") {
                     blocks["emb_in." + mode] = std::make_shared<Linear>(config.channels, config.hidden_size, false);
                 }
             }
             for (int i = 0; i < config.single_depth; ++i) {
-                blocks["single_blocks." + std::to_string(i)] = std::make_shared<Block>(config);
+                add_block("single_blocks." + std::to_string(i));
             }
             blocks["final_layer.image"] = std::make_shared<Flux::LastLayer>(config.hidden_size, 1, config.channels, false, false);
         }
@@ -198,7 +211,7 @@ namespace Flux3 {
         Flux3Runner(ggml_backend_t backend, const String2TensorStorage& tensors, const std::string& prefix, std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : DiffusionModelRunner(backend, prefix, weight_manager),
               config(Flux3Config::detect_from_weights(tensors, prefix)),
-              model(config) {
+              model(config, tensors, prefix) {
             model.init(params_ctx, tensors, prefix);
         }
 

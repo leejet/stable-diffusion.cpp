@@ -106,6 +106,12 @@ struct ComfyQuantConfig {
     int group_size = 0;
 };
 
+static ComfyQuantConfig parse_comfy_quant_config(const nlohmann::json& json) {
+    const auto format = json.value("format", "");
+    const bool w4 = format == "convrot_w4a4";
+    return {format, w4 || json.value("convrot", false), json.value("convrot_groupsize", w4 ? 256 : 0)};
+}
+
 static bool read_comfy_quant_config(std::ifstream& file,
                                     const std::string& file_path,
                                     const std::string& tensor_name,
@@ -129,10 +135,7 @@ static bool read_comfy_quant_config(std::ifstream& file,
     }
 
     try {
-        const nlohmann::json json = nlohmann::json::parse(data.data(), data.data() + size);
-        config.format             = json.value("format", "");
-        config.convrot            = json.value("convrot", false);
-        config.group_size         = json.value("convrot_groupsize", 0);
+        config = parse_comfy_quant_config(nlohmann::json::parse(data.data(), data.data() + size));
     } catch (const std::exception&) {
         set_error(error, "parsing ComfyUI quantization metadata tensor failed: '" + tensor_name + "'");
         return false;
@@ -195,9 +198,9 @@ bool read_safetensors_file(const std::string& file_path,
         return false;
     }
 
+    const auto metadata_item = header_.find("__metadata__");
     if (metadata != nullptr) {
         metadata->clear();
-        auto metadata_item = header_.find("__metadata__");
         if (metadata_item != header_.end() && metadata_item->is_object()) {
             for (const auto& item : metadata_item->items()) {
                 if (item.value().is_string()) {
@@ -208,6 +211,26 @@ bool read_safetensors_file(const std::string& file_path,
     }
 
     std::unordered_map<std::string, ComfyQuantConfig> comfy_quant_configs;
+    if (metadata_item != header_.end()) {
+        const auto quant_item = metadata_item->find("_quantization_metadata");
+        if (quant_item != metadata_item->end() && quant_item->is_string()) {
+            const auto quant = nlohmann::json::parse(quant_item->get_ref<const std::string&>(), nullptr, false);
+            const auto layers = quant.find("layers");
+            if (layers != quant.end() && layers->is_object()) {
+                for (const auto& layer : layers->items()) {
+                    const auto format = layer.value().find("format");
+                    if (format != layer.value().end() && *format == "convrot_w4a4") {
+                        try {
+                            comfy_quant_configs.emplace(layer.key(), parse_comfy_quant_config(layer.value()));
+                        } catch (const std::exception&) {
+                            set_error(error, "invalid ConvRot metadata for '" + layer.key() + "'");
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+    }
     for (const auto& item : header_.items()) {
         const std::string& name = item.key();
         if (name == "__metadata__" || !ends_with(name, ".comfy_quant")) {
@@ -231,7 +254,7 @@ bool read_safetensors_file(const std::string& file_path,
             return false;
         }
         const std::string module_name = name.substr(0, name.size() - std::string(".comfy_quant").size());
-        comfy_quant_configs.emplace(module_name, std::move(config));
+        comfy_quant_configs.insert_or_assign(module_name, std::move(config));
     }
 
     tensor_storages.clear();
@@ -322,33 +345,48 @@ bool read_safetensors_file(const std::string& file_path,
         if (ends_with(name, ".weight")) {
             const std::string module_name = name.substr(0, name.size() - std::string(".weight").size());
             auto config                   = comfy_quant_configs.find(module_name);
-            if (config != comfy_quant_configs.end() && config->second.format == "int8_tensorwise") {
+            if (config != comfy_quant_configs.end() &&
+                (config->second.format == "int8_tensorwise" || config->second.format == "convrot_w4a4")) {
+                const bool w4 = config->second.format == "convrot_w4a4";
                 if (type != GGML_TYPE_I8) {
-                    set_error(error, "ComfyUI int8_tensorwise weight is not I8: '" + name + "'");
+                    set_error(error, "ComfyUI quantized weight is not I8: '" + name + "'");
                     return false;
                 }
+                if (w4 && (shape.size() != 2 || tensor_storage.ne[0] <= 0 ||
+                           tensor_storage.ne[0] > INT64_MAX / 2 || tensor_storage.ne[1] <= 0)) {
+                    set_error(error, "invalid packed INT4 weight shape: '" + name + "'");
+                    return false;
+                }
+                tensor_storage.w4_convrot_kind = w4 ? 1 : 0;
                 if (config->second.convrot) {
                     int group_size_remainder = config->second.group_size;
                     while (group_size_remainder > 1 && group_size_remainder % 4 == 0) {
                         group_size_remainder /= 4;
                     }
-                    if (group_size_remainder != 1 || tensor_storage.ne[0] % config->second.group_size != 0) {
+                    if (group_size_remainder != 1 || (w4 && (config->second.group_size < 4 || config->second.group_size > 256)) ||
+                        tensor_storage.input_features() % config->second.group_size != 0) {
                         set_error(error, "invalid ComfyUI convrot group size for tensor '" + name + "'");
                         return false;
                     }
                 }
-                tensor_storage.is_int8_tensorwise      = true;
+                tensor_storage.is_int8_tensorwise      = !w4;
                 tensor_storage.int8_convrot            = config->second.convrot;
                 tensor_storage.int8_convrot_group_size = config->second.group_size;
             }
         } else if (ends_with(name, ".weight_scale")) {
             const std::string module_name = name.substr(0, name.size() - std::string(".weight_scale").size());
             auto config                   = comfy_quant_configs.find(module_name);
-            if (config != comfy_quant_configs.end() && config->second.format == "int8_tensorwise" &&
-                tensor_storage.n_dims == 2 && tensor_storage.ne[0] == 1) {
-                tensor_storage.ne[0]  = tensor_storage.ne[1];
-                tensor_storage.ne[1]  = 1;
-                tensor_storage.n_dims = 1;
+            if (config != comfy_quant_configs.end() &&
+                (config->second.format == "int8_tensorwise" || config->second.format == "convrot_w4a4")) {
+                if (config->second.format == "convrot_w4a4" && type != GGML_TYPE_F32) {
+                    set_error(error, "packed INT4 scale is not F32: '" + name + "'");
+                    return false;
+                }
+                if (tensor_storage.n_dims == 2 && tensor_storage.ne[0] == 1) {
+                    tensor_storage.ne[0]  = tensor_storage.ne[1];
+                    tensor_storage.ne[1]  = 1;
+                    tensor_storage.n_dims = 1;
+                }
             }
         } else if (ends_with(name, "._weight_scale") && tensor_storage.n_dims == 2 && tensor_storage.ne[0] == 1) {
             tensor_storage.ne[0] = tensor_storage.ne[1];

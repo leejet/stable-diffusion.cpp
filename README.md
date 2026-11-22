@@ -14,6 +14,7 @@ Devices with less than 16 GB of memory have not been validated. If memory is ins
 |---|---|
 | Adreno GPU | Q4_0 GGUF |
 | Hexagon NPU | Q4_0, MXFP4, Q8_0 (GGUF); F8_E4M3 (safetensors) |
+| Hexagon NPU | ConvRot W4A4 safetensors with W4A8 HMX inference |
 
 - GGML tracking: [llama.cpp issue #28904](https://github.com/ggml-org/llama.cpp/issues/28904) and [PR #28952](https://github.com/ggml-org/llama.cpp/pull/28952)
 - SD.cpp integration: [stable-diffusion.cpp PR #1970](https://github.com/leejet/stable-diffusion.cpp/pull/1970)
@@ -21,22 +22,36 @@ Devices with less than 16 GB of memory have not been validated. If memory is ins
 
 ## Weights
 
+Shared VAE downloads for the DiT weight formats. [FLUX.2 VAE](https://huggingface.co/unsloth/FLUX.2-VAE/blob/main/split_files/vae/flux2-vae.safetensors) · [Wan 2.1 VAE](https://huggingface.co/Osrivers/wan_2.1_vae.safetensors/blob/main/wan_2.1_vae.safetensors) · [Qwen Image 2.1 BF16 VAE](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/vae/qwen_image_2.1_vae_bf16.safetensors)
+
+### FP8 safetensors
+
+- Z-Image Turbo F8_E4M3 DiT: https://huggingface.co/Kijai/Z-Image_comfy_fp8_scaled/blob/main/z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors
+- FLUX.2 Klein 4B FP8 DiT: https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-fp8/blob/main/flux-2-klein-4b-fp8.safetensors
+- Qwen Image 2.1 F8_E4M3 DiT: https://huggingface.co/unsloth/Qwen-Image-2.1-FP8/blob/main/Qwen-Image-2.1-FP8.safetensors
+
+### ConvRot safetensors
+
+- [Z-Image Turbo](https://huggingface.co/JoaoZaokk/Z-Image-Turbo-W4A4-ConvRot/resolve/main/zimage_turbo_w4a4.safetensors)
+- [FLUX.2 Klein 4B](https://huggingface.co/toxicdog/FLUX.2-klein-4B-INT4-ConvRot/resolve/main/flux-2-klein-4b-int4_convrot.safetensors)
+- [FLUX.2 Klein 9B](https://huggingface.co/ariaotp/INT4-ConvRot-W4A4-ComfyUI/resolve/main/Flux2-Klein-9B/flux-2-klein-9b-int4_convrot.safetensors)
+- [FLUX.3 Image Klein](https://huggingface.co/toxicdog/FLUX.3-Image-Klein-INT4-ConvRot-ComfyUI/resolve/main/diffusion_models/flux3_image_klein_sd_int4_convrot.safetensors)
+- [Qwen Image 2.1](https://huggingface.co/poor7/Models/resolve/main/qwen_image_2.1-int4_convrot.safetensors)
+- [Qwen Image 2.1 Turbo](https://huggingface.co/toxicdog/Qwen-Image-2.1-Turbo-INT4-ConvRot/resolve/main/diffusion_models/qwen_image_2.1_turbo_int4_convrot.safetensors)
+- [Krea 2 Turbo](https://huggingface.co/poor7/Models/resolve/main/krea2_turbo_int4.safetensors)
+
+### GGUF
+
 - Z-Image Turbo Q4_0 GGUF and Q4_0 text encoder: https://huggingface.co/zhiyuanasad/z_image_turbo_adreno
 - Qwen3-4B Q4_0 text encoder: https://huggingface.co/zhiyuanasad/z_image_turbo_adreno/blob/main/llm.gguf
-- Z-Image Turbo F8_E4M3 DiT: https://huggingface.co/Kijai/Z-Image_comfy_fp8_scaled/blob/main/z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors
 - FLUX.2 Klein 4B Q4_0 GGUF: https://huggingface.co/zhiyuanasad/flux2_klein_adreno
-- FLUX.2 Klein 4B FP8 DiT: https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-fp8/blob/main/flux-2-klein-4b-fp8.safetensors
 - FLUX.2 Klein 9B Q4_0 DiT: https://huggingface.co/leejet/FLUX.2-klein-9B-GGUF/blob/main/flux-2-klein-9b-Q4_0.gguf
 - Qwen3-8B Q4_0 text encoder: https://huggingface.co/bartowski/Qwen_Qwen3-8B-GGUF/blob/main/Qwen_Qwen3-8B-Q4_0.gguf
-- FLUX.2 VAE: https://huggingface.co/unsloth/FLUX.2-VAE/blob/main/split_files/vae/flux2-vae.safetensors
 - Krea 2 Turbo MXFP4 MoE DiT: https://huggingface.co/gguf-org/krea-2-gguf/blob/main/krea2_turbo-mxfp4_moe.gguf
 - Qwen3-VL-4B Q4_0 text encoder: https://huggingface.co/bartowski/Qwen_Qwen3-VL-4B-Instruct-GGUF/blob/main/Qwen_Qwen3-VL-4B-Instruct-Q4_0.gguf
-- Wan 2.1 VAE: https://huggingface.co/Osrivers/wan_2.1_vae.safetensors/blob/main/wan_2.1_vae.safetensors
 - Qwen Image 2.1 Q4_0 DiT: https://huggingface.co/leejet/Qwen-Image-2.1-GGUF/blob/main/qwen_image_2.1-Q4_0.gguf
-- Qwen Image 2.1 F8_E4M3 DiT: https://huggingface.co/unsloth/Qwen-Image-2.1-FP8/blob/main/Qwen-Image-2.1-FP8.safetensors
 - Qwen3-VL-8B Q4_0 text encoder: https://huggingface.co/bartowski/Qwen_Qwen3-VL-8B-Instruct-GGUF/blob/main/Qwen_Qwen3-VL-8B-Instruct-Q4_0.gguf
 - Qwen3-VL-8B F16 vision projector: https://huggingface.co/bartowski/Qwen_Qwen3-VL-8B-Instruct-GGUF/blob/main/mmproj-Qwen_Qwen3-VL-8B-Instruct-f16.gguf
-- Qwen Image 2.1 BF16 VAE: https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/vae/qwen_image_2.1_vae_bf16.safetensors
 
 ## Important News
 
