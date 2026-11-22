@@ -187,14 +187,15 @@ namespace sd::api {
     }
 }
 
+static thread_local std::string generation_metadata_json;
+
 const char* sd_get_generation_metadata(const char* source) {
     const char* result = nullptr;
     sd::api::call([&] {
         if (!source)
             return sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "source is required");
-        static thread_local std::string output;
-        output = sd::api::generation_metadata(source).dump();
-        result = output.c_str();
+        generation_metadata_json = sd::api::generation_metadata(source).dump();
+        result                   = generation_metadata_json.c_str();
         return SD_STATUS_OK;
     });
     return result;

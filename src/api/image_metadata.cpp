@@ -1432,6 +1432,8 @@ namespace sd::metadata_reader {
 
 }  // namespace sd::metadata_reader
 
+static thread_local std::string metadata_report_text;
+
 const char* sd_read_metadata(const char* path, uint32_t flags) {
     const char* result = nullptr;
     sd::api::call([&] {
@@ -1450,9 +1452,8 @@ const char* sd_read_metadata(const char* path, uint32_t flags) {
         } else {
             sd::metadata_reader::print_text_report(path, visible_report, flags & SD_METADATA_READ_STRUCTURAL, flags & SD_METADATA_READ_BRIEF, output);
         }
-        static thread_local std::string text;
-        text   = output.str();
-        result = text.c_str();
+        metadata_report_text = output.str();
+        result               = metadata_report_text.c_str();
         return SD_STATUS_OK;
     });
     return result;

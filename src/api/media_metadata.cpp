@@ -139,6 +139,8 @@ namespace sd::metadata {
     }
 }
 
+static thread_local std::vector<uint8_t> metadata_chunk_bytes;
+
 sd_status_t sd_get_metadata_chunk(const char* source, sd_metadata_format_t format, const void** data_out, size_t* size_out) {
     if (data_out)
         *data_out = nullptr;
@@ -147,7 +149,7 @@ sd_status_t sd_get_metadata_chunk(const char* source, sd_metadata_format_t forma
     return sd::api::call([&] {
         if (!source || !data_out || !size_out)
             return sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "source, data_out and size_out are required");
-        static thread_local std::vector<uint8_t> bytes;
+        auto& bytes = metadata_chunk_bytes;
         bytes.clear();
         if (format == SD_METADATA_AVI) {
             bytes = sd::metadata::avi_info(source);
