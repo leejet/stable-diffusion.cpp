@@ -85,6 +85,7 @@ API and command-line option may change frequently.***
     - [Mage-Flow-Edit](./docs/models/mage_flow.md#image-editing)
     - [LLaDA-Image Edit](./docs/models/llada_image.md#image-editing)
     - [Fibo 2.0 Dev / Edit Turbo](./docs/models/fibo2.md#fibo-20-edit-turbo)
+    - [MOSS-Image Edit](./docs/models/moss_image.md#moss-image-edit)
   - Video Models
     - [Wan2.1/Wan2.2](./docs/models/wan.md)
     - [MiniMax-H3](./docs/models/minimax_h3.md)

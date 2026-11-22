@@ -23,6 +23,7 @@ that do not support image guidance report an error.
 | Fibo 2.0 | Shared center crops for VAE and vision encoding; multiple references use aspect-ratio buckets |
 | [Anima Edit](../models/anima.md) | Matching community editing LoRA; VAE reference latents |
 | [Krea2 Edit](../models/krea2.md) | Matching community editing LoRA; vision inputs and VAE reference latents |
+| [MOSS-Image Edit](../models/moss_image.md#moss-image-edit) | HQ LoRA with VAE reference latents and optional vision conditioning |
 | LLaDA-Image | Reference pixels go to the text encoder's native image components and reference latents to the diffusion model |
 | MiniMax-H3 | Aspect-preserving references aligned to the model grid |
 

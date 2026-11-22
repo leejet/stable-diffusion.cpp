@@ -14,6 +14,7 @@
 #include "conditioning/textual_inversion.h"
 #include "core/ggml_tensor_utils.h"
 #include "core/image_geometry.h"
+#include "core/image_tensor.h"
 
 #include "core/tensor_ggml.hpp"
 #include "core/util.h"
@@ -1993,7 +1994,8 @@ struct LLMEmbedder : public Conditioner {
             return 0;
         return sd_version_is_minimax_h3(version) || sd_version_is_lingbot_video(version) ||
                        sd_version_is_qwen_image(version) || sd_version_is_mage_flow(version) ||
-                       sd_version_is_boogu_image(version) || sd_version_is_krea2(version) || sd_version_is_longcat(version)
+                       sd_version_is_boogu_image(version) || sd_version_is_krea2(version) || sd_version_is_longcat(version) ||
+                       version == VERSION_MOSS_IMAGE
                    ? std::numeric_limits<size_t>::max()
                    : 0;
     }
@@ -2560,8 +2562,28 @@ struct LLMEmbedder : public Conditioner {
     SDCondition get_learned_condition(int n_threads,
                                       const ConditionerParams& params) override {
         ConditionerParams conditioner_params = params;
-        sd::PromptInputTemplate input_template(params.prompt_input);
-        if (params.prompt_input != nullptr) {
+        sd::PromptInput prompt_with_references;
+        if (version == VERSION_MOSS_IMAGE && params.ref_images && !params.ref_images->empty()) {
+            for (size_t i = 0; i < params.ref_images->size(); ++i) {
+                const auto& source = (*params.ref_images)[i];
+                const auto width = source.shape()[0], height = source.shape()[1];
+                const double scale = std::min(1.0, std::sqrt(384.0 * 384.0 / (double(width) * height)));
+                const auto w       = std::max<int64_t>(32, std::llround(width * scale));
+                const auto h       = std::max<int64_t>(32, std::llround(height * scale));
+                auto rgb           = sd::ensure_image_tensor_channels(source, 3);
+                if (w != width || h != height)
+                    rgb = sd::ops::interpolate(rgb, {w, h, 3, 1}, sd::ops::InterpolateMode::Bicubic, false, true);
+                prompt_with_references.push_back({sd::PromptPart::Type::TEXT, "Picture " + std::to_string(i + 1) + ": "});
+                prompt_with_references.push_back({sd::PromptPart::Type::IMAGE, {}, std::make_shared<sd::Tensor<float>>(std::move(rgb))});
+            }
+            if (params.prompt_input)
+                prompt_with_references.insert(prompt_with_references.end(), params.prompt_input->begin(), params.prompt_input->end());
+            else
+                prompt_with_references.push_back({sd::PromptPart::Type::TEXT, params.text});
+            conditioner_params.prompt_input = &prompt_with_references;
+        }
+        sd::PromptInputTemplate input_template(conditioner_params.prompt_input);
+        if (conditioner_params.prompt_input != nullptr) {
             if (!supports_prompt_images()) {
                 LOG_ERROR("This conditioner does not support inline prompt images");
                 return {};
@@ -3170,8 +3192,11 @@ struct LLMEmbedder : public Conditioner {
         } else if (version == VERSION_MOSS_IMAGE) {
             prompt_template_encode_start_idx = 0;
             max_length                       = 4096;
-            prompt                           = system_prefix("<|im_start|>user\n") + conditioner_params.text + "<|im_end|>\n<|im_start|>assistant\n<think>\n";
-            prompt_attn_range                = {0, 0};
+            prompt                           = system_prefix("<|im_start|>user\n");
+            prompt_attn_range.first          = static_cast<int>(prompt.size());
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+            prompt += "<|im_end|>\n<|im_start|>assistant\n<think>\n";
         } else if (sd_version_is_flux3(version)) {
             prompt_template_encode_start_idx = 0;
             max_length                       = 4096;
@@ -3329,7 +3354,7 @@ struct LLMEmbedder : public Conditioner {
                                            image_grids,
                                            prompt_suffix,
                                            version == VERSION_IRIS ? &text_mask : nullptr,
-                                           params.prompt_input == nullptr ? nullptr : &input_template,
+                                           conditioner_params.prompt_input == nullptr ? nullptr : &input_template,
                                            &prompt_tokens);
         if (hidden_states.empty()) {
             return {};

@@ -8,6 +8,7 @@
 #include "core/ggml_runner.h"
 #include "core/ggml_tensor_utils.h"
 #include "core/util.h"
+#include "json.hpp"
 #include "model.h"
 #include "model/adapter/lora_ops.h"
 #include "model_loader.h"
@@ -66,6 +67,38 @@ struct LoraModel : public GGMLRunner {
 
     ggml_backend_t backend() const { return runtime_backend; }
 
+    void load_moss_edit_scales(const std::string& adapter_config) {
+        try {
+            const auto config = nlohmann::json::parse(adapter_config);
+            if (config.value("format", "") != "moss-edit-lora" || config.value("format_version", 0) != 1)
+                return;
+            const auto modules = config.find("modules");
+            if (modules == config.end() || !modules->is_object())
+                return;
+            for (const auto& [target, spec] : modules->items()) {
+                const auto alpha = spec.find("alpha");
+                if (alpha == spec.end() || !alpha->is_number())
+                    continue;
+                const float value = alpha->get<float>();
+                if (!std::isfinite(value) || value < 0.f)
+                    continue;
+
+                auto name       = convert_tensor_name("lora." + target + ".scale", source_version);
+                const auto base = name.substr(0, name.size() - (sizeof(".scale") - 1));
+                const auto down = lora_tensors.find(base + ".lora_down");
+                if (down == lora_tensors.end() || lora_tensors.count(name) || lora_tensors.count(base + ".alpha"))
+                    continue;
+
+                // Use the loaded linear tensor's rank and the same scale path as file-backed scalars.
+                auto* scale = ggml_new_tensor_1d(params_ctx, GGML_TYPE_F32, 1);
+                scale->data = &scalar_values.emplace(scale, value / down->second->ne[1]).first->second;
+                lora_tensors.emplace(std::move(name), scale);
+            }
+        } catch (const nlohmann::json::exception& e) {
+            LOG_WARN("invalid MOSS-Image Edit adapter_config in '%s': %s", file_path.c_str(), e.what());
+        }
+    }
+
     bool init_params(int n_threads, filter_t filter = nullptr) {
         if (!weights)
             return false;
@@ -76,7 +109,8 @@ struct LoraModel : public GGMLRunner {
         const auto metadata = weights->loader().file_metadata(source_file);
         const auto alpha    = metadata.find("alpha");
         // Converters that write "baked_scale" have already folded alpha / rank into lora_up.
-        if (alpha != metadata.end() && metadata.find("baked_scale") == metadata.end()) {
+        const bool baked_scale = metadata.count("baked_scale") != 0;
+        if (alpha != metadata.end() && !baked_scale) {
             try {
                 size_t parsed  = 0;
                 metadata_alpha = std::stof(alpha->second, &parsed);
@@ -126,6 +160,9 @@ struct LoraModel : public GGMLRunner {
             if (!weights->loader().load_file_tensors(source_file, source_version, callback, scalar_names))
                 return false;
         }
+        const auto adapter_config = metadata.find("adapter_config");
+        if (source_version == VERSION_MOSS_IMAGE && !baked_scale && metadata_alpha < 0.f && adapter_config != metadata.end())
+            load_moss_edit_scales(adapter_config->second);
         if (!weights->register_param_tensors(ModelComponent::LoRA, tensors, residency_mode,
                                              runtime_backend, params_backend, nullptr, false, params_follow_compute,
                                              nullptr, source_file, source_version))

@@ -41,6 +41,7 @@ namespace sd::dgl::models {
         float audio_sigma_shift           = 3.f;
         int audio_length                  = 0;
         Rope::RefIndexMode ref_index_mode = Rope::RefIndexMode::FIXED;
+        Rope::RefRoPEAnchor ref_rope_anchor = Rope::RefRoPEAnchor::MODEL_DEFAULT;
         bool force_ref_timestep_zero      = false;
         std::function<PredictionParameters(PredictionParameters)> transform;
     };
