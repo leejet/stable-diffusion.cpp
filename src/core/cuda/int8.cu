@@ -386,12 +386,55 @@ namespace SD_CUDA_NAMESPACE {
             return info.int8_blas &&
                    ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(device), "ggml_ext_gpu_blas_v1");
         }
+        template <bool Quantize>
+        static __global__ void convrot_h64(const float* src, int8_t* dst, float* partial, const float* scales, int64_t k) {
+            const int64_t group = blockIdx.x, groups = k / 64, row = group / groups;
+            const int tid = threadIdx.x;
+            __shared__ float values[64];
+            __shared__ float maxima[16];
+#pragma unroll
+            for (int j = 0; j < 4; ++j)
+                values[tid + j * 16] = src[group * 64 + tid + j * 16] * (1.f / 8.f);
+            __syncthreads();
+#pragma unroll
+            for (int stride = 1; stride < 64; stride *= 4) {
+                const int i   = (tid / stride) * 4 * stride + tid % stride;
+                const float a = values[i], b = values[i + stride], c = values[i + 2 * stride], d = values[i + 3 * stride];
+                values[i]              = convrot_h4_cuda(a, b, c, d, 0);
+                values[i + stride]     = convrot_h4_cuda(a, b, c, d, 1);
+                values[i + 2 * stride] = convrot_h4_cuda(a, b, c, d, 2);
+                values[i + 3 * stride] = convrot_h4_cuda(a, b, c, d, 3);
+                __syncthreads();
+            }
+            if constexpr (Quantize) {
+                const float inverse = scales[row] == 0.f ? 0.f : 1.f / scales[row];
+#pragma unroll
+                for (int j = 0; j < 4; ++j) {
+                    const int value                = __float2int_rn(values[tid + j * 16] * inverse);
+                    dst[group * 64 + tid + j * 16] = int8_t(max(-127, min(127, value)));
+                }
+            } else {
+                float amax = 0.f;
+#pragma unroll
+                for (int j = 0; j < 4; ++j)
+                    amax = fmaxf(amax, fabsf(values[tid + j * 16]));
+                maxima[tid] = amax;
+                __syncthreads();
+                for (int stride = 8; stride; stride >>= 1) {
+                    if (tid < stride)
+                        maxima[tid] = fmaxf(maxima[tid], maxima[tid + stride]);
+                    __syncthreads();
+                }
+                if (!tid)
+                    partial[group] = maxima[0];
+            }
+        }
         static bool convrot_supports(ggml_backend_dev_t device, const ggml_tensor* node, void*) {
             int group;
-            if (!sd_ggml_convrot_describe(node, &group) || group != 256 || !aligned(node) || !aligned(node->src[0]))
+            if (!sd_ggml_convrot_describe(node, &group) || (group != 1 && group != 64 && group != 256) || !aligned(node) || !aligned(node->src[0]))
                 return false;
             const int64_t k = node->ne[0], rows = ggml_nrows(node->src[0]);
-            return k <= INT_MAX && rows <= INT_MAX && rows <= INT_MAX / (k / 256) && cuda_device_info(device).device >= 0;
+            return k <= INT_MAX && rows <= INT_MAX && (group == 1 || rows <= INT_MAX / (k / group)) && cuda_device_info(device).device >= 0;
         }
         enum Kind { MAT,
                     QUANTIZE,
@@ -421,7 +464,8 @@ namespace SD_CUDA_NAMESPACE {
                 return 0;
             if (first + 2 < ggml_graph_n_nodes(g)) {
                 const auto* quant = ggml_graph_node(g, first + 2);
-                if (quant->src[0] == next && convrot_supports(device, quant, nullptr) &&
+                int group;
+                if (quant->src[0] == next && sd_ggml_convrot_describe(quant, &group) && group == 256 && convrot_supports(device, quant, nullptr) &&
                     size_t(next->ne[0]) * sizeof(float) + 128 <= cuda_device_info(device).shared_memory)
                     return 3;
             }
@@ -430,6 +474,7 @@ namespace SD_CUDA_NAMESPACE {
         struct Plan {
             ggml_ext_gpu_device_info device;
             Kind kind;
+            int group;
             int64_t k, n, rows, padded;
             size_t quant, scales, accum, partial, output, gemm_offset;
             SDI8CudaGemmPlan* gemm = nullptr;
@@ -456,7 +501,10 @@ namespace SD_CUDA_NAMESPACE {
             p->n           = mat ? nodes[0]->ne[0] : 0;
             p->rows        = mat ? ggml_nrows(nodes[0]) : ggml_nrows(dst->src[0]);
             p->padded      = (p->rows + 3) / 4 * 4;
-            size_t total   = 0;
+            p->group       = mat ? op.group_size : 0;
+            if (!mat)
+                sd_ggml_convrot_describe(dst, &p->group);
+            size_t total = 0;
             if (mat) {
                 p->quant  = reserve(total, op.input->type == GGML_TYPE_F32 || (!op.packed && p->rows != p->padded) ? size_t(p->k) * p->padded : 0);
                 p->scales = reserve(total, op.input->type == GGML_TYPE_F32 ? size_t(p->rows) * sizeof(float) : 0);
@@ -480,7 +528,8 @@ namespace SD_CUDA_NAMESPACE {
                 p->accum                = reserve(total, intermediate ? size_t(p->fast_swiglu ? p->n / 2 : p->n) * p->padded * sizeof(float) : 0);
             }
             const bool large_rotation = (!mat || (op.input->type == GGML_TYPE_F32 && op.group_size == 256)) && size_t(p->k) * sizeof(float) + 128 > p->device.shared_memory;
-            p->partial                = reserve(total, large_rotation ? size_t(p->rows) * (p->k / 256) * sizeof(float) : 0);
+            p->partial                = reserve(total, p->group == 64 ? size_t(p->rows) * (p->k / 64) * sizeof(float) : large_rotation ? size_t(p->rows) * (p->k / 256) * sizeof(float)
+                                                                                                                                       : 0);
             p->output                 = reserve(total, p->gemm && p->kind == SWIGLU_QUANTIZE ? 0 : ggml_nbytes(dst));
             *workspace                = total;
             return GGML_STATUS_SUCCESS;
@@ -506,6 +555,17 @@ namespace SD_CUDA_NAMESPACE {
                     return error;
             }
             const size_t shared = size_t(p.k) * sizeof(float);
+            if (p.group == 1) {
+                quantize_rowwise_i8_cuda<<<unsigned(p.rows), 256, 0, stream>>>(src, dst, scales, p.k, p.rows);
+                return cuda_last_error();
+            }
+            if (p.group == 64) {
+                const auto groups = p.k / 64;
+                convrot_h64<false><<<unsigned(p.rows * groups), 16, 0, stream>>>(src, dst, partial, scales, p.k);
+                reduce_convrot_row_amax_i8_cuda<<<unsigned(p.rows), 256, 0, stream>>>(partial, scales, groups, p.rows);
+                convrot_h64<true><<<unsigned(p.rows * groups), 16, 0, stream>>>(src, dst, partial, scales, p.k);
+                return cuda_last_error();
+            }
             if (shared + 128 <= p.device.shared_memory) {
                 static std::mutex mutex;
                 static std::unordered_map<int, bool> configured;

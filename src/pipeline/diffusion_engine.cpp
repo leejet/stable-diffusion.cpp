@@ -1057,7 +1057,7 @@ void StableDiffusionGGML::configure_weight_loading() {
     bool have_int8_tensorwise = false;
     bool have_quant_type_rule = false;
     for (const auto& [_, tensor_storage] : model_loader.get_tensor_storage_map()) {
-        if (tensor_storage.is_int8_tensorwise) {
+        if (tensor_storage.is_int8_tensorwise || tensor_storage.w4_convrot_kind) {
             have_int8_tensorwise = true;
         }
         if (tensor_storage.expected_type < GGML_TYPE_COUNT && ggml_is_quantized(tensor_storage.expected_type)) {
@@ -1089,7 +1089,7 @@ void StableDiffusionGGML::configure_weight_loading() {
     } else if (sd_ctx_params->lora_apply_mode == LORA_APPLY_IMMEDIATELY) {
         if (have_int8_tensorwise) {
             LOG_WARN(
-                "INT8 tensorwise weights do not support the immediately LoRA apply mode; "
+                "ComfyUI INT8/packed INT4 weights do not support the immediately LoRA apply mode; "
                 "using at_runtime instead");
             apply_lora_immediately = false;
         } else if (row_split_active()) {

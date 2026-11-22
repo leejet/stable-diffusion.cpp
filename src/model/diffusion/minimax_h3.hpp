@@ -73,16 +73,16 @@ namespace MiniMaxH3 {
             };
 
             if (const auto* weight = find("video_patch_proj.weight")) {
-                config.video_latent_channels = weight->ne[0] / 4;
+                config.video_latent_channels = weight->logical_ne0() / 4;
                 config.hidden_size           = weight->ne[1];
             }
             if (const auto* weight = find("audio_patch_proj.weight")) {
-                config.audio_latent_channels = weight->ne[0];
+                config.audio_latent_channels = weight->logical_ne0();
             }
             config.num_layers               = count_blocks(tensors, prefix + ".blocks.");
             config.token_refiner_num_layers = count_blocks(tensors, prefix + ".token_refiner.blocks.");
             if (const auto* weight = find("blocks.0.attn.q_norm.weight")) {
-                config.attention_head_dim = weight->ne[0];
+                config.attention_head_dim = weight->logical_ne0();
             }
             if (const auto* weight = find("blocks.0.attn.qkv_proj.weight")) {
                 config.num_attention_heads = weight->ne[1] / (3 * config.attention_head_dim);
@@ -91,14 +91,14 @@ namespace MiniMaxH3 {
                 config.ffn_hidden_size = weight->ne[1] / 2;
             }
             if (const auto* weight = find("condition_proj.weight")) {
-                config.text_dim = weight->ne[0];
+                config.text_dim = weight->logical_ne0();
             }
             if (const auto* table = find("adaln_t_table")) {
                 config.time_embed_dim   = table->ne[0];
                 config.adaln_curve_grid = table->ne[1];
             } else {
                 if (const auto* weight = find("time_embedder.proj_in.weight")) {
-                    config.timestep_input_dim     = weight->ne[0];
+                    config.timestep_input_dim     = weight->logical_ne0();
                     config.time_embed_hidden_size = weight->ne[1];
                 }
                 if (const auto* weight = find("time_embedder.proj_out.weight")) {

@@ -1,0 +1,244 @@
+#version 460
+
+#extension GL_EXT_control_flow_attributes : require
+#extension GL_EXT_integer_dot_product : require
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform parameter {
+    uint n;
+    uint rows;
+    uint k;
+    uint has_bias;
+}
+p;
+
+layout(binding = 0, std430) readonly buffer W {
+    int data_w[];
+};
+layout(binding = 1, std430) readonly buffer A {
+    int data_a[];
+};
+layout(binding = 2, std430) readonly buffer CB {
+    float data_cb[];
+};
+layout(binding = 3, std430) readonly buffer SC {
+    float data_sc[];
+};
+layout(binding = 4, std430) readonly buffer SR {
+    uint data_sr[];
+};
+layout(binding = 5, std430) readonly buffer AS {
+    float data_as[];
+};
+layout(binding = 6, std430) readonly buffer B {
+    float data_b[];
+};
+layout(binding = 7, std430) writeonly buffer D {
+    float data_d[];
+};
+
+shared int w_dec[2][16 * 64];
+shared int x_tile[2][32 * 16];
+shared float s_dec[2][4 * 64];
+shared int lut[256];
+shared float s_lut[256];
+shared int cb8s[16];
+shared float s_cb;
+
+float f8_e4m3_to_f32(uint v) {
+    const uint sign = (v >> 7) & 1u;
+    const uint exp  = (v >> 3) & 0xFu;
+    const uint man  = v & 0x7u;
+    float result;
+    if (exp == 0xFu && man == 0x7u) {
+        result = uintBitsToFloat(0x7FC00000u);
+    } else if (exp == 0u) {
+        result = ldexp(float(man), -9);
+    } else {
+        result = ldexp(1.0 + float(man) / 8.0, int(exp) - 7);
+    }
+    return sign != 0u ? -result : result;
+}
+
+void main() {
+    const uint out_base = gl_WorkGroupID.x * 64u;
+    const uint lx       = gl_LocalInvocationID.x;
+    const uint ly       = gl_LocalInvocationID.y;
+
+    const uint row0     = gl_WorkGroupID.y * 32u + ly;
+    const uint row1     = row0 + 16u;
+    const uint idx      = gl_LocalInvocationIndex;
+    const uint w_words  = p.k / 8u;
+    const uint a_words  = p.k / 4u;
+    const uint groups   = p.k / 16u;
+    const uint sr_words = groups / 4u;
+
+    const uint dc   = idx & 63u;
+    const uint dw   = idx >> 6u;
+    const uint ocol = out_base + dc;
+    float sum0      = 0.0;
+    float sum1      = 0.0;
+    float sum2      = 0.0;
+    float sum3      = 0.0;
+    float sum4      = 0.0;
+    float sum5      = 0.0;
+    float sum6      = 0.0;
+    float sum7      = 0.0;
+
+    if (idx == 0u) {
+        float amax = 0.0;
+        for (uint i = 0; i < 16; ++i) {
+            amax = max(amax, abs(data_cb[i]));
+        }
+        s_cb = amax / 127.0;
+        for (uint i = 0; i < 16; ++i) {
+            const int v = (s_cb == 0.0 ? 0 : int(roundEven(data_cb[i] / s_cb)));
+            cb8s[i]     = v < -127 ? -127 : (v > 127 ? 127 : v);
+        }
+    }
+    barrier();
+
+    lut[idx]   = (cb8s[idx & 0xFu] & 0xFF) | (cb8s[idx >> 4] << 8);
+    s_lut[idx] = f8_e4m3_to_f32(idx);
+    barrier();
+
+    {
+        [[unroll]] for (uint j = 0; j < 2; ++j) {
+            const uint pw   = dw * 2 + j;
+            const uint widx = pw;
+            const uint wv   = ocol < p.n && widx < w_words
+                                  ? uint(data_w[ocol * w_words + widx])
+                                  : 0u;
+
+            w_dec[0][(pw * 2 + 0) * 64 + dc] = int((uint(lut[wv & 0xFFu] & 0xFFFF)) | (uint(lut[(wv >> 8) & 0xFFu] & 0xFFFF) << 16));
+            w_dec[0][(pw * 2 + 1) * 64 + dc] = int((uint(lut[(wv >> 16) & 0xFFu] & 0xFFFF)) | (uint(lut[(wv >> 24) & 0xFFu] & 0xFFFF) << 16));
+        }
+        {
+            const uint g = dw;
+            float s      = 0.0;
+            if (ocol < p.n && g < groups) {
+                const uint sr_word = data_sr[ocol * sr_words + g / 4u];
+                s                  = data_sc[ocol] * s_lut[(sr_word >> (8u * (g % 4u))) & 0xFFu];
+            }
+            s_dec[0][dw * 64 + dc] = s_cb * s;
+        }
+        if (lx < 16u) {
+            const uint aidx                 = lx;
+            x_tile[0][ly * 16 + lx]         = row0 < p.rows && aidx < a_words
+                                                  ? data_a[row0 * a_words + aidx]
+                                                  : 0;
+            x_tile[0][(16u + ly) * 16 + lx] = row1 < p.rows && aidx < a_words
+                                                  ? data_a[row1 * a_words + aidx]
+                                                  : 0;
+        }
+    }
+    barrier();
+
+    for (uint gs = 0; gs < groups; gs += 4) {
+        const uint buf = (gs >> 2) & 1u;
+
+        if (gs + 4 < groups) {
+            const uint nbuf = buf ^ 1u;
+            const uint ngs  = gs + 4;
+            [[unroll]] for (uint j = 0; j < 2; ++j) {
+                const uint pw                       = dw * 2 + j;
+                const uint widx                     = ngs * 2 + pw;
+                const uint wv                       = ocol < p.n && widx < w_words
+                                                          ? uint(data_w[ocol * w_words + widx])
+                                                          : 0u;
+                w_dec[nbuf][(pw * 2 + 0) * 64 + dc] = int((uint(lut[wv & 0xFFu] & 0xFFFF)) | (uint(lut[(wv >> 8) & 0xFFu] & 0xFFFF) << 16));
+                w_dec[nbuf][(pw * 2 + 1) * 64 + dc] = int((uint(lut[(wv >> 16) & 0xFFu] & 0xFFFF)) | (uint(lut[(wv >> 24) & 0xFFu] & 0xFFFF) << 16));
+            }
+            {
+                const uint g = ngs + dw;
+                float s      = 0.0;
+                if (ocol < p.n && g < groups) {
+                    const uint sr_word = data_sr[ocol * sr_words + g / 4u];
+                    s                  = data_sc[ocol] * s_lut[(sr_word >> (8u * (g % 4u))) & 0xFFu];
+                }
+                s_dec[nbuf][dw * 64 + dc] = s_cb * s;
+            }
+            if (lx < 16u) {
+                const uint aidx                    = ngs * 4 + lx;
+                x_tile[nbuf][ly * 16 + lx]         = row0 < p.rows && aidx < a_words
+                                                         ? data_a[row0 * a_words + aidx]
+                                                         : 0;
+                x_tile[nbuf][(16u + ly) * 16 + lx] = row1 < p.rows && aidx < a_words
+                                                         ? data_a[row1 * a_words + aidx]
+                                                         : 0;
+            }
+        }
+
+        float partial0 = 0.0;
+        float partial1 = 0.0;
+        float partial2 = 0.0;
+        float partial3 = 0.0;
+        float partial4 = 0.0;
+        float partial5 = 0.0;
+        float partial6 = 0.0;
+        float partial7 = 0.0;
+        {
+            [[unroll]] for (uint gl = 0; gl < 4; ++gl) {
+                int accg0 = 0;
+                int accg1 = 0;
+                int accg2 = 0;
+                int accg3 = 0;
+                int accg4 = 0;
+                int accg5 = 0;
+                int accg6 = 0;
+                int accg7 = 0;
+                [[unroll]] for (uint q = 0; q < 4; ++q) {
+                    const int a0 = x_tile[buf][ly * 16 + gl * 4 + q];
+                    const int a1 = x_tile[buf][(16u + ly) * 16 + gl * 4 + q];
+                    accg0 += int(dotPacked4x8EXT(w_dec[buf][(gl * 4 + q) * 64 + lx], a0));
+                    accg1 += int(dotPacked4x8EXT(w_dec[buf][(gl * 4 + q) * 64 + 16u + lx], a0));
+                    accg2 += int(dotPacked4x8EXT(w_dec[buf][(gl * 4 + q) * 64 + 32u + lx], a0));
+                    accg3 += int(dotPacked4x8EXT(w_dec[buf][(gl * 4 + q) * 64 + 48u + lx], a0));
+                    accg4 += int(dotPacked4x8EXT(w_dec[buf][(gl * 4 + q) * 64 + lx], a1));
+                    accg5 += int(dotPacked4x8EXT(w_dec[buf][(gl * 4 + q) * 64 + 16u + lx], a1));
+                    accg6 += int(dotPacked4x8EXT(w_dec[buf][(gl * 4 + q) * 64 + 32u + lx], a1));
+                    accg7 += int(dotPacked4x8EXT(w_dec[buf][(gl * 4 + q) * 64 + 48u + lx], a1));
+                }
+                const float s0 = s_dec[buf][gl * 64 + lx];
+                const float s1 = s_dec[buf][gl * 64 + 16u + lx];
+                const float s2 = s_dec[buf][gl * 64 + 32u + lx];
+                const float s3 = s_dec[buf][gl * 64 + 48u + lx];
+                partial0 += float(accg0) * s0;
+                partial1 += float(accg1) * s1;
+                partial2 += float(accg2) * s2;
+                partial3 += float(accg3) * s3;
+                partial4 += float(accg4) * s0;
+                partial5 += float(accg5) * s1;
+                partial6 += float(accg6) * s2;
+                partial7 += float(accg7) * s3;
+            }
+        }
+        sum0 += partial0;
+        sum1 += partial1;
+        sum2 += partial2;
+        sum3 += partial3;
+        sum4 += partial4;
+        sum5 += partial5;
+        sum6 += partial6;
+        sum7 += partial7;
+        barrier();
+    }
+
+    const float sumv[8] = {sum0, sum1, sum2, sum3, sum4, sum5, sum6, sum7};
+    [[unroll]] for (uint t = 0; t < 2u; ++t) {
+        const uint rt = t == 0u ? row0 : row1;
+        if (rt < p.rows) {
+            [[unroll]] for (uint j = 0; j < 4; ++j) {
+                const uint oj = out_base + j * 16u + lx;
+                if (oj < p.n) {
+                    float value = sumv[t * 4u + j] * data_as[rt];
+                    if (p.has_bias != 0) {
+                        value += data_b[oj];
+                    }
+                    data_d[rt * p.n + oj] = value;
+                }
+            }
+        }
+    }
+}

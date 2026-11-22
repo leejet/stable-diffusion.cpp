@@ -9,6 +9,7 @@ namespace sd_cpu {
     void register_rope(ggml_backend_dev_t device);
     void register_modulate(ggml_backend_dev_t device);
     void register_i8(ggml_backend_dev_t device);
+    void register_w4(ggml_backend_dev_t device);
 }
 #endif
 
