@@ -11,6 +11,7 @@ var {
 
     reference_paths = ["../assets/flux/flux1-dev-q8_0.png"]
     output_path = "output.png"
+
     prompt = "change 'flux.cpp' to 'moss.cpp'"
     negative_prompt = ""
 
@@ -18,6 +19,7 @@ var {
     rng_type = "cuda"
     width = 512
     height = 512
+
     steps = 20
     cfg_scale = 3.0
     method = "euler"
@@ -46,8 +48,10 @@ fn main() {
     base = tensor::zeros(latent_shape(vae, width = width, height = height))
     positive = encode_prompt(text, prompt, width = width, height = height)
     negative = encode_prompt(text, negative_prompt, width = width, height = height)
-    pos = predictor(model, positive, ref_latents = references, ref_index_mode = "increase", ref_rope_anchor = "text_start", force_ref_timestep_zero = true)
-    neg = predictor(model, negative, ref_latents = references, ref_index_mode = "increase", ref_rope_anchor = "text_start", force_ref_timestep_zero = true)
+    pos = predictor(model, positive, ref_latents = references,
+        ref_index_mode = "increase", ref_rope_anchor = "text_start", force_ref_timestep_zero = true)
+    neg = predictor(model, negative, ref_latents = references,
+        ref_index_mode = "increase", ref_rope_anchor = "text_start", force_ref_timestep_zero = true)
     guided = cfg(pos, neg, scale = cfg_scale)
     sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler)
     rng = make_rng(rng_type, seed = seed)

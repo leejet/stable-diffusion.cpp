@@ -65,7 +65,7 @@ and [NumPy tensor files](../dgl.md#tensor-files).
 | [Ming-Image](../models/ming_image.md) | [0.1 Design text to image](ming_image/ming-image-0-1-design-txt2img.dgl) |
 | [MiniMax-H3-Image](../models/minimax_h3_image.md) | [Text to image](minimax_h3_image/minimax-h3-image-txt2img.dgl) · [Image editing](minimax_h3_image/minimax-h3-image-edit.dgl) |
 | [MiniT2I](../models/minit2i.md) | [CUDA](minit2i/minit2i-cuda-txt2img.dgl) · [Metal](minit2i/minit2i-metal-txt2img.dgl) (`--threads 8`) |
-| [MOSS-Image](../models/moss_image.md) | [Base: text to image](moss_image/moss-image-base-txt2img.dgl) · [SFT: text to image](moss_image/moss-image-sft-txt2img.dgl) · [Inline images](moss_image/moss-image-sft-inline-images.dgl) · [HQ editing](moss_image/moss-image-edit.dgl) · [chinoll editing](moss_image/moss-image-edit-chinoll.dgl) |
+| [MOSS-Image](../models/moss_image.md) | [Base: text to image](moss_image/moss-image-base-txt2img.dgl) · [SFT: text to image](moss_image/moss-image-sft-txt2img.dgl) · [Inline images](moss_image/moss-image-sft-inline-images.dgl) · [Image editing (HQ)](moss_image/moss-image-edit.dgl) · [Image editing (chinoll)](moss_image/moss-image-edit-chinoll.dgl) |
 | [Ovis-Image](../models/ovis_image.md) | [Text to image](ovis_image/ovis-image-txt2img.dgl) |
 | [P-H3-Image](../models/p_h3_image.md) | [Text to image](p_h3_image/p-h3-image-txt2img.dgl) · [Image editing](p_h3_image/p-h3-image-edit.dgl) |
 | [PiD](../models/pid.md) | [512 to 2048 pixels](pid/pid-flux1-512-to-2048-txt2img.dgl) |

@@ -780,9 +780,9 @@ pixels to `encode_prompt` and prepared latents to `predictor` explicitly.
 `predictor(ref_index_mode="increase")` selects reference position indexing;
 the default is `"fixed"`. Use `"decrease"` for layered references and set
 `force_ref_timestep_zero=true` when required by the checkpoint.
-`ref_rope_anchor` selects which position reference tokens share along the RoPE
-sequence axis. MOSS-Image uses `"image_start"` for HQ and `"text_start"` for the
-chinoll LoRA. `"default"` uses the model's alignment. See the
+For MOSS-Image, `ref_rope_anchor` aligns reference tokens with the start of the
+image (`"image_start"`) or text (`"text_start"`) along the RoPE sequence axis.
+`"default"` uses the model's alignment. See the
 [MOSS-Image editing examples](models/moss_image.md#dgl).
 
 `prediction` belongs to `predictor`, for example
