@@ -40,7 +40,6 @@ namespace sd::dgl::models {
         std::shared_ptr<const LoraConfig> loras_;
         LoraExecution lora_execution_;
         bool executing_        = false;
-        bool persistent_loras_ = false;
         bool weights_released_ = false;
         bool eager_load_       = false;
         ModelLoader::Dependencies family_dependencies_;
@@ -99,7 +98,7 @@ namespace sd::dgl::models {
         bool finish_initialization();
         bool place_params(const std::string& name, ggml_backend_t backend, bool disk);
         void set_shared_weights(std::string key) { model_weights->set_shared_weights(std::move(key)); }
-        bool init_variant(const Model& base, std::shared_ptr<const LoraConfig> loras, bool persistent);
+        bool init_variant(const Model& base, std::shared_ptr<const LoraConfig> loras);
         ModelLoader::Dependencies dependencies() const;
     };
 

@@ -29,9 +29,13 @@ namespace sd::dgl::models {
         lora_apply_mode_t mode = LORA_APPLY_AUTO;
     };
 
+    lora_apply_mode_t resolve_lora_mode(lora_apply_mode_t mode, const ModelLoader& loader,
+                                       SDBackendManager& backends, SDBackendModule module, bool row_split = false);
+
     class LoraExecution {
         std::vector<std::shared_ptr<LoraModel>> models_;
         std::shared_ptr<WeightAdapter> adapter_;
+        SDBackendModule module_{};
         bool ready_ = false;
 
     public:

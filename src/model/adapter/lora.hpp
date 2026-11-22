@@ -1068,7 +1068,7 @@ struct LoraModel : public GGMLRunner {
         return apply(model_tensors, tensor_names(model_tensors), version, n_threads, warn_unused);
     }
 
-    void stat(bool at_runntime = false) {
+    void stat(bool at_runtime, const char* component = nullptr) {
         size_t total_lora_tensors_count   = 0;
         size_t applied_lora_tensors_count = 0;
         size_t skipped_lora_tensors_count = 0;
@@ -1078,7 +1078,7 @@ struct LoraModel : public GGMLRunner {
             if (skipped_incompatible_lora_tensors.find(kv.first) != skipped_incompatible_lora_tensors.end()) {
                 skipped_lora_tensors_count++;
             } else if (applied_lora_tensors.find(kv.first) == applied_lora_tensors.end()) {
-                if (!at_runntime) {
+                if (!at_runtime) {
                     LOG_WARN("unused lora tensor |%s|", kv.first.c_str());
                     print_ggml_tensor(kv.second, true);
                 }
@@ -1086,20 +1086,18 @@ struct LoraModel : public GGMLRunner {
                 applied_lora_tensors_count++;
             }
         }
-        /* Don't worry if this message shows up twice in the logs per LoRA,
-         * this function is called once to calculate the required buffer size
-         * and then again to actually generate a graph to be used */
+        const std::string prefix             = component ? std::string(component) + ": " : "";
         size_t compatible_lora_tensors_count = total_lora_tensors_count - skipped_lora_tensors_count;
-        if (!at_runntime && applied_lora_tensors_count != compatible_lora_tensors_count) {
-            LOG_WARN("Only (%lu / %lu) LoRA tensors have been applied, lora_file_path = %s",
+        if (!at_runtime && applied_lora_tensors_count != compatible_lora_tensors_count) {
+            LOG_WARN("Only (%zu / %zu) LoRA tensors have been applied, lora_file_path = %s",
                      applied_lora_tensors_count, compatible_lora_tensors_count, file_path.c_str());
         } else {
-            LOG_INFO("(%lu / %lu) LoRA tensors have been applied, lora_file_path = %s",
-                     applied_lora_tensors_count, compatible_lora_tensors_count, file_path.c_str());
+            LOG_INFO("%s(%zu / %zu) LoRA tensors have been applied, lora_file_path = %s",
+                     prefix.c_str(), applied_lora_tensors_count, compatible_lora_tensors_count, file_path.c_str());
         }
         if (skipped_lora_tensors_count > 0) {
-            LOG_WARN("(%lu / %lu) incompatible LoRA tensors have been skipped, lora_file_path = %s",
-                     skipped_lora_tensors_count, total_lora_tensors_count, file_path.c_str());
+            LOG_WARN("%s(%zu / %zu) incompatible LoRA tensors have been skipped, lora_file_path = %s",
+                     prefix.c_str(), skipped_lora_tensors_count, total_lora_tensors_count, file_path.c_str());
         }
     }
 };

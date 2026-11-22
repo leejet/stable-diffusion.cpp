@@ -69,7 +69,7 @@ namespace sd::dgl {
         return visit_model(base, [&](const auto& model) {
             using T      = typename std::decay_t<decltype(model)>::element_type;
             auto variant = context.make_model<T>(base.model_source->key);
-            if (!variant->init_variant(*model, loras, context.keep_resources))
+            if (!variant->init_variant(*model, loras))
                 throw std::runtime_error("cannot build LoRA variant of " + type_name(base.type()));
             if constexpr (std::is_same_v<T, models::DiT>)
                 return Value::object(std::make_shared<models::DiffusionModel>(models::DiffusionModel{std::move(variant)}));

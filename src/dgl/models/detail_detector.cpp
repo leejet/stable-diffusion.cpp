@@ -325,8 +325,9 @@ namespace sd::dgl::models {
     }
 
     bool DetailDetector::attach_loras() {
+        const auto mode = resolve_lora_mode(lora_mode(), model_weights->loader(), backend_manager, SDBackendModule::DETECTOR);
         return prepare_loras(VERSION_COUNT, backend_manager, SDBackendModule::DETECTOR,
-                             n_threads, lora_mode() == LORA_APPLY_IMMEDIATELY);
+                             n_threads, mode == LORA_APPLY_IMMEDIATELY);
     }
 
     void DetailDetector::set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {

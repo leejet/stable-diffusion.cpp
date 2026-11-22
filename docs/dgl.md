@@ -605,9 +605,9 @@ across both modes. Changing mode or strength can reuse the original weights
 while they remain resident. Persistent contexts retain idle buffers subject
 to RAM and VRAM pressure. Run-once contexts can release shared buffers after
 their last use.
-Automatic mode defaults to runtime LoRA in persistent contexts. For run-once
-DiTs and text encoders, automatic mode also considers quantization and
-backend placement.
+In both persistent and run-once contexts, `auto` selects `immediately` for
+unquantized weights on the compute backend without row splitting. It selects
+`at_runtime` for quantized, offloaded, or row-split weights.
 
 ### Prompt encoding
 
