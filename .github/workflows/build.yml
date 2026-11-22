@@ -67,6 +67,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  resolve-rocm:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Resolve latest stable ROCm
+        id: resolve
+        shell: bash
+        run: |
+          v=$(python3 -m pip index versions rocm --index-url https://stable.repo.amd.com/rocm/whl-next/ 2>/dev/null \
+              | sed -nE 's/^rocm \(([0-9]+\.[0-9]+\.[0-9]+)\).*/\1/p')
+          test -n "$v" || { echo "failed to resolve ROCm version" >&2; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Resolved ROCm $v"
+
   ubuntu-latest-cmake:
     runs-on: ubuntu-latest
 
@@ -505,10 +520,11 @@ jobs:
             sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip
 
   windows-latest-rocm:
+    needs: resolve-rocm
     runs-on: windows-2022
 
     env:
-      ROCM_VERSION: "10.1.0"
+      ROCM_VERSION: "${{ needs.resolve-rocm.outputs.version }}"
       gpu_targets: "gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201"
 
     steps:
@@ -644,16 +660,17 @@ jobs:
             sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip
 
   ubuntu-latest-rocm:
+    needs: resolve-rocm
     runs-on: ubuntu-24.04
 
     env:
       UBUNTU_VERSION: "24.04"
+      ROCM_VERSION: "${{ needs.resolve-rocm.outputs.version }}"
 
     strategy:
       matrix:
         include:
-          - ROCM_VERSION: "10.1.0"
-            gpu_targets: "gfx900;gfx906;gfx908;gfx90a;gfx90c;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201"
+          - gpu_targets: "gfx900;gfx906;gfx908;gfx90a;gfx90c;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201"
             build: 'x64'
 
     steps:
@@ -666,7 +683,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-rocm-cmake-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+          key: ubuntu-rocm-cmake-${{ env.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
           max-size: "2G"
 
@@ -714,7 +731,7 @@ jobs:
           # libraries = HIP runtime and CMake configs needed for linking
           # devel = compilers, headers, static libs
           python -m pip install --upgrade pip
-          python -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ "rocm[libraries,devel]==${{matrix.ROCM_VERSION}}"
+          python -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ "rocm[libraries,devel]==${{env.ROCM_VERSION}}"
 
           # Get ROCm installation paths using the rocm-sdk CLI tool
           ROCM_PATH=$(rocm-sdk path --root)
@@ -797,15 +814,15 @@ jobs:
           cp ggml/LICENSE ./build/bin/ggml.txt
           cp LICENSE ./build/bin/stable-diffusion.cpp.txt
           chmod +x start-server.sh
-          zip -y -r sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm-${{ matrix.ROCM_VERSION }}.zip ./build/bin ./start-server.sh ./start-server.bat
+          zip -y -r sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm-${{ env.ROCM_VERSION }}.zip ./build/bin ./start-server.sh ./start-server.bat
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v6
         with:
-          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm-${{ matrix.ROCM_VERSION }}.zip
+          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm-${{ env.ROCM_VERSION }}.zip
           path: |
-            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm-${{ matrix.ROCM_VERSION }}.zip
+            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm-${{ env.ROCM_VERSION }}.zip
 
   release:
     if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
