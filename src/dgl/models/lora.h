@@ -32,6 +32,7 @@ namespace sd::dgl::models {
     class LoraExecution {
         std::vector<std::shared_ptr<LoraModel>> models_;
         std::shared_ptr<WeightAdapter> adapter_;
+        SDBackendModule module_{};
         bool ready_ = false;
 
     public:

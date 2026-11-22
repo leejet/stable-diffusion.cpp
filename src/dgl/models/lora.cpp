@@ -17,8 +17,14 @@ namespace sd::dgl::models {
     }
 
     void LoraExecution::end() {
-        for (const auto& model : models_)
+        for (const auto& model : models_) {
+            if (adapter_ && (!model->applied_lora_tensors.empty() || !model->skipped_incompatible_lora_tensors.empty())) {
+                model->stat(true, sd_backend_module_name(module_));
+                model->applied_lora_tensors.clear();
+                model->skipped_incompatible_lora_tensors.clear();
+            }
             model->runner_end();
+        }
     }
 
     void LoraExecution::reset() {
@@ -85,6 +91,7 @@ namespace sd::dgl::models {
             adapter_ = std::make_shared<MultiLoraAdapter>(models);
         if (!models.empty())
             LOG_INFO("apply lora %s", immediately ? "immediately" : "at runtime");
+        module_ = module;
         models_ = std::move(models);
         ready_  = true;
         return true;
