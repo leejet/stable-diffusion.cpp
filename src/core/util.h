@@ -1,12 +1,16 @@
 #ifndef __SD_CORE_UTIL_H__
 #define __SD_CORE_UTIL_H__
 
+#include "core/media.h"
+
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "core/option_types.h"
+#include "core/progress.h"
 #include "core/tensor.hpp"
 #include "ggml-backend.h"
 #include "stable-diffusion.h"
@@ -41,9 +45,9 @@ std::string utf32_to_utf8(const std::u32string& utf32_str);
 std::u32string unicode_value_to_utf32(int unicode_value);
 // std::string sd_basename(const std::string& path);
 
-sd_image_t tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index = 0);
+sd::Image tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index = 0);
 
-sd::Tensor<float> sd_image_to_tensor(sd_image_t image,
+sd::Tensor<float> sd_image_to_tensor(sd::Image image,
                                      int target_width  = -1,
                                      int target_height = -1,
                                      bool scale        = true);
@@ -84,9 +88,6 @@ bool parse_strict_float(const std::string& text, float& value);
 bool parse_strict_int(const std::string& text, int& value);
 bool parse_strict_bool(const std::string& text, bool& value);
 
-void pretty_progress(int step, int steps, float time);
-void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds);
-
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...);
 void sd_ggml_log_callback(ggml_log_level level, const char* text, void*);
 
@@ -105,6 +106,7 @@ void* sd_get_progress_callback_data();
 void sd_begin_preview_pass(int total_steps);
 sd_preview_cb_t sd_get_preview_callback();
 void* sd_get_preview_callback_data();
+void sd_set_preview_callback_impl(sd_preview_cb_t cb, preview_t mode, int interval, bool denoised, bool noisy, void* data);
 preview_t sd_get_preview_mode();
 int sd_get_preview_interval();
 bool sd_should_preview_denoised();

@@ -1,0 +1,42 @@
+# version: 0.0.0
+# CLI/context: --threads 8
+# docs/models/minit2i.md — macOS with Metal
+
+var {
+    model_path = "../models/diffusion_models/minit2i/diffusion_pytorch_model.safetensors"
+    text_path = "../models/text_encoders/flan-t5-large/model.safetensors"
+
+    output_path = "minit2i_metal.png"
+
+    prompt = "a cat"
+
+    seed = 42
+    rng_type = "cpu"
+    width = 512
+    height = 512
+
+    steps = 100
+    cfg_scale = 6.0
+    method = "euler"
+    scheduler = "discrete"
+}
+
+fn main() {
+    model = load_dit(model_path, backend = "metal", family = "minit2i")
+    text = load_text_encoder(text_path, backend = "metal", family = "minit2i", t5_path = text_path)
+    base = tensor::zeros([width, height, 3, 1])
+
+    positive = encode_prompt(text, prompt, width = width, height = height)
+    negative = zero_out(positive, fields = ["vector"])
+    pos = predictor(model, positive)
+    neg = predictor(model, negative)
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    pixels = tensor::clamp(tensor::affine(latent, scale = 0.5, offset = 0.5), 0, 1)
+    image = image::to_u8(pixels)
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

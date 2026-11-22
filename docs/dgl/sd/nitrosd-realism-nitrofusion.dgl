@@ -1,0 +1,46 @@
+# version: 0.0.0
+
+var {
+    model_path = "nitrosd-realism_f16.gguf"
+
+    output_path = "nitrofusion.png"
+
+    prompt = "cute cat"
+
+    seed = 2024
+    width = 1024
+    height = 1024
+
+    steps = 1
+    timestep_limit = 250
+    scheduler = "sgm_uniform"
+}
+
+fn nitrofusion_step(step, options) {
+    time_scale = options.timestep_limit / 1000
+    timestep = math::min(math::round(step.timestep * time_scale), 999)
+    t = timestep / 999
+    sigma = t_to_sigma(options.predict, t)
+    scales = denoiser_scalings(options.predict, sigma)
+    skip = scales.skip_scale * step.input_scale / scales.input_scale
+    return { timestep = timestep, skip_scale = skip, output_scale = scales.output_scale }
+}
+
+fn main() {
+    unet = load_unet(model_path)
+    text = load_text_encoder(model_path)
+    vae = load_vae(model_path, conv_scale = 0.03125)
+    shape = latent_shape(vae, width = width, height = height)
+    base = tensor::zeros(shape)
+    rng = make_rng("cuda", seed = seed)
+    pos_text = encode_prompt(text, prompt, width = width, height = height)
+    sampling_predict = predictor(unet, pos_text)
+    sigmas = make_sigmas(sampling_predict, latent = base, steps = steps, scheduler = scheduler)
+    start = add_noise(sampling_predict, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    options = { predict = sampling_predict, timestep_limit = timestep_limit }
+    predict = predictor(unet, pos_text, transform = nitrofusion_step, transform_args = options)
+    latent = sample(start, sigmas, predict = predict, method = "euler_a", rng = rng)
+    pixels = vae_decode(vae, unet_to_vae_latents(vae, latent))
+    image::save(output_path, pixels)
+    return { image = pixels, latent = latent }
+}

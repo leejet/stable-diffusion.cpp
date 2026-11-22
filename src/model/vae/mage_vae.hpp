@@ -502,9 +502,11 @@ namespace MageVAE {
             return LATENT_CHANNELS * 2;
         }
 
-        sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) override {
-            const auto chunks         = sd::ops::chunk(vae_output, 2, 2);
-            const auto& mean          = chunks[0];
+        sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng, VAEPosterior posterior, bool) override {
+            const auto chunks = sd::ops::chunk(vae_output, 2, 2);
+            const auto& mean  = chunks[0];
+            if (posterior == VAEPosterior::Mode)
+                return mean;
             const auto& logvar        = chunks[1];
             sd::Tensor<float> stddev  = sd::ops::exp(0.5f * sd::ops::clamp(logvar, -20.0f, 10.0f));
             sd::Tensor<float> noise   = sd::Tensor<float>::randn_like(mean, rng);

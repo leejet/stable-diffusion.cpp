@@ -1,0 +1,34 @@
+fn fit_canvas(input, width, height, mode) {
+    shape = tensor::shape(input)
+    crop_width = math::min(shape[1], math::floor(shape[2] * width / height))
+    crop_height = math::min(shape[2], math::floor(shape[1] * height / width))
+    start = [math::floor((shape[1] - crop_width) / 2), math::floor((shape[2] - crop_height) / 2)]
+    cropped = tensor::crop(input, axes = [1, 2], start = start, size = [crop_width, crop_height])
+    return tensor::interpolate(cropped, size = [width, height], axes = [1, 2], mode = mode)
+}
+
+fn pack_av(video, audio, audio_scale) {
+    shape = tensor::shape(video)
+    count = tensor::numel(audio)
+    tail_channels = math::ceil_div(count, shape[0] * shape[1] * shape[2])
+    tail_shape = [shape[0], shape[1], shape[2], tail_channels, 1]
+    flat = tensor::reshape(tensor::mul(audio, audio_scale), [count])
+    padded = tensor::pad(flat, [0, math::product(tail_shape) - count])
+    return tensor::concat([video, tensor::reshape(padded, tail_shape)], axis = 3)
+}
+
+fn unpack_audio(packed, channels, audio_shape, audio_scale) {
+    tail = packed[:, :, :, channels:]
+    flat = tensor::reshape(tail, [tensor::numel(tail)])
+    return tensor::div(tensor::reshape(flat[:math::product(audio_shape)], audio_shape), audio_scale)
+}
+
+fn h3_reference_noise(latent, seed) {
+    rng = make_rng("cuda", seed = seed)
+    return tensor::lerp(latent, tensor::randn_like(latent, rng = rng), 0.001)
+}
+
+fn control_frame_pixels(index, args) {
+    pixels = image::to_f32(fit_canvas(args.frames[:, :, :, index], args.width, args.height, mode = "nearest"), channels = 3)
+    return tensor::unsqueeze(pixels, axis = 2)
+}

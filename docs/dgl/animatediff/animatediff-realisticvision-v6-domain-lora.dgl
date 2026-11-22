@@ -1,0 +1,45 @@
+# version: 0.0.0
+# docs/models/animatediff.md — v3 + Domain Adapter LoRA
+
+var {
+    weights = "../models/checkpoints/realisticVisionV60B1.safetensors"
+    model_path = "../models/motion_modules/mm_sd15_v3.safetensors"
+    lora_path = "./loras/v3_sd15_adapter.safetensors"
+
+    output_path = "output.avi"
+
+    prompt = "close up photo of a rabbit"
+    negative_prompt = ""
+
+    seed = 42
+    width = 512
+    height = 512
+    frames = 16
+    fps = 8
+
+    steps = 20
+    cfg_scale = 7.0
+    method = "euler"
+    scheduler = "discrete"
+}
+
+fn main() {
+    original_unet = load_unet(weights)
+    domain_adapter = load_lora(lora_path)
+    base_unet = apply_lora(original_unet, domain_adapter)
+    motion = animatediff::load(model_path)
+    unet = animatediff::apply(base_unet, motion)
+    text = load_text_encoder(weights)
+    vae = load_vae(weights)
+    base = tensor::zeros(latent_shape(vae, width = width, height = height, batch = frames))
+    rng = make_rng("cuda", seed = seed)
+    pos = predictor(unet, encode_prompt(text, prompt), prediction = "eps")
+    neg = predictor(unet, encode_prompt(text, negative_prompt), prediction = "eps")
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, scheduler = scheduler, steps = steps)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    video = vae_decode(vae, unet_to_vae_latents(vae, latent))
+    video::save(output_path, {frames = video, fps_num = fps, fps_den = 1})
+    return { video = video, latent = latent }
+}

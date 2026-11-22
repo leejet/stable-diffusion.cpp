@@ -93,7 +93,7 @@ available during loading. Model lists are empty when no model is loaded;
 | GET | `/sdcpp/v1/model-files` | `{files: [{id, name, category, root, relative_path}], errors: [...]}` |
 | POST | `/sdcpp/v1/models/refresh` | Rescan recipes and files; return `{errors: [...]}` |
 | GET | `/sdcpp/v1/models/status` | Current state, recipe, selection, error, loading time and optional revision |
-| POST | `/sdcpp/v1/models/load` | Load the submitted recipe and selection; return status after completion. A load is a no-op returning the current status with `already_loaded: true` only when the state is ready and the fully resolved selection, the complete recipe object, and the resolved component paths all match the active model; a catalog refresh with modified recipe metadata or a retargeted model path therefore reloads even with an unchanged recipe ID and selection |
+| POST | `/sdcpp/v1/models/load` | Prepare and validate the submitted components before reporting `ready`; failures report `model_load_failed` and leave no active context. A load is a no-op returning the current status with `already_loaded: true` only when the state is ready and the fully resolved selection, the complete recipe object, and the resolved component paths all match the active model; a catalog refresh with modified recipe metadata or a retargeted model path therefore reloads even with an unchanged recipe ID and selection |
 | POST | `/sdcpp/v1/models/unload` | Release the active context; return empty status |
 
 Load request:
@@ -229,6 +229,9 @@ values reflect these declarations. A loaded recipe is snapshotted: refreshing
 recipe files does not change the active context's capabilities until reloading.
 Command-line preloading uses the runtime-only all-features recipe instead of model-family inference
 and component paths; variant-specific recipe declarations are more precise.
+Known high-noise sampling settings and `moe_boundary` are ignored when no
+high-noise stage is loaded, and `vace_strength` is ignored by non-VACE models.
+Actual control-frame inputs still require VACE.
 
 These declarations govern the Web UI and advertised capabilities, not API
 request validation. Existing generation APIs continue accepting their existing
@@ -504,16 +507,10 @@ Native extension fields:
 
 Uploaded images are decoded at their original dimensions. The first decoded
 image establishes the generation dimensions if `size` is omitted. Input
-geometry follows `image_preprocess`: references preserve their dimensions by
-default, while init and mask use the generation canvas preset.
+geometry follows the selected model's default input rules.
 
-Reference encoding then follows model presets and `ref_image_args`. To skip
-input geometry for references and disable resizing before VAE encoding, include
-this in `prompt`:
-
-```text
-edit this image <sd_cpp_extra_args>{"image_preprocess":"target=ref,mode=none","ref_image_args":"resize_before_vae=false"}</sd_cpp_extra_args>
-```
+Reference encoding follows the model defaults. Custom resizing, cropping and
+reference conditioning require a DGL program.
 
 Response fields:
 
@@ -993,8 +990,6 @@ LTX and Wan preserve causal state between temporal tiles. Hunyuan Video and TAEH
 | Field | Type |
 | --- | --- |
 | `batch_count` | `integer` |
-| `ref_image_args` | `string` |
-| `increase_ref_index` | `boolean` |
 | `control_strength` | `number` |
 | `control_type` | `string` |
 | `ip_adapter_strength` | `number` |
@@ -1015,7 +1010,6 @@ LTX and Wan preserve causal state between temporal tiles. Hunyuan Video and TAEH
 | --- | --- |
 | `video_frames` | `integer` |
 | `fps` | `integer` |
-| `ref_image_args` | `string` |
 | `moe_boundary` | `number` |
 | `vace_strength` | `number` |
 | `high_noise_sample_params` | `object` |
@@ -1174,8 +1168,6 @@ Example:
   "strength": 0.75,
   "seed": -1,
   "batch_count": 1,
-  "ref_image_args": "",
-  "increase_ref_index": false,
   "control_strength": 0.9,
   "control_type": "",
   "ip_adapter_strength": 1.0,
@@ -1253,16 +1245,13 @@ Example:
 
 ### Image Encoding Rules
 
-Native image/video requests and SDAPI accept `image_preprocess` as a rule string
-or array of rule strings. OpenAI-compatible requests can supply it in
-`sd_cpp_extra_args`. See [Image preprocessing](../../docs/guides/image_preprocessing.md)
-for one-time input geometry, native-resolution decoding, mask alignment, and
-`canny=true` for edge detection on any supported image input.
+Native generation follows model defaults. Custom input geometry and reference
+conditioning use DGL tensor operations. See
+[Image preprocessing](../../docs/guides/image_preprocessing.md) and
+[Image editing](../../docs/guides/edit.md).
 
-Image generation also accepts `ref_image_args` as a string (for example,
-`"resize_before_vae=false"`) in native and SDAPI requests, or through
-`sd_cpp_extra_args` in OpenAI-compatible requests. It controls downstream
-reference encoding and is independent of input geometry rules.
+The former `image_preprocess` rule field is rejected. Use the DGL execution
+endpoint for custom preprocessing.
 
 Any image field accepts:
 
@@ -1282,7 +1271,7 @@ and `ref_images[]`. RGB-only models drop it, so sending RGBA is safe for every m
 
 If omitted or null:
 
-- single-image fields map to an empty `sd_image_t`
+- single-image fields clear the corresponding image tensor
 - array fields map to an empty C-style array, represented as `pointer = nullptr` and `count = 0`
 
 ### Field Mapping Summary
@@ -1299,9 +1288,6 @@ Top-level scalar fields:
 | `strength` | `number` |
 | `seed` | `integer` |
 | `batch_count` | `integer` |
-| `ref_image_args` | `string` |
-| `image_preprocess` | `string \| array<string>` |
-| `increase_ref_index` | `boolean` |
 | `control_strength` | `number` |
 | `control_type` | `string` |
 | `ip_adapter_strength` | `number` |
@@ -1515,7 +1501,7 @@ Compared with `img_gen`, the `vid_gen` request body:
 - `vid_gen` is a single video sequence job, so `batch_count` is not part of the request schema
 - `mask_image`, `control_image`, `control_strength`, `ip_adapter_image`, `ip_adapter_strength`, and `embed_image_metadata` are not part of the request schema
 - `ref_images` is accepted for MiniMax-H3 Ref2VA conditioning; other video model families currently ignore it
-- `vid_gen` adds `end_image`, `control_frames`, `high_noise_sample_params`, `video_frames`, `fps`, `ref_image_args`, `moe_boundary`, and `vace_strength`
+- `vid_gen` adds `end_image`, `control_frames`, `high_noise_sample_params`, `video_frames`, `fps`, `moe_boundary`, and `vace_strength`
 
 Example:
 
@@ -1530,7 +1516,6 @@ Example:
   "seed": -1,
   "video_frames": 33,
   "fps": 16,
-  "ref_image_args": "",
   "moe_boundary": 0.875,
   "vace_strength": 1.0,
 
@@ -1612,7 +1597,6 @@ Example:
 - Images retain request order and correspond to `<Picture 1>`, `<Picture 2>`, and so on in the prompt.
 - For MiniMax-H3, non-empty `ref_images` cannot be combined with `init_image` or `end_image`. A conflicting API request fails during generation; the WebUI checks this before submission.
 - MiniMax-H3 does not support `control_frames`; leave that array empty.
-- `ref_image_args` applies to `vid_gen`; MiniMax-H3 honors `ref_image_size` there (`match` default, `max` for a 2048 px short edge). Only references above the limit are downscaled; each axis is then snapped to the nearest 32 px multiple.
 - Other video model families currently ignore `ref_images`.
 - `features_by_mode.vid_gen` does not currently advertise `ref_images`; its absence is not an indication that MiniMax-H3 reference images are unsupported.
 
@@ -1645,7 +1629,7 @@ Frame ordering rules:
 
 If omitted or null:
 
-- single-image fields map to an empty `sd_image_t`
+- single-image fields clear the corresponding image tensor
 - array fields map to an empty C-style array, represented as `pointer = nullptr` and `count = 0`
 
 ### Field Mapping Summary
@@ -1663,7 +1647,6 @@ Top-level scalar fields:
 | `seed` | `integer` |
 | `video_frames` | `integer` |
 | `fps` | `integer` |
-| `ref_image_args` | `string` |
 | `moe_boundary` | `number` |
 | `vace_strength` | `number` |
 | `preview` | `string` |
@@ -1706,6 +1689,13 @@ Sampling fields:
 | `sample_params.guidance.slg.scale` | `number` |
 
 High-noise sampling fields:
+
+The two video stages share the scheduler, flow shift and timestep shifting.
+`high_noise_sample_params.scheduler`, `.flow_shift` and `.shifted_timestep`
+are accepted as aliases for those shared settings in video requests. Image
+requests ignore these high-noise fields. Within one video request, a
+corresponding `sample_params` field takes precedence. Request aliases override
+inherited startup and recipe values; `null` clears the inherited shared setting.
 
 | Field | Type |
 | --- | --- |
@@ -1810,19 +1800,21 @@ to the loaded model:
 
 | Model family | Frame alignment | Fixed FPS |
 | --- | --- | --- |
-| Wan, HunyuanVideo, LingBot | `4n + 1`, round down | Wan 2.2 S2V: 16 |
-| LTX | `8n + 1`, round down | None |
+| Wan, HunyuanVideo, LingBot | `4n + 1`, round up | Wan 2.2 S2V: 16 |
+| LTX | `8n + 1`, round up | None |
 | MiniMax-H3 | `17n + 5`, round up, minimum 5 | 24 |
-| AnimateDiff | Whole frames, maximum 32 | None |
+
+AnimateDiff requires an explicit DGL workflow rather than the native video
+generation API.
 
 Wan examples:
 
 - `video_frames = 33` stays `33`
-- `video_frames = 34` becomes `33`
-- `video_frames = 32` becomes `29`
+- `video_frames = 34` becomes `37`
+- `video_frames = 32` becomes `33`
 
-At 16 FPS, a 5-second target requests 80 frames and aligns to 77 frames for Wan,
-or approximately 4.813 seconds. Audio-driven generation and temporal upscaling
+At 16 FPS, a 5-second target requests 80 frames and aligns to 81 frames for Wan,
+or approximately 5.063 seconds. Audio-driven generation and temporal upscaling
 can change the final length. Use the completed job's actual decoded `frame_count`
 and `fps` for the final playback duration.
 
@@ -1903,13 +1895,63 @@ Example cancelled job:
 - `429 Too Many Requests` when the job queue is full
 - `500 Internal Server Error` for unexpected server exceptions during submission
 
+## DGL editor API
+
+These endpoints are available to the local, same-origin Web UI. The server uses
+the working directory's ./dgl directory unless --dgl-dir is set.
+
+| Method and path | Request or response |
+| --- | --- |
+| GET /sdcpp/v1/dgl/scripts | Returns directory and a list of scripts |
+| GET /sdcpp/v1/dgl/script?name=example.dgl | Returns the script as source |
+| POST /sdcpp/v1/dgl/script | Saves UTF-8 source with the given name. Pass previous_source to update an existing script. A conflict returns HTTP 409. |
+| POST /sdcpp/v1/dgl/jobs | Queues the source string and returns a job ID with HTTP 202 |
+| GET /sdcpp/v1/dgl/jobs/{id} | Returns the job status, error or result with tensor descriptions and inline encoded media |
+| GET /sdcpp/v1/dgl/jobs/{id}/outputs/{index}?frame=0 | Returns a PNG of an image output or a video frame. Output and frame indexes start at zero. |
+
+Model reads are restricted to the configured model directories. Script writes
+are restricted to output/ in the server's working directory.
+
+### Encoded DGL results
+
+The existing job result has `type`, `outputs` and `media`. `outputs` retains
+the flat tensor descriptions. `media` recognizes a root `{data, mime_type}`
+dict or such dicts in the root's named fields. `data` must be DGL `bytes`, and
+the supported MIME types are `image/png`, `video/webm` and `video/x-msvideo`.
+Bare bytes, U8 tensors and more deeply nested dicts are not inferred as media.
+The name of a root media dict is `result`.
+
+```json
+{
+  "type": "dict",
+  "outputs": [],
+  "media": [
+    {"name": "cover", "mime_type": "image/png", "b64_json": "..."},
+    {"name": "clip", "mime_type": "video/webm", "b64_json": "..."}
+  ]
+}
+```
+
+The script encodes media once. After execution releases the generation lock,
+the server converts returned bytes to Base64 once, before publishing
+`completed`. Polling returns the stored result; it does not encode a video,
+convert Base64 again, or require frame requests. The frame endpoint remains
+available for explicit tensor inspection. Native `/sdcpp/v1/vid_gen` is unchanged.
+
+Inline media share a 64 MiB raw-byte budget per job. An item that exceeds the
+remaining budget has no `b64_json`; it instead contains
+`error: {code: "inline_too_large", message: "..."}`. Other media and tensor
+outputs remain available, and any file already written by `media::save`
+remains intact. Encoder failures fail the script through the ordinary DGL
+execution error path. WebM encoding rejects nonempty audio instead of silently
+removing it. Use AVI encoding for a PCM16 soundtrack.
+
 ## Actual generation parameters
 
-Generation responses expose the core `sdcpp.generation/v1` record as
-`generation_info`, independently of `embed_image_metadata`. Native async image
-result items and OpenAI image items contain the parameter snapshot with each
-image's actual seed and without `batch_count`. Native video
-results contain the video request snapshot. SD API `info.generation_info` is an array
+Generation responses expose the executed DGL source as `generation_info`,
+independently of `embed_image_metadata`. Native async image result items and
+OpenAI image items contain each image's source with its resolved seed. Native
+video results contain the sequence-wide source. SD API `info.generation_info` is an array
 aligned with `info.infotexts` and `info.all_seeds`; the outer `parameters` field
 remains the request echo. See [generation metadata](../../docs/guides/generation_metadata.md)
-for field semantics, postprocessing and container storage.
+for source semantics and container storage.

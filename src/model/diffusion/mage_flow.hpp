@@ -160,7 +160,7 @@ namespace MageFlow {
                            *diffusion_params.x,
                            *diffusion_params.timesteps,
                            tensor_or_empty(diffusion_params.context),
-                           diffusion_params.ref_latents && diffusion_params.ref_image_params.pass_to_dit ? *diffusion_params.ref_latents : empty_ref_latents);
+                           diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents);
         }
     };
 }  // namespace MageFlow

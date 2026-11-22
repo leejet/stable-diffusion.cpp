@@ -59,9 +59,22 @@ including `GGML_MAX_NAME`. For an upstream package, also set
 `SD_USE_UPSTREAM_GGML=ON` and point `SD_GGML_SOURCE_DIR` to its matching source
 tree for the compatibility layer's private headers.
 
-## WebP and WebM Support in Examples
+## WebP and WebM Support
 
-The example applications (`examples/cli` and `examples/server`) use `libwebp` to support WebP image I/O, and `examples/cli` can also use `libwebm` for `.webm` video output. Both are enabled by default. WebM output currently reuses `libwebp` to encode each frame as VP8 before muxing with `libwebm`.
+WebP and WebM support are enabled by default. The library links `libwebp`,
+`libwebpdemux` and `libwebm` so DGL `video::load` works through the C API as
+well as CLI and server. WebP input supports static images and animation;
+WebM input supports this project's independent VP8 frames and PCM16 audio.
+No libvpx dependency is required. See [DGL media I/O](dgl.md) for frame-rate
+and codec restrictions.
+
+The CLI and server also use `libwebp` for WebP images. CLI WebM output reuses
+`libwebp` to encode each frame as VP8 before muxing with `libwebm`. System WebP
+packages must provide the decoder, demuxer and muxer libraries.
+
+DGL `video::encode` supports silent WebM and AVI with PCM16 audio. Requesting
+WebM audio reports an unsupported-encoder error; use `format="avi"` to include
+an audio track.
 
 If you do not want WebP/WebM support, you can disable them at configure time:
 

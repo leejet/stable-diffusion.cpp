@@ -11,7 +11,7 @@
 #include "core/ggml_extend_backend.h"
 #include "core/ggml_tensor_utils.h"
 
-#include "model/diffusion/ltxv.hpp"
+#include "model/common/ltx.hpp"
 #include "model/vae/vae.hpp"
 #include "model/vae/wan_vae.hpp"
 #include "model_loader.h"
@@ -1054,18 +1054,22 @@ namespace LTXVAE {
         int patch_size;
         bool decode_only;
 
+        const bool use_normalized_latents;
+
         VideoVAE(int version,
                  bool decode_only,
                  bool timestep_conditioning,
                  int patch_size,
                  const String2TensorStorage& tensor_storage_map,
                  const std::string& prefix,
+                 bool use_normalized_latents,
                  float decode_timestep = 0.05f)
             : version(version),
               decode_timestep(decode_timestep),
               timestep_conditioning(timestep_conditioning),
               patch_size(patch_size),
-              decode_only(decode_only) {
+              decode_only(decode_only),
+              use_normalized_latents(use_normalized_latents) {
             if (!decode_only) {
                 blocks["encoder"] = std::make_shared<Encoder>(version,
                                                               tensor_storage_map,
@@ -1084,11 +1088,10 @@ namespace LTXVAE {
         ggml_tensor* decode(GGMLRunnerContext* ctx,
                             ggml_tensor* z,
                             ggml_tensor* timestep) {
-            auto decoder   = std::dynamic_pointer_cast<Decoder>(blocks["decoder"]);
-            auto processor = std::dynamic_pointer_cast<PerChannelStatistics>(blocks["per_channel_statistics"]);
-            auto latents   = processor->un_normalize(ctx, z);
-            auto out       = decoder->forward(ctx, latents, timestep);
-            out            = WAN::WanVAE::unpatchify(ctx, out, patch_size, 1);
+            auto decoder = std::dynamic_pointer_cast<Decoder>(blocks["decoder"]);
+            auto latents = use_normalized_latents ? un_normalize_latents(ctx, z) : z;
+            auto out     = decoder->forward(ctx, latents, timestep);
+            out          = WAN::WanVAE::unpatchify(ctx, out, patch_size, 1);
             return out;
         }
 
@@ -1101,9 +1104,8 @@ namespace LTXVAE {
                                   ggml_tensor* timestep,
                                   int temporal_window_size  = 1,
                                   int temporal_tile_overlap = 0) {
-            auto decoder   = std::dynamic_pointer_cast<Decoder>(blocks["decoder"]);
-            auto processor = std::dynamic_pointer_cast<PerChannelStatistics>(blocks["per_channel_statistics"]);
-            auto latents   = processor->un_normalize(ctx, z);
+            auto decoder = std::dynamic_pointer_cast<Decoder>(blocks["decoder"]);
+            auto latents = use_normalized_latents ? un_normalize_latents(ctx, z) : z;
 
             const int64_t T = z->ne[2];
             if (T <= 1) {
@@ -1164,9 +1166,8 @@ namespace LTXVAE {
                                         int chunk_idx,
                                         int temporal_tile_overlap,
                                         int& feat_idx) {
-            auto decoder   = std::dynamic_pointer_cast<Decoder>(blocks["decoder"]);
-            auto processor = std::dynamic_pointer_cast<PerChannelStatistics>(blocks["per_channel_statistics"]);
-            auto latents   = processor->un_normalize(ctx, z);
+            auto decoder = std::dynamic_pointer_cast<Decoder>(blocks["decoder"]);
+            auto latents = use_normalized_latents ? un_normalize_latents(ctx, z) : z;
 
             feat_idx          = 0;
             int chunk_overlap = temporal_tile_overlap;  // modified by forward_tiled_frame temporal inflation
@@ -1181,14 +1182,13 @@ namespace LTXVAE {
         ggml_tensor* encode(GGMLRunnerContext* ctx,
                             ggml_tensor* x) {
             GGML_ASSERT(!decode_only);
-            auto encoder   = std::dynamic_pointer_cast<Encoder>(blocks["encoder"]);
-            auto processor = std::dynamic_pointer_cast<PerChannelStatistics>(blocks["per_channel_statistics"]);
+            auto encoder = std::dynamic_pointer_cast<Encoder>(blocks["encoder"]);
 
             x         = patchify(ctx, x, patch_size);
             auto out  = encoder->forward(ctx, x);
             auto mean = ggml_ext_chunk(ctx, out, 2, 3, false)[0];
             mean      = ggml_cont(ctx->ggml_ctx, mean);
-            return processor->normalize(ctx, mean);
+            return use_normalized_latents ? normalize_latents(ctx, mean) : mean;
         }
 
         ggml_tensor* normalize_latents(GGMLRunnerContext* ctx,
@@ -1222,7 +1222,8 @@ struct LTXVideoVAE : public VAE {
                 const std::string& prefix,
                 bool decode_only                                    = true,
                 SDVersion version                                   = VERSION_LTXAV,
-                std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+                std::shared_ptr<RunnerWeightManager> weight_manager = nullptr,
+                bool use_normalized_latents                         = true)
         : decode_only(decode_only),
           ltx_vae_version(LTXVAE::detect_ltx_vae_version(tensor_storage_map, prefix)),
           timestep_conditioning(LTXVAE::detect_ltx_vae_timestep_conditioning(tensor_storage_map, prefix)),
@@ -1233,7 +1234,8 @@ struct LTXVideoVAE : public VAE {
               LTXVAE::detect_ltx_vae_timestep_conditioning(tensor_storage_map, prefix),
               patch_size,
               tensor_storage_map,
-              prefix),
+              prefix,
+              use_normalized_latents),
           VAE(version, backend, prefix, weight_manager) {
         vae.init(params_ctx, tensor_storage_map, prefix);
         decode_timestep_tensor.values()[0] = vae.decode_timestep;
@@ -1434,7 +1436,7 @@ struct LTXVideoVAE : public VAE {
         return 256;
     }
 
-    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) override {
+    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng, VAEPosterior, bool) override {
         SD_UNUSED(rng);
         if (vae_output.dim() >= 4 && vae_output.shape()[3] > 128) {
             return sd::ops::slice(vae_output, 3, 0, 128);

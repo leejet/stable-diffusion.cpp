@@ -25,6 +25,7 @@ struct SDSvrParams {
     int max_pending_jobs      = 64;
     int completed_ttl_seconds = 600;
     std::string serve_html_path;
+    std::string dgl_dir = "dgl";
     std::vector<std::string> model_dirs;
     bool normal_exit         = false;
     sd_log_level_t log_level = SD_LOG_INFO;
@@ -73,10 +74,10 @@ struct ServerADetailerPass {
     std::string prompt;
     std::string negative_prompt;
     std::string extra_args;
-    int width                = 512;
-    int height               = 512;
-    float strength           = 0.4f;
-    int clip_skip            = -1;
+    std::optional<int> width;
+    std::optional<int> height;
+    std::optional<float> strength;
+    std::optional<int> clip_skip;
     bool automatic_scheduler = false;
 };
 
@@ -89,16 +90,15 @@ struct ImgGenJobRequest {
     bool adetailer_enabled    = true;
     std::vector<ServerADetailerPass> adetailer_passes;
 
-    sd_img_gen_params_t to_sd_img_gen_params_t() {
-        return gen_params.to_sd_img_gen_params_t();
-    }
+    SDOptPtr to_image_opt() { return gen_params.to_image_opt(); }
 };
 
 class PromptImageCallbackGuard {
     sd_ctx_t* ctx_;
     const SDGenerationParams& params_;
+    SDTensorPtr image_tensor_;
 
-    static bool load_image(const char* source, void* data, sd_image_t* image_out);
+    static bool load_image(const char* source, void* data, const sd_tensor_t** image_out);
 
 public:
     PromptImageCallbackGuard(sd_ctx_t* ctx, const SDGenerationParams& params);
@@ -121,12 +121,11 @@ struct VidGenJobRequest {
     std::string preview_mode  = "none";
     int preview_interval      = 1;
 
-    sd_vid_gen_params_t to_sd_vid_gen_params_t() {
-        return gen_params.to_sd_vid_gen_params_t();
-    }
+    SDOptPtr to_video_opt() { return gen_params.to_video_opt(); }
 };
 
 std::string base64_encode(const std::vector<uint8_t>& bytes);
+std::string base64_encode(const void* bytes, size_t size);
 std::string normalize_output_format(std::string output_format);
 std::vector<std::string> supported_img_output_formats(bool allow_webp = true);
 std::vector<std::string> supported_vid_output_formats();
@@ -141,12 +140,9 @@ bool assign_output_options(VidGenJobRequest& request,
                            std::string& error_message);
 std::string video_mime_type(const std::string& output_format);
 bool runtime_supports_generation_mode(const ServerRuntime& runtime, SDMode mode);
+void prepare_native_context(ServerModels& models, const SDSvrParams& params, const SDContextParams& config, bool startup = false);
 std::string unsupported_generation_mode_error(SDMode mode);
 void refresh_lora_cache(ServerRuntime& rt);
 std::string get_lora_full_path(ServerRuntime& rt, const std::string& path);
 void refresh_upscaler_cache(ServerRuntime& rt);
 int64_t unix_timestamp_now_ms();
-bool apply_server_adetailer(ServerRuntime& runtime,
-                            const ImgGenJobRequest& request,
-                            const sd_img_gen_params_t& params,
-                            SDImageVec& results);

@@ -1,5 +1,6 @@
 #include <array>
 #include <stdexcept>
+#include <unordered_set>
 #include "model_definition.h"
 
 const std::vector<ModelDefinition>& fibo2_definitions();
@@ -33,14 +34,35 @@ const std::vector<ModelDefinition>& lens_definitions();
 const std::vector<ModelDefinition>& iris_definitions();
 const std::vector<ModelDefinition>& sd_definitions();
 const std::vector<ModelDefinition>& moss_image_definitions();
+const std::vector<ModelDefinition>& seedvr2_definitions();
+
+static bool valid_model_id(std::string_view id) {
+    if (id.empty() || id == "auto" || id.front() < 'a' || id.front() > 'z')
+        return false;
+    bool separator = false;
+    for (char c : id) {
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+            separator = false;
+        } else if (c == '_' && !separator) {
+            separator = true;
+        } else {
+            return false;
+        }
+    }
+    return !separator;
+}
 
 static const std::array<const ModelDefinition*, VERSION_COUNT>& model_definitions() {
     static const auto definitions = [] {
         std::array<const ModelDefinition*, VERSION_COUNT> result{};
+        std::unordered_set<std::string_view> ids;
         auto append = [&](const std::vector<ModelDefinition>& family) {
             for (const auto& definition : family) {
                 if (definition.version < 0 || definition.version >= VERSION_COUNT || result[definition.version]) {
                     throw std::logic_error("duplicate or invalid model registration");
+                }
+                if (!definition.id || !valid_model_id(definition.id) || !ids.insert(definition.id).second) {
+                    throw std::logic_error("duplicate or invalid model family ID for version " + std::to_string(definition.version));
                 }
                 result[definition.version] = &definition;
             }
@@ -76,6 +98,7 @@ static const std::array<const ModelDefinition*, VERSION_COUNT>& model_definition
         append(iris_definitions());
         append(sd_definitions());
         append(moss_image_definitions());
+        append(seedvr2_definitions());
         for (const auto* definition : result) {
             if (!definition)
                 throw std::logic_error("missing model registration");
@@ -89,6 +112,14 @@ const ModelDefinition* find_model_definition(SDVersion version) {
     if (version < 0 || version >= VERSION_COUNT)
         return nullptr;
     return model_definitions()[version];
+}
+
+const ModelDefinition* find_model_definition(std::string_view id) {
+    for (const auto* definition : model_definitions()) {
+        if (id == definition->id)
+            return definition;
+    }
+    return nullptr;
 }
 
 const ModelTraits* find_model_traits(SDVersion version) {

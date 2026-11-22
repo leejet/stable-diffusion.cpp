@@ -1,0 +1,101 @@
+# version: 0.0.0
+
+var {
+{{variables}}
+}
+
+{% include "video_helpers" %}
+
+fn main({{inputs}}) {
+    base_model = load_dit(model_path{{model_options}})
+    base_text = load_text_encoder(text_path{{text_options}})
+    vae = {{vae_loader}}(vae_path{{vae_options}})
+{{loras}}
+    model = {{patched_model}}
+    text = {{patched_text}}
+    encode_rng = make_rng(rng_type, seed = seed)
+    video_base = tensor::zeros(latent_shape(vae, width = width, height = height, frames = frames))
+{% if flags.first %}
+    first_frame_pixels = tensor::unsqueeze(image::to_f32(fit_canvas(first_frame, width, height, mode = "nearest"), channels = 3), axis = 2)
+{% endif %}
+{% if flags.last %}
+    last_frame_pixels = tensor::unsqueeze(image::to_f32(fit_canvas(last_frame, width, height, mode = "nearest"), channels = 3), axis = 2)
+{% endif %}
+    video_shape = tensor::shape(video_base)
+{% if flags.conditioned %}
+    video_mask = tensor::full([video_shape[0], video_shape[1], video_shape[2], 1, 1], 1)
+{% if flags.first %}
+    first_latent = vae_to_dit_latents(vae, vae_encode(vae, first_frame_pixels, rng = encode_rng{{vae_run_options}}))
+    video_first = tensor::replace_slice(video_base, first_latent, axis = 2, start = 0)
+    mask_first = tensor::index_fill(video_mask, axis = 2, indices = [0], value = 1 - strength)
+{% else %}
+    video_first = video_base
+    mask_first = video_mask
+{% endif %}
+{% if flags.last %}
+    last_latent = vae_to_dit_latents(vae, vae_encode(vae, last_frame_pixels, rng = encode_rng{{vae_run_options}}))
+    tail_mask = tensor::full([video_shape[0], video_shape[1], tensor::shape(last_latent)[2], 1, 1], 1 - strength)
+    video_conditioned = tensor::concat([video_first, last_latent], axis = 2)
+    mask_conditioned = tensor::concat([mask_first, tail_mask], axis = 2)
+    positions = ltx::video_positions(video_first, keyframe_latent_frames = tensor::shape(last_latent)[2], keyframe_frame_index = frames - 1, keyframe_pixel_frames = 1, fps = fps)
+{% else %}
+    video_conditioned = video_first
+    mask_conditioned = mask_first
+{% endif %}
+{% endif %}
+{% if flags.decode_audio %}
+    audio_vae = load_audio_vae(audio_vae_path{{audio_vae_options}})
+    audio_shape = audio_latent_shape(audio_vae, frames = frames, fps = fps)
+{% else %}
+    audio_shape = empty_audio_shape
+{% endif %}
+{% if flags.conditioned %}
+    base = pack_av(video_conditioned, tensor::zeros(audio_shape), audio_scale = audio_scale)
+    packed_shape = tensor::shape(base)
+    full_video_mask = tensor::broadcast_to(mask_conditioned, tensor::shape(video_conditioned))
+    packed_mask = tensor::concat([full_video_mask, tensor::full([packed_shape[0], packed_shape[1], packed_shape[2], packed_shape[3] - video_shape[3], 1], 1)], axis = 3)
+{% else %}
+    base = pack_av(video_base, tensor::zeros(audio_shape), audio_scale = audio_scale)
+{% endif %}
+    positive_text = encode_prompt(text, prompt, width = width, height = height{{prompt_options}})
+{% if flags.encode_negative %}
+    negative_text = encode_prompt(text, negative_prompt, width = width, height = height{{negative_prompt_options}})
+{% else %}
+    negative_text = positive_text
+{% endif %}
+{% if flags.vision %}
+    positive = {crossattn = positive_text.crossattn, vector = vision_condition}
+    negative = {crossattn = negative_text.crossattn, vector = vision_condition}
+{% else %}
+    positive = positive_text
+    negative = negative_text
+{% endif %}
+    pos = predictor(model, positive{{predictor_options}})
+    neg = predictor(model, negative{{negative_predictor_options}})
+    guided = {{guidance_function}}(pos, neg, scale = cfg_scale{{guidance_options}})
+{% if flags.custom_sigmas %}
+    sigmas = tensor::vector(custom_sigmas, dtype = "f32")
+{% else %}
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler{{schedule_options}})
+{% endif %}
+    rng = encode_rng
+{% if flags.shared_rng %}
+    sampler_rng = rng
+{% else %}
+    sampler_rng = make_rng(sampler_rng_type, seed = seed)
+{% endif %}
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = sampler_rng, eta = eta{{sample_options}})
+{% if flags.hires %}
+{% include "video_hires" %}
+{% endif %}
+    video_latent = {{result_latent}}[:, :, :{{output_video_frames}}, :tensor::shape(video_base)[3]]
+    output_frames = vae_decode(vae, dit_to_vae_latents(vae, video_latent){{vae_run_options}})
+{% if flags.decode_audio %}
+    sound_latent = unpack_audio({{result_latent}}, channels = tensor::shape(video_base)[3], audio_shape = {{output_audio_shape}}, audio_scale = audio_scale)
+    audio = audio_vae_decode(audio_vae, sound_latent)
+{% else %}
+    audio = {}
+{% endif %}
+    return {video = {frames = output_frames, fps_num = fps, fps_den = 1}, latent = {{result_latent}}, audio = audio}
+}

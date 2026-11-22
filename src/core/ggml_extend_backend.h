@@ -39,6 +39,7 @@ struct SDBackendHandleDeleter {
 };
 
 using SDBackendHandle = std::unique_ptr<struct ggml_backend, SDBackendHandleDeleter>;
+using SDBackendPool   = std::unordered_map<std::string, SDBackendHandle>;
 
 enum class SDSplitMode {
     LAYER,
@@ -50,10 +51,13 @@ private:
     SDBackendAssignment runtime_assignment_;
     SDBackendAssignment params_assignment_;
     SDBackendAssignment split_mode_assignment_;
-    std::unordered_map<std::string, SDBackendHandle> backends_;
+    SDBackendPool backends_;
+    std::shared_ptr<SDBackendPool> shared_backends_;
 
 public:
     SDBackendManager() = default;
+    explicit SDBackendManager(std::shared_ptr<SDBackendPool> backends)
+        : shared_backends_(std::move(backends)) {}
     ~SDBackendManager();
 
     SDBackendManager(const SDBackendManager&)            = delete;
@@ -69,6 +73,7 @@ public:
     ggml_backend_t params_backend(SDBackendModule module);
 
     std::vector<ggml_backend_t> runtime_backends(SDBackendModule module);
+    ggml_backend_t existing_backend(ggml_backend_dev_t device) const;
 
     SDSplitMode split_mode(SDBackendModule module) const;
     ggml_backend_buffer_type_t split_buffer_type(ggml_backend_t backend,
@@ -99,10 +104,6 @@ bool sd_backend_cpu_set_n_threads(ggml_backend_t backend_cpu, int n_threads);
 void sd_backend_set_buffer_cache_enabled(ggml_backend_t backend, bool enabled);
 void sd_backend_clear_buffer_cache(ggml_backend_t backend);
 
-ggml_status sd_backend_graph_compute_with_eval_callback(ggml_backend_t backend,
-                                                        ggml_cgraph* gf,
-                                                        sd_graph_eval_callback_t callback_eval,
-                                                        void* callback_eval_user_data);
 std::string sd_backend_resolve_name(const std::string& name);
 bool sd_parse_backend_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error);
 bool sd_parse_flash_attention_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error);

@@ -127,7 +127,8 @@ namespace AnimateDiff {
             h = tb0->forward(ctx, h);
             h = proj_out->forward(ctx, h);
             h = ggml_reshape_4d(ctx->ggml_ctx, h, C, num_frames, W, H);
-            h = ggml_ext_cont(ctx, ggml_permute(ctx->ggml_ctx, h, 2, 3, 0, 1));
+            // Binary kernels require a unit innermost stride even for singleton spatial dimensions.
+            h = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, h, 2, 3, 0, 1));
 
             return ggml_add(ctx->ggml_ctx, h, residual);
         }
@@ -176,6 +177,37 @@ namespace AnimateDiff {
             if (it == blocks.end())
                 return nullptr;
             return std::dynamic_pointer_cast<MotionModule>(it->second);
+        }
+    };
+
+    class MotionRunner : public GGMLRunner {
+        AnimateDiffModel model_;
+
+    public:
+        static constexpr const char* prefix = "model.diffusion_model.motion_module";
+
+        MotionRunner(ggml_backend_t backend, const String2TensorStorage& weights, MotionModuleConfig config, std::shared_ptr<RunnerWeightManager> manager)
+            : GGMLRunner(backend, std::move(manager)), model_(config) {
+            model_.init(params_ctx, weights, prefix);
+        }
+
+        std::string get_desc() override { return "animatediff"; }
+        ggml_backend_t compute_backend() const { return runtime_backend; }
+        int max_frames() const { return model_.config.max_frames; }
+        size_t extra_graph_size() const { return weight_adapter ? weight_adapter->get_extra_graph_size() : 0; }
+
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) { model_.get_param_tensors(tensors, prefix); }
+
+        ggml_tensor* forward(GGMLRunnerContext& ctx, const std::string& key, ggml_tensor* activation, int frames) {
+            auto motion = model_.motion(key);
+            if (!motion)
+                return activation;
+            auto branch              = ctx;
+            branch.weight_adapter    = weight_adapter;
+            branch.linear_scale      = linear_scale;
+            branch.attn_scale        = attn_scale;
+            branch.sage_attn_enabled = sage_attn_enabled;
+            return motion->forward(&branch, activation, frames);
         }
     };
 

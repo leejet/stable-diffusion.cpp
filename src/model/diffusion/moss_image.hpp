@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cinttypes>
+#include <stdexcept>
 
 #include "core/pe_cache.h"
 
@@ -109,8 +110,7 @@ namespace MOSSImage {
             blocks["proj.ffn_down"]    = std::make_shared<Linear>(config.ffn_dim, config.dim, false);
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* pe, const std::array<ggml_tensor*, 6>& mod,
-                             int64_t ref_start = -1) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* pe, const std::array<ggml_tensor*, 6>& mod, int64_t ref_start = -1) {
             auto c      = ctx->ggml_ctx;
             auto linear = [&](const char* name, ggml_tensor* h) { return std::dynamic_pointer_cast<Linear>(blocks[name])->forward(ctx, h); };
             auto norm   = [&](const char* name, ggml_tensor* h) { return std::dynamic_pointer_cast<RMSNorm>(blocks[name])->forward(ctx, h); };
@@ -160,8 +160,7 @@ namespace MOSSImage {
             blocks["final_linear_video"] = std::make_shared<Linear>(config.dim, config.channels, false);
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* image, ggml_tensor* time, ggml_tensor* time_0, ggml_tensor* text,
-                             ggml_tensor* pe, const std::vector<int>& skip, const std::vector<ggml_tensor*>& refs) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* image, ggml_tensor* time, ggml_tensor* time_0, ggml_tensor* text, ggml_tensor* pe, const std::vector<int>& skip, const std::vector<ggml_tensor*>& refs) {
             auto c            = ctx->ggml_ctx;
             auto linear       = [&](const char* name, ggml_tensor* h) { return std::dynamic_pointer_cast<Linear>(blocks[name])->forward(ctx, h); };
             int64_t image_len = image->ne[0] * image->ne[1];
@@ -174,47 +173,38 @@ namespace MOSSImage {
             }
             time      = linear("time_embedding.2", ggml_silu(c, linear("time_embedding.0", time)));
             auto head = linear("video_head_modulation", time);
-            x         = ggml_concat(c, x, text, 1);
-            int64_t body_len = x->ne[1];  // image + text; refs are appended after this
+            x                      = ggml_concat(c, x, text, 1);
+            const int64_t body_len = x->ne[1];
+            for (auto* ref : refs) {
+                auto pixels_ref = ggml_reshape_3d(c, ref, ref->ne[0] * ref->ne[1], ref->ne[2], ref->ne[3]);
+                pixels_ref      = ggml_cont(c, ggml_transpose(c, pixels_ref));
+                x               = ggml_concat(c, x, linear("video_embedder", pixels_ref), 1);
+            }
+            const int64_t ref_len = x->ne[1] - body_len;
 
-            // Per-token modulation: body rows use timestep t, ref rows use the constant t=0
-            // embedding (the MOSS-Image edit contract). With no refs, `parts` stays as plain
-            // [dim] vectors and the graph is bit-identical to the t2i path.
+            // Reference tokens use the clean-image timestep while image and text use the sampling timestep.
             auto mod0 = time_0 != nullptr
                             ? linear("shared_block_modulation",
                                      linear("time_embedding.2", ggml_silu(c, linear("time_embedding.0", time_0))))
                             : nullptr;
             auto mod  = linear("shared_block_modulation", time);
             std::array<ggml_tensor*, 6> parts;
-            auto ref_len = [&]() {
-                int64_t n = 0;
-                for (ggml_tensor* ref : refs) {
-                    n += ref->ne[0] * ref->ne[1];
-                }
-                return n;
-            };
             for (int i = 0; i < 6; ++i) {
                 parts[i] = ggml_ext_slice(ctx, mod, 0, i * config.dim, (i + 1) * config.dim, false);
                 if (mod0 != nullptr) {
-                    auto seg    = [&](ggml_tensor* vec, int64_t len) {
+                    auto seg = [&](ggml_tensor* vec, int64_t len) {
                         return ggml_repeat(c, ggml_reshape_3d(c, vec, config.dim, 1, 1),
                                            ggml_new_tensor_3d(c, GGML_TYPE_F32, config.dim, len, 1));
                     };
-                    auto refp   = ggml_ext_slice(ctx, mod0, 0, i * config.dim, (i + 1) * config.dim);
-                    parts[i]    = ggml_concat(c, seg(parts[i], body_len), seg(refp, ref_len()), 1);  // [dim, L_total, 1]
+                    auto refp = ggml_ext_slice(ctx, mod0, 0, i * config.dim, (i + 1) * config.dim, false);
+                    parts[i]  = ggml_concat(c, seg(parts[i], body_len), seg(refp, ref_len), 1);
                 }
                 if (ctx->graph != nullptr) {
                     ggml_build_forward_expand(ctx->graph, parts[i]);
                 }
             }
 
-            for (ggml_tensor* ref : refs) {  // refs appended at the END of the sequence
-                auto pixels_ref = ggml_reshape_3d(c, ref, ref->ne[0] * ref->ne[1], ref->ne[2], ref->ne[3]);
-                pixels_ref      = ggml_cont(c, ggml_transpose(c, pixels_ref));
-                x               = ggml_concat(c, x, linear("video_embedder", pixels_ref), 1);
-            }
-            int64_t ref_start = ref_len() > 0 ? body_len : -1;
-
+            const int64_t ref_start = refs.empty() ? -1 : body_len;
             for (int64_t i = 0; i < config.depth; ++i) {
                 if (std::find(skip.begin(), skip.end(), i) == skip.end()) {
                     x = std::dynamic_pointer_cast<Block>(blocks["layers." + std::to_string(i)])->forward(ctx, x, pe, parts, ref_start);
@@ -259,13 +249,12 @@ namespace MOSSImage {
                     skip = *extra->skip_layers;
                 }
             }
-            // edit refs: FLUX.2-VAE latents consumed by the DiT (moss_edit preset)
-            // validation only: the graph inputs are made inside the lambda, because make_input
-            // allocates in compute_ctx which exists only after new_graph_custom
-            const bool use_edit_refs = inputs.ref_latents != nullptr && inputs.ref_image_params.pass_to_dit &&
-                                       !inputs.ref_latents->empty();
-            if (use_edit_refs && !inputs.ref_image_params.force_ref_timestep_zero) {
-                LOG_WARN("MOSS-Image edit requires force_ref_timestep_zero; using t=0 for refs anyway");
+            if (inputs.ref_latents != nullptr) {
+                for (const auto& ref : *inputs.ref_latents) {
+                    if (ref.empty() || ref.dim() != 4 || ref.shape()[2] != config.channels || ref.shape()[3] != 1) {
+                        throw std::runtime_error("MOSS-Image reference latents must have shape [width, height, channels, 1] with the model's latent channel count");
+                    }
+                }
             }
             auto graph = [&]() {
                 auto gf   = new_graph_custom(65536);
@@ -273,11 +262,9 @@ namespace MOSSImage {
                 auto text = make_input(*inputs.context);
                 GGML_ASSERT(x->ne[3] == 1 && x->ne[2] == config.channels && text->ne[0] == config.text_dim);
                 int64_t h = x->ne[1], w = x->ne[0], nt = text->ne[1];
-                // edit refs: VAE latents with the same layout as x (ne[0]=W_lat, ne[1]=H_lat, ne[2]=128, ne[3]=1).
                 std::vector<ggml_tensor*> refs;
-                if (use_edit_refs) {
+                if (inputs.ref_latents != nullptr) {
                     for (const auto& ref : *inputs.ref_latents) {
-                        GGML_ASSERT(ref.shape()[2] == config.channels && ref.shape()[3] == 1);
                         refs.push_back(make_input(ref));
                     }
                 }
@@ -341,7 +328,7 @@ namespace MOSSImage {
                 if (!refs.empty()) {
                     time0_data.assign(config.freq_dim / 2, 1.f);
                     time0_data.resize(config.freq_dim, 0.f);
-                    time_0            = ggml_new_tensor_3d(compute_ctx, GGML_TYPE_F32, config.freq_dim, 1, 1);
+                    time_0 = ggml_new_tensor_3d(compute_ctx, GGML_TYPE_F32, config.freq_dim, 1, 1);
                     set_backend_tensor_data(time_0, time0_data.data());
                 }
                 auto ctx = get_context(gf);

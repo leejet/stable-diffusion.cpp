@@ -20,7 +20,8 @@
 #include "common/common.h"
 #include "common/media_io.h"
 #include "common/resource_owners.hpp"
-#include "image_metadata.h"
+#include "dgl.h"
+#include "media_input.h"
 
 namespace fs = std::filesystem;
 
@@ -34,29 +35,26 @@ const char* previews_str[] = {
 std::regex format_specifier_regex("(?:[^%]|^)(?:%%)*(%\\d{0,3}d)");
 
 struct SDCliParams {
-    std::string input_frames;
-    int video_upscale_factor    = 0;
-    int vsr_window_size         = 16;
-    int vsr_temporal_chunk_size = 5;
-    SDMode mode                 = IMG_GEN;
-    std::string output_path     = "output.png";
-    int output_begin_idx        = -1;
-    int compression_quality     = 90;
+    SDMode mode             = IMG_GEN;
+    std::string output_path = "output.png";
+    int output_begin_idx    = -1;
+    int compression_quality = 90;
     std::string image_path;
     std::string metadata_format = "text";
+    DGLModeParams dgl;
 
     sd_log_level_t log_level = SD_LOG_INFO;
     bool convert_name        = false;
 
-    preview_t preview_method = PREVIEW_NONE;
-    int preview_interval     = 1;
-    std::string preview_path = "preview.png";
-    int preview_fps          = 16;
-    bool preview_noisy       = false;
-    bool color               = false;
-    bool metadata_raw        = false;
-    bool metadata_brief      = false;
-    bool metadata_all        = false;
+    std::string preview_method = "none";
+    int preview_interval       = 1;
+    std::string preview_path   = "preview.png";
+    int preview_fps            = 16;
+    bool preview_noisy         = false;
+    bool color                 = false;
+    bool metadata_raw          = false;
+    bool metadata_brief        = false;
+    bool metadata_all          = false;
 
     std::string imatrix_out;
     std::vector<std::string> imatrix_in;
@@ -67,7 +65,6 @@ struct SDCliParams {
         ArgOptions options;
 
         options.string_options = {
-            {"", "--input-frames", "directory of ordered RGB frames for vid_upscale (use -i for a single image)", 0, &input_frames},
             {"-o",
              "--output",
              "path to write result image to. you can use printf-style %d format specifiers for image sequences (default: ./output.png) (eg. output_%03d.png). Single-file video outputs support .avi, .webm, and animated .webp",
@@ -96,9 +93,6 @@ struct SDCliParams {
         };
 
         options.int_options = {
-            {"", "--upscale-factor", "required positive video upscale factor (RelayVSR: 2 or 4; SeedVR2: integer)", &video_upscale_factor},
-            {"", "--vsr-window-size", "RelayVSR window including both endpoints (default: 16)", &vsr_window_size},
-            {"", "--vsr-temporal-chunk-size", "SeedVR2 input frames per independent chunk: 1 or 4n+1 (default: 5)", &vsr_temporal_chunk_size},
             {"",
              "--preview-interval",
              "preview interval: in each sampling pass, positive N updates every Nth denoiser step and -N previews only completed logical step N; 0 previews the final completed step of the first pass (base-resolution or high-noise). Default: 1",
@@ -167,18 +161,7 @@ struct SDCliParams {
             if (++index >= argc) {
                 return -1;
             }
-            const char* preview = argv[index];
-            int preview_found   = -1;
-            for (int m = 0; m < PREVIEW_COUNT; m++) {
-                if (!strcmp(preview, previews_str[m])) {
-                    preview_found = m;
-                }
-            }
-            if (preview_found == -1) {
-                LOG_ERROR("error: preview method %s", preview);
-                return -1;
-            }
-            preview_method = (preview_t)preview_found;
+            preview_method = argv[index];
             return 1;
         };
 
@@ -199,11 +182,11 @@ struct SDCliParams {
         options.manual_options = {
             {"-M",
              "--mode",
-             "run mode, one of [img_gen, adetailer, vid_gen, vid_upscale, upscale, convert, metadata], default: img_gen",
+             "run mode, one of [" SD_ALL_MODES_STR "], default: img_gen",
              on_mode_arg},
             {"",
              "--preview",
-             std::string("preview method. must be one of the following [") + previews_str[0] + ", " + previews_str[1] + ", " + previews_str[2] + ", " + previews_str[3] + "] (default is " + previews_str[PREVIEW_NONE] + ")",
+             std::string("preview method. must be one of the following [") + previews_str[0] + ", " + previews_str[1] + ", " + previews_str[2] + ", " + previews_str[3] + "] (default is " + previews_str[0] + ")",
              on_preview_arg},
             {"-h",
              "--help",
@@ -229,8 +212,11 @@ struct SDCliParams {
     }
 
     bool validate() {
-        if (mode == VID_UPSCALE && video_upscale_factor <= 0) {
-            LOG_ERROR("vid_upscale requires a positive --upscale-factor");
+        if (mode == DGL) {
+            return dgl.validate();
+        }
+        if (dgl.has_options()) {
+            LOG_ERROR("DGL options require --mode dgl");
             return false;
         }
         if (mode != METADATA) {
@@ -272,7 +258,7 @@ struct SDCliParams {
             << "  log_level: " << log_level_name(log_level) << ",\n"
             << "  color: " << (color ? "true" : "false") << ",\n"
             << "  convert_name: " << (convert_name ? "true" : "false") << ",\n"
-            << "  preview_method: " << previews_str[preview_method] << ",\n"
+            << "  preview_method: " << preview_method << ",\n"
             << "  preview_interval: " << preview_interval << ",\n"
             << "  preview_path: \"" << preview_path << "\",\n"
             << "  preview_fps: " << preview_fps << ",\n"
@@ -295,25 +281,28 @@ void print_usage(int argc, const char* argv[], const std::vector<ArgOptions>& op
     options_list[1].print();
     std::cout << "\nGeneration Options:\n";
     options_list[2].print();
+    std::cout << "\nDGL Options:\n";
+    options_list[3].print();
 }
 
 void parse_args(int argc, const char** argv, SDCliParams& cli_params, SDContextParams& ctx_params, SDGenerationParams& gen_params) {
-    std::vector<ArgOptions> options_vec = {cli_params.get_options(), ctx_params.get_options(), gen_params.get_options()};
+    std::vector<ArgOptions> options_vec = {cli_params.get_options(), ctx_params.get_options(), gen_params.get_options(), cli_params.dgl.get_options()};
 
     if (!parse_options(argc, argv, options_vec)) {
         print_usage(argc, argv, options_vec);
         exit(cli_params.normal_exit ? 0 : 1);
     }
 
-    log_level = cli_params.log_level;
-    log_color = cli_params.color;
+    log_level  = cli_params.log_level;
+    log_color  = cli_params.color;
+    log_stream = cli_params.mode == DGL ? stderr : nullptr;
 
     if (ctx_params.list_devices) {
         exit(ctx_params.print_devices() ? 0 : 1);
     }
 
     bool valid = cli_params.resolve_and_validate();
-    if (valid && cli_params.mode != METADATA) {
+    if (valid && cli_params.mode != METADATA && cli_params.mode != DGL) {
         valid = ctx_params.resolve_and_validate(cli_params.mode) &&
                 gen_params.resolve_and_validate(cli_params.mode,
                                                 ctx_params.lora_model_dir,
@@ -328,57 +317,7 @@ void parse_args(int argc, const char** argv, SDCliParams& cli_params, SDContextP
 
 void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     SDCliParams* cli_params = (SDCliParams*)data;
-    log_print(level, log, cli_params->log_level, cli_params->color);
-}
-
-bool load_images_from_dir(const std::string dir,
-                          std::vector<SDImageOwner>& images,
-                          int max_image_num = 0) {
-    const fs::path dir_path = fs::u8path(dir);
-    if (!fs::exists(dir_path) || !fs::is_directory(dir_path)) {
-        LOG_ERROR("'%s' is not a valid directory\n", dir.c_str());
-        return false;
-    }
-
-    std::vector<fs::directory_entry> entries;
-    for (const auto& entry : fs::directory_iterator(dir_path)) {
-        if (entry.is_regular_file()) {
-            entries.push_back(entry);
-        }
-    }
-
-    std::sort(entries.begin(), entries.end(),
-              [](const fs::directory_entry& a, const fs::directory_entry& b) {
-                  return a.path().filename().u8string() < b.path().filename().u8string();
-              });
-
-    for (const auto& entry : entries) {
-        std::string path = entry.path().u8string();
-        std::string ext  = entry.path().extension().u8string();
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-        if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp" || ext == ".webp") {
-            LOG_VERBOSE("load image %zu from '%s'", images.size(), path.c_str());
-            int width             = 0;
-            int height            = 0;
-            int loaded_channel    = 0;
-            uint8_t* image_buffer = load_image_from_file(path.c_str(), width, height, loaded_channel, 0, 0);
-            if (image_buffer == nullptr) {
-                LOG_ERROR("load image from '%s' failed", path.c_str());
-                return false;
-            }
-
-            images.emplace_back(sd_image_t{(uint32_t)width,
-                                           (uint32_t)height,
-                                           (uint32_t)loaded_channel,
-                                           image_buffer});
-
-            if (max_image_num > 0 && static_cast<int>(images.size()) >= max_image_num) {
-                break;
-            }
-        }
-    }
-    return true;
+    log_print(level, log, cli_params->log_level, cli_params->color, log_stream);
 }
 
 std::string format_frame_idx(std::string pattern, int frame_idx) {
@@ -402,7 +341,11 @@ std::string format_frame_idx(std::string pattern, int frame_idx) {
 
 int continuous_preview_counter = 0;
 
-void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data) {
+void step_callback(int step, int frame_count, const sd_tensor_t* const* tensors, bool is_noisy, void* data) {
+    std::vector<SDImage> views;
+    for (int i = 0; i < frame_count; ++i)
+        views.push_back(tensor_image_view(tensors[i]));
+    SDImage* image = views.data();
     (void)step;
     (void)is_noisy;
     SDCliParams* cli_params = (SDCliParams*)data;
@@ -424,7 +367,7 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
             LOG_ERROR("save preview image to '%s' failed", path.u8string().c_str());
         }
     } else {
-        int fps = cli_params->preview_method == PREVIEW_PROJ ? cli_params->preview_fps / 4 : cli_params->preview_fps;
+        int fps = cli_params->preview_method == "proj" ? cli_params->preview_fps / 4 : cli_params->preview_fps;
         if (create_video_from_sd_images(cli_params->preview_path.c_str(), image, frame_count, fps, cli_params->compression_quality) != 0) {
             LOG_ERROR("save preview video to '%s' failed", cli_params->preview_path.c_str());
         }
@@ -456,7 +399,7 @@ bool save_results(const SDCliParams& cli_params,
                   const SDGenerationParams& gen_params,
                   SDImageVec& results,
                   int num_results,
-                  const sd_audio_t* generated_audio,
+                  const SDAudio* generated_audio,
                   const std::string& video_info) {
     if (results.empty() || num_results <= 0) {
         return false;
@@ -497,7 +440,7 @@ bool save_results(const SDCliParams& cli_params,
     }
 
     auto write_image = [&](const fs::path& path, int idx) {
-        const sd_image_t& img = results[idx];
+        const SDImage& img = results[idx];
         if (!img.data)
             return false;
 
@@ -542,9 +485,7 @@ bool save_results(const SDCliParams& cli_params,
         return sucessful_reults != 0;
     }
 
-    const bool video_upscale_output = cli_params.mode == VID_UPSCALE &&
-                                      (gen_params.init_image_path.empty() || ext_lower == ".avi" || ext_lower == ".webm");
-    if ((cli_params.mode == VID_GEN && num_results > 1) || video_upscale_output) {
+    if (cli_params.mode == VID_GEN && num_results > 1) {
         if (ext_lower != ".avi" && ext_lower != ".webp" && ext_lower != ".webm")
             ext = ".avi";
         std::string params = gen_params.embed_image_metadata
@@ -556,7 +497,7 @@ bool save_results(const SDCliParams& cli_params,
         std::string final_ext_lower = ext.u8string();
         std::transform(final_ext_lower.begin(), final_ext_lower.end(), final_ext_lower.begin(), ::tolower);
         const bool mux_audio = generated_audio != nullptr && (final_ext_lower == ".avi" || final_ext_lower == ".webm");
-        if (create_video_from_sd_images(video_path.u8string().c_str(), results.data(), num_results, gen_params.fps, cli_params.compression_quality, mux_audio ? generated_audio : nullptr, params) == 0) {
+        if (create_video_from_sd_images(video_path.u8string().c_str(), results.data(), num_results, gen_params.fps.value(), cli_params.compression_quality, mux_audio ? generated_audio : nullptr, params) == 0) {
             LOG_INFO("save result video to '%s'", video_path.u8string().c_str());
             if (generated_audio != nullptr && !mux_audio) {
                 fs::path wav_path = video_path;
@@ -590,64 +531,6 @@ bool save_results(const SDCliParams& cli_params,
     return sucessful_reults != 0;
 }
 
-static bool apply_adetailer(sd_ctx_t* sd_ctx,
-                            const sd_ctx_params_t& sd_ctx_params,
-                            const SDContextParams& ctx_params,
-                            const SDGenerationParams& gen_params,
-                            const sd_img_gen_params_t& img_gen_params,
-                            SDMode mode,
-                            SDImageVec& results,
-                            int num_results) {
-    if (gen_params.ad_model_path.empty()) {
-        return true;
-    }
-
-    sd_adetailer_params_t ad_params{};
-    ad_params.prompt          = gen_params.ad_prompt.empty() ? nullptr : gen_params.ad_prompt.c_str();
-    ad_params.negative_prompt = gen_params.ad_negative_prompt.empty() ? nullptr : gen_params.ad_negative_prompt.c_str();
-    ad_params.extra_ad_args   = gen_params.extra_ad_args.c_str();
-
-    ADetailerCtxPtr ad_ctx(new_adetailer_ctx(gen_params.ad_model_path.c_str(),
-                                             ctx_params.n_threads,
-                                             sd_ctx_params.backend,
-                                             sd_ctx_params.params_backend));
-    if (ad_ctx == nullptr) {
-        LOG_ERROR("new_adetailer_ctx failed");
-        return false;
-    }
-
-    for (int i = 0; i < num_results; ++i) {
-        if (results[i].data == nullptr) {
-            continue;
-        }
-        sd_img_gen_params_t ad_generation_params = img_gen_params;
-        ad_generation_params.seed                = generation_seed(results.generation_info(i), img_gen_params.seed);
-        if (mode == IMG_GEN) {
-            ad_generation_params.width    = 512;
-            ad_generation_params.height   = 512;
-            ad_generation_params.strength = 0.4f;
-        }
-        sd_image_generation_result_t* detailed = nullptr;
-        if (!adetail_image(ad_ctx.get(),
-                           sd_ctx,
-                           results[i],
-                           &ad_params,
-                           &ad_generation_params,
-                           &detailed) ||
-            detailed == nullptr || detailed->count <= 0 || detailed->items[0].image.data == nullptr) {
-            free_sd_image_generation_result(detailed);
-            LOG_ERROR("ADetailer failed for image %d", i + 1);
-            return false;
-        }
-        results.append_generation_info(i, detailed->items[0].generation_info, ctx_params.lora_model_dir);
-        free(results[i].data);
-        results[i]               = detailed->items[0].image;
-        detailed->items[0].image = {};
-        free_sd_image_generation_result(detailed);
-    }
-    return true;
-}
-
 int main(int argc, const char* argv[]) {
     if (argc > 1 && std::string(argv[1]) == "--version") {
         std::cout << version_string() << "\n";
@@ -656,101 +539,41 @@ int main(int argc, const char* argv[]) {
 
     SDCliParams cli_params;
     SDContextParams ctx_params;
-    ctx_params.conditioning_cache_size = 0;
     SDGenerationParams gen_params;
+    gen_params.seed = 42;
 
     sd_set_log_callback(sd_log_cb, (void*)&cli_params);
     parse_args(argc, argv, cli_params, ctx_params, gen_params);
 
-    if (cli_params.mode == METADATA) {
-        MetadataReadOptions options;
-        options.output_format      = cli_params.metadata_format == "json"
-                                         ? MetadataOutputFormat::JSON
-                                         : MetadataOutputFormat::TEXT;
-        options.include_raw        = cli_params.metadata_raw;
-        options.brief              = cli_params.metadata_brief;
-        options.include_structural = cli_params.metadata_all;
+    if (cli_params.mode == DGL) {
+        return cli_params.dgl.run(ctx_params, gen_params.embed_image_metadata);
+    }
 
-        std::string error;
-        if (!print_image_metadata(cli_params.image_path, options, std::cout, error)) {
-            LOG_ERROR("%s", error.c_str());
+    if (cli_params.mode == METADATA) {
+        uint32_t flags = 0;
+        if (cli_params.metadata_format == "json")
+            flags |= SD_METADATA_READ_JSON;
+        if (cli_params.metadata_raw)
+            flags |= SD_METADATA_READ_RAW;
+        if (cli_params.metadata_brief)
+            flags |= SD_METADATA_READ_BRIEF;
+        if (cli_params.metadata_all)
+            flags |= SD_METADATA_READ_STRUCTURAL;
+        const auto* output = sd_read_metadata(cli_params.image_path.c_str(), flags);
+        if (!output) {
+            LOG_ERROR("%s", sd_get_last_error());
             return 1;
         }
+        print_utf8(stdout, output);
         return 0;
     }
 
-    if (cli_params.mode == VID_UPSCALE) {
-        if (cli_params.input_frames.empty() == gen_params.init_image_path.empty()) {
-            LOG_ERROR("vid_upscale requires exactly one input: -i/--init-img or --input-frames");
-            return 1;
-        }
-        ctx_params.prepare_backend_assignments();
-        if (ctx_params.diffusion_model_path.empty() || ctx_params.vae_path.empty() || gen_params.fps <= 0) {
-            LOG_ERROR("vid_upscale requires --diffusion-model, --vae and positive --fps");
-            return 1;
-        }
-        std::vector<SDImageOwner> owned_frames;
-        if (!gen_params.init_image_path.empty()) {
-            owned_frames.emplace_back();
-            if (!load_sd_image_from_file(owned_frames.back().put(), gen_params.init_image_path.c_str(), 0, 0, 3)) {
-                LOG_ERROR("load image from '%s' failed", gen_params.init_image_path.c_str());
-                return 1;
-            }
-        } else if (!load_images_from_dir(cli_params.input_frames, owned_frames) || owned_frames.empty()) {
-            LOG_ERROR("vid_upscale input contains no readable frames");
-            return 1;
-        }
-        if (owned_frames.size() > size_t(INT_MAX))
-            return 1;
-        std::vector<sd_image_t> frames;
-        for (const auto& frame : owned_frames)
-            frames.push_back(frame.get());
-        sd_video_upscaler_ctx_params_t params;
-        sd_video_upscaler_ctx_params_init(&params);
-        params.diffusion_model_path  = ctx_params.diffusion_model_path.c_str();
-        params.vae_path              = ctx_params.vae_path.c_str();
-        params.upscale_factor        = cli_params.video_upscale_factor;
-        params.n_threads             = ctx_params.n_threads;
-        params.backend               = ctx_params.effective_backend.c_str();
-        params.params_backend        = ctx_params.effective_params_backend.c_str();
-        params.flash_attn_mode       = ctx_params.flash_attn_mode.c_str();
-        std::string conv_direct_mode = ctx_params.conv_direct_mode;
-        if (conv_direct_mode.empty()) {
-            conv_direct_mode = "auto";
-            if (ctx_params.diffusion_conv_direct)
-                conv_direct_mode += ",diffusion=on";
-            if (ctx_params.vae_conv_direct)
-                conv_direct_mode += ",vae=on";
-        }
-        params.conv_direct_mode = conv_direct_mode.c_str();
-        std::unique_ptr<video_upscaler_ctx_t, decltype(&free_video_upscaler_ctx)> upscaler(
-            new_video_upscaler_ctx(&params),
-            free_video_upscaler_ctx);
-        if (!upscaler)
-            return 1;
-        sd_video_generation_result_t* output = nullptr;
-        sd_video_upscale_params_t upscale_params;
-        sd_video_upscale_params_init(&upscale_params);
-        upscale_params.frames              = frames.data();
-        upscale_params.frame_count         = int(frames.size());
-        upscale_params.fps                 = gen_params.fps;
-        upscale_params.window_size         = cli_params.vsr_window_size;
-        upscale_params.temporal_chunk_size = cli_params.vsr_temporal_chunk_size;
-        upscale_params.seed                = gen_params.seed;
-        if (!upscale_video(upscaler.get(), &upscale_params, &output))
-            return 1;
-        std::string video_info = output->generation_info;
-        SDImageVec results;
-        results.adopt_video(output);
-        return save_results(cli_params, ctx_params, gen_params, results, int(results.size()), nullptr, video_info) ? 0 : 1;
-    }
-
-    if (!gen_params.ad_model_path.empty() && cli_params.mode != IMG_GEN && cli_params.mode != ADETAILER) {
-        LOG_ERROR("--ad-model is only supported in image generation and adetailer modes");
+    if (!ctx_params.esrgan_path.empty() && cli_params.mode != UPSCALE) {
+        LOG_ERROR("generation followed by automatic upscaling requires DGL; use -M dgl --script FILE");
         return 1;
     }
 
-    if (gen_params.video_frames > 4) {
+    if (cli_params.mode == VID_GEN || gen_params.video_frames > 4) {
         size_t last_dot_pos   = cli_params.preview_path.find_last_of(".");
         std::string base_path = cli_params.preview_path;
         std::string file_ext  = "";
@@ -763,14 +586,18 @@ int main(int argc, const char* argv[]) {
             cli_params.preview_path = base_path + ".avi";
         }
     }
-    cli_params.preview_fps = gen_params.fps;
+    if (gen_params.fps)
+        cli_params.preview_fps = *gen_params.fps;
 
-    sd_set_preview_callback(step_callback,
-                            cli_params.preview_method,
-                            cli_params.preview_interval,
-                            !cli_params.preview_noisy,
-                            cli_params.preview_noisy,
-                            (void*)&cli_params);
+    if (sd_set_preview_callback(step_callback,
+                                cli_params.preview_method.c_str(),
+                                cli_params.preview_interval,
+                                !cli_params.preview_noisy,
+                                cli_params.preview_noisy,
+                                (void*)&cli_params) != SD_STATUS_OK) {
+        LOG_ERROR("%s", sd_get_last_error());
+        return 1;
+    }
 
     LOG_VERBOSE("version: %s", version_string().c_str());
     LOG_VERBOSE("%s", sd_get_system_info());
@@ -813,7 +640,7 @@ int main(int argc, const char* argv[]) {
                                                ctx_params.wtype,
                                                ctx_params.tensor_type_rules.c_str(),
                                                cli_params.convert_name,
-                                               ctx_params.n_threads,
+                                               ctx_params.n_threads.value_or(0),
                                                loras.empty() ? nullptr : loras.data(),
                                                (int)loras.size());
         if (!success) {
@@ -856,7 +683,7 @@ int main(int argc, const char* argv[]) {
     };
 
     if (gen_params.init_image_path.size() > 0) {
-        const bool native_init = cli_params.mode == IMG_GEN || cli_params.mode == ADETAILER;
+        const bool native_init = cli_params.mode == IMG_GEN;
         if (!load_image_and_update_size(gen_params.init_image_path, gen_params.init_image, native_init ? 0 : 3)) {
             return 1;
         }
@@ -881,24 +708,11 @@ int main(int argc, const char* argv[]) {
 
     if (!gen_params.ref_video_paths.empty()) {
         gen_params.ref_videos.clear();
-        gen_params.ref_videos.reserve(gen_params.ref_video_paths.size());
-        for (const auto& path : gen_params.ref_video_paths) {
-            std::vector<SDImageOwner> frames;
-            if (!load_images_from_dir(path, frames) || frames.empty()) {
-                LOG_ERROR("load reference video frames from '%s' failed", path.c_str());
-                return 1;
-            }
-            gen_params.ref_videos.push_back(std::move(frames));
-        }
-
         gen_params.ref_video_audios.clear();
-        gen_params.ref_video_audios.resize(gen_params.ref_videos.size());
-        for (size_t i = 0; i < gen_params.ref_video_audio_paths.size(); ++i) {
-            if (!load_audio(gen_params.ref_video_audio_paths[i], gen_params.ref_video_audios[i])) {
-                return 1;
-            }
-        }
     }
+    std::vector<VideoInput> reference_video_inputs;
+    if (!load_reference_video_inputs(gen_params.ref_video_paths, gen_params.ref_video_audio_paths, reference_video_inputs))
+        return 1;
 
     if (!gen_params.ref_audio_paths.empty()) {
         gen_params.ref_audios.clear();
@@ -931,145 +745,105 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    if (gen_params.ip_adapter_image_path.size() > 0) {
-        if (!load_sd_image_from_file(gen_params.ip_adapter_image.put(),
-                                     gen_params.ip_adapter_image_path.c_str(),
-                                     0,
-                                     0)) {
-            LOG_ERROR("load image from '%s' failed", gen_params.ip_adapter_image_path.c_str());
-            return 1;
-        }
-    }
-
+    VideoInput control_video_input;
     if (!gen_params.control_video_path.empty()) {
         gen_params.control_frames.clear();
-        if (!load_images_from_dir(gen_params.control_video_path,
-                                  gen_params.control_frames,
-                                  gen_params.video_frames)) {
+        if (fs::is_directory(fs::u8path(gen_params.control_video_path))) {
+            if (!load_images_from_dir(gen_params.control_video_path,
+                                      gen_params.control_frames,
+                                      gen_params.video_frames.value_or(0)))
+                return 1;
+        } else if (!load_video_input(gen_params.control_video_path, gen_params.fps.value_or(16),
+                                     gen_params.video_frames.value_or(0), false, control_video_input)) {
             return 1;
         }
     }
 
-    if (!gen_params.pm_id_images_dir.empty()) {
-        gen_params.pm_id_images.clear();
-        if (!load_images_from_dir(gen_params.pm_id_images_dir,
-                                  gen_params.pm_id_images)) {
-            return 1;
-        }
-    }
-
-    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t();
+    SDOptPtr sd_ctx_params = ctx_params.to_context_opt();
 
     SDImageVec results;
-    int num_results             = 0;
-    sd_audio_t* generated_audio = nullptr;
+    int num_results          = 0;
+    SDAudio* generated_audio = nullptr;
     std::string video_info;
 
     if (cli_params.mode == UPSCALE) {
         num_results = 1;
         results.push_back(gen_params.init_image.release());
     } else {
-        SDCtxPtr sd_ctx(new_sd_ctx(&sd_ctx_params));
+        SDCtxPtr sd_ctx(create_sd_context(sd_ctx_params));
 
         if (sd_ctx == nullptr) {
-            LOG_INFO("new_sd_ctx_t failed");
+            LOG_INFO("sd_ctx_create failed");
             return 1;
         }
 
         SDImageOwner prompt_image;
         sd_set_prompt_image_callback(
-            sd_ctx.get(), [](const char* source, void* data, sd_image_t* image_out) -> bool {
+            sd_ctx.get(), [](const char* source, void* data, const sd_tensor_t** image_out) -> bool {
                 auto& image = *static_cast<SDImageOwner*>(data);
-                sd_image_t loaded{};
+                SDImage loaded{};
                 if (!load_sd_image_from_file(&loaded, source, 0, 0, 3)) {
                     return false;
                 }
                 image.reset(loaded);
-                *image_out = loaded;
+                *image_out = image.tensor();
                 return true;
             },
             &prompt_image);
 
-        sd_img_gen_params_t img_gen_params{};
-        const bool use_img_gen_params = cli_params.mode == IMG_GEN || cli_params.mode == ADETAILER;
-        if (use_img_gen_params) {
-            img_gen_params = gen_params.to_sd_img_gen_params_t();
-        }
-
         if (cli_params.mode == IMG_GEN) {
-            sd_image_generation_result_t* generated = nullptr;
-            generate_image(sd_ctx.get(), &img_gen_params, &generated);
-            results.adopt(generated, ctx_params.lora_model_dir);
+            sd_result_t* generated = nullptr;
+            generate_sd_image(sd_ctx.get(), gen_params.to_image_opt(), &generated);
+            results.adopt(generated);
             num_results = results.count();
-        } else if (cli_params.mode == ADETAILER) {
-            num_results = 1;
-            results.push_back(gen_params.init_image.release());
         } else if (cli_params.mode == VID_GEN) {
-            sd_vid_gen_params_t vid_gen_params      = gen_params.to_sd_vid_gen_params_t();
-            sd_video_generation_result_t* generated = nullptr;
-            if (generate_video(sd_ctx.get(), &vid_gen_params, &generated)) {
-                gen_params.fps = cli_params.preview_fps = generated->fps;
-                generated_audio                         = generated->audio;
-                generated->audio                        = nullptr;
-                num_results                             = generated->frame_count;
-                results.adopt_video(generated, ctx_params.lora_model_dir);
+            SDOptPtr vid_gen_params = gen_params.to_video_opt();
+            if (!vid_gen_params || !set_video_inputs(vid_gen_params.get(), reference_video_inputs, control_video_input.frames.get()))
+                return 1;
+            sd_result_t* generated = nullptr;
+            if (generate_sd_video(sd_ctx.get(), vid_gen_params, &generated)) {
+                gen_params.fps = cli_params.preview_fps = sd_result_get_fps(generated);
+                generated_audio                         = retain_result_audio(generated);
+
+                num_results = sd_result_get_image_count(generated);
+                results.adopt_video(generated);
                 video_info = results.generation_info(0);
             }
         }
 
         if (!results) {
-            LOG_ERROR("generate failed");
-            return 1;
-        }
-
-        if (use_img_gen_params &&
-            !apply_adetailer(sd_ctx.get(),
-                             sd_ctx_params,
-                             ctx_params,
-                             gen_params,
-                             img_gen_params,
-                             cli_params.mode,
-                             results,
-                             num_results)) {
+            LOG_ERROR("generate failed: %s", sd_get_last_error());
             return 1;
         }
     }
 
-    int upscale_factor = 4;  // unused for RealESRGAN_x4plus_anime_6B.pth
     if (ctx_params.esrgan_path.size() > 0 && gen_params.upscale_repeats > 0) {
-        UpscalerCtxPtr upscaler_ctx(new_upscaler_ctx(ctx_params.esrgan_path.c_str(),
-                                                     ctx_params.diffusion_conv_direct,
-                                                     ctx_params.n_threads,
-                                                     gen_params.upscale_tile_size,
-                                                     sd_ctx_params.backend,
-                                                     sd_ctx_params.params_backend));
+        UpscalerCtxPtr upscaler_ctx(create_sd_upscaler(ctx_params.esrgan_path.c_str(),
+                                                       ctx_params.diffusion_conv_direct,
+                                                       ctx_params.n_threads,
+                                                       gen_params.upscale_tile_size,
+                                                       ctx_params.effective_backend.c_str(),
+                                                       ctx_params.effective_params_backend.c_str()));
 
         if (upscaler_ctx == nullptr) {
-            LOG_ERROR("new_upscaler_ctx failed");
+            LOG_ERROR("sd_upscaler_create failed");
         } else {
             for (int i = 0; i < num_results; i++) {
                 if (results[i].data == nullptr) {
                     continue;
                 }
                 SDImageOwner current_image(results[i]);
-                results[i] = {0, 0, 0, nullptr};
-                for (int u = 0; u < gen_params.upscale_repeats; ++u) {
-                    sd_image_generation_result_t* upscaled = nullptr;
-                    bool upscale_ok                        = upscale(upscaler_ctx.get(),
-                                                                     current_image.get(),
-                                                                     upscale_factor,
-                                                                     &upscaled);
-                    if (!upscale_ok || !upscaled || upscaled->count <= 0 || upscaled->items[0].image.data == nullptr) {
-                        free_sd_image_generation_result(upscaled);
-                        LOG_ERROR("upscale failed");
-                        break;
-                    }
-                    results.append_generation_info(i, upscaled->items[0].generation_info);
-                    sd_image_t upscaled_image = upscaled->items[0].image;
-                    upscaled->items[0].image  = {};
-                    free_sd_image_generation_result(upscaled);
-                    current_image.reset(upscaled_image);
+                results[i]            = {0, 0, 0, nullptr};
+                sd_result_t* upscaled = nullptr;
+                if (!upscale_sd_image(upscaler_ctx.get(), current_image.get(), &upscaled, gen_params.upscale_repeats) || !upscaled) {
+                    LOG_ERROR("upscale failed: %s", sd_get_last_error());
+                    sd_result_free(upscaled);
+                    return 1;
                 }
+                const std::string source = sd_result_get_generation_info(upscaled, 0);
+                current_image.reset(take_result_image(upscaled, 0));
+                results.set_generation_info(i, source);
+                sd_result_free(upscaled);
                 results[i] = current_image.release();  // Set the final upscaled image as the result
             }
         }

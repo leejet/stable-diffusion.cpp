@@ -15,6 +15,9 @@ For the project overview and supported models, see the [project README](../READM
 
 ## Generation and inputs
 
+- [DGL generation scripts](dgl.md)
+- [DGL model examples](dgl/README.md)
+- [C API and migration](guides/c_api.md)
 - [Sampling methods and schedulers](guides/sampling.md)
 - [Image editing](guides/edit.md)
 - [Images in prompts](guides/prompt_images.md)
@@ -38,8 +41,12 @@ For the project overview and supported models, see the [project README](../READM
 
 ## Development
 
+- [C API internals](development/c_api.md)
+- [DGL architecture](development/dgl.md)
 - [Model configuration and integration conventions](development/model_config.md)
 - [ggml operator extensions](development/ggml_extensions.md)
 - [Backend performance probes](development/backend_probe.md)
 - [Position embedding cache](development/pe_cache.md)
+- [PuLID implementation and validation](development/pulid.md)
+- [Qwen Image 2.1 prefix cache internals](development/qwen_image_prefix_cache.md)
 - [Contribution guidelines](../CONTRIBUTING.md)

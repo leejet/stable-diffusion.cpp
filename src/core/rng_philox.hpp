@@ -57,9 +57,9 @@ private:
     }
 
 public:
-    PhiloxRNG(uint64_t seed = 0) {
+    PhiloxRNG(uint64_t seed = 0, uint32_t offset = 0) {
         this->seed   = seed;
-        this->offset = 0;
+        this->offset = offset;
     }
 
     std::shared_ptr<RNG> clone() const override {

@@ -1,5 +1,9 @@
 # JSON tokenizers
 
+DGL versions of the generation examples are linked below. Edit each script's
+`var` block and follow the [DGL run instructions](../dgl/README.md).
+
+
 Use a Hugging Face `tokenizer.json` to supply the tokenizer vocabulary, merges,
 added tokens, and processing stages. **PiD (including PiD 1.5) and Lens (including
 Lens Turbo) require an external JSON**; their Gemma 2 and GPT-OSS tokenizers are
@@ -10,6 +14,7 @@ models keep their embedded tokenizer when this option is omitted.
 sd-cli --diffusion-model model.gguf --llm text_encoder.gguf \
   --tokenizer tokenizer_gemma2.json --vae vae.safetensors -p "a cat"
 ```
+
 
 Choose the JSON belonging to the text encoder checkpoint. Checking that IDs fit
 the embedding table does not establish that two vocabularies have the same
@@ -52,15 +57,18 @@ sd-cli --diffusion-model sd3.gguf --clip_l clip_l.safetensors \
   -p "a cat"
 ```
 
-The C API accepts the same string in `sd_ctx_params_t::tokenizer`. A null or
+
+The C API accepts the same string through the `tokenizer` context-option key. An unset or
 empty value keeps an embedded tokenizer where available; PiD and Lens require
 a nonempty main tokenizer path. The CLI passes the string through;
 `TokenizerConfig` parses and validates it when text encoders are initialized.
 
 ```c
-sd_ctx_params_t params;
-sd_ctx_params_init(&params);
-params.tokenizer = "clip-l=tokenizer_clip.json,clip-g=tokenizer_clip.json";
+sd_ctx_opt_t* opt = sd_ctx_opt_create();
+sd_status_t status = sd_opt_set_string(opt, "tokenizer",
+    "clip-l=tokenizer_clip.json,clip-g=tokenizer_clip.json");
+/* Set model paths, then call sd_ctx_create(opt, &ctx). */
+sd_opt_free(opt);
 ```
 
 Rebuild applications against the updated public header when using the updated

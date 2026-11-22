@@ -4,6 +4,7 @@
 #include <atomic>
 #include <limits>
 
+#include "core/file_access.h"
 #include "core/util.h"
 #include "name_conversion.h"
 
@@ -12,12 +13,18 @@ static uint64_t next_source_revision() {
     return revision.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
-bool ModelLoader::read_file_stamp(const std::string& path, FileStamp& stamp) {
+bool ModelLoader::read_file_stamp(const std::string& path, FileStamp& stamp, bool allow_missing) {
+    sd::require_file_access(path, SD_DGL_FILE_READ_MODEL);
     std::error_code error;
     const auto file_path = std::filesystem::u8path(path);
     stamp.path           = path;
     stamp.size           = 0;
-    stamp.modified       = std::filesystem::last_write_time(file_path, error);
+    stamp.exists         = std::filesystem::exists(file_path, error);
+    if (!error && !stamp.exists && allow_missing) {
+        stamp.modified = {};
+        return true;
+    }
+    stamp.modified = std::filesystem::last_write_time(file_path, error);
     if (!error && std::filesystem::is_regular_file(file_path, error)) {
         stamp.size = std::filesystem::file_size(file_path, error);
     }
@@ -29,18 +36,39 @@ bool ModelLoader::read_file_stamp(const std::string& path, FileStamp& stamp) {
 }
 
 bool ModelLoader::file_unchanged(const FileStamp& stamp) {
-    std::error_code error;
-    if (!std::filesystem::exists(std::filesystem::u8path(stamp.path), error)) {
-        return false;
-    }
     FileStamp current;
-    return read_file_stamp(stamp.path, current) &&
+    return read_file_stamp(stamp.path, current, true) && current.exists == stamp.exists &&
            current.size == stamp.size && current.modified == stamp.modified;
+}
+
+bool ModelLoader::inspect_optional_file(const std::string& path, bool& exists) {
+    FileStamp stamp;
+    if (!read_file_stamp(path, stamp, true))
+        return false;
+    exists = stamp.exists;
+    parsed_dependencies_.push_back(std::move(stamp));
+    return true;
 }
 
 void ModelLoader::invalidate_file_data() {
     file_data.clear();
     model_files_processed = false;
+}
+
+static String2TensorStorage prefixed_tensors(const String2TensorStorage& source, const std::string& prefix) {
+    String2TensorStorage result;
+    std::map<std::string, std::string> original_names;
+    for (const auto& [name, storage] : source) {
+        auto tensor = storage;
+        if (!starts_with(tensor.name, prefix))
+            tensor.name = prefix + tensor.name;
+        auto inserted = original_names.emplace(tensor.name, name);
+        if (!inserted.second)
+            throw std::runtime_error("model tensors '" + inserted.first->second + "' and '" + name +
+                                     "' collide after prefix '" + prefix + "': '" + tensor.name + "'");
+        result.emplace(tensor.name, std::move(tensor));
+    }
+    return result;
 }
 
 void ModelLoader::rebuild_catalog() {
@@ -49,9 +77,11 @@ void ModelLoader::rebuild_catalog() {
     for (const auto& file : files_) {
         if (file.scope == FileScope::Isolated)
             continue;
-        for (const auto& entry : file.tensors) {
-            tensor_storage_map[entry.first] = entry.second;
-        }
+        if (!names_converted_ || version_ == VERSION_COUNT)
+            for (auto& entry : prefixed_tensors(file.tensors, file.prefix)) {
+                auto tensor                     = std::move(entry.second);
+                tensor_storage_map[tensor.name] = std::move(tensor);
+            }
         for (const auto& entry : file.metadata) {
             metadata_[entry.first] = entry.second;
         }
@@ -62,8 +92,8 @@ void ModelLoader::rebuild_catalog() {
         for (const auto& file : files_) {
             if (file.scope == FileScope::Isolated)
                 continue;
-            for (const auto& entry : file.tensors) {
-                TensorStorage tensor            = entry.second;
+            for (auto& entry : prefixed_tensors(file.tensors, file.prefix)) {
+                TensorStorage tensor            = std::move(entry.second);
                 tensor.name                     = convert_tensor_name(tensor.name, version);
                 tensor_storage_map[tensor.name] = std::move(tensor);
             }
@@ -101,9 +131,11 @@ bool ModelLoader::add_file_impl(const std::string& path, const std::string& pref
 
     ModelLoader parsed;
     try {
-        if (!parsed.parse_file(root.path, prefix)) {
+        if (!parsed.parse_file(root.path, "")) {
             return false;
         }
+    } catch (const sd::FileAccessDenied&) {
+        throw;
     } catch (const std::exception& error) {
         LOG_ERROR("invalid model source '%s': %s", path.c_str(), error.what());
         return false;
@@ -192,6 +224,15 @@ bool ModelLoader::add_file_impl(const std::string& path, const std::string& pref
 }
 
 bool ModelLoader::add_file(const std::string& path, const std::string& prefix, FileId* id, bool force, FileScope scope) {
+    const auto existing = std::find_if(files_.begin(), files_.end(), [&](const FileRecord& file) {
+        return file.path == path && file.prefix == prefix && file.scope == scope;
+    });
+    if (existing != files_.end() && !force &&
+        std::all_of(existing->dependencies.begin(), existing->dependencies.end(), file_unchanged)) {
+        if (id)
+            *id = existing->id;
+        return true;
+    }
     ModelLoader candidate = *this;
     FileId added_id       = 0;
     if (!candidate.add_file_impl(path, prefix, &added_id, force, scope)) {
@@ -215,26 +256,44 @@ bool ModelLoader::del_file(FileId id) {
     return true;
 }
 
-bool ModelLoader::files_changed(bool& changed, bool include_isolated) const {
-    changed = false;
+bool ModelLoader::set_file_prefix(FileId id, const std::string& prefix) {
+    auto file = std::find_if(files_.begin(), files_.end(), [id](const FileRecord& file) { return file.id == id; });
+    if (file == files_.end())
+        return false;
+    if (file->prefix != prefix) {
+        prefixed_tensors(file->tensors, prefix);
+        file->prefix = prefix;
+        ++revision_;
+        invalidate_file_data();
+        rebuild_catalog();
+    }
+    return true;
+}
+
+ModelLoader::Dependencies ModelLoader::dependencies(bool include_isolated) const {
+    Dependencies result;
     for (const auto& file : files_) {
         if (!include_isolated && file.scope == FileScope::Isolated)
             continue;
-        for (const auto& stamp : file.dependencies) {
-            std::error_code error;
-            if (!std::filesystem::exists(std::filesystem::u8path(stamp.path), error) && !error) {
-                // An updated index may no longer reference this dependency.
-                changed = true;
-                continue;
-            }
-            FileStamp current;
-            if (!read_file_stamp(stamp.path, current)) {
-                return false;
-            }
-            changed |= current.size != stamp.size || current.modified != stamp.modified;
+        result.insert(result.end(), file.dependencies.begin(), file.dependencies.end());
+    }
+    return result;
+}
+
+bool ModelLoader::dependencies_changed(const Dependencies& dependencies, bool& changed) {
+    changed = false;
+    for (const auto& stamp : dependencies) {
+        FileStamp current;
+        if (!read_file_stamp(stamp.path, current, true)) {
+            return false;
         }
+        changed |= current.exists != stamp.exists || current.size != stamp.size || current.modified != stamp.modified;
     }
     return true;
+}
+
+bool ModelLoader::files_changed(bool& changed, bool include_isolated) const {
+    return dependencies_changed(dependencies(include_isolated), changed);
 }
 
 bool ModelLoader::refresh_files(bool include_isolated) {
@@ -299,6 +358,25 @@ uint64_t ModelLoader::file_revision(FileId id) const {
     return 0;
 }
 
+bool ModelLoader::same_weight_file(FileId id, size_t index, const ModelLoader& other, FileId other_id, size_t other_index) const {
+    if (index >= file_paths_.size() || other_index >= other.file_paths_.size() ||
+        file_paths_[index] != other.file_paths_[other_index])
+        return false;
+    const auto find = [](const auto& files, FileId id) {
+        return std::find_if(files.begin(), files.end(), [id](const auto& file) { return file.id == id; });
+    };
+    const auto a = find(files_, id);
+    const auto b = find(other.files_, other_id);
+    if (a == files_.end() || b == other.files_.end())
+        return false;
+    return a->revision == b->revision ||
+           (a->path == b->path && a->prefix == b->prefix &&
+            std::equal(a->dependencies.begin(), a->dependencies.end(), b->dependencies.begin(), b->dependencies.end(),
+                       [](const FileStamp& x, const FileStamp& y) {
+                           return x.path == y.path && x.exists == y.exists && x.size == y.size && x.modified == y.modified;
+                       }));
+}
+
 std::string ModelLoader::file_path(FileId id) const {
     for (const auto& file : files_) {
         if (file.id == id)
@@ -336,7 +414,7 @@ std::map<std::string, std::string> ModelLoader::file_metadata(FileId id) const {
 String2TensorStorage ModelLoader::file_tensors(FileId id) const {
     for (const auto& file : files_) {
         if (file.id == id) {
-            return file.tensors;
+            return prefixed_tensors(file.tensors, file.prefix);
         }
     }
     return {};

@@ -1,0 +1,46 @@
+# version: 0.0.0
+
+var {
+    dit_path = "z_image_turbo_bf16.safetensors"
+    encoder_path = "qwen_3_4b.safetensors"
+    vae_path = "ae.sft"
+    controlnet_path = "z-image-control.safetensors"
+
+    input_path = "pose.png"
+    output_path = "z-image-controlnet.png"
+
+    prompt = "A dancer in a bright studio"
+
+    seed = 42
+    width = 512
+    height = 512
+
+    steps = 8
+}
+
+fn z_image_control_hint(vae, image, rng) {
+    encoded = vae_encode(vae, image, rng = rng, posterior = "mode")
+    latent = vae_to_dit_latents(vae, encoded)
+    return tensor::pad(latent, [0, 0, 0, 0, 0, 17])
+}
+
+fn main() {
+    dit = load_dit(dit_path, family = "z_image")
+    text = load_text_encoder(encoder_path, family = "z_image")
+    vae = load_vae(vae_path, family = "z_image")
+    control = controlnet::load(controlnet_path, family = "z_image")
+    pose = tensor::interpolate(image::load(input_path), size = [width, height], axes = [1, 2])
+    rng = make_rng("cuda", seed = seed)
+    hint = z_image_control_hint(vae, pose, rng)
+    condition = controlnet::apply(encode_prompt(text, prompt, width = width, height = height),
+                                 control, hint, strength = 0.8)
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    noise = tensor::randn_like(base, rng = rng)
+    sampling_predictor = predictor(dit, condition)
+    sigmas = make_sigmas(sampling_predictor, latent = base, scheduler = "discrete", steps = steps)
+    start = add_noise(sampling_predictor, base, noise, sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = sampling_predictor, method = "euler", rng = rng)
+    image = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return { image = image, latent = latent }
+}

@@ -1,0 +1,43 @@
+# version: 0.0.0
+# docs/models/z_image.md — Z-Image-Base
+
+var {
+    model_path = "../models/diffusion_models/z_image_bf16.safetensors"
+    text_path = "../models/text_encoders/qwen_3_4b.safetensors"
+    vae_path = "../models/vae/ae.sft"
+
+    output_path = "output.png"
+
+    negative_prompt = ""
+    prompt = "A cinematic, melancholic photograph of a solitary hooded figure walking through a sprawling, rain-slicked metropolis at night. The city lights are a chaotic blur of neon orange and cool blue, reflecting on the wet asphalt. The scene evokes a sense of being a single component in a vast machine. Superimposed over the image in a sleek, modern, slightly glitched font is the philosophical quote: 'THE CITY IS A CIRCUIT BOARD, AND I AM A BROKEN TRANSISTOR.' -- moody, atmospheric, profound, dark academic"
+
+    seed = 42
+    rng_type = "cuda"
+    width = 512
+    height = 1024
+
+    steps = 20
+    cfg_scale = 5.0
+    method = "euler"
+    scheduler = "discrete"
+}
+
+fn main() {
+    model = load_dit(model_path, family = "z_image", params_backend = "cpu")
+    text = load_text_encoder(text_path, family = "z_image", params_backend = "cpu")
+    vae = load_vae(vae_path, family = "z_image", params_backend = "cpu")
+
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    positive = encode_prompt(text, prompt, width = width, height = height)
+    negative = encode_prompt(text, negative_prompt, width = width, height = height)
+    pos = predictor(model, positive)
+    neg = predictor(model, negative)
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    image = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

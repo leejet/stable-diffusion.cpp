@@ -47,30 +47,64 @@ smaller source image if this limit is exceeded.
 ## C API
 
 Register a context-local image resolver with `sd_set_prompt_image_callback()`,
-then call the existing `generate_image()` or `generate_video()` function. The
+then call `sd_generate_image()` or `sd_generate_video()`. The
 library passes each marker's `source` string unchanged to the callback, allowing
 paths, application resource IDs, or in-memory images. The library does not open
 files or fetch URLs itself.
 
 ```c
-bool load_prompt_image(const char* source, void* user_data, sd_image_t* image_out);
+bool load_prompt_image(const char* source, void* user_data, const sd_tensor_t** image_out);
 
-params.prompt = "Draw the subject from <image:subject> in a watercolor landscape.";
-sd_image_generation_result_t* result = NULL;
+sd_img_gen_opt_t* opt = sd_img_gen_opt_create();
+sd_status_t status = sd_opt_set_string(opt, "prompt",
+    "Draw the subject from <image:subject> in a watercolor landscape.");
+sd_result_t* result = NULL;
 sd_set_prompt_image_callback(ctx, load_prompt_image, application_images);
-bool ok = generate_image(ctx, &params, &result);
+if (status == SD_STATUS_OK)
+    status = sd_generate_image(ctx, opt, &result);
 sd_set_prompt_image_callback(ctx, NULL, NULL);
+sd_result_free(result);
+sd_opt_free(opt);
 ```
 
-The loader returns `true` with an image containing interleaved 8-bit pixels and
-one to four channels. The caller owns the pixels. The library copies them before
-calling the loader again, so a loader may reuse its buffer. Repeated sources
+The loader returns `true` with a borrowed U8 tensor of shape
+`[channels,width,height]`, containing interleaved pixels and one to four channels.
+The caller owns the tensor and keeps it valid until the next callback. The
+library copies its pixels before calling the loader again. Repeated sources
 within one prompt are loaded once and appear at every specified position.
 Resolved image pixels participate in conditioning-cache comparisons.
 
 Register or clear the callback while the context is idle. Different contexts
-have independent callbacks. Generation parameter structures and generation
-entry points are unchanged.
+have independent callbacks.
+
+## DGL
+The complete [MOSS-Image prompt-image example](../dgl/moss_image/moss-image-sft-inline-images.dgl)
+loads all components, binds the prompt image and saves the generated result.
+See the [DGL example collection](../dgl/README.md) for run instructions.
+
+Use the same markers with `encode_prompt`. DGL reads image paths relative to the
+working directory.
+LLM encoders accept `system` to customize the template while retaining image
+inputs. `raw=true` is the complete text-tokenizer-input path and cannot be
+combined with image/video bindings or `system`. See
+[prompt formatting](../dgl.md#independent-generation-components).
+
+```text
+condition = encode_prompt(encoder, "Draw <image:inputs/subject.png> in watercolor.")
+```
+
+To compose images inside the graph, pass a dictionary of tensors with keys
+matching the markers. Explicit bindings take precedence over opening a path.
+Only referenced bindings enter conditioning; additional dictionary entries do
+not add images. A referenced binding must contain a valid image tensor. If a
+name is absent, the normal file reader and permission callback still apply,
+including when the encoder has cached a previous result.
+
+```text
+subject = image::load("inputs/subject.png")
+condition = encode_prompt(encoder, "Draw <image:subject> in watercolor.",
+                          image_bindings = {subject = subject})
+```
 
 ## Server
 
