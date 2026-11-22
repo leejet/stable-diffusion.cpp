@@ -845,14 +845,14 @@ std::vector<sd_video_t> sd::api::bound_videos(const sd_opt_t* params, const char
 nlohmann::json sd::api::scalar_values(const sd_opt_t* params) {
     auto values = nlohmann::json::object();
     if (params)
-        for (const auto& [key, value] : params->values)
+        for (const auto& entry : params->values)
             std::visit([&](const auto& item) {
                 using T = std::decay_t<decltype(item)>;
                 if constexpr (std::is_arithmetic_v<T> || std::is_same_v<T, std::string> ||
                               std::is_same_v<T, std::vector<float>> || std::is_same_v<T, std::vector<int>>)
-                    values[key] = item;
+                    values[entry.first] = item;
             },
-                       value);
+                       entry.second);
     return values;
 }
 
