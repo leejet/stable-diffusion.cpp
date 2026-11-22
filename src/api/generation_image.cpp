@@ -191,7 +191,7 @@ namespace sd::api {
         request.flags["reference_image_guidance"] = reference_guidance && image_guidance;
         request.flags["hidream_o1"]               = version == VERSION_HIDREAM_O1;
         request.flags["control_image_guidance"]   = image_guidance && version == VERSION_FLUX_CONTROLS;
-        if (version == VERSION_MOSS_IMAGE)
+        if (version == VERSION_MOSS_IMAGE && !refs)
             request.fields["negative_predictor_options"] += ", skip_layers = [22]";
         if (sd_version_is_sensenova_u1(version)) {
             request.fields["negative_prompt_input"] = "negative_prompt_raw";

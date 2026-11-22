@@ -10,7 +10,7 @@ MOSS-Image uses a 5B diffusion transformer, the FLUX.2 VAE, and Qwen3.5 9B as th
 | vae | [Safetensors](https://huggingface.co/Comfy-Org/MOSS-Image/tree/main/vae) | `--vae` | Use matching VAE |
 | Qwen3.5 9B | [GGUF](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/tree/main) | `--llm` | Use matching text encoder |
 | `tokenizer.json` | [Download](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base/tree/main/tokenizer) | `--tokenizer` | Required; match text encoder |
-| MOSS-Image Edit LoRA | [`adapter_model.safetensors`](https://huggingface.co/chinoll/Moss-Image-Edit/tree/main) | `--lora-model-dir` and `<lora:adapter_model:1>` in the prompt | Required for editing |
+| MOSS-Image Edit LoRA | [`adapter_model.safetensors`](https://huggingface.co/chinoll/Moss-Image-Edit/tree/main) | `--lora-model-dir` and `<lora:moss/moss-edit-lora:1.0>` in the prompt | Required for editing |
 
 Pass the external `tokenizer.json` with `--tokenizer`; Qwen3.5 uses a different vocabulary from the embedded Qwen tokenizer.
 
@@ -46,13 +46,12 @@ Select optional components when required by your checkpoint or task.
 | [Inline images](../dgl/moss_image/moss-image-sft-inline-images.dgl) | Insert named images into the prompt. |
 | [Reference-guided editing](../dgl/moss_image/moss-image-edit.dgl) | Edit with Base or SFT and the community editing LoRA. |
 
-Set `lora_path` and list the input images in `reference_paths`. The example
-caps the long edge at 1024 pixels and aligns both dimensions to 16 before
-encoding with the FLUX.2 VAE. References enter the diffusion model at timestep
-zero. Describe the desired change in `prompt`, using `(phrase:1.2)` to weight
-a phrase. The CLI and C API use the same reference defaults. Pass `-r` once
-per reference in the CLI, or supply `ref_images` in the C API, and select the
-editing LoRA explicitly.
+The editing script uses the same input and settings as the [CLI edit example](#moss-image-edit).
+Change `lora_path` or list different inputs in `reference_paths` as needed.
+The script caps the reference long edge at 1024 pixels and aligns both dimensions
+to 16 before encoding with the FLUX.2 VAE. Both predictor branches receive the
+same reference latents at timestep zero. Use `(phrase:1.2)` to weight a phrase
+in the prompt.
 
 #### Run a script
 
@@ -150,4 +149,49 @@ CLI examples use the [shared path and shell conventions](README.md#example-conve
 
 <img src="../../assets/moss/sft.png" />
 
-Use dimensions divisible by 16. The default discrete scheduler uses the upstream time shift of 5. Use `--flow-shift` to override it. The CLI and C API set `skip_layers = [22]` on the negative predictor when translating requests to DGL, matching the upstream pipeline. Handwritten DGL scripts specify this zero-based layer index explicitly, as shown in the examples.
+#### MOSS-Image Edit
+
+Save the edit LoRA as `models/loras/moss/moss-edit-lora.safetensors` in the
+repository, or adjust the LoRA path in the [DGL example](../dgl/moss_image/moss-image-edit.dgl)
+or the LoRA tag below. Pass `-r` once per reference in the CLI, or supply
+`ref_images` in the C API.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe `
+  --diffusion-model ..\models\diffusion_models\moss_image_sft_int8_convrot_attn.safetensors `
+  --llm ..\models\text_encoders\Qwen3.5-9B-Q4_K_M.gguf `
+  --vae ..\models\vae\flux2_ae.safetensors `
+  --tokenizer ..\models\tokenizers\tokenizer_qwen3.5.json `
+  --lora-model-dir ..\models\loras `
+  -r ..\assets\flux\flux1-dev-q8_0.png `
+  -p "change 'flux.cpp' to 'moss.cpp'<lora:moss/moss-edit-lora:1.0>" `
+  --cfg-scale 3.0 `
+  -v
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli \
+  --diffusion-model ../models/diffusion_models/moss_image_sft_int8_convrot_attn.safetensors \
+  --llm ../models/text_encoders/Qwen3.5-9B-Q4_K_M.gguf \
+  --vae ../models/vae/flux2_ae.safetensors \
+  --tokenizer ../models/tokenizers/tokenizer_qwen3.5.json \
+  --lora-model-dir ../models/loras \
+  -r ../assets/flux/flux1-dev-q8_0.png \
+  -p "change 'flux.cpp' to 'moss.cpp'<lora:moss/moss-edit-lora:1.0>" \
+  --cfg-scale 3.0 \
+  -v
+```
+
+## Notes and limitations
+
+Use output dimensions divisible by 16. The default discrete scheduler uses a
+flow shift of 5. Use `--flow-shift` to override it.
+
+Text-to-image requests skip layer 22 in the negative predictor. Reference-guided
+editing uses all layers in both CFG branches, as in the edit LoRA's reference
+sampler. [MOSS-Image SFT pipeline](https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT/blob/main/pipeline_moss_image.py) ·
+[MOSS-Image Edit sampler](https://github.com/Chenkin-x/Moss-Image-Edit/blob/main/moss_edit/sampling.py)
