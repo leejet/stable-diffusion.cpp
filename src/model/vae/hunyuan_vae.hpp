@@ -140,8 +140,15 @@ namespace Hunyuan {
                 }
                 return input;
             };
-            padded = replicate_pad(padded, 0, pad_w, pad_w);
-            padded = replicate_pad(padded, 1, pad_h, pad_h);
+            if (pad_w > 0 || pad_h > 0) {
+                const int64_t frames   = padded->ne[2];
+                const int64_t channels = padded->ne[3];
+                // Keep spatial padding in one outer slice to avoid per-channel CUDA launches.
+                padded = ggml_reshape_3d(ctx->ggml_ctx, ggml_ext_cont(ctx, padded), padded->ne[0], padded->ne[1], frames * channels);
+                padded = replicate_pad(padded, 0, pad_w, pad_w);
+                padded = replicate_pad(padded, 1, pad_h, pad_h);
+                padded = ggml_reshape_4d(ctx->ggml_ctx, padded, padded->ne[0], padded->ne[1], frames, channels);
+            }
             return conv->forward(ctx, padded);
         }
     };
