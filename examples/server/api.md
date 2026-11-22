@@ -98,36 +98,79 @@ keep their meaning. A `429` carries `Retry-After: 10`.
 ### Stepping down
 
 A request that fails because the machine ran out of memory (or because a compute device failed) does not end the
-server and is not simply refused. The server frees the model, loads it again with the next lighter profile of the
-ladder `max > balanced > lite > lite-disk > lite-cpu`, and runs the same request again:
+server and is not simply refused. The server frees the model, loads it again in a different configuration, and runs
+the same request again. An out-of-memory failure moves down the ladder of profiles
+`max > balanced > lite > lite-disk > lite-hybrid > lite-cpu`; a device failure moves to another device
+(see [Device failures](#device-failures)).
 
 | Profile | What changes |
 | --- | --- |
 | `balanced` | `--memory-guard 90` |
-| `lite` | memory guard 85, text encoder on the CPU, VAE decoded in tiles, no batched CFG |
+| `lite` | memory guard 85, VAE decoded in tiles, no batched CFG, `--multi-gpu on` (every GPU of the backend may take a module; an explicit `--multi-gpu off` is kept) |
 | `lite-disk` | weights are streamed from disk (`--params-backend disk`) instead of being kept in memory; `--eager-load` is switched off |
-| `lite-cpu` | everything is computed on the CPU (only when the machine has another device) |
+| `lite-hybrid` | the text encoder is computed on the CPU; everything else keeps its device |
+| `lite-cpu` | everything is computed on the CPU |
+
+Up to `lite-disk` all the computing stays on the GPUs: those profiles save memory by working in smaller pieces and by
+reading weights again from RAM or disk, which costs time but does not hand the work to the CPU. The CPU takes a share
+only from `lite-hybrid` on, and all of it only at `lite-cpu`, the last resort. These two profiles exist only when the
+machine has a device other than the CPU; without one everything already runs on the CPU and the ladder ends at
+`lite-disk`.
 
 Steps that would load the same configuration as the previous one are skipped, so the ladder is shorter when
 the server was started with some of these options already. The profile the server was started with
 (`--profile`, default `max`) is the top of the ladder. From `lite` on, the VAE is decoded in tiles whatever the
-request asked. A device failure goes straight to the last profile of the ladder, `lite-cpu`.
+request asked.
 
 A request served after a step-down is a normal `200`. When even the lightest profile does not fit, the request
 fails with the `503` above, and the server stays up, on the lightest profile that could load the model.
 
-After `--degradation-cooldown` seconds (default `300`) the server climbs back one profile, at the beginning of the next
-request, which pays for loading the model again. A climb that does not work is undone and the wait doubles (up to an
-hour); a climb that works resets it. With `--degradation-cooldown 0` the server stays where it stepped down,
-and with `--disable-degradation` it never steps down: such a request is answered with the error at once.
-`GET /sdcpp/v1/health` reports the profile in use.
+After `--degradation-cooldown` seconds (default `300`) the server climbs back one step, at the beginning of the next
+request, which pays for loading the model again: one profile up, or back to the device it started on (see below). A climb
+that does not work is undone and the wait doubles (up to an hour); a climb that works resets it. With
+`--degradation-cooldown 0` the server stays where it stepped down, and with `--disable-degradation` it never steps
+down: such a request is answered with the error at once. `GET /sdcpp/v1/health` reports the profile and the device in use.
 
-The same ladder protects the models loaded with `POST /sdcpp/v1/models/load` (see [Model management](#model-management)):
-each load starts again from the profile the server was started with, and a model that does not fit there is loaded on
-the first lighter profile that does, before the load is reported as failed.
+The same ladder, and the device rules below, protect the models loaded with `POST /sdcpp/v1/models/load` (see
+[Model management](#model-management)): each load starts again from the profile the server was started with, and a
+model that does not fit there is loaded on the first lighter profile, or the first device, that works, before the load
+is reported as failed.
 
 If the model cannot be loaded again after a failure, requests are answered with `503` / `unavailable` and
 the server tries again from the next request on, no more often than every 15 seconds.
+
+### Device failures
+
+A compute device can fail without the memory being short: a driver error, a GPU that is reset or removed, a backend that
+does not start. Trimming memory does not cure that, and handing the work to the CPU throws away the GPUs that still work,
+so the server first looks for another place to run the same configuration. The order is:
+
+1. the same device once more, because many such failures are passing ones (once per request);
+2. each device the engine lists, one at a time on its own: graphics cards first, the vendor's backend (CUDA, HIP, Metal)
+   before the same card seen through Vulkan or OpenCL, the one with the most free memory first; accelerators next;
+   integrated GPUs last, because they share the system RAM and compute several times slower;
+3. the CPU (`lite-cpu`), only when no device is left.
+
+A device failure on the CPU ends the request with the error. An out-of-memory failure on any of these devices first goes
+down the ladder of profiles on that same device (see above). Network devices (`RPC...`) are never used as a replacement.
+A placement written in `--backend` (modules assigned with `=`, several devices with `&` or `,`) is not rewritten: the
+server tries the same configuration once more and then goes to the CPU.
+
+While a device is left to try, the server also tells the engine not to fall back to the CPU by itself
+(`disable_backend_fallback`). Without that, a backend that does not start would silently turn the whole model into a CPU
+run, and the profile in use would hide it. With `--disable-degradation` the engine keeps its own behavior.
+
+The log says each move (`trying profile lite on Vulkan0 instead of profile lite`) and, at start-up, the order the
+server would follow (`a device that fails is replaced by the next one before the cpu takes over: CUDA0 > Vulkan0`). The
+same rules apply when the model is loaded at start-up or again after a failure: if the first device does not start, the
+server starts on the next one, and the log says which. `GET /sdcpp/v1/health` tells which `device` the model runs on and
+which modules the CPU computes (`cpu_modules`).
+
+Going back is the other half. From a GPU the climb makes one attempt: back to the device the server started on when it
+is running on another one, otherwise one profile up; if the attempt fails, the server returns to where it was and the
+wait doubles. From the CPU, after a device failure, the climb goes straight back to the profile the server had when the
+device failed and offers every device again, so the best one that works is found even if the preferred one does not;
+when the CPU was reached through memory failures, the climb is one profile up, as usual.
 
 ## Model management
 
@@ -203,7 +246,7 @@ paths escaping the configured root are rejected. Optional slots can be omitted
 or set to an empty string. Load/unload returns HTTP 409 (`model_busy`) while
 requests or queued jobs are pending. Invalid configurations return HTTP 400
 (`invalid_model_config`) before unloading the current context. An initialization
-failure, after the lighter profiles of [Stepping down](#stepping-down) have been tried, returns HTTP 422
+failure, after the lighter profiles and the other devices of [Stepping down](#stepping-down) have been tried, returns HTTP 422
 (`model_load_failed`), with the reason of the last attempt in `error`, and leaves no active context.
 The load HTTP request waits for completion; a separate client can poll status
 while it runs. Refreshing the catalog never modifies an already loaded context.
@@ -1090,6 +1133,9 @@ Example response:
   "model_loaded": true,
   "profile": "lite",
   "base_profile": "max",
+  "device": "auto",
+  "cpu_modules": [],
+  "fallback_devices": ["CUDA0", "Vulkan0"],
   "degradation": true,
   "busy": false,
   "counters": {
@@ -1099,6 +1145,8 @@ Example response:
     "cancelled": 3,
     "recovered": 2,
     "step_downs": 3,
+    "retries": 0,
+    "device_switches": 0,
     "promotions": 1,
     "failed_promotions": 0,
     "rebuilds": 4
@@ -1121,15 +1169,18 @@ Example response:
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `status` | `string` | `ok`, `degraded` (running on a lighter profile than the one it was started with), `recovering` (the model is being loaded), `unavailable` (no usable model at the moment), or `no_model` (no model is loaded: the server was started without one, or it was unloaded) |
+| `status` | `string` | `ok`, `degraded` (running on a lighter profile than the one it was started with, or on another device than the first one), `recovering` (the model is being loaded), `unavailable` (no usable model at the moment), or `no_model` (no model is loaded: the server was started without one, or it was unloaded) |
 | `model_loaded` | `boolean` | |
-| `profile` | `string \| null` | Profile in use: `max`, `balanced`, `lite`, `lite-disk` or `lite-cpu`; `null` without a model |
+| `profile` | `string \| null` | Profile in use: `max`, `balanced`, `lite`, `lite-disk`, `lite-hybrid` or `lite-cpu`; `null` without a model |
 | `base_profile` | `string` | Profile the server was started with |
+| `device` | `string \| null` | Where the model computes: `auto` when the engine chooses the device, the value of `--backend` or the device a device switch named, `cpu` at `lite-cpu`; `null` without a model |
+| `cpu_modules` | `array \| null` | The modules the CPU computes next to the GPUs: `text_encoder`, `vae`, `controlnet` (from the profile or from `--clip-on-cpu`, `--vae-on-cpu`, `--control-net-cpu`), or `["all"]` at `lite-cpu`. Empty when the GPUs do all the work; `null` without a model |
+| `fallback_devices` | `array` | The devices the server tries, in this order, when the device fails, before it takes the CPU. Empty without a device other than the CPU, with `--disable-degradation`, with `--backend cpu` and with a placement written in `--backend` |
 | `degradation` | `boolean` | `false` with `--disable-degradation` |
 | `busy` | `boolean` | A generation is running |
-| `counters` | `object` | Since the start. `requests`, `succeeded`, `failed`; `cancelled` is the number of generations stopped on request (not failures, and they never make the server step down); `recovered` is the number of requests served after a step-down; `step_downs`, `promotions`, `failed_promotions` and `rebuilds` (times the model was loaded again). A job cancelled while it was still queued never reaches the model and is not counted |
+| `counters` | `object` | Since the start. `requests`, `succeeded`, `failed`; `cancelled` is the number of generations stopped on request (not failures, and they never make the server step down); `recovered` is the number of requests served after the model had to be loaded again to run them; `step_downs` (a lighter profile after an out-of-memory failure), `retries` (the same configuration tried again after a device failure), `device_switches` (another device, or the CPU, after a device failure), `promotions`, `failed_promotions` and `rebuilds` (times the model was loaded again). A job cancelled while it was still queued never reaches the model and is not counted |
 | `last_error` | `object \| null` | Last failure the server saw (`code`, `message`, `at` as a Unix time). Invalid requests are not recorded |
-| `next_promotion_seconds` | `integer \| null` | Seconds until the next attempt to climb back; `null` when the server is on its base profile or does not climb |
+| `next_promotion_seconds` | `integer \| null` | Seconds until the next attempt to climb back; `null` when the server is on its base profile and device or does not climb |
 | `uptime_seconds` | `integer` | |
 | `version` | `string` | |
 | `queue` | `object` | Jobs of the async API: `pending` (queued or generating), `waiting` (queued) and `max` (limit before `429`) |

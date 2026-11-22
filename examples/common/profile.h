@@ -12,13 +12,16 @@
 namespace sd_profile {
 
     // From the lightest on resources to the heaviest. The levels after LITE are not selectable from
-    // the command line: a server steps down to them when a request runs out of memory.
+    // the command line: a server steps down to them when a request runs out of memory. Every level up to
+    // LITE_DISK trades memory for time and keeps all the compute on the GPUs; the CPU takes over only
+    // from LITE_HYBRID on, the text encoder first and everything at LITE_CPU.
     enum class Level {
-        MAX,        // the defaults of the engine
-        BALANCED,   // memory guard at 90
-        LITE,       // + text encoder on the CPU, tiled VAE, unbatched CFG, memory guard at 85
-        LITE_DISK,  // + weights streamed from disk
-        LITE_CPU,   // + every module computed on the CPU
+        MAX,          // the defaults of the engine
+        BALANCED,     // memory guard at 90
+        LITE,         // + tiled VAE, unbatched CFG, memory guard at 85, every GPU of the backend used
+        LITE_DISK,    // + weights streamed from disk
+        LITE_HYBRID,  // + text encoder computed on the CPU
+        LITE_CPU,     // + every module computed on the CPU
     };
 
     const char* level_name(Level level);

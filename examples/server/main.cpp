@@ -167,6 +167,17 @@ int main(int argc, const char** argv) {
         } else {
             LOG_INFO("a request that runs out of memory makes the server step down: %s", keeper.describe_ladder().c_str());
         }
+        const std::string fallback_devices = keeper.describe_devices();
+        if (!fallback_devices.empty()) {
+            LOG_INFO("a device that fails is replaced by the next one before the cpu takes over: %s", fallback_devices.c_str());
+        }
+        const nlohmann::json health = keeper.health_json();
+        LOG_INFO("the model runs on device '%s' with profile %s",
+                 health["device"].get<std::string>().c_str(),
+                 health["profile"].get<std::string>().c_str());
+        if (!health["cpu_modules"].empty()) {
+            LOG_WARN("the cpu does the work of: %s (the GPUs do the rest)", health["cpu_modules"].dump().c_str());
+        }
     } else {
         LOG_WARN(
             "starting without a model: device and upscale endpoints work, "

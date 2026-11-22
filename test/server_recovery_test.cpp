@@ -67,13 +67,19 @@ struct Load {
     std::string params_backend;
     bool eager_load;
     std::string model_path;
+    std::string multi_gpu;
+    bool no_fallback;
+
+    bool text_encoder_on_cpu() const {
+        return backend.find("te=cpu") != std::string::npos;
+    }
 
     Level level() const {
         if (backend == "cpu") {
             return Level::LITE_CPU;
         }
         if (params_backend == "disk") {
-            return Level::LITE_DISK;
+            return text_encoder_on_cpu() ? Level::LITE_HYBRID : Level::LITE_DISK;
         }
         if (memory_guard == 85) {
             return Level::LITE;
@@ -93,6 +99,8 @@ struct Env {
     GenerationFailure next_failure;                             // what the library reports for the attempt that failed
     Clock::time_point now = Clock::now();
     bool accelerator      = true;
+    // The devices the library lists besides the cpu; empty means that the engine's own choice is all there is.
+    std::vector<sd_device_info_t> devices;
 
     // The contexts the keeper asked the library to stop, in order. on_cancel runs on the thread that called cancel().
     std::mutex cancel_mutex;
@@ -107,7 +115,9 @@ struct Env {
                       params.backend != nullptr ? params.backend : "",
                       params.params_backend != nullptr ? params.params_backend : "",
                       params.eager_load,
-                      params.model_path != nullptr ? params.model_path : ""};
+                      params.model_path != nullptr ? params.model_path : "",
+                      params.multi_gpu != nullptr ? params.multi_gpu : "",
+                      params.disable_backend_fallback};
             loads.push_back(load);
             if (on_create) {
                 on_create(load);
@@ -122,6 +132,7 @@ struct Env {
         };
         hooks.read_failure    = [this] { return next_failure; };
         hooks.has_accelerator = [this] { return accelerator; };
+        hooks.list_devices    = [this] { return devices; };
         hooks.now             = [this] { return now; };
         hooks.cancel_context  = [this](sd_ctx_t* ctx) {
             // Touching the memory of a context the keeper no longer owns is what the address sanitizer reports.
@@ -196,13 +207,14 @@ static void test_ladder() {
     Env env;
     {
         ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
-        CHECK(keeper.describe_ladder() == "max > balanced > lite > lite-disk > lite-cpu", "ladder with an accelerator");
+        CHECK(keeper.describe_ladder() == "max > balanced > lite > lite-disk > lite-hybrid > lite-cpu", "ladder with an accelerator");
         CHECK(keeper.can_step_down(), "a full ladder can step down");
     }
     env.accelerator = false;
     {
         ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
-        CHECK(keeper.describe_ladder() == "max > balanced > lite > lite-disk", "no cpu profile without an accelerator");
+        CHECK(keeper.describe_ladder() == "max > balanced > lite > lite-disk",
+              "without an accelerator the cpu has nothing to take over: no hybrid and no cpu profile");
     }
 
     // The configuration of a host that already asks for most of it: steps that change nothing are left out.
@@ -216,8 +228,21 @@ static void test_ladder() {
         CHECK(keeper.describe_ladder() == "max > lite > lite-cpu", "profiles that would load the same configuration are skipped");
     }
     {
+        // Weights already streamed from disk, text encoder still on the GPU: the hybrid profile is the step this host lacks.
+        SDContextParams disk_only = base_params();
+        disk_only.memory_guard    = 90;
+        disk_only.params_backend  = "disk";
+        ContextKeeper keeper(disk_only, Level::MAX, settings(), env.hooks());
+        CHECK(keeper.describe_ladder() == "max > lite > lite-hybrid > lite-cpu",
+              "lite-hybrid is kept when it is the only change of placement left");
+    }
+    {
         ContextKeeper keeper(base_params(), Level::LITE, settings(), env.hooks());
-        CHECK(keeper.describe_ladder() == "lite > lite-disk > lite-cpu", "the ladder starts at the profile the server was started with");
+        CHECK(keeper.describe_ladder() == "lite > lite-disk > lite-hybrid > lite-cpu", "the ladder starts at the profile the server was started with");
+    }
+    {
+        ContextKeeper keeper(base_params(), Level::LITE_HYBRID, settings(), env.hooks());
+        CHECK(keeper.describe_ladder() == "lite-hybrid > lite-cpu" && keeper.can_step_down(), "the cpu profile comes after the hybrid one");
     }
     {
         // Reading every weight into memory at load time is what streaming them from disk avoids.
@@ -279,6 +304,24 @@ static void test_start() {
         CHECK(env.loads[0].eager_load && env.loads[2].eager_load, "the lighter profiles above it keep the option");
     }
     {
+        // The cpu takes work only when no level that keeps the compute on the GPUs is left.
+        Env env;
+        env.load_result = [](const Load& load) { return load.level() < Level::LITE_HYBRID ? oom() : ok_result; };
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        CHECK(keeper.start(failure) && env.loads.size() == 5 && env.loads[4].level() == Level::LITE_HYBRID,
+              "a model that does not fit is tried at every level that stays on the GPUs before the cpu is involved");
+        bool cpu_early = false;
+        for (size_t i = 0; i < 4; ++i) {
+            cpu_early = cpu_early || !env.loads[i].backend.empty();
+        }
+        CHECK(!cpu_early, "no level before lite-hybrid places a module on the cpu");
+        CHECK(env.loads[4].backend == "te=cpu", "lite-hybrid gives the cpu the text encoder and nothing else");
+        CHECK(env.loads[2].multi_gpu == "on" && env.loads[3].multi_gpu == "on" && env.loads[4].multi_gpu == "on",
+              "from lite on every GPU of the backend may take part");
+        CHECK(env.loads[0].multi_gpu.empty() && env.loads[1].multi_gpu.empty(), "max and balanced leave the choice of GPUs to the engine");
+    }
+    {
         Env env;
         env.load_result = [](const Load&) { return model_file_failure(); };
         ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
@@ -298,8 +341,8 @@ static void test_start() {
         env.load_result = [](const Load& load) { return load.level() == Level::MAX ? backend_failure() : ok_result; };
         ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
         GenerationFailure failure;
-        CHECK(keeper.start(failure) && env.loads.size() == 2 && env.loads[1].level() == Level::LITE_CPU,
-              "a backend failure at start goes straight to the cpu profile");
+        CHECK(keeper.start(failure) && env.loads.size() == 3 && env.loads[1].level() == Level::MAX && env.loads[2].level() == Level::LITE_CPU,
+              "a backend failure at start tries the same profile once more and, with no other device to use, goes to the cpu profile");
     }
     {
         Env env;
@@ -366,6 +409,11 @@ static void test_step_down() {
         CHECK(failure.code == SD_ERROR_OUT_OF_MEMORY && !failure.unavailable && failure.message == "unet ran out of memory",
               "with the out of memory reason, not as unavailable");
         CHECK(seen.levels.size() == 4, "every profile was tried");
+        bool moved_to_cpu = false;
+        for (const Load& load : env.loads) {
+            moved_to_cpu = moved_to_cpu || load.text_encoder_on_cpu() || load.backend == "cpu";
+        }
+        CHECK(!moved_to_cpu, "without an accelerator no load moves a module to the cpu: it is the only device");
         const json health = keeper.health_json();
         CHECK(health["status"] == "degraded" && health["profile"] == "lite-disk", "the server keeps the lightest context");
         CHECK(counter(health, "failed") == 1, "one failed request");
@@ -384,6 +432,25 @@ static void test_step_down() {
         const json health = keeper.health_json();
         CHECK(health["last_error"].is_null(), "a mistake of the client is not an error of the server");
         CHECK(counter(health, "failed") == 1, "but it is a failed request");
+    }
+    {
+        // A request that keeps running out of memory is served by the GPUs for as long as a level exists that lets them.
+        Env env;
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        Seen seen;
+        const bool ok = run_with(keeper, env, seen, [](const ContextKeeper::ContextView& view) { return view.level < Level::LITE_HYBRID ? oom() : ok_result; }, failure);
+        CHECK(ok && seen.levels == std::vector<Level>({Level::MAX, Level::BALANCED, Level::LITE, Level::LITE_DISK, Level::LITE_HYBRID}),
+              "the request is run at each level in turn, the one that uses the cpu last");
+        CHECK(seen.tiled == std::vector<bool>({false, false, true, true, true}), "tiling is forced from the lite profile on");
+        bool cpu_early = false;
+        for (size_t i = 0; i + 1 < env.loads.size(); ++i) {
+            cpu_early = cpu_early || !env.loads[i].backend.empty();
+        }
+        CHECK(!cpu_early, "no load before the last one places a module on the cpu");
+        const json health = keeper.health_json();
+        CHECK(health["status"] == "degraded" && health["profile"] == "lite-hybrid", "the server stays on the profile that worked");
     }
     {
         Env env;
@@ -405,8 +472,8 @@ static void test_step_down() {
         keeper.start(failure);
         Seen seen;
         const bool ok = run_with(keeper, env, seen, [](const ContextKeeper::ContextView& view) { return view.level == Level::MAX ? backend_failure() : ok_result; }, failure);
-        CHECK(ok && seen.levels == std::vector<Level>({Level::MAX, Level::LITE_CPU}),
-              "a backend failure goes straight to the cpu profile");
+        CHECK(ok && seen.levels == std::vector<Level>({Level::MAX, Level::MAX, Level::LITE_CPU}),
+              "a backend failure is tried once more on the same profile and, with no other device to use, then goes to the cpu profile");
         CHECK(env.loads.back().backend == "cpu", "which loads the model on the cpu");
         CHECK(keeper.backend_choice().backend == "cpu", "and the upscaler follows");
     }
@@ -773,7 +840,7 @@ static void test_load_unload() {
         ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
         GenerationFailure failure;
         keeper.start(failure);
-        CHECK(keeper.describe_ladder() == "max > balanced > lite > lite-disk > lite-cpu", "the ladder of the first model");
+        CHECK(keeper.describe_ladder() == "max > balanced > lite > lite-disk > lite-hybrid > lite-cpu", "the ladder of the first model");
         SDContextParams explicit_set = base_params();
         explicit_set.memory_guard    = 90;
         explicit_set.clip_on_cpu     = true;
@@ -880,7 +947,8 @@ static void test_load_unload() {
             reader.join();
         }
         CHECK(readings.load() > 0, "the health, the ladder and the status were read while the model changed");
-        CHECK(keeper.load(other, failure) && keeper.has_model() && keeper.describe_ladder() == "max > balanced > lite > lite-disk > lite-cpu",
+        CHECK(keeper.load(other, failure) && keeper.has_model() &&
+                  keeper.describe_ladder() == "max > balanced > lite > lite-disk > lite-hybrid > lite-cpu",
               "and the keeper still works after 150 changes");
     }
 }
@@ -1218,12 +1286,358 @@ static void test_cancel_threads() {
     CHECK(cancelled >= kThreads * kJobs / 5 && health["busy"] == false, "the jobs cancelled beforehand were stopped, and the keeper is idle at the end");
 }
 
+static sd_device_info_t device_info(const char* name, sd_device_type_t type, uint64_t free_gib) {
+    sd_device_info_t info{};
+    snprintf(info.name, sizeof(info.name), "%s", name);
+    snprintf(info.description, sizeof(info.description), "%s", name);
+    info.type               = type;
+    info.free_memory_bytes  = free_gib << 30;
+    info.total_memory_bytes = free_gib << 30;
+    return info;
+}
+
+// A card that the library lists once for each backend that supports it, and the integrated GPU of the processor.
+static std::vector<sd_device_info_t> laptop_devices() {
+    return {device_info("CUDA0", SD_DEVICE_TYPE_GPU, 6),
+            device_info("Vulkan0", SD_DEVICE_TYPE_GPU, 6),
+            device_info("Vulkan1", SD_DEVICE_TYPE_IGPU, 8)};
+}
+
+using Names = std::vector<std::string>;
+
+// The backend each load asked for, in order; "" is the engine's own choice of device.
+static Names backends_of(const Env& env) {
+    Names names;
+    for (const Load& load : env.loads) {
+        names.push_back(load.backend);
+    }
+    return names;
+}
+
+// A scripted library where nothing works but the cpu.
+static GenerationFailure only_the_cpu_works(const Load& load) {
+    return load.backend == "cpu" ? ok_result : backend_failure();
+}
+
+// A request that only succeeds on the device named.
+static Script runs_only_on(const std::string& device) {
+    return [device](const ContextKeeper::ContextView& view) {
+        return view.params != nullptr && view.params->backend == device ? ok_result : backend_failure();
+    };
+}
+
+// A device that fails is not the end of the GPUs: the same configuration is tried once more, then every other device,
+// and the cpu only when none of them works. The server goes back to the preferred device when it works again.
+static void test_devices() {
+    {
+        Env env;
+        env.devices     = laptop_devices();
+        env.load_result = only_the_cpu_works;
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        CHECK(keeper.start(failure), "the model loads on the cpu when no device works");
+        CHECK(backends_of(env) == Names({"", "", "CUDA0", "Vulkan0", "Vulkan1", "cpu"}),
+              "the same configuration again, then every other device best first, and the cpu last");
+        const json health = keeper.health_json();
+        CHECK(health["profile"] == "lite-cpu" && health["device"] == "cpu" && health["cpu_modules"] == json::array({"all"}),
+              "the health says that the cpu is doing all the work");
+        CHECK(health["fallback_devices"] == json::array({"CUDA0", "Vulkan0", "Vulkan1"}), "and which devices the server can use");
+    }
+    {
+        Env env;
+        env.devices     = laptop_devices();
+        env.load_result = [](const Load& load) { return load.backend == "Vulkan0" ? ok_result : backend_failure(); };
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        CHECK(keeper.start(failure) && backends_of(env) == Names({"", "", "CUDA0", "Vulkan0"}),
+              "a device that cannot start is replaced by the next GPU, not by the cpu");
+        const json health = keeper.health_json();
+        CHECK(env.loads.back().level() == Level::MAX, "on the profile the server was already on");
+        CHECK(health["profile"] == "max" && health["status"] == "degraded" && health["device"] == "Vulkan0" &&
+                  health["cpu_modules"] == json::array(),
+              "the health says that it runs on another device, with nothing on the cpu");
+        CHECK(health["next_promotion_seconds"] == 10, "the way back to the preferred device is scheduled");
+    }
+    {
+        Env env;
+        env.devices     = laptop_devices();
+        int calls       = 0;
+        env.load_result = [&](const Load&) { return ++calls == 1 ? backend_failure() : ok_result; };
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        CHECK(keeper.start(failure) && backends_of(env) == Names({"", ""}),
+              "a failure that does not repeat is cured by loading the same configuration again");
+        const json health = keeper.health_json();
+        CHECK(health["status"] == "ok" && health["device"] == "auto" && health["next_promotion_seconds"].is_null(),
+              "and the server is back to normal at once");
+    }
+    {
+        Env env;
+        env.devices = laptop_devices();
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        Seen seen;
+        CHECK(run_with(keeper, env, seen, runs_only_on("Vulkan0"), failure), "a request is served by another GPU when the first one fails");
+        CHECK(seen.levels == std::vector<Level>({Level::MAX, Level::MAX, Level::MAX, Level::MAX}), "on the same profile every time");
+        CHECK(backends_of(env) == Names({"", "", "CUDA0", "Vulkan0"}), "the same configuration again, then the next device, then the one after");
+        CHECK(keeper.backend_choice().backend == "Vulkan0", "the upscaler follows to the device in use");
+        const json health = keeper.health_json();
+        CHECK(counter(health, "recovered") == 1 && counter(health, "retries") == 1 && counter(health, "device_switches") == 2 &&
+                  counter(health, "step_downs") == 0,
+              "counted as one retry and two device changes, not as a lighter profile");
+        CHECK(health["status"] == "degraded" && health["profile"] == "max" && health["device"] == "Vulkan0" &&
+                  health["next_promotion_seconds"] == 10,
+              "the server stays on the device that worked and schedules the way back");
+        CHECK(health["last_error"]["code"] == "backend", "the failure is the last error");
+    }
+    {
+        Env env;
+        env.devices = laptop_devices();
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        Seen seen;
+        int attempts = 0;
+        CHECK(run_with(keeper, env, seen, [&](const ContextKeeper::ContextView&) { return ++attempts == 1 ? backend_failure() : ok_result; }, failure), "a request whose failure does not repeat is served");
+        CHECK(seen.levels == std::vector<Level>({Level::MAX, Level::MAX}) && backends_of(env) == Names({"", ""}),
+              "by the same device, after loading the model again");
+        const json health = keeper.health_json();
+        CHECK(health["status"] == "ok" && health["device"] == "auto" && counter(health, "retries") == 1 && counter(health, "device_switches") == 0,
+              "without leaving it");
+    }
+    {
+        Env env;
+        env.devices = laptop_devices();
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        Seen seen;
+        CHECK(!run_with(keeper, env, seen, [](const ContextKeeper::ContextView&) { return backend_failure(); }, failure), "a request that no device and not even the cpu can serve fails");
+        CHECK(failure.code == SD_ERROR_BACKEND && !failure.unavailable && seen.levels.size() == 6 && backends_of(env).back() == "cpu",
+              "after trying them all, with the reason of the failure");
+        const json health = keeper.health_json();
+        CHECK(health["profile"] == "lite-cpu" && counter(health, "failed") == 1, "the server stays up on the cpu");
+    }
+    {
+        // What the host wrote itself is not rewritten: the same configuration again, then the cpu.
+        Env env;
+        env.devices            = laptop_devices();
+        env.load_result        = only_the_cpu_works;
+        SDContextParams pinned = base_params();
+        pinned.backend         = "diffusion=cuda0,vae=cpu";
+        ContextKeeper keeper(pinned, Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        CHECK(keeper.start(failure) && backends_of(env) == Names({"diffusion=cuda0,vae=cpu", "diffusion=cuda0,vae=cpu", "cpu"}),
+              "a placement of modules written by the host is kept");
+        CHECK(keeper.health_json()["fallback_devices"] == json::array(), "and no other device is offered");
+    }
+    {
+        // A device the host named is the one the engine tries first: the others come after it.
+        Env env;
+        env.devices           = laptop_devices();
+        env.load_result       = only_the_cpu_works;
+        SDContextParams named = base_params();
+        named.backend         = "cuda0";
+        ContextKeeper keeper(named, Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        CHECK(keeper.start(failure) && backends_of(env) == Names({"cuda0", "cuda0", "Vulkan0", "Vulkan1", "cpu"}),
+              "the device the host named is not tried again as an alternative");
+    }
+    {
+        // A machine on the network is not something to send the model to because a local device failed.
+        Env env;
+        env.devices     = {device_info("CUDA0", SD_DEVICE_TYPE_GPU, 6), device_info("RPC0", SD_DEVICE_TYPE_GPU, 24)};
+        env.load_result = only_the_cpu_works;
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        CHECK(keeper.start(failure) && backends_of(env) == Names({"", "", "CUDA0", "cpu"}), "devices of an rpc server are not used on their own");
+    }
+    {
+        // Cards first (the one the vendor backend lists, then the one with the most memory), then accelerators, then the integrated GPU.
+        Env env;
+        env.devices     = {device_info("Vulkan0", SD_DEVICE_TYPE_GPU, 6),
+                           device_info("Vulkan2", SD_DEVICE_TYPE_IGPU, 8),
+                           device_info("CUDA0", SD_DEVICE_TYPE_GPU, 6),
+                           device_info("CUDA1", SD_DEVICE_TYPE_GPU, 12),
+                           device_info("NPU0", SD_DEVICE_TYPE_ACCEL, 4),
+                           device_info("CPU", SD_DEVICE_TYPE_CPU, 16)};
+        env.load_result = only_the_cpu_works;
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        CHECK(keeper.start(failure) && backends_of(env) == Names({"", "", "CUDA1", "CUDA0", "Vulkan0", "NPU0", "Vulkan2", "cpu"}),
+              "the devices are tried best first, the cpu device is not one of them");
+    }
+    {
+        // Running out of memory on the device that took over goes down the profiles on that device.
+        Env env;
+        env.devices     = laptop_devices();
+        env.load_result = [](const Load& load) -> GenerationFailure {
+            if (load.backend != "Vulkan0") {
+                return backend_failure();
+            }
+            return load.level() < Level::LITE ? oom() : ok_result;
+        };
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        CHECK(keeper.start(failure) && backends_of(env) == Names({"", "", "CUDA0", "Vulkan0", "Vulkan0", "Vulkan0"}) &&
+                  env.loads[3].level() == Level::MAX && env.loads[4].level() == Level::BALANCED && env.loads[5].level() == Level::LITE,
+              "the lighter profiles are tried on the device that is working");
+        const json health = keeper.health_json();
+        CHECK(health["profile"] == "lite" && health["device"] == "Vulkan0", "and the server stays there");
+    }
+    {
+        // While a GPU is left to try, the engine must not turn a device that fails to start into a quiet cpu fallback.
+        Env env;
+        env.devices     = laptop_devices();
+        env.load_result = only_the_cpu_works;
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        bool guarded = true;
+        for (size_t i = 0; i + 1 < env.loads.size(); ++i) {
+            guarded = guarded && env.loads[i].no_fallback;
+        }
+        CHECK(guarded && !env.loads.back().no_fallback, "every load that wants a GPU fails when the GPU does not start; the cpu profile asks for the cpu itself");
+    }
+    {
+        Env env;
+        ContextKeeper keeper(base_params(), Level::MAX, settings(false), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        CHECK(!env.loads[0].no_fallback, "with degradation disabled the engine keeps its own fallback");
+    }
+    {
+        Env env;
+        env.accelerator = false;
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        CHECK(!env.loads[0].no_fallback, "and so does a machine without an accelerator, where the cpu is the only device");
+    }
+    {
+        Env env;
+        env.devices = laptop_devices();
+        ContextKeeper keeper(base_params(), Level::MAX, settings(false), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        Seen seen;
+        CHECK(!run_with(keeper, env, seen, [](const ContextKeeper::ContextView&) { return backend_failure(); }, failure), "with degradation disabled a backend failure fails the request");
+        CHECK(failure.code == SD_ERROR_BACKEND && seen.levels.size() == 1 && env.loads.size() == 1 &&
+                  keeper.health_json()["fallback_devices"] == json::array(),
+              "after one attempt, without loading the model again or offering a device");
+    }
+    {
+        // The preferred device works again: the next climb returns to it.
+        Env env;
+        env.devices      = laptop_devices();
+        bool cuda_broken = true;
+        env.load_result  = [&](const Load& load) { return cuda_broken && (load.backend.empty() || load.backend == "CUDA0") ? backend_failure() : ok_result; };
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        CHECK(backends_of(env) == Names({"", "", "CUDA0", "Vulkan0"}), "the server started on the second GPU");
+        const size_t loads = env.loads.size();
+        cuda_broken        = false;
+        env.advance(5);
+        Seen early;
+        run_with(keeper, env, early, succeed, failure);
+        CHECK(env.loads.size() == loads, "no climb before the wait is over");
+        env.advance(6);
+        Seen climb;
+        CHECK(run_with(keeper, env, climb, succeed, failure) && climb.levels == std::vector<Level>({Level::MAX}) && env.loads.size() == loads + 1 &&
+                  env.loads.back().backend.empty(),
+              "the next request after the wait loads the engine's own choice again");
+        const json health = keeper.health_json();
+        CHECK(health["status"] == "ok" && health["device"] == "auto" && counter(health, "promotions") == 1 && health["next_promotion_seconds"].is_null(),
+              "and the server is back at the preferred device");
+        CHECK(keeper.backend_choice().backend.empty(), "the upscaler follows");
+    }
+    {
+        // The preferred device still fails: one attempt on it, then back to the one that worked, and a longer wait.
+        Env env;
+        env.devices     = laptop_devices();
+        env.load_result = [](const Load& load) { return load.backend.empty() || load.backend == "CUDA0" ? backend_failure() : ok_result; };
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        const size_t loads = env.loads.size();
+        env.advance(11);
+        Seen climb;
+        CHECK(run_with(keeper, env, climb, succeed, failure), "the request is served even if the climb fails");
+        CHECK(env.loads.size() == loads + 2 && env.loads[loads].backend.empty() && env.loads[loads + 1].backend == "Vulkan0",
+              "one attempt on the preferred device, then the device that worked");
+        const json health = keeper.health_json();
+        CHECK(counter(health, "promotions") == 0 && counter(health, "failed_promotions") == 1 && health["next_promotion_seconds"] == 20 &&
+                  health["device"] == "Vulkan0",
+              "counted as a failed climb with a longer wait");
+    }
+    {
+        // The cpu took over because every device failed: the climb goes back to the profile it left, on the best device that works.
+        Env env;
+        env.devices      = laptop_devices();
+        bool gpus_broken = true;
+        env.load_result  = [&](const Load& load) { return gpus_broken && load.backend != "cpu" ? backend_failure() : ok_result; };
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        CHECK(keeper.health_json()["profile"] == "lite-cpu", "the cpu took over");
+        gpus_broken        = false;
+        const size_t loads = env.loads.size();
+        env.advance(11);
+        Seen climb;
+        CHECK(run_with(keeper, env, climb, succeed, failure) && climb.levels == std::vector<Level>({Level::MAX}) &&
+                  env.loads.size() == loads + 1 && env.loads.back().backend.empty(),
+              "the first climb returns to the profile the server had when the device failed, not one step up");
+        CHECK(keeper.health_json()["status"] == "ok", "on the preferred device");
+    }
+    {
+        // Only the second GPU works again.
+        Env env;
+        env.devices      = laptop_devices();
+        bool gpus_broken = true;
+        bool only_vulkan = false;
+        env.load_result  = [&](const Load& load) {
+            if (load.backend == "cpu") {
+                return ok_result;
+            }
+            return gpus_broken || (only_vulkan && load.backend != "Vulkan0") ? backend_failure() : ok_result;
+        };
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        gpus_broken = false;
+        only_vulkan = true;
+        env.advance(11);
+        Seen climb;
+        CHECK(run_with(keeper, env, climb, succeed, failure) && climb.levels == std::vector<Level>({Level::MAX}), "the climb is served");
+        const json health = keeper.health_json();
+        CHECK(health["status"] == "degraded" && health["profile"] == "max" && health["device"] == "Vulkan0" && counter(health, "promotions") == 1,
+              "by the GPU that works, not by the cpu");
+    }
+    {
+        // The cpu took over because the memory ran out on every level: the climb goes up one step at a time.
+        Env env;
+        env.devices = laptop_devices();
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        Seen seen;
+        run_with(keeper, env, seen, [](const ContextKeeper::ContextView& view) { return view.level < Level::LITE_CPU ? oom() : ok_result; }, failure);
+        env.advance(11);
+        Seen climb;
+        CHECK(run_with(keeper, env, climb, succeed, failure) && climb.levels == std::vector<Level>({Level::LITE_HYBRID}),
+              "after running out of memory everywhere the climb is one profile up");
+    }
+}
+
 int main() {
     sd_set_log_callback([](enum sd_log_level_t, const char*, void*) {}, nullptr);
 
     test_ladder();
     test_start();
     test_step_down();
+    test_devices();
     test_promotion();
     test_unavailable();
     test_reporting();

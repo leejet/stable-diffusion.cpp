@@ -44,10 +44,19 @@ namespace sd_profile {
             return family;
         }
 
-        bool multi_gpu_off(const std::string& mode) {
-            std::string lowered = mode;
+        std::string lowercase(const std::string& text) {
+            std::string lowered = text;
             std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            return lowered == "off";
+            return lowered;
+        }
+
+        bool multi_gpu_off(const std::string& mode) {
+            return lowercase(mode) == "off";
+        }
+
+        bool multi_gpu_unset_or_auto(const std::string& mode) {
+            const std::string lowered = lowercase(mode);
+            return lowered.empty() || lowered == "auto";
         }
 
     }  // namespace
@@ -62,6 +71,8 @@ namespace sd_profile {
                 return "lite";
             case Level::LITE_DISK:
                 return "lite-disk";
+            case Level::LITE_HYBRID:
+                return "lite-hybrid";
             case Level::LITE_CPU:
                 return "lite-cpu";
         }
@@ -93,6 +104,8 @@ namespace sd_profile {
             case Level::LITE:
                 return Level::LITE_DISK;
             case Level::LITE_DISK:
+                return Level::LITE_HYBRID;
+            case Level::LITE_HYBRID:
             case Level::LITE_CPU:
                 return Level::LITE_CPU;
         }
@@ -223,19 +236,23 @@ namespace sd_profile {
             ctx.memory_guard = ctx.memory_guard <= 0 ? target : std::min(ctx.memory_guard, target);
         }
         if (level >= Level::LITE) {
-            if ((free_to_set("--backend") || ctx.backend.empty()) &&
-                !mentions_module(ctx.backend, "te") && !mentions_module(ctx.backend, "clip")) {
-                ctx.clip_on_cpu = true;
-            }
             gen.vae_tiling_params.enabled = true;
             if (free_to_set("--batched-cfg")) {
                 ctx.batched_cfg = false;
+            }
+            if (free_to_set("--multi-gpu") && multi_gpu_unset_or_auto(ctx.multi_gpu)) {
+                ctx.multi_gpu = "on";
             }
         }
         if (level >= Level::LITE_DISK && free_to_set("--params-backend")) {
             ctx.params_backend        = "disk";
             ctx.offload_params_to_cpu = false;
             ctx.eager_load            = false;
+        }
+        if (level >= Level::LITE_HYBRID &&
+            (free_to_set("--backend") || ctx.backend.empty()) &&
+            !mentions_module(ctx.backend, "te") && !mentions_module(ctx.backend, "clip")) {
+            ctx.clip_on_cpu = true;
         }
         if (level >= Level::LITE_CPU && free_to_set("--backend")) {
             ctx.backend         = "cpu";

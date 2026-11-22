@@ -602,7 +602,7 @@ ArgOptions SDContextParams::get_options() {
          &max_vram},
         {"",
          "--profile",
-         "resource profile: max (engine defaults), balanced (memory guard at 90), lite (also text encoder on the CPU, tiled VAE, unbatched CFG, guard at 85) "
+         "resource profile: max (engine defaults), balanced (memory guard at 90), lite (also tiled VAE, unbatched CFG, guard at 85 and every GPU of the backend; the compute stays on the GPUs) "
          "or auto (picks one from the model size, the free RAM and the free GPU memory). Options given explicitly on the command line always win",
          0,
          &profile},

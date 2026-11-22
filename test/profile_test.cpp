@@ -79,6 +79,7 @@ int main() {
               strcmp(sd_profile::level_name(Level::BALANCED), "balanced") == 0 &&
               strcmp(sd_profile::level_name(Level::LITE), "lite") == 0 &&
               strcmp(sd_profile::level_name(Level::LITE_DISK), "lite-disk") == 0 &&
+              strcmp(sd_profile::level_name(Level::LITE_HYBRID), "lite-hybrid") == 0 &&
               strcmp(sd_profile::level_name(Level::LITE_CPU), "lite-cpu") == 0,
           "level names");
 
@@ -88,14 +89,15 @@ int main() {
     CHECK(sd_profile::parse("balanced", level, automatic) && level == Level::BALANCED && !automatic, "parse balanced");
     CHECK(sd_profile::parse("max", level, automatic) && level == Level::MAX && !automatic, "parse max");
     CHECK(sd_profile::parse("auto", level, automatic) && automatic, "parse auto");
-    CHECK(!sd_profile::parse("lite-disk", level, automatic) && !sd_profile::parse("", level, automatic) &&
+    CHECK(!sd_profile::parse("lite-disk", level, automatic) && !sd_profile::parse("lite-hybrid", level, automatic) &&
+              !sd_profile::parse("lite-cpu", level, automatic) && !sd_profile::parse("", level, automatic) &&
               !sd_profile::parse("LITE", level, automatic) && !sd_profile::parse("fast", level, automatic),
           "the steps below lite and unknown names are not accepted");
 
     CHECK(sd_profile::lighter(Level::MAX) == Level::BALANCED && sd_profile::lighter(Level::BALANCED) == Level::LITE &&
-              sd_profile::lighter(Level::LITE) == Level::LITE_DISK && sd_profile::lighter(Level::LITE_DISK) == Level::LITE_CPU &&
-              sd_profile::lighter(Level::LITE_CPU) == Level::LITE_CPU,
-          "lighter walks down the steps and stops at the last one");
+              sd_profile::lighter(Level::LITE) == Level::LITE_DISK && sd_profile::lighter(Level::LITE_DISK) == Level::LITE_HYBRID &&
+              sd_profile::lighter(Level::LITE_HYBRID) == Level::LITE_CPU && sd_profile::lighter(Level::LITE_CPU) == Level::LITE_CPU,
+          "lighter walks down the steps, the CPU last, and stops at the last one");
 
     check_choice("unknown model size", resources(0, 8, 0), Level::MAX);
     check_choice("unknown memory", resources(2, -1, 0), Level::MAX);
@@ -170,11 +172,40 @@ int main() {
     {
         Parsed p({});
         sd_profile::apply(Level::LITE, p.ctx, p.gen, true);
-        CHECK(p.ok && p.ctx.memory_guard == 85 && p.ctx.clip_on_cpu && !p.ctx.batched_cfg && p.gen.vae_tiling_params.enabled,
-              "lite sets the guard, the text encoder on the CPU, unbatched CFG and VAE tiling");
+        CHECK(p.ok && p.ctx.memory_guard == 85 && !p.ctx.batched_cfg && p.gen.vae_tiling_params.enabled,
+              "lite sets the guard, unbatched CFG and VAE tiling");
+        CHECK(!p.ctx.clip_on_cpu && !p.ctx.vae_on_cpu && !p.ctx.control_net_cpu && p.ctx.backend.empty(),
+              "lite keeps every module on the GPU: the text encoder stays where auto-fit puts it");
+        CHECK(p.ctx.multi_gpu == "on", "lite spreads the modules over every GPU of the backend");
         sd_profile::apply(Level::LITE, p.ctx, p.gen, true);
-        CHECK(p.ctx.memory_guard == 85 && p.ctx.params_backend.empty() && p.ctx.backend.empty(),
+        CHECK(p.ctx.memory_guard == 85 && p.ctx.params_backend.empty() && p.ctx.backend.empty() && p.ctx.multi_gpu == "on",
               "applying a level twice changes nothing more, and lite leaves the weights placement to auto-fit");
+    }
+    {
+        Parsed off({"--multi-gpu", "OFF"});
+        sd_profile::apply(Level::LITE, off.ctx, off.gen, true);
+        CHECK(off.ctx.multi_gpu == "OFF", "lite does not undo --multi-gpu off at startup");
+        sd_profile::apply(Level::LITE, off.ctx, off.gen, false);
+        CHECK(off.ctx.multi_gpu == "OFF", "nor does a recovery step");
+        Parsed automatic({"--multi-gpu", "auto"});
+        sd_profile::apply(Level::LITE, automatic.ctx, automatic.gen, true);
+        CHECK(automatic.ctx.multi_gpu == "auto", "an explicit --multi-gpu auto is kept at startup");
+        sd_profile::apply(Level::LITE, automatic.ctx, automatic.gen, false);
+        CHECK(automatic.ctx.multi_gpu == "on", "and a recovery step turns it on");
+        Parsed balanced({});
+        sd_profile::apply(Level::BALANCED, balanced.ctx, balanced.gen, true);
+        CHECK(balanced.ctx.multi_gpu.empty(), "balanced leaves multi-gpu alone");
+    }
+    {
+        bool stays_on_gpu = true;
+        for (Level step : {Level::MAX, Level::BALANCED, Level::LITE, Level::LITE_DISK}) {
+            for (bool respect_explicit : {true, false}) {
+                Parsed p({});
+                sd_profile::apply(step, p.ctx, p.gen, respect_explicit);
+                stays_on_gpu = stays_on_gpu && !p.ctx.clip_on_cpu && !p.ctx.vae_on_cpu && !p.ctx.control_net_cpu && p.ctx.backend.empty();
+            }
+        }
+        CHECK(stays_on_gpu, "no step down to lite-disk moves a module to the CPU");
     }
     {
         Parsed p({});
@@ -210,6 +241,24 @@ int main() {
         Parsed p({"--backend", "te=cuda0"});
         sd_profile::apply(Level::LITE, p.ctx, p.gen, true);
         CHECK(!p.ctx.clip_on_cpu, "an explicit text encoder placement is not overridden by lite");
+        sd_profile::apply(Level::LITE_HYBRID, p.ctx, p.gen, false);
+        CHECK(!p.ctx.clip_on_cpu, "nor by lite-hybrid, even in a recovery");
+    }
+    {
+        Parsed p({});
+        sd_profile::apply(Level::LITE_HYBRID, p.ctx, p.gen, false);
+        CHECK(p.ctx.clip_on_cpu && !p.ctx.vae_on_cpu && !p.ctx.control_net_cpu && p.ctx.backend.empty(),
+              "lite-hybrid moves only the text encoder to the CPU");
+        CHECK(p.ctx.params_backend == "disk" && !p.ctx.eager_load && p.ctx.memory_guard == 85 && !p.ctx.batched_cfg &&
+                  p.gen.vae_tiling_params.enabled && p.ctx.multi_gpu == "on",
+              "and keeps everything the steps before it set");
+        Parsed manual({"--backend", "cuda0"});
+        sd_profile::apply(Level::LITE_HYBRID, manual.ctx, manual.gen, true);
+        CHECK(!manual.ctx.clip_on_cpu && manual.ctx.backend == "cuda0", "an explicit --backend is kept at startup");
+        Parsed clip({"--clip-on-cpu"});
+        sd_profile::apply(Level::LITE, clip.ctx, clip.gen, true);
+        sd_profile::apply(Level::LITE_DISK, clip.ctx, clip.gen, false);
+        CHECK(clip.ctx.clip_on_cpu, "a --clip-on-cpu given on the command line is never undone before lite-cpu");
     }
     {
         Parsed p({"--params-backend", "cpu", "--offload-to-cpu", "--eager-load"});
@@ -219,6 +268,7 @@ int main() {
         sd_profile::apply(Level::LITE_DISK, p.ctx, p.gen, false);
         CHECK(p.ctx.params_backend == "disk" && !p.ctx.offload_params_to_cpu, "lite-disk streams the weights from disk in a recovery");
         CHECK(!p.ctx.eager_load, "and does not read all of them into memory first");
+        CHECK(!p.ctx.clip_on_cpu && p.ctx.backend.empty(), "while the compute stays on the GPU, the text encoder included");
     }
     {
         Parsed p({"--backend", "cuda0"});
@@ -237,8 +287,9 @@ int main() {
         CHECK(sd_profile::apply_from_options(p.ctx, p.gen, applied) && applied == Level::MAX && p.ctx.memory_guard == 0,
               "no --profile leaves the options alone");
         p.ctx.profile = "lite";
-        CHECK(sd_profile::apply_from_options(p.ctx, p.gen, applied) && applied == Level::LITE && p.ctx.memory_guard == 85,
-              "--profile lite is applied");
+        CHECK(sd_profile::apply_from_options(p.ctx, p.gen, applied) && applied == Level::LITE && p.ctx.memory_guard == 85 &&
+                  !p.ctx.clip_on_cpu,
+              "--profile lite is applied, without moving anything to the CPU");
     }
 
     printf("\n%s (%d failures)\n", failures ? "TEST FAILED" : "ALL TESTS PASSED", failures);

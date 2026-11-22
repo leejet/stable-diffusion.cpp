@@ -54,8 +54,19 @@ std::string safe_json_dump(const nlohmann::json& value);
 //
 // A request that fails because the machine ran out of memory (or because a backend failed) makes the
 // keeper free the context, load the model again with the next lighter profile of the ladder
-// max > balanced > lite > lite-disk > lite-cpu, and run the same request again. Once the machine has been
-// quiet for a while, it climbs back one step at a time; a climb that fails doubles the wait.
+// max > balanced > lite > lite-disk > lite-hybrid > lite-cpu, and run the same request again. The levels up to
+// lite-disk keep all the compute on the GPUs; the CPU takes the text encoder at lite-hybrid and everything at
+// lite-cpu, so it is the last resort. Once the machine has been quiet for a while, the keeper climbs back one
+// step at a time; a climb that fails doubles the wait.
+//
+// A backend failure (a device that does not start, or fails while computing) is a different matter: a lighter
+// profile does not cure it, so the keeper keeps the profile and changes where the model runs. It loads the model
+// again with the same configuration once, in case the failure was passing; then it tries every other device in
+// turn, the GPUs best first (the same card on another backend, other cards) and the integrated GPU last; the
+// CPU takes over only when none of them works. While a GPU is left to try, the engine is told not to fall back to
+// the CPU by itself, so that a device that fails to start is not turned into a slow server unnoticed. The
+// climb back leads to the preferred device first, and from the CPU straight to the profile it was running when the
+// device failed.
 //
 // The mutex returned by mutex() serializes everything that uses the compute devices: it is held for
 // the whole of a run() and by the upscale endpoint. Reading the health or the resources never takes it.
@@ -77,6 +88,8 @@ public:
         std::function<GenerationFailure()> read_failure;
         // Whether a device other than the CPU is present. Default: asks the library.
         std::function<bool()> has_accelerator;
+        // The devices of the machine, in the order the library lists them. Default: sd_get_device_info().
+        std::function<std::vector<sd_device_info_t>()> list_devices;
         std::function<Clock::time_point()> now;
         // Asks the library to stop the generation running on a context. Default: sd_cancel_generation(SD_CANCEL_ALL).
         std::function<void(sd_ctx_t*)> cancel_context;
@@ -159,6 +172,9 @@ public:
     // The profiles the server can step down through, e.g. "max > lite > lite-cpu".
     std::string describe_ladder() const;
     bool can_step_down() const;
+    // The devices tried, in this order, after the engine's own choice failed, e.g. "CUDA0 > Vulkan0 > Vulkan1";
+    // empty when none is offered (no accelerator, degradation disabled, or a placement written by the host).
+    std::string describe_devices() const;
 
     nlohmann::json health_json() const;
     // "ok", "degraded", "recovering", "unavailable" or "no_model"
@@ -178,6 +194,8 @@ private:
         uint64_t cancelled         = 0;  // stopped on request; neither a success nor a failure
         uint64_t recovered         = 0;  // requests that succeeded after a step down
         uint64_t step_downs        = 0;
+        uint64_t retries           = 0;  // a backend failure answered by loading the same configuration again
+        uint64_t device_switches   = 0;  // a backend failure answered by another device, the cpu included
         uint64_t promotions        = 0;
         uint64_t failed_promotions = 0;
         uint64_t rebuilds          = 0;
@@ -189,16 +207,34 @@ private:
         int64_t at = 0;
     };
 
-    std::unique_ptr<SDContextParams> params_for(sd_profile::Level level) const;
+    // Where the model runs: a profile of the ladder, on a device. Slot 0 leaves the choice of device to the engine;
+    // slot k > 0 names devices_[k - 1], which the keeper tries after the engine's own choice failed.
+    struct Rung {
+        size_t index = 0;
+        size_t slot  = 0;
+        bool valid   = false;
+        bool retry   = false;  // the rung that just failed, loaded again
+    };
+
+    std::unique_ptr<SDContextParams> params_for(sd_profile::Level level, size_t slot = 0) const;
     std::string fingerprint(sd_profile::Level level) const;
     bool force_tiling_at(sd_profile::Level level) const;
     std::vector<sd_profile::Level> make_ladder() const;
+    std::vector<std::string> make_devices() const;
+    // Where to try next after failure at (index, slot); not valid when nothing is left. The same rung again is
+    // offered once (retry_available) for a backend failure, then the other devices, then the lightest profile.
+    Rung next_rung(size_t index, size_t slot, const GenerationFailure& failure, bool retry_available) const;
+    std::string rung_text(size_t index, size_t slot) const;
 
     bool load_locked(GenerationFailure& failure);
-    bool build_from(size_t index, GenerationFailure& failure);
-    bool try_build(size_t index, GenerationFailure& failure);
+    // Loads the model at (index, slot) and, unless only_this, keeps moving to the next rung while the failure is one
+    // a lighter profile or another device can get around. retry_used is shared with the caller, so that one request
+    // never loads the same rung again twice.
+    bool build_from(size_t index, size_t slot, GenerationFailure& failure, bool& retry_used, bool only_this = false);
+    bool try_build(size_t index, size_t slot, GenerationFailure& failure);
     bool restore(GenerationFailure& failure);
-    bool step_down(GenerationFailure& failure);
+    bool step_down(GenerationFailure& failure, bool& retry_used);
+    void note_move(size_t from_index, const Rung& to, const GenerationFailure& failure);
     void promote_if_due();
     void release_context();
     void note_build_failure(const GenerationFailure& failure);
@@ -214,6 +250,8 @@ private:
     SDContextParams base_params_;
     const sd_profile::Level base_level_;
     std::vector<sd_profile::Level> ladder_;
+    bool accelerator_ = false;
+    std::vector<std::string> devices_;  // the devices of slots 1, 2, ...: best first
 
     // Held for the whole of a run(); guards ctx_ and the parameters it was created with.
     std::mutex mutex_;
@@ -222,7 +260,14 @@ private:
 
     // Small lock for the figures health reads; always taken after mutex_ when both are needed.
     mutable std::mutex state_mutex_;
-    size_t index_         = 0;  // position in ladder_
+    size_t index_ = 0;  // position in ladder_
+    size_t slot_  = 0;  // the device of the context in use: 0 = the engine's own choice, k = devices_[k - 1]
+    // The profile the server was running when a backend failure sent it to the cpu profile; the climb back from
+    // the cpu returns to it. SIZE_MAX when the cpu profile was reached by running out of memory.
+    size_t resume_index_ = SIZE_MAX;
+    // What the context in use was asked for, as health reports it.
+    std::string device_ = "auto";
+    std::vector<std::string> cpu_modules_;
     bool has_ctx_         = false;
     bool rebuilding_      = false;
     bool probation_       = false;  // the context in use is a promotion nobody has tried yet

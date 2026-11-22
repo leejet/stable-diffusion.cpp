@@ -248,7 +248,7 @@ memory footprint:
 |---|---|
 | `max` | nothing; the defaults of the engine |
 | `balanced` | `--memory-guard 90` |
-| `lite` | `--memory-guard 85`, the text encoder on the CPU (`--backend te=cpu`), `--vae-tiling`, `--batched-cfg off` |
+| `lite` | `--memory-guard 85`, `--vae-tiling`, `--batched-cfg off`, and `--multi-gpu on` when `--multi-gpu` is not set or is `auto` (an explicit `off` is kept; with one GPU it changes nothing) |
 | `auto` | one of the three above, chosen from the machine (below) |
 
 An option given on the command line always wins over the profile: with
@@ -256,8 +256,10 @@ An option given on the command line always wins over the profile: with
 it off. A profile does not set `--params-backend` or `--backend`, so `--auto-fit`
 still decides where the weights live. It does not change the size, the steps or
 the sampler of an image; it only changes where the memory goes, and with it the
-speed (the text encoder on the CPU and the tiled VAE are slower, unbatched CFG
-needs two forwards per step).
+speed (the tiled VAE is slower, unbatched CFG needs two forwards per step). None
+of the profiles you can choose hands compute to the CPU: the GPUs keep all of it.
+Before this change `lite` also put the text encoder on the CPU; if you want that,
+ask for it with `--clip-on-cpu` or `--backend te=cpu`.
 
 `auto` adds up the size of the model files and a working-memory reserve (1 GiB
 plus a fifth of the weights) and compares it with the memory where the compute
@@ -282,7 +284,7 @@ The estimate comes from the file sizes (it does not read the models) and does no
 account for `--type` conversions at load time. When the sizes or the memory are
 unknown, `auto` leaves the defaults alone. The thresholds are heuristics.
 
-### Two more levels for the server
+### More levels for the server
 
 `sd-server` can go beyond `lite` on its own. When a request runs out of memory, it
 loads the model again with the next lighter profile and runs the request again:
@@ -290,14 +292,25 @@ loads the model again with the next lighter profile and runs the request again:
 | Level | What it sets |
 |---|---|
 | `lite-disk` | `--params-backend disk` (weights are streamed from the file instead of kept in memory); `--eager-load` is switched off |
+| `lite-hybrid` | the text encoder on the CPU (`--clip-on-cpu`); only when the machine has another device |
 | `lite-cpu` | everything on the CPU (`--backend cpu`); only when the machine has another device |
 
-These two are not values of `--profile`. The server climbs back one level at a time
-after `--degradation-cooldown` seconds; every climb loads the model once, which takes
-long on a large model. If that cost is not worth it, start the server on the lighter
-profile with `--profile lite` and `--degradation-cooldown 0`, or use
-`--disable-degradation` to get the error at once. See [Failures and
-recovery](../examples/server/api.md#failures-and-recovery).
+These are not values of `--profile`. Up to `lite-disk` all the compute stays on the
+GPUs, so a model that is short of memory gets slower but is not handed to the CPU;
+the CPU takes work only from `lite-hybrid` on, and all of it only at `lite-cpu`.
+The server climbs back one level at a time after `--degradation-cooldown` seconds;
+every climb loads the model once, which takes long on a large model. If that cost is
+not worth it, start the server on the lighter profile with `--profile lite` and
+`--degradation-cooldown 0`, or use `--disable-degradation` to get the error at once.
+
+A device that fails is not a memory problem, so it does not walk down this ladder.
+The server tries the same device once more, then every other GPU the engine lists
+(graphics cards first, a card through its vendor's backend before the same card
+through Vulkan, integrated GPUs last) and takes the CPU only when none is left. While
+a GPU is left to try it also stops the engine from falling back to the CPU by itself,
+which would hide the failure behind a slow run. `GET /sdcpp/v1/health` shows the
+`device`, the `cpu_modules` and the `fallback_devices`, and the log says every move.
+See [Failures and recovery](../examples/server/api.md#failures-and-recovery).
 
 ## Use quantization to reduce memory usage.
 

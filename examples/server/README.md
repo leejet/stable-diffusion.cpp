@@ -280,18 +280,24 @@ If you want to use a different host or port, pass:
 # When the memory runs short
 
 A request that makes the machine run out of memory does not stop the server. It frees the model, loads it again
-with a lighter configuration (profiles `max > balanced > lite > lite-disk > lite-cpu`, see `--profile`) and runs the
-same request again; from `lite` on, the VAE is decoded in tiles. The request is then served normally. When even the
-lightest profile does not fit, the request is answered with `503` and a `Retry-After` header, and the server stays up.
-After a quiet period the server climbs back one profile at a time.
+with a lighter configuration (profiles `max > balanced > lite > lite-disk > lite-hybrid > lite-cpu`, see `--profile`)
+and runs the same request again; from `lite` on, the VAE is decoded in tiles. The request is then served normally. Up to
+`lite-disk` all the computing stays on the GPUs: the CPU takes the text encoder at `lite-hybrid` and everything only at
+`lite-cpu`, the last resort. When even the lightest profile does not fit, the request is answered with `503` and a
+`Retry-After` header, and the server stays up. After a quiet period the server climbs back one step at a time.
+
+A device that fails (a driver error, a GPU that is reset or removed) is not a memory problem, and the answer is not the
+CPU: the server tries the same device once more, then each other GPU the engine lists (graphics cards before integrated
+GPUs), and only then the CPU. See [Device failures](api.md#device-failures).
 
 * `--degradation-cooldown <seconds>` sets how long the server waits before climbing back (default `300`; `0` = stay
   on the lighter profile until the next restart)
 * `--disable-degradation` turns this off: a request that runs out of memory is answered with the error at once
-* `GET /sdcpp/v1/health` tells which profile is in use, how many times the server had to step down and the last
-  error; `GET /sdcpp/v1/resources` reports the free memory of the machine and of each device
+* `GET /sdcpp/v1/health` tells which profile and device are in use, which modules the CPU computes, how many times
+  the server had to step down or change device, and the last error; `GET /sdcpp/v1/resources` reports the free memory
+  of the machine and of each device
 
-If the model does not fit at startup, the server starts on the first profile that loads it (the log says which). When
+If the model does not fit at startup, the server starts on the first profile and device that load it (the log says which). When
 the model cannot be loaded at all, or the address cannot be used, `sd-server` exits with a non-zero code and says why.
 See [Failures and recovery](api.md#failures-and-recovery) for the answers a client gets.
 

@@ -25,11 +25,11 @@ controllato:
 | Rilevamento device | `sd_get_device_count()` / `sd_get_device_info()` elencano CPU, GPU e acceleratori con tipo e memoria, prima di caricare un modello | sempre disponibile |
 | Fallback CPU | se il backend richiesto non esiste o non si inizializza, il contesto passa alla CPU con un avviso invece di fallire | **attivo** |
 | Memory guard | sopra una soglia di memoria libera pressione (evict dei pesi, prefetch sospeso) prima che l'allocazione fallisca | **disattivo** |
-| Profili di risorse | `--profile lite\|balanced\|max\|auto` imposta in un colpo guardiano di memoria, encoder di testo su CPU, VAE a tasselli e CFG non raggruppato; `auto` sceglie dalla dimensione del modello e dalla memoria libera | **disattivo** (come `max`) |
+| Profili di risorse | `--profile lite\|balanced\|max\|auto` imposta in un colpo guardiano di memoria, VAE a tasselli, CFG non raggruppato e `--multi-gpu on`; il calcolo resta sulle GPU (l'encoder di testo sulla CPU non fa più parte di `lite`); `auto` sceglie dalla dimensione del modello e dalla memoria libera | **disattivo** (come `max`) |
 | Più GPU | con più GPU discrete dello stesso backend l'auto-fit sposta l'encoder di testo o il VAE su un'altra GPU, o divide per blocchi un modello che non sta in una sola; `--profile auto` ne somma la memoria. `--multi-gpu auto\|on\|off`. Non rende più veloce una singola immagine (per la produttività: un `sd-server` per GPU, sezione 3.6) | **attivo** (`auto`: la seconda GPU entra solo se serve) |
 | Errori classificati e memoria di sistema | dopo un fallimento `sd_get_last_error()` dà un codice (memoria esaurita, file del modello, backend, ...) e il motivo; `sd_get_system_memory()` riporta RAM totale, disponibile e del processo | sempre disponibile |
 | Server senza modello | `sd-server` parte anche senza `-m`: device e upscale funzionano, la generazione risponde con un errore chiaro | **attivo** |
-| Server che resta in piedi | una richiesta che esaurisce la memoria non ferma `sd-server`: il modello viene ricaricato con un profilo più leggero (`max > balanced > lite > lite-disk > lite-cpu`) e la richiesta ripetuta; se nemmeno il più leggero basta, risposta `503` con `Retry-After`; dopo una pausa il server risale. `GET /sdcpp/v1/health` e `/resources` | **attivo** (`--disable-degradation` lo spegne) |
+| Server che resta in piedi | una richiesta che esaurisce la memoria non ferma `sd-server`: il modello viene ricaricato con un profilo più leggero (`max > balanced > lite > lite-disk > lite-hybrid > lite-cpu`: la CPU entra solo da `lite-hybrid` in poi) e la richiesta ripetuta; un device che si guasta viene sostituito da un'altra GPU prima che la CPU prenda il lavoro; se nemmeno il più leggero basta, risposta `503` con `Retry-After`; dopo una pausa il server risale. `GET /sdcpp/v1/health` (profilo, device, moduli sulla CPU) e `/resources` | **attivo** (`--disable-degradation` lo spegne) |
 | Autenticazione server | `--api-key` (Bearer o `X-API-Key`) e allowlist CORS `--cors-origins` | **disattivi** |
 | Pacchetto portabile | backend ggml come librerie dinamiche caricate a runtime: un solo pacchetto, ogni macchina usa ciò che ha | opzionale in build |
 | Release automatiche | workflow `release-portable.yml`: zip con GPU (Windows CUDA 12 e Vulkan, Linux Vulkan, macOS Metal) a ogni tag `portable-v*` o avvio manuale | su tag |
@@ -697,12 +697,29 @@ Il server **parte anche senza modello** (niente loop né uscita silenziosa):
 
 Il server **non cade quando la memoria finisce**:
 
-- una richiesta che esaurisce la memoria (o fa fallire un device) libera il
-  modello, lo ricarica con il profilo più leggero successivo
-  (`max > balanced > lite > lite-disk > lite-cpu`; i passi che darebbero la
-  stessa configurazione vengono saltati) e ripete **la stessa richiesta**. Da
-  `lite` in poi il VAE decodifica a tasselli qualunque cosa chieda la richiesta.
-  Con `--eager-load` il passo `lite-disk` non rilegge tutti i pesi all'avvio;
+- una richiesta che esaurisce la memoria libera il modello, lo ricarica con il
+  profilo più leggero successivo
+  (`max > balanced > lite > lite-disk > lite-hybrid > lite-cpu`; i passi che
+  darebbero la stessa configurazione vengono saltati) e ripete **la stessa
+  richiesta**. Fino a `lite-disk` il calcolo resta tutto sulle GPU (si lavora a
+  pezzi più piccoli e i pesi si rileggono da RAM o disco: costa tempo ma non
+  cede il lavoro alla CPU); la CPU prende l'encoder di testo da `lite-hybrid` e
+  tutto solo a `lite-cpu`, l'ultima risorsa. Da `lite` in poi il VAE decodifica
+  a tasselli qualunque cosa chieda la richiesta. Con `--eager-load` il passo
+  `lite-disk` non rilegge tutti i pesi all'avvio;
+- un **device che si guasta** (errore del driver, GPU reimpostata o rimossa,
+  backend che non parte) non è un problema di memoria e non porta alla CPU: il
+  server riprova lo stesso device una volta, poi prova uno per uno gli altri
+  che il motore elenca (le schede grafiche prima degli acceleratori e delle GPU
+  integrate; la scheda col backend del produttore prima della stessa scheda
+  vista da Vulkan; a parità, quella con più memoria libera) e solo alla fine
+  passa alla CPU (`lite-cpu`). Finché resta una GPU da provare dice anche al
+  motore di non ripiegare da solo sulla CPU (`disable_backend_fallback`), cosa
+  che nasconderebbe il guasto dietro una generazione lenta. Un guasto sulla CPU
+  fa fallire la richiesta. Un `--backend` scritto a mano con moduli assegnati
+  (`=`) o più device (`&`, `,`) non viene riscritto: una nuova prova e poi la
+  CPU, come prima. Vale anche all'avvio: se il primo device non parte, il
+  server parte sul successivo e il log dice quale;
 - se nemmeno il profilo più leggero basta, la risposta è `503` con
   l'intestazione `Retry-After` e un corpo
   `{"error": "...", "code": "out_of_memory", "retry_after_seconds": 30}`; il
@@ -711,10 +728,15 @@ Il server **non cade quando la memoria finisce**:
   (`invalid_argument`); un file del modello illeggibile o un device guasto sono
   `500` (`model_file`, `backend`);
 - dopo `--degradation-cooldown` secondi (predefinito 300) il server risale di un
-  profilo, all'inizio della richiesta successiva, che paga il ricaricamento del
-  modello; una risalita che non funziona viene annullata e l'attesa raddoppia
-  (fino a un'ora). `--degradation-cooldown 0` lo lascia sul profilo leggero fino
-  al riavvio; `--disable-degradation` spegne tutto e la richiesta fallisce subito;
+  passo, all'inizio della richiesta successiva, che paga il ricaricamento del
+  modello: un profilo in su, oppure il ritorno al device di partenza se sta
+  girando su un altro; una risalita che non funziona viene annullata e l'attesa
+  raddoppia (fino a un'ora). Dalla CPU, dopo un guasto di device, la risalita
+  torna direttamente al profilo che c'era quando il device si è guastato e offre
+  di nuovo tutti i device, così si trova il migliore che funziona anche se quello
+  preferito no. `--degradation-cooldown 0` lo lascia dov'è fino al riavvio;
+  `--disable-degradation` spegne tutto (anche il divieto di ripiegare da soli
+  sulla CPU: il motore si comporta come prima) e la richiesta fallisce subito;
 - se il modello non si riesce a ricaricare, le richieste ricevono `503`
   (`unavailable`) e il server riprova a partire dalla richiesta successiva, non
   più spesso di ogni 15 secondi;
@@ -723,9 +745,17 @@ Il server **non cade quando la memoria finisce**:
   a creare i thread del server HTTP, esce con codice 1 e un messaggio
   invece di terminare in silenzio;
 - `GET /sdcpp/v1/health` riporta stato (`ok`, `degraded`, `recovering`,
-  `unavailable`, `no_model`), profilo in uso, contatori (richieste, riuscite,
-  fallite, annullate, discese, risalite, ricaricamenti), ultimo errore e coda dei
-  job, e risponde subito anche durante una generazione;
+  `unavailable`, `no_model`; `degraded` anche su un device diverso dal primo),
+  profilo e device in uso (`device`: `auto` se sceglie il motore), i moduli che
+  la CPU calcola accanto alle GPU (`cpu_modules`: `text_encoder`, `vae`,
+  `controlnet`, oppure `["all"]` a `lite-cpu`; vuoto se fanno tutto le GPU), i
+  device di riserva nell'ordine in cui verrebbero provati
+  (`fallback_devices`), contatori (richieste, riuscite, fallite, annullate,
+  discese di profilo, nuove prove sullo stesso device `retries`, cambi di device
+  `device_switches`, risalite, ricaricamenti), ultimo errore e coda dei job, e
+  risponde subito anche durante una generazione; all'avvio il log scrive
+  l'ordine dei device di riserva, il device in uso e, se c'è, quali moduli
+  calcola la CPU;
   `GET /sdcpp/v1/resources` riporta RAM del sistema e memoria dei device.
   Entrambi richiedono la chiave API se impostata.
 
@@ -1178,8 +1208,12 @@ dei pacchetti portabili automatici descritti sopra.
   richiesta.
 - **Profili di risorse** (`--profile <max|balanced|lite|auto>`, in `sd-cli` e
   `sd-server`): `max` non cambia nulla; `balanced` imposta `--memory-guard 90`;
-  `lite` imposta anche `--memory-guard 85`, l'encoder di testo su CPU
-  (`--backend te=cpu`), `--vae-tiling` e `--batched-cfg off`. Le opzioni scritte
+  `lite` imposta anche `--memory-guard 85`, `--vae-tiling`, `--batched-cfg off`
+  e `--multi-gpu on` (se `--multi-gpu` non è scritto o è `auto`; un `off`
+  esplicito resta; con una GPU sola non cambia nulla). Nessun profilo che si
+  può scegliere cede calcolo alla CPU: prima della voce 24 `lite` metteva anche
+  l'encoder di testo sulla CPU (`--backend te=cpu`); chi lo vuole lo chiede con
+  `--clip-on-cpu` o `--backend te=cpu`. Le opzioni scritte
   esplicitamente sulla riga di comando vincono sempre sul profilo
   (`--profile lite --memory-guard 70` usa 70; `--memory-guard 0` lo lascia
   spento). Un profilo non imposta `--params-backend` né `--backend`: la
@@ -1493,7 +1527,8 @@ sincronizzazioni future.
     (`examples/common/common.cpp` registra anche quali opzioni sono state date
     sulla riga di comando, `option_was_given()`, perché una scelta esplicita
     vinca sempre sul profilo). I livelli oltre `lite` (`lite-disk`: pesi in
-    streaming dal disco; `lite-cpu`: tutto sulla CPU) non sono scelte della
+    streaming dal disco; `lite-hybrid`, aggiunto con la voce 24: encoder di
+    testo sulla CPU; `lite-cpu`: tutto sulla CPU) non sono scelte della
     riga di comando: servono a un server che deve scendere di livello quando una
     richiesta esaurisce la memoria. Test: `test/profile_test.cpp` (nomi, ordine
     dei livelli, scelta automatica su una tabella di casi, precedenza delle
@@ -1510,7 +1545,8 @@ sincronizzazioni future.
     `ContextKeeper::run()`. Su `out_of_memory` o `backend` (codici di
     `sd_get_last_error()`) libera il modello, lo ricarica con il profilo più
     leggero successivo e ripete la stessa richiesta (da `lite` in poi forza il
-    VAE a tasselli); un guasto di device salta direttamente a `lite-cpu`. Il
+    VAE a tasselli); un guasto di device saltava direttamente a `lite-cpu`
+    (dalla voce 24 prova prima le altre GPU). Il
     livello di partenza è quello di `--profile`. Risalita di un passo dopo
     `--degradation-cooldown` (300 s; 0 = mai) con prova: se il profilo più
     pesante fallisce al primo uso, si torna indietro e l'attesa raddoppia (tetto
@@ -1617,7 +1653,8 @@ sincronizzazioni future.
     comportamenti che la guida documenta e non cambia: su Linux due `sd-server`
     possono mettersi in ascolto sulla stessa porta senza errore (la libreria
     HTTP inclusa imposta `SO_REUSEPORT`) e, con un `--backend` scritto a mano,
-    `--profile lite` non sposta l'encoder di testo sulla CPU. Nessuna prova su
+    `--profile lite` non sposta l'encoder di testo sulla CPU (da allora `lite`
+    non lo sposta più in nessun caso: voce 24). Nessuna prova su
     una GPU reale.
 
 21. **Annullamento di un job in corso** — `POST /sdcpp/v1/jobs/{id}/cancel`
@@ -1642,7 +1679,8 @@ sincronizzazioni future.
     è stato letto, e per un POST senza `Content-Length` (quello di
     `curl -X POST`) la libreria aspetta 5 secondi di timeout prima di accorgersi
     che non c'è; così `curl -X POST …/cancel` risponde subito. Test:
-    `test/server_recovery_test.cpp` (173 controlli, con ASan/UBSan e TSan, tra
+    `test/server_recovery_test.cpp` (173 controlli a questa voce, 234 dopo la
+    voce 24; con ASan/UBSan e TSan, tra
     cui quelli di caricamento e scaricamento del modello dal catalogo; sette
     guasti inseriti di proposito nell'annullamento sono tutti rilevati) e
     `test/server_cancel_e2e.py` (35 controlli su un vero
@@ -1707,10 +1745,67 @@ sincronizzazioni future.
     linguaggio), una GPU reale, Windows, più macchine, i tempi di reazione con
     un carico vero.
 
+24. **Il calcolo resta sulla GPU; un device che si guasta viene sostituito da
+    un'altra GPU, la CPU per ultima** — `examples/common/profile.{h,cpp}`,
+    `examples/server/recovery.{h,cpp}`, `examples/server/main.cpp`. Il problema,
+    visto in uso: quando il server scendeva di livello, a prendere il lavoro era
+    la CPU e le GPU restavano indietro. Le cause, trovate nel codice: `lite`
+    metteva l'encoder di testo sulla CPU; `lite-disk` spegneva l'auto-fit; un
+    guasto di backend saltava direttamente a `lite-cpu`; e se un backend non
+    partiva il motore passava da solo, in silenzio, a tutta CPU, perdendo anche
+    la disposizione dei pesi. Retrocompatibile: nomi e opzioni non cambiano
+    (`--profile max|balanced|lite|auto`; un'opzione scritta a mano vince sempre;
+    `max` è identico; l'API C in `include/` non cambia; senza acceleratori non
+    cambia nulla). Cosa cambia:
+    - `lite` non mette più l'encoder di testo sulla CPU e aggiunge
+      `--multi-gpu on` (solo se non è scritto o è `auto`: un `off` resta);
+      `lite-disk` tiene l'auto-fit. Fino a `lite-disk` il calcolo resta tutto
+      sulle GPU.
+    - nuovo livello `lite-hybrid` fra `lite-disk` e `lite-cpu`, l'unico punto in
+      cui l'encoder di testo passa alla CPU (e solo con un acceleratore):
+      `max > balanced > lite > lite-disk > lite-hybrid > lite-cpu`.
+    - un guasto di device (codice `backend`) non scende più i profili: una nuova
+      prova sullo stesso device (una per richiesta), poi gli altri device che il
+      motore elenca (schede grafiche, acceleratori, GPU integrate; il backend del
+      produttore prima della stessa scheda vista da Vulkan o OpenCL; a parità,
+      più memoria libera; mai `RPC`), e solo alla fine `lite-cpu`. Una memoria
+      esaurita scende i profili sullo stesso device. Finché resta una GPU da
+      provare il server imposta `disable_backend_fallback` (campo già presente di
+      `sd_ctx_params_t`) perché il motore non ripieghi da solo sulla CPU; con
+      `--disable-degradation` il motore si comporta come prima. Un `--backend`
+      con moduli assegnati o più device non viene riscritto.
+    - risalita: da una GPU un solo tentativo (il device di partenza se si è su un
+      altro, altrimenti un profilo in su); dalla CPU, dopo un guasto di device,
+      direttamente al profilo che c'era, con tutti i device offerti di nuovo.
+    - visibilità: `GET /sdcpp/v1/health` ha i campi nuovi `device`,
+      `cpu_modules`, `fallback_devices` e i contatori `retries` e
+      `device_switches` (nessun campo esistente cambia); `degraded` anche su un
+      device diverso dal primo; il log all'avvio scrive l'ordine dei device di
+      riserva, il device in uso e, se la CPU fa parte del lavoro, quali moduli;
+      ogni passaggio scrive `trying profile … on <device> instead of profile …`.
+
+    Test: `test/profile_test.cpp` (74 controlli) e
+    `test/server_recovery_test.cpp` (234 controlli, con libreria, elenco dei
+    device e orologio simulati), con sette mutazioni del codice sul percorso del
+    guasto di device, tutte rilevate; il test del guardiano passa anche con
+    AddressSanitizer, UBSan e ThreadSanitizer. Contro un vero `sd-server` su CPU
+    con il modello sintetico passano `test/server_cancel_e2e.py` (35 controlli) e
+    una prova a mano del catalogo (15 controlli, non nel repository); con 2400
+    MiB di spazio di indirizzi una richiesta 384×384 scende da `max` a
+    `lite-disk` (3 discese, 3 ricaricamenti) come prima, e `/health` riporta i
+    campi nuovi (`device: auto`, `cpu_modules: []`, `fallback_devices: []`).
+    **Non provato**: una GPU reale (nessun
+    guasto vero del driver), più GPU, la GPU integrata come riserva, Windows; dove
+    finiscono i pesi di un modello grande su una GPU con meno memoria lo decide
+    l'auto-fit al ricaricamento, non il server. Non fatto di proposito (seconda
+    fase): usare la GPU integrata come aiuto per encoder di testo e VAE, dividere
+    il lavoro fra GPU e CPU, riprendere un job a metà dopo un guasto.
+
 Passaggi previsti e non ancora svolti: collaudo del workflow di release sui
 runner GitHub, prova di `--multi-gpu` su una macchina con due GPU, generazione
 con un modello reale (inclusa la memory guard e la discesa di profilo del server
-sotto pressione vera), prova della convivenza con un'altra applicazione sulla
+sotto pressione vera), prova del cambio di device del server dopo un guasto vero
+(voce 24) su una macchina con più GPU, prova della convivenza con un'altra applicazione sulla
 stessa GPU (scenari in [convivenza_applicazioni.md](./convivenza_applicazioni.md),
 sezione 5), prova di `termico.py` su una GPU NVIDIA reale e su Windows e del
 guardiano della guida sugli agenti con una GPU vera sotto carico, test su

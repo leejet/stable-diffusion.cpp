@@ -58,7 +58,7 @@ non il limite di un cgroup, se sei in un container: vedi
 | `--auto-fit` | al caricamento del modello: decide dove mettere ogni componente in base alla memoria libera di quel momento | [backend.md](./backend.md#automatic-placement---auto-fit-onoff) |
 | `--memory-guard N` | durante la generazione: oltre N% di uso (il più alto fra memoria riportata dal dispositivo e budget `--max-vram`) libera i pesi non fissati e sospende il prefetch | [performance.md](./performance.md#keep-device-memory-below-a-pressure-threshold---memory-guard) |
 | `--max-vram` | tetto gestito per dispositivo (`cuda0=6`, `vulkan0=2`, oppure un valore solo); non è un limite fisico | [backend.md](./backend.md#syntax) |
-| Scala di recupero di `sd-server` | dopo un errore di memoria o di dispositivo: scende di un livello lungo `max > balanced > lite > lite-disk > lite-cpu`, ricarica il modello e ripete la richiesta; risponde `503` con `Retry-After` solo se neanche l'ultimo livello basta; risale dopo `--degradation-cooldown` secondi | [api.md](../examples/server/api.md#failures-and-recovery) |
+| Scala di recupero di `sd-server` | dopo un errore di memoria: scende di un livello lungo `max > balanced > lite > lite-disk > lite-hybrid > lite-cpu` (fino a `lite-disk` il calcolo resta sulle GPU), ricarica il modello e ripete la richiesta; dopo un errore di dispositivo riprova lo stesso, poi prova le altre GPU e solo alla fine la CPU; risponde `503` con `Retry-After` solo se non resta nulla da provare; risale dopo `--degradation-cooldown` secondi | [api.md](../examples/server/api.md#failures-and-recovery) |
 | `--multi-gpu` | con più GPU discrete dello stesso backend usa la seconda solo se serve (o sempre, con `on`) | [backend.md](./backend.md#several-gpus---multi-gpu-autoonoff) |
 | Stato leggibile dall'esterno | `sd-cli --list-devices`; `GET /sdcpp/v1/health`; `GET /sdcpp/v1/resources` | [api.md](../examples/server/api.md) |
 
@@ -136,8 +136,10 @@ Da sapere:
   nome.
 - **Un `--backend` scritto a mano vince sul profilo.** Con
   `--profile lite --backend cuda0` il profilo imposta guardia, VAE a tasselli e
-  CFG non raggruppato, ma **non** sposta l'encoder di testo sulla CPU. Se lo
-  vuoi, scrivilo tu: `--backend all=cuda0,te=cpu`.
+  CFG non raggruppato; `--multi-gpu on` non sposta nulla, perché un modulo
+  assegnato con `--backend` non viene mai spostato. L'encoder di testo resta su
+  `cuda0`, come con ogni profilo che si può scegliere. Se vuoi la CPU, scrivilo
+  tu: `--backend all=cuda0,te=cpu`.
 - **Con più GPU** e nessun `--backend`, il pianificatore può usare la seconda
   GPU del motore se il modello non sta nella prima. Per tenere il motore su una
   GPU sola: `--multi-gpu off`. Un modulo assegnato con `--backend` non viene mai
@@ -206,9 +208,12 @@ Da sapere:
 4. Tieni accesa la guardia: `--memory-guard 85`. Il profilo `balanced` la imposta
    a 90 e `lite` a 85, quindi con `--profile auto` c'è già a meno che il motore
    scelga `max`, che non la imposta.
-5. Se non sei sicuro, parti da `--profile lite`: encoder di testo sulla CPU, VAE
-   a tasselli, CFG non raggruppato. Più lento, ma con il picco di memoria più
-   basso. Con `--backend` esplicito vedi la nota in [3.1](#31-dispositivi-separati).
+5. Se non sei sicuro, parti da `--profile lite`: VAE a tasselli, CFG non
+   raggruppato, tutte le GPU del backend; il calcolo resta sulle GPU. Più lento,
+   ma con un picco di memoria più basso di `max`. Per liberare ancora memoria
+   video a costo di core e tempo aggiungi `--clip-on-cpu` (l'encoder di testo
+   sulla CPU). Con `--backend` esplicito vedi la nota in
+   [3.1](#31-dispositivi-separati).
 
 Cosa aspettarsi:
 
@@ -218,7 +223,8 @@ Cosa aspettarsi:
 - Quando le due applicazioni calcolano nello stesso momento i tempi si
   allungano per entrambe.
 - Se la memoria finisce, `sd-server` scende di profilo e ripete la richiesta
-  (che riesce, più lenta), oppure risponde `503` con `Retry-After`.
+  (che riesce, più lenta; fino a `lite-disk` il calcolo resta sulla GPU),
+  oppure risponde `503` con `Retry-After`.
 - `--max-vram` non è un limite fisico: i contesti del driver e le allocazioni
   fuori dai gestori di memoria del motore non ne fanno parte.
 - **Driver NVIDIA su Windows.** Dalla versione 536.40 un programma CUDA che
@@ -236,9 +242,10 @@ Cosa aspettarsi:
 
 Il conflitto è su RAM e core, non sulla memoria video. Metti il motore sulla GPU
 e limita i suoi thread con `--threads N` (se omesso, o se `N` è 0 o negativo,
-usa tutti i core fisici). Con `--profile lite` l'encoder di testo gira sulla
-CPU: è un lavoro breve a inizio richiesta, ma toglie core alla chat in quel
-momento.
+usa tutti i core fisici). Con `--profile lite` il calcolo resta sulla GPU. La CPU
+entra solo se il server scende a `lite-hybrid` (l'encoder di testo: un lavoro
+breve a inizio richiesta, ma toglie core alla chat in quel momento) o a
+`lite-cpu` (tutto), oppure se la chiedi tu con `--clip-on-cpu`.
 
 ## 4. Contratto minimo per chi avvia il motore da un altro programma
 
@@ -305,7 +312,7 @@ momento.
 | `409` su `cancel` | server più vecchio: il job sta generando e non si può fermare | aspetta o termina il processo |
 | `401` | manca la chiave API | `Authorization: Bearer <chiave>` oppure `X-API-Key` |
 | `400` `invalid_argument` | la richiesta non è generabile così | non ripeterla uguale |
-| `200` dopo una discesa di profilo | servita con un profilo più leggero | `/health` mostra `status: degraded` e il `profile` in uso; dopo `--degradation-cooldown` il server prova a risalire |
+| `200` dopo una discesa di profilo o un cambio di device | servita con un profilo più leggero o su un altro device | `/health` mostra `status: degraded`, il `profile` e il `device` in uso (e `cpu_modules` se la CPU fa parte del lavoro); dopo `--degradation-cooldown` il server prova a risalire |
 
 Il corpo di un `503` è `{"error": "...", "code": "...", "retry_after_seconds": N}`
 (vedi [api.md](../examples/server/api.md#failures-and-recovery)). Un `503` che
@@ -385,8 +392,12 @@ Verificato, su Linux, **solo CPU**, con un modello sintetico:
 - Con un carico di RAM esterno e la soglia abbassata, la guardia segnala la
   pressione (`memory guard: ...`) e la generazione termina.
 - La forma delle risposte di `/health`, di `/resources` e del `503`.
-- `--profile lite` con un `--backend` scritto a mano non sposta l'encoder di
-  testo (eseguito con la logica dei profili).
+- `--profile lite` non sposta l'encoder di testo sulla CPU, con o senza un
+  `--backend` scritto a mano: lo fa solo `lite-hybrid` (eseguito con la logica
+  dei profili, `test/profile_test.cpp`).
+- La scala dei device del server (nuova prova sullo stesso device, altre GPU, CPU
+  per ultima, risalita) con elenco dei device e orologio simulati
+  (`test/server_recovery_test.cpp`).
 - Due `sd-server` sulla stessa porta: entrambi in ascolto, richieste divise.
 
 **Non** verificato:
@@ -402,6 +413,8 @@ Verificato, su Linux, **solo CPU**, con un modello sintetico:
   utente, vedi [cuda_e_vulkan_stessa_scheda.md](./cuda_e_vulkan_stessa_scheda.md));
   per il resto la logica è provata con dispositivi simulati.
 - Il comportamento del motore con il ripiego sulla RAM dei driver NVIDIA.
+- Il passaggio a un'altra GPU dopo un guasto vero del driver (con due schede, o
+  con la GPU integrata come ultima riserva prima della CPU).
 - Il costo del ricaricamento di un modello reale.
 - Quanto si scalda la macchina con il motore e l'altra applicazione accesi per
   molti minuti: lo misura [`termico.py`](../scripts/diagnostica_termica/README.md),
