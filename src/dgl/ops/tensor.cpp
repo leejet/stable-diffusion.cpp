@@ -165,7 +165,8 @@ namespace sd::dgl::ops {
 
     std::shared_ptr<sd_tensor_t> pool_tensor(const sd_tensor_t& source, const std::vector<int64_t>& axes, const std::vector<int64_t>& kernel, const std::vector<int64_t>& stride, const std::vector<int64_t>& before, const std::vector<int64_t>& after, std::optional<TensorNumber> pad_value, bool maximum) {
         const auto* input = &source;
-        const auto [x, y] = spatial_axes(source, axes);
+        const auto spatial = spatial_axes(source, axes);
+        const auto x = spatial.first, y = spatial.second;
         if (kernel.size() != 2 || stride.size() != 2 || before.size() != 2 || after.size() != 2)
             throw std::runtime_error("pooling kernel, stride and padding need two entries");
         auto output_size = [&](size_t i, int64_t length) {
@@ -247,7 +248,7 @@ namespace sd::dgl::ops {
                             sum += Compute(source[plane + sy * width + sx]) * weights[size_t(k + radius)];
                         }
                         if constexpr (std::is_same_v<Output, uint8_t> && std::is_same_v<Compute, float>)
-                            target[row * width + x] = uint8_t(std::clamp(sum, 0.f, 255.f) + 0.5f);
+                            target[row * width + x] = uint8_t(std::clamp(sum, Compute(0), Compute(255)) + 0.5f);
                         else if constexpr (std::is_same_v<Output, uint8_t>)
                             target[row * width + x] = rounded_byte(sum);
                         else
@@ -262,7 +263,8 @@ namespace sd::dgl::ops {
     }
 
     std::shared_ptr<sd_tensor_t> blur_tensor(const std::shared_ptr<sd_tensor_t>& input, const std::vector<int64_t>& axes, int64_t radius, double sigma, const std::string& precision) {
-        const auto [x, y] = spatial_axes(*input, axes);
+        const auto spatial = spatial_axes(*input, axes);
+        const auto x = spatial.first, y = spatial.second;
         if (input->type != SD_TENSOR_U8 && input->type != SD_TENSOR_F32 && input->type != SD_TENSOR_F64)
             throw std::runtime_error("gaussian blur requires u8, f32 or f64");
         if (!radius)
