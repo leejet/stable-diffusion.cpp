@@ -1,11 +1,31 @@
 #include "dgl/models/lora.h"
 
+#include <algorithm>
 #include <string_view>
 
 #include "core/ggml_extend_backend.h"
 #include "model/adapter/lora.hpp"
 
 namespace sd::dgl::models {
+
+    lora_apply_mode_t resolve_lora_mode(lora_apply_mode_t mode, const ModelLoader& loader,
+                                       SDBackendManager& backends, SDBackendModule module, bool row_split) {
+        if (mode != LORA_APPLY_AUTO)
+            return mode;
+        // Offloading can signal limited compute memory, so avoid merged copies in auto mode.
+        if (row_split || backends.params_backend_is_disk(module) ||
+            backends.params_backend(module) != backends.runtime_backend(module))
+            return LORA_APPLY_AT_RUNTIME;
+
+        const auto& tensors  = loader.get_tensor_storage_map();
+        const bool quantized = std::any_of(tensors.begin(), tensors.end(), [](const auto& entry) {
+            const auto& tensor = entry.second;
+            return tensor.is_int8_tensorwise || tensor.w4_convrot_kind ||
+                   ggml_is_quantized(tensor.type) ||
+                   (tensor.expected_type < GGML_TYPE_COUNT && ggml_is_quantized(tensor.expected_type));
+        });
+        return quantized ? LORA_APPLY_AT_RUNTIME : LORA_APPLY_IMMEDIATELY;
+    }
 
     static bool is_patch_tensor(std::string_view suffix) {
         const auto index = suffix.find('.');

@@ -77,8 +77,10 @@ namespace sd::dgl::models {
     }
 
     bool ImageUpscaler::attach_loras() {
+        const auto& loader = model_weights->model_source(model->source_file());
+        const auto mode    = resolve_lora_mode(lora_mode(), loader, backend_manager, SDBackendModule::UPSCALER);
         return prepare_loras(VERSION_COUNT, backend_manager, SDBackendModule::UPSCALER,
-                             n_threads, lora_mode() == LORA_APPLY_IMMEDIATELY);
+                             n_threads, mode == LORA_APPLY_IMMEDIATELY);
     }
 
     void ImageUpscaler::set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {

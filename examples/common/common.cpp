@@ -762,11 +762,9 @@ ArgOptions SDContextParams::get_options() {
          on_prediction_arg},
         {"",
          "--lora-apply-mode",
-         "the way to apply LoRA, one of [auto, immediately, at_runtime], default is auto. "
-         "In auto mode, if the model weights contain any quantized parameters, the at_runtime mode will be used; otherwise, immediately will be used."
-         "The immediately mode may have precision and compatibility issues with quantized parameters, "
-         "but it usually offers faster inference speed and, in some cases, lower memory usage. "
-         "The at_runtime mode, on the other hand, is exactly the opposite.",
+         "Select auto (default), immediately, or at_runtime for LoRA application. "
+         "Auto merges unquantized weights on the compute backend when row splitting is off. "
+         "It applies LoRA at runtime for quantized, offloaded, or row-split weights.",
          on_lora_apply_mode_arg},
     };
 

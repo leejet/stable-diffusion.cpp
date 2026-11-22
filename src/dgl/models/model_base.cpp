@@ -102,11 +102,10 @@ namespace sd::dgl::models {
         return !params_placement_ || params_placement_(name);
     }
 
-    bool Model::init_variant(const Model& base, std::shared_ptr<const LoraConfig> loras, bool persistent) {
+    bool Model::init_variant(const Model& base, std::shared_ptr<const LoraConfig> loras) {
         if (typeid(*this) != typeid(base))
             throw std::invalid_argument("LoRA variant must have the same model type as its base");
         loras_               = std::move(loras);
-        persistent_loras_    = persistent;
         family_dependencies_ = base.family_dependencies_;
         return build_variant(base, base.base_loader()) && apply_loras();
     }
@@ -122,8 +121,7 @@ namespace sd::dgl::models {
     }
 
     lora_apply_mode_t Model::lora_mode() const {
-        const auto mode = loras_ ? loras_->mode : LORA_APPLY_AUTO;
-        return persistent_loras_ && mode == LORA_APPLY_AUTO ? LORA_APPLY_AT_RUNTIME : mode;
+        return loras_ ? loras_->mode : LORA_APPLY_AUTO;
     }
 
     bool Model::apply_loras() {

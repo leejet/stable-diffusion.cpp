@@ -76,10 +76,10 @@ The example loads `../models/loras/marblesh.safetensors` or
 
 There are two ways to apply LoRA: **immediately** and **at_runtime**. You can specify it using the `--lora-apply-mode` parameter.
 
-By default, the mode is selected automatically:
-
-* If the model weights contain any quantized parameters, the **at_runtime** mode is used;
-* Otherwise, the **immediately** mode is used.
+The default **auto** mode chooses **immediately** for unquantized weights on
+the compute backend without row splitting. It chooses **at_runtime** for
+quantized, offloaded, or row-split weights. For scripts, see
+[DGL LoRA combinations](../dgl.md#lora-combinations).
 
 The **immediately** mode may have precision and compatibility issues with quantized parameters, but it usually offers faster inference speed and, in some cases, lower memory usage.
 In contrast, the **at_runtime** mode provides better compatibility and higher precision, but inference may be slower and memory usage may be higher in some cases.
