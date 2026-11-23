@@ -988,12 +988,11 @@ struct LoraModel : public GGMLRunner {
                 final_tensor = ggml_cpy(compute_ctx, final_tensor, model_tensor);
             } else {
                 final_tensor = ggml_add_inplace(compute_ctx, model_tensor, diff);
-                // Some backends (e.g. Metal) can't add an F32 diff to an F16 weight:
-                // cast the diff to the weight's type there. supports_op() asks about a built op,
-                // so the add is built first and rebuilt with the cast diff if it is refused.
                 if (diff->type != model_tensor->type && !ggml_backend_supports_op(runtime_backend, final_tensor)) {
-                    diff         = ggml_cast(compute_ctx, diff, model_tensor->type);
-                    final_tensor = ggml_add_inplace(compute_ctx, model_tensor, diff);
+                    // Rounding the delta before adding can erase a representable result.
+                    final_tensor = ggml_cast(compute_ctx, model_tensor, GGML_TYPE_F32);
+                    final_tensor = ggml_add_inplace(compute_ctx, final_tensor, diff);
+                    final_tensor = ggml_cpy(compute_ctx, final_tensor, model_tensor);
                 }
             }
             ggml_build_forward_expand(gf, final_tensor);
