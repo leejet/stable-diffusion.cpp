@@ -13,6 +13,7 @@
 #include "dgl/model_value.h"
 #include "dgl/models/component_sources.h"
 #include "dgl/models/lora.h"
+#include "dgl/run_events.h"
 
 namespace sd::dgl {
 
@@ -203,6 +204,8 @@ namespace sd::dgl {
             return std::move(*value);
         }
         const bool model = is_model_kind(kind);
+        if (model)
+            report_run_progress("loading");
         ResourceLoadRequest request{*this, model ? identity.first : ""};
         auto value        = prepared.load(request);
         auto dependencies = model ? model_from_value(value).dependencies() : ModelLoader::Dependencies{};

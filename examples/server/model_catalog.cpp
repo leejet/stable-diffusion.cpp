@@ -66,14 +66,6 @@ static void clear_model_paths(SDContextParams& params) {
     }
 }
 
-bool component_paths_match(const SDContextParams& a, const SDContextParams& b) {
-    for (const auto& slot : k_model_slots) {
-        if ((a.*slot.field) != (b.*slot.field))
-            return false;
-    }
-    return true;
-}
-
 std::string model_path_key(const fs::path& path) {
 #ifdef _WIN32
     const auto value = path.generic_wstring();
@@ -426,25 +418,22 @@ json resolve_recipe_features(const json& recipe) {
 }
 
 json model_generation_features(const ServerRuntime& runtime) {
-    if (!runtime.sd_ctx || runtime.models->active_recipe.is_null()) {
-        json features = k_recipe_features;
-        for (auto& feature : features)
-            feature = false;
+    const auto& recipe = runtime.models->current_recipe;
+    if (!recipe.is_null()) {
+        auto features = recipe.at("effective_features");
+        if (recipe.value("source", "") != "command_line") {
+            const auto& context          = *runtime.ctx_params;
+            features["controlnet"]       = features.at("controlnet").get<bool>() && !context.control_net_path.empty();
+            features["high_noise"]       = features.at("high_noise").get<bool>() && !context.high_noise_diffusion_model_path.empty();
+            features["preview_tae"]      = features.at("preview_tae").get<bool>() && !context.taesd_path.empty();
+            features["ref_audios"]       = features.at("ref_audios").get<bool>() && (!context.audio_vae_path.empty() || !context.audio_encoder_path.empty());
+            features["ref_video_audios"] = features.at("ref_video_audios").get<bool>() && !context.audio_vae_path.empty();
+        }
         return features;
     }
-    json features = resolve_recipe_features(runtime.models->active_recipe);
-    if (runtime.models->active_recipe.value("source", "") == "command_line")
-        return features;
-    // Optional components only become usable once selected and loaded.
-    features["ip_adapter"]       = features.value("ip_adapter", false) && !runtime.ctx_params->ip_adapter_path.empty();
-    features["controlnet"]       = features.value("controlnet", false) && !runtime.ctx_params->control_net_path.empty();
-    features["high_noise"]       = features.value("high_noise", false) && !runtime.ctx_params->high_noise_diffusion_model_path.empty();
-    features["preview_tae"]      = features.value("preview_tae", false) && !runtime.ctx_params->taesd_path.empty();
-    features["ref_audios"]       = features.value("ref_audios", false) &&
-                                   (!runtime.ctx_params->audio_vae_path.empty() || !runtime.ctx_params->audio_encoder_path.empty());
-    features["ref_video_audios"] = features.value("ref_video_audios", false) && !runtime.ctx_params->audio_vae_path.empty();
-    if (!runtime.ctx_params->pulid_weights_path.empty())
-        features["slg"] = false;
+    json features = k_recipe_features;
+    for (auto& feature : features)
+        feature = false;
     return features;
 }
 
@@ -689,12 +678,21 @@ void refresh_model_catalog(ServerRuntime& runtime) {
     models.catalog_errors = std::move(errors);
 }
 
-json model_status(ServerRuntime& runtime) {
-    std::lock_guard<std::mutex> lock(runtime.models->status_mutex);
-    auto& models = *runtime.models;
-    json status  = models.status;
-    if (status["state"] == "loading" && !status["load_elapsed_seconds"].is_null()) {
-        status["load_elapsed_seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - models.load_started_at).count();
+json model_status(const ServerRuntime& runtime) {
+    const auto& models = *runtime.models;
+    const auto& recipe = models.current_recipe;
+    const bool startup = !recipe.is_null() && recipe.value("source", "") == "command_line";
+    json status        = {{"state", recipe.is_null() ? "empty" : "configured"},
+                          {"recipe", recipe.is_null() || startup ? json(nullptr) : recipe.at("id")},
+                          {"models", models.current_files},
+                          {"error", nullptr},
+                          {"revision", models.revision}};
+    if (startup)
+        status["origin"] = "command_line";
+    if (!recipe.is_null()) {
+        status["runtime_recipe"] = {{"id", "@current"}, {"name", "Current server model"}, {"source", "current"}, {"size_multiple", recipe.value("size_multiple", 8)}, {"slots", json::array()}};
+        if (recipe.contains("video_constraints"))
+            status["runtime_recipe"]["video_constraints"] = recipe.at("video_constraints");
     }
     return status;
 }
@@ -704,29 +702,26 @@ void initialize_server_models(ServerRuntime& runtime) {
     models.base_context = *runtime.ctx_params;
     clear_model_paths(models.base_context);
     models.base_defaults = *runtime.default_gen_params;
-    if (runtime.sd_ctx) {
-        models.status["state"]  = "ready";
-        models.status["origin"] = "command_line";
-        json features           = json::array();
+    if (has_current_model(runtime)) {
+        json features = json::array();
         for (const auto& feature : k_recipe_features)
             features.push_back(feature.first);
-        models.active_recipe = {
+        models.current_recipe = {
             {"id", "@command-line"},
             {"name", "Command-line model (all features)"},
             {"source", "command_line"},
-            {"description", "Uses the loaded command-line model and its generation defaults."},
+            {"description", "Uses the model and generation defaults specified on the command line."},
             {"slots", json::array()},
             {"defaults", json::object()},
             {"size_multiple", 8},
             {"features", features},
         };
-        models.active_recipe["effective_features"] = resolve_recipe_features(models.active_recipe);
-        models.status["runtime_recipe"]            = models.active_recipe;
+        models.current_recipe["effective_features"] = resolve_recipe_features(models.current_recipe);
     }
     refresh_model_catalog(runtime);
 }
 
-void prepare_model_load(ServerRuntime& runtime, json& body, SDContextParams& context, SDGenerationParams& defaults, json* loaded_recipe) {
+ServerModelSelection resolve_model_selection(ServerRuntime& runtime, const json& body) {
     check_keys(body, {"recipe", "models"});
     const auto recipe_id = body.at("recipe").get<std::string>();
     // `models` is optional; unselected slots may fall back to recipe defaults below.
@@ -739,10 +734,8 @@ void prepare_model_load(ServerRuntime& runtime, json& body, SDContextParams& con
     if (found == models.recipes.end())
         throw std::runtime_error("unknown recipe");
     const auto& recipe = found->second;
-    if (loaded_recipe)
-        *loaded_recipe = recipe;
-    context  = models.base_context;
-    defaults = models.base_defaults;
+    auto context       = models.base_context;
+    auto defaults      = models.base_defaults;
     apply_recipe_context(recipe.value("context", json::object()), context);
     apply_recipe_defaults(recipe.value("defaults", json::object()), defaults);
     // Recipe-provided default models fill any slot the request did not select.
@@ -770,8 +763,7 @@ void prepare_model_load(ServerRuntime& runtime, json& body, SDContextParams& con
                 if (selection.contains(id))
                     throw std::runtime_error("specify only one of tae and taesd");
                 selection[id] = selection.at(alias);
-                // Keep only the declared spelling: equivalent loads must resolve
-                // to an identical selection for the idempotent-load comparison.
+                // Normalize the alias so the same selection reuses the current configuration.
                 selection.erase(alias);
             }
         }
@@ -796,20 +788,6 @@ void prepare_model_load(ServerRuntime& runtime, json& body, SDContextParams& con
         if (!allowed.count(it.key()))
             throw std::runtime_error("unknown model slot: " + it.key());
     }
-    // Omitting an optional slot and sending it as an empty string resolve to
-    // the same context; drop the empty key so equivalent loads compare
-    // identically instead of rebuilding the context. The explicit empty
-    // string already overrode any recipe default during the merge, so its
-    // intent is preserved.
-    for (auto it = selection.begin(); it != selection.end();) {
-        if (!it->is_string() || !it->get<std::string>().empty()) {
-            ++it;
-            continue;
-        }
-        it = selection.erase(it);
-    }
-    // Echo the fully resolved selection (recipe defaults merged in) for status reporting.
-    body["models"] = selection;
     for (const auto& group : recipe.value("required_any", json::array())) {
         if (std::none_of(group.begin(), group.end(), [&](const json& value) {
                 return !selection.value(value.get<std::string>(), std::string()).empty();
@@ -817,6 +795,36 @@ void prepare_model_load(ServerRuntime& runtime, json& body, SDContextParams& con
             throw std::runtime_error("select at least one model from: " + group.dump());
         }
     }
-    if (!context.resolve_and_validate(IMG_GEN))
+    if (!context.resolve(IMG_GEN))
         throw std::runtime_error("invalid model context parameters");
+    auto options = context.to_context_opt();
+    if (!options)
+        throw std::runtime_error(sd_get_last_error());
+    for (auto it = selection.begin(); it != selection.end();) {
+        if (it.value() == "")
+            it = selection.erase(it);
+        else
+            ++it;
+    }
+    return {std::move(context), std::move(defaults), recipe, std::move(selection), std::move(options)};
+}
+
+bool set_current_model(ServerRuntime& runtime, ServerModelSelection&& selection, std::string& error_message) {
+    auto& models = *runtime.models;
+    std::unique_lock<std::shared_mutex> lock(models.model_mutex);
+    if (models.current_recipe == selection.recipe && models.current_files == selection.files &&
+        std::all_of(std::begin(k_model_slots), std::end(k_model_slots), [&](const ModelSlot& slot) {
+            return runtime.ctx_params->*slot.field == selection.context.*slot.field;
+        }))
+        return true;
+    if (sd_ctx_set_model_options(runtime.sd_ctx, selection.options.get()) != SD_STATUS_OK) {
+        error_message = sd_get_last_error();
+        return false;
+    }
+    *runtime.ctx_params         = std::move(selection.context);
+    *runtime.default_gen_params = std::move(selection.defaults);
+    models.current_recipe       = std::move(selection.recipe);
+    models.current_files        = std::move(selection.files);
+    ++models.revision;
+    return true;
 }

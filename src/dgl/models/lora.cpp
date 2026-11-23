@@ -8,8 +8,7 @@
 
 namespace sd::dgl::models {
 
-    lora_apply_mode_t resolve_lora_mode(lora_apply_mode_t mode, const ModelLoader& loader,
-                                       SDBackendManager& backends, SDBackendModule module, bool row_split) {
+    lora_apply_mode_t resolve_lora_mode(lora_apply_mode_t mode, const ModelLoader& loader, SDBackendManager& backends, SDBackendModule module, bool row_split) {
         if (mode != LORA_APPLY_AUTO)
             return mode;
         // Offloading can signal limited compute memory, so avoid merged copies in auto mode.

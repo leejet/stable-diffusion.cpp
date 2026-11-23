@@ -413,7 +413,7 @@ namespace sd::dgl::models {
         const auto& loader   = model_.model_weights->loader();
         const bool row_split = mode != LORA_APPLY_AT_RUNTIME && split_active(SDSplitMode::ROW);
         if (mode == LORA_APPLY_IMMEDIATELY) {
-            const auto& tensors = loader.get_tensor_storage_map();
+            const auto& tensors     = loader.get_tensor_storage_map();
             apply_lora_immediately_ = !row_split &&
                                       std::none_of(tensors.begin(), tensors.end(), [](const auto& entry) {
                                           return entry.second.is_int8_tensorwise || entry.second.w4_convrot_kind;

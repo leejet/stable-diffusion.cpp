@@ -227,32 +227,30 @@ void register_dgl_endpoints(httplib::Server& svr, ServerRuntime& runtime) {
                  send_json(res, updating ? 200 : 201, {{"name", name}});
              }));
 
-    RuntimeRoutes routes(svr, runtime);
-    // Use the model transition lock during admission, as with image and video jobs.
-    routes.post("/sdcpp/v1/dgl/jobs", local_dgl_route([&runtime](const Request& req, Response& res) {
-                    auto source = json::parse(req.body).at("source").get<std::string>();
-                    if (source.empty() || !valid_source(source)) {
-                        send_error(res, 400, "Expected non-empty UTF-8 source");
-                        return;
-                    }
-                    auto job        = std::make_shared<AsyncGenerationJob>();
-                    job->kind       = AsyncJobKind::Dgl;
-                    job->dgl_source = std::move(source);
-                    auto& manager   = *runtime.async_job_manager;
-                    {
-                        std::lock_guard<std::mutex> lock(manager.mutex);
-                        purge_expired_jobs(manager);
-                        if (count_pending_jobs(manager) >= manager.max_pending_jobs) {
-                            send_error(res, 429, "Job queue is full");
-                            return;
-                        }
-                        job->id = make_async_job_id(manager);
-                        manager.jobs.emplace(job->id, job);
-                        manager.queue.push_back(job->id);
-                        send_json(res, 202, make_async_job_json(manager, *job));
-                    }
-                    manager.cv.notify_one();
-                }));
+    svr.Post("/sdcpp/v1/dgl/jobs", local_dgl_route([&runtime](const Request& req, Response& res) {
+                 auto source = json::parse(req.body).at("source").get<std::string>();
+                 if (source.empty() || !valid_source(source)) {
+                     send_error(res, 400, "Expected non-empty UTF-8 source");
+                     return;
+                 }
+                 auto job        = std::make_shared<AsyncGenerationJob>();
+                 job->kind       = AsyncJobKind::Dgl;
+                 job->dgl_source = std::move(source);
+                 auto& manager   = *runtime.async_job_manager;
+                 {
+                     std::lock_guard<std::mutex> lock(manager.mutex);
+                     purge_expired_jobs(manager);
+                     if (count_pending_jobs(manager) >= manager.max_pending_jobs) {
+                         send_error(res, 429, "Job queue is full");
+                         return;
+                     }
+                     job->id = make_async_job_id(manager);
+                     manager.jobs.emplace(job->id, job);
+                     manager.queue.push_back(job->id);
+                     send_json(res, 202, make_async_job_json(manager, *job));
+                 }
+                 manager.cv.notify_one();
+             }));
 
     svr.Get(R"(/sdcpp/v1/dgl/jobs/([A-Za-z0-9_-]+))", local_dgl_route([&runtime](const Request& req, Response& res) {
                 auto& manager = *runtime.async_job_manager;

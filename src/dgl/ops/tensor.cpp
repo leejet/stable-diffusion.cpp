@@ -164,7 +164,7 @@ namespace sd::dgl::ops {
     }
 
     std::shared_ptr<sd_tensor_t> pool_tensor(const sd_tensor_t& source, const std::vector<int64_t>& axes, const std::vector<int64_t>& kernel, const std::vector<int64_t>& stride, const std::vector<int64_t>& before, const std::vector<int64_t>& after, std::optional<TensorNumber> pad_value, bool maximum) {
-        const auto* input = &source;
+        const auto* input  = &source;
         const auto spatial = spatial_axes(source, axes);
         const auto x = spatial.first, y = spatial.second;
         if (kernel.size() != 2 || stride.size() != 2 || before.size() != 2 || after.size() != 2)

@@ -112,17 +112,24 @@ void sd_ctx_free(sd_ctx_t* context) {
     delete context;
 }
 
-sd_status_t sd_ctx_prepare(sd_ctx_t* context) {
+sd_dgl_ctx_t* sd_ctx_get_dgl_ctx(sd_ctx_t* context) {
+    return context && context->engine ? &context->engine->execution : nullptr;
+}
+
+sd_status_t sd_ctx_set_model_options(sd_ctx_t* context, const sd_ctx_opt_t* options) {
     return sd::api::call([&] {
         if (!context || !context->engine)
             return sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "context is required");
         auto& engine = *context->engine;
-        sd::api::GenerationRun preparation(engine);
-        sd::FileAccessScope access(engine.execution.file_access);
-        sd::api::execute_program(engine, sd::api::component_program(engine));
+        std::unique_lock<std::recursive_mutex> lock(engine.mutex, std::try_to_lock);
+        if (!lock.owns_lock() || engine.executing)
+            return sd::api::error(SD_STATUS_BUSY, nullptr, "context is busy");
+        std::unique_lock<std::mutex> execution_lock(engine.execution.mutex, std::try_to_lock);
+        if (!execution_lock.owns_lock() || engine.execution.active_run)
+            return sd::api::error(SD_STATUS_BUSY, nullptr, "DGL context is busy");
+        engine.model = sd::api::GenerationModel(sd::api::copy_options(options), sd::api::Context);
         return SD_STATUS_OK;
-    },
-                         SD_STATUS_LOAD_FAILED);
+    });
 }
 
 void sd_cancel_generation(sd_ctx_t* context, enum sd_cancel_mode_t mode) {
@@ -144,14 +151,14 @@ static const ModelDefinition* context_definition(const sd_ctx_t* context) {
     sd::api::call([&] {
         if (!context || !context->engine)
             return sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "context is required");
-        auto& engine      = *context->engine;
-        const auto family = engine.family.load();
+        auto& engine = *context->engine;
+        std::lock_guard<std::recursive_mutex> lock(engine.mutex);
+        const auto family = engine.model.family;
         if (family != VERSION_COUNT) {
             definition = find_model_definition(family);
         } else {
-            std::lock_guard<std::recursive_mutex> lock(engine.mutex);
-            sd::FileAccessScope access(engine.execution.file_access);
-            definition = &engine.model_definition();
+            sd::FileAccessScope access(engine.file_access);
+            definition = &engine.model.definition(engine);
         }
         return SD_STATUS_OK;
     },
@@ -182,7 +189,7 @@ sd_status_t sd_ctx_set_file_access_callback(sd_ctx_t* context, sd_dgl_file_acces
         std::unique_lock<std::recursive_mutex> lock(engine.mutex, std::try_to_lock);
         if (!lock.owns_lock() || engine.executing)
             return sd::api::error(SD_STATUS_BUSY, nullptr, "context is busy");
-        engine.execution.file_access = {callback, data};
+        engine.file_access = {callback, data};
         return SD_STATUS_OK;
     });
 }

@@ -94,22 +94,15 @@ int main(int argc, const char** argv) {
 
     SDOptPtr sd_ctx_params = ctx_params.to_context_opt();
     ServerModels models;
-    if (!ctx_params.model_path.empty() || !ctx_params.diffusion_model_path.empty()) {
-        const auto started = std::chrono::steady_clock::now();
-        models.context.reset(create_sd_context(sd_ctx_params));
-        if (models.context) {
-            try {
-                prepare_native_context(models, svr_params, ctx_params, true);
-            } catch (const std::exception& error) {
-                LOG_ERROR("Model preparation failed: %s", error.what());
-                models.context.reset();
-            }
-        }
-        models.status["load_elapsed_seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    models.context.reset(create_sd_context(sd_ctx_params));
+    if (!models.context) {
+        LOG_ERROR("sd_ctx_create failed: %s", sd_get_last_error());
+        return 1;
     }
-
-    if ((!ctx_params.model_path.empty() || !ctx_params.diffusion_model_path.empty()) && !models.context) {
-        LOG_ERROR("sd_ctx_create failed");
+    try {
+        configure_server_file_access(models, svr_params, ctx_params);
+    } catch (const std::exception& error) {
+        LOG_ERROR("Context setup failed: %s", error.what());
         return 1;
     }
 

@@ -62,13 +62,20 @@ cleanup:
 }
 ```
 
-`sd_ctx_create()` retains configuration and leaves component loading lazy. To
-validate a model before accepting generation requests, install any file-access
-callback and call `sd_ctx_prepare(ctx)`. It probes the model, builds and validates
-the configured components, and retains them for later generation without
-sampling. Weight residency still follows `eager_load` and the memory budgets.
-Preparation failures return a non-OK status; callers can discard or retry the
-context. Capability queries reuse the detected model type during generation.
+`sd_ctx_create()` retains the model configuration. The first generation call
+loads the components it needs and reports any loading errors through its return
+status. Weight residency follows `eager_load` and the memory budgets. Capability
+queries can probe the model family and reuse the detected type.
+
+Use `sd_ctx_set_model_options()` on an idle context to replace its model
+configuration. It copies the options and resets model detection. Later
+`sd_generate_image()` and `sd_generate_video()` calls use the new configuration.
+The execution settings and component cache continue to serve generation and the
+DGL context borrowed through `sd_ctx_get_dgl_ctx()`. The borrowed pointer stays
+valid until `sd_ctx_free()`. Run scripts and generation calls one at a time. Set
+file-access callbacks for generated programs and scripts through
+`sd_ctx_set_file_access_callback()` and `sd_dgl_ctx_set_file_access_callback()`
+respectively.
 
 Use `sd_generate_video()` with options from `sd_vid_gen_opt_create()` to generate video. Its result
 exposes frames through the same image accessors, optional audio through

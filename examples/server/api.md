@@ -65,47 +65,46 @@ Current endpoints include:
 - `GET /sdcpp/v1/jobs/{id}`
 - `POST /sdcpp/v1/jobs/{id}/cancel`
 - `POST /sdcpp/v1/vid_gen`
-- `POST /sdcpp/v1/upscale`
 
 ## Model management
 
-Model management is additive: existing generation request bodies, successful
-responses, job polling and cancellation remain unchanged. All three API families
-use the current loaded context. Starting with the existing model arguments
-preserves command-line preloading and its generation defaults; it does not
-require a recipe.
+All three API families share the server's execution context and its component
+cache. The command-line model supplies the initial configuration. Native image
+and video jobs can select a recipe and component files in the request. The worker
+applies that selection to the shared context before generation. It remains the
+current model for later requests that omit `model`, including A1111 and OpenAI
+requests. Each native job reports loading and generation progress through the job API.
 
 Recipe defaults apply when a generation request omits the corresponding
 parameters. Image editing endpoints retain their existing input-image size
 inference when dimensions are omitted.
 
-Without a loaded model, generation endpoints return HTTP 503 with
-`{"error":"No model is loaded","code":"model_not_loaded"}`.
-While loading/unloading, endpoints that access the context return HTTP 503
-with `code: "model_loading"`. These errors retain the existing string-valued
-`error` field. Job polling/cancellation, catalog queries and model status remain
-available during loading. Model lists are empty when no model is loaded;
-`/v1/models` retains the `sd-cpp-local` ID when ready.
+Requests that use the current model return HTTP 503 with
+`{"error":"No current model is configured","code":"model_not_loaded"}` until
+the server has a model configuration. `/v1/models` lists `sd-cpp-local` when a
+model is configured. An accepted native job that omits `model` uses the current
+model and its defaults when the job starts.
 
 | Method | Endpoint | Response / behavior |
 | --- | --- | --- |
 | GET | `/sdcpp/v1/recipes` | `{recipes: [...], errors: [...]}` |
 | GET | `/sdcpp/v1/model-files` | `{files: [{id, name, category, root, relative_path}], errors: [...]}` |
 | POST | `/sdcpp/v1/models/refresh` | Rescan recipes and files; return `{errors: [...]}` |
-| GET | `/sdcpp/v1/models/status` | Current state, recipe, selection, error, loading time and optional revision |
-| POST | `/sdcpp/v1/models/load` | Prepare and validate the submitted components before reporting `ready`; failures report `model_load_failed` and leave no active context. A load is a no-op returning the current status with `already_loaded: true` only when the state is ready and the fully resolved selection, the complete recipe object, and the resolved component paths all match the active model; a catalog refresh with modified recipe metadata or a retargeted model path therefore reloads even with an unchanged recipe ID and selection |
-| POST | `/sdcpp/v1/models/unload` | Release the active context; return empty status |
+| GET | `/sdcpp/v1/models/status` | Current model configuration (`configured` or `empty`), recipe, components and revision |
 
-Load request:
+Example `POST /sdcpp/v1/img_gen` request with a model selection.
 
 ```json
 {
-  "recipe": "flux1-dev",
-  "models": {
-    "diffusion_model": "diffusion_models/flux1-dev.gguf",
-    "clip_l": "text_encoders/clip_l.safetensors",
-    "t5xxl": "text_encoders/t5xxl.safetensors",
-    "vae": "vae/ae.safetensors"
+  "prompt": "a photograph of a cat",
+  "model": {
+    "recipe": "flux1-dev",
+    "models": {
+      "diffusion_model": "diffusion_models/flux1-dev.gguf",
+      "clip_l": "text_encoders/clip_l.safetensors",
+      "t5xxl": "text_encoders/t5xxl.safetensors",
+      "vae": "vae/ae.safetensors"
+    }
   }
 }
 ```
@@ -115,7 +114,7 @@ retains the existing relative IDs, such as `checkpoints/nested/model.gguf`.
 Additional roots use `@<root-id>/<relative-path>` so identical paths in different
 roots remain selectable. Root qualifiers derive from the canonical root path;
 adding unrelated roots or refreshing the catalog does not change them. Moving
-a root changes its qualifier. Do not construct IDs or use display names in load
+a root changes its qualifier. Use the returned IDs to select files in generation
 requests.
 
 The display `name` omits the physical category directory (including aliases such
@@ -137,31 +136,17 @@ relative path, or the full absolute file path when needed to distinguish duplica
 Continue sending `path` in structured LoRA requests. `--lora-model-dir` overrides
 automatic discovery across all model roots.
 Absolute paths, unknown files, wrong categories and
-paths escaping the configured root are rejected. Optional slots can be omitted
-or set to an empty string. Load/unload returns HTTP 409 (`model_busy`) while
-requests or queued jobs are pending. Invalid configurations return HTTP 400
-(`invalid_model_config`) before unloading the current context. An initialization
-failure returns HTTP 422 (`model_load_failed`) and leaves no active context.
-The load HTTP request waits for completion; a separate client can poll status
-while it runs. Refreshing the catalog never modifies an already loaded context.
+paths escaping the configured root are rejected. An invalid selection returns
+HTTP 400 with `code: "invalid_model_config"`. A component that fails to load
+after submission reports its error in the job result. Catalog refreshes apply
+to later submissions.
 
-Status uses `state: empty | loading | ready | error`, `recipe` (ID or null),
-`models` (slot-to-file-ID mapping), and `error` (string or null). A monotonically
-increasing `revision` identifies runtime transitions within this server process.
-Command-line preloading keeps `origin: command_line` and `recipe: null` for
-compatibility, and adds `runtime_recipe`: a read-only `@command-line` recipe
-with all feature declarations enabled. It is only available while that context
-is loaded and cannot be submitted to `models/load`. The UI selects it by default
-and uses command-line generation defaults, not defaults from a catalog recipe.
-Capabilities also include this status as an additive `runtime` field.
-
-`load_elapsed_seconds` is the server-measured duration in seconds (a number or
-null). It updates while a model is loading and freezes on success or failure.
-Timing starts after selection validation and includes releasing the previous
-model. It resets for each load and is null before any load and during/after
-unloading. Command-line preloading reports its completed initialization time.
-Poll `/sdcpp/v1/models/status` to display elapsed time, including while loading;
-timer updates alone do not change `revision`.
+The initial command-line selection has `origin: command_line`. Once a catalog
+recipe is selected, status reports its ID and component files. The read-only
+`runtime_recipe` with ID `@current` represents whichever model is configured at
+the time of the query. Omit `model` from the request to use the current model.
+Capabilities include the same model information in `runtime` and advertise
+`generation_model_selection: true`.
 
 ### Recipe feature declarations
 
@@ -206,9 +191,8 @@ Default-enabled features are `img2img`, `mask_image`, `lora`, `vae_tiling`,
 
 A `control_net` slot enables `controlnet`, `ip_adapter` enables `ip_adapter`,
 `high_noise_diffusion_model` enables `high_noise`, and `tae`/`taesd` enables `preview_tae`, unless explicitly disabled.
-ControlNet controls are shown when previewing a supporting recipe, even before
-a model file is selected. High-noise and TAE controls additionally require their
-component to be selected. Runtime capabilities require the component to be loaded.
+ControlNet, IP-Adapter, high-noise, TAE preview and audio reference controls
+also depend on the selected component files.
 PuLID disables SLG while selected.
 Image-only and video-only inputs are filtered by the active generation mode.
 Eta depends on the selected sampler; SCM fields only apply to DBCache,
@@ -219,16 +203,11 @@ each recipe. This is response-only metadata, like `source` and slot `categories`
 omit it when writing a user recipe file. The defaults are maintained by the
 server, not duplicated by the frontend.
 
-`GET /sdcpp/v1/capabilities` adds `generation_features` for the loaded context,
-derived from the active recipe and component availability without inferring
-features from model-family names. When no model is loaded, every feature is
-present and false. The UI can still preview a selected recipe using its
-`effective_features` before loading.
-Existing `features` / `features_by_mode` keys are retained and their model-specific
-values reflect these declarations. A loaded recipe is snapshotted: refreshing
-recipe files does not change the active context's capabilities until reloading.
-Command-line preloading uses the runtime-only all-features recipe instead of model-family inference
-and component paths; variant-specific recipe declarations are more precise.
+`GET /sdcpp/v1/capabilities` reports `generation_features` for the current model,
+along with its generation mode and defaults. With no configured model, those
+features are false.
+The UI uses the selected catalog recipe's `effective_features` and component
+selection for requests that specify `model`.
 Known high-noise sampling settings and `moe_boundary` are ignored when no
 high-noise stage is loaded, and `vace_strength` is ignored by non-VACE models.
 Actual control-frame inputs still require VACE.
@@ -281,12 +260,9 @@ supported directories; they cannot redefine or restrict its search directories.
 At least one required `model` or `diffusion_model` slot is necessary.
 
 An optional top-level `models` object maps slot IDs to file IDs, providing
-recipe-local defaults for component selection. A load request may omit
-`models` entirely and load with the recipe's defaults. Selections sent in the
-request always override recipe defaults, slot by slot. An empty string
-disables a slot's recipe default (omitting the slot selects it); the empty
-key is then normalized out of the reported selection, so for slots without a
-recipe default an empty selection loads identically to an omitted one.
+recipe-local defaults for component selection. Omitting `model.models` uses
+the recipe's defaults. Explicit selections override recipe defaults slot by
+slot. An empty string disables the default for an optional slot.
 
 `size_multiple` is a positive integer from 1 to 4096 that declares the width and
 height increment used by the web UI. It defaults to `8` when omitted; the UI also
@@ -396,7 +372,7 @@ Supported defaults:
 
 Other generation parameters continue to use startup defaults unless explicitly
 supplied by the generation request. Built-in Wan recipes provide video defaults;
-use `/sdcpp/v1/vid_gen` after loading a video model.
+use `/sdcpp/v1/vid_gen` with a video model.
 LoRAs are merged from `loras/` and `Lora/` in every model root unless
 `--lora-model-dir` is supplied.
 
@@ -877,7 +853,6 @@ Top-level fields:
 | `schedulers` | `array<string>` | Available schedulers |
 | `loras` | `array<object>` | Available LoRA entries |
 | `upscalers` | `array<object>` | Available highres upscalers, built-in and model-backed |
-| `upscale` | `boolean` | Whether a compatible RGB ESRGAN model is available for `POST /sdcpp/v1/upscale` |
 | `preview_modes` | `array<string>` | Available preview modes, e.g. `["none", "proj", "tae", "vae"]` |
 | `limits` | `object` | Shared queue and size limits |
 
@@ -922,7 +897,6 @@ Shared nested fields:
 | --- | --- | --- |
 | `upscalers[].name` | `string` | Built-in name or model stem; use this value in `hires.upscaler` |
 | `upscalers[].model` | `boolean` | True for a model-backed upscaler, false for a built-in scaling filter |
-| `upscalers[].image_upscale` | `boolean` | Whether this model can be selected by `POST /sdcpp/v1/upscale`; false for latent upscalers and built-in filters |
 
 Built-in entries include `None`, `Lanczos`, `Nearest`, `Latent`, `Latent (nearest)`, `Latent (nearest-exact)`, `Latent (antialiased)`, `Latent (bicubic)`, and `Latent (bicubic antialiased)`. Model-backed entries are scanned from the top level of `--hires-upscalers-dir`; subdirectories are not scanned.
 
@@ -936,8 +910,6 @@ Built-in entries include `None`, `Lanczos`, `Nearest`, `Latent`, `Latent (neares
 | `limits.max_height` | `integer` |
 | `limits.max_batch_count` | `integer` |
 | `limits.max_queue_size` | `integer` |
-| `limits.max_upscale_width` | `integer` |
-| `limits.max_upscale_height` | `integer` |
 
 Shared default fields used by both `img_gen` and `vid_gen`:
 
@@ -1092,52 +1064,6 @@ Typical status codes:
 - `200 OK`
 - `404 Not Found`
 - `410 Gone`
-
-#### `POST /sdcpp/v1/upscale`
-
-Runs one RGB ESRGAN upscaler over an image, with no generation involved. Latent upscaler models remain available for hires generation but cannot be used here.
-
-This is the HTTP equivalent of `sd-cli -M upscale`: no diffusion model, text
-encoder or sampling is used, so it is fast enough to answer synchronously and
-does not create a job.
-
-Request fields:
-
-| Field | Type | Notes |
-| --- | --- | --- |
-| `image` | `string` | Required. Base64 or data URL image |
-| `upscaler` | `string` | A name from `upscalers` with `image_upscale: true`; the first compatible entry when omitted |
-| `repeats` | `integer` | Run the upscaler this many times, 1 to 4 (default `1`) |
-| `tile_size` | `integer` | Tile size, defaulting to the server's `--upscale-tile-size` |
-| `output_format` | `string` | `png`, `jpeg`, or `webp` when built with WebP support (default `png`); unsupported formats return 400 |
-| `output_compression` | `integer` | Range is clamped to `0..100` |
-
-Response fields:
-
-| Field | Type | Notes |
-| --- | --- | --- |
-| `images` | `array<object>` | One image |
-| `images[].index` | `integer` | |
-| `images[].b64_json` | `string` | Base64-encoded image bytes |
-| `upscaler` | `string` | The upscaler actually used |
-| `scale` | `integer` | The model's scale factor |
-| `repeats` | `integer` | How many times it was run |
-| `width` | `integer` | Result width |
-| `height` | `integer` | Result height |
-| `output_format` | `string` | Final encoded image format |
-
-Typical status codes:
-
-- `200 OK`
-- `400 Bad Request` (invalid request, unsupported output format, unreadable image, incompatible upscaler, or output dimensions exceeding the limit)
-- `500 Internal Server Error`
-
-Notes:
-
-- Final output dimensions, including all repeats, must not exceed 8192 pixels on either axis (`limits.max_upscale_width` and `limits.max_upscale_height`). Requests exceeding this bound are rejected before upscaling.
-- The upscaler models are three-channel; alpha is not preserved.
-- The request holds the generation context lock, so an upscale and a
-  generation never run on the device at the same time.
 
 #### `POST /sdcpp/v1/jobs/{id}/cancel`
 
@@ -1458,7 +1384,8 @@ Example cancelled job:
 `POST /sdcpp/v1/img_gen` may return:
 
 - `202 Accepted` when the job is created
-- `400 Bad Request` for an empty body, unsupported model mode, invalid JSON, or invalid generation parameters
+- `400 Bad Request` for an invalid model selection, an unsupported current model mode, or invalid request parameters
+- `503 Service Unavailable` when the request uses the current model and the server has none configured
 - `429 Too Many Requests` when the job queue is full
 - `500 Internal Server Error` for unexpected server exceptions during submission
 
@@ -1891,7 +1818,8 @@ Example cancelled job:
 `POST /sdcpp/v1/vid_gen` may return:
 
 - `202 Accepted` when the job is created
-- `400 Bad Request` for an empty body, unsupported model mode, invalid JSON, invalid generation parameters, or an unsupported output format
+- `400 Bad Request` for an invalid model selection, an unsupported current model mode, invalid request parameters, or an unsupported output format
+- `503 Service Unavailable` when the request uses the current model and the server has none configured
 - `429 Too Many Requests` when the job queue is full
 - `500 Internal Server Error` for unexpected server exceptions during submission
 
@@ -1909,6 +1837,7 @@ the working directory's ./dgl directory unless --dgl-dir is set.
 | GET /sdcpp/v1/dgl/jobs/{id} | Returns the job status, error or result with tensor descriptions and inline encoded media |
 | GET /sdcpp/v1/dgl/jobs/{id}/outputs/{index}?frame=0 | Returns a PNG of an image output or a video frame. Output and frame indexes start at zero. |
 
+Scripts share the component cache and execution settings used for generation.
 Model reads are restricted to the configured model directories. Script writes
 are restricted to output/ in the server's working directory.
 

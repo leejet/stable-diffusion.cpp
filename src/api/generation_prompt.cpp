@@ -12,7 +12,7 @@ namespace sd::api {
     }
 
     static void prepare_textual_inversion(GenerationTemplate& request) {
-        const auto& config = request.context.config.context;
+        const auto& config = request.context.model.config.context;
         if (!config.embedding_count)
             return;
         std::vector<std::pair<std::string, std::string>> embeddings;

@@ -12,7 +12,7 @@
 #include <vector>
 
 
-#include "runtime.h"
+#include "model_catalog.h"
 
 enum class AsyncJobKind {
     ImgGen,
@@ -50,6 +50,9 @@ struct AsyncGenerationJob {
     int64_t created_at   = unix_timestamp_now_ms();
     int64_t started_at   = 0;
     int64_t completed_at = 0;
+    std::unique_ptr<ServerModelSelection> model;
+    json request_body;
+    uint64_t model_revision = 0;
     ImgGenJobRequest img_gen;
     VidGenJobRequest vid_gen;
     std::string dgl_source;
@@ -91,6 +94,7 @@ std::string make_async_job_id(AsyncJobManager& manager);
 bool cancel_queued_job(AsyncJobManager& manager, AsyncGenerationJob& job);
 json make_async_job_json(const AsyncJobManager& manager, const AsyncGenerationJob& job);
 int64_t dgl_image_frame_count(const sd_tensor_t* tensor);
+bool parse_native_job_request(const json& body, ServerRuntime& runtime, AsyncGenerationJob& job, std::string& error_message);
 bool execute_img_gen_job(ServerRuntime& runtime,
                          AsyncGenerationJob& job,
                          std::vector<std::string>& output_images,

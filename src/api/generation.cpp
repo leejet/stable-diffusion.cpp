@@ -18,12 +18,16 @@
 #include "name_conversion.h"
 
 namespace sd::api {
-    GenerationContext::GenerationContext(const sd_opt_t* source, Operation purpose)
-        : options(copy_options(source)), execution(true) {
+    GenerationModel::GenerationModel(std::shared_ptr<sd_opt_t> source, Operation purpose)
+        : options(std::move(source)) {
         const auto status = resolve(options.get(), purpose, config);
         if (status != SD_STATUS_OK)
             throw dgl::Error(status, sd_get_last_error());
-        const auto& settings = config.context;
+    }
+
+    GenerationContext::GenerationContext(const sd_opt_t* source, Operation purpose)
+        : model(copy_options(source), purpose) {
+        const auto& settings = model.config.context;
         execution.set("n_threads", std::to_string(settings.n_threads));
         execution.set("conditioning_cache_size", std::to_string(settings.conditioning_cache_size));
         for (const auto& [key, enabled] : std::map<std::string, bool>{
@@ -46,9 +50,9 @@ namespace sd::api {
         return false;
     }
 
-    const ModelDefinition& GenerationContext::model_definition() {
-        std::lock_guard<std::recursive_mutex> lock(mutex);
-        check_cancelled();
+    const ModelDefinition& GenerationModel::definition(GenerationContext& context) {
+        std::lock_guard<std::recursive_mutex> lock(context.mutex);
+        context.check_cancelled();
         const auto& settings = config.context;
         const auto* path     = settings.diffusion_model_path && *settings.diffusion_model_path ? settings.diffusion_model_path : settings.model_path;
         if (!path || !*path)
@@ -107,7 +111,7 @@ namespace sd::api {
                             embedded_audio_vae = settings.vae_path;
                     }
                 }
-                check_cancelled();
+                context.check_cancelled();
                 family             = detected;
                 probe_dependencies = std::move(dependencies);
                 LOG_INFO("Detected model family: %s (%s)", sd_version_name(family), std::filesystem::u8path(path).filename().u8string().c_str());
@@ -135,13 +139,17 @@ namespace sd::api {
         std::unique_lock<std::recursive_mutex> lock(context_.mutex, std::try_to_lock);
         if (!lock.owns_lock() || context_.executing)
             throw dgl::Error(SD_STATUS_BUSY, "context is busy");
-        context_.executing = true;
+        std::unique_lock<std::mutex> execution_lock(context_.execution.mutex, std::try_to_lock);
+        if (!execution_lock.owns_lock() || context_.execution.active_run)
+            throw dgl::Error(SD_STATUS_BUSY, "DGL context is busy");
+        context_.execution.generating = true;
+        context_.executing            = true;
     }
 
     GenerationRun::~GenerationRun() {
         std::lock_guard<std::recursive_mutex> lock(context_.mutex);
-        context_.active_run           = nullptr;
-        context_.execution.active_run = nullptr;
+        std::lock_guard<std::mutex> execution_lock(context_.execution.mutex);
+        context_.execution.generating = false;
         context_.cancellation.store(SD_CANCEL_RESET);
         context_.executing = false;
     }
@@ -156,7 +164,7 @@ namespace sd::api {
 
     dgl::Value execute_program(GenerationContext& context, const GenerationProgram& program, const dgl::Graph* compiled) {
         context.check_cancelled();
-        FileAccessScope access(context.execution.file_access);
+        FileAccessScope access(context.file_access);
         dgl::Graph graph;
         if (!compiled) {
             graph    = dgl::compile(program.source, dgl::operations(), !program.inputs.empty());
@@ -172,6 +180,7 @@ namespace sd::api {
             dgl::RunEvents& events;
             ~ActiveRun() {
                 std::lock_guard<std::recursive_mutex> lock(context.mutex);
+                std::lock_guard<std::mutex> execution_lock(context.execution.mutex);
                 context.sample_pass += events.preview_info().sample_pass;
                 context.active_run           = nullptr;
                 context.execution.active_run = nullptr;
@@ -179,6 +188,7 @@ namespace sd::api {
         } active{context, events};
         {
             std::lock_guard<std::recursive_mutex> lock(context.mutex);
+            std::lock_guard<std::mutex> execution_lock(context.execution.mutex);
             context.active_run           = &events;
             context.execution.active_run = &events;
             if (context.cancellation.load() == SD_CANCEL_ALL)
@@ -199,7 +209,7 @@ namespace sd::api {
 
     sd_status_t generate_images(GenerationContext& context, const sd_img_gen_opt_t* options, sd_result_t** out) {
         GenerationRun request(context);
-        FileAccessScope access(context.execution.file_access);
+        FileAccessScope access(context.file_access);
         auto snapshot = copy_options(options);
         OptConfig config;
         const auto status = resolve(snapshot.get(), Image, config);
@@ -223,7 +233,7 @@ namespace sd::api {
     }
     sd_status_t generate_video(GenerationContext& context, const sd_vid_gen_opt_t* options, sd_result_t** out) {
         GenerationRun request(context);
-        FileAccessScope access(context.execution.file_access);
+        FileAccessScope access(context.file_access);
         auto snapshot = copy_options(options);
         OptConfig config;
         const auto status = resolve(snapshot.get(), Video, config);

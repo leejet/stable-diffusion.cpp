@@ -210,11 +210,15 @@ SD_API sd_status_t sd_opt_unset(sd_opt_t* params, const char* key);
 // its own configuration; params may be freed immediately after the call returns.
 SD_API sd_status_t sd_ctx_create(const sd_ctx_opt_t* params, sd_ctx_t** ctx_out);
 SD_API void sd_ctx_free(sd_ctx_t* ctx);
+// Borrows the context used for generation, or returns NULL if ctx is NULL.
+// It shares component caches and can run scripts between generation calls.
+// Its lifetime is tied to ctx. Do not pass it to sd_dgl_ctx_free().
+SD_API sd_dgl_ctx_t* sd_ctx_get_dgl_ctx(sd_ctx_t* ctx);
+// Copies the new model configuration into an idle context. The execution
+// settings, callbacks, and DGL component cache belong to the existing context.
+SD_API sd_status_t sd_ctx_set_model_options(sd_ctx_t* ctx, const sd_ctx_opt_t* params);
 // Applies to generated programs and model probing. Register or clear while idle.
 SD_API sd_status_t sd_ctx_set_file_access_callback(sd_ctx_t* ctx, sd_dgl_file_access_cb_t callback, void* userdata);
-// Probe the model and prepare its configured components without generating.
-// Optional for lazy C API use; call after setting file permissions to validate loading.
-SD_API sd_status_t sd_ctx_prepare(sd_ctx_t* ctx);
 
 SD_API sd_status_t sd_generate_image(sd_ctx_t* ctx, const sd_img_gen_opt_t* params, sd_result_t** result_out);
 SD_API sd_status_t sd_generate_video(sd_ctx_t* ctx, const sd_vid_gen_opt_t* params, sd_result_t** result_out);

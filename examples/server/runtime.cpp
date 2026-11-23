@@ -233,6 +233,9 @@ std::string video_mime_type(const std::string& output_format) {
 }
 
 bool runtime_supports_generation_mode(const ServerRuntime& runtime, SDMode mode) {
+    if (!has_current_model(runtime)) {
+        return false;
+    }
     if (mode == VID_GEN) {
         return sd_ctx_supports_video_generation(runtime.sd_ctx);
     }
@@ -242,14 +245,39 @@ bool runtime_supports_generation_mode(const ServerRuntime& runtime, SDMode mode)
     return true;
 }
 
+bool has_current_model(const ServerRuntime& runtime) {
+    return !runtime.ctx_params->model_path.empty() || !runtime.ctx_params->diffusion_model_path.empty();
+}
+
+bool generate_server_images(sd_ctx_t* ctx, ImgGenJobRequest& request, SDImageVec& results, std::string& error_message) {
+    auto params = request.to_image_opt();
+    PromptImageCallbackGuard prompt_images(ctx, request.gen_params);
+    sd_result_t* generated = nullptr;
+    if (!generate_sd_image(ctx, params, &generated)) {
+        error_message = sd_get_last_error();
+        if (error_message.empty())
+            error_message = "generate_image returned no results";
+        return false;
+    }
+    results.adopt(generated);
+    if (results.empty()) {
+        error_message = "generate_image returned no results";
+        return false;
+    }
+    return true;
+}
+
 std::string unsupported_generation_mode_error(SDMode mode) {
+    if (const auto* error = sd_get_last_error(); *error) {
+        return error;
+    }
     if (mode == VID_GEN) {
-        return "loaded model does not support vid_gen";
+        return "current model does not support vid_gen";
     }
     if (mode == IMG_GEN) {
-        return "loaded model does not support img_gen";
+        return "current model does not support img_gen";
     }
-    return "loaded model does not support requested mode";
+    return "current model does not support requested mode";
 }
 
 ArgOptions SDSvrParams::get_options() {
@@ -458,10 +486,9 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
                 UpscalerEntry upscaler_entry;
                 upscaler_entry.name = p.stem().u8string();
                 std::error_code abs_ec;
-                fs::path abs_path         = fs::absolute(p, abs_ec);
-                upscaler_entry.fullpath   = (abs_ec ? p : abs_path.lexically_normal()).u8string();
-                upscaler_entry.model_name = "ESRGAN_4x";
-                upscaler_entry.path       = p.filename().u8string();
+                fs::path abs_path       = fs::absolute(p, abs_ec);
+                upscaler_entry.fullpath = (abs_ec ? p : abs_path.lexically_normal()).u8string();
+                upscaler_entry.path     = p.filename().u8string();
 
                 std::error_code size_ec;
                 upscaler_entry.file_size = it->file_size(size_ec);
@@ -471,19 +498,15 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
                 }
 
                 std::error_code time_ec;
-                upscaler_entry.last_modified        = it->last_write_time(time_ec);
-                auto previous                       = std::find_if(previous_cache.begin(), previous_cache.end(), [&](const UpscalerEntry& cached) {
+                upscaler_entry.last_modified = it->last_write_time(time_ec);
+                auto previous                = std::find_if(previous_cache.begin(), previous_cache.end(), [&](const UpscalerEntry& cached) {
                     return cached.fullpath == upscaler_entry.fullpath &&
                            cached.file_size == upscaler_entry.file_size &&
                            (!time_ec && cached.last_modified == upscaler_entry.last_modified);
                 });
-                upscaler_entry.image_upscale_factor = previous != previous_cache.end()
-                                                          ? previous->image_upscale_factor
-                                                          : sd_upscaler_probe_scale(upscaler_entry.fullpath.c_str());
-                if (upscaler_entry.image_upscale_factor > 0) {
-                    upscaler_entry.scale      = upscaler_entry.image_upscale_factor;
-                    upscaler_entry.model_name = "ESRGAN_" + std::to_string(upscaler_entry.scale) + "x";
-                }
+                const int scale              = previous != previous_cache.end() ? previous->scale : sd_upscaler_probe_scale(upscaler_entry.fullpath.c_str());
+                upscaler_entry.scale         = scale > 0 ? scale : 4;
+                upscaler_entry.model_name    = "ESRGAN_" + std::to_string(upscaler_entry.scale) + "x";
 
                 new_cache.push_back(std::move(upscaler_entry));
                 it.increment(ec);

@@ -10,10 +10,6 @@
 #include "graph.h"
 #include "result.h"
 
-struct sd_dgl_ctx_t : sd::dgl::Context {
-    using Context::Context;
-};
-
 namespace {
     using namespace sd::dgl;
 
@@ -35,7 +31,7 @@ namespace {
         if (!ctx)
             throw Error(SD_STATUS_INVALID_ARGUMENT, "context is required");
         std::unique_lock<std::mutex> lock(ctx->mutex, std::try_to_lock);
-        if (!lock.owns_lock() || ctx->active_run)
+        if (!lock.owns_lock() || ctx->active_run || ctx->generating)
             throw Error(SD_STATUS_BUSY, "DGL context is busy");
         return lock;
     }
