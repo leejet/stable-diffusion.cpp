@@ -36,7 +36,7 @@ namespace sd::api {
         sd_dgl_ctx_t execution;
         FileAccessPolicy file_access;
         std::recursive_mutex mutex;
-        bool executing = false;
+        bool executing     = false;
         bool probing_model = false;
         std::atomic<sd_cancel_mode_t> cancellation{SD_CANCEL_RESET};
         dgl::RunEvents* active_run           = nullptr;

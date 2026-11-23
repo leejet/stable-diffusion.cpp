@@ -81,6 +81,11 @@ file-access callbacks for generated programs and scripts through
 `sd_ctx_set_file_access_callback()` and `sd_dgl_ctx_set_file_access_callback()`
 respectively.
 
+Use `sd_dgl_ctx_release_staging()` to release idle GPU staging copies backed by
+RAM weights. Use `sd_dgl_ctx_unload_models()` to release cached model components
+and reload them on demand. Both return `SD_STATUS_BUSY` while the context is
+running a script or generation.
+
 Use `sd_generate_video()` with options from `sd_vid_gen_opt_create()` to generate video. Its result
 exposes frames through the same image accessors, optional audio through
 `sd_result_get_audio()`, and effective frame rate through `sd_result_get_fps()`.

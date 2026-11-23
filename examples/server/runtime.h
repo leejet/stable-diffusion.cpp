@@ -24,6 +24,8 @@ struct SDSvrParams {
     int listen_port           = 1234;
     int max_pending_jobs      = 64;
     int completed_ttl_seconds = 600;
+    int weight_staging_ttl    = -1;
+    int weight_residency_ttl  = -1;
     std::string serve_html_path;
     std::string dgl_dir = "dgl";
     std::vector<std::string> model_dirs;

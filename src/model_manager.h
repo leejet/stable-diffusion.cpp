@@ -169,6 +169,7 @@ private:
     bool populate_prefetch_block(PrefetchBlock& block);
     void synchronize_prefetch_block(PrefetchBlock& block);
     void free_prefetch_block(PrefetchBlock& block);
+    void protect_prefetched_states(std::unordered_set<TensorState*>& states) const;
     void clear_all_prefetched_params();
     void release_prefetch();
 
@@ -253,6 +254,7 @@ public:
     bool remove_resource(ResourceId id);
     void set_retain_weights(bool retain) { retain_weights_ = retain; }
     bool retains_idle_weights() const override { return retain_weights_; }
+    void release_idle_gpu_staging();
     void set_max_vram(sd::ggml_graph_cut::MaxVramAssignment limit) { max_vram_ = std::move(limit); }
     bool set_max_ram(size_t bytes);
     const sd::ggml_graph_cut::MaxVramAssignment& max_vram() const { return max_vram_; }

@@ -1342,8 +1342,7 @@ bool ModelManager::ensure_host_capacity(size_t pending, const std::vector<Tensor
 
     if (!weight_allocation || !max_ram_bytes_ || pending <= max_ram_bytes_) {
         std::unordered_set<TensorState*> protected_states(required_states.begin(), required_states.end());
-        for (const auto& entry : prefetch_blocks_)
-            protected_states.insert(entry.second->states.begin(), entry.second->states.end());
+        protect_prefetched_states(protected_states);
         while (evict_host_weight_block(protected_states) || (evict_idle_resource_ && evict_idle_resource_())) {
             if (fits())
                 return true;
@@ -1727,6 +1726,29 @@ void ModelManager::free_compute_staging_block(ComputeStagingBlock& block) {
         block.staging_ctx = nullptr;
     }
     block.staged_tensors.clear();
+}
+
+void ModelManager::protect_prefetched_states(std::unordered_set<TensorState*>& states) const {
+    for (const auto& entry : prefetch_blocks_)
+        states.insert(entry.second->states.begin(), entry.second->states.end());
+}
+
+void ModelManager::release_idle_gpu_staging() {
+    std::unordered_set<TensorState*> protected_states;
+    protect_prefetched_states(protected_states);
+    std::unordered_set<TensorState*> target_states;
+    for (const auto& block : compute_staging_blocks_) {
+        if (!block->buffer || ggml_backend_buffer_is_host(block->buffer))
+            continue;
+        // Staging swaps the original storage into the block's tensor metadata.
+        for (const auto& [state, original] : block->staged_tensors) {
+            if (state && state->loaded_to_params_backend && original && original->data && original->buffer &&
+                ggml_backend_buffer_is_host(original->buffer) && !protected_states.count(state))
+                target_states.insert(state);
+        }
+    }
+    if (!target_states.empty())
+        release_compute_staging_blocks(false, &target_states);
 }
 
 void ModelManager::release_compute_staging_blocks(bool force,
@@ -2501,9 +2523,7 @@ std::vector<WeightResidencyBlock> ModelManager::evictable_compute_backend_blocks
         return result;
     }
     std::unordered_set<TensorState*> protected_states(protected_list.begin(), protected_list.end());
-    for (const auto& entry : prefetch_blocks_) {
-        protected_states.insert(entry.second->states.begin(), entry.second->states.end());
-    }
+    protect_prefetched_states(protected_states);
     const auto device = ggml_backend_get_device(backend);
     const bool cpu    = sd_backend_is_cpu(backend);
     auto on_device    = [&](ggml_backend_buffer_t buffer) {
