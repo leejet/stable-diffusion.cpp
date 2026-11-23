@@ -375,7 +375,7 @@ namespace sd::dgl::models {
         } else if (version() == VERSION_FLUX3) {
             params.extra = Flux3DiffusionExtra{present(target_time)};
         } else if (version() == VERSION_QWEN_IMAGE_2_1) {
-            params.extra = QwenImage21DiffusionExtra{&condition.c_token_types};
+            params.extra = QwenImage21DiffusionExtra{&condition.c_token_types, step.qwen_prefix_id};
         } else if (sd_version_is_anima(version())) {
             params.extra = AnimaDiffusionExtra{present(condition.c_t5_ids), present(condition.c_t5_weights)};
         } else if (sd_version_is_wan(version())) {

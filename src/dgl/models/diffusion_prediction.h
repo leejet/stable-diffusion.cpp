@@ -1,6 +1,7 @@
 #ifndef __SD_DGL_MODELS_DIFFUSION_PREDICTION_H__
 #define __SD_DGL_MODELS_DIFFUSION_PREDICTION_H__
 
+#include <cstdint>
 #include <functional>
 #include <limits>
 
@@ -64,6 +65,7 @@ namespace sd::dgl::models {
         const AttentionProcessor* attn2_processor           = nullptr;
         const FluxImageBlockProcessor* flux_image_processor = nullptr;
         const UNetBlockProcessor* unet_block_processor      = nullptr;
+        uint64_t qwen_prefix_id                             = 0;
 
         void blend_mask(Tensor<float>& latent) const {
             if (!mask.empty())

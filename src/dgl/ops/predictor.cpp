@@ -167,6 +167,7 @@ namespace sd::dgl::ops {
         const PredictionExecutionOptions options;
         std::map<models::Model*, PreparedModel> prepared;
         std::map<const ModelPredictor*, ConditioningWindows> windows;
+        std::map<const ModelPredictor*, uint64_t> qwen_prefix_ids;
         std::map<const models::DenoisingParameterization*, sd_sample::ConditionCacheRuntime> caches;
         std::map<const ModelPredictor*, ActiveConditioning> previous_conditioning;
         IPAdapterCache ip_adapter_cache;
@@ -227,6 +228,9 @@ namespace sd::dgl::ops {
                     resources.add_windows(model->controls, windows.controls);
                     resources.add_windows(model->ip_adapters, windows.ip_adapters);
                     resources.add_windows(model->pulid, windows.pulid);
+                } else if (model->dit().version() == VERSION_QWEN_IMAGE_2_1) {
+                    // This leaf's text, image slots and references are fixed for the sample.
+                    resources.qwen_prefix_ids.emplace(model, resources.qwen_prefix_ids.size() + 1);
                 }
             } else if (const auto* branches = guidance_branches(predictor)) {
                 self(self, *branches->positive);
@@ -449,6 +453,8 @@ namespace sd::dgl::ops {
         PuLIDAttention pulid(active_pulid, pulid_cache);
         if (!active_pulid.empty())
             step.flux_image_processor = &pulid;
+        const auto prefix   = qwen_prefix_ids.find(&leaf);
+        step.qwen_prefix_id = prefix == qwen_prefix_ids.end() ? 0 : prefix->second;
         sd::ParallelScope tensor_scope(engine.tensor_executor.get());
         auto prediction = engine.predict_diffusion(x, leaf.resolved_parameterization(), sigma, leaf.condition, leaf.references,
                                                    leaf.options, step);
