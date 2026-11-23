@@ -279,7 +279,7 @@ namespace MOSSImage {
                         tokens += ref.shape()[1] * ref.shape()[0];
                     }
                 }
-                auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe              = make_input(pe_cache_.get_or_create(pe_key, [&]() {
                     Rope::Embedding embedding;
                     embedding.ids.reserve(tokens);
                     auto append_image = [&](int64_t height, int64_t width, float ref_index, float text_position) {

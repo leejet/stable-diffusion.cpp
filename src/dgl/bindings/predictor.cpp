@@ -139,10 +139,10 @@ namespace sd::dgl {
         const auto ref_rope_anchor             = get_string(args, "ref_rope_anchor");
         if (ref_rope_anchor != "default" && engine.version() != VERSION_MOSS_IMAGE)
             throw std::runtime_error("reference RoPE anchoring is not configurable for this model");
-        output.options.ref_rope_anchor         = ref_rope_anchor == "image_start"  ? Rope::RefRoPEAnchor::IMAGE_START
-                                                 : ref_rope_anchor == "text_start" ? Rope::RefRoPEAnchor::TEXT_START
-                                                                                   : Rope::RefRoPEAnchor::MODEL_DEFAULT;
-        output.options.guidance                = float(get_number(args, "guidance"));
+        output.options.ref_rope_anchor = ref_rope_anchor == "image_start"  ? Rope::RefRoPEAnchor::IMAGE_START
+                                         : ref_rope_anchor == "text_start" ? Rope::RefRoPEAnchor::TEXT_START
+                                                                           : Rope::RefRoPEAnchor::MODEL_DEFAULT;
+        output.options.guidance        = float(get_number(args, "guidance"));
         bind_predictor_options(output, args);
         const auto& condition = args.at("condition").fields;
         if (const auto controls = condition.find("controls"); controls != condition.end()) {

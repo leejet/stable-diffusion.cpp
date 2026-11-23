@@ -3,6 +3,16 @@
 
 #include "core/ggml_runner.h"
 
+struct LoraInt8Weight {
+    ggml_tensor* scale;
+    int convrot_group;
+};
+
+ggml_tensor* build_lora_int8_merge(ggml_context* ctx, ggml_tensor* weight, const LoraInt8Weight& layout, ggml_tensor* diff);
+ggml_tensor* append_lora_int8_writeback(ggml_context* ctx, ggml_cgraph* graph, ggml_backend_t backend, ggml_tensor* weight, const LoraInt8Weight& layout, ggml_tensor* packed);
+bool check_lora_int8_merge(const ggml_tensor* weight, const ggml_tensor* status);
+bool commit_lora_int8_merge(ggml_tensor* weight, const LoraInt8Weight& layout, ggml_tensor* packed);
+
 // n-mode tensor-matrix product
 // example: 2-mode product
 // A: [ne03, k, ne01, ne00]

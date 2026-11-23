@@ -23,6 +23,8 @@ struct LoraModel : public GGMLRunner {
     float metadata_alpha = -1.f;
     std::unordered_map<std::string, ggml_tensor*> lora_tensors;
     std::map<ggml_tensor*, ggml_tensor*> original_tensor_to_final_tensor;
+    std::map<ggml_tensor*, ggml_tensor*> int8_merged_weights;
+    std::map<ggml_tensor*, ggml_tensor*> int8_merge_status;
     std::set<std::string> applied_lora_tensors;
     std::set<std::string> swapped_lora_up_tensors;
     std::set<std::string> skipped_incompatible_lora_tensors;
@@ -998,15 +1000,16 @@ struct LoraModel : public GGMLRunner {
 
     ggml_cgraph* build_lora_graph(const std::map<std::string, ggml_tensor*>& model_tensors,
                                   const std::set<std::string>& model_tensor_names,
-                                  SDVersion version) {
-        size_t lora_graph_size = LORA_GRAPH_BASE_SIZE + lora_tensors.size() * 10;
-        ggml_cgraph* gf        = ggml_new_graph_custom(compute_ctx, lora_graph_size, false);
+                                  const std::map<ggml_tensor*, LoraInt8Weight>& int8_weights) {
+        const size_t lora_graph_size = LORA_GRAPH_BASE_SIZE + lora_tensors.size() * 10 + int8_weights.size() * 12;
+        ggml_cgraph* gf              = ggml_new_graph_custom(compute_ctx, lora_graph_size, false);
 
         auto runner_ctx = get_context();
         preprocess_lora_tensors(model_tensor_names);
 
         original_tensor_to_final_tensor.clear();
-        applied_lora_tensors.clear();
+        int8_merged_weights.clear();
+        int8_merge_status.clear();
 
         for (auto it : model_tensors) {
             std::string model_tensor_name = it.first;
@@ -1015,6 +1018,25 @@ struct LoraModel : public GGMLRunner {
             // lora
             ggml_tensor* diff = get_weight_diff(model_tensor_name, &runner_ctx, model_tensor);
             if (diff == nullptr) {
+                continue;
+            }
+            auto int8 = int8_weights.find(model_tensor);
+            if (int8 != int8_weights.end()) {
+                if (diff->type != GGML_TYPE_F32)
+                    diff = ggml_ext_cast_f32(&runner_ctx, diff);
+                auto* merged = build_lora_int8_merge(compute_ctx, model_tensor, int8->second, diff);
+                if (!merged) {
+                    LOG_ERROR("invalid INT8 LoRA merge layout for '%s'", model_tensor_name.c_str());
+                    return nullptr;
+                }
+                auto* status = append_lora_int8_writeback(compute_ctx, gf, runtime_backend, model_tensor, int8->second, merged);
+                if (status) {
+                    int8_merge_status[model_tensor] = status;
+                } else {
+                    ggml_set_output(merged);
+                    ggml_build_forward_expand(gf, merged);
+                    int8_merged_weights[model_tensor] = merged;
+                }
                 continue;
             }
 
@@ -1040,31 +1062,43 @@ struct LoraModel : public GGMLRunner {
         return gf;
     }
 
-    bool apply(std::map<std::string, ggml_tensor*> model_tensors,
+    bool apply(const std::map<std::string, ggml_tensor*>& model_tensors,
                const std::set<std::string>& model_tensor_names,
                SDVersion version,
                int n_threads,
-               bool warn_unused = true) {
-        auto get_graph = [&]() -> ggml_cgraph* {
-            return build_lora_graph(model_tensors, model_tensor_names, version);
+               bool warn_unused                                           = true,
+               const std::map<ggml_tensor*, LoraInt8Weight>& int8_weights = {}) {
+        applied_lora_tensors.clear();
+        auto get_graph = [&]() {
+            return build_lora_graph(model_tensors, model_tensor_names, int8_weights);
         };
         auto read_outputs = [&]() {
+            for (const auto& [weight, status] : int8_merge_status) {
+                if (!check_lora_int8_merge(weight, status))
+                    return false;
+            }
+            for (const auto& [weight, merged] : int8_merged_weights) {
+                if (!commit_lora_int8_merge(weight, int8_weights.at(weight), merged))
+                    return false;
+            }
             for (const auto& item : original_tensor_to_final_tensor) {
                 ggml_backend_tensor_copy(item.second, item.first);
             }
             return true;
         };
-        auto result = GGMLRunner::compute(get_graph, n_threads, false, true, read_outputs);
-        if (!result.has_value()) {
+        const bool success = GGMLRunner::compute(get_graph, n_threads, false, true, read_outputs).has_value();
+        if (!success) {
             LOG_ERROR("LoRA graph execution failed");
         }
         stat(!warn_unused);
+        int8_merged_weights.clear();
+        int8_merge_status.clear();
         original_tensor_to_final_tensor.clear();
         runner_end();
-        return result.has_value();
+        return success;
     }
 
-    bool apply(std::map<std::string, ggml_tensor*> model_tensors, SDVersion version, int n_threads, bool warn_unused = true) {
+    bool apply(const std::map<std::string, ggml_tensor*>& model_tensors, SDVersion version, int n_threads, bool warn_unused = true) {
         return apply(model_tensors, tensor_names(model_tensors), version, n_threads, warn_unused);
     }
 

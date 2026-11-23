@@ -245,6 +245,11 @@ WeightPrefetchResult ModelManager::prepare_prefetch_params(
             is_optional_missing_tensor(state->name)) {
             continue;
         }
+        if (has_lora_int8_pair(*state)) {
+            // Synchronous staging keeps the merged weight and scale in the same block.
+            needs_synchronous_load = needs_synchronous_load || !state->staged_to_compute_backend;
+            continue;
+        }
         if (state->usage_op == GGML_OP_CUSTOM || state->compute_backend == state->params_backend) {
             needs_synchronous_load = needs_synchronous_load ||
                                      !state->loaded_to_params_backend;
@@ -310,6 +315,7 @@ bool ModelManager::activate_prefetched_params(
         [&](TensorState* state) {
             return state == nullptr || should_ignore(*state) ||
                    is_optional_missing_tensor(state->name) ||
+                   has_lora_int8_pair(*state) ||
                    state->usage_op == GGML_OP_CUSTOM ||
                    state->compute_backend == state->params_backend ||
                    state->staged_to_compute_backend;

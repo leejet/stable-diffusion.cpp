@@ -217,6 +217,7 @@ bool ModelManager::set_loras(Resource& resource, std::vector<LoraSpec> loras, SD
     resource.lora_targets_ = std::move(targets);
     resource.lora_version_ = version;
     resource.current_lora_epoch_++;
+    resolved_tensor_states_.clear();
     reset_lora_applied_params(resource);
     return true;
 }
@@ -310,6 +311,7 @@ bool ModelManager::register_param_tensors(Resource& resource, ModelComponent com
         state->source_file     = source_file;
         state->source_version  = source_version;
         state->sources         = find_tensor_sources(*state, sources);
+        state->is_int8_weight  = !state->sources.empty() && state->sources.front().is_int8_tensorwise;
         state->residency_mode  = residency_mode;
         state->compute_backend = compute_backend;
         state->params_backend  = params_backend;
@@ -325,6 +327,21 @@ bool ModelManager::register_param_tensors(Resource& resource, ModelComponent com
             }
         }
         new_states.push_back(std::move(state));
+    }
+
+    std::map<std::string_view, TensorState*> weight_scales;
+    for (const auto& state : new_states) {
+        if (ends_with(state->name, ".weight_scale"))
+            weight_scales.emplace(state->name, state.get());
+    }
+    for (const auto& state : new_states) {
+        if (!state->is_int8_weight)
+            continue;
+        const auto scale = weight_scales.find(state->name + "_scale");
+        if (scale != weight_scales.end()) {
+            state->lora_int8_partner         = scale->second;
+            scale->second->lora_int8_partner = state.get();
+        }
     }
 
     resolved_tensor_states_.clear();
@@ -477,6 +494,12 @@ bool ModelManager::unregister_tensor_states(const std::unordered_set<TensorState
             state->applied_lora_epoch       = UINT64_MAX;
         }
         return true;
+    }
+    for (auto* state : target_states) {
+        if (state->lora_int8_partner) {
+            state->lora_int8_partner->lora_int8_partner = nullptr;
+            state->lora_int8_partner                    = nullptr;
+        }
     }
     for (auto it = tensor_states_by_tensor_.begin(); it != tensor_states_by_tensor_.end();) {
         if (target_states.count(it->second) > 0) {
@@ -695,9 +718,15 @@ bool ModelManager::load_tensors_to_params_backend(const std::vector<TensorState*
     return true;
 }
 
+bool ModelManager::has_lora_int8_pair(const TensorState& state) {
+    return state.lora_int8_partner &&
+           state.resource->lora_targets_.count(state.is_int8_weight ? state.name : state.lora_int8_partner->name) != 0;
+}
+
 bool ModelManager::needs_lora_staging(const TensorState& state) {
-    return !state.resource->shared_weights_key_.empty() && state.component != ModelComponent::LoRA &&
-           state.resource->lora_targets_.count(state.name) != 0;
+    return state.component != ModelComponent::LoRA &&
+           (has_lora_int8_pair(state) || (!state.resource->shared_weights_key_.empty() &&
+                                          state.resource->lora_targets_.count(state.name) != 0));
 }
 
 bool ModelManager::stage_tensors_to_compute_backend(const std::vector<TensorState*>& states) {
@@ -823,8 +852,16 @@ bool ModelManager::stage_tensors_to_compute_backend(const std::vector<TensorStat
         std::vector<TensorState*> chunk;
         size_t chunk_size = 0;
         for (TensorState* state : target_states) {
-            const size_t tensor_size = GGML_PAD(
+            auto* partner = has_lora_int8_pair(*state) ? state->lora_int8_partner : nullptr;
+            if (partner && !state->is_int8_weight)
+                continue;
+            size_t tensor_size = GGML_PAD(
                 ggml_backend_buft_get_alloc_size(staging_buft, state->tensor), alignment);
+            if (partner) {
+                // Evict and reload the merged weight and its scale together.
+                const size_t scale_size = GGML_PAD(ggml_backend_buft_get_alloc_size(staging_buft, partner->tensor), alignment);
+                tensor_size += std::min(scale_size, SIZE_MAX - tensor_size);
+            }
             if (!chunk.empty() && backend_limit > 0 &&
                 tensor_size > backend_limit - std::min(chunk_size, backend_limit)) {
                 if (!stage_chunk(chunk, chunk_size)) {
@@ -834,6 +871,8 @@ bool ModelManager::stage_tensors_to_compute_backend(const std::vector<TensorStat
                 chunk_size = 0;
             }
             chunk.push_back(state);
+            if (partner)
+                chunk.push_back(partner);
             chunk_size = tensor_size > SIZE_MAX - chunk_size ? SIZE_MAX : chunk_size + tensor_size;
         }
         if (!stage_chunk(chunk, chunk_size)) {
@@ -872,6 +911,7 @@ bool ModelManager::apply_resource_loras(Resource& resource, const std::vector<Te
 
     struct LoraApplyGroup {
         std::map<std::string, ggml_tensor*> model_tensors;
+        std::map<ggml_tensor*, LoraInt8Weight> int8_weights;
         std::vector<TensorState*> states;
     };
 
@@ -882,11 +922,11 @@ bool ModelManager::apply_resource_loras(Resource& resource, const std::vector<Te
             should_ignore(*state) || (state->sources.empty() && is_optional_missing_tensor(state->name))) {
             continue;
         }
-        if (!resource.shared_weights_key_.empty()) {
-            if (!needs_lora_staging(*state))
-                continue;
+        if (needs_lora_staging(*state)) {
             if (!state->staged_to_compute_backend)
                 return false;
+        } else if (!resource.shared_weights_key_.empty()) {
+            continue;
         } else if (state->component == ModelComponent::LatentUpsampler || resource.model_sources_.count(state->source_file) != 0) {
             continue;
         }
@@ -912,7 +952,20 @@ bool ModelManager::apply_resource_loras(Resource& resource, const std::vector<Te
             LOG_ERROR("model manager lora target tensor '%s' is not prepared", state->name.c_str());
             return false;
         }
-        LoraApplyGroup& group            = groups[{state->compute_backend, state->params_backend, state->residency_mode}];
+        LoraApplyGroup& group = groups[{state->compute_backend, state->params_backend, state->residency_mode}];
+        if (state->is_int8_weight) {
+            if (resource.lora_targets_.count(state->name) == 0)
+                continue;
+            if (!state->lora_int8_partner || !state->lora_int8_partner->staged_to_compute_backend) {
+                LOG_ERROR("model manager INT8 LoRA target '%s' has no staged weight scale", state->name.c_str());
+                return false;
+            }
+            const auto& storage               = state->sources.front();
+            group.int8_weights[state->tensor] = {state->lora_int8_partner->tensor, storage.int8_convrot ? storage.int8_convrot_group_size : 0};
+        } else if (has_lora_int8_pair(*state)) {
+            group.states.push_back(state);
+            continue;
+        }
         group.model_tensors[state->name] = state->tensor;
         group.states.push_back(state);
     }
@@ -966,7 +1019,7 @@ bool ModelManager::apply_resource_loras(Resource& resource, const std::vector<Te
                 continue;
             }
             lora->multiplier = lora_spec.multiplier;
-            if (!lora->apply(group.model_tensors, all_tensor_names, resource.lora_version_, resource.n_threads_, false))
+            if (!lora->apply(group.model_tensors, all_tensor_names, resource.lora_version_, resource.n_threads_, false, group.int8_weights))
                 return false;
             if (temporary)
                 lora->release_loaded_tensors();
@@ -1854,6 +1907,9 @@ bool ModelManager::resolve_required_tensor_states(const std::vector<ggml_tensor*
         if (seen.insert(state).second) {
             states.push_back(state);
         }
+        if (has_lora_int8_pair(*state) && seen.insert(state->lora_int8_partner).second) {
+            states.push_back(state->lora_int8_partner);
+        }
     }
     append_states(states);
     if (cacheable && !tensors.empty()) {
@@ -1936,7 +1992,7 @@ size_t ModelManager::compute_backend_alloc_size(const std::vector<TensorState*>&
         if (state == nullptr || state->tensor == nullptr) {
             continue;
         }
-        if (state->usage_op == GGML_OP_CUSTOM && !sd_backend_is_cpu(state->compute_backend)) {
+        if (state->usage_op == GGML_OP_CUSTOM && !sd_backend_is_cpu(state->compute_backend) && !needs_lora_staging(*state)) {
             continue;
         }
         const bool compute_resident =

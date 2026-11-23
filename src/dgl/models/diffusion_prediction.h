@@ -34,15 +34,15 @@ namespace sd::dgl::models {
     struct DiffusionPredictionOptions {
         sd::Tensor<float> vace_context, audio_embedding, video_positions;
         std::vector<int> skip_layers;
-        float guidance                    = 3.5f;
-        float vace_strength               = 1.f;
-        float fps                         = 24.f;
-        float video_sigma_shift           = 12.f;
-        float audio_sigma_shift           = 3.f;
-        int audio_length                  = 0;
-        Rope::RefIndexMode ref_index_mode = Rope::RefIndexMode::FIXED;
+        float guidance                      = 3.5f;
+        float vace_strength                 = 1.f;
+        float fps                           = 24.f;
+        float video_sigma_shift             = 12.f;
+        float audio_sigma_shift             = 3.f;
+        int audio_length                    = 0;
+        Rope::RefIndexMode ref_index_mode   = Rope::RefIndexMode::FIXED;
         Rope::RefRoPEAnchor ref_rope_anchor = Rope::RefRoPEAnchor::MODEL_DEFAULT;
-        bool force_ref_timestep_zero      = false;
+        bool force_ref_timestep_zero        = false;
         std::function<PredictionParameters(PredictionParameters)> transform;
     };
 
