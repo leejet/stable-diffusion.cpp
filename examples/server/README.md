@@ -437,6 +437,20 @@ configured defaults.
 | `--max-pending-jobs <count>` | `64` | Maximum async jobs queued or generating |
 | `--completed-ttl-seconds <seconds>` | `600` | Retention time for completed async jobs |
 
+### Idle weight release
+
+| Option | Default | Memory released when idle |
+| --- | --- | --- |
+| `--weight-staging-ttl <seconds>` | `-1` | GPU staging copies of weights backed by RAM, including components placed on CPU by `--params-backend cpu` or auto-fit. The next request uploads the needed weights from RAM. |
+| `--weight-residency-ttl <seconds>` | `-1` | Cached model components, including RAM weights, GPU weights, staging copies, and component caches. The next request loads the needed components from their files. |
+
+For either option, `-1` disables release, `0` releases as soon as the shared
+context is idle, and a positive integer sets the idle time in seconds. The
+timer starts when the last job finishes. Running and queued generation or DGL
+jobs defer release. Status and progress requests do not reset the timer. If
+both deadlines are due, the server unloads the model components in one step.
+The configured model and the model catalog remain available after unloading.
+
 ### Logging
 
 Logging defaults to `info`. Use `--log-level <level>` to select `debug`, `verbose`,

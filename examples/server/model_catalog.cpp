@@ -733,12 +733,12 @@ ServerModelSelection resolve_model_selection(ServerRuntime& runtime, const json&
     const auto found = models.recipes.find(recipe_id);
     if (found == models.recipes.end())
         throw std::runtime_error("unknown recipe");
-    const auto& recipe = found->second;
+    const auto& recipe         = found->second;
     const auto recipe_defaults = recipe.value("defaults", json::object());
     if (mode == VID_GEN && !recipe_defaults.contains("video_frames"))
         throw std::runtime_error("selected recipe does not support vid_gen: " + recipe_id);
-    auto context       = models.base_context;
-    auto defaults      = models.base_defaults;
+    auto context  = models.base_context;
+    auto defaults = models.base_defaults;
     apply_recipe_context(recipe.value("context", json::object()), context);
     apply_recipe_defaults(recipe_defaults, defaults);
     // Recipe-provided default models fill any slot the request did not select.

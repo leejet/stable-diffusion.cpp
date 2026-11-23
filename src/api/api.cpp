@@ -135,7 +135,8 @@ static sd_status_t set_model_options(sd_ctx_t* context, const sd_ctx_opt_t* opti
         engine.model = std::move(candidate);
         sd::api::clear_error();
         return SD_STATUS_OK;
-    }, kind == SD_RESULT_INVALID ? SD_STATUS_INVALID_ARGUMENT : SD_STATUS_LOAD_FAILED);
+    },
+                         kind == SD_RESULT_INVALID ? SD_STATUS_INVALID_ARGUMENT : SD_STATUS_LOAD_FAILED);
 }
 
 sd_status_t sd_ctx_set_model_options(sd_ctx_t* context, const sd_ctx_opt_t* options) {

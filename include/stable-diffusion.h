@@ -364,6 +364,13 @@ SD_API void sd_dgl_ctx_free(sd_dgl_ctx_t* ctx);
 // Threading, placement and weight-loading options invalidate cached models when changed.
 SD_API bool sd_dgl_ctx_set(sd_dgl_ctx_t* ctx, const char* key, const char* value);
 
+// Releases idle GPU staging buffers that have RAM originals.
+// Returns SD_STATUS_BUSY during DGL execution or generation.
+SD_API sd_status_t sd_dgl_ctx_release_staging(sd_dgl_ctx_t* ctx);
+// Unloads cached model components. The context keeps its settings and callbacks.
+// Subsequent requests reload components as needed. Returns SD_STATUS_BUSY during execution.
+SD_API sd_status_t sd_dgl_ctx_unload_models(sd_dgl_ctx_t* ctx);
+
 // Optional per-context callback. A null callback restores unrestricted file access.
 SD_API bool sd_dgl_ctx_set_file_access_callback(sd_dgl_ctx_t* ctx, sd_dgl_file_access_cb_t callback, void* userdata);
 

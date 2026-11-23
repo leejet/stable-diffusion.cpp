@@ -51,6 +51,7 @@ namespace sd::dgl {
         Value derive_model(const Value& base, std::shared_ptr<const models::LoraConfig> loras);
         bool evict_idle_resource();
         void prune_expired_resources();
+        void unload_models();
 
         sd::ParallelExecutor* tensor_executor() const { return model_execution_.tensor_executor.get(); }
         bool auto_fit() const { return auto_fit_; }

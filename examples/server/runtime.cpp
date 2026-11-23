@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -9,6 +10,7 @@
 #include <mutex>
 #include <regex>
 #include <sstream>
+#include <string_view>
 
 #include "common/common.h"
 #include "common/log.h"
@@ -280,6 +282,21 @@ std::string unsupported_generation_mode_error(SDMode mode) {
     return "current model does not support requested mode";
 }
 
+static int parse_weight_ttl(int argc, const char** argv, int index, int& ttl) {
+    if (index + 1 < argc) {
+        const std::string_view value = argv[index + 1];
+        const auto* end              = value.data() + value.size();
+        int seconds                  = 0;
+        const auto parsed            = std::from_chars(value.data(), end, seconds);
+        if (parsed.ec == std::errc{} && parsed.ptr == end && seconds >= -1) {
+            ttl = seconds;
+            return 1;
+        }
+    }
+    LOG_ERROR("%s expects an integer greater than or equal to -1", argv[index]);
+    return -1;
+}
+
 ArgOptions SDSvrParams::get_options() {
     ArgOptions options;
 
@@ -311,6 +328,16 @@ ArgOptions SDSvrParams::get_options() {
 
     options.manual_options = {
         {"-h", "--help", "show this help message and exit", on_help_arg},
+        {"", "--weight-staging-ttl",
+         "idle seconds before releasing GPU staging copies of RAM weights (-1 disabled, 0 immediate; default: -1)",
+         [this](int argc, const char** argv, int index) {
+             return parse_weight_ttl(argc, argv, index, weight_staging_ttl);
+         }},
+        {"", "--weight-residency-ttl",
+         "idle seconds before unloading model components from RAM and VRAM (-1 disabled, 0 immediate; default: -1)",
+         [this](int argc, const char** argv, int index) {
+             return parse_weight_ttl(argc, argv, index, weight_residency_ttl);
+         }},
         {"", "--model-dir", "model root; repeat to search multiple directories (default: models)",
          [this](int argc, const char** argv, int index) {
              if (++index >= argc || argv[index][0] == '\0')
@@ -370,6 +397,8 @@ std::string SDSvrParams::to_string() const {
         << "  listen_port: \"" << listen_port << "\",\n"
         << "  max_pending_jobs: " << max_pending_jobs << ",\n"
         << "  completed_ttl_seconds: " << completed_ttl_seconds << ",\n"
+        << "  weight_staging_ttl: " << weight_staging_ttl << ",\n"
+        << "  weight_residency_ttl: " << weight_residency_ttl << ",\n"
         << "  serve_html_path: \"" << serve_html_path << "\",\n"
         << "  dgl_dir: \"" << dgl_dir << "\",\n"
         << "}";

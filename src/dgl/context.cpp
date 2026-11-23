@@ -51,6 +51,18 @@ namespace sd::dgl {
         return true;
     }
 
+    void Context::unload_models() {
+        const auto cached = resources.size();
+        for (auto it = resources.begin(); it != resources.end();) {
+            if (is_model_kind(it->second.value.type().kind))
+                it = resources.erase(it);
+            else
+                ++it;
+        }
+        if (const auto unloaded = cached - resources.size(); unloaded != 0)
+            LOG_VERBOSE("DGL unloaded %zu cached model components", unloaded);
+    }
+
     static size_t parse_max_ram(const std::string& value) {
         constexpr long double gib_bytes = 1024.0L * 1024 * 1024;
         size_t end                      = 0;
@@ -103,12 +115,7 @@ namespace sd::dgl {
             current = enabled;
         }
         // Runner sessions and weight storage take their settings from the model at initialization.
-        for (auto it = resources.begin(); it != resources.end();) {
-            if (is_model_kind(it->second.value.type().kind))
-                it = resources.erase(it);
-            else
-                ++it;
-        }
+        unload_models();
     }
 
     void Context::set(const std::string& key, const std::string& value) {

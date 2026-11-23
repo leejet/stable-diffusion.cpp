@@ -704,6 +704,46 @@ static bool execute_dgl_job(ServerRuntime& runtime,
     }
 }
 
+void AsyncJobManager::record_context_job_completion(const SDSvrParams& params) {
+    const auto now = std::chrono::steady_clock::now();
+    if (params.weight_staging_ttl >= 0)
+        staging_deadline = now + std::chrono::seconds(params.weight_staging_ttl);
+    if (params.weight_residency_ttl >= 0)
+        residency_deadline = now + std::chrono::seconds(params.weight_residency_ttl);
+}
+
+static void wait_for_job(ServerRuntime& runtime, std::unique_lock<std::mutex>& lock) {
+    auto& manager       = *runtime.async_job_manager;
+    using Clock         = std::chrono::steady_clock;
+    const auto disabled = Clock::time_point::max();
+    while (!manager.stop && manager.queue.empty()) {
+        const auto deadline = std::min(manager.staging_deadline, manager.residency_deadline);
+        if (deadline == disabled || manager.synchronous_jobs != 0) {
+            manager.cv.wait(lock);
+            continue;
+        }
+        const auto now = Clock::now();
+        if (now < deadline) {
+            manager.cv.wait_until(lock, deadline);
+            continue;
+        }
+
+        // Keep job admission serialized with the idle check and the DGL release.
+        const bool unload = now >= manager.residency_deadline;
+        auto* ctx         = sd_ctx_get_dgl_ctx(runtime.sd_ctx);
+        const auto status = unload ? sd_dgl_ctx_unload_models(ctx) : sd_dgl_ctx_release_staging(ctx);
+        if (status == SD_STATUS_BUSY) {
+            manager.cv.wait_for(lock, std::chrono::milliseconds(100));
+            continue;
+        }
+        if (status != SD_STATUS_OK)
+            LOG_WARN("idle weight release failed: %s", sd_dgl_error());
+        if (unload)
+            manager.residency_deadline = disabled;
+        manager.staging_deadline = disabled;
+    }
+}
+
 void async_job_worker(ServerRuntime& runtime) {
     AsyncJobManager& manager = *runtime.async_job_manager;
 
@@ -711,7 +751,7 @@ void async_job_worker(ServerRuntime& runtime) {
         std::shared_ptr<AsyncGenerationJob> job;
         {
             std::unique_lock<std::mutex> lock(manager.mutex);
-            manager.cv.wait(lock, [&]() { return manager.stop || !manager.queue.empty(); });
+            wait_for_job(runtime, lock);
 
             if (manager.stop && manager.queue.empty()) {
                 break;
@@ -766,6 +806,7 @@ void async_job_worker(ServerRuntime& runtime) {
 
         {
             std::lock_guard<std::mutex> lock(manager.mutex);
+            manager.record_context_job_completion(*runtime.svr_params);
             auto it = manager.jobs.find(job->id);
             if (it == manager.jobs.end()) {
                 continue;
