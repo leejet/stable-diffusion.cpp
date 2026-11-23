@@ -52,6 +52,13 @@ namespace sd::api {
 
     const ModelDefinition& GenerationModel::definition(GenerationContext& context) {
         std::lock_guard<std::recursive_mutex> lock(context.mutex);
+        if (context.probing_model)
+            throw dgl::Error(SD_STATUS_BUSY, "model probe is in progress");
+        context.probing_model = true;
+        struct ProbeGuard {
+            bool& probing;
+            ~ProbeGuard() { probing = false; }
+        } probe{context.probing_model};
         context.check_cancelled();
         const auto& settings = config.context;
         const auto* path     = settings.diffusion_model_path && *settings.diffusion_model_path ? settings.diffusion_model_path : settings.model_path;
@@ -129,6 +136,11 @@ namespace sd::api {
         return *definition;
     }
 
+    bool supports_generation(const ModelDefinition& definition, bool video) {
+        return definition.traits.supports_video_generation == video && definition.version != VERSION_ESRGAN &&
+               definition.version != VERSION_SEEDVR2 && definition.version != VERSION_RELAY_VSR;
+    }
+
     void GenerationContext::check_cancelled() const {
         if (cancellation.load(std::memory_order_relaxed) == SD_CANCEL_ALL)
             throw dgl::Error(SD_STATUS_CANCELLED, "generation cancelled");
@@ -137,7 +149,7 @@ namespace sd::api {
     GenerationRun::GenerationRun(GenerationContext& context)
         : context_(context) {
         std::unique_lock<std::recursive_mutex> lock(context_.mutex, std::try_to_lock);
-        if (!lock.owns_lock() || context_.executing)
+        if (!lock.owns_lock() || context_.executing || context_.probing_model)
             throw dgl::Error(SD_STATUS_BUSY, "context is busy");
         std::unique_lock<std::mutex> execution_lock(context_.execution.mutex, std::try_to_lock);
         if (!execution_lock.owns_lock() || context_.execution.active_run)

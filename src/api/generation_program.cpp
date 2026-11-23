@@ -204,7 +204,7 @@ namespace sd::api {
         auto& model            = context.model;
         const auto& definition = model.definition(context);
         const auto& settings   = model.config.context;
-        if (definition.traits.supports_video_generation != bool(video) || definition.version == VERSION_ESRGAN || definition.version == VERSION_SEEDVR2 || definition.version == VERSION_RELAY_VSR)
+        if (!supports_generation(definition, video != nullptr))
             throw dgl::Error(SD_STATUS_UNSUPPORTED, "this model requires a video or dedicated DGL workflow");
         const auto components = component_bindings(settings, definition);
         const auto method     = image.sample_params.sample_method == SAMPLE_METHOD_COUNT ? definition.sampling.default_sample_method : image.sample_params.sample_method;

@@ -216,6 +216,7 @@ SD_API void sd_ctx_free(sd_ctx_t* ctx);
 SD_API sd_dgl_ctx_t* sd_ctx_get_dgl_ctx(sd_ctx_t* ctx);
 // Copies the new model configuration into an idle context. The execution
 // settings, callbacks, and DGL component cache belong to the existing context.
+// Returns SD_STATUS_BUSY during generation, DGL execution, or a model probe.
 SD_API sd_status_t sd_ctx_set_model_options(sd_ctx_t* ctx, const sd_ctx_opt_t* params);
 // Applies to generated programs and model probing. Register or clear while idle.
 SD_API sd_status_t sd_ctx_set_file_access_callback(sd_ctx_t* ctx, sd_dgl_file_access_cb_t callback, void* userdata);
@@ -247,6 +248,10 @@ typedef enum {
     SD_RESULT_IMAGE   = 1,
     SD_RESULT_VIDEO   = 2,
 } sd_result_kind_t;
+
+// Probes the candidate model before replacing the current configuration.
+// Accepts SD_RESULT_IMAGE or SD_RESULT_VIDEO and preserves the current model on failure.
+SD_API sd_status_t sd_ctx_set_model_options_for_generation(sd_ctx_t* ctx, const sd_ctx_opt_t* params, sd_result_kind_t kind);
 
 // Results own all outputs independently of ctx and params. Views are read-only and
 // borrowed until sd_result_free(). Retain a tensor to keep its data independently.

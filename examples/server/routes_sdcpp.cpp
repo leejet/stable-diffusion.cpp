@@ -464,7 +464,7 @@ static void submit_generation_job(ServerRuntime& runtime, const httplib::Request
         std::shared_lock<std::shared_mutex> model_lock(runtime.models->model_mutex, std::defer_lock);
         if (auto model = body.find("model"); model != body.end()) {
             try {
-                job->model = std::make_unique<ServerModelSelection>(resolve_model_selection(runtime, *model));
+                job->model = std::make_unique<ServerModelSelection>(resolve_model_selection(runtime, *model, mode));
             } catch (const std::exception& error) {
                 res.status = 400;
                 res.set_content(json({{"error", error.what()}, {"code", "invalid_model_config"}}).dump(), "application/json");

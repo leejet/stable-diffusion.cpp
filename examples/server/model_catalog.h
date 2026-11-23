@@ -67,9 +67,9 @@ void initialize_server_models(ServerRuntime& runtime);
 json resolve_recipe_features(const json& recipe);
 json model_generation_features(const ServerRuntime& runtime);
 
-ServerModelSelection resolve_model_selection(ServerRuntime& runtime, const json& body);
+ServerModelSelection resolve_model_selection(ServerRuntime& runtime, const json& body, SDMode mode);
 // The caller holds the generation mutex across the switch and generation.
-bool set_current_model(ServerRuntime& runtime, ServerModelSelection&& selection, std::string& error_message);
+bool set_current_model(ServerRuntime& runtime, ServerModelSelection&& selection, SDMode mode, std::string& error_message);
 void add_startup_model_sources(ServerFileAccess& policy, const SDContextParams& config);
 
 #endif

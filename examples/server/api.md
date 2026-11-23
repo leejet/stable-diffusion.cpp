@@ -70,8 +70,12 @@ Current endpoints include:
 
 All three API families share the server's execution context and its component
 cache. The command-line model supplies the initial configuration. Native image
-and video jobs can select a recipe and component files in the request. The worker
-applies that selection to the shared context before generation. It remains the
+and video jobs can select a recipe and component files in the request. Video
+requests with an explicit recipe require that recipe to declare
+`defaults.video_frames`. The worker probes the selected model family and checks
+that it supports the requested mode before applying the selection. A probe or
+mode check failure is reported on the job and preserves the current model.
+An applied selection remains the
 current model for later requests that omit `model`, including A1111 and OpenAI
 requests. Each native job reports loading and generation progress through the job API.
 

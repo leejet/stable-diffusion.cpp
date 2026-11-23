@@ -37,6 +37,7 @@ namespace sd::api {
         FileAccessPolicy file_access;
         std::recursive_mutex mutex;
         bool executing = false;
+        bool probing_model = false;
         std::atomic<sd_cancel_mode_t> cancellation{SD_CANCEL_RESET};
         dgl::RunEvents* active_run           = nullptr;
         sd_generation_progress_cb_t progress = nullptr;
@@ -48,6 +49,8 @@ namespace sd::api {
         GenerationContext(const sd_opt_t* source, Operation purpose);
         void check_cancelled() const;
     };
+
+    bool supports_generation(const ModelDefinition& definition, bool video);
 
     class GenerationRun {
         GenerationContext& context_;

@@ -344,15 +344,15 @@ json make_async_job_json(const AsyncJobManager& manager, const AsyncGenerationJo
 static bool prepare_native_job(ServerRuntime& runtime, AsyncGenerationJob& job, std::string& error_message) {
     if (job.cancel_requested.load())
         return false;
+    const SDMode mode = job.kind == AsyncJobKind::VidGen ? VID_GEN : IMG_GEN;
     if (job.model) {
         auto model = std::move(job.model);
-        return set_current_model(runtime, std::move(*model), error_message);
+        return set_current_model(runtime, std::move(*model), mode, error_message);
     }
     auto body = std::move(job.request_body);
     if (job.model_revision == runtime.models->revision)
         return true;
     // An earlier queued job can change the model and its defaults before this job starts.
-    const SDMode mode = job.kind == AsyncJobKind::VidGen ? VID_GEN : IMG_GEN;
     if (!runtime_supports_generation_mode(runtime, mode)) {
         error_message = unsupported_generation_mode_error(mode);
         return false;

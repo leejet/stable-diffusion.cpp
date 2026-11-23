@@ -70,6 +70,10 @@ queries can probe the model family and reuse the detected type.
 Use `sd_ctx_set_model_options()` on an idle context to replace its model
 configuration. It copies the options and resets model detection. Later
 `sd_generate_image()` and `sd_generate_video()` calls use the new configuration.
+Use `sd_ctx_set_model_options_for_generation()` to probe the candidate against
+`SD_RESULT_IMAGE` or `SD_RESULT_VIDEO` before applying it. A failed check
+preserves the current configuration. Model setters return `SD_STATUS_BUSY`
+while model probing is in progress, including from file-access callbacks.
 The execution settings and component cache continue to serve generation and the
 DGL context borrowed through `sd_ctx_get_dgl_ctx()`. The borrowed pointer stays
 valid until `sd_ctx_free()`. Run scripts and generation calls one at a time. Set

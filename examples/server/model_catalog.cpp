@@ -721,7 +721,7 @@ void initialize_server_models(ServerRuntime& runtime) {
     refresh_model_catalog(runtime);
 }
 
-ServerModelSelection resolve_model_selection(ServerRuntime& runtime, const json& body) {
+ServerModelSelection resolve_model_selection(ServerRuntime& runtime, const json& body, SDMode mode) {
     check_keys(body, {"recipe", "models"});
     const auto recipe_id = body.at("recipe").get<std::string>();
     // `models` is optional; unselected slots may fall back to recipe defaults below.
@@ -734,10 +734,13 @@ ServerModelSelection resolve_model_selection(ServerRuntime& runtime, const json&
     if (found == models.recipes.end())
         throw std::runtime_error("unknown recipe");
     const auto& recipe = found->second;
+    const auto recipe_defaults = recipe.value("defaults", json::object());
+    if (mode == VID_GEN && !recipe_defaults.contains("video_frames"))
+        throw std::runtime_error("selected recipe does not support vid_gen: " + recipe_id);
     auto context       = models.base_context;
     auto defaults      = models.base_defaults;
     apply_recipe_context(recipe.value("context", json::object()), context);
-    apply_recipe_defaults(recipe.value("defaults", json::object()), defaults);
+    apply_recipe_defaults(recipe_defaults, defaults);
     // Recipe-provided default models fill any slot the request did not select.
     // An explicit selection blocks the default for that slot, including an
     // empty string (a deliberate opt-out of the default). The tae/taesd pair
@@ -809,15 +812,20 @@ ServerModelSelection resolve_model_selection(ServerRuntime& runtime, const json&
     return {std::move(context), std::move(defaults), recipe, std::move(selection), std::move(options)};
 }
 
-bool set_current_model(ServerRuntime& runtime, ServerModelSelection&& selection, std::string& error_message) {
+bool set_current_model(ServerRuntime& runtime, ServerModelSelection&& selection, SDMode mode, std::string& error_message) {
     auto& models = *runtime.models;
     std::unique_lock<std::shared_mutex> lock(models.model_mutex);
     if (models.current_recipe == selection.recipe && models.current_files == selection.files &&
         std::all_of(std::begin(k_model_slots), std::end(k_model_slots), [&](const ModelSlot& slot) {
             return runtime.ctx_params->*slot.field == selection.context.*slot.field;
-        }))
-        return true;
-    if (sd_ctx_set_model_options(runtime.sd_ctx, selection.options.get()) != SD_STATUS_OK) {
+        })) {
+        if (runtime_supports_generation_mode(runtime, mode))
+            return true;
+        error_message = unsupported_generation_mode_error(mode);
+        return false;
+    }
+    const auto kind = mode == VID_GEN ? SD_RESULT_VIDEO : SD_RESULT_IMAGE;
+    if (sd_ctx_set_model_options_for_generation(runtime.sd_ctx, selection.options.get(), kind) != SD_STATUS_OK) {
         error_message = sd_get_last_error();
         return false;
     }
