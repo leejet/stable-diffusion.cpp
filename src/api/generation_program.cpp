@@ -200,45 +200,19 @@ namespace sd::api {
                  {"vae_options", arguments(vae_options)}}};
     }
 
-    GenerationProgram component_program(GenerationContext& context) {
-        const auto& definition = context.model_definition();
-        const auto& settings   = context.config.context;
-        if (definition.version == VERSION_ESRGAN || definition.version == VERSION_SEEDVR2 || definition.version == VERSION_RELAY_VSR)
-            throw dgl::Error(SD_STATUS_UNSUPPORTED, "this model requires a dedicated DGL workflow");
-        auto components = component_bindings(settings, definition);
-        nlohmann::json flags;
-        const auto optional_component = [&](const char* name, const std::string& path, SDBackendModule module) {
-            flags[name] = !path.empty();
-            if (!path.empty()) {
-                components.values[std::string(name) + "_path"]    = path;
-                components.fields[std::string(name) + "_options"] = arguments(loader_options(settings, module, definition));
-            }
-        };
-        optional_component("high_model", text(settings.high_noise_diffusion_model_path), SDBackendModule::DIFFUSION);
-        optional_component("negative_model", sd_version_is_ideogram4(definition.version) ? text(settings.uncond_diffusion_model_path) : "", SDBackendModule::DIFFUSION);
-        optional_component("control", text(settings.control_net_path), SDBackendModule::CONTROL_NET);
-        optional_component("vision", text(settings.clip_vision_path), SDBackendModule::TE);
-        optional_component("audio_encoder", text(settings.audio_encoder_path), SDBackendModule::TE);
-        optional_component("audio_vae", text(settings.audio_vae_path).empty() ? context.embedded_audio_vae : text(settings.audio_vae_path), SDBackendModule::VAE);
-        optional_component("preview", !components.tae && settings.tae_preview_only ? text(settings.taesd_path) : "", SDBackendModule::VAE);
-        nlohmann::json parameters = components.fields;
-        parameters["variables"]   = variables(components.values);
-        parameters["flags"]       = std::move(flags);
-        return {render_template("load_components", parameters), {}};
-    }
-
     static GenerationProgram generation_program(GenerationContext& context, const ImageConfig& image, const sd_opt_t* explicit_options, int64_t seed, const VideoConfig* video) {
-        const auto& definition = context.model_definition();
-        const auto& settings   = context.config.context;
-        if (definition.traits.supports_video_generation != bool(video) || definition.version == VERSION_ESRGAN || definition.version == VERSION_SEEDVR2 || definition.version == VERSION_RELAY_VSR)
+        auto& model            = context.model;
+        const auto& definition = model.definition(context);
+        const auto& settings   = model.config.context;
+        if (!supports_generation(definition, video != nullptr))
             throw dgl::Error(SD_STATUS_UNSUPPORTED, "this model requires a video or dedicated DGL workflow");
         const auto components = component_bindings(settings, definition);
         const auto method     = image.sample_params.sample_method == SAMPLE_METHOD_COUNT ? definition.sampling.default_sample_method : image.sample_params.sample_method;
         auto scheduler        = image.sample_params.scheduler;
         if (scheduler == SCHEDULER_COUNT) {
-            scheduler = (settings.prediction == EDM_V_PRED || (settings.prediction == PREDICTION_COUNT && context.default_prediction == EDM_V_PRED)) ? EXPONENTIAL_SCHEDULER : method == LCM_SAMPLE_METHOD || method == TCD_SAMPLE_METHOD ? LCM_SCHEDULER
-                                                                                                                                                                           : method == DDIM_TRAILING_SAMPLE_METHOD                        ? SIMPLE_SCHEDULER
-                                                                                                                                                                                                                                          : definition.sampling.default_scheduler;
+            scheduler = (settings.prediction == EDM_V_PRED || (settings.prediction == PREDICTION_COUNT && model.default_prediction == EDM_V_PRED)) ? EXPONENTIAL_SCHEDULER : method == LCM_SAMPLE_METHOD || method == TCD_SAMPLE_METHOD ? LCM_SCHEDULER
+                                                                                                                                                                         : method == DDIM_TRAILING_SAMPLE_METHOD                        ? SIMPLE_SCHEDULER
+                                                                                                                                                                                                                                        : definition.sampling.default_scheduler;
         }
         const auto predictor_options = arguments({{"prediction", settings.prediction == PREDICTION_COUNT ? "auto" : sd_prediction_name(settings.prediction)},
                                                   {"guidance", image.sample_params.guidance.distilled_guidance},

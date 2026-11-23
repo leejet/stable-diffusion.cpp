@@ -4,7 +4,7 @@
 and HTTP APIs. Download or build the server before starting; see the
 [build guide](../../docs/build.md) and [frontend build instructions](#build-with-frontend).
 
-- [Web UI](#web-ui): start the server, load a model, and generate.
+- [Web UI](#web-ui): start the server, select a model, and generate.
 - [Model management](#model-management): model directories, recipes, and startup models.
 - [Server configuration](#server-configuration): launcher settings, network, logging, and help.
 - [API](#api): native and compatibility endpoints.
@@ -61,7 +61,7 @@ for another build configuration or an extracted release archive. Open
 <http://127.0.0.1:1234/> after the server starts, and keep the server running
 while using the browser.
 
-### Load a model
+### Select a model
 
 1. Download the weights and required components listed in the matching
    [model guide](../../docs/models/README.md). Put them in the category folders
@@ -76,8 +76,6 @@ while using the browser.
    to the chosen checkpoint and variant, as described in its model guide.
 5. If a file is missing from a dropdown, check its category folder and click
    **Refresh files & recipes**. Selectors support searching by name or path.
-6. Click **Load models** and wait for loading to finish. Selecting a recipe or
-   file alone does not reload the model.
 
 Recipe and component selectors support searching by name or relative file ID.
 Use the arrow keys and Enter to select, or Escape to cancel a search. With
@@ -85,13 +83,10 @@ Use the arrow keys and Enter to select, or Escape to cancel a search. With
 declared generation defaults while preserving prompts, input images and fields
 not specified by the recipe. Disable it to keep your current parameters when
 switching recipes. This preference defaults to enabled and is saved locally.
-Model loading and server-info refreshes do not reapply defaults or reset the form.
 Recipes declaring `video_frames` also switch the form to Video Generation;
-other recipes switch to Image Generation. Generation is enabled after the
-selected recipe is loaded.
-
-The model button shows elapsed loading time and keeps the final time after
-success or failure, including after a page refresh.
+other recipes switch to Image Generation. Select the required components to
+enable **Generate**. The job loads any needed components and reports the
+loading progress alongside sampling and output encoding.
 
 ### Generate an image or video
 
@@ -316,12 +311,10 @@ For example, run this Z-Image Turbo configuration from the build directory:
 `--offload-to-cpu` keeps weights in RAM when possible to reduce VRAM pressure,
 `-v` enables verbose logging, and `--cfg-scale 1.0` sets the default CFG scale.
 
-API clients can use the model loaded at startup without selecting a recipe.
-The UI automatically selects **Command-line model (all features)** and uses the
-startup generation defaults. This runtime-only recipe exposes all controls for the supported
-image/video mode. Selecting another recipe previews a model switch; selecting
-the command-line entry again restores its generation defaults. The entry is
-removed when the command-line context is unloaded or replaced.
+The model specified on the command line is the initial model for API clients.
+Its components load when needed. The UI offers **Current server model** with
+generation defaults and controls for the active configuration. Generating with
+a catalog recipe makes that selection the current model.
 
 #### Identity inputs
 
@@ -336,18 +329,16 @@ their own inputs under the server's file-access rules.
 For a checkpoint loaded from a complete repository directory, pass its model
 loading arguments when starting `sd-server`, as in the model's CLI example.
 Keep the index, tokenizer, and all shards together. The browser then uses
-**Command-line model (all features)** for the model loaded at startup; selecting
-an individual shard in a recipe dropdown does not load the whole repository.
+**Current server model** for that repository. Select the repository
+using the startup option so the model loader can resolve all its shards.
 
 ### Switching models
 
-The server keeps one model context loaded. Loading or unloading is rejected
-while generation requests or queued jobs are pending. A switch validates the
-selection before unloading the old context, then loads the replacement.
-If loading fails, the service stays online with no active model and reports
-the error. Backend and memory options supplied at startup apply to subsequent
-loads. Recipe defaults apply to new loads; explicitly supplied generation
-request parameters take precedence.
+Choose a recipe and component files for the next generation. A queued job that
+specifies a recipe makes it the current model when it starts. Later requests
+without a recipe use the current model. The server shares one execution context
+with the DGL editor and reuses matching model components within its startup
+memory budgets. A load failure is reported on the job that requested the model.
 
 See [the API reference](api.md#model-management) for recipe fields, supported
 slots, management endpoints, and compatibility behavior.

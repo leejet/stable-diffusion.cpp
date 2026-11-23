@@ -29,7 +29,7 @@ namespace sd::api {
             throw dgl::Error(SD_STATUS_INVALID_ARGUMENT, "video hires requires a latent interpolation mode or a latent upscaler model");
         if (model && text(hires.model_path).empty())
             throw dgl::Error(SD_STATUS_INVALID_ARGUMENT, "hires model upscaling requires hires.model_path");
-        const auto& settings   = request.context.config.context;
+        const auto& settings   = request.context.model.config.context;
         const auto vae_version = request.definition.traits.vae_format_override && request.fields.at("vae_loader") != "load_tae"
                                      ? sd::vae::version_for_format(settings.vae_format, version)
                                      : version;

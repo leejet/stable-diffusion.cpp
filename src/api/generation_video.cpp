@@ -26,7 +26,7 @@ namespace sd::api {
         request.flags["driving_audio"] = !tracks.empty();
         if (tracks.empty())
             return;
-        const auto& config = request.context.config.context;
+        const auto& config = request.context.model.config.context;
         if (!config.audio_encoder_path || !*config.audio_encoder_path)
             throw dgl::Error(SD_STATUS_INVALID_ARGUMENT, "Wan S2V audio requires audio_encoder_path");
         bind_tensor(request.program, "driving_audio", tracks[0].data);
@@ -39,10 +39,10 @@ namespace sd::api {
 
     static void audiovisual(GenerationTemplate& request) {
         const bool h3        = sd_version_is_minimax_h3(request.definition.version);
-        const auto& settings = request.context.config.context;
+        const auto& settings = request.context.model.config.context;
         auto path            = text(settings.audio_vae_path);
         if (path.empty())
-            path = request.context.embedded_audio_vae;
+            path = request.context.model.embedded_audio_vae;
         request.flags["decode_audio"] = !path.empty();
         if (!path.empty())
             request.values["audio_vae_path"] = path;
@@ -59,7 +59,7 @@ namespace sd::api {
     }
 
     static void dual_expert(GenerationTemplate& request) {
-        const auto& settings  = request.context.config.context;
+        const auto& settings  = request.context.model.config.context;
         request.flags["dual"] = !text(settings.high_noise_diffusion_model_path).empty();
         if (!request.flags.at("dual").get<bool>())
             return;
@@ -95,10 +95,10 @@ namespace sd::api {
 
     void prepare_video_program(GenerationTemplate& request) {
         const auto version   = request.definition.version;
-        const auto& settings = request.context.config.context;
+        const auto& settings = request.context.model.config.context;
         const bool first     = keyframe(request, "init_image", "first_frame");
         const bool last      = keyframe(request, "end_image", "last_frame");
-        const bool vace      = request.context.wan_vace;
+        const bool vace      = request.context.model.wan_vace;
         const bool s2v       = version == VERSION_WAN2_2_S2V;
         const bool frozen    = (version == VERSION_WAN2_2_TI2V || sd_version_is_lingbot_video(version)) && (first || last);
         const bool ltx       = sd_version_is_ltxav(version);
@@ -109,8 +109,8 @@ namespace sd::api {
             throw dgl::Error(SD_STATUS_UNSUPPORTED, "reference audio requires MiniMax-H3 or Wan2.2 S2V");
         if (s2v && last)
             throw dgl::Error(SD_STATUS_UNSUPPORTED, "Wan2.2 S2V does not support an end image");
-        const bool image_condition = !vace && !s2v && request.context.wan_image_condition;
-        request.flags              = {{"first", first}, {"last", last}, {"conditioned", first || last}, {"vace", vace}, {"vace_reference", vace && first}, {"s2v_reference", s2v && first}, {"driving_audio", false}, {"image_condition", image_condition}, {"vision", image_condition && request.context.wan_vision_condition}, {"end_vision", request.context.wan_end_vision}, {"frozen", frozen}, {"hunyuan", sd_version_is_hunyuan_video(version) && (first || last)}, {"controls", false}, {"dual", false}, {"custom_sigmas", request.image.sample_params.custom_sigmas_count > 0}};
+        const bool image_condition = !vace && !s2v && request.context.model.wan_image_condition;
+        request.flags              = {{"first", first}, {"last", last}, {"conditioned", first || last}, {"vace", vace}, {"vace_reference", vace && first}, {"s2v_reference", s2v && first}, {"driving_audio", false}, {"image_condition", image_condition}, {"vision", image_condition && request.context.model.wan_vision_condition}, {"end_vision", request.context.model.wan_end_vision}, {"frozen", frozen}, {"hunyuan", sd_version_is_hunyuan_video(version) && (first || last)}, {"controls", false}, {"dual", false}, {"custom_sigmas", request.image.sample_params.custom_sigmas_count > 0}};
         request.fields["entry"]    = ltx ? "video_ltx" : h3 ? "video_h3"
                                                             : "video_wan";
         if (image_condition || request.flags.at("hunyuan").get<bool>())

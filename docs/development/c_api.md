@@ -74,12 +74,9 @@ Context creation snapshots options without loading weights. Family probing is
 lazy and tracks actual file dependencies. The complete request stays busy during
 probing, compilation, batch gaps and execution. File permissions are checked
 before probing and on every DGL resource access, including cache hits.
-`sd_ctx_prepare()` runs a component-only template using the same loading
-parameters as generation. Server startup and model selection call it after
-installing file permissions, before publishing `ready`. Capability queries read
-an atomic snapshot of the last detected type and do not acquire a generation
-run or reset its cancellation state. Only an initial probe takes the context
-lock.
+Generation templates load their required components as part of execution.
+Capability queries read the detected family under the context lock and probe it
+on demand. They leave the generation cancellation state untouched.
 
 C++ validates inputs, resolves model defaults, prepares geometry and binds host
 tensors. Templates describe complete execution flows and optional stages;

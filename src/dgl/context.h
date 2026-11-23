@@ -33,6 +33,7 @@ namespace sd::dgl {
 
         std::mutex mutex;
         RunEvents* active_run = nullptr;
+        bool generating       = false;
         RunCallbacks callbacks;
         FileAccessPolicy file_access;
         std::shared_ptr<SDBackendPool> backends = std::make_shared<SDBackendPool>();
@@ -72,5 +73,9 @@ namespace sd::dgl {
     };
 
 }  // namespace sd::dgl
+
+struct sd_dgl_ctx_t : sd::dgl::Context {
+    using Context::Context;
+};
 
 #endif  // __SD_DGL_CONTEXT_H__

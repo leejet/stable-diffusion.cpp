@@ -218,23 +218,7 @@ static bool execute_sync_img_gen_request(ServerRuntime& runtime,
                                          ImgGenJobRequest& request,
                                          SDImageVec& results,
                                          std::string& error_message) {
-    SDOptPtr img_gen_params = request.to_image_opt();
-    int num_results         = 0;
-
-    {
-        std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
-        PromptImageCallbackGuard prompt_images(runtime.sd_ctx, request.gen_params);
-        sd_result_t* generated = nullptr;
-        generate_sd_image(runtime.sd_ctx, img_gen_params, &generated);
-        results.adopt(generated);
-        num_results = results.count();
-    }
-
-    if (results.empty()) {
-        error_message = "generate_image returned no results";
-        return false;
-    }
-    return true;
+    return generate_server_images(runtime.sd_ctx, request, results, error_message);
 }
 
 void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
@@ -244,7 +228,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
     routes.get("/v1/models", [runtime](const httplib::Request&, httplib::Response& res) {
         json r;
         r["data"] = json::array();
-        if (runtime->sd_ctx) {
+        if (has_current_model(*runtime)) {
             r["data"].push_back({{"id", "sd-cpp-local"}, {"object", "model"}, {"owned_by", "local"}});
         }
         res.set_content(r.dump(), "application/json");

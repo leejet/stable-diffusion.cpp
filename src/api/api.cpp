@@ -112,17 +112,40 @@ void sd_ctx_free(sd_ctx_t* context) {
     delete context;
 }
 
-sd_status_t sd_ctx_prepare(sd_ctx_t* context) {
+sd_dgl_ctx_t* sd_ctx_get_dgl_ctx(sd_ctx_t* context) {
+    return context && context->engine ? &context->engine->execution : nullptr;
+}
+
+static sd_status_t set_model_options(sd_ctx_t* context, const sd_ctx_opt_t* options, sd_result_kind_t kind) {
     return sd::api::call([&] {
         if (!context || !context->engine)
             return sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "context is required");
         auto& engine = *context->engine;
-        sd::api::GenerationRun preparation(engine);
-        sd::FileAccessScope access(engine.execution.file_access);
-        sd::api::execute_program(engine, sd::api::component_program(engine));
+        std::unique_lock<std::recursive_mutex> lock(engine.mutex, std::try_to_lock);
+        if (!lock.owns_lock())
+            return sd::api::error(SD_STATUS_BUSY, nullptr, "context is busy");
+        sd::api::GenerationRun replacement(engine);
+        sd::api::GenerationModel candidate(sd::api::copy_options(options), sd::api::Context);
+        if (kind != SD_RESULT_INVALID) {
+            sd::FileAccessScope access(engine.file_access);
+            const bool video = kind == SD_RESULT_VIDEO;
+            if (!sd::api::supports_generation(candidate.definition(engine), video))
+                return sd::api::error(SD_STATUS_UNSUPPORTED, nullptr, video ? "selected model does not support vid_gen" : "selected model does not support img_gen");
+        }
+        engine.model = std::move(candidate);
+        sd::api::clear_error();
         return SD_STATUS_OK;
-    },
-                         SD_STATUS_LOAD_FAILED);
+    }, kind == SD_RESULT_INVALID ? SD_STATUS_INVALID_ARGUMENT : SD_STATUS_LOAD_FAILED);
+}
+
+sd_status_t sd_ctx_set_model_options(sd_ctx_t* context, const sd_ctx_opt_t* options) {
+    return set_model_options(context, options, SD_RESULT_INVALID);
+}
+
+sd_status_t sd_ctx_set_model_options_for_generation(sd_ctx_t* context, const sd_ctx_opt_t* options, sd_result_kind_t kind) {
+    if (kind != SD_RESULT_IMAGE && kind != SD_RESULT_VIDEO)
+        return sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "image or video result kind is required");
+    return set_model_options(context, options, kind);
 }
 
 void sd_cancel_generation(sd_ctx_t* context, enum sd_cancel_mode_t mode) {
@@ -144,15 +167,16 @@ static const ModelDefinition* context_definition(const sd_ctx_t* context) {
     sd::api::call([&] {
         if (!context || !context->engine)
             return sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "context is required");
-        auto& engine      = *context->engine;
-        const auto family = engine.family.load();
+        auto& engine = *context->engine;
+        std::lock_guard<std::recursive_mutex> lock(engine.mutex);
+        const auto family = engine.model.family;
         if (family != VERSION_COUNT) {
             definition = find_model_definition(family);
         } else {
-            std::lock_guard<std::recursive_mutex> lock(engine.mutex);
-            sd::FileAccessScope access(engine.execution.file_access);
-            definition = &engine.model_definition();
+            sd::FileAccessScope access(engine.file_access);
+            definition = &engine.model.definition(engine);
         }
+        sd::api::clear_error();
         return SD_STATUS_OK;
     },
                   SD_STATUS_LOAD_FAILED);
@@ -161,12 +185,12 @@ static const ModelDefinition* context_definition(const sd_ctx_t* context) {
 
 bool sd_ctx_supports_image_generation(const sd_ctx_t* context) {
     const auto* definition = context_definition(context);
-    return definition && !definition->traits.supports_video_generation && definition->version != VERSION_ESRGAN && definition->version != VERSION_SEEDVR2 && definition->version != VERSION_RELAY_VSR;
+    return definition && sd::api::supports_generation(*definition, false);
 }
 
 bool sd_ctx_supports_video_generation(const sd_ctx_t* context) {
     const auto* definition = context_definition(context);
-    return definition && definition->traits.supports_video_generation && definition->version != VERSION_SEEDVR2 && definition->version != VERSION_RELAY_VSR;
+    return definition && sd::api::supports_generation(*definition, true);
 }
 
 const char* sd_get_model_version_name(const sd_ctx_t* context) {
@@ -182,7 +206,7 @@ sd_status_t sd_ctx_set_file_access_callback(sd_ctx_t* context, sd_dgl_file_acces
         std::unique_lock<std::recursive_mutex> lock(engine.mutex, std::try_to_lock);
         if (!lock.owns_lock() || engine.executing)
             return sd::api::error(SD_STATUS_BUSY, nullptr, "context is busy");
-        engine.execution.file_access = {callback, data};
+        engine.file_access = {callback, data};
         return SD_STATUS_OK;
     });
 }

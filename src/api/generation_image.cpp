@@ -55,7 +55,7 @@ namespace sd::api {
     }
 
     static bool prompt_has_vision(const GenerationTemplate& request) {
-        const auto* vision_path = request.context.config.context.llm_vision_path;
+        const auto* vision_path = request.context.model.config.context.llm_vision_path;
         if (vision_path && *vision_path)
             return true;
         const auto path = request.values.at("text_path").get<std::string>();
@@ -159,7 +159,7 @@ namespace sd::api {
             }
             return;
         }
-        const auto& settings = request.context.config.context;
+        const auto& settings = request.context.model.config.context;
         if (!settings.control_net_path || !*settings.control_net_path)
             throw dgl::Error(SD_STATUS_INVALID_ARGUMENT, "control_image requires control_net_path");
         request.values["control_path"]       = settings.control_net_path;
@@ -173,8 +173,8 @@ namespace sd::api {
 
     void prepare_image_program(GenerationTemplate& request) {
         const auto version            = request.definition.version;
-        const auto& settings          = request.context.config.context;
-        const auto prediction         = settings.prediction == PREDICTION_COUNT ? request.context.default_prediction : settings.prediction;
+        const auto& settings          = request.context.model.config.context;
+        const auto prediction         = settings.prediction == PREDICTION_COUNT ? request.context.model.default_prediction : settings.prediction;
         const bool inpaint            = sd_version_is_inpaint(version);
         const bool mask               = bound_tensor(request.options, "mask_image");
         const bool refs               = request.image.ref_images_count > 0;

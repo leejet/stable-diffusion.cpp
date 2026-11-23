@@ -7,7 +7,6 @@ during configuration.
 
 | Template | Flow |
 | --- | --- |
-| [load_components.dgl](load_components.dgl) | Prepare and validate configured model components without generation |
 | [image.dgl](image.dgl) | Text-to-image and ordinary image-to-image |
 | [image_inpaint.dgl](image_inpaint.dgl) | Masked sampling and native inpaint conditioning |
 | [image_edit.dgl](image_edit.dgl) | Native reference-image editing |

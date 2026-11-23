@@ -582,18 +582,13 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             LOG_DEBUG("%s\n", request.gen_params.to_string().c_str());
 
-            SDOptPtr img_gen_params = request.to_image_opt();
             SDImageVec results;
             int num_results = 0;
 
             {
-                std::lock_guard<std::mutex> lock(*runtime->sd_ctx_mutex);
-                PromptImageCallbackGuard prompt_images(runtime->sd_ctx, request.gen_params);
                 const bool detailing = request.adetailer_enabled && !runtime->default_gen_params->ad_model_path.empty();
                 SDAPIPreviewGuard preview_guard(id_task, request.gen_params, img2img ? "img2img" : "txt2img", detailing);
-                sd_result_t* generated = nullptr;
-                generate_sd_image(runtime->sd_ctx, img_gen_params, &generated);
-                results.adopt(generated);
+                generate_server_images(runtime->sd_ctx, request, results, error_message);
                 num_results = results.count();
                 if (detailing && !results.empty())
                     preview_guard.begin_detailing();
@@ -601,7 +596,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             if (results.empty()) {
                 res.status = 500;
-                res.set_content(R"({"error":"generate_image returned no results"})", "application/json");
+                res.set_content(json({{"error", error_message}}).dump(), "application/json");
                 return;
             }
 
@@ -777,7 +772,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         entry["sha256"]     = "8888888888888888888888888888888888888888888888888888888888888888";
         entry["config"]     = nullptr;
         json r              = json::array();
-        if (runtime->sd_ctx) {
+        if (has_current_model(*runtime)) {
             r.push_back(entry);
         }
         res.set_content(r.dump(), "application/json");

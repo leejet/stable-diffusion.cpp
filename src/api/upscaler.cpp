@@ -17,8 +17,8 @@ struct sd_upscaler {
 };
 
 namespace sd::api {
-    static std::string upscale_source(const GenerationContext& context, int repeats) {
-        const auto& settings = context.config.context;
+    static std::string upscale_source(const OptConfig& config, int repeats) {
+        const auto& settings = config.context;
         std::string options;
         for (const auto& [name, spec] : std::map<std::string, const char*>{{"backend", settings.backend}, {"params_backend", settings.params_backend}}) {
             if (!spec || !*spec)
@@ -29,10 +29,10 @@ namespace sd::api {
                 throw dgl::Error(SD_STATUS_INVALID_ARGUMENT, error);
             options += ", " + name + " = " + nlohmann::json(assignment.get(SDBackendModule::UPSCALER)).dump();
         }
-        if (context.config.post.conv_direct)
+        if (config.post.conv_direct)
             options += ", direct = true";
         return render_template("upscale", {{"model_path", nlohmann::json(settings.model_path).dump()},
-                                           {"tile_size", std::to_string(context.config.post.tile_size)},
+                                           {"tile_size", std::to_string(config.post.tile_size)},
                                            {"repeats", std::to_string(repeats)},
                                            {"loader_options", options}});
     }
@@ -45,7 +45,7 @@ sd_status_t sd_upscaler_create(const sd_upscaler_opt_t* options, sd_upscaler_t**
         if (!out)
             return sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "out is required");
         auto result          = std::make_unique<sd_upscaler_t>(options);
-        result->source       = sd::api::upscale_source(result->context, 1);
+        result->source       = sd::api::upscale_source(result->context.model.config, 1);
         result->program      = sd::dgl::compile(result->source, sd::dgl::operations(), true);
         const auto& resource = result->program.resources.at(0);
         auto arguments       = resource.arguments;
@@ -109,7 +109,7 @@ sd_status_t sd_upscale(sd_upscaler_t* upscaler, const sd_upscale_opt_t* options,
         }
         const auto* input = sd::api::bound_tensor(snapshot.get(), "image");
         sd::api::GenerationProgram program;
-        program.source = config.post.repeats == 1 ? upscaler->source : sd::api::upscale_source(upscaler->context, config.post.repeats);
+        program.source = config.post.repeats == 1 ? upscaler->source : sd::api::upscale_source(upscaler->context.model.config, config.post.repeats);
         program.inputs.emplace("input_image", sd::dgl::Value::object(std::shared_ptr<sd_tensor_t>(sd_tensor_retain(input), sd_tensor_free)));
         auto value  = sd::api::execute_program(upscaler->context, program, config.post.repeats == 1 ? &upscaler->program : nullptr);
         auto result = std::make_unique<sd_result_t>();
