@@ -835,7 +835,6 @@ jobs:
       - ubuntu-latest-cmake
       - ubuntu-latest-cmake-vulkan
       - ubuntu-latest-rocm
-      - build-and-push-docker-images
       - macOS-latest-cmake
       - windows-latest-cmake
       - windows-latest-rocm
