@@ -105,7 +105,7 @@ namespace sd::api {
                 request.fields["negative_prompt_options"] += ", media = [" + pixels + "]";
         }
         if (encode && !sd_version_is_unet_edit(version)) {
-            const bool increase  = sd_version_is_flux2(version) || sd_version_is_flux3(version) ||
+            const bool increase = sd_version_is_flux2(version) || sd_version_is_flux3(version) ||
                                   sd_version_is_qwen_image(version) || sd_version_is_minimax_h3_image(version) ||
                                   version == VERSION_FIBO2 || sd_version_is_krea2(version) ||
                                   version == VERSION_ANIMA || sd_version_is_mage_flow(version) || moss_edit;

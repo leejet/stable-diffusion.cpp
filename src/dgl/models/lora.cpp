@@ -8,8 +8,7 @@
 
 namespace sd::dgl::models {
 
-    lora_apply_mode_t resolve_lora_mode(lora_apply_mode_t mode, const ModelLoader& loader,
-                                       SDBackendManager& backends, SDBackendModule module, bool row_split) {
+    lora_apply_mode_t resolve_lora_mode(lora_apply_mode_t mode, const ModelLoader& loader, SDBackendManager& backends, SDBackendModule module, bool row_split) {
         if (mode != LORA_APPLY_AUTO)
             return mode;
         // Offloading can signal limited compute memory, so avoid merged copies in auto mode.
@@ -20,9 +19,10 @@ namespace sd::dgl::models {
         const auto& tensors  = loader.get_tensor_storage_map();
         const bool quantized = std::any_of(tensors.begin(), tensors.end(), [](const auto& entry) {
             const auto& tensor = entry.second;
-            return tensor.is_int8_tensorwise || tensor.w4_convrot_kind ||
-                   ggml_is_quantized(tensor.type) ||
-                   (tensor.expected_type < GGML_TYPE_COUNT && ggml_is_quantized(tensor.expected_type));
+            return tensor.w4_convrot_kind ||
+                   (!tensor.is_int8_tensorwise &&
+                    (ggml_is_quantized(tensor.type) ||
+                     (tensor.expected_type < GGML_TYPE_COUNT && ggml_is_quantized(tensor.expected_type))));
         });
         return quantized ? LORA_APPLY_AT_RUNTIME : LORA_APPLY_IMMEDIATELY;
     }

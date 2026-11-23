@@ -6,6 +6,7 @@
 #include <vector>
 #include "core/ggml_extensions.h"
 #include "ggml-ext-vulkan.h"
+#include "i8_lora_merge.h"
 #include "modulate_convrot.h"
 #include "mul_mat_i8_residual_cm2.h"
 #include "mul_mat_i8_swiglu_split_cm2.h"
@@ -860,6 +861,45 @@ namespace sd_vulkan_i8 {
             return multiply_w4(e, d, nodes[0]);
         return is_convrot(nodes[count - 1]) ? quantize(e, d, nodes, count) : multiply(e, d, nodes, count);
     }
+
+    struct LoRAMergeParams {
+        uint32_t k, rows, count, group, scalar;
+    };
+    static bool lora_supports(ggml_backend_dev_t dev, const ggml_tensor* dst, void*) {
+        Device d;
+        SDI8LoRAMerge op;
+        return sd_ggml_i8_lora_merge_describe(dst, &op) && device_info(dev, d) &&
+               ggml_nelements(op.weight) % 4 == 0 && op.workspace_size() <= std::min<size_t>(d.info.max_buffer_range, UINT32_MAX / 2) &&
+               d.info.max_group_invocations >= 256 && d.info.max_group_size[0] >= 256 && d.compute.shared_memory >= 2048 &&
+               bounded(d, dst) && bounded(d, op.weight) && bounded(d, op.scale) && bounded(d, op.diff);
+    }
+    static ggml_status lora_prepare(ggml_backend_t, ggml_tensor* const* nodes, int, void**, size_t* bytes, void*) {
+        SDI8LoRAMerge op;
+        if (!sd_ggml_i8_lora_merge_describe(nodes[0], &op))
+            return GGML_STATUS_FAILED;
+        *bytes = op.workspace_size();
+        return GGML_STATUS_SUCCESS;
+    }
+    static ggml_status lora_execute(const ggml_ext_execution_context* e, ggml_tensor* const* nodes, int, void*, void*) {
+        Device device;
+        SDI8LoRAMerge op;
+        if (!sd_ggml_i8_lora_merge_describe(nodes[0], &op) || !device_info(ggml_backend_get_device(e->backend), device))
+            return GGML_STATUS_FAILED;
+        const LoRAMergeParams pc                 = {uint32_t(op.weight->ne[0]), uint32_t(op.weight->ne[1]), uint32_t(ggml_nelements(op.weight)),
+                                                    uint32_t(op.group), op.scalar_scale()};
+        const ggml_ext_vulkan_binding bindings[] = {{op.weight}, {op.scale}, {op.diff}, {nodes[0]}, {nullptr, e->workspace, 0, op.workspace_size()}};
+        auto pipeline                            = SD_VK_PIPELINE(i8_lora_merge, 5, LoRAMergeParams);
+        const uint32_t workgroups[]              = {(pc.count + 255) / 256, pc.rows, 1, (pc.count / 4 + 255) / 256};
+        for (uint32_t stage = 0; stage < 4; ++stage) {
+            pipeline.constants      = &stage;
+            pipeline.constant_count = 1;
+            const uint32_t groups[] = {std::min(workgroups[stage], device.info.max_group_count[0]), 1, 1};
+            const auto status       = device.api->dispatch(e->backend, &pipeline, bindings, &pc, groups);
+            if (status != GGML_STATUS_SUCCESS)
+                return status;
+        }
+        return GGML_STATUS_SUCCESS;
+    }
 #undef SD_VK_PIPELINE
 }
 
@@ -871,13 +911,21 @@ void sd_ggml_register_vulkan_i8(ggml_backend_dev_t device) {
     ggml_ext_kernel_desc d = {};
     d.abi_version          = GGML_EXT_ABI_VERSION;
     d.priority             = 100;
-    d.prepare              = prepare;
-    d.destroy              = destroy;
-    d.execute              = execute;
-    d.name                 = "sd.quantize_i8_convrot.vulkan.v1";
     d.op                   = GGML_OP_CUSTOM;
-    d.custom_op            = sd_ggml_convrot_op();
-    d.supports             = quant_supports;
+    d.name                 = "sd.i8_lora_merge.vulkan.v1";
+    d.custom_op            = sd_ggml_i8_lora_merge_op();
+    d.supports             = lora_supports;
+    d.prepare              = lora_prepare;
+    d.destroy              = destroy;
+    d.execute              = lora_execute;
+    GGML_ASSERT(ggml_ext_register_kernel(device, &d));
+    d.prepare   = prepare;
+    d.destroy   = destroy;
+    d.execute   = execute;
+    d.name      = "sd.quantize_i8_convrot.vulkan.v1";
+    d.op        = GGML_OP_CUSTOM;
+    d.custom_op = sd_ggml_convrot_op();
+    d.supports  = quant_supports;
     GGML_ASSERT(ggml_ext_register_kernel(device, &d));
     d.name     = "sd.quantize_i8_convrot.h64.vulkan.v1";
     d.supports = quant64_supports;

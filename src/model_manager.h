@@ -104,6 +104,8 @@ private:
         bool params_follow_compute_backend           = false;
         bool metadata_validated                      = false;
         enum ggml_op usage_op                        = GGML_OP_NONE;
+        TensorState* lora_int8_partner               = nullptr;
+        bool is_int8_weight                          = false;
 
         int pin_count = 0;
 
@@ -181,6 +183,7 @@ private:
     bool load_tensors_to_params_backend(const std::vector<TensorState*>& states);
     void reuse_shared_weights(std::vector<TensorState*>& need_load);
     void detach_shared_weight(TensorState& state);
+    static bool has_lora_int8_pair(const TensorState& state);
     static bool needs_lora_staging(const TensorState& state);
     bool apply_loras_to_params(const std::vector<TensorState*>& states);
     bool mmap_params(const std::vector<TensorState*>& states,

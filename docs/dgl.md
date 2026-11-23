@@ -606,8 +606,9 @@ while they remain resident. Persistent contexts retain idle buffers subject
 to RAM and VRAM pressure. Run-once contexts can release shared buffers after
 their last use.
 In both persistent and run-once contexts, `auto` selects `immediately` for
-unquantized weights on the compute backend without row splitting. It selects
-`at_runtime` for quantized, offloaded, or row-split weights.
+unquantized and [INT8 tensorwise weights](guides/int8_convrot.md) on the compute
+backend without row splitting. It selects `at_runtime` for other quantized
+formats, offloaded weights, or row-split weights.
 
 ### Prompt encoding
 

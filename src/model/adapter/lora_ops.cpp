@@ -4,7 +4,129 @@
 
 #include "core/ggml_extend.h"
 #include "core/ggml_extend_backend.h"
+#include "core/ggml_extensions.h"
 #include "core/ggml_runner.h"
+#include "core/util.h"
+
+ggml_tensor* build_lora_int8_merge(ggml_context* ctx, ggml_tensor* weight, const LoraInt8Weight& layout, ggml_tensor* diff) {
+#ifndef SD_USE_UPSTREAM_GGML
+    ggml_tensor* inputs[] = {weight, layout.scale, diff};
+    const int32_t group   = layout.convrot_group;
+    return ggml_ext_op_create(ctx, sd_ggml_i8_lora_merge_op(), inputs, 3, &group);
+#else
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(weight);
+    GGML_UNUSED(layout);
+    GGML_UNUSED(diff);
+    return nullptr;
+#endif
+}
+
+#ifndef SD_USE_UPSTREAM_GGML
+static ggml_tensor* lora_storage_view(ggml_context* ctx, ggml_tensor* tensor, size_t bytes, size_t offset, ggml_type type) {
+    // Reinterpret the range as integers so CPY preserves weight and scale bits.
+    const size_t stride = ggml_type_size(type);
+    auto* view          = ggml_view_1d(ctx, tensor, bytes / ggml_type_size(tensor->type), offset);
+    view->type          = type;
+    view->ne[0]         = bytes / stride;
+    view->nb[0]         = stride;
+    view->nb[1] = view->nb[2] = view->nb[3] = bytes;
+    return view;
+}
+
+static void copy_packed_lora_result(ggml_tensor* target, ggml_tensor* packed, size_t offset) {
+    ggml_tensor view = *target;
+    view.view_src    = packed;
+    view.view_offs   = offset;
+    view.buffer      = packed->buffer;
+    view.data        = static_cast<char*>(packed->data) + offset;
+    view.extra       = packed->extra;
+    ggml_backend_tensor_copy(&view, target);
+}
+
+static uint32_t lora_int8_merge_flags(const ggml_tensor* status) {
+    uint32_t flags;
+    ggml_backend_tensor_get(status, &flags, 0, sizeof(flags));
+    return flags;
+}
+
+static bool lora_int8_merge_valid(const ggml_tensor* weight, uint32_t flags) {
+    if (flags & SD_I8_LORA_NONFINITE) {
+        LOG_ERROR("non-finite INT8 LoRA merge for '%s'", ggml_get_name(weight));
+        return false;
+    }
+    return true;
+}
+#endif
+
+ggml_tensor* append_lora_int8_writeback(ggml_context* ctx, ggml_cgraph* graph, ggml_backend_t backend, ggml_tensor* weight, const LoraInt8Weight& layout, ggml_tensor* packed) {
+#ifndef SD_USE_UPSTREAM_GGML
+    SDI8LoRAMerge op;
+    if (!sd_ggml_i8_lora_merge_describe(packed, &op))
+        return nullptr;
+    auto copy = [&](ggml_tensor* target, size_t offset) {
+        const auto bytes = ggml_nbytes(target);
+        const auto type  = bytes % sizeof(uint32_t) == 0 && offset % sizeof(uint32_t) == 0 &&
+                                   target->view_offs % sizeof(uint32_t) == 0 && uintptr_t(target->data) % sizeof(uint32_t) == 0
+                               ? GGML_TYPE_I32
+                               : GGML_TYPE_I8;
+        return ggml_cpy(ctx, lora_storage_view(ctx, packed, bytes, offset, type),
+                        lora_storage_view(ctx, target, bytes, 0, type));
+    };
+    auto* status  = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+    auto* weights = copy(weight, op.weight_offset());
+    auto* scales  = copy(layout.scale, op.scale_offset());
+    auto* flags   = ggml_cpy(ctx, lora_storage_view(ctx, packed, sizeof(uint32_t), 0, GGML_TYPE_I32), status);
+    if (!ggml_backend_supports_op(backend, weights) || !ggml_backend_supports_op(backend, scales) ||
+        !ggml_backend_supports_op(backend, flags))
+        return nullptr;
+
+    ggml_set_output(status);
+    ggml_build_forward_expand(graph, flags);
+    ggml_build_forward_expand(graph, scales);
+    ggml_build_forward_expand(graph, weights);
+    return status;
+#else
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(graph);
+    GGML_UNUSED(backend);
+    GGML_UNUSED(weight);
+    GGML_UNUSED(layout);
+    GGML_UNUSED(packed);
+    return nullptr;
+#endif
+}
+
+bool check_lora_int8_merge(const ggml_tensor* weight, const ggml_tensor* status) {
+#ifndef SD_USE_UPSTREAM_GGML
+    return lora_int8_merge_valid(weight, lora_int8_merge_flags(status));
+#else
+    GGML_UNUSED(weight);
+    GGML_UNUSED(status);
+    return false;
+#endif
+}
+
+bool commit_lora_int8_merge(ggml_tensor* weight, const LoraInt8Weight& layout, ggml_tensor* packed) {
+#ifndef SD_USE_UPSTREAM_GGML
+    SDI8LoRAMerge op;
+    if (!sd_ggml_i8_lora_merge_describe(packed, &op))
+        return false;
+    const auto flags = lora_int8_merge_flags(packed);
+    if (!lora_int8_merge_valid(weight, flags))
+        return false;
+    if (flags & SD_I8_LORA_CHANGED) {
+        copy_packed_lora_result(weight, packed, op.weight_offset());
+        copy_packed_lora_result(layout.scale, packed, op.scale_offset());
+    }
+    return true;
+#else
+    GGML_UNUSED(weight);
+    GGML_UNUSED(layout);
+    GGML_UNUSED(packed);
+    return false;
+#endif
+}
 
 ggml_tensor* ggml_ext_mul_n_mode(GGMLRunnerContext* runner_ctx, ggml_tensor* a, ggml_tensor* b, int mode) {
     auto ctx = runner_ctx->ggml_ctx;
