@@ -25,6 +25,7 @@
 #include "model/te/ltx_connector.hpp"
 #include "model/te/ming_image_te.hpp"
 #include "model/te/ph3_image_connector.hpp"
+#include "model/te/clipproj_connector.hpp"
 #include "model/te/t5.hpp"
 #include "model_loader.h"
 #include "tokenizers/sensenova_u1_tokenizer.h"
@@ -1984,6 +1985,7 @@ struct LLMEmbedder : public Conditioner {
     std::shared_ptr<LLM::LLMRunner> llm;
     std::shared_ptr<T5Runner> byt5;
     std::shared_ptr<PH3ImageTextConnectorRunner> ph3_connector;
+    std::shared_ptr<ClipProjConnectorRunner> clipproj_connector;
 
     bool supports_prompt_images() const override {
         return llm->supports_prompt_images();
@@ -2066,11 +2068,14 @@ struct LLMEmbedder : public Conditioner {
                                                weight_manager);
         if (sd_version_is_minimax_h3(version)) {
             const bool has_ph3_connector = tensor_storage_map.count(std::string(PH3ImageTextConnectorRunner::prefix) + ".proj.weight") != 0;
+            const bool has_clipproj_connector = tensor_storage_map.count(std::string(ClipProjConnectorRunner::prefix) + ".W") != 0;
             if (has_ph3_connector) {
                 if (llm->config.num_layers != 36 || llm->config.hidden_size != 2560) {
                     throw std::runtime_error("The P-H3-Image text connector requires the Qwen3-VL-4B text encoder");
                 }
                 ph3_connector = std::make_shared<PH3ImageTextConnectorRunner>(backend, tensor_storage_map, weight_manager);
+            } else if(has_clipproj_connector){
+                clipproj_connector = std::make_shared<ClipProjConnectorRunner>(backend, llm->config.hidden_size, tensor_storage_map, weight_manager);
             } else if (llm->config.hidden_size == 2560) {
                 throw std::runtime_error(
                     sd_format("%s with Qwen3-VL-4B requires the P-H3-Image text connector; "
@@ -2120,6 +2125,9 @@ struct LLMEmbedder : public Conditioner {
         if (ph3_connector) {
             ph3_connector->get_param_tensors(tensors);
         }
+        if(clipproj_connector){
+            clipproj_connector->get_param_tensors(tensors);
+        }
         if (byt5) {
             byt5->get_param_tensors(tensors, "text_encoders.t5xxl.transformer");
         }
@@ -2134,6 +2142,9 @@ struct LLMEmbedder : public Conditioner {
         if (ph3_connector) {
             ph3_connector->set_max_graph_vram_bytes(max_vram_bytes);
         }
+        if (clipproj_connector) {
+            clipproj_connector->set_max_graph_vram_bytes(max_vram_bytes);
+        }
         if (byt5) {
             byt5->set_max_graph_vram_bytes(max_vram_bytes);
         }
@@ -2143,6 +2154,9 @@ struct LLMEmbedder : public Conditioner {
         llm->set_runtime_backends(backends);
         if (ph3_connector) {
             ph3_connector->set_runtime_backends(backends);
+        }
+        if (clipproj_connector) {
+            clipproj_connector->set_runtime_backends(backends);
         }
         if (byt5) {
             byt5->set_runtime_backends(backends);
@@ -2179,6 +2193,9 @@ struct LLMEmbedder : public Conditioner {
         if (ph3_connector) {
             ph3_connector->set_flash_attention_enabled(enabled);
         }
+        if (clipproj_connector) {
+            clipproj_connector->set_flash_attention_enabled(enabled);
+        }
         if (byt5) {
             byt5->set_flash_attention_enabled(enabled);
         }
@@ -2189,6 +2206,9 @@ struct LLMEmbedder : public Conditioner {
         if (ph3_connector) {
             ph3_connector->set_scale_overrides(linear_scale, attn_scale);
         }
+        if (clipproj_connector) {
+            clipproj_connector->set_scale_overrides(linear_scale, attn_scale);
+        }
         if (byt5) {
             byt5->set_scale_overrides(linear_scale, attn_scale);
         }
@@ -2197,6 +2217,9 @@ struct LLMEmbedder : public Conditioner {
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
         if (ph3_connector) {
             ph3_connector->set_weight_adapter(adapter);
+        }
+        if (clipproj_connector) {
+            clipproj_connector->set_weight_adapter(adapter);
         }
         if (llm) {
             llm->set_weight_adapter(adapter);
@@ -2209,6 +2232,9 @@ struct LLMEmbedder : public Conditioner {
     void runner_end() override {
         if (ph3_connector) {
             ph3_connector->runner_end();
+        }
+        if (clipproj_connector) {
+            clipproj_connector->runner_end();
         }
         if (llm) {
             llm->runner_end();
@@ -2467,6 +2493,11 @@ struct LLMEmbedder : public Conditioner {
             if (hidden_states.empty()) {
                 return {};
             }
+        } else if(clipproj_connector){
+            hidden_states = clipproj_connector->compute(n_threads, hidden_states);
+            if (hidden_states.empty()) {
+                return {};
+            }
         }
         hidden_states = apply_token_weights(std::move(hidden_states), weights);
         GGML_ASSERT(hidden_states.shape()[1] > prompt_template_encode_start_idx);
@@ -2631,7 +2662,7 @@ struct LLMEmbedder : public Conditioner {
             prompt                           = system_prefix("");
             prompt_template_encode_start_idx = 0;
             // The final tap is normalized; LLMRunner exposes it at num_layers + 1.
-            out_layers        = ph3_connector ? std::set<int>{13, 19, 25, 31, 37} : std::set<int>{50};
+            out_layers        = ph3_connector ? std::set<int>{13, 19, 25, 31, 37} : std::set<int>{clipproj_connector ? 24 : 50};
             prompt_attn_range = {0, 0};
 
             if (llm->enable_vision) {
