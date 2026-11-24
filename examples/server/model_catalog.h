@@ -1,9 +1,9 @@
 #ifndef __SD_EXAMPLES_SERVER_MODEL_CATALOG_H__
 #define __SD_EXAMPLES_SERVER_MODEL_CATALOG_H__
 
-#include <chrono>
 #include <map>
 #include <mutex>
+#include <set>
 #include <shared_mutex>
 #include <string>
 
@@ -29,36 +29,47 @@ ModelRoot make_model_root(const std::filesystem::path& path, bool primary);
 std::vector<ModelRoot> get_model_roots(const SDSvrParams& params);
 std::vector<std::filesystem::path> model_category_directories(const ModelRoot& root, const std::string& category);
 
+struct ServerFileAccess {
+    std::vector<ModelRoot> models;
+    std::filesystem::path output;
+    std::vector<std::filesystem::path> model_bundles;
+    std::set<std::string> configured_files;
+};
+
 struct ServerModels {
-    std::shared_mutex runtime_mutex;
+    std::shared_mutex model_mutex;
     std::mutex catalog_mutex;
-    std::mutex status_mutex;
+    ServerFileAccess file_access;
+    ServerFileAccess workspace_file_access;
     SDCtxPtr context;
     SDContextParams base_context;
     SDGenerationParams base_defaults;
     std::map<std::string, json> recipes;
     std::map<std::string, ModelFile> files;
-    std::chrono::steady_clock::time_point load_started_at;
-    json active_recipe  = nullptr;
+    json current_recipe = nullptr;
+    json current_files = json::object();
+    uint64_t revision = 0;
     json catalog_errors = json::array();
-    json status         = {{"state", "empty"}, {"recipe", nullptr}, {"models", json::object()}, {"error", nullptr}, {"load_elapsed_seconds", nullptr}};
+};
+
+struct ServerModelSelection {
+    SDContextParams context;
+    SDGenerationParams defaults;
+    json recipe;
+    json files;
+    SDOptPtr options;
 };
 
 void refresh_model_catalog(ServerRuntime& runtime);
-json model_status(ServerRuntime& runtime);
+json model_status(const ServerRuntime& runtime);
 void initialize_server_models(ServerRuntime& runtime);
 
 json resolve_recipe_features(const json& recipe);
 json model_generation_features(const ServerRuntime& runtime);
 
-// Resolves the load request into context/generation params. `body` is updated
-// so `models` reflects the fully resolved selection (recipe defaults merged in),
-// letting the caller report exactly which components got loaded.
-void prepare_model_load(ServerRuntime& runtime, json& body, SDContextParams& context, SDGenerationParams& defaults, json* loaded_recipe = nullptr);
-
-// True when both parameter sets resolve to the same component files. File IDs
-// stay stable if a model directory symlink is retargeted inside the configured
-// root, so the idempotent-load check compares the resolved paths too.
-bool component_paths_match(const SDContextParams& a, const SDContextParams& b);
+ServerModelSelection resolve_model_selection(ServerRuntime& runtime, const json& body, SDMode mode);
+// The caller holds the generation mutex across the switch and generation.
+bool set_current_model(ServerRuntime& runtime, ServerModelSelection&& selection, SDMode mode, std::string& error_message);
+void add_startup_model_sources(ServerFileAccess& policy, const SDContextParams& config);
 
 #endif

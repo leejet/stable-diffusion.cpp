@@ -2,6 +2,7 @@
 #define __SD_MODEL_VAE_SEEDVR2_VAE_HPP__
 
 #include "model/common/ggml_block.hpp"
+#include "model/vae/vae.hpp"
 
 namespace SeedVR2 {
 
@@ -259,16 +260,22 @@ namespace SeedVR2 {
         }
     };
 
-    struct SeedVR2VAERunner : GGMLRunner {
+    struct SeedVR2VAERunner : VAE {
         SeedVR2VAEConfig config;
         VideoAutoencoderKL model;
 
-        SeedVR2VAERunner(ggml_backend_t backend, const String2TensorStorage& weights, std::shared_ptr<DeviceResidencyManager> manager)
-            : GGMLRunner(backend, manager), config(SeedVR2VAEConfig::detect_from_weights(weights, "vae")), model(config) {
-            model.init(params_ctx, weights, "vae");
+        SeedVR2VAERunner(ggml_backend_t backend, const String2TensorStorage& weights, std::shared_ptr<RunnerWeightManager> manager, const std::string& prefix = "vae")
+            : VAE(VERSION_SEEDVR2, backend, prefix, manager),
+              config(SeedVR2VAEConfig::detect_from_weights(weights, prefix)),
+              model(config) {
+            model.init(params_ctx, weights, prefix);
         }
         std::string get_desc() override { return "SeedVR2 VAE"; }
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) { model.get_param_tensors(tensors, "vae"); }
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override { model.get_param_tensors(tensors, weight_prefix); }
+        int get_encoder_output_channels(int) override { return 16; }
+        sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& output, std::shared_ptr<RNG>, VAEPosterior, bool) override { return output; }
+        sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latent) override { return latent * 0.9152f; }
+        sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latent) override { return latent / 0.9152f; }
         sd::Tensor<float> compute(int n_threads, const sd::Tensor<float>& input, bool decode) {
             auto graph = [&]() {
                 auto gf  = new_graph_custom(MAX_GRAPH_SIZE * 4);
@@ -278,7 +285,24 @@ namespace SeedVR2 {
                 return gf;
             };
             auto output = GGMLRunner::compute(graph, n_threads);
-            return restore_trailing_singleton_dims(output, 4);
+            return restore_trailing_singleton_dims(std::move(output), 4);
+        }
+
+    protected:
+        sd::Tensor<float> _compute(int n_threads, const sd::Tensor<float>& input, bool decode) override {
+            if (input.empty() || (input.dim() != 4 && input.dim() != 5) || input.shape().back() != 1 ||
+                input.shape()[input.dim() - 2] != (decode ? 16 : 3)) {
+                throw std::runtime_error("SeedVR2 VAE requires a single RGB tensor or 16-channel latent");
+            }
+            auto volume = input.dim() == 5 ? input.squeeze(4) : input.squeeze(3).unsqueeze(2);
+            if (!decode && (volume.shape()[2] - 1) % 4)
+                throw std::runtime_error("SeedVR2 VAE requires 4n+1 pixel frames");
+            auto result = compute(n_threads, volume, decode);
+            if (result.empty())
+                return {};
+            if (decode && !std::all_of(result.values().begin(), result.values().end(), [](float value) { return std::isfinite(value); }))
+                throw std::runtime_error("SeedVR2 produced non-finite pixels");
+            return input.dim() == 5 ? result.unsqueeze(4) : result.squeeze(2).unsqueeze(3);
         }
     };
 }

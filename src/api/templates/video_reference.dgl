@@ -1,0 +1,11 @@
+{% if encode_audio %}
+    {{name}} = audio_vae_encode(audio_vae, {{name}}_samples, sample_rate = {{sample_rate}})
+{% else %}
+{% if resize_video %}
+    {{source}}_pixels = image::to_f32(tensor::interpolate(tensor::index_select({{source}}, axis = 3, indices = {{indices}}), size = [{{width}}, {{height}}], axes = [1, 2]), channels = 3)
+{% elif resize_image %}
+    {{source}}_pixels = image::to_f32(tensor::interpolate({{source}}, size = [{{width}}, {{height}}], axes = [1, 2]), channels = 3)
+{% endif %}
+    {{name}}_raw = vae_to_dit_latents(vae, vae_encode(vae, {{pixels}}, rng = encode_rng{{vae_run_options}}))
+    {{name}} = h3_reference_noise({{name}}_raw, seed)
+{% endif %}

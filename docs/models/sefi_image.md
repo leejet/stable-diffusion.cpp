@@ -34,8 +34,6 @@ python3 scripts/convert_qwen3_vl.py "<hf_repo_dir>/Qwen3-VL-XB-Instruct" "<out_d
 
 ## Usage
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
-
 ### Web UI
 
 Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
@@ -51,7 +49,55 @@ Slot IDs correspond to CLI component options: `diffusion_model` uses
 `--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
 Select optional components when required by your checkpoint or task.
 
-### CLI
+### DGL
+
+| Example | Description |
+| --- | --- |
+| [1B Turbo](../dgl/sefi_image/sefi-1b-turbo-txt2img.dgl) | Distilled generation; see variant defaults for 2B. |
+| [1B Base](../dgl/sefi_image/sefi-1b-base-txt2img.dgl) | Base generation; see variant defaults for 2B. |
+| [5B Turbo](../dgl/sefi_image/sefi-5b-turbo-txt2img.dgl) | Run with `--max-vram 8` for the streaming example. |
+| [5B RL](../dgl/sefi_image/sefi-image-5b-rl.dgl) | Use the dual-stream sampler. |
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\sefi_image\sefi-1b-turbo-txt2img.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/sefi_image/sefi-1b-turbo-txt2img.dgl
+```
+
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+The [SeFi example](../dgl/sefi_image/sefi-image-5b-rl.dgl) passes the two sigma tensors
+from `sefi::make_sigmas` to `sefi::sample`. Both tensors must be rank-one F32,
+nonnegative, nonincreasing and equal in length. Repeated values describe a
+paused stream while the other stream advances. The sampler uses Euler.
+
+```text
+schedule = sefi::make_sigmas(steps = 20)
+latent = sefi::sample(start, schedule.sigmas, schedule.semantic_sigmas,
+                      predict = guided, rng = rng)
+```
+
+The call supports `base`, `denoise_mask`, `mask_input`, `finish`, cache and
+preview options through the shared sampling execution layer. Slice the
+texture channels `[16, 144)` before converting the latent for the Flux2 VAE.
+
+### Legacy CLI
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 #### 1B / 2B turbo
 
@@ -175,4 +221,9 @@ Select optional components when required by your checkpoint or task.
 | RL | 0.3 | 50 | 4.0 |
 | turbo | 1.0 | 4 | 1.0 |
 
-The dispatcher picks `alpha` from the filename (`turbo` substring => 1.0, otherwise 0.3). Override via `--extra-sample-args sefi_alpha=<value>` or `sefi_delta_t=<value>`.
+Set `--extra-sample-args sefi_alpha=0.3` for Base and RL; turbo uses the default
+alpha of 1. Override the second timeline offset with `sefi_delta_t=<value>`.
+CLI and C API translation forward both settings to the initial and hires
+schedules. Image-to-image strength trims both timelines together. Custom sigmas
+replace the texture schedule while the semantic schedule uses the same number
+of steps.

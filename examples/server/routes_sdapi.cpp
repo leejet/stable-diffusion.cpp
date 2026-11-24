@@ -47,41 +47,38 @@ static std::string lower_ascii(std::string value) {
     return value;
 }
 
-static enum sample_method_t get_sdapi_sample_method(std::string name) {
-    enum sample_method_t result = str_to_sample_method(name.c_str());
-    if (result != SAMPLE_METHOD_COUNT) {
-        return result;
-    }
-
+static std::string get_sdapi_sample_method(std::string name) {
+    if (example_options::contains(example_options::sample_methods, name))
+        return name;
     name = lower_ascii(name);
-    static const std::unordered_map<std::string_view, sample_method_t> hardcoded{
-        {"euler a", EULER_A_SAMPLE_METHOD},
-        {"k_euler_a", EULER_A_SAMPLE_METHOD},
-        {"euler", EULER_SAMPLE_METHOD},
-        {"k_euler", EULER_SAMPLE_METHOD},
-        {"heun", HEUN_SAMPLE_METHOD},
-        {"k_heun", HEUN_SAMPLE_METHOD},
-        {"dpm2", DPM2_SAMPLE_METHOD},
-        {"k_dpm_2", DPM2_SAMPLE_METHOD},
-        {"lcm", LCM_SAMPLE_METHOD},
-        {"ddim", DDIM_TRAILING_SAMPLE_METHOD},
-        {"dpm++ 2m", DPMPP2M_SAMPLE_METHOD},
-        {"k_dpmpp_2m", DPMPP2M_SAMPLE_METHOD},
-        {"dpm++ 2m sde", DPMPP2M_SDE_SAMPLE_METHOD},
-        {"k_dpmpp_2m_sde", DPMPP2M_SDE_SAMPLE_METHOD},
-        {"dpm++ 2m sde gpu", DPMPP2M_SDE_BT_SAMPLE_METHOD},
-        {"k_dpmpp_2m_sde_gpu", DPMPP2M_SDE_BT_SAMPLE_METHOD},
-        {"res multistep", RES_MULTISTEP_SAMPLE_METHOD},
-        {"k_res_multistep", RES_MULTISTEP_SAMPLE_METHOD},
-        {"res 2s", RES_2S_SAMPLE_METHOD},
-        {"k_res_2s", RES_2S_SAMPLE_METHOD},
-        {"euler_cfg_pp", EULER_CFG_PP_SAMPLE_METHOD},
-        {"k_euler_cfg_pp", EULER_CFG_PP_SAMPLE_METHOD},
-        {"euler_a_cfg_pp", EULER_CFG_PP_SAMPLE_METHOD},
-        {"k_euler_a_cfg_pp", EULER_CFG_PP_SAMPLE_METHOD},
+    static const std::unordered_map<std::string_view, std::string> hardcoded{
+        {"euler a", "euler_a"},
+        {"k_euler_a", "euler_a"},
+        {"euler", "euler"},
+        {"k_euler", "euler"},
+        {"heun", "heun"},
+        {"k_heun", "heun"},
+        {"dpm2", "dpm2"},
+        {"k_dpm_2", "dpm2"},
+        {"lcm", "lcm"},
+        {"ddim", "ddim_trailing"},
+        {"dpm++ 2m", "dpm++2m"},
+        {"k_dpmpp_2m", "dpm++2m"},
+        {"dpm++ 2m sde", "dpm++2m_sde"},
+        {"k_dpmpp_2m_sde", "dpm++2m_sde"},
+        {"dpm++ 2m sde gpu", "dpm++2m_sde_bt"},
+        {"k_dpmpp_2m_sde_gpu", "dpm++2m_sde_bt"},
+        {"res multistep", "res_multistep"},
+        {"k_res_multistep", "res_multistep"},
+        {"res 2s", "res_2s"},
+        {"k_res_2s", "res_2s"},
+        {"euler_cfg_pp", "euler_cfg_pp"},
+        {"k_euler_cfg_pp", "euler_cfg_pp"},
+        {"euler_a_cfg_pp", "euler_a_cfg_pp"},
+        {"k_euler_a_cfg_pp", "euler_a_cfg_pp"},
     };
     auto it = hardcoded.find(name);
-    return it != hardcoded.end() ? it->second : SAMPLE_METHOD_COUNT;
+    return it != hardcoded.end() ? it->second : std::string{};
 }
 
 static bool parse_sdapi_adetailer(const json& body,
@@ -191,10 +188,11 @@ static bool parse_sdapi_adetailer(const json& body,
             ServerADetailerPass pass;
             pass.prompt          = text("ad_prompt", "");
             pass.negative_prompt = text("ad_negative_prompt", "");
-            pass.width           = request.gen_params.get_resolved_width();
-            pass.height          = request.gen_params.get_resolved_height();
-            pass.strength        = static_cast<float>(number("ad_denoising_strength", 0.4, 0, 1));
-            auto append          = [&](const char* key, const std::string& value) {
+            pass.width           = request.gen_params.width;
+            pass.height          = request.gen_params.height;
+            if (config.contains("ad_denoising_strength"))
+                pass.strength = static_cast<float>(number("ad_denoising_strength", 0, 0, 1));
+            auto append = [&](const char* key, const std::string& value) {
                 if (!pass.extra_args.empty())
                     pass.extra_args += ",";
                 pass.extra_args += std::string(key) + "=" + value;
@@ -218,7 +216,7 @@ static bool parse_sdapi_adetailer(const json& body,
             append("mask_min_ratio", json(min_ratio).dump());
             append("mask_max_ratio", json(max_ratio).dump());
             // Bound pixel operations before converting them to the native mask parameters.
-            const int mask_limit = std::clamp(std::max(pass.width, pass.height), 32, 16384);
+            const int mask_limit = k_max_generation_dimension;
             append_integer("dilate_erode", "ad_dilate_erode", 4, -mask_limit, mask_limit);
             append_integer("x_offset", "ad_x_offset", 0, -mask_limit, mask_limit);
             append_integer("y_offset", "ad_y_offset", 0, -mask_limit, mask_limit);
@@ -231,8 +229,12 @@ static bool parse_sdapi_adetailer(const json& body,
             append("mask_mode", merge == "None" ? "none" : merge == "Merge" ? "merge"
                                                                             : "merge_invert");
             if (boolean("ad_use_inpaint_width_height", false)) {
-                pass.width  = integer("ad_inpaint_width", 512, 1, k_max_generation_dimension);
-                pass.height = integer("ad_inpaint_height", 512, 1, k_max_generation_dimension);
+                pass.width.reset();
+                pass.height.reset();
+                if (config.contains("ad_inpaint_width"))
+                    pass.width = integer("ad_inpaint_width", 0, 1, k_max_generation_dimension);
+                if (config.contains("ad_inpaint_height"))
+                    pass.height = integer("ad_inpaint_height", 0, 1, k_max_generation_dimension);
             }
             if (boolean("ad_use_steps", false))
                 append_integer("steps", "ad_steps", 28, 1, k_max_adetailer_steps);
@@ -251,20 +253,20 @@ static bool parse_sdapi_adetailer(const json& body,
                     if (legacy_karras)
                         sampler.resize(sampler.size() - suffix.size());
                     const auto method = get_sdapi_sample_method(sampler);
-                    if (method == SAMPLE_METHOD_COUNT)
+                    if (method.empty())
                         throw std::invalid_argument("unsupported ADetailer sampler");
-                    append("sample_method", sd_sample_method_name(method));
+                    append("sample_method", method);
                     if (legacy_karras && text("ad_scheduler", "Use same scheduler") == "Use same scheduler")
-                        append("scheduler", sd_scheduler_name(KARRAS_SCHEDULER));
+                        append("scheduler", "karras");
                 }
                 const auto scheduler = text("ad_scheduler", "Use same scheduler");
                 if (scheduler == "Automatic") {
                     pass.automatic_scheduler = true;
                 } else if (scheduler != "Use same scheduler") {
-                    const auto value = str_to_scheduler(scheduler.c_str());
-                    if (value == SCHEDULER_COUNT)
+                    const auto value = scheduler;
+                    if (!example_options::contains(example_options::schedulers, value) && value != "normal")
                         throw std::invalid_argument("unsupported ADetailer scheduler");
-                    append("scheduler", sd_scheduler_name(value));
+                    append("scheduler", value == "normal" ? "discrete" : value);
                 }
             }
             request.adetailer_passes.push_back(std::move(pass));
@@ -287,20 +289,8 @@ static bool build_sdapi_img_gen_request(const json& j,
                                         std::string& error_message) {
     std::string prompt          = j.value("prompt", "");
     std::string negative_prompt = j.value("negative_prompt", "");
-    int width                   = j.value("width", 512);
-    int height                  = j.value("height", 512);
-    int steps                   = j.value("steps", runtime.default_gen_params->sample_params.sample_steps);
-    float cfg_scale             = j.value("cfg_scale", runtime.default_gen_params->sample_params.guidance.txt_cfg);
-    int64_t seed                = j.value("seed", -1);
-    int batch_size              = j.value("batch_size", 1);
-    int clip_skip               = j.value("clip_skip", -1);
     std::string sampler_name    = j.value("sampler_name", "");
     std::string scheduler_name  = j.value("scheduler", "");
-
-    if (width <= 0 || height <= 0) {
-        error_message = "width and height must be positive";
-        return false;
-    }
 
     if (prompt.empty()) {
         error_message = "prompt required";
@@ -309,15 +299,20 @@ static bool build_sdapi_img_gen_request(const json& j,
 
     request.gen_params = *runtime.default_gen_params;
 
-    request.gen_params.prompt                         = prompt;
-    request.gen_params.negative_prompt                = negative_prompt;
-    request.gen_params.seed                           = seed;
-    request.gen_params.sample_params.sample_steps     = steps;
-    request.gen_params.batch_count                    = batch_size;
-    request.gen_params.sample_params.guidance.txt_cfg = cfg_scale;
-    const bool recipe_dimensions                      = !img2img && model_status(runtime)["recipe"].is_string();
-    request.gen_params.width                          = j.value("width", recipe_dimensions ? runtime.default_gen_params->width : -1);
-    request.gen_params.height                         = j.value("height", recipe_dimensions ? runtime.default_gen_params->height : -1);
+    request.gen_params.prompt = prompt;
+    if (j.contains("negative_prompt"))
+        request.gen_params.negative_prompt = negative_prompt;
+    auto load_input = [&](const char* key, auto& value) {
+        if (j.contains(key))
+            j.at(key).get_to(value);
+    };
+    load_input("seed", request.gen_params.seed);
+    load_input("steps", request.gen_params.sample_params.sample_steps);
+    load_input("batch_size", request.gen_params.batch_count);
+    load_input("cfg_scale", request.gen_params.sample_params.guidance.txt_cfg);
+    load_input("width", request.gen_params.width);
+    load_input("height", request.gen_params.height);
+    load_input("clip_skip", request.gen_params.clip_skip);
 
     if (!img2img && j.value("enable_hr", false)) {
         request.gen_params.hires_enabled = true;
@@ -337,17 +332,13 @@ static bool build_sdapi_img_gen_request(const json& j,
         return false;
     }
 
-    if (clip_skip > 0) {
-        request.gen_params.clip_skip = clip_skip;
-    }
-
-    enum sample_method_t sample_method = get_sdapi_sample_method(sampler_name);
-    if (sample_method != SAMPLE_METHOD_COUNT) {
+    const auto sample_method = get_sdapi_sample_method(sampler_name);
+    if (!sample_method.empty()) {
         request.gen_params.sample_params.sample_method = sample_method;
     }
 
-    enum scheduler_t scheduler = str_to_scheduler(scheduler_name.c_str());
-    if (scheduler != SCHEDULER_COUNT) {
+    const auto scheduler = scheduler_name;
+    if (example_options::contains(example_options::schedulers, scheduler) || scheduler == "normal") {
         request.gen_params.sample_params.scheduler = scheduler;
     }
 
@@ -384,16 +375,13 @@ static bool build_sdapi_img_gen_request(const json& j,
         }
     }
 
-    if (j.contains("ref_image_args")) {
-        if (!j["ref_image_args"].is_string()) {
-            error_message = "ref_image_args must be a string";
-            return false;
-        }
-        request.gen_params.ref_image_args = j["ref_image_args"].get<std::string>();
+    if (j.contains("ref_image_args") && j["ref_image_args"] != "") {
+        error_message = "reference overrides require a DGL script";
+        return false;
     }
 
-    if (j.contains("image_preprocess") && !request.gen_params.parse_image_preprocess_json(j["image_preprocess"].dump())) {
-        error_message = "invalid image_preprocess";
+    if (j.contains("image_preprocess")) {
+        error_message = "image_preprocess requires a DGL script";
         return false;
     }
 
@@ -404,7 +392,7 @@ static bool build_sdapi_img_gen_request(const json& j,
                                     0,
                                     0,
                                     request.gen_params.init_image)) {
-                const sd_image_t& image = request.gen_params.init_image.get();
+                const SDImage& image = request.gen_params.init_image.get();
                 request.gen_params.set_width_and_height_if_unset(image.width, image.height);
             }
         }
@@ -415,10 +403,10 @@ static bool build_sdapi_img_gen_request(const json& j,
                                     0,
                                     0,
                                     request.gen_params.mask_image)) {
-                const sd_image_t& image = request.gen_params.mask_image.get();
+                const SDImage& image = request.gen_params.mask_image.get();
                 request.gen_params.set_width_and_height_if_unset(image.width, image.height);
             }
-            sd_image_t& mask_image      = request.gen_params.mask_image.get();
+            SDImage& mask_image         = request.gen_params.mask_image.get();
             bool inpainting_mask_invert = j.value("inpainting_mask_invert", 0) != 0;
             if (inpainting_mask_invert && mask_image.data != nullptr) {
                 for (uint32_t i = 0; i < mask_image.width * mask_image.height; ++i) {
@@ -445,7 +433,7 @@ static bool build_sdapi_img_gen_request(const json& j,
                                     0,
                                     0, 0,
                                     image_owner)) {
-                const sd_image_t& image = image_owner.get();
+                const SDImage& image = image_owner.get();
                 request.gen_params.set_width_and_height_if_unset(image.width, image.height);
                 request.gen_params.ref_images.push_back(std::move(image_owner));
             }
@@ -462,26 +450,22 @@ static bool build_sdapi_img_gen_request(const json& j,
            validate_server_img_gen_request(runtime, request, error_message);
 }
 
-static nlohmann::json prepare_info_field(const std::string& generation_info) {
-    const auto info       = nlohmann::json::parse(generation_info);
-    const auto& sampling  = info.at("sample_params");
-    nlohmann::json result = {{"prompt", info.at("prompt")},
-                             {"negative_prompt", info.at("negative_prompt")},
-                             {"seed", generation_seed(generation_info)},
-                             {"cfg_scale", sampling.at("guidance").at("txt_cfg")},
-                             {"width", info.at("width")},
-                             {"height", info.at("height")},
-                             {"steps", sampling.contains("custom_sigmas") ? json(sampling.at("custom_sigmas").size() - 1) : sampling.at("sample_steps")},
-                             {"sampler_name", sampling.at("sample_method")},
-                             {"version", "stable-diffusion.cpp"}};
-    if (info.contains("clip_skip"))
-        result["clip_skip"] = info.at("clip_skip");
-    if (info.contains("strength"))
-        result["denoising_strength"] = info.at("strength");
-    if (sampling.contains("scheduler"))
-        result["extra_generation_params"]["Schedule type"] = sampling.at("scheduler");
+static json generation_metadata(const std::string& source) {
+    const auto* metadata = sd_get_generation_metadata(source.c_str());
+    return metadata ? json::parse(metadata) : json::object();
+}
+
+static nlohmann::json prepare_info_field(const json& info) {
+    auto result = json::object();
+    const std::map<std::string, std::string> names{{"prompt", "prompt"}, {"negative_prompt", "negative_prompt"}, {"seed", "seed"}, {"cfg_scale", "cfg_scale"}, {"width", "width"}, {"height", "height"}, {"steps", "steps"}, {"method", "sampler_name"}, {"clip_skip", "clip_skip"}, {"strength", "denoising_strength"}};
+    for (const auto& [key, output] : names)
+        if (info.contains(key))
+            result[output] = info.at(key);
+    if (info.contains("scheduler"))
+        result["extra_generation_params"]["Schedule type"] = info.at("scheduler");
+    result["version"] = "stable-diffusion.cpp";
     for (const auto* key : {"infotexts", "all_prompts", "all_negative_prompts", "all_seeds", "generation_info"})
-        result[key] = nlohmann::json::array();
+        result[key] = json::array();
     return result;
 }
 
@@ -499,14 +483,18 @@ struct SDAPIPreviewState {
 
 static SDAPIPreviewState g_preview;
 
-static void preview_callback(int step, int frame_count, sd_image_t* frames, bool is_noisy, void* data) {
+static void preview_callback(int step, int frame_count, const sd_tensor_t* const* tensors, bool is_noisy, void* data) {
+    std::vector<SDImage> views;
+    for (int i = 0; i < frame_count; ++i)
+        views.push_back(tensor_image_view(tensors[i]));
+    SDImage* frames = views.data();
     (void)is_noisy;
     (void)data;
     if (frame_count <= 0 || frames == nullptr || frames[0].data == nullptr) {
         return;
     }
 
-    const sd_image_t& frame      = frames[0];
+    const SDImage& frame         = frames[0];
     const sd_preview_info_t info = sd_get_preview_info();
 
     auto image_bytes = encode_image_to_vector(EncodedImageFormat::JPEG,
@@ -530,7 +518,7 @@ static void preview_callback(int step, int frame_count, sd_image_t* frames, bool
 }
 
 struct SDAPIPreviewGuard {
-    SDAPIPreviewGuard(const std::string& id_task, const sd_img_gen_params_t& params, const std::string& job_type, bool detailing = false) {
+    SDAPIPreviewGuard(const std::string& id_task, const SDGenerationParams& params, const std::string& job_type, bool detailing = false) {
         std::lock_guard<std::mutex> lock(g_preview.mutex);
         g_preview.id_task  = id_task;
         g_preview.total    = 0;
@@ -539,13 +527,13 @@ struct SDAPIPreviewGuard {
         g_preview.step   = 0;
         g_preview.active = true;
         // Each batch item has a base pass and, when enabled, a hires pass.
-        g_preview.job_count = static_cast<int64_t>(std::max(1, params.batch_count)) * (params.hires.enabled ? 2 : 1) + (detailing ? 1 : 0);
+        g_preview.job_count = static_cast<int64_t>(std::max(1, params.batch_count.value_or(1))) * (params.hires_enabled.value_or(false) ? 2 : 1) + (detailing ? 1 : 0);
         g_preview.job_no    = 0;
-        sd_set_preview_callback(preview_callback, PREVIEW_PROJ, 1, true, false, nullptr);
+        sd_set_preview_callback(preview_callback, "proj", 1, true, false, nullptr);
     }
 
     void begin_detailing() {
-        sd_set_preview_callback(nullptr, PREVIEW_NONE, 1, false, false, nullptr);
+        sd_set_preview_callback(nullptr, "none", 1, false, false, nullptr);
         std::lock_guard<std::mutex> lock(g_preview.mutex);
         g_preview.job_type = "adetailer";
         g_preview.job_no   = static_cast<int>(g_preview.job_count - 1);
@@ -554,7 +542,7 @@ struct SDAPIPreviewGuard {
     }
 
     ~SDAPIPreviewGuard() {
-        sd_set_preview_callback(nullptr, PREVIEW_NONE, 1, false, false, nullptr);
+        sd_set_preview_callback(nullptr, "none", 1, false, false, nullptr);
         std::lock_guard<std::mutex> lock(g_preview.mutex);
         g_preview.active = false;
         g_preview.b64.clear();
@@ -594,38 +582,29 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             LOG_DEBUG("%s\n", request.gen_params.to_string().c_str());
 
-            sd_img_gen_params_t img_gen_params = request.to_sd_img_gen_params_t();
             SDImageVec results;
             int num_results = 0;
 
             {
-                std::lock_guard<std::mutex> lock(*runtime->sd_ctx_mutex);
-                PromptImageCallbackGuard prompt_images(runtime->sd_ctx, request.gen_params);
                 const bool detailing = request.adetailer_enabled && !runtime->default_gen_params->ad_model_path.empty();
-                SDAPIPreviewGuard preview_guard(id_task, img_gen_params, img2img ? "img2img" : "txt2img", detailing);
-                sd_image_generation_result_t* generated = nullptr;
-                generate_image(runtime->sd_ctx, &img_gen_params, &generated);
-                results.adopt(generated, runtime->ctx_params->lora_model_dir);
+                SDAPIPreviewGuard preview_guard(id_task, request.gen_params, img2img ? "img2img" : "txt2img", detailing);
+                generate_server_images(runtime->sd_ctx, request, results, error_message);
                 num_results = results.count();
                 if (detailing && !results.empty())
                     preview_guard.begin_detailing();
-                if (!results.empty() && !apply_server_adetailer(*runtime, request, img_gen_params, results)) {
-                    res.status = 500;
-                    res.set_content(R"({"error":"ADetailer failed"})", "application/json");
-                    return;
-                }
             }
 
             if (results.empty()) {
                 res.status = 500;
-                res.set_content(R"({"error":"generate_image returned no results"})", "application/json");
+                res.set_content(json({{"error", error_message}}).dump(), "application/json");
                 return;
             }
 
             json out;
             out["images"]     = json::array();
             out["parameters"] = j;
-            json jsoninfo     = prepare_info_field(results.generation_info(0));
+            auto metadata     = generation_metadata(results.generation_info(0));
+            json jsoninfo     = prepare_info_field(metadata);
 
             for (int i = 0; i < num_results; ++i) {
                 if (results[i].data == nullptr) {
@@ -634,7 +613,9 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
                 bool embed_meta = request.gen_params.embed_image_metadata;
 
-                std::string params = generation_info_to_webui(results.generation_info(i));
+                if (i != 0)
+                    metadata = generation_metadata(results.generation_info(i));
+                const auto params = metadata.value("infotext", "");
 
                 auto image_bytes = encode_image_to_vector(EncodedImageFormat::PNG,
                                                           results[i].data,
@@ -650,12 +631,12 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
                 out["images"].push_back(base64_encode(image_bytes));
 
-                const auto actual = json::parse(results.generation_info(i));
                 jsoninfo["infotexts"].push_back(params);
-                jsoninfo["all_seeds"].push_back(generation_seed(results.generation_info(i)));
-                jsoninfo["generation_info"].push_back(actual);
-                jsoninfo["all_prompts"].push_back(actual["prompt"]);
-                jsoninfo["all_negative_prompts"].push_back(actual["negative_prompt"]);
+                const auto seed = metadata.find("seed");
+                jsoninfo["all_seeds"].push_back(seed != metadata.end() && seed->is_number_integer() ? seed->get<int64_t>() : -1);
+                jsoninfo["generation_info"].push_back(results.generation_info(i));
+                jsoninfo["all_prompts"].push_back(metadata.value("prompt", ""));
+                jsoninfo["all_negative_prompts"].push_back(metadata.value("negative_prompt", ""));
             }
 
             // not a mistake: it is supposed to be a string in json format
@@ -748,8 +729,8 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
     routes.get("/sdapi/v1/samplers", [runtime](const httplib::Request&, httplib::Response& res) {
         std::vector<std::string> sampler_names;
         sampler_names.push_back("default");
-        for (int i = 0; i < SAMPLE_METHOD_COUNT; i++) {
-            sampler_names.push_back(sd_sample_method_name((sample_method_t)i));
+        for (const char* name : example_options::sample_methods) {
+            sampler_names.push_back(name);
         }
         json r = json::array();
         for (auto name : sampler_names) {
@@ -765,9 +746,9 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
     routes.get("/sdapi/v1/schedulers", [runtime](const httplib::Request&, httplib::Response& res) {
         std::vector<std::string> scheduler_names;
         scheduler_names.push_back("default");
-        for (int i = 0; i < SCHEDULER_COUNT; i++) {
-            scheduler_names.push_back(sd_scheduler_name((scheduler_t)i));
-            if (i == DISCRETE_SCHEDULER) {
+        for (const std::string name : example_options::schedulers) {
+            scheduler_names.push_back(name);
+            if (name == "discrete") {
                 scheduler_names.push_back("normal");
             }
         }
@@ -791,7 +772,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         entry["sha256"]     = "8888888888888888888888888888888888888888888888888888888888888888";
         entry["config"]     = nullptr;
         json r              = json::array();
-        if (runtime->sd_ctx) {
+        if (has_current_model(*runtime)) {
             r.push_back(entry);
         }
         res.set_content(r.dump(), "application/json");

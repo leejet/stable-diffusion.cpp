@@ -1,47 +1,43 @@
 #include "media_metadata.h"
 
-std::string generation_xmp(const std::string& info) {
-    std::string escaped;
-    for (char c : info) {
-        switch (c) {
-            case '&':
-                escaped += "&amp;";
-                break;
-            case '<':
-                escaped += "&lt;";
-                break;
-            case '>':
-                escaped += "&gt;";
-                break;
-            case '"':
-                escaped += "&quot;";
-                break;
-            case '\'':
-                escaped += "&apos;";
-                break;
-            default:
-                escaped += c;
-                break;
-        }
-    }
-    return "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
-           "<rdf:Description rdf:about=\"\" xmlns:sdcpp=\"https://github.com/leejet/stable-diffusion.cpp/ns/1.0/\">"
-           "<sdcpp:parameters>" +
-           escaped + "</sdcpp:parameters></rdf:Description></rdf:RDF></x:xmpmeta>";
+#include <cstring>
+
+#include "stable-diffusion.h"
+
+std::string generation_xmp(const std::string& source) {
+    const void* data = nullptr;
+    size_t size      = 0;
+    if (sd_get_metadata_chunk(source.c_str(), SD_METADATA_XMP, &data, &size) != SD_STATUS_OK || !size)
+        return "";
+    return std::string(static_cast<const char*>(data), size);
 }
 
-bool embed_jpeg_metadata(std::vector<uint8_t>& image, const std::string& parameters) {
-    if (parameters.empty())
+bool embed_jpeg_metadata(std::vector<uint8_t>& image, const std::string& source) {
+    if (source.empty())
         return true;
-    const char label[]    = "parameters";
-    const size_t overhead = sizeof(label) + 1;
-    if (image.size() < 2 || parameters.size() > 65533 - overhead)
+    if (image.size() < 2)
         return false;
-    const size_t length          = overhead + parameters.size() + 2;
-    std::vector<uint8_t> segment = {0xff, 0xfe, static_cast<uint8_t>(length >> 8), static_cast<uint8_t>(length)};
-    segment.insert(segment.end(), label, label + sizeof(label));
-    segment.insert(segment.end(), parameters.begin(), parameters.end());
-    segment.push_back(0);
-    image.insert(image.begin() + 2, segment.begin(), segment.end());
+    const void* data = nullptr;
+    size_t size      = 0;
+    if (sd_get_metadata_chunk(source.c_str(), SD_METADATA_JPEG, &data, &size) != SD_STATUS_OK)
+        return false;
+    const auto* bytes = static_cast<const uint8_t*>(data);
+    if (size)
+        image.insert(image.begin() + 2, bytes, bytes + size);
+    return true;
+}
+
+bool embed_png_metadata(std::vector<uint8_t>& image, const std::string& source) {
+    if (source.empty())
+        return true;
+    if (image.size() < 33 || std::memcmp(image.data() + 12, "IHDR", 4))
+        return false;
+    const void* data = nullptr;
+    size_t size      = 0;
+    if (sd_get_metadata_chunk(source.c_str(), SD_METADATA_PNG, &data, &size) != SD_STATUS_OK)
+        return false;
+    const auto* bytes = static_cast<const uint8_t*>(data);
+    if (size)
+        image.insert(image.begin() + 33, bytes, bytes + size);
     return true;
 }

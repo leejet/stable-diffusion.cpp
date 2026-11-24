@@ -1,0 +1,42 @@
+# version: 0.0.0
+# docs/models/sd3.md — SD3.5 Large
+
+var {
+    model_path = "../models/checkpoints/sd3.5_large.safetensors"
+    clip_l_path = "../models/text_encoders/clip_l.safetensors"
+    clip_g_path = "../models/text_encoders/clip_g.safetensors"
+    t5_path = "../models/text_encoders/t5xxl_fp16.safetensors"
+
+    output_path = "output.png"
+    negative_prompt = ""
+    prompt = "a lovely cat holding a sign says \\\"Stable diffusion 3.5 Large\\\""
+    seed = 42
+    rng_type = "cuda"
+    width = 1024
+    height = 1024
+
+    steps = 20
+    cfg_scale = 4.5
+    method = "euler"
+    scheduler = "discrete"
+}
+
+fn main() {
+    model = load_dit(model_path, family = "sd3")
+    text = load_text_encoder(model_path, backend = "cpu", clip_g_path = clip_g_path, clip_l_path = clip_l_path, family = "sd3", t5_path = t5_path)
+    vae = load_vae(model_path, family = "sd3")
+
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    positive = encode_prompt(text, prompt, width = width, height = height)
+    negative = encode_prompt(text, negative_prompt, width = width, height = height)
+    pos = predictor(model, positive)
+    neg = predictor(model, negative)
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    image = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

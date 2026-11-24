@@ -6,8 +6,28 @@
 #include <exception>
 
 #include "core/ggml_extend_backend.h"
+#include "core/probe/conv_direct.h"
+#include "core/probe/flash_attn.h"
 #include "core/util.h"
 #include "ggml-alloc.h"
+
+bool BackendProbeCache::supports(BackendProbeOperation operation, ggml_backend_t backend, int n_threads) {
+    if (backend == nullptr)
+        return false;
+    const int threads = operation == BackendProbeOperation::FlashAttention && sd_backend_is_cpu(backend)
+                            ? (n_threads > 0 ? n_threads : sd_get_num_physical_cores())
+                            : 0;
+    const auto key    = std::make_pair(operation, threads);
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto& results    = results_[backend];
+    const auto found = results.find(key);
+    if (found != results.end())
+        return found->second;
+    const bool supported = operation == BackendProbeOperation::FlashAttention ? sd_probe_flash_attention(backend, n_threads)
+                                                                              : sd_probe_conv_direct(backend, operation == BackendProbeOperation::Conv3D);
+    results.emplace(key, supported);
+    return supported;
+}
 
 BackendProbeGraph::BackendProbeGraph(ggml_backend_t backend, size_t graph_size)
     : backend_(backend), graph_size_(graph_size) {

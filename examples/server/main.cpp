@@ -52,8 +52,6 @@ static void parse_args(int argc,
         exit(ctx_params.print_devices() ? 0 : 1);
     }
 
-    const bool random_seed_requested = default_gen_params.seed < 0;
-
     if (!svr_params.resolve_and_validate() ||
         !ctx_params.resolve_and_validate(ctx_params.model_path.empty() && ctx_params.diffusion_model_path.empty() ? METADATA : IMG_GEN) ||
         !default_gen_params.resolve_and_validate(IMG_GEN,
@@ -61,10 +59,6 @@ static void parse_args(int argc,
                                                  ctx_params.hires_upscalers_dir)) {
         print_usage(argv[0], options_vec);
         exit(1);
-    }
-
-    if (random_seed_requested) {
-        default_gen_params.seed = -1;
     }
 }
 
@@ -93,16 +87,22 @@ int main(int argc, const char** argv) {
     LOG_DEBUG("%s", ctx_params.to_string().c_str());
     LOG_DEBUG("%s", default_gen_params.to_string().c_str());
 
-    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t();
-    ServerModels models;
-    if (!ctx_params.model_path.empty() || !ctx_params.diffusion_model_path.empty()) {
-        const auto started = std::chrono::steady_clock::now();
-        models.context.reset(new_sd_ctx(&sd_ctx_params));
-        models.status["load_elapsed_seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    if (!ctx_params.register_rpc_devices()) {
+        return 1;
     }
+    ctx_params.rpc_servers.reset();
 
-    if ((!ctx_params.model_path.empty() || !ctx_params.diffusion_model_path.empty()) && !models.context) {
-        LOG_ERROR("new_sd_ctx_t failed");
+    SDOptPtr sd_ctx_params = ctx_params.to_context_opt();
+    ServerModels models;
+    models.context.reset(create_sd_context(sd_ctx_params));
+    if (!models.context) {
+        LOG_ERROR("sd_ctx_create failed: %s", sd_get_last_error());
+        return 1;
+    }
+    try {
+        configure_server_file_access(models, svr_params, ctx_params);
+    } catch (const std::exception& error) {
+        LOG_ERROR("Context setup failed: %s", error.what());
         return 1;
     }
 
@@ -169,6 +169,7 @@ int main(int argc, const char** argv) {
     register_openai_api_endpoints(svr, runtime);
     register_sdapi_endpoints(svr, runtime);
     register_sdcpp_api_endpoints(svr, runtime);
+    register_dgl_endpoints(svr, runtime);
     register_model_endpoints(svr, runtime);
 
     LOG_INFO("listening on: http://%s:%d\n", svr_params.listen_ip.c_str(), svr_params.listen_port);

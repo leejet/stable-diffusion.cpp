@@ -147,6 +147,10 @@ static bool read_comfy_quant_config(std::ifstream& file,
             config.convrot    = true;
             config.group_size = json.value("convrot_groupsize", 256);
         }
+        if (config.format == "asym_w4a8_int8") {
+            // ComfyUI defaults the W4A8 weight group size to 16 when the key is missing.
+            config.weight_group_size = json.value("group_size", 16);
+        }
     } catch (const std::exception&) {
         set_error(error, "parsing ComfyUI quantization metadata tensor failed: '" + tensor_name + "'");
         return false;

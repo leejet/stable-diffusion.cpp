@@ -1,0 +1,17 @@
+# version: 0.0.0
+
+var {
+    model_path = {{model_path}}
+    tile_size = {{tile_size}}
+    repeats = {{repeats}}
+}
+
+fn enlarge(image, index, model) {
+    return upscale(model, image)
+}
+
+fn main(input_image) {
+    model = load_upscaler(model_path{{loader_options}}, tile_size = tile_size)
+    image = fold(tensor::to_list(tensor::arange(0, repeats)), input_image, process = enlarge, model = model)
+    return {image = image}
+}

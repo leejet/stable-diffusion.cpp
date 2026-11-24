@@ -542,24 +542,203 @@ namespace ZImage {
         }
     };
 
+    class ControlNet : public GGMLBlock {
+        ZImageConfig config_;
+        int num_layers         = 0;
+        int num_refiner_layers = 0;
+
+    public:
+        static bool has_weights(const String2TensorStorage& weights) {
+            return weights.count("control_all_x_embedder.2-1.weight") != 0;
+        }
+
+        static ZImageConfig detect_config(const String2TensorStorage& weights) {
+            ZImageConfig config;
+            const auto projection = weights.find("control_all_x_embedder.2-1.weight");
+            const auto q          = weights.find("control_layers.0.attention.to_q.weight");
+            const auto k          = weights.find("control_layers.0.attention.to_k.weight");
+            const auto norm       = weights.find("control_layers.0.attention.norm_q.weight");
+            if (projection == weights.end() || q == weights.end() || k == weights.end() ||
+                projection->second.logical_ne0() != config.patch_size * config.patch_size * CONTROL_IN_CHANNELS)
+                throw std::runtime_error("invalid Z-Image ControlNet weights");
+            config.hidden_size = projection->second.ne[1];
+            config.qk_norm     = norm != weights.end();
+            if (config.qk_norm)
+                config.head_dim = norm->second.ne[0];
+            if (config.head_dim <= 0 || config.hidden_size <= 0 ||
+                q->second.ne[1] % config.head_dim || k->second.ne[1] % config.head_dim ||
+                q->second.ne[1] == 0 || k->second.ne[1] == 0)
+                throw std::runtime_error("invalid Z-Image ControlNet attention dimensions");
+            config.num_heads    = q->second.ne[1] / config.head_dim;
+            config.num_kv_heads = k->second.ne[1] / config.head_dim;
+            return config;
+        }
+
+        ControlNet(const ZImageConfig& config, const String2TensorStorage& tensor_storage_map)
+            : config_(config) {
+            for (const auto& pair : tensor_storage_map) {
+                if (starts_with(pair.first, "control_layers.")) {
+                    auto items = split_string(pair.first, '.');
+                    if (items.size() > 1) {
+                        num_layers = std::max(num_layers, atoi(items[1].c_str()) + 1);
+                    }
+                } else if (starts_with(pair.first, "control_noise_refiner.")) {
+                    auto items = split_string(pair.first, '.');
+                    if (items.size() > 1) {
+                        num_refiner_layers = std::max(num_refiner_layers, atoi(items[1].c_str()) + 1);
+                    }
+                }
+            }
+
+            if (num_layers <= 0 || num_refiner_layers <= 0)
+                throw std::runtime_error("Z-Image ControlNet requires main and noise refiner blocks");
+
+            blocks["control_all_x_embedder.2-1"] = std::make_shared<Linear>(config.patch_size * config.patch_size * CONTROL_IN_CHANNELS, config.hidden_size);
+
+            for (int i = 0; i < num_refiner_layers; i++) {
+                std::string name = "control_noise_refiner." + std::to_string(i);
+                auto block       = std::make_shared<ZImageControlTransformerBlock>(i,
+                                                                                   config.hidden_size,
+                                                                                   config.head_dim,
+                                                                                   config.num_heads,
+                                                                                   config.num_kv_heads,
+                                                                                   config.multiple_of,
+                                                                                   config.ffn_dim_multiplier,
+                                                                                   config.norm_eps,
+                                                                                   config.qk_norm,
+                                                                                   tensor_storage_map.find(name + ".before_proj.weight") != tensor_storage_map.end());
+
+                blocks[name] = block;
+            }
+
+            for (int i = 0; i < num_layers; i++) {
+                std::string name = "control_layers." + std::to_string(i);
+                auto block       = std::make_shared<ZImageControlTransformerBlock>(i,
+                                                                                   config.hidden_size,
+                                                                                   config.head_dim,
+                                                                                   config.num_heads,
+                                                                                   config.num_kv_heads,
+                                                                                   config.multiple_of,
+                                                                                   config.ffn_dim_multiplier,
+                                                                                   config.norm_eps,
+                                                                                   config.qk_norm,
+                                                                                   tensor_storage_map.find(name + ".before_proj.weight") != tensor_storage_map.end());
+
+                blocks[name] = block;
+            }
+        }
+
+        bool compatible(const ZImageConfig& config) const {
+            return config_.patch_size == config.patch_size && config_.hidden_size == config.hidden_size &&
+                   config_.head_dim == config.head_dim && config_.num_heads == config.num_heads &&
+                   config_.num_kv_heads == config.num_kv_heads && num_refiner_layers == config.num_refiner_layers &&
+                   num_layers <= (config.num_layers + 1) / 2;
+        }
+
+        ggml_tensor* forward_refiner(GGMLRunnerContext* ctx,
+                                     ggml_tensor* control,
+                                     ggml_tensor* img,
+                                     ggml_tensor* img_pe,
+                                     ggml_tensor* img_pad_token,
+                                     ggml_tensor* t_emb,
+                                     float strength,
+                                     const std::string& group,
+                                     std::vector<ggml_tensor*>& ref_hints) const {
+            auto all_x_embedder = std::dynamic_pointer_cast<Linear>(blocks.at("control_all_x_embedder.2-1"));
+
+            auto c = all_x_embedder->forward(ctx, control);
+            sd::ggml_graph_cut::mark_graph_cut(c, group + ".prelude", "control");
+
+            int64_t N       = c->ne[2];
+            int64_t n_token = c->ne[1];
+
+            int64_t n_pad_token = Rope::bound_mod(static_cast<int>(n_token), SEQ_MULTI_OF);
+            if (n_pad_token > 0) {
+                auto ctrl_pad_tokens = ggml_repeat_4d(ctx->ggml_ctx, img_pad_token, img_pad_token->ne[0], n_pad_token, N, 1);
+                c                    = ggml_concat(ctx->ggml_ctx, c, ctrl_pad_tokens, 1);
+            }
+
+            for (int i = 0; i < num_refiner_layers; i++) {
+                auto block = std::dynamic_pointer_cast<ZImageControlTransformerBlock>(blocks.at("control_noise_refiner." + std::to_string(i)));
+
+                auto out = block->forward(ctx, c, img_pe, img, t_emb);
+                c        = out.second;
+                ref_hints.push_back(ggml_ext_scale(ctx, out.first, strength));
+                sd::ggml_graph_cut::mark_graph_cut(c, group + ".noise_refiner." + std::to_string(i), "control");
+            }
+
+            return c;
+        }
+
+        std::vector<ggml_tensor*> forward_main(GGMLRunnerContext* ctx,
+                                               ggml_tensor* control_ctx,
+                                               ggml_tensor* img_c,
+                                               ggml_tensor* txt,
+                                               ggml_tensor* pe,
+                                               ggml_tensor* t_emb,
+                                               float strength,
+                                               const std::string& group) const {
+            auto unified_c    = ggml_concat(ctx->ggml_ctx, txt, img_c, 1);
+            auto ctrl_unified = ggml_concat(ctx->ggml_ctx, txt, control_ctx, 1);
+
+            std::vector<ggml_tensor*> main_hints;
+            main_hints.reserve(num_layers);
+
+            for (int i = 0; i < num_layers; i++) {
+                auto block = std::dynamic_pointer_cast<ZImageControlTransformerBlock>(blocks.at("control_layers." + std::to_string(i)));
+
+                auto out     = block->forward(ctx, ctrl_unified, pe, unified_c, t_emb);
+                ctrl_unified = out.second;
+                main_hints.push_back(ggml_ext_scale(ctx, out.first, strength));
+                sd::ggml_graph_cut::mark_graph_cut(ctrl_unified, group + ".layers." + std::to_string(i), "control");
+            }
+
+            return main_hints;
+        }
+    };
+
+    struct ControlNetRunner : public GGMLRunner {
+        ControlNet model;
+
+        ControlNetRunner(ggml_backend_t backend, const String2TensorStorage& weights, const std::shared_ptr<RunnerWeightManager>& manager)
+            : GGMLRunner(backend, manager), model(ControlNet::detect_config(weights), weights) {
+            model.init(params_ctx, weights, "");
+        }
+
+        std::string get_desc() override { return "z_image_controlnet"; }
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) { model.get_param_tensors(tensors, ""); }
+        ggml_backend_t compute_backend() const { return runtime_backend; }
+        size_t extra_graph_size() const { return weight_adapter ? weight_adapter->get_extra_graph_size() : 0; }
+        void configure_branch(GGMLRunnerContext& ctx) const {
+            ctx.weight_adapter     = weight_adapter;
+            ctx.flash_attn_enabled = flash_attn_enabled;
+            ctx.linear_scale       = linear_scale;
+            ctx.attn_scale         = attn_scale;
+        }
+    };
+
+    struct GraphControl {
+        const ControlNet* model;
+        ggml_tensor* hint;
+        float strength;
+        const ControlNetRunner* runner = nullptr;
+    };
+
     class ZImageModel : public GGMLBlock {
     protected:
         ZImageConfig config;
-        GGMLBlockMap control_blocks;
-        int control_num_layers         = 0;
-        int control_num_refiner_layers = 0;
+        std::shared_ptr<ControlNet> embedded_control_;
 
         void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             params["cap_pad_token"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, config.hidden_size);
             params["x_pad_token"]   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, config.hidden_size);
 
-            for (auto& [name, block] : control_blocks) {
-                block->init(ctx, tensor_storage_map, name);
-            }
+            if (embedded_control_)
+                embedded_control_->init(ctx, tensor_storage_map, "");
         }
 
     public:
-        bool control_enabled = false;
+        bool control_enabled() const { return bool(embedded_control_); }
 
         ZImageModel() = default;
         ZImageModel(ZImageConfig config, const String2TensorStorage& tensor_storage_map = {})
@@ -616,107 +795,21 @@ namespace ZImage {
 
             blocks["final_layer"] = std::make_shared<FinalLayer>(config.hidden_size, config.patch_size, config.out_channels);
 
-            if (tensor_storage_map.find("control_all_x_embedder.2-1.weight") != tensor_storage_map.end()) {
-                control_enabled = true;
-
-                for (const auto& pair : tensor_storage_map) {
-                    if (starts_with(pair.first, "control_layers.")) {
-                        auto items = split_string(pair.first, '.');
-                        if (items.size() > 1) {
-                            control_num_layers = std::max(control_num_layers, atoi(items[1].c_str()) + 1);
-                        }
-                    } else if (starts_with(pair.first, "control_noise_refiner.")) {
-                        auto items = split_string(pair.first, '.');
-                        if (items.size() > 1) {
-                            control_num_refiner_layers = std::max(control_num_refiner_layers, atoi(items[1].c_str()) + 1);
-                        }
-                    }
-                }
-
-                GGML_ASSERT(control_num_layers > 0);
-                GGML_ASSERT(control_num_refiner_layers == config.num_refiner_layers);
-
-                control_blocks["control_all_x_embedder.2-1"] = std::make_shared<Linear>(config.patch_size * config.patch_size * CONTROL_IN_CHANNELS, config.hidden_size);
-
-                for (int i = 0; i < control_num_refiner_layers; i++) {
-                    std::string name = "control_noise_refiner." + std::to_string(i);
-                    auto block       = std::make_shared<ZImageControlTransformerBlock>(i,
-                                                                                       config.hidden_size,
-                                                                                       config.head_dim,
-                                                                                       config.num_heads,
-                                                                                       config.num_kv_heads,
-                                                                                       config.multiple_of,
-                                                                                       config.ffn_dim_multiplier,
-                                                                                       config.norm_eps,
-                                                                                       config.qk_norm,
-                                                                                       tensor_storage_map.find(name + ".before_proj.weight") != tensor_storage_map.end());
-
-                    control_blocks[name] = block;
-                }
-
-                for (int i = 0; i < control_num_layers; i++) {
-                    std::string name = "control_layers." + std::to_string(i);
-                    auto block       = std::make_shared<ZImageControlTransformerBlock>(i,
-                                                                                       config.hidden_size,
-                                                                                       config.head_dim,
-                                                                                       config.num_heads,
-                                                                                       config.num_kv_heads,
-                                                                                       config.multiple_of,
-                                                                                       config.ffn_dim_multiplier,
-                                                                                       config.norm_eps,
-                                                                                       config.qk_norm,
-                                                                                       tensor_storage_map.find(name + ".before_proj.weight") != tensor_storage_map.end());
-
-                    control_blocks[name] = block;
-                }
-            }
+            if (ControlNet::has_weights(tensor_storage_map))
+                embedded_control_ = std::make_shared<ControlNet>(config, tensor_storage_map);
         }
 
         void get_control_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {
-            for (auto& [name, block] : control_blocks) {
-                block->get_param_tensors(tensors, name);
-            }
-        }
-
-        ggml_tensor* forward_control_refiner(GGMLRunnerContext* ctx,
-                                             ggml_tensor* control,
-                                             ggml_tensor* img,
-                                             ggml_tensor* img_pe,
-                                             ggml_tensor* t_emb,
-                                             float strength,
-                                             std::vector<ggml_tensor*>& ref_hints) {
-            auto all_x_embedder = std::dynamic_pointer_cast<Linear>(control_blocks["control_all_x_embedder.2-1"]);
-
-            auto c = all_x_embedder->forward(ctx, control);
-            sd::ggml_graph_cut::mark_graph_cut(c, "z_image.control.prelude", "control");
-
-            int64_t N       = c->ne[2];
-            int64_t n_token = c->ne[1];
-
-            int64_t n_pad_token = Rope::bound_mod(static_cast<int>(n_token), SEQ_MULTI_OF);
-            if (n_pad_token > 0) {
-                auto img_pad_token   = params["x_pad_token"];
-                auto ctrl_pad_tokens = ggml_repeat_4d(ctx->ggml_ctx, img_pad_token, img_pad_token->ne[0], n_pad_token, N, 1);
-                c                    = ggml_concat(ctx->ggml_ctx, c, ctrl_pad_tokens, 1);
-            }
-
-            for (int i = 0; i < control_num_refiner_layers; i++) {
-                auto block = std::dynamic_pointer_cast<ZImageControlTransformerBlock>(control_blocks["control_noise_refiner." + std::to_string(i)]);
-
-                auto out = block->forward(ctx, c, img_pe, img, t_emb);
-                c        = out.second;
-                ref_hints.push_back(ggml_ext_scale(ctx, out.first, strength));
-                sd::ggml_graph_cut::mark_graph_cut(c, "z_image.control.noise_refiner." + std::to_string(i), "control");
-            }
-
-            return c;
+            if (embedded_control_)
+                embedded_control_->get_param_tensors(tensors, "");
         }
 
         ggml_tensor* forward_noise_refiner_hinted(GGMLRunnerContext* ctx,
                                                   ggml_tensor* img,
                                                   ggml_tensor* img_pe,
                                                   ggml_tensor* t_emb,
-                                                  const std::vector<ggml_tensor*>& ref_hints) {
+                                                  const std::vector<ggml_tensor*>& ref_hints,
+                                                  const std::string& group) {
             GGML_ASSERT(ref_hints.size() == static_cast<size_t>(config.num_refiner_layers));
 
             auto c = img;
@@ -725,35 +818,10 @@ namespace ZImage {
 
                 c = block->forward(ctx, c, img_pe, nullptr, t_emb);
                 c = ggml_add(ctx->ggml_ctx, c, ref_hints[i]);
-                sd::ggml_graph_cut::mark_graph_cut(c, "z_image.noise_refiner_hinted." + std::to_string(i), "img");
+                sd::ggml_graph_cut::mark_graph_cut(c, group + ".noise_refiner_hinted." + std::to_string(i), "img");
             }
 
             return c;
-        }
-
-        std::vector<ggml_tensor*> forward_control_main(GGMLRunnerContext* ctx,
-                                                       ggml_tensor* control_ctx,
-                                                       ggml_tensor* img_c,
-                                                       ggml_tensor* txt,
-                                                       ggml_tensor* pe,
-                                                       ggml_tensor* t_emb,
-                                                       float strength) {
-            auto unified_c    = ggml_concat(ctx->ggml_ctx, txt, img_c, 1);
-            auto ctrl_unified = ggml_concat(ctx->ggml_ctx, txt, control_ctx, 1);
-
-            std::vector<ggml_tensor*> main_hints;
-            main_hints.reserve(control_num_layers);
-
-            for (int i = 0; i < control_num_layers; i++) {
-                auto block = std::dynamic_pointer_cast<ZImageControlTransformerBlock>(control_blocks["control_layers." + std::to_string(i)]);
-
-                auto out     = block->forward(ctx, ctrl_unified, pe, unified_c, t_emb);
-                ctrl_unified = out.second;
-                main_hints.push_back(ggml_ext_scale(ctx, out.first, strength));
-                sd::ggml_graph_cut::mark_graph_cut(ctrl_unified, "z_image.control.layers." + std::to_string(i), "control");
-            }
-
-            return main_hints;
         }
 
         ggml_tensor* forward_core(GGMLRunnerContext* ctx,
@@ -761,8 +829,7 @@ namespace ZImage {
                                   ggml_tensor* timestep,
                                   ggml_tensor* context,
                                   ggml_tensor* pe,
-                                  ggml_tensor* control = nullptr,
-                                  float strength       = 0.f) {
+                                  const std::vector<GraphControl>& controls) {
             auto x_embedder     = std::dynamic_pointer_cast<Linear>(blocks["x_embedder"]);
             auto t_embedder     = std::dynamic_pointer_cast<TimestepEmbedder>(blocks["t_embedder"]);
             auto cap_embedder_0 = std::dynamic_pointer_cast<RMSNorm>(blocks["cap_embedder.0"]);
@@ -802,10 +869,21 @@ namespace ZImage {
             auto txt_pe = ggml_ext_slice(ctx, pe, 3, 0, txt->ne[1]);
             auto img_pe = ggml_ext_slice(ctx, pe, 3, txt->ne[1], pe->ne[3]);
 
-            std::vector<ggml_tensor*> ref_hints;
-            ggml_tensor* control_ctx = nullptr;
-            if (control != nullptr) {
-                control_ctx = forward_control_refiner(ctx, control, img, img_pe, t_emb, strength, ref_hints);
+            struct ControlFeatures {
+                ggml_tensor* context;
+                std::vector<ggml_tensor*> refiner_hints;
+                std::string group;
+            };
+            std::vector<ControlFeatures> features;
+            features.reserve(controls.size());
+            for (const auto& control : controls) {
+                auto& feature    = features.emplace_back();
+                feature.group    = controls.size() == 1 ? "z_image.control" : "z_image.control." + std::to_string(features.size() - 1);
+                auto control_ctx = *ctx;
+                if (control.runner)
+                    control.runner->configure_branch(control_ctx);
+                feature.context = control.model->forward_refiner(&control_ctx, control.hint, img, img_pe, img_pad_token,
+                                                                 t_emb, control.strength, feature.group, feature.refiner_hints);
             }
 
             ggml_tensor* img_pre_refiner = img;
@@ -824,19 +902,24 @@ namespace ZImage {
                 sd::ggml_graph_cut::mark_graph_cut(img, "z_image.noise_refiner." + std::to_string(i), "img");
             }
 
-            ggml_tensor* img_c = nullptr;
-            if (control_ctx != nullptr) {
-                img_c = forward_noise_refiner_hinted(ctx, img_pre_refiner, img_pe, t_emb, ref_hints);
-            }
-
             auto txt_img = ggml_concat(ctx->ggml_ctx, txt, img, 1);  // [N, n_txt_token + n_txt_pad_token + n_img_token + n_img_pad_token, hidden_size]
             sd::ggml_graph_cut::mark_graph_cut(txt_img, "z_image.prelude", "txt_img");
 
             std::vector<ggml_tensor*> main_hints;
-            if (control_ctx != nullptr) {
-                main_hints = forward_control_main(ctx, control_ctx, img_c, txt, pe, t_emb, strength);
+            for (size_t i = 0; i < controls.size(); ++i) {
+                const auto& control = controls[i];
+                const auto& feature = features[i];
+                auto* img_c         = forward_noise_refiner_hinted(ctx, img_pre_refiner, img_pe, t_emb,
+                                                                   feature.refiner_hints, feature.group);
+                auto control_ctx    = *ctx;
+                if (control.runner)
+                    control.runner->configure_branch(control_ctx);
+                auto hints = control.model->forward_main(&control_ctx, feature.context, img_c, txt, pe, t_emb,
+                                                         control.strength, feature.group);
+                main_hints.resize(std::max(main_hints.size(), hints.size()), nullptr);
+                for (size_t j = 0; j < hints.size(); ++j)
+                    main_hints[j] = main_hints[j] ? ggml_add(ctx->ggml_ctx, main_hints[j], hints[j]) : hints[j];
             }
-            GGML_ASSERT(main_hints.empty() || main_hints.size() == static_cast<size_t>(control_num_layers));
 
             for (int i = 0; i < config.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["layers." + std::to_string(i)]);
@@ -862,7 +945,8 @@ namespace ZImage {
                              ggml_tensor* pe,
                              std::vector<ggml_tensor*> ref_latents = {},
                              ggml_tensor* control_latent           = nullptr,
-                             float control_strength                = 0.f) {
+                             float control_strength                = 0.f,
+                             std::vector<GraphControl> controls    = {}) {
             // Forward pass of DiT.
             // x: [N, C, H, W]
             // timestep: [N,]
@@ -887,16 +971,20 @@ namespace ZImage {
                 }
             }
 
-            ggml_tensor* control = nullptr;
             if (control_latent != nullptr) {
-                GGML_ASSERT(control_enabled);
-                GGML_ASSERT(control_latent->ne[2] == CONTROL_IN_CHANNELS);
-                GGML_ASSERT(control_latent->ne[0] == W && control_latent->ne[1] == H && control_latent->ne[3] == N);
-                GGML_ASSERT(ref_latents.empty());
-                control = DiT::pad_and_patchify(ctx, control_latent, patch_size, patch_size, false);
+                GGML_ASSERT(embedded_control_ != nullptr);
+                controls.push_back({embedded_control_.get(), control_latent, control_strength});
+            }
+            for (auto& control : controls) {
+                if (!control.model->compatible(config) || control.hint->ne[2] != CONTROL_IN_CHANNELS ||
+                    control.hint->ne[0] != W || control.hint->ne[1] != H || control.hint->ne[3] != N)
+                    throw std::runtime_error("Z-Image ControlNet is incompatible with the model or latent shape");
+                if (!ref_latents.empty())
+                    throw std::runtime_error("Z-Image ControlNet cannot be combined with reference latents");
+                control.hint = DiT::pad_and_patchify(ctx, control.hint, patch_size, patch_size, false);
             }
 
-            auto out = forward_core(ctx, img, timestep, context, pe, control, control_strength);
+            auto out = forward_core(ctx, img, timestep, context, pe, controls);
 
             out = ggml_ext_slice(ctx, out, 1, 0, n_img_token);                              // [N, n_img_token, ph*pw*C]
             out = DiT::unpatchify_and_crop(ctx, out, H, W, patch_size, patch_size, false);  // [N, C, H, W]
@@ -936,8 +1024,10 @@ namespace ZImage {
         }
 
         bool control_enabled() const {
-            return z_image.control_enabled;
+            return z_image.control_enabled();
         }
+
+        ggml_backend_t compute_backend() const { return runtime_backend; }
 
         void get_control_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {
             z_image.get_control_param_tensors(tensors);
@@ -949,8 +1039,15 @@ namespace ZImage {
                                  const std::vector<sd::Tensor<float>>& ref_latents_tensor = {},
                                  Rope::RefIndexMode ref_index_mode                        = Rope::RefIndexMode::FIXED,
                                  const sd::Tensor<float>& control_latent_tensor           = {},
-                                 float control_strength                                   = 0.f) {
-            ggml_cgraph* gf        = new_graph_custom(Z_IMAGE_GRAPH_SIZE);
+                                 float control_strength                                   = 0.f,
+                                 const std::vector<ZImageControlInput>* external_controls = nullptr) {
+            size_t graph_size = Z_IMAGE_GRAPH_SIZE;
+            if (external_controls) {
+                graph_size += external_controls->size() * size_t(Z_IMAGE_GRAPH_SIZE);
+                for (const auto& control : *external_controls)
+                    graph_size += control.runner->extra_graph_size();
+            }
+            ggml_cgraph* gf        = new_graph_custom(graph_size);
             ggml_tensor* x         = make_input(x_tensor);
             ggml_tensor* timesteps = make_input(timesteps_tensor);
             GGML_ASSERT(x->ne[3] == 1);
@@ -963,6 +1060,12 @@ namespace ZImage {
             }
 
             ggml_tensor* control_latent = make_optional_input(control_latent_tensor);
+            std::vector<GraphControl> controls;
+            if (external_controls) {
+                controls.reserve(external_controls->size());
+                for (const auto& control : *external_controls)
+                    controls.push_back({&control.runner->model, make_input(*control.latent), control.strength, control.runner});
+            }
 
             sd::PECacheKey pe_key("z_image.pe");
             pe_key.add_shape(x).add_shape(context).add(config.theta).add(config.axes_dim).add(config.axes_dim_sum);
@@ -991,7 +1094,8 @@ namespace ZImage {
                                                pe,
                                                ref_latents,
                                                control_latent,
-                                               control_strength);
+                                               control_strength,
+                                               std::move(controls));
 
             ggml_build_forward_expand(gf, out);
 
@@ -1005,12 +1109,13 @@ namespace ZImage {
                                   const std::vector<sd::Tensor<float>>& ref_latents = {},
                                   Rope::RefIndexMode ref_index_mode                 = Rope::RefIndexMode::FIXED,
                                   const sd::Tensor<float>& control_latent           = {},
-                                  float control_strength                            = 0.f) {
+                                  float control_strength                            = 0.f,
+                                  const std::vector<ZImageControlInput>* controls   = nullptr) {
             // x: [N, in_channels, h, w]
             // timesteps: [N, ]
             // context: [N, max_position, hidden_size]
             auto get_graph = [&]() -> ggml_cgraph* {
-                return build_graph(x, timesteps, context, ref_latents, ref_index_mode, control_latent, control_strength);
+                return build_graph(x, timesteps, context, ref_latents, ref_index_mode, control_latent, control_strength, controls);
             };
 
             return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
@@ -1032,10 +1137,11 @@ namespace ZImage {
                            *diffusion_params.x,
                            *diffusion_params.timesteps,
                            tensor_or_empty(diffusion_params.context),
-                           diffusion_params.ref_latents && diffusion_params.ref_image_params.pass_to_dit ? *diffusion_params.ref_latents : empty_ref_latents,
-                           diffusion_params.ref_image_params.ref_index_mode,
+                           diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
+                           diffusion_params.ref_index_mode,
                            control_latent,
-                           control_strength);
+                           control_strength,
+                           z_image_extra ? z_image_extra->controls : nullptr);
         }
 
         void test() {

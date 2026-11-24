@@ -364,7 +364,7 @@ namespace Fibo2 {
                 GGML_ASSERT(x->ne[3] == 1 && x->ne[2] == config.channels);
                 int count = config.gist_count(static_cast<int>(p.context->shape()[1]));
                 std::vector<ggml_tensor*> refs;
-                if (p.ref_latents && p.ref_image_params.pass_to_dit) {
+                if (p.ref_latents) {
                     for (const auto& ref : *p.ref_latents) {
                         refs.push_back(make_input(ref));
                     }

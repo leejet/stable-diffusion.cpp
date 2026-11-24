@@ -1,0 +1,55 @@
+{% if flags.sdxl_zero %}
+fn sdxl_zero_text(cond) {
+    zeroed = zero_out(cond, fields = ["crossattn"])
+    pooled_zeros = tensor::zeros_like(cond.vector[:1280])
+    adm = tensor::replace_slice(cond.vector, pooled_zeros, axis = 0, start = 0)
+    return {crossattn = zeroed.crossattn, vector = adm}
+}
+
+{% endif %}
+fn fit_canvas(input, width, height, mode) {
+    shape = tensor::shape(input)
+    crop_width = math::min(shape[1], math::floor(shape[2] * width / height))
+    crop_height = math::min(shape[2], math::floor(shape[1] * height / width))
+    start = [math::floor((shape[1] - crop_width) / 2), math::floor((shape[2] - crop_height) / 2)]
+    cropped = tensor::crop(input, axes = [1, 2], start = start, size = [crop_width, crop_height])
+    return tensor::interpolate(cropped, size = [width, height], axes = [1, 2], mode = mode)
+}
+
+fn slice_sigmas_by_strength(sigmas, strength) {
+    steps = tensor::numel(sigmas) - 1
+    retained = math::min(math::floor(steps * strength) + 1, steps)
+    return sigmas[steps - retained:]
+}
+
+{% if flags.layered %}
+fn decode_layer(index, args) {
+    latent = args.latent[:, :, index]
+    return vae_decode(args.vae, dit_to_vae_latents(args.vae, latent){{vae_run_options}})
+}
+{% if flags.hires %}
+{% if flags.hires_pixels %}
+fn upscale_layer(index, args) {
+    latent = args.latent[:, :, index]
+    image = vae_decode(args.vae, dit_to_vae_latents(args.vae, latent), dtype = "f32"{{vae_run_options}})
+{% if flags.hires_model %}
+    upscaled = upscale(args.upscaler, image::to_u8(image))
+    pixels = image::to_f32(tensor::interpolate(upscaled, size = args.size, axes = [1, 2], mode = args.mode))
+{% else %}
+    pixels = tensor::interpolate(image, size = args.size, mode = args.mode)
+{% endif %}
+    encoded = vae_to_dit_latents(args.vae, vae_encode(args.vae, pixels, rng = args.rng{{vae_run_options}}))
+    return tensor::unsqueeze(encoded, axis = 2)
+}
+{% endif %}
+{% endif %}
+{% endif %}
+{% if flags.h3_reference_noise %}
+fn h3_image_reference_noise(latent, seed) {
+    shape = tensor::shape(latent)
+    patches = tensor::zeros([2, 2, shape[-2], math::floor(shape[0] / 2), math::floor(shape[1] / 2)])
+    rng = make_rng("cpu", seed = seed)
+    noise = tensor::reshape(tensor::permute(tensor::randn_like(patches, rng = rng), [0, 3, 1, 4, 2]), shape)
+    return tensor::lerp(latent, noise, 0.001)
+}
+{% endif %}

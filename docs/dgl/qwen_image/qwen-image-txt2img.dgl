@@ -1,0 +1,43 @@
+# version: 0.0.0
+# docs/models/qwen_image.md — CLI
+
+var {
+    model_path = "../models/diffusion_models/qwen-image-Q8_0.gguf"
+    text_path = "../models/text_encoders/Qwen2.5-VL-7B-Instruct-Q8_0.gguf"
+    vae_path = "../models/vae/qwen_image_vae.safetensors"
+
+    output_path = "output.png"
+
+    negative_prompt = ""
+    prompt = "一个穿着\"QWEN\"标志的T恤的中国美女正拿着黑色的马克笔面相镜头微笑。她身后的玻璃板上手写体写着 “一、Qwen-Image的技术路线： 探索视觉生成基础模型的极限，开创理解与生成一体化的未来。二、Qwen-Image的模型特色：1、复杂文字渲染。支持中英渲染、自动布局； 2、精准图像编辑。支持文字编辑、物体增减、风格变换。三、Qwen-Image的未来愿景：赋能专业内容创作、助力生成式AI发展。”"
+
+    seed = 42
+    rng_type = "cuda"
+    width = 1024
+    height = 1024
+
+    steps = 20
+    cfg_scale = 2.5
+    method = "euler"
+    scheduler = "discrete"
+}
+
+fn main() {
+    model = load_dit(model_path, family = "qwen_image", params_backend = "cpu")
+    text = load_text_encoder(text_path, family = "qwen_image", params_backend = "cpu")
+    vae = load_vae(vae_path, family = "qwen_image", params_backend = "cpu")
+
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    positive = encode_prompt(text, prompt, width = width, height = height)
+    negative = encode_prompt(text, negative_prompt, width = width, height = height)
+    pos = predictor(model, positive)
+    neg = predictor(model, negative)
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler, flow_shift = 3.0)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    image = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

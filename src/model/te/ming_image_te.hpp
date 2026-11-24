@@ -14,17 +14,17 @@ namespace MingImageTE {
         static MingImageTEConfig detect_from_weights(const String2TensorStorage& tensors, const std::string& prefix) {
             MingImageTEConfig config;
             for (const auto& entry : tensors) {
-                if (starts_with(entry.first, prefix + ".backbone.") &&
+                if (starts_with(entry.first, prefix + ".llm.backbone.") &&
                     contains(entry.first, ".mlp.experts.") && entry.second.type == GGML_TYPE_I8) {
                     throw std::runtime_error("Ming-Image INT8/W4A8 text encoder experts are not supported; use the BF16 text encoder");
                 }
             }
             bool vision           = false;
-            config.backbone       = LLM::LLMConfig::detect_from_weights(tensors, prefix + ".backbone.", LLM::LLMArch::BAILING_MOE, vision);
+            config.backbone       = LLM::LLMConfig::detect_from_weights(tensors, prefix + ".llm.backbone.", LLM::LLMArch::BAILING_MOE, vision);
             config.connector      = LLM::LLMConfig::detect_from_weights(tensors, prefix + ".connector.", LLM::LLMArch::QWEN2, vision);
-            const auto query      = tensors.find(prefix + ".query_tokens_dict.16x16");
-            const auto projection = tensors.find(prefix + ".proj_out.weight");
-            const auto direct     = tensors.find(prefix + ".proj_directvlm.1.weight");
+            const auto query      = tensors.find(prefix + ".connector.query_tokens_dict.16x16");
+            const auto projection = tensors.find(prefix + ".connector.proj_out.weight");
+            const auto direct     = tensors.find(prefix + ".connector.proj_directvlm.1.weight");
             if (query == tensors.end() || projection == tensors.end() || direct == tensors.end()) {
                 throw std::runtime_error("Ming-Image requires the learned queries, connector and both condition projections");
             }
@@ -53,39 +53,39 @@ namespace MingImageTE {
         MingImageTEConfig config;
 
         void init_params(ggml_context* ctx, const String2TensorStorage& tensors = {}, const std::string prefix = "") override {
-            params["query_tokens_dict.16x16"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, config.backbone.hidden_size, config.num_queries);
+            params["connector.query_tokens_dict.16x16"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, config.backbone.hidden_size, config.num_queries);
         }
 
     public:
         explicit MingImageTextModel(const MingImageTEConfig& config)
             : config(config) {
-            blocks["backbone"]         = std::make_shared<LLM::TextModel>(config.backbone, "ming_image.backbone");
-            blocks["connector"]        = std::make_shared<ConnectorModel>(config.connector);
-            blocks["proj_in"]          = std::make_shared<Linear>(config.backbone.hidden_size, config.connector.hidden_size);
-            blocks["proj_out"]         = std::make_shared<Linear>(config.connector.hidden_size, config.caption_dim);
-            blocks["proj_directvlm.0"] = std::make_shared<RMSNorm>(config.backbone.hidden_size * 3, 1e-5f);
-            blocks["proj_directvlm.1"] = std::make_shared<Linear>(config.backbone.hidden_size * 3, config.diffusion_dim);
+            blocks["llm.backbone"]               = std::make_shared<LLM::TextModel>(config.backbone, "ming_image.backbone");
+            blocks["connector"]                  = std::make_shared<ConnectorModel>(config.connector);
+            blocks["connector.proj_in"]          = std::make_shared<Linear>(config.backbone.hidden_size, config.connector.hidden_size);
+            blocks["connector.proj_out"]         = std::make_shared<Linear>(config.connector.hidden_size, config.caption_dim);
+            blocks["connector.proj_directvlm.0"] = std::make_shared<RMSNorm>(config.backbone.hidden_size * 3, 1e-5f);
+            blocks["connector.proj_directvlm.1"] = std::make_shared<Linear>(config.backbone.hidden_size * 3, config.diffusion_dim);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* ids, int64_t prompt_length, ggml_tensor* mask, ggml_tensor* image_mask, ggml_tensor* cos, ggml_tensor* sin, ggml_tensor* connector_positions) {
             auto gctx                 = ctx->ggml_ctx;
-            auto backbone             = std::dynamic_pointer_cast<LLM::TextModel>(blocks["backbone"]);
+            auto backbone             = std::dynamic_pointer_cast<LLM::TextModel>(blocks["llm.backbone"]);
             auto connector            = std::dynamic_pointer_cast<ConnectorModel>(blocks["connector"]);
             auto x                    = backbone->embed(ctx, ids);
             const int64_t query_start = prompt_length + 1;
             auto before               = ggml_ext_slice(ctx, x, 1, 0, query_start);
             auto after                = ggml_ext_slice(ctx, x, 1, query_start + config.num_queries, x->ne[1]);
-            x                         = ggml_concat(gctx, ggml_concat(gctx, before, params["query_tokens_dict.16x16"], 1), after, 1);
+            x                         = ggml_concat(gctx, ggml_concat(gctx, before, params["connector.query_tokens_dict.16x16"], 1), after, 1);
             // HF hidden_states[20] includes final RMSNorm; sd.cpp selects it as num_layers + 1.
             x            = backbone->forward_embeds(ctx, x, nullptr, mask, {5, 12, 21}, {}, nullptr, false, image_mask, cos, sin);
             auto direct  = ggml_ext_slice(ctx, x, 1, 0, prompt_length);
-            direct       = std::dynamic_pointer_cast<RMSNorm>(blocks["proj_directvlm.0"])->forward(ctx, direct);
-            direct       = std::dynamic_pointer_cast<Linear>(blocks["proj_directvlm.1"])->forward(ctx, direct);
+            direct       = std::dynamic_pointer_cast<RMSNorm>(blocks["connector.proj_directvlm.0"])->forward(ctx, direct);
+            direct       = std::dynamic_pointer_cast<Linear>(blocks["connector.proj_directvlm.1"])->forward(ctx, direct);
             auto queries = ggml_ext_slice(ctx, x, 0, config.backbone.hidden_size * 2, config.backbone.hidden_size * 3);
             queries      = ggml_ext_slice(ctx, queries, 1, query_start, query_start + config.num_queries);
-            queries      = std::dynamic_pointer_cast<Linear>(blocks["proj_in"])->forward(ctx, queries);
+            queries      = std::dynamic_pointer_cast<Linear>(blocks["connector.proj_in"])->forward(ctx, queries);
             queries      = connector->forward_embeds(ctx, queries, connector_positions, nullptr, {});
-            queries      = std::dynamic_pointer_cast<Linear>(blocks["proj_out"])->forward(ctx, queries);
+            queries      = std::dynamic_pointer_cast<Linear>(blocks["connector.proj_out"])->forward(ctx, queries);
             queries      = ggml_pad(gctx, queries, static_cast<int>(config.diffusion_dim - config.caption_dim), 0, 0, 0);
             return ggml_concat(gctx, queries, direct, 1);
         }
