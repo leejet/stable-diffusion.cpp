@@ -1840,6 +1840,71 @@ sincronizzazioni future.
     l'auto-fit al ricaricamento, non il server. Non fatto di proposito (seconda
     fase): usare la GPU integrata come aiuto per encoder di testo e VAE, dividere
     il lavoro fra GPU e CPU, riprendere un job a metà dopo un guasto.
+25. **Il motore DGL di leejet** — la sincronizzazione con upstream fino a
+    `79dc7ca`, in tre parti, porta il Diffusion Graph Language (#2396): ogni
+    generazione diventa un programma DGL e i pesi si caricano alla prima
+    generazione, non più in `sd_ctx_create()`. Le vecchie `src/pipeline/` e
+    `src/stable-diffusion.cpp` non ci sono più; le aggiunte del fork passano
+    nel nuovo motore:
+    - ripiego sulla CPU: `ModelRuntime::configure_backends()`
+      (`src/dgl/models/model_runtime.cpp`) passa alla CPU, con un avviso,
+      quando il backend di un modulo non si inizializza;
+      `disable_backend_fallback` (opzione del contesto e del contesto DGL) lo
+      impedisce;
+    - memory guard: chiave `memory_guard` del contesto DGL, applicata al
+      `ModelManager` del contesto; `ModelManager::ResourceHandle`, il gestore
+      che i modelli usano davvero, inoltra i controlli del guardiano e la
+      sospensione del prefetch;
+    - `--layer-split-fill` vale dalla creazione del contesto; con l'auto-fit,
+      più di una GPU e nessun `--backend`, il pianificatore di `--multi-gpu`
+      sceglie su quale GPU gira ogni modulo (`planned_backend_spec()` in
+      `src/api/generation_program.cpp`), e il piano di esecuzione di upstream
+      decide dove stanno i pesi, fase per fase;
+    - la sonda della parametrizzazione di SD2 non interrompe più il processo
+      quando il suo calcolo fallisce;
+    - codici d'errore: un caricamento fallito senza una causa più precisa è
+      `model_file`; `sd_ctx_set_model_options*()` registra il codice come le
+      altre chiamate.
+
+    `sd-server`: il custode del contesto resta il proprietario del contesto.
+    Le richieste scelgono il modello come in upstream (`recipe` e `models` nel
+    corpo); il cambio passa da `ContextKeeper::load()`, quindi scala dei
+    profili e recupero valgono anche per il modello scelto così. Un mutex
+    serializza cambi di modello, generazioni e script DGL; uno script DGL usa
+    il contesto del custode, o un contesto temporaneo quando nessun modello è
+    caricato (`ContextKeeper::with_context()`); il rilascio dei pesi inattivi
+    (`--weight-staging-ttl`, `--weight-residency-ttl`) non aspetta una
+    generazione in corso (`try_with_context()`); ogni contesto creato dal
+    custode riceve la politica di accesso ai file del server. Restano
+    `/sdcpp/v1/models/load` e `/unload`, `/sdcpp/v1/health` e `/resources`.
+    `/sdcpp/v1/upscale` e ADetailer lato server non ci sono più, come in
+    upstream: si fanno con uno script DGL (per l'upscale
+    `docs/dgl/esrgan/realesrgan-x4plus-anime-6b-upscale.dgl`).
+    `/sdapi/v1/interrupt` (upstream, #2349) ferma la generazione A1111 in
+    corso attraverso il gettone di annullamento del custode, quindi solo
+    quella.
+
+    Test, su una build per CPU: i nove programmi di `test/` passano;
+    `server_recovery_test` anche otto volte di fila e due volte con
+    ThreadSanitizer, senza avvisi, e i suoi controlli nuovi su
+    `with_context()` e `try_with_context()` falliscono se quei comportamenti
+    si rompono. Il controllo «mai due generazioni insieme», che falliva ogni
+    tanto, non dipende più dal carico della macchina: con la CPU occupata il
+    thread degli stop annullava tutti i 160 job prima che ne partisse uno, e
+    il conteggio restava a zero; ora gli stop raggiungono un job su cinque, e
+    il controllo resta rosso se `run()` perde il suo lucchetto. Con un modello SD 1.5 sintetico (pesi casuali, 2 GiB)
+    `sd-cli` genera; `--backend vulkan0` ripiega sulla CPU e con
+    `--disable-backend-fallback` fallisce come `backend`;
+    `test/server_cancel_e2e.py` passa i suoi 35 controlli contro un vero
+    `sd-server` (ora con 100 passi, il massimo che il server accetta); una
+    prova a mano del server (22 controlli, non nel repository:
+    server senza modello, script DGL con e senza modello, `models/load` e
+    `unload`, un job che sceglie il suo modello, `/sdapi/v1/interrupt`, il
+    rilascio dei pesi inattivi, log senza errori) passa; l'esempio C della
+    sezione 3.2 si compila senza avvisi e genera. **Non provato**: una GPU
+    reale, più GPU (la scelta dei device di `planned_backend_spec()` non è
+    coperta da nessun test: servono almeno due GPU; il pianificatore in sé ha
+    i suoi test con GPU simulate), Windows.
 
 Passaggi previsti e non ancora svolti: collaudo del workflow di release sui
 runner GitHub, prova di `--multi-gpu` su una macchina con due GPU, generazione

@@ -926,10 +926,12 @@ static void test_load_unload() {
         keeper.start(failure);
 
         std::atomic<bool> done{false};
+        std::atomic<int> started{0};
         std::atomic<int> readings{0};
         std::vector<std::thread> readers;
         for (int t = 0; t < 3; t++) {
             readers.emplace_back([&] {
+                ++started;
                 while (!done) {
                     const json health = keeper.health_json();
                     (void)health["status"];
@@ -941,7 +943,13 @@ static void test_load_unload() {
                 }
             });
         }
-        for (int i = 0; i < 150; i++) {
+        // The changes wait for the readers and last until some reading overlaps them, so that a busy machine,
+        // which can start the readers late, does not leave the changes without readers.
+        while (started.load() < 3) {
+            std::this_thread::yield();
+        }
+        const int before = readings.load();
+        for (int i = 0; i < 150 || readings.load() == before; i++) {
             if (i % 3 == 0) {
                 keeper.unload();
             } else {
@@ -952,7 +960,7 @@ static void test_load_unload() {
         for (auto& reader : readers) {
             reader.join();
         }
-        CHECK(readings.load() > 0, "the health, the ladder and the status were read while the model changed");
+        CHECK(readings.load() > before, "the health, the ladder and the status were read while the model changed");
         CHECK(keeper.load(other, failure) && keeper.has_model() &&
                   keeper.describe_ladder() == "max > balanced > lite > lite-disk > lite-hybrid > lite-cpu",
               "and the keeper still works after 150 changes");
@@ -1231,10 +1239,12 @@ static void test_cancel_threads() {
     std::atomic<int> failed{0};
     std::atomic<int> cancelled{0};
 
+    // The stops reach one job in five, chosen at random among them: stops at random among all the jobs would, on
+    // a busy machine that starts the workers late, cancel every job before any generation starts.
     std::thread canceller([&] {
         std::mt19937 rng(1234);
         while (!done) {
-            keeper.cancel(*tokens[rng() % tokens.size()]);
+            keeper.cancel(*tokens[(rng() % (tokens.size() / 5)) * 5 + 1]);
             (void)keeper.health_json();
         }
     });
@@ -1285,6 +1295,7 @@ static void test_cancel_threads() {
 
     const json health = keeper.health_json();
     CHECK(max_inside.load() == 1, "with stops arriving, still never two generations at the same time");
+    CHECK(succeeded + failed >= kThreads * kJobs * 3 / 5, "the jobs no stop reaches run to their end");
     CHECK(succeeded + failed + cancelled == kThreads * kJobs && counter(health, "requests") == kThreads * kJobs,
           "every job ends as succeeded, failed or cancelled");
     CHECK(counter(health, "succeeded") == succeeded && counter(health, "failed") == failed && counter(health, "cancelled") == cancelled,

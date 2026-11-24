@@ -480,6 +480,8 @@ struct SDAPIPreviewState {
     bool active       = false;
     int64_t job_count = 0;
     int job_no        = 0;
+    // The stop of the running A1111 generation, for /sdapi/v1/interrupt; set while active.
+    CancelToken* cancel = nullptr;
 };
 
 static SDAPIPreviewState g_preview;
@@ -519,8 +521,13 @@ static void preview_callback(int step, int frame_count, const sd_tensor_t* const
 }
 
 struct SDAPIPreviewGuard {
-    SDAPIPreviewGuard(const std::string& id_task, const SDGenerationParams& params, const std::string& job_type, bool detailing = false) {
+    SDAPIPreviewGuard(const std::string& id_task,
+                      const SDGenerationParams& params,
+                      const std::string& job_type,
+                      bool detailing      = false,
+                      CancelToken* cancel = nullptr) {
         std::lock_guard<std::mutex> lock(g_preview.mutex);
+        g_preview.cancel   = cancel;
         g_preview.id_task  = id_task;
         g_preview.total    = 0;
         g_preview.job_type = job_type;
@@ -546,6 +553,7 @@ struct SDAPIPreviewGuard {
         sd_set_preview_callback(nullptr, "none", 1, false, false, nullptr);
         std::lock_guard<std::mutex> lock(g_preview.mutex);
         g_preview.active = false;
+        g_preview.cancel = nullptr;
         g_preview.b64.clear();
     }
 
@@ -587,10 +595,11 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             int num_results = 0;
 
             GenerationFailure failure;
+            CancelToken interrupt;
             const bool detailing = request.adetailer_enabled && !runtime->default_gen_params->ad_model_path.empty();
             const bool generated = runtime->keeper->run(
                 [&](const ContextKeeper::ContextView& view) {
-                    SDAPIPreviewGuard preview_guard(id_task, request.gen_params, img2img ? "img2img" : "txt2img", detailing);
+                    SDAPIPreviewGuard preview_guard(id_task, request.gen_params, img2img ? "img2img" : "txt2img", detailing, &interrupt);
                     std::string message;
                     if (!generate_server_images(view.ctx, request, results, message, view.force_vae_tiling)) {
                         return false;
@@ -600,7 +609,8 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                     }
                     return true;
                 },
-                failure);
+                failure,
+                &interrupt);
             if (!generated) {
                 send_generation_failure(res, failure);
                 return;
@@ -801,6 +811,47 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         r["samples_format"]      = "png";
         r["sd_model_checkpoint"] = model_path.stem().u8string();
         res.set_content(r.dump(), "application/json");
+    });
+
+    // A1111 clients (e.g. SDAI) fetch these during setup and abort on 404. sd-server has no
+    // equivalent concept, so they report "nothing available" in A1111's response shapes.
+    routes.get("/sdapi/v1/embeddings", [](const httplib::Request&, httplib::Response& res) {
+        json r;
+        r["loaded"]  = json::object();
+        r["skipped"] = json::object();
+        res.set_content(r.dump(), "application/json");
+    });
+
+    for (const char* path : {"/sdapi/v1/hypernetworks",
+                             "/sdapi/v1/sd-modules",
+                             "/sdapi/v1/extensions",
+                             "/sdapi/v1/script-info"}) {
+        routes.get(path, [](const httplib::Request&, httplib::Response& res) {
+            res.set_content(json::array().dump(), "application/json");
+        });
+    }
+
+    routes.get("/sdapi/v1/scripts", [](const httplib::Request&, httplib::Response& res) {
+        json r;
+        r["txt2img"] = json::array();
+        r["img2img"] = json::array();
+        res.set_content(r.dump(), "application/json");
+    });
+
+    // Server options are fixed at launch; accept and ignore updates so clients that save
+    // settings before generating keep working.
+    routes.post("/sdapi/v1/options", [](const httplib::Request&, httplib::Response& res) {
+        res.set_content(json::object().dump(), "application/json");
+    });
+
+    routes.post("/sdapi/v1/interrupt", [runtime](const httplib::Request&, httplib::Response& res) {
+        // Hold the preview lock through the cancel: the generation's preview guard clears the token under this
+        // lock before its run returns, so the stop reaches the A1111 generation that is running and no other.
+        std::lock_guard<std::mutex> lock(g_preview.mutex);
+        if (g_preview.active && g_preview.cancel != nullptr) {
+            runtime->keeper->cancel(*g_preview.cancel);
+        }
+        res.set_content(json::object().dump(), "application/json");
     });
 
     routes.get("/sdapi/v1/progress", [](const httplib::Request& req, httplib::Response& res) {

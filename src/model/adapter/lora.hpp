@@ -1053,6 +1053,12 @@ struct LoraModel : public GGMLRunner {
                 final_tensor = ggml_cpy(compute_ctx, final_tensor, model_tensor);
             } else {
                 final_tensor = ggml_add_inplace(compute_ctx, model_tensor, diff);
+                if (diff->type != model_tensor->type && !ggml_backend_supports_op(runtime_backend, final_tensor)) {
+                    // Rounding the delta before adding can erase a representable result.
+                    final_tensor = ggml_cast(compute_ctx, model_tensor, GGML_TYPE_F32);
+                    final_tensor = ggml_add_inplace(compute_ctx, final_tensor, diff);
+                    final_tensor = ggml_cpy(compute_ctx, final_tensor, model_tensor);
+                }
             }
             ggml_build_forward_expand(gf, final_tensor);
             if (!sd_backend_is_cpu(runtime_backend) && ggml_backend_buffer_is_host(original_tensor->buffer)) {

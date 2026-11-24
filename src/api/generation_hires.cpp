@@ -41,16 +41,20 @@ namespace sd::api {
                                                                                                 : std::round(request.values.at("height").get<int>() * double(hires.scale));
         if (width < 1 || height < 1 || width > 16384 || height > 16384)
             throw dgl::Error(SD_STATUS_OUT_OF_RANGE, "hires target dimensions must be in 1..16384");
-        const auto& sampling         = request.image.sample_params;
-        const int default_steps      = sampling.custom_sigmas_count ? sampling.custom_sigmas_count - 1 : sampling.sample_steps;
-        const int steps              = hires.steps > 0 ? hires.steps : default_steps;
-        const double scheduler_steps = steps / double(hires.denoising_strength);
-        if (!hires.custom_sigmas_count && scheduler_steps > 10000)
+        const auto& sampling             = request.image.sample_params;
+        const int default_steps          = sampling.custom_sigmas_count ? sampling.custom_sigmas_count - 1 : sampling.sample_steps;
+        const int steps                  = hires.steps > 0 ? hires.steps : default_steps;
+        const double raw_scheduler_steps = steps / double(hires.denoising_strength);
+        if (!hires.custom_sigmas_count && raw_scheduler_steps > 10000)
             throw dgl::Error(SD_STATUS_OUT_OF_RANGE, "hires steps / denoising_strength exceeds 10000; supply hires.sigmas or increase the strength");
+        int scheduler_steps = std::max(1, int(std::min(raw_scheduler_steps, 10000.0)));
+        // The templates keep the last steps + 1 sigmas. Partial denoising must trim at least the first sigma.
+        if (!hires.custom_sigmas_count && hires.denoising_strength < 1.f && scheduler_steps == steps)
+            ++scheduler_steps;
         request.values.update({{"hires_target_width", sd::align_image_dimension(int(width), multiple)},
                                {"hires_target_height", sd::align_image_dimension(int(height), multiple)},
                                {"hires_steps", steps},
-                               {"hires_scheduler_steps", std::max(1, int(std::min(scheduler_steps, 10000.0)))},
+                               {"hires_scheduler_steps", scheduler_steps},
                                {"hires_mode", found->second},
                                {"hires_antialias", mode == "latent_antialiased" || mode == "latent_bicubic_antialiased"},
                                {"hires_vae_scale", scale}});
