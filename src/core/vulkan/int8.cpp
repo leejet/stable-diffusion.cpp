@@ -1,10 +1,12 @@
 #include <algorithm>
 #include <array>
 #include <climits>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 #include "core/ggml_extensions.h"
 #include "ggml-ext-vulkan.h"
+#include "i8_lora_merge.h"
 #include "modulate_convrot.h"
 #include "mul_mat_i8_residual_cm2.h"
 #include "mul_mat_i8_swiglu_split_cm2.h"
@@ -12,7 +14,10 @@
 #include "mul_mat_i8_tensorwise_cm1.h"
 #include "mul_mat_i8_tensorwise_cm2.h"
 #include "mul_mat_w4a4_convrot.h"
+#include "mul_mat_w4a4_convrot_cm2.h"
+#include "mul_mat_w4a4_convrot_decode_cm2.h"
 #include "mul_mat_w4a8_convrot.h"
+#include "mul_mat_w4a8_convrot_cm2.h"
 #include "quantize_i8_convrot.h"
 #include "quantize_i8_convrot_h64.h"
 #include "quantize_i8_convrot_register.h"
@@ -23,11 +28,17 @@
 #include "swiglu_quantize_i8_convrot_16384.h"
 
 namespace sd_vulkan_i8 {
+    // Keep these budgets in sync with the cooperative matrix shader tile layouts.
+    static constexpr uint32_t w4a4_shared       = 2 * (64 + 64) * (64 / 4 + 4) * 4;
+    static constexpr uint32_t w4a4_large_shared = 2 * (64 + 128) * (64 / 4 + 4) * 4;
+    static constexpr uint32_t w4a8_shared       = (64 * (64 / 2 + 4) + 64 * (64 / 16) + 64 * (64 / 4 + 4) + 256 + 256 + 16 + 1) * 4;
+    static constexpr uint32_t w4a8_large_shared = (64 * (64 / 2 + 4) + 64 * (64 / 16) + 128 * (64 / 4 + 4) + 256 + 256 + 16 + 1) * 4;
     struct Device {
         const ggml_ext_vulkan_api* api;
         ggml_ext_vulkan_device_info info;
         ggml_ext_vulkan_compute_info compute;
         bool subgroup, cm2, cm2_small;
+        bool w4a4_cm2, w4a8_cm2;
         uint32_t cm_m, cm_n, cm_k;
     };
     static bool device_info(ggml_backend_dev_t dev, Device& d) {
@@ -54,6 +65,10 @@ namespace sd_vulkan_i8 {
             if (prop.flexible && prop.workgroup_scope && prop.invocations == 128 && 128 % prop.m == 0 && 64 % prop.n == 0 && 64 % prop.k == 0 && sizeof(sd_vulkan_shaders::mul_mat_i8_tensorwise_cm2) > 4) {
                 d.cm2 = true;
                 d.cm2_small |= 64 % prop.m == 0 && 32 % prop.n == 0;
+            }
+            if (prop.flexible && prop.workgroup_scope && prop.invocations == 256 && d.info.max_group_size[0] >= 256 && 64 % prop.m == 0 && 64 % prop.n == 0) {
+                d.w4a4_cm2 |= d.compute.shared_memory >= w4a4_shared && 64 % prop.k == 0 && sizeof(sd_vulkan_shaders::mul_mat_w4a4_convrot_cm2) > 4;
+                d.w4a8_cm2 |= d.compute.shared_memory >= w4a8_shared && 32 % prop.k == 0 && sizeof(sd_vulkan_shaders::mul_mat_w4a8_convrot_cm2) > 4;
             }
         }
         return d.info.integer_dot_product && sizeof(sd_vulkan_shaders::mul_mat_i8_tensorwise) > 4;
@@ -698,9 +713,45 @@ namespace sd_vulkan_i8 {
         struct Parameters {
             uint32_t n, rows, k, bias;
         };
-        const Parameters pc     = {n, rows, k, op.bias ? 1u : 0u};
-        auto pipeline           = op.kind == SDW4Kind::W4A4 ? SD_VK_PIPELINE(mul_mat_w4a4_convrot, 6, Parameters) : SD_VK_PIPELINE(mul_mat_w4a8_convrot, 8, Parameters);
-        const uint32_t groups[] = {(n + 63) / 64, (rows + 31) / 32, 1};
+        const Parameters pc = {n, rows, k, op.bias ? 1u : 0u};
+        auto pipeline       = op.kind == SDW4Kind::W4A4 ? SD_VK_PIPELINE(mul_mat_w4a4_convrot, 6, Parameters) : SD_VK_PIPELINE(mul_mat_w4a8_convrot, 8, Parameters);
+        uint32_t tile_cols = 64, tile_rows = 32;
+        const bool large_w4a4      = op.kind == SDW4Kind::W4A4 && rows >= 512 && d.compute.shared_memory >= w4a4_large_shared;
+        const bool large_w4a8      = op.kind == SDW4Kind::W4A8 && rows >= 512 && d.compute.shared_memory >= w4a8_large_shared;
+        const bool decode_w4a4     = op.kind == SDW4Kind::W4A4 && d.w4a4_cm2 && k % 256 == 0 && n % 64 == 0 && rows >= 128 &&
+                                     aligned(op.weight, 16) && sizeof(sd_vulkan_shaders::mul_mat_w4a4_convrot_decode_cm2) > 4;
+        const uint32_t constants[] = {64, large_w4a4 || large_w4a8 ? 128u : 64u, 64};
+        const char* force_dp4a     = std::getenv("GGML_VK_W4_FORCE_DP4A");
+        if (!(force_dp4a && std::atoi(force_dp4a)) && aligned(op.input, 16) &&
+            (op.kind == SDW4Kind::W4A4 ? d.w4a4_cm2 : d.w4a8_cm2 && aligned(op.weight, 8))) {
+            pipeline = op.kind == SDW4Kind::W4A4 ? SD_VK_PIPELINE(mul_mat_w4a4_convrot_cm2, 6, Parameters) : SD_VK_PIPELINE(mul_mat_w4a8_convrot_cm2, 8, Parameters);
+            if (decode_w4a4) {
+                struct DecodeParameters {
+                    uint32_t n, rows, k, bias, row_offset;
+                };
+                DecodeParameters decoded    = {n, rows, k, pc.bias, 0};
+                uint32_t decode_constants[] = {64, 128, 128, 1};
+                pipeline                    = SD_VK_PIPELINE(mul_mat_w4a4_convrot_decode_cm2, 6, DecodeParameters);
+                pipeline.constants          = decode_constants;
+                pipeline.constant_count     = 4;
+                uint32_t groups[]           = {n / 64, rows / 128, 1};
+                auto status                 = d.api->dispatch(e->backend, &pipeline, bindings.data(), &decoded, groups);
+                if (status == GGML_STATUS_SUCCESS && rows % 128) {
+                    // Specialize the tail separately so bounds checks do not inhibit full-tile loads.
+                    decoded.row_offset  = rows / 128 * 128;
+                    decode_constants[1] = rows % 128 <= 64 ? 64 : 128;
+                    decode_constants[3] = 0;
+                    groups[1]           = 1;
+                    status              = d.api->dispatch(e->backend, &pipeline, bindings.data(), &decoded, groups);
+                }
+                return finish(e, d, output, dst, alias, status);
+            }
+            pipeline.constants      = constants;
+            pipeline.constant_count = 3;
+            tile_cols               = constants[0];
+            tile_rows               = constants[1];
+        }
+        const uint32_t groups[] = {(n + tile_cols - 1) / tile_cols, (rows + tile_rows - 1) / tile_rows, 1};
         auto status             = d.api->dispatch(e->backend, &pipeline, bindings.data(), &pc, groups);
         return finish(e, d, output, dst, alias, status);
     }
@@ -810,6 +861,45 @@ namespace sd_vulkan_i8 {
             return multiply_w4(e, d, nodes[0]);
         return is_convrot(nodes[count - 1]) ? quantize(e, d, nodes, count) : multiply(e, d, nodes, count);
     }
+
+    struct LoRAMergeParams {
+        uint32_t k, rows, count, group, scalar;
+    };
+    static bool lora_supports(ggml_backend_dev_t dev, const ggml_tensor* dst, void*) {
+        Device d;
+        SDI8LoRAMerge op;
+        return sd_ggml_i8_lora_merge_describe(dst, &op) && device_info(dev, d) &&
+               ggml_nelements(op.weight) % 4 == 0 && op.workspace_size() <= std::min<size_t>(d.info.max_buffer_range, UINT32_MAX / 2) &&
+               d.info.max_group_invocations >= 256 && d.info.max_group_size[0] >= 256 && d.compute.shared_memory >= 2048 &&
+               bounded(d, dst) && bounded(d, op.weight) && bounded(d, op.scale) && bounded(d, op.diff);
+    }
+    static ggml_status lora_prepare(ggml_backend_t, ggml_tensor* const* nodes, int, void**, size_t* bytes, void*) {
+        SDI8LoRAMerge op;
+        if (!sd_ggml_i8_lora_merge_describe(nodes[0], &op))
+            return GGML_STATUS_FAILED;
+        *bytes = op.workspace_size();
+        return GGML_STATUS_SUCCESS;
+    }
+    static ggml_status lora_execute(const ggml_ext_execution_context* e, ggml_tensor* const* nodes, int, void*, void*) {
+        Device device;
+        SDI8LoRAMerge op;
+        if (!sd_ggml_i8_lora_merge_describe(nodes[0], &op) || !device_info(ggml_backend_get_device(e->backend), device))
+            return GGML_STATUS_FAILED;
+        const LoRAMergeParams pc                 = {uint32_t(op.weight->ne[0]), uint32_t(op.weight->ne[1]), uint32_t(ggml_nelements(op.weight)),
+                                                    uint32_t(op.group), op.scalar_scale()};
+        const ggml_ext_vulkan_binding bindings[] = {{op.weight}, {op.scale}, {op.diff}, {nodes[0]}, {nullptr, e->workspace, 0, op.workspace_size()}};
+        auto pipeline                            = SD_VK_PIPELINE(i8_lora_merge, 5, LoRAMergeParams);
+        const uint32_t workgroups[]              = {(pc.count + 255) / 256, pc.rows, 1, (pc.count / 4 + 255) / 256};
+        for (uint32_t stage = 0; stage < 4; ++stage) {
+            pipeline.constants      = &stage;
+            pipeline.constant_count = 1;
+            const uint32_t groups[] = {std::min(workgroups[stage], device.info.max_group_count[0]), 1, 1};
+            const auto status       = device.api->dispatch(e->backend, &pipeline, bindings, &pc, groups);
+            if (status != GGML_STATUS_SUCCESS)
+                return status;
+        }
+        return GGML_STATUS_SUCCESS;
+    }
 #undef SD_VK_PIPELINE
 }
 
@@ -821,13 +911,21 @@ void sd_ggml_register_vulkan_i8(ggml_backend_dev_t device) {
     ggml_ext_kernel_desc d = {};
     d.abi_version          = GGML_EXT_ABI_VERSION;
     d.priority             = 100;
-    d.prepare              = prepare;
-    d.destroy              = destroy;
-    d.execute              = execute;
-    d.name                 = "sd.quantize_i8_convrot.vulkan.v1";
     d.op                   = GGML_OP_CUSTOM;
-    d.custom_op            = sd_ggml_convrot_op();
-    d.supports             = quant_supports;
+    d.name                 = "sd.i8_lora_merge.vulkan.v1";
+    d.custom_op            = sd_ggml_i8_lora_merge_op();
+    d.supports             = lora_supports;
+    d.prepare              = lora_prepare;
+    d.destroy              = destroy;
+    d.execute              = lora_execute;
+    GGML_ASSERT(ggml_ext_register_kernel(device, &d));
+    d.prepare   = prepare;
+    d.destroy   = destroy;
+    d.execute   = execute;
+    d.name      = "sd.quantize_i8_convrot.vulkan.v1";
+    d.op        = GGML_OP_CUSTOM;
+    d.custom_op = sd_ggml_convrot_op();
+    d.supports  = quant_supports;
     GGML_ASSERT(ggml_ext_register_kernel(device, &d));
     d.name     = "sd.quantize_i8_convrot.h64.vulkan.v1";
     d.supports = quant64_supports;

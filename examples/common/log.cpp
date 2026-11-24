@@ -4,6 +4,7 @@
 
 sd_log_level_t log_level = SD_LOG_INFO;
 bool log_color           = false;
+FILE* log_stream         = nullptr;
 
 std::string sd_basename(const std::string& path) {
     size_t pos = path.find_last_of('/');
@@ -79,10 +80,10 @@ bool parse_log_level(const std::string& name, sd_log_level_t& level) {
     return false;
 }
 
-void log_print(enum sd_log_level_t level, const char* log, sd_log_level_t min_level, bool color) {
+void log_print(enum sd_log_level_t level, const char* log, sd_log_level_t min_level, bool color, FILE* stream) {
     int tag_color;
     const char* level_str;
-    FILE* out_stream = (level == SD_LOG_ERROR) ? stderr : stdout;
+    FILE* out_stream = stream ? stream : ((level == SD_LOG_ERROR) ? stderr : stdout);
 
     if (!log || level < min_level) {
         return;
@@ -141,5 +142,5 @@ void example_log_printf(sd_log_level_t level, const char* file, int line, const 
     }
     message += " --- " + sd_basename(file) + ":" + std::to_string(line) + '\n';
 
-    log_print(level, message.c_str(), log_level, log_color);
+    log_print(level, message.c_str(), log_level, log_color, log_stream);
 }

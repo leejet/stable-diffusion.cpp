@@ -28,17 +28,17 @@ struct PH3ImageTextConnector : public UnaryBlock {
         x         = ggml_div(ctx->ggml_ctx, ggml_sub(ctx->ggml_ctx, x, params["input_mean"]), params["input_std"]);
         x         = proj->forward(ctx, x);
         x         = ggml_add(ctx->ggml_ctx, ggml_mul(ctx->ggml_ctx, x, params["output_std"]), params["output_mean"]);
-        auto sink = ggml_repeat(ctx->ggml_ctx, params["sink_embedding"], ggml_ext_slice(ctx->ggml_ctx, x, 1, 0, 1));
+        auto sink = ggml_repeat(ctx->ggml_ctx, params["sink_embedding"], ggml_ext_slice(ctx, x, 1, 0, 1));
         if (x->ne[1] == 1) {
             return sink;
         }
-        return ggml_concat(ctx->ggml_ctx, sink, ggml_ext_slice(ctx->ggml_ctx, x, 1, 1, x->ne[1]), 1);
+        return ggml_concat(ctx->ggml_ctx, sink, ggml_ext_slice(ctx, x, 1, 1, x->ne[1]), 1);
     }
 };
 
 struct PH3ImageTextConnectorRunner : public GGMLRunner {
     PH3ImageTextConnector model;
-    static constexpr const char* prefix = "text_encoders.ph3_image_connector";
+    static constexpr const char* prefix = "text_encoders.connector";
 
     PH3ImageTextConnectorRunner(ggml_backend_t backend,
                                 const String2TensorStorage& tensor_storage_map,

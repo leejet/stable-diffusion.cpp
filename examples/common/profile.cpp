@@ -113,7 +113,8 @@ namespace sd_profile {
     }
 
     bool may_use_several_gpus(const SDContextParams& ctx) {
-        return ctx.auto_fit && ctx.backend.empty() && ctx.params_backend.empty() && !multi_gpu_off(ctx.multi_gpu);
+        return ctx.auto_fit.value_or(true) && ctx.backend.value_or("").empty() && ctx.params_backend.value_or("").empty() &&
+               !multi_gpu_off(ctx.multi_gpu);
     }
 
     int64_t usable_gpu_memory(const std::vector<sd_device_info_t>& devices, bool pool, int* count) {
@@ -250,8 +251,8 @@ namespace sd_profile {
             ctx.eager_load            = false;
         }
         if (level >= Level::LITE_HYBRID &&
-            (free_to_set("--backend") || ctx.backend.empty()) &&
-            !mentions_module(ctx.backend, "te") && !mentions_module(ctx.backend, "clip")) {
+            (free_to_set("--backend") || ctx.backend.value_or("").empty()) &&
+            !mentions_module(ctx.backend.value_or(""), "te") && !mentions_module(ctx.backend.value_or(""), "clip")) {
             ctx.clip_on_cpu = true;
         }
         if (level >= Level::LITE_CPU && free_to_set("--backend")) {

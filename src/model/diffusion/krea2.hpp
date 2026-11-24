@@ -185,9 +185,9 @@ namespace Krea2 {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
             ggml_tensor* scale = params["scale"];
             if (ctx->weight_adapter) {
-                scale = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, scale, prefix + "scale.weight");
+                scale = ctx->weight_adapter->patch_weight(ctx, scale, prefix + "scale.weight");
             }
-            scale = ggml_add(ctx->ggml_ctx, scale, ggml_ext_ones(ctx->ggml_ctx, scale->ne[0], 1, 1, 1));
+            scale = ggml_add(ctx->ggml_ctx, scale, ggml_ext_ones(ctx, scale->ne[0], 1, 1, 1));
             x     = ggml_rms_norm(ctx->ggml_ctx, x, eps);
             x     = ggml_mul_inplace(ctx->ggml_ctx, x, scale);
             return x;
@@ -273,9 +273,7 @@ namespace Krea2 {
             auto knorm = std::dynamic_pointer_cast<KreaRMSNorm>(blocks["qknorm.knorm"]);
             auto wo    = std::dynamic_pointer_cast<Linear>(blocks["wo"]);
 
-            if (sd_backend_is(ctx->backend, "Vulkan") || sd_backend_is(ctx->backend, "ROCm")) {
-                wo->set_force_prec_f32(true);
-            }
+            wo->set_precision_flags(GGML_PRECISION_F32_VULKAN | GGML_PRECISION_F32_ROCM);
 
             int64_t L = x->ne[1];
             int64_t N = x->ne[2];
@@ -316,11 +314,11 @@ namespace Krea2 {
         std::vector<ggml_tensor*> forward(GGMLRunnerContext* ctx, ggml_tensor* vec) {
             auto lin = params["lin"];
             if (ctx->weight_adapter) {
-                lin = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, lin, prefix + "lin.weight");
+                lin = ctx->weight_adapter->patch_weight(ctx, lin, prefix + "lin.weight");
             }
             lin      = ggml_repeat(ctx->ggml_ctx, lin, vec);
             auto out = ggml_add(ctx->ggml_ctx, vec, lin);
-            return ggml_ext_chunk(ctx->ggml_ctx, out, 6, 0);
+            return ggml_ext_chunk(ctx, out, 6, 0);
         }
     };
 
@@ -342,10 +340,10 @@ namespace Krea2 {
         std::vector<ggml_tensor*> forward(GGMLRunnerContext* ctx, ggml_tensor* vec) {
             auto lin = params["lin"];
             if (ctx->weight_adapter) {
-                lin = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, lin, prefix + "lin.weight");
+                lin = ctx->weight_adapter->patch_weight(ctx, lin, prefix + "lin.weight");
             }
             auto out = ggml_add(ctx->ggml_ctx, lin, vec);
-            return ggml_ext_chunk(ctx->ggml_ctx, out, 2, 1);
+            return ggml_ext_chunk(ctx, out, 2, 1);
         }
     };
 
@@ -541,7 +539,7 @@ namespace Krea2 {
             auto linear_0 = std::dynamic_pointer_cast<Linear>(blocks["0"]);
             auto linear_2 = std::dynamic_pointer_cast<Linear>(blocks["2"]);
             x             = linear_0->forward(ctx, x);
-            x             = ggml_ext_gelu(ctx->ggml_ctx, x, false);
+            x             = ggml_ext_gelu(ctx, x, false);
             x             = linear_2->forward(ctx, x);
             return x;
         }
@@ -555,7 +553,7 @@ namespace Krea2 {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
             auto linear_1 = std::dynamic_pointer_cast<Linear>(blocks["1"]);
-            x             = ggml_ext_gelu(ctx->ggml_ctx, x, false);
+            x             = ggml_ext_gelu(ctx, x, false);
             x             = linear_1->forward(ctx, x);
             return x;
         }
@@ -575,7 +573,7 @@ namespace Krea2 {
             auto linear_3 = std::dynamic_pointer_cast<Linear>(blocks["3"]);
             x             = norm->forward(ctx, x);
             x             = linear_1->forward(ctx, x);
-            x             = ggml_ext_gelu(ctx->ggml_ctx, x, true);
+            x             = ggml_ext_gelu(ctx, x, true);
             x             = linear_3->forward(ctx, x);
             return x;
         }
@@ -656,7 +654,7 @@ namespace Krea2 {
             int64_t ref_len = img->ne[1] - img_len;
             img             = first->forward(ctx, img);
 
-            auto t    = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep, static_cast<int>(config.timestep_dim), 10000, 1000.f);
+            auto t    = ggml_ext_timestep_embedding(ctx, timestep, static_cast<int>(config.timestep_dim), 10000, 1000.f);
             t         = tmlp->forward(ctx, t);
             t         = ggml_reshape_3d(ctx->ggml_ctx, t, t->ne[0], 1, t->ne[1]);
             auto tvec = tproj->forward(ctx, t);
@@ -665,7 +663,7 @@ namespace Krea2 {
             if (ref_latents.size() > 0 && zero_timestep_refs) {
                 // "index_timestep_zero" mode: use timestep = 0 for ref latents
                 auto timestep_0 = ggml_scale(ctx->ggml_ctx, timestep, 0.0f);
-                auto t_0        = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep_0, static_cast<int>(config.timestep_dim), 10000, 1000.f);
+                auto t_0        = ggml_ext_timestep_embedding(ctx, timestep_0, static_cast<int>(config.timestep_dim), 10000, 1000.f);
                 t_0             = tmlp->forward(ctx, t_0);
                 t_0             = ggml_reshape_3d(ctx->ggml_ctx, t_0, t_0->ne[0], 1, t_0->ne[1]);
                 tvec_0          = tproj->forward(ctx, t_0);
@@ -683,9 +681,9 @@ namespace Krea2 {
                 sd::ggml_graph_cut::mark_graph_cut(hidden_states, "krea2.blocks." + std::to_string(i), "hidden_states");
             }
 
-            hidden_states = ggml_ext_slice(ctx->ggml_ctx, hidden_states, 1, txt_len, txt_len + img_len);
+            hidden_states = ggml_ext_slice(ctx, hidden_states, 1, txt_len, txt_len + img_len);
             hidden_states = last->forward(ctx, hidden_states, t);
-            hidden_states = DiT::unpatchify_and_crop(ctx->ggml_ctx, hidden_states, H, W, config.patch_size, config.patch_size, true);
+            hidden_states = DiT::unpatchify_and_crop(ctx, hidden_states, H, W, config.patch_size, config.patch_size, true);
             return hidden_states;
         }
     };
@@ -741,7 +739,8 @@ namespace Krea2 {
                                  const sd::Tensor<float>& timesteps_tensor,
                                  const sd::Tensor<float>& context_tensor,
                                  const std::vector<sd::Tensor<float>>& ref_latents_tensor = {},
-                                 const RefImageParams& ref_image_params                   = REF_IMAGE_PRESETS.at("krea2_ostris_edit")) {
+                                 Rope::RefIndexMode ref_index_mode                        = Rope::RefIndexMode::FIXED,
+                                 bool force_ref_timestep_zero                             = false) {
             ggml_cgraph* gf        = new_graph_custom(KREA2_GRAPH_SIZE);
             ggml_tensor* x         = make_input(x_tensor);
             ggml_tensor* timesteps = make_input(timesteps_tensor);
@@ -758,7 +757,7 @@ namespace Krea2 {
             sd::PECacheKey pe_key("krea2.pe");
             pe_key.add_shape(x).add_shape(context).add(config.theta).add(config.axes_dim).add(config.axes_dim_sum);
             pe_key.add(circular_x_enabled).add(circular_y_enabled).add(config.patch_size).add_shapes(ref_latents);
-            pe_key.add(ref_image_params.ref_index_mode);
+            pe_key.add(ref_index_mode);
             auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
                 auto pe_vec = finish_rope_pe(gen_krea2_pe(static_cast<int>(x->ne[1]),
                                                           static_cast<int>(x->ne[0]),
@@ -768,13 +767,13 @@ namespace Krea2 {
                                                           config.theta,
                                                           config.axes_dim,
                                                           ref_latents,
-                                                          ref_image_params.ref_index_mode));
+                                                          ref_index_mode));
                 int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
                 return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
             }));
 
             auto runner_ctx  = get_context();
-            ggml_tensor* out = model.forward(&runner_ctx, x, timesteps, context, pe, ref_latents, ref_image_params.force_ref_timestep_zero);
+            ggml_tensor* out = model.forward(&runner_ctx, x, timesteps, context, pe, ref_latents, force_ref_timestep_zero);
             ggml_build_forward_expand(gf, out);
             return gf;
         }
@@ -784,9 +783,10 @@ namespace Krea2 {
                                   const sd::Tensor<float>& timesteps,
                                   const sd::Tensor<float>& context,
                                   const std::vector<sd::Tensor<float>>& ref_latents = {},
-                                  const RefImageParams& ref_image_params            = REF_IMAGE_PRESETS.at("krea2_ostris_edit")) {
+                                  Rope::RefIndexMode ref_index_mode                 = Rope::RefIndexMode::FIXED,
+                                  bool force_ref_timestep_zero                      = false) {
             auto get_graph = [&]() -> ggml_cgraph* {
-                return build_graph(x, timesteps, context, ref_latents, ref_image_params);
+                return build_graph(x, timesteps, context, ref_latents, ref_index_mode, force_ref_timestep_zero);
             };
             return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
@@ -800,8 +800,8 @@ namespace Krea2 {
                            *diffusion_params.x,
                            *diffusion_params.timesteps,
                            tensor_or_empty(diffusion_params.context),
-                           diffusion_params.ref_latents && diffusion_params.ref_image_params.pass_to_dit ? *diffusion_params.ref_latents : empty_ref_latents,
-                           diffusion_params.ref_image_params);
+                           diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
+                           diffusion_params.ref_index_mode, diffusion_params.force_ref_timestep_zero);
         }
     };
 }  // namespace Krea2

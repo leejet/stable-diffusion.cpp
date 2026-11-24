@@ -1,0 +1,17 @@
+    {{name}}_original = image::to_f32({{name}}, channels = {{channels}})
+{% if center_crop %}
+    {{name}}_resized = tensor::interpolate({{name}}_original, size = [{{resize_width}}, {{resize_height}}], mode = "lanczos")
+    {{name}}_pixels = tensor::crop({{name}}_resized, axes = [0, 1], start = [{{crop_x}}, {{crop_y}}], size = [{{width}}, {{height}}])
+{% else %}
+    {{name}}_pixels = tensor::interpolate({{name}}_original, size = [{{width}}, {{height}}], mode = {{mode}})
+{% endif %}
+{% if encode %}
+{% if flags.raw_reference %}
+    {{latent}} = vae_encode(vae, {{name}}_pixels, rng = encode_rng, posterior = "mode"{{vae_run_options}})
+{% elif augment %}
+    {{latent}}_raw = vae_to_dit_latents(vae, vae_encode(vae, {{name}}_pixels, rng = encode_rng{{vae_run_options}}))
+    {{latent}} = h3_image_reference_noise({{latent}}_raw, seed)
+{% else %}
+    {{latent}} = vae_to_dit_latents(vae, vae_encode(vae, {{name}}_pixels, rng = encode_rng{{vae_run_options}}))
+{% endif %}
+{% endif %}

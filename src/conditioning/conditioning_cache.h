@@ -11,11 +11,16 @@ class ConditioningCache {
     struct Entry {
         ConditionerParams params;
         std::vector<sd::Tensor<float>> ref_images;
+        sd::PromptInput prompt_input;
         std::vector<MiniMaxH3PresentationItem> references;
         SDCondition condition;
 
         Entry(const ConditionerParams& input, const SDCondition& output)
             : params(input), condition(output) {
+            if (input.prompt_input != nullptr) {
+                prompt_input        = *input.prompt_input;
+                params.prompt_input = &prompt_input;
+            }
             // Request-owned reference pointers must not outlive the request.
             if (input.ref_images != nullptr) {
                 ref_images        = *input.ref_images;
@@ -42,18 +47,35 @@ class ConditioningCache {
                           });
     }
 
+    static bool same_textual_inversion(const std::shared_ptr<sd::TextualInversion>& a,
+                                       const std::shared_ptr<sd::TextualInversion>& b) {
+        if (!a || !b)
+            return a == b;
+        return std::equal(a->sources.begin(), a->sources.end(), b->sources.begin(), b->sources.end(),
+                          [](const ModelLoader::FileStamp& x, const ModelLoader::FileStamp& y) {
+                              return std::tie(x.path, x.size, x.modified, x.exists) == std::tie(y.path, y.size, y.modified, y.exists);
+                          });
+    }
+
     static bool same_params(const ConditionerParams& a, const ConditionerParams& b) {
         const auto fields = [](const ConditionerParams& p) {
-            const auto& r = p.ref_image_params;
-            return std::tie(p.text, p.clip_skip, p.width, p.height, p.zero_out_masked,
-                            r.pass_to_vlm, r.pass_to_dit, r.ref_index_mode,
-                            r.force_ref_timestep_zero, r.resize_before_vae, r.vae_input_max_pixels,
-                            r.vlm_resize_mode, r.vlm_min_size, r.vlm_max_size, r.resize_vae_to_target,
-                            r.ref_image_size);
+            return std::tie(p.text, p.system_prompt, p.raw, p.clip_skip, p.width, p.height, p.zero_out_masked);
         };
         if (fields(a) != fields(b) ||
+            !same_textual_inversion(a.textual_inversion, b.textual_inversion) ||
+            (a.prompt_input == nullptr) != (b.prompt_input == nullptr) ||
             (a.ref_images == nullptr) != (b.ref_images == nullptr) ||
             (a.minimax_h3_references == nullptr) != (b.minimax_h3_references == nullptr)) {
+            return false;
+        }
+        if (a.prompt_input != nullptr &&
+            !std::equal(a.prompt_input->begin(), a.prompt_input->end(),
+                        b.prompt_input->begin(), b.prompt_input->end(),
+                        [](const sd::PromptPart& x, const sd::PromptPart& y) {
+                            return x.type == y.type && x.content == y.content && x.weight == y.weight &&
+                                   (x.image == y.image ||
+                                    (x.image && y.image && x.image->shape() == y.image->shape() && x.image->values() == y.image->values()));
+                        })) {
             return false;
         }
         if (a.ref_images != nullptr && !same_images(*a.ref_images, *b.ref_images)) {
@@ -88,6 +110,11 @@ public:
         }
         for (auto it = entries_.begin(); it != entries_.end(); ++it) {
             if (same_params(it->params, params)) {
+                if (it->params.textual_inversion) {
+                    bool changed = false;
+                    if (!ModelLoader::dependencies_changed(it->params.textual_inversion->dependencies, changed) || changed)
+                        continue;
+                }
                 entries_.splice(entries_.begin(), entries_, it);
                 LOG_INFO("conditioning cache hit");
                 return entries_.front().condition;

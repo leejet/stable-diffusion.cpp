@@ -25,7 +25,7 @@ progetto originale. Modifiche del fork di **Francesco Simeoni**
 - **Una scheda vista da due backend** (CUDA e Vulkan nella stessa cartella: la stessa scheda NVIDIA è `CUDA0` e `Vulkan0`): il motore la conta una volta e usa CUDA; se un `--backend vulkan0` la fissa su Vulkan, o se i pesi restano su disco e vengono riletti a ogni passo, il log lo dice con un avviso. Come si legge, tempi misurati e cosa fare in [docs/cuda_e_vulkan_stessa_scheda.md](./docs/cuda_e_vulkan_stessa_scheda.md)
 - **Diagnostica termica** (`scripts/diagnostica_termica/`): `termico.py` registra temperatura, potenza, frequenza e motivi di throttling di una GPU NVIDIA mentre il motore e, se vuoi, un'altra applicazione lavorano, affianca lo stato di `sd-server` (`--motore`), dà un giudizio **indicativo** per ogni fase, scrive un riepilogo JSON leggibile da altri programmi e confronta più prove. `carico_motore.py` dà al motore sempre lo stesso lavoro. Guida in italiano: [scripts/diagnostica_termica/README.md](./scripts/diagnostica_termica/README.md)
 - **Agenti indipendenti accanto al motore** (un'IA, un agente o un nodo principale che usa il motore e i dati termici): tre livelli (macchina, guardiano, agente), fedeltà flessibile ai comandi, indipendenza che non esclude lo stop, giustizia verso persone e programmi, regole contro il sovraccarico e un guardiano d'esempio collaudato contro un vero `sd-server` (su CPU, con una GPU simulata). Il motore non è il cervello né un controllo in tempo reale: la guida dice come dovrebbe comportarsi chi lo è, in [docs/agenti_indipendenti.md](./docs/agenti_indipendenti.md)
-- **Errori leggibili dalle app**: `sd_get_last_error()` distingue memoria esaurita, file del modello e backend; `sd_get_system_memory()` riporta la RAM di sistema
+- **Errori leggibili dalle app**: `sd_get_last_error_code()` distingue memoria esaurita, file del modello e backend; `sd_get_system_memory()` riporta la RAM di sistema
 - **Server robusto**: parte anche senza modello, autenticazione opzionale (`--api-key`) e allowlist CORS (`--cors-origins`)
 - **Server che non cade per la memoria**: una richiesta che esaurisce la RAM/VRAM non ferma `sd-server`; il modello viene ricaricato con un profilo più leggero e la richiesta ripetuta, altrimenti risposta `503` con `Retry-After`; `GET /sdcpp/v1/health` e `/resources` mostrano lo stato (`--disable-degradation` per spegnerlo)
 - **Fermare un job che sta generando**: `POST /sdcpp/v1/jobs/{id}/cancel` ferma anche un job già partito (senza `?wait=` risponde subito `200`, con il job che può risultare ancora `generating`; con `?wait=` da 0 a 60 secondi aspetta e risponde `200` con il job annullato, o `202` se sta ancora finendo). Non è un errore: il modello resta caricato, il server non scende di profilo e `/health` conta `cancelled`. Esempi `curl` e limiti in [docs/integrazione_progetti.md](./docs/integrazione_progetti.md), sezione 3.5
@@ -81,6 +81,7 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
+* **2026/11/11** 🚀 stable-diffusion.cpp adds **Day-0 support for MiniMax-H3-Image**
 * **2026/10/16** 🚀 stable-diffusion.cpp adds **Day-0 support for MOSS-Image-Base / MOSS-Image-SFT**
 * **2026/10/16** 🚀 stable-diffusion.cpp adds **Day-0 support for FLUX.3 Image Klein / Klein Base**
 * **2026/09/20** 🚀 stable-diffusion.cpp adds **Day-0 support for Qwen-Image-2.1**
@@ -104,64 +105,70 @@ API and command-line option may change frequently.***
 
 - Plain C/C++ implementation based on [ggml](https://github.com/ggml-org/ggml), working in the same way as [llama.cpp](https://github.com/ggml-org/llama.cpp)
 - Super lightweight and without external dependencies
+- Built-in [Web UI](./examples/server/README.md) for image and video generation
 - Supported models
   - Image Models
-    - [SD1.x, SD2.x, SD-Turbo](./docs/sd.md)
-    - [SDXL, SDXL-Turbo](./docs/sd.md)
-    - [Some SD1.x and SDXL distilled models](./docs/distilled_sd.md)
-    - [SD3/SD3.5](./docs/sd3.md)
-    - [FLUX.1-dev/FLUX.1-schnell](./docs/flux.md)
-    - [FLUX.2-dev/FLUX.2-klein](./docs/flux2.md)
-    - [FLUX.3 Image Klein / Klein Base](./docs/flux3.md)
-    - [MOSS-Image-Base / MOSS-Image-SFT](./docs/moss_image.md)
-    - [Fibo 2.0 Dev](./docs/fibo2.md)
-    - [Lens](./docs/lens.md)
-    - [Chroma](./docs/chroma.md)
-    - [Chroma1-Radiance](./docs/chroma_radiance.md)
-    - [Qwen Image](./docs/qwen_image.md)
-    - [Qwen Image 2.1](./docs/qwen_image_2.1.md)
-    - [PiD](./docs/pid.md)
-    - [LongCat Image](./docs/longcat_image.md)
-    - [Z-Image](./docs/z_image.md)
-    - [Z-Image L2P](./docs/z_image_l2p.md)
-    - [MiniT2I](./docs/minit2i.md)
-    - [P-H3-Image](./docs/p_h3_image.md)
-    - [SenseNova U1.5](./docs/sensenova_u1.md)
-    - [Ovis-Image](./docs/ovis_image.md)
-    - [Anima](./docs/anima.md)
-    - [ERNIE-Image](./docs/ernie_image.md)
-    - [Boogu Image](./docs/boogu_image.md)
-    - [Krea2](./docs/krea2.md)
-    - [Mage-Flow](./docs/mage_flow.md)
-    - [SeFi-Image](./docs/sefi_image.md)
-    - [HiDream-O1-Image](./docs/hidream_o1_image.md)
-    - [Ideogram4](./docs/ideogram4.md)
-    - [LLaDA-Image](./docs/llada_image.md)
-    - [Ming-Image Design](./docs/ming_image.md)
-    - [PixArt](./docs/pixart.md)
-    - [Iris-3B](./docs/iris.md)
-  - [Image Edit Models](./docs/edit.md)
-    - [FLUX.1-Kontext-dev](./docs/kontext.md)
-    - [Qwen Image Edit series](./docs/qwen_image_edit.md)
-    - [LongCat Image Edit](./docs/longcat_image.md)
-    - [Boogu Image Edit](./docs/boogu_image.md)
-    - [Mage-Flow-Edit](./docs/mage_flow.md#image-editing)
-    - [LLaDA-Image Edit](./docs/llada_image.md#image-editing)
-    - [Fibo 2.0 Dev / Edit Turbo](./docs/fibo2.md#editing-and-turbo)
+    - [SD1.x, SD2.x, SD-Turbo](./docs/models/sd.md)
+    - [SDXL, SDXL-Turbo](./docs/models/sd.md)
+    - [Some SD1.x and SDXL distilled models](./docs/models/distilled_sd.md)
+    - [SD3/SD3.5](./docs/models/sd3.md)
+    - [FLUX.1-dev/FLUX.1-schnell](./docs/models/flux.md)
+    - [FLUX.2-dev/FLUX.2-klein](./docs/models/flux2.md)
+    - [FLUX.3 Image Klein / Klein Base](./docs/models/flux3.md)
+    - [MOSS-Image-Base / MOSS-Image-SFT](./docs/models/moss_image.md)
+    - [Fibo 2.0 Dev](./docs/models/fibo2.md)
+    - [Lens](./docs/models/lens.md)
+    - [Chroma](./docs/models/chroma.md)
+    - [Chroma1-Radiance](./docs/models/chroma_radiance.md)
+    - [Qwen Image](./docs/models/qwen_image.md)
+    - [Qwen Image 2.1](./docs/models/qwen_image_2.1.md)
+    - [PiD](./docs/models/pid.md)
+    - [LongCat Image](./docs/models/longcat_image.md)
+    - [Z-Image](./docs/models/z_image.md), including [DGL ControlNet](./docs/models/z_image.md#controlnet)
+    - [Z-Image L2P](./docs/models/z_image_l2p.md)
+    - [MiniT2I](./docs/models/minit2i.md)
+    - [P-H3-Image](./docs/models/p_h3_image.md)
+    - [MiniMax-H3-Image](./docs/models/minimax_h3_image.md)
+    - [SenseNova U1.5](./docs/models/sensenova_u1.md)
+    - [Ovis-Image](./docs/models/ovis_image.md)
+    - [Anima](./docs/models/anima.md)
+    - [ERNIE-Image](./docs/models/ernie_image.md)
+    - [Boogu Image](./docs/models/boogu_image.md)
+    - [Krea2](./docs/models/krea2.md)
+    - [Mage-Flow](./docs/models/mage_flow.md)
+    - [SeFi-Image](./docs/models/sefi_image.md)
+    - [HiDream-O1-Image](./docs/models/hidream_o1_image.md)
+    - [Ideogram4](./docs/models/ideogram4.md)
+    - [LLaDA-Image](./docs/models/llada_image.md)
+    - [Ming-Image Design](./docs/models/ming_image.md)
+    - [PixArt](./docs/models/pixart.md)
+    - [Iris-3B](./docs/models/iris.md)
+  - [Image Edit Models](./docs/guides/edit.md)
+    - [FLUX.1-Kontext-dev](./docs/models/kontext.md)
+    - [Qwen Image Edit series](./docs/models/qwen_image_edit.md)
+    - [LongCat Image Edit](./docs/models/longcat_image.md)
+    - [Boogu Image Edit](./docs/models/boogu_image.md)
+    - [Mage-Flow-Edit](./docs/models/mage_flow.md#image-editing)
+    - [LLaDA-Image Edit](./docs/models/llada_image.md#image-editing)
+    - [Fibo 2.0 Dev / Edit Turbo](./docs/models/fibo2.md#fibo-20-edit-turbo)
+    - [MOSS-Image Edit](./docs/models/moss_image.md#moss-image-edit)
   - Video Models
-    - [Wan2.1/Wan2.2](./docs/wan.md)
-    - [MiniMax-H3](./docs/minimax_h3.md)
-    - [LTX-2.3/LTX-2.5](./docs/ltx2.md)
-    - [HunyuanVideo 1.5](./docs/hunyuan_video.md)
-    - [LingBot-Video](./docs/lingbot_video.md)
-  - [PhotoMaker](./docs/photo_maker.md) support.
-  - [IP-Adapter](./docs/ip_adapter.md) support (SD 1.5 and SDXL, including Plus)
+    - [Wan2.1/Wan2.2](./docs/models/wan.md)
+    - [MiniMax-H3](./docs/models/minimax_h3.md)
+    - [LTX-2.3/LTX-2.5](./docs/models/ltx2.md)
+    - [HunyuanVideo 1.5](./docs/models/hunyuan_video.md)
+    - [LingBot-Video](./docs/models/lingbot_video.md)
+  - Video Upscale Models
+    - [RelayVSR](./docs/models/relay_vsr.md)
+    - [SeedVR2](./docs/models/seedvr2.md)
+  - [PhotoMaker](./docs/models/photo_maker.md) support.
+  - [IP-Adapter](./docs/models/ip_adapter.md) support (SD 1.5 and SDXL, including Plus)
   - Control Net support with SD 1.5
-  - [ADetailer](./docs/adetailer.md)
+  - [ADetailer](./docs/models/adetailer.md)
   - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
   - Latent Consistency Models support (LCM/LCM-LoRA)
-  - Faster and memory efficient latent decoding with [TAESD](./docs/taesd.md)
-  - Upscale images generated with [ESRGAN](./docs/esrgan.md)
+  - Faster and memory efficient latent decoding with [TAESD](./docs/models/taesd.md)
+  - Upscale images generated with [ESRGAN](./docs/models/esrgan.md)
 - Supported backends
   - CPU (AVX, AVX2 and AVX512 support for x86 architectures)
   - CUDA
@@ -183,16 +190,7 @@ API and command-line option may change frequently.***
 - Negative prompt
 - [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (not all the features, only token weighting for now)
 - VAE tiling processing for reduce memory usage
-- Sampling method
-    - `Euler A`
-    - `Euler`
-    - `Heun`
-    - `DPM2`
-    - `DPM++ 2M`
-    - [`DPM++ 2M v2`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457)
-    - `DPM++ 2S a`
-    - `ER-SDE`
-    - [`LCM`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/issues/13952)
+- Support for a wide range of [sampling methods and schedulers](./docs/guides/sampling.md)
 - Cross-platform reproducibility
     - `--rng cuda`, default, consistent with the `stable-diffusion-webui GPU RNG`
     - `--rng cpu`, consistent with the `comfyui RNG`
@@ -200,70 +198,93 @@ API and command-line option may change frequently.***
 
 ## Quick Start
 
-### Get the sd executable
+### Get the executables
 
-- Download pre-built binaries from the [releases page](https://github.com/Filve/diffusione-in-tempo-reale/releases)
+- Download and extract pre-built binaries from the [releases page](https://github.com/Filve/diffusione-in-tempo-reale/releases)
 - Or build from source by following the [build guide](./docs/build.md)
+
+The executable examples below run from the build directory (`cd build` from
+the repository root). Windows examples use the Visual Studio Release path;
+adjust the executable path for other build configurations or extracted archives.
+Model files stay under the repository's `models/` directory.
 
 ### Download model weights
 
-- download weights(.ckpt or .safetensors or .gguf). For example
-    - Stable Diffusion v1.5 from https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5 
+Choose a model from the [model guides](./docs/models/README.md) and download its
+weights and required components. For a simple example, save Stable Diffusion 1.5
+under `models/checkpoints/`:
 
-    ```sh
-    curl -L -O https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
-    ```
+**Windows (PowerShell)**
 
-### Generate an image with just one command
-
-```sh
-./bin/sd-cli -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
+```powershell
+New-Item -ItemType Directory -Force ..\models\checkpoints | Out-Null
+curl.exe -L -o ..\models\checkpoints\v1-5-pruned-emaonly.safetensors https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
 ```
 
-***For detailed command-line arguments, check out [cli doc](./examples/cli/README.md).***
+**Linux/macOS**
+
+```sh
+mkdir -p ../models/checkpoints
+curl -L -o ../models/checkpoints/v1-5-pruned-emaonly.safetensors https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
+```
+
+### Option 1: Web UI
+
+Start the server:
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-server.exe --model-dir ..\models
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-server --model-dir ../models
+```
+
+Open <http://127.0.0.1:1234/>, choose **SD 1.x** in **Recipe**, select the
+checkpoint, and click **Load models**. Enter a prompt and click **Generate**.
+See the [Web UI guide](./examples/server/README.md#web-ui) for the full workflow.
+
+### Option 2: CLI
+
+Generate an image with one command:
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -m ..\models\checkpoints\v1-5-pruned-emaonly.safetensors -p "a lovely cat"
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -m ../models/checkpoints/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
+```
+
+Run `.\bin\Release\sd-cli.exe --help` on Windows or `./bin/sd-cli --help` on
+Linux/macOS for all command-line options. See the
+[CLI guide](./examples/cli/README.md) for additional usage notes.
 
 ## Performance
 
-If you want to improve performance or reduce VRAM/RAM usage, please refer to [performance guide](./docs/performance.md).
-For runtime and parameter backend placement, see the [backend selection guide](./docs/backend.md).
+If you want to improve performance or reduce VRAM/RAM usage, please refer to [performance guide](./docs/guides/performance.md).
+For runtime and parameter backend placement, see the [backend selection guide](./docs/guides/backend.md).
 
-## More Guides
+## Documentation
 
+Browse the [documentation index](./docs/README.md) or jump to a topic:
+
+- [Getting started: build, Docker, CLI, and server](./docs/README.md#get-started)
+- [Models and components](./docs/models/README.md)
+- [Generation and inputs](./docs/README.md#generation-and-inputs)
+- [DGL generation scripts](./docs/dgl.md)
+- [Devices and performance](./docs/README.md#devices-and-performance)
+- [Weights and quantization](./docs/README.md#weights-and-quantization)
 - [Troubleshooting](./docs/troubleshooting.md)
-- [Backend selection](./docs/backend.md)
-- [RPC](./docs/rpc.md)
-- [LoRA](./docs/lora.md)
-- [LCM/LCM-LoRA](./docs/lcm.md)
-- [Docker](./docs/docker.md)
-- [Quantization and GGUF](./docs/quantization_and_gguf.md)
-- [INT8 convrot safetensors](./docs/int8_convrot.md)
-- [Inference acceleration via caching](./docs/caching.md)
-
-## Bindings
-
-These projects wrap `stable-diffusion.cpp` for easier use in other languages/frameworks.
-
-* Golang (non-cgo): [seasonjs/stable-diffusion](https://github.com/seasonjs/stable-diffusion)
-* Golang (cgo): [Binozo/GoStableDiffusion](https://github.com/Binozo/GoStableDiffusion)
-* Golang (non-cgo): [l8bloom/gosd](https://github.com/l8bloom/gosd)
-* C#: [DarthAffe/StableDiffusion.NET](https://github.com/DarthAffe/StableDiffusion.NET)
-* Python: [william-murray1204/stable-diffusion-cpp-python](https://github.com/william-murray1204/stable-diffusion-cpp-python)
-* Rust: [newfla/diffusion-rs](https://github.com/newfla/diffusion-rs)
-* Flutter/Dart: [rmatif/Local-Diffusion](https://github.com/rmatif/Local-Diffusion)
-
-## UIs
-
-These projects use `stable-diffusion.cpp` as a backend for their image generation.
-
-- [GIMP Plugins](https://github.com/themanyone/gimp-plugins)
-- [Stable Diffusion GUI](https://github.com/fszontagh/sd.cpp.gui.wx)
-- [Stable Diffusion CLI-GUI](https://github.com/piallai/stable-diffusion.cpp)
-- [Local Diffusion](https://github.com/rmatif/Local-Diffusion)
-- [sd.cpp-webui](https://github.com/daniandtheweb/sd.cpp-webui)
-- [LocalAI](https://github.com/mudler/LocalAI)
-- [Neural-Pixel](https://github.com/Luiz-Alcantara/Neural-Pixel)
-- [KoboldCpp](https://github.com/LostRuins/koboldcpp)
-- [Kokon](https://github.com/GabrieleLozupone/kokon)
+- [Development and contributing](./docs/README.md#development)
 
 ## Fork e autori (Italiano)
 

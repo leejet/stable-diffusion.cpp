@@ -1,8 +1,8 @@
 """
 Precompute a PuLID-Flux identity embedding from a single source portrait.
 
-Writes a gguf file (a single tensor `pulid_id`) that stable-diffusion.cpp's
-`--pulid-id-embedding` flag consumes.
+Writes a gguf file (a single tensor `pulid_id`) consumed by the DGL
+`pulid::load_embedding` function.
 
 Dependencies (recommended: vendor rather than pip-install due to upstream
 packaging quirks):

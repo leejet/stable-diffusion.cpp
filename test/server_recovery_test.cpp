@@ -27,6 +27,9 @@
 #include "httplib.h"
 #include "recovery.h"
 
+// The complete sd_ctx_t, so that the scripted contexts are what sd_ctx_free() releases.
+#include "api/api.h"
+
 using Level = sd_profile::Level;
 using Clock = ContextKeeper::Clock;
 using json  = nlohmann::json;
@@ -109,14 +112,17 @@ struct Env {
 
     ContextKeeper::Hooks hooks() {
         ContextKeeper::Hooks hooks;
-        hooks.create_context = [this](const sd_ctx_params_t& params, GenerationFailure& failure) -> SDCtxPtr {
+        hooks.create_context = [this](const SDContextParams& requested, GenerationFailure& failure) -> SDCtxPtr {
+            // What the library receives: the backend assignments settled the way to_context_opt() settles them.
+            SDContextParams params = requested;
+            params.prepare_backend_assignments();
             Load load{params.memory_guard,
-                      params.batched_cfg,
-                      params.backend != nullptr ? params.backend : "",
-                      params.params_backend != nullptr ? params.params_backend : "",
-                      params.eager_load,
-                      params.model_path != nullptr ? params.model_path : "",
-                      params.multi_gpu != nullptr ? params.multi_gpu : "",
+                      params.batched_cfg.value_or(true),
+                      params.effective_backend,
+                      params.effective_params_backend,
+                      params.eager_load.value_or(false),
+                      params.model_path,
+                      params.multi_gpu,
                       params.disable_backend_fallback};
             loads.push_back(load);
             if (on_create) {
@@ -127,16 +133,16 @@ struct Env {
                 failure = result;
                 return nullptr;
             }
-            // free_sd_ctx() accepts a context that holds no model.
-            return SDCtxPtr(static_cast<sd_ctx_t*>(calloc(1, 64)));
+            // sd_ctx_free() accepts a context that holds no model.
+            return SDCtxPtr(new sd_ctx_t());
         };
         hooks.read_failure    = [this] { return next_failure; };
         hooks.has_accelerator = [this] { return accelerator; };
         hooks.list_devices    = [this] { return devices; };
         hooks.now             = [this] { return now; };
         hooks.cancel_context  = [this](sd_ctx_t* ctx) {
-            // Touching the memory of a context the keeper no longer owns is what the address sanitizer reports.
-            reinterpret_cast<volatile char*>(ctx)[63] = 1;
+            // Reading the memory of a context the keeper no longer owns is what the address sanitizer reports.
+            (void)reinterpret_cast<volatile const char*>(ctx)[0];
             std::lock_guard<std::mutex> lock(cancel_mutex);
             cancel_calls.push_back(ctx);
             if (on_cancel) {
@@ -920,10 +926,12 @@ static void test_load_unload() {
         keeper.start(failure);
 
         std::atomic<bool> done{false};
+        std::atomic<int> started{0};
         std::atomic<int> readings{0};
         std::vector<std::thread> readers;
         for (int t = 0; t < 3; t++) {
             readers.emplace_back([&] {
+                ++started;
                 while (!done) {
                     const json health = keeper.health_json();
                     (void)health["status"];
@@ -935,7 +943,13 @@ static void test_load_unload() {
                 }
             });
         }
-        for (int i = 0; i < 150; i++) {
+        // The changes wait for the readers and last until some reading overlaps them, so that a busy machine,
+        // which can start the readers late, does not leave the changes without readers.
+        while (started.load() < 3) {
+            std::this_thread::yield();
+        }
+        const int before = readings.load();
+        for (int i = 0; i < 150 || readings.load() == before; i++) {
             if (i % 3 == 0) {
                 keeper.unload();
             } else {
@@ -946,7 +960,7 @@ static void test_load_unload() {
         for (auto& reader : readers) {
             reader.join();
         }
-        CHECK(readings.load() > 0, "the health, the ladder and the status were read while the model changed");
+        CHECK(readings.load() > before, "the health, the ladder and the status were read while the model changed");
         CHECK(keeper.load(other, failure) && keeper.has_model() &&
                   keeper.describe_ladder() == "max > balanced > lite > lite-disk > lite-hybrid > lite-cpu",
               "and the keeper still works after 150 changes");
@@ -1225,10 +1239,12 @@ static void test_cancel_threads() {
     std::atomic<int> failed{0};
     std::atomic<int> cancelled{0};
 
+    // The stops reach one job in five, chosen at random among them: stops at random among all the jobs would, on
+    // a busy machine that starts the workers late, cancel every job before any generation starts.
     std::thread canceller([&] {
         std::mt19937 rng(1234);
         while (!done) {
-            keeper.cancel(*tokens[rng() % tokens.size()]);
+            keeper.cancel(*tokens[(rng() % (tokens.size() / 5)) * 5 + 1]);
             (void)keeper.health_json();
         }
     });
@@ -1279,6 +1295,7 @@ static void test_cancel_threads() {
 
     const json health = keeper.health_json();
     CHECK(max_inside.load() == 1, "with stops arriving, still never two generations at the same time");
+    CHECK(succeeded + failed >= kThreads * kJobs * 3 / 5, "the jobs no stop reaches run to their end");
     CHECK(succeeded + failed + cancelled == kThreads * kJobs && counter(health, "requests") == kThreads * kJobs,
           "every job ends as succeeded, failed or cancelled");
     CHECK(counter(health, "succeeded") == succeeded && counter(health, "failed") == failed && counter(health, "cancelled") == cancelled,
@@ -1631,6 +1648,71 @@ static void test_devices() {
     }
 }
 
+// DGL scripts and the release of idle weights use the context of the model; a script that comes while no model is
+// loaded gets a context of its own, made from the fallback settings and freed after the call.
+static void test_with_context() {
+    {
+        Env env;
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        bool called = false;
+        CHECK(!keeper.with_context([&](sd_ctx_t*) { called = true; return true; }, failure),
+              "without a model and without fallback settings the call does not run");
+        CHECK(!called && failure.code != SD_ERROR_NONE && env.loads.empty(), "and no context is created for it");
+        SDContextParams bare = base_params();
+        bare.model_path.clear();
+        sd_ctx_t* used = nullptr;
+        CHECK(keeper.with_context([&](sd_ctx_t* ctx) { used = ctx; return true; }, failure, &bare),
+              "without a model the call runs on a context of the fallback settings");
+        CHECK(used != nullptr && env.loads.size() == 1 && env.loads[0].model_path.empty(),
+              "that context comes from the fallback settings");
+        CHECK(!keeper.has_model() && keeper.status_name() == std::string("no_model"), "the call does not load a model");
+        bool idle_called = false;
+        CHECK(keeper.try_with_context([&](sd_ctx_t*) { idle_called = true; }) && !idle_called,
+              "without a model the idle release has nothing to reach");
+    }
+    {
+        Env env;
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        CHECK(keeper.start(failure), "start for the shared context");
+        Seen seen;
+        run_with(keeper, env, seen, succeed, failure);
+        sd_ctx_t* scripted_on = nullptr;
+        SDContextParams bare  = base_params();
+        bare.model_path.clear();
+        CHECK(keeper.with_context([&](sd_ctx_t* ctx) { scripted_on = ctx; return true; }, failure, &bare) &&
+                  !seen.contexts.empty() && scripted_on == seen.contexts.back() && env.loads.size() == 1,
+              "with a model the call runs on its context, and no other context is created");
+        CHECK(!keeper.with_context([](sd_ctx_t*) { return false; }, failure), "a call that fails is reported");
+        CHECK(keeper.has_model() && keeper.status_name() == std::string("ok") && env.loads.size() == 1,
+              "a failed call neither steps down nor reloads the model");
+
+        std::atomic<bool> inside{false};
+        std::atomic<bool> release{false};
+        std::thread generation([&] {
+            Seen running;
+            GenerationFailure result;
+            run_with(keeper, env, running, [&](const ContextKeeper::ContextView&) {
+                inside = true;
+                while (!release) {
+                    std::this_thread::yield();
+                }
+                return ok_result; }, result);
+        });
+        while (!inside) {
+            std::this_thread::yield();
+        }
+        bool idle_called = false;
+        CHECK(!keeper.try_with_context([&](sd_ctx_t*) { idle_called = true; }) && !idle_called,
+              "the idle release does not wait for a generation that holds the context");
+        release = true;
+        generation.join();
+        CHECK(keeper.try_with_context([&](sd_ctx_t*) { idle_called = true; }) && idle_called,
+              "after the generation the idle release reaches the context");
+    }
+}
+
 int main() {
     sd_set_log_callback([](enum sd_log_level_t, const char*, void*) {}, nullptr);
 
@@ -1646,6 +1728,7 @@ int main() {
     test_load_unload();
     test_cancel();
     test_cancel_threads();
+    test_with_context();
 
     printf("\n%s (%d failures)\n", failures ? "TEST FAILED" : "ALL TESTS PASSED", failures);
     return failures ? 1 : 0;

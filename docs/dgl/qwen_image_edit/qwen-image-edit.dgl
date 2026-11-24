@@ -1,0 +1,67 @@
+# version: 0.0.0
+# docs/models/qwen_image_edit.md — Qwen Image Edit
+
+var {
+    model_path = "../models/diffusion_models/Qwen_Image_Edit-Q8_0.gguf"
+    text_path = "../models/text_encoders/qwen_2.5_vl_7b.safetensors"
+    vae_path = "../models/vae/qwen_image_vae.safetensors"
+
+    reference_0_path = "../inputs/flux/flux1-dev-q8_0.png"
+    output_path = "output.png"
+
+    prompt = "change 'flux.cpp' to 'edit.cpp'"
+    negative_prompt = ""
+
+    seed = 1118877715456453
+    rng_type = "cuda"
+
+    steps = 20
+    cfg_scale = 2.5
+    method = "euler"
+    scheduler = "discrete"
+}
+
+fn sqrt_step(estimate, index, value) {
+    return (estimate + value / estimate) / 2
+}
+
+fn positive_sqrt(value) {
+    return fold(tensor::to_list(tensor::arange(0, 32)), value + 1.0, process = sqrt_step, value = value)
+}
+
+fn fit_reference_area(input, area, factor, mode) {
+    shape = tensor::shape(input)
+    width = positive_sqrt(area * shape[0] / shape[1])
+    rounded = [math::round(width / factor) * factor, math::round(width * shape[1] / shape[0] / factor) * factor]
+    size = tensor::maximum(tensor::vector(rounded, dtype = "i64"), tensor::full([2], factor, dtype = "i64"))
+    return tensor::interpolate(input, size = size, mode = mode)
+}
+
+fn main() {
+    reference_0 = image::load(reference_0_path)
+    width = tensor::shape(reference_0)[1]
+    height = tensor::shape(reference_0)[2]
+
+    model = load_dit(model_path, family = "qwen_image", params_backend = "cpu")
+    text = load_text_encoder(text_path, family = "qwen_image", params_backend = "cpu")
+    vae = load_vae(vae_path, family = "qwen_image", params_backend = "cpu")
+
+    encode_rng = make_rng(rng_type, seed = seed)
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    reference_0_original = image::to_f32(reference_0, channels = 3)
+    reference_0_pixels = fit_reference_area(reference_0_original, math::min(1048576, width * height), 32, mode = "bilinear")
+    reference_latent_0 = vae_to_dit_latents(vae, vae_encode(vae, reference_0_pixels, rng = encode_rng))
+
+    positive = encode_prompt(text, prompt, width = width, height = height, media = [reference_0_original])
+    negative = encode_prompt(text, negative_prompt, width = width, height = height, media = [reference_0_original])
+    pos = predictor(model, positive, ref_latents = [reference_latent_0], ref_index_mode = "increase")
+    neg = predictor(model, negative, ref_latents = [reference_latent_0], ref_index_mode = "increase")
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler, flow_shift = 3.0)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    image = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

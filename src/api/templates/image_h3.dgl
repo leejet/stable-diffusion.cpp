@@ -1,0 +1,89 @@
+# version: 0.0.0
+
+var {
+{{variables}}
+}
+
+{% include "image_helpers" %}
+
+fn main({{inputs}}) {
+    base_model = {{model_loader}}(model_path{{model_options}})
+    base_text = load_text_encoder(text_path{{text_options}})
+    vae = {{vae_loader}}(vae_path{{vae_options}})
+{{loras}}
+    model = {{patched_model}}
+    text = {{patched_text}}
+    encode_rng = make_rng(rng_type, seed = seed)
+{% if flags.has_init %}
+    source = fit_canvas(input_image, width, height, mode = "nearest")
+    image_encoded = {{from_vae}}(vae, vae_encode(vae, image::to_f32(source, channels = {{channels}}), rng = encode_rng{{vae_run_options}}))
+    image_base = tensor::reshape(image_encoded, latent_shape(vae, width = width, height = height))
+{% else %}
+    image_base = tensor::zeros(latent_shape(vae, width = width, height = height))
+{% endif %}
+{% if flags.ph3 %}
+    image_shape = tensor::shape(image_base)
+    image_video = tensor::unsqueeze(image_base, axis = 2)
+    audio_channels = math::ceil_div(128, image_shape[0] * image_shape[1])
+    base = tensor::concat([image_video, tensor::zeros([image_shape[0], image_shape[1], 1, audio_channels, 1])], axis = 3)
+{% else %}
+    base = tensor::unsqueeze(image_base, axis = 2)
+{% endif %}
+{{references}}
+{% if flags.control_image %}
+    control_pixels = image::to_f32(fit_canvas(input_control, width, height, mode = "nearest"), channels = 3)
+    control_model = controlnet::load(control_path{{control_options}})
+{% endif %}
+{% if flags.mask_stage %}
+{% if flags.has_mask %}
+    mask_pixels = tensor::threshold(image::to_f32(fit_canvas(tensor::grayscale(input_mask, axis = 0), width, height, mode = "nearest_exact")), threshold = 0.5)
+{% else %}
+    mask_pixels = tensor::full([width, height, 1, 1], 1)
+{% endif %}
+    base_shape = tensor::shape(base)
+    mask_scale = [math::floor(width / base_shape[0]), math::floor(height / base_shape[1])]
+    mask_latent = tensor::max_pool2d(mask_pixels, kernel = mask_scale, stride = mask_scale)
+{% endif %}
+    positive_text = encode_prompt(text, prompt, width = width, height = height{{prompt_options}})
+{% if flags.encode_negative %}
+    negative_text = encode_prompt(text, {{negative_prompt_input}}, width = width, height = height{{negative_prompt_options}})
+{% else %}
+    negative_text = positive_text
+{% endif %}
+    positive = positive_text
+    negative = negative_text
+{% if flags.controlnet %}
+    controlled_positive = controlnet::apply(positive, control_model, {{control_hint}}, strength = control_strength, type = {{control_type}})
+    controlled_negative = controlnet::apply(negative, control_model, {{control_hint}}, strength = control_strength, type = {{control_type}})
+{% endif %}
+    pos = predictor(model, {{positive_condition}}{{predictor_options}})
+    neg = predictor({{negative_model}}, {{negative_condition}}{{negative_predictor_options}})
+    guided = {{guidance_function}}(pos, neg, scale = cfg_scale{{guidance_options}})
+{% if flags.custom_sigmas %}
+    full_sigmas = tensor::vector(custom_sigmas, dtype = "f32")
+{% else %}
+    full_sigmas = make_sigmas({{schedule_predictor}}, latent = base, steps = steps, scheduler = scheduler{{schedule_options}})
+{% endif %}
+{% if flags.has_init %}
+    sigmas = slice_sigmas_by_strength(full_sigmas, strength)
+{% else %}
+    sigmas = full_sigmas
+{% endif %}
+    rng = make_rng(rng_type, seed = seed)
+{% if flags.shared_rng %}
+    sampler_rng = rng
+{% else %}
+    sampler_rng = make_rng(sampler_rng_type, seed = seed)
+{% endif %}
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = sampler_rng, eta = eta{{sample_options}})
+{% if flags.hires %}
+{% include "image_hires" %}
+{% endif %}
+{% if flags.ph3 %}
+    image = vae_decode(vae, dit_to_vae_latents(vae, {{result_latent}}[:, :, :, :24]){{vae_run_options}})
+{% else %}
+    image = vae_decode(vae, dit_to_vae_latents(vae, {{result_latent}}){{vae_run_options}})
+{% endif %}
+    return {image = image, latent = {{result_latent}}}
+}

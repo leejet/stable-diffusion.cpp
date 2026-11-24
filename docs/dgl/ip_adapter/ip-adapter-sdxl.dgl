@@ -1,0 +1,47 @@
+# version: 0.0.0
+# docs/models/ip_adapter.md — Example (SDXL)
+
+var {
+    weights = "../models/checkpoints/sdxl.safetensors"
+    vision_encoder_path = "../models/clip_vision/clip_vision_h.safetensors"
+    ip_adapter_path = "../models/ipadapter/ip-adapter_sdxl_vit-h.safetensors"
+
+    input_path = "../inputs/reference.png"
+    output_path = "output.png"
+
+    prompt = "a woman, best quality"
+    negative_prompt = "lowres, bad anatomy"
+
+    seed = 42
+    width = 1024
+    height = 1024
+
+    steps = 25
+    cfg_scale = 6.0
+    method = "dpm++2m"
+    scheduler = "karras"
+}
+
+fn main() {
+    unet = load_unet(weights)
+    text = load_text_encoder(weights)
+    vae = load_vae(weights, conv_scale = 0.03125)
+    vision = load_vision_encoder(vision_encoder_path)
+    adapter = ip_adapter::load(ip_adapter_path, family = "sdxl")
+    embedding = encode_vision(vision, image::load(input_path), pooled = true)
+    positive_image = ip_adapter::project(adapter, embedding)
+    negative_image = ip_adapter::project(adapter, tensor::zeros_like(embedding))
+    positive = ip_adapter::apply(encode_prompt(text, prompt, width = width, height = height), adapter, positive_image, strength = 0.8)
+    negative = ip_adapter::apply(encode_prompt(text, negative_prompt, width = width, height = height), adapter, negative_image, strength = 0.8)
+    pos = predictor(unet, positive, prediction = "eps")
+    neg = predictor(unet, negative, prediction = "eps")
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, scheduler = scheduler, steps = steps)
+    rng = make_rng("cuda", seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    image = vae_decode(vae, unet_to_vae_latents(vae, latent), tiling = tiling())
+    image::save(output_path, image)
+    return { image = image, latent = latent, image_tokens = positive_image }
+}

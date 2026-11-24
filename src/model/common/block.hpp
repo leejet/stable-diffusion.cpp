@@ -32,7 +32,7 @@ public:
         if (vae_downsample) {
             auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["conv"]);
 
-            x = ggml_ext_pad(ctx->ggml_ctx, x, 1, 1, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
+            x = ggml_ext_pad(ctx, x, 1, 1, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
             x = conv->forward(ctx, x);
         } else {
             auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["op"]);
@@ -220,7 +220,7 @@ public:
         auto proj = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
 
         x = proj->forward(ctx, x);
-        x = ggml_ext_gelu(ctx->ggml_ctx, x, true);
+        x = ggml_ext_gelu(ctx, x, true);
         return x;
     }
 };
@@ -250,7 +250,7 @@ public:
         auto fc2 = std::dynamic_pointer_cast<Linear>(blocks["fc2"]);
 
         x = fc1->forward(ctx, x);
-        x = ggml_ext_gelu(ctx->ggml_ctx, x, true);
+        x = ggml_ext_gelu(ctx, x, true);
         x = fc2->forward(ctx, x);
         return x;
     }
@@ -293,9 +293,7 @@ public:
 
         auto net_0 = std::dynamic_pointer_cast<UnaryBlock>(blocks["net.0"]);
         auto net_2 = std::dynamic_pointer_cast<Linear>(blocks["net.2"]);
-        if (sd_backend_is(ctx->backend, "Vulkan") || sd_backend_is(ctx->backend, "ROCm")) {
-            net_2->set_force_prec_f32(true);
-        }
+        net_2->set_precision_flags(GGML_PRECISION_F32_VULKAN | GGML_PRECISION_F32_ROCM);
 
         x = net_0->forward(ctx, x);  // [ne3, ne2, ne1, inner_dim]
         x = net_2->forward(ctx, x);  // [ne3, ne2, ne1, dim_out]
@@ -312,9 +310,13 @@ protected:
     bool xtra_dim  = false;
     bool enable_ip = false;
     bool has_ip    = false;
+    std::string layer_name;
 
     void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
         GGMLBlock::init_params(ctx, tensor_storage_map, prefix);
+        if (enable_ip && !prefix.empty()) {
+            layer_name = prefix.substr(0, prefix.size() - 1);
+        }
         if (enable_ip &&
             tensor_storage_map.find(prefix + "to_k_ip.weight") != tensor_storage_map.end()) {
             has_ip            = true;
@@ -385,6 +387,9 @@ public:
             auto v_ip    = to_v_ip->forward(ctx, ctx->ip_context);
             auto x_ip    = ggml_ext_attention_ext(ctx, q, k_ip, v_ip, n_head, nullptr, false, ctx->flash_attn_enabled);
             x            = ggml_add(ctx->ggml_ctx, x, ggml_scale(ctx->ggml_ctx, x_ip, ctx->ip_scale));
+        }
+        if (enable_ip && ctx->attn2_processor) {
+            x = ctx->attn2_processor->apply(*ctx, layer_name, q, x, n_head);
         }
 
         x = to_out_0->forward(ctx, x);  // [N, n_token, query_dim]
@@ -576,6 +581,33 @@ public:
     }
 };
 
+class ResidualAttentionBlock : public GGMLBlock {
+public:
+    ResidualAttentionBlock(int64_t channels, int64_t n_head) {
+        blocks["ln_1"]       = std::shared_ptr<GGMLBlock>(new LayerNorm(channels));
+        blocks["attn"]       = std::shared_ptr<GGMLBlock>(new MultiheadAttention(channels, n_head, true, true, true));
+        blocks["ln_2"]       = std::shared_ptr<GGMLBlock>(new LayerNorm(channels));
+        blocks["mlp.c_fc"]   = std::shared_ptr<GGMLBlock>(new Linear(channels, channels * 4));
+        blocks["mlp.c_proj"] = std::shared_ptr<GGMLBlock>(new Linear(channels * 4, channels));
+    }
+
+    // x: [N, n_token, channels]
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+        auto ln_1       = std::dynamic_pointer_cast<LayerNorm>(blocks["ln_1"]);
+        auto attn       = std::dynamic_pointer_cast<MultiheadAttention>(blocks["attn"]);
+        auto ln_2       = std::dynamic_pointer_cast<LayerNorm>(blocks["ln_2"]);
+        auto mlp_c_fc   = std::dynamic_pointer_cast<Linear>(blocks["mlp.c_fc"]);
+        auto mlp_c_proj = std::dynamic_pointer_cast<Linear>(blocks["mlp.c_proj"]);
+
+        x = ggml_add(ctx->ggml_ctx, x, attn->forward(ctx, ln_1->forward(ctx, x)));
+
+        auto h = mlp_c_fc->forward(ctx, ln_2->forward(ctx, x));
+        h      = ggml_ext_gelu_quick(ctx, h);
+        h      = mlp_c_proj->forward(ctx, h);
+        return ggml_add(ctx->ggml_ctx, x, h);
+    }
+};
+
 class AlphaBlender : public GGMLBlock {
 protected:
     void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
@@ -587,7 +619,7 @@ protected:
     ggml_tensor* get_alpha(GGMLRunnerContext* ctx) {
         // image_only_indicator is always tensor([0.]) and since mix_factor.shape is [1,]
         // so learned_with_images is same as learned
-        auto mix_factor = ggml_ext_cast_f32(ctx->ggml_ctx, ctx->backend, params["mix_factor"]);
+        auto mix_factor = ggml_ext_cast_f32(ctx, params["mix_factor"]);
         return ggml_sigmoid(ctx->ggml_ctx, mix_factor);
     }
 

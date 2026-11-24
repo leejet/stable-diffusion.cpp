@@ -71,6 +71,9 @@ enum SDVersion {
     VERSION_FIBO2,
     VERSION_CHROMA,
     VERSION_P_H3_IMAGE,
+    VERSION_MINIMAX_H3_IMAGE,
+    VERSION_RELAY_VSR,
+    VERSION_SEEDVR2,
     VERSION_COUNT,
 };
 
@@ -167,7 +170,11 @@ static inline bool sd_version_is_ltxav(SDVersion version) {
 }
 
 static inline bool sd_version_is_minimax_h3(SDVersion version) {
-    return version == VERSION_MINIMAX_H3 || version == VERSION_P_H3_IMAGE;
+    return version == VERSION_MINIMAX_H3 || version == VERSION_P_H3_IMAGE || version == VERSION_MINIMAX_H3_IMAGE;
+}
+
+static inline bool sd_version_is_minimax_h3_image(SDVersion version) {
+    return version == VERSION_P_H3_IMAGE || version == VERSION_MINIMAX_H3_IMAGE;
 }
 
 static inline bool sd_version_is_wan(SDVersion version) {

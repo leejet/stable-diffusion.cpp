@@ -1,0 +1,7 @@
+    {{name}} = load_lora({{path|literal}})
+{% if diffusion %}
+    {{model_result}} = apply_lora({{model_source}}, {{name}}, weight = {{weight}}, mode = {{mode|literal}})
+{% endif %}
+{% if conditioning %}
+    {{text_result}} = apply_lora({{text_source}}, {{name}}, weight = {{weight}}, mode = {{mode|literal}})
+{% endif %}

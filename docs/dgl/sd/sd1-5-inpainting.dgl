@@ -1,0 +1,62 @@
+# version: 0.0.0
+
+var {
+    weights = "sd-v1-5-inpainting.safetensors"
+
+    input_path = "input.png"
+    mask_path = "mask.png"
+    output_path = "inpaint.png"
+
+    prompt = "A red flower in the masked area"
+    negative_prompt = ""
+
+    seed = 42
+
+    strength = 0.8
+    steps = 20
+    cfg_scale = 7
+    scheduler = "karras"
+}
+
+fn latent_mask(mask, like) {
+    shape = tensor::shape(like)
+    w = shape[0]
+    h = shape[1]
+    batch = shape[3]
+    resized = tensor::interpolate(image::to_f32(mask), size = [w, h], mode = "nearest")
+    return tensor::broadcast_to(resized, [w, h, 1, batch])
+}
+
+fn slice_sigmas_by_strength(sigmas, strength) {
+    steps = tensor::numel(sigmas) - 1
+    retained = math::floor(steps * strength)
+    return sigmas[steps - retained:]
+}
+
+fn main() {
+    unet = load_unet(weights)
+    text = load_text_encoder(weights)
+    vae = load_vae(weights)
+    source = tensor::interpolate(image::load(input_path), size = [512, 512], axes = [1, 2])
+    gray = tensor::grayscale(image::load(mask_path), axis = 0)
+    binary_mask = tensor::threshold(gray, threshold = 128, low = 0, high = 255)
+    region = tensor::interpolate(binary_mask, size = [512, 512], axes = [1, 2], mode = "nearest_exact")
+    pixels = image::to_f32(source)
+    masked = tensor::lerp(pixels, 0.5, image::to_f32(region))
+    encode_rng = make_rng("cuda", seed = seed)
+    base = vae_to_unet_latents(vae, vae_encode(vae, pixels, rng = encode_rng))
+    cond_image = vae_to_unet_latents(vae, vae_encode(vae, masked, rng = encode_rng))
+    region_latent = latent_mask(region, like = base)
+    condition = tensor::concat([region_latent, cond_image], axis = 2)
+    denoise_mask = tensor::max_pool2d(region_latent, kernel = [3, 3], padding_before = [1, 1])
+    rng = make_rng("cuda", seed = seed)
+    pos = predictor(unet, encode_prompt(text, prompt), concat = condition, prediction = "eps")
+    neg = predictor(unet, encode_prompt(text, negative_prompt), concat = condition, prediction = "eps")
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = slice_sigmas_by_strength(make_sigmas(guided, latent = base, scheduler = scheduler, steps = steps), strength = strength)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, base = base, denoise_mask = denoise_mask, rng = rng)
+    image = vae_decode(vae, unet_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return { image = image, latent = latent, mask = denoise_mask }
+}

@@ -1,0 +1,125 @@
+    hires_rng = make_rng(rng_type, seed = seed)
+{% if flags.shared_rng %}
+    hires_sampler_rng = hires_rng
+{% else %}
+    hires_sampler_rng = make_rng(sampler_rng_type, seed = seed)
+{% endif %}
+{% if flags.ph3 %}
+    hires_source = latent[:, :, :, :24]
+{% else %}
+    hires_source = latent
+{% endif %}
+{% if flags.hires_pixels %}
+{% if flags.layered %}
+{% if flags.hires_model %}
+    hires_upscaler = load_upscaler(hires_model_path{{hires_model_options}})
+    hires_layers = map(tensor::to_list(tensor::arange(0, layers)), process = upscale_layer, args = {vae = vae, latent = latent, rng = hires_rng, upscaler = hires_upscaler, size = [hires_target_width, hires_target_height], mode = hires_mode})
+{% else %}
+    hires_layers = map(tensor::to_list(tensor::arange(0, layers)), process = upscale_layer, args = {vae = vae, latent = latent, rng = hires_rng, size = [hires_target_width, hires_target_height], mode = hires_mode})
+{% endif %}
+    hires_image_base = tensor::concat(hires_layers, axis = 2)
+{% else %}
+{% if flags.hires_pixel_model %}
+    hires_pixels = tensor::clamp(tensor::affine(hires_source, scale = 0.5, offset = 0.5), 0, 1)
+{% elif flags.hires_sefi %}
+    hires_pixels = vae_decode(vae, {{to_vae}}(vae, hires_source[:, :, 16:144]), dtype = "f32"{{vae_run_options}})
+{% else %}
+    hires_pixels = vae_decode(vae, {{to_vae}}(vae, hires_source), dtype = "f32"{{vae_run_options}})
+{% endif %}
+{% if flags.hires_model %}
+    hires_upscaler = load_upscaler(hires_model_path{{hires_model_options}})
+    hires_upscaled = upscale(hires_upscaler, image::to_u8(hires_pixels))
+    hires_resized = image::to_f32(tensor::interpolate(hires_upscaled, size = [hires_target_width, hires_target_height], axes = [1, 2], mode = hires_mode), channels = {{channels}})
+{% else %}
+    hires_resized = tensor::interpolate(hires_pixels, size = [hires_target_width, hires_target_height], mode = hires_mode)
+{% endif %}
+{% if flags.hires_pixel_model %}
+    hires_image_base = tensor::affine(hires_resized, scale = 2, offset = -1)
+{% else %}
+    hires_encoded = {{from_vae}}(vae, vae_encode(vae, hires_resized, rng = hires_rng{{vae_run_options}}))
+{% if flags.hires_h3_image %}
+    hires_image_base = tensor::reshape(hires_encoded, [math::floor(hires_target_width / hires_vae_scale), math::floor(hires_target_height / hires_vae_scale), 1, 24, 1])
+{% elif flags.hires_sefi %}
+    hires_image_base = tensor::concat([tensor::interpolate(latent[:, :, :16], size = [math::floor(hires_target_width / hires_vae_scale), math::floor(hires_target_height / hires_vae_scale)]), hires_encoded], axis = 2)
+{% else %}
+    hires_image_base = hires_encoded
+{% endif %}
+{% endif %}
+{% endif %}
+{% else %}
+    hires_image_base = tensor::interpolate(hires_source, size = [math::floor(hires_target_width / hires_vae_scale), math::floor(hires_target_height / hires_vae_scale)], mode = hires_mode, antialias = hires_antialias)
+{% endif %}
+{% if flags.ph3 %}
+    hires_shape = tensor::shape(hires_image_base)
+    hires_audio = tensor::reshape(latent[:, :, :, 24:], [tensor::numel(latent[:, :, :, 24:])])[:128]
+    hires_audio_channels = math::ceil_div(128, hires_shape[0] * hires_shape[1])
+    hires_base = tensor::concat([hires_image_base, tensor::reshape(tensor::pad(hires_audio, [0, hires_shape[0] * hires_shape[1] * hires_audio_channels - 128]), [hires_shape[0], hires_shape[1], 1, hires_audio_channels, 1])], axis = 3)
+{% else %}
+    hires_base = hires_image_base
+{% endif %}
+{% if flags.mask_stage %}
+    hires_mask = tensor::interpolate({{hires_mask}}, size = tensor::shape(hires_base)[:2], mode = "nearest_max")
+{% elif flags.has_mask %}
+    hires_mask = tensor::interpolate({{hires_mask}}, size = tensor::shape(hires_base)[:2], mode = "nearest_max")
+{% endif %}
+{% if flags.hires_rebuild %}
+{% if flags.inpaint_model %}
+    hires_inpaint_condition = tensor::interpolate(inpaint_condition, size = tensor::shape(hires_base)[:2])
+{% elif flags.unet_edit %}
+    hires_edit_latent = tensor::interpolate(edit_latent, size = tensor::shape(hires_base)[:2])
+{% elif flags.native_control %}
+{% if flags.control_image %}
+    hires_control_pixels = image::to_f32(fit_canvas(input_control, hires_target_width, hires_target_height, mode = "nearest"), channels = 3)
+    hires_control_latent = {{from_vae}}(vae, vae_encode(vae, hires_control_pixels, rng = hires_rng{{vae_run_options}}))
+{% else %}
+    hires_control_latent = tensor::zeros_like(hires_base)
+{% endif %}
+{% endif %}
+{% if flags.z_control %}
+    hires_control_pixels = image::to_f32(fit_canvas(input_control, hires_target_width, hires_target_height, mode = "nearest"), channels = 3)
+    hires_control_encoded = {{from_vae}}(vae, vae_encode(vae, hires_control_pixels, rng = hires_rng, posterior = "mode"{{vae_run_options}}))
+    hires_control_hint = tensor::pad(hires_control_encoded, [0, 0, 0, 0, 0, 33 - tensor::shape(hires_control_encoded)[2]])
+    hires_controlled_positive = controlnet::apply(positive, control_model, hires_control_hint, strength = control_strength, type = {{control_type}})
+    hires_controlled_negative = controlnet::apply(negative, control_model, hires_control_hint, strength = control_strength, type = {{control_type}})
+{% endif %}
+{% if flags.image_guidance %}
+{% if flags.reference_image_guidance %}
+{% if flags.z_control %}
+    hires_controlled_unconditional = controlnet::apply(unconditional_text, control_model, hires_control_hint, strength = control_strength, type = {{control_type}})
+{% endif %}
+{% else %}
+    hires_image_unconditional_concat = tensor::interpolate(image_unconditional_concat, size = tensor::shape(hires_base)[:2])
+{% endif %}
+{% endif %}
+    hires_pos = predictor(model, {{hires_positive_condition}}{{hires_predictor_options}})
+    hires_neg = predictor({{negative_model}}, {{hires_negative_condition}}{{hires_negative_predictor_options}})
+{% if flags.image_guidance %}
+    hires_image_only = predictor(model, {{hires_image_only_condition}}{{hires_image_only_options}})
+{% endif %}
+    hires_guided = {{guidance_function}}(hires_pos, hires_neg, scale = cfg_scale{{hires_guidance_options}})
+{% endif %}
+{% if flags.hires_custom_sigmas %}
+    hires_sigmas = tensor::vector(hires_custom_sigmas, dtype = "f32")
+{% elif flags.hires_sefi %}
+    hires_schedule = sefi::make_sigmas(steps = hires_scheduler_steps{{sefi_schedule_options}})
+    hires_sigmas = hires_schedule.sigmas[-(hires_steps + 1):]
+{% else %}
+    hires_schedule = make_sigmas({{hires_schedule_predictor}}, latent = hires_base, steps = hires_scheduler_steps, scheduler = scheduler{{schedule_options}})
+    hires_sigmas = hires_schedule[-(hires_steps + 1):]
+{% endif %}
+{% if flags.hidream_o1 %}
+    hires_start = add_noise({{hires_schedule_predictor}}, hires_base, tensor::mul(tensor::randn_like(hires_base, rng = hires_rng), eta), sigma = hires_sigmas[0])
+{% else %}
+    hires_start = add_noise({{hires_schedule_predictor}}, hires_base, tensor::randn_like(hires_base, rng = hires_rng), sigma = hires_sigmas[0])
+{% endif %}
+{% if flags.hires_sefi %}
+{% if flags.hires_custom_sigmas %}
+    hires_semantic_schedule = sefi::make_sigmas(steps = tensor::numel(hires_sigmas) - 1{{sefi_schedule_options}})
+    hires_semantic_sigmas = hires_semantic_schedule.semantic_sigmas
+{% else %}
+    hires_semantic_sigmas = hires_schedule.semantic_sigmas[-(hires_steps + 1):]
+{% endif %}
+    hires_latent = sefi::sample(hires_start, hires_sigmas, semantic_sigmas = hires_semantic_sigmas, predict = {{hires_schedule_predictor}}, method = method, rng = hires_sampler_rng, eta = eta{{hires_sample_options}})
+{% else %}
+    hires_latent = sample(hires_start, hires_sigmas, predict = {{hires_schedule_predictor}}, method = method, rng = hires_sampler_rng, eta = eta{{hires_sample_options}})
+{% endif %}

@@ -45,6 +45,9 @@ const char* failure_code_name(const GenerationFailure& failure);
 int failure_http_status(const GenerationFailure& failure);
 GenerationFailure out_of_memory_failure();
 GenerationFailure failure_from_exception(const std::exception& error);
+// The context of these settings, as the keeper creates it unless its hooks say otherwise; on failure the
+// reason the library recorded.
+SDCtxPtr create_context_from_params(const SDContextParams& params, GenerationFailure& failure);
 // 503 (with Retry-After) for lack of memory or of a context, 400 for invalid input, 500 otherwise.
 void send_generation_failure(httplib::Response& res, const GenerationFailure& failure);
 // Serializes without ever throwing on text that is not valid UTF-8 (library messages can carry file names).
@@ -82,9 +85,9 @@ public:
     // Everything that touches the library or the machine, replaceable so that the logic can be tested
     // without a model. An empty function selects the real behavior.
     struct Hooks {
-        // Loads the model; returns null and describes the reason when it cannot. Default: new_sd_ctx.
-        std::function<SDCtxPtr(const sd_ctx_params_t&, GenerationFailure&)> create_context;
-        // The reason the attempt that just returned false failed. Default: sd_get_last_error().
+        // Loads the model; returns null and describes the reason when it cannot. Default: sd_ctx_create.
+        std::function<SDCtxPtr(const SDContextParams&, GenerationFailure&)> create_context;
+        // The reason the attempt that just returned false failed. Default: sd_get_last_error_code().
         std::function<GenerationFailure()> read_failure;
         // Whether a device other than the CPU is present. Default: asks the library.
         std::function<bool()> has_accelerator;
@@ -154,6 +157,16 @@ public:
     // before the run reached the context stops it without generating anything.
     bool run(const Attempt& attempt, GenerationFailure& failure, const CancelToken* token = nullptr);
 
+    // Calls use with the context, holding it as run() does but without stepping down when use fails. When no
+    // model is loaded, use gets a context made from fallback_params for this call only, or, without them, the
+    // call returns false and leaves use uncalled.
+    bool with_context(const std::function<bool(sd_ctx_t*)>& use,
+                      GenerationFailure& failure,
+                      const SDContextParams* fallback_params = nullptr);
+    // Calls use with the context when one is loaded and nothing else holds it; false, without waiting, when
+    // the keeper is busy.
+    bool try_with_context(const std::function<void(sd_ctx_t*)>& use);
+
     // Records the request in the token and, if the run that owns it is generating at this moment, tells the
     // library to stop. Safe from any thread, never waits for the generation, and returns whether the library
     // was told. The library forgets a stop request when a generation begins, so a caller that cannot tell
@@ -164,8 +177,9 @@ public:
     struct BackendChoice {
         std::string backend;
         std::string params_backend;
-        bool diffusion_conv_direct = false;
-        int n_threads              = -1;
+        // Unset: the library default.
+        std::optional<bool> diffusion_conv_direct;
+        std::optional<int> n_threads;
     };
     BackendChoice backend_choice() const;
 
