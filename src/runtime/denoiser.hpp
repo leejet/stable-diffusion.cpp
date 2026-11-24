@@ -1402,11 +1402,11 @@ struct MingImageFlowDenoiser : DiscreteFlowDenoiser {
         const float factor = std::isfinite(shift) ? shift : resolution_shift;
         std::vector<float> sigmas;
         sigmas.reserve(n + 1);
+        // The upstream grid includes zero. Sample n positive points before appending the single terminal zero.
         for (uint32_t i = 0; i < n; ++i) {
-            const float t = n == 1 ? 1.f : 1.f - static_cast<float>(i) / static_cast<float>(n - 1);
+            const float t = 1.f - static_cast<float>(i) / static_cast<float>(n);
             sigmas.push_back(time_snr_shift(factor, t));
         }
-        // Upstream sets sigma_min to zero before linspace, then appends the terminal zero.
         sigmas.push_back(0.f);
         return sigmas;
     }
