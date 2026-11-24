@@ -1,0 +1,40 @@
+# version: 0.0.0
+# docs/models/llada_image.md — Text to image
+
+var {
+    model_path = "../models/diffusion_models/llada-image-turbo-f16.gguf"
+    text_path = "../models/text_encoders/llada-image-turbo-text_encoder-q8_0.gguf"
+    connectors_path = "../models/text_encoders/llada-image-turbo-connectors.safetensors"
+    tokenizer_path = "../models/tokenizers/tokenizer.json"
+    vae_path = "../models/vae/llada_vae.safetensors"
+
+    output_path = "output.png"
+
+    prompt = "a lovely cat holding a sign says 'llada.cpp'"
+
+    seed = 42
+    rng_type = "cuda"
+    width = 1024
+    height = 1024
+
+    steps = 4
+    method = "euler"
+    scheduler = "llada_image"
+}
+
+fn main() {
+    model = load_dit(model_path, family = "llada_image")
+    text = load_text_encoder(text_path, connectors_path = connectors_path, family = "llada_image", tokenizer = tokenizer_path)
+    vae = load_vae(vae_path, family = "llada_image")
+
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    condition = encode_prompt(text, prompt, width = width, height = height)
+    predict = predictor(model, condition)
+    sigmas = make_sigmas(predict, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(predict, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = predict, method = method, rng = rng)
+    image = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

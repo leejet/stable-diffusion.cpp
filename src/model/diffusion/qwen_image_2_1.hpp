@@ -460,7 +460,7 @@ namespace Qwen {
                 return {};
             }
             static const std::vector<sd::Tensor<float>> empty_refs;
-            const auto& refs = inputs.ref_latents && inputs.ref_image_params.pass_to_dit ? *inputs.ref_latents : empty_refs;
+            const auto& refs = inputs.ref_latents ? *inputs.ref_latents : empty_refs;
             std::vector<std::pair<int64_t, int64_t>> shapes;
             for (const auto& ref : refs) {
                 if (ref.dim() != 4 || ref.shape()[2] != config.in_channels || ref.shape()[3] != 1) {

@@ -1,5 +1,9 @@
 ## Caching
 
+DGL versions of the generation examples are linked below. Edit each script's
+`var` block and follow the [DGL run instructions](../dgl/README.md).
+
+
 Caching methods accelerate diffusion inference by reusing intermediate computations when changes between steps are small.
 
 ### Conditioning Cache
@@ -30,6 +34,7 @@ UCache caches the residual difference (output - input) and reuses it when input 
 ```bash
 sd-cli -m model.safetensors -p "a cat" --cache-mode ucache --cache-option "threshold=1.5"
 ```
+
 
 #### Parameters
 
@@ -67,11 +72,12 @@ Condition-level caching for DiT models. Caches and reuses outputs when input cha
 
 ### Cache-DIT (DiT Models)
 
-For DiT models like FLUX and QWEN, use block-level caching modes.
+For DiT models like FLUX and QWEN, these modes cache each model condition's
+raw output. This path does not perform block-level caching.
 
 #### DBCache
 
-Caches blocks based on L1 residual difference threshold:
+Reuses whole-model input/output residuals when input changes pass the L1 difference threshold:
 
 ```bash
 --cache-mode dbcache --cache-option "threshold=0.25,warmup=4"
@@ -79,7 +85,7 @@ Caches blocks based on L1 residual difference threshold:
 
 #### TaylorSeer
 
-Uses Taylor series approximation to predict block outputs:
+Uses Taylor series approximation to predict each condition's raw model output:
 
 ```bash
 --cache-mode taylorseer
@@ -97,10 +103,14 @@ Combines DBCache and TaylorSeer:
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `Fn` | Front blocks to always compute | 8 |
-| `Bn` | Back blocks to always compute | 0 |
+| `Fn`, `Bn` | Legacy options: ignored with a warning; block counts are not supported | No effect |
 | `threshold` | L1 residual difference threshold | 0.08 |
 | `warmup` | Steps before caching starts | 8 |
+
+Explicit `Fn`/`Bn` settings, including their former defaults, produce a warning.
+The C API keys `cache.fn_compute_blocks` and `cache.bn_compute_blocks` remain
+accepted for compatibility and also warn when set. They have no effect on cache
+execution. Omitted options do not warn.
 
 #### SCM Options
 
@@ -112,10 +122,10 @@ Steps Computation Mask controls which steps can be cached:
 
 Mask values: `1` = compute, `0` = can cache.
 
-| Policy | Description |
-|--------|-------------|
-| `dynamic` | Check threshold before caching |
-| `static` | Always cache on cacheable steps |
+The native `--scm-policy` option is retained for compatibility. Its `dynamic`
+and `static` values do not change this condition-level implementation: a mask
+value of `1` forces computation; `0` permits reuse subject to the cache's gates
+and available history.
 
 ```bash
 --scm-policy dynamic
@@ -128,6 +138,7 @@ Spectrum uses Chebyshev polynomial fitting blended with Taylor extrapolation to 
 ```bash
 sd-cli -m model.safetensors -p "a cat" --cache-mode spectrum
 ```
+
 
 #### Parameters
 

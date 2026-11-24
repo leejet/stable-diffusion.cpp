@@ -45,6 +45,9 @@ const char* failure_code_name(const GenerationFailure& failure);
 int failure_http_status(const GenerationFailure& failure);
 GenerationFailure out_of_memory_failure();
 GenerationFailure failure_from_exception(const std::exception& error);
+// The context of these settings, as the keeper creates it unless its hooks say otherwise; on failure the
+// reason the library recorded.
+SDCtxPtr create_context_from_params(const SDContextParams& params, GenerationFailure& failure);
 // 503 (with Retry-After) for lack of memory or of a context, 400 for invalid input, 500 otherwise.
 void send_generation_failure(httplib::Response& res, const GenerationFailure& failure);
 // Serializes without ever throwing on text that is not valid UTF-8 (library messages can carry file names).
@@ -153,6 +156,16 @@ public:
     // cancelled (not as failed) and never makes the server step down. A token that was already requested
     // before the run reached the context stops it without generating anything.
     bool run(const Attempt& attempt, GenerationFailure& failure, const CancelToken* token = nullptr);
+
+    // Calls use with the context, holding it as run() does but without stepping down when use fails. When no
+    // model is loaded, use gets a context made from fallback_params for this call only, or, without them, the
+    // call returns false and leaves use uncalled.
+    bool with_context(const std::function<bool(sd_ctx_t*)>& use,
+                      GenerationFailure& failure,
+                      const SDContextParams* fallback_params = nullptr);
+    // Calls use with the context when one is loaded and nothing else holds it; false, without waiting, when
+    // the keeper is busy.
+    bool try_with_context(const std::function<void(sd_ctx_t*)>& use);
 
     // Records the request in the token and, if the run that owns it is generating at this moment, tells the
     // library to stop. Safe from any thread, never waits for the generation, and returns whether the library

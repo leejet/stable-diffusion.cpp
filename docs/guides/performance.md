@@ -1,5 +1,9 @@
 ## Use Flash Attention to save memory and improve speed.
 
+DGL versions of the generation examples are linked below. Edit each script's
+`var` block and follow the [DGL run instructions](../dgl/README.md).
+
+
 Enabling flash attention for the diffusion model reduces memory usage by varying amounts of MB.
 eg.:
  - flux 768x768 ~600mb
@@ -48,6 +52,11 @@ run qualifies for it.
 
 Use `--batched-cfg off` to force separate conditional and unconditional
 forwards.
+
+In DGL mode the flag sets `batched_cfg` on the execution context. Compatible
+`cfg(positive, negative, ...)` branches use batching automatically; combinations
+that require separate forwards retain their original execution. See
+[DGL context execution settings](../dgl.md#context-execution-settings).
 
 ## Use VAE tiling to reduce encode and decode memory usage.
 
@@ -186,6 +195,7 @@ The recommended shape for "biggest model my card can host" is:
 sd-cli --diffusion-model flux1-dev.safetensors ... \
        --offload-to-cpu --max-vram -1
 ```
+
 
 - `--offload-to-cpu`: params in RAM, staged as needed.
 - `--max-vram -1`: reserve about 1 GiB from the startup free-memory snapshot; live free memory can still lower the effective limit for every graph.

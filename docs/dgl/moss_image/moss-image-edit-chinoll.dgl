@@ -1,0 +1,63 @@
+# version: 0.0.0
+# docs/models/moss_image.md — chinoll/Moss-Image-Edit
+
+var {
+    model_path = "../models/diffusion_models/moss_image_sft_int8_convrot_attn.safetensors"
+    text_path = "../models/text_encoders/Qwen3.5-9B-Q4_K_M.gguf"
+    tokenizer_path = "../models/tokenizers/tokenizer_qwen3.5.json"
+    vae_path = "../models/vae/flux2_ae.safetensors"
+    lora_path = "../models/loras/moss/moss-edit-lora.safetensors"
+    lora_weight = 1.0
+
+    reference_paths = ["../assets/flux/flux1-dev-q8_0.png"]
+    output_path = "output.png"
+
+    prompt = "change 'flux.cpp' to 'moss.cpp'"
+    negative_prompt = ""
+
+    seed = 42
+    rng_type = "cuda"
+    width = 512
+    height = 512
+
+    steps = 20
+    cfg_scale = 3.0
+    method = "euler"
+    scheduler = "discrete"
+}
+
+fn encode_reference(path, vae, rng) {
+    image = image::to_f32(image::load(path), channels = 3)
+    shape = tensor::shape(image)
+    long_edge = shape[0] + shape[1] - math::min(shape[0], shape[1])
+    scale = math::min(1024, long_edge) / long_edge
+    rounded = [math::round(shape[0] * scale / 16) * 16, math::round(shape[1] * scale / 16) * 16]
+    size = tensor::maximum(tensor::vector(rounded, dtype = "i64"), tensor::full([2], 16, dtype = "i64"))
+    pixels = tensor::interpolate(image, size = size, mode = "bilinear")
+    return vae_to_dit_latents(vae, vae_encode(vae, pixels, rng = rng))
+}
+
+fn main() {
+    base_model = load_dit(model_path, family = "moss_image")
+    model = apply_lora(base_model, load_lora(lora_path), weight = lora_weight, mode = "auto")
+    text = load_text_encoder(text_path, family = "moss_image", tokenizer = tokenizer_path)
+    vae = load_vae(vae_path, family = "moss_image")
+
+    encode_rng = make_rng(rng_type, seed = seed)
+    references = map(reference_paths, process = encode_reference, vae = vae, rng = encode_rng)
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    positive = encode_prompt(text, prompt, width = width, height = height)
+    negative = encode_prompt(text, negative_prompt, width = width, height = height)
+    pos = predictor(model, positive, ref_latents = references,
+        ref_index_mode = "increase", ref_rope_anchor = "text_start", force_ref_timestep_zero = true)
+    neg = predictor(model, negative, ref_latents = references,
+        ref_index_mode = "increase", ref_rope_anchor = "text_start", force_ref_timestep_zero = true)
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    image = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

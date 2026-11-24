@@ -1,0 +1,75 @@
+# version: 0.0.0
+
+var {
+{{variables}}
+}
+
+{% include "video_helpers" %}
+
+fn main({{inputs}}) {
+    base_model = load_dit(model_path{{model_options}})
+    base_text = load_text_encoder(text_path{{text_options}})
+    vae = {{vae_loader}}(vae_path{{vae_options}})
+{{loras}}
+    model = {{patched_model}}
+    text = {{patched_text}}
+    encode_rng = make_rng(rng_type, seed = seed)
+    video_base = tensor::zeros(latent_shape(vae, width = width, height = height, frames = frames))
+{% if flags.first %}
+    first_frame_pixels = tensor::unsqueeze(image::to_f32(fit_canvas(first_frame, width, height, mode = "nearest"), channels = 3), axis = 2)
+{% endif %}
+{% if flags.last %}
+    last_frame_pixels = tensor::unsqueeze(image::to_f32(fit_canvas(last_frame, width, height, mode = "nearest"), channels = 3), axis = 2)
+{% endif %}
+{% if flags.decode_audio %}
+    audio_vae = load_audio_vae(audio_vae_path{{audio_vae_options}})
+    audio_shape = audio_latent_shape(audio_vae, frames = frames, fps = fps)
+{% else %}
+    audio_shape = empty_audio_shape
+{% endif %}
+    base = pack_av(video_base, tensor::zeros(audio_shape), audio_scale = audio_scale)
+{{references}}
+    positive_text = encode_prompt(text, prompt, width = width, height = height{{prompt_options}})
+{% if flags.encode_negative %}
+    negative_text = encode_prompt(text, negative_prompt, width = width, height = height{{negative_prompt_options}})
+{% else %}
+    negative_text = positive_text
+{% endif %}
+{% if flags.vision %}
+    positive = {crossattn = positive_text.crossattn, vector = vision_condition}
+    negative = {crossattn = negative_text.crossattn, vector = vision_condition}
+{% else %}
+    positive = positive_text
+    negative = negative_text
+{% endif %}
+    pos = predictor(model, positive{{predictor_options}})
+    neg = predictor(model, negative{{negative_predictor_options}})
+    guided = {{guidance_function}}(pos, neg, scale = cfg_scale{{guidance_options}})
+{% if flags.custom_sigmas %}
+    sigmas = tensor::vector(custom_sigmas, dtype = "f32")
+{% else %}
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler{{schedule_options}})
+{% endif %}
+    rng = encode_rng
+{% if flags.shared_rng %}
+    sampler_rng = rng
+{% else %}
+    sampler_rng = make_rng(sampler_rng_type, seed = seed)
+{% endif %}
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = sampler_rng, eta = eta{{sample_options}})
+{% if flags.hires %}
+{% include "video_hires" %}
+{% endif %}
+    video_latent = {{result_latent}}[:, :, :{{output_video_frames}}, :tensor::shape(video_base)[3]]
+    output_frames = vae_decode(vae, dit_to_vae_latents(vae, video_latent){{vae_run_options}})
+{% if flags.decode_audio %}
+    sound_latent = unpack_audio({{result_latent}}, channels = tensor::shape(video_base)[3], audio_shape = {{output_audio_shape}}, audio_scale = audio_scale)
+    decoded_audio = audio_vae_decode(audio_vae, sound_latent)
+    max_audio_samples = math::floor(tensor::shape(output_frames)[3] * decoded_audio.sample_rate / fps)
+    audio = {samples = decoded_audio.samples[:, :max_audio_samples], sample_rate = decoded_audio.sample_rate}
+{% else %}
+    audio = {}
+{% endif %}
+    return {video = {frames = output_frames, fps_num = fps, fps_den = 1}, latent = {{result_latent}}, audio = audio}
+}

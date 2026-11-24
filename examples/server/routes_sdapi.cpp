@@ -376,16 +376,13 @@ static bool build_sdapi_img_gen_request(const json& j,
         }
     }
 
-    if (j.contains("ref_image_args")) {
-        if (!j["ref_image_args"].is_string()) {
-            error_message = "ref_image_args must be a string";
-            return false;
-        }
-        request.gen_params.ref_image_args = j["ref_image_args"].get<std::string>();
+    if (j.contains("ref_image_args") && j["ref_image_args"] != "") {
+        error_message = "reference overrides require a DGL script";
+        return false;
     }
 
-    if (j.contains("image_preprocess") && !request.gen_params.parse_image_preprocess_json(j["image_preprocess"].dump())) {
-        error_message = "invalid image_preprocess";
+    if (j.contains("image_preprocess")) {
+        error_message = "image_preprocess requires a DGL script";
         return false;
     }
 
@@ -454,26 +451,22 @@ static bool build_sdapi_img_gen_request(const json& j,
            validate_server_img_gen_request(runtime, request, error_message);
 }
 
-static nlohmann::json prepare_info_field(const std::string& generation_info) {
-    const auto info       = nlohmann::json::parse(generation_info);
-    const auto& sampling  = info.at("sample_params");
-    nlohmann::json result = {{"prompt", info.at("prompt")},
-                             {"negative_prompt", info.at("negative_prompt")},
-                             {"seed", generation_seed(generation_info)},
-                             {"cfg_scale", sampling.at("guidance").at("txt_cfg")},
-                             {"width", info.at("width")},
-                             {"height", info.at("height")},
-                             {"steps", sampling.contains("custom_sigmas") ? json(sampling.at("custom_sigmas").size() - 1) : sampling.at("sample_steps")},
-                             {"sampler_name", sampling.at("sample_method")},
-                             {"version", "stable-diffusion.cpp"}};
-    if (info.contains("clip_skip"))
-        result["clip_skip"] = info.at("clip_skip");
-    if (info.contains("strength"))
-        result["denoising_strength"] = info.at("strength");
-    if (sampling.contains("scheduler"))
-        result["extra_generation_params"]["Schedule type"] = sampling.at("scheduler");
+static json generation_metadata(const std::string& source) {
+    const auto* metadata = sd_get_generation_metadata(source.c_str());
+    return metadata ? json::parse(metadata) : json::object();
+}
+
+static nlohmann::json prepare_info_field(const json& info) {
+    auto result = json::object();
+    const std::map<std::string, std::string> names{{"prompt", "prompt"}, {"negative_prompt", "negative_prompt"}, {"seed", "seed"}, {"cfg_scale", "cfg_scale"}, {"width", "width"}, {"height", "height"}, {"steps", "steps"}, {"method", "sampler_name"}, {"clip_skip", "clip_skip"}, {"strength", "denoising_strength"}};
+    for (const auto& [key, output] : names)
+        if (info.contains(key))
+            result[output] = info.at(key);
+    if (info.contains("scheduler"))
+        result["extra_generation_params"]["Schedule type"] = info.at("scheduler");
+    result["version"] = "stable-diffusion.cpp";
     for (const auto* key : {"infotexts", "all_prompts", "all_negative_prompts", "all_seeds", "generation_info"})
-        result[key] = nlohmann::json::array();
+        result[key] = json::array();
     return result;
 }
 
@@ -594,36 +587,21 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             int num_results = 0;
 
             GenerationFailure failure;
-            bool adetailer_failed = false;
-            const bool detailing  = request.adetailer_enabled && !runtime->default_gen_params->ad_model_path.empty();
-            const bool generated  = runtime->keeper->run(
+            const bool detailing = request.adetailer_enabled && !runtime->default_gen_params->ad_model_path.empty();
+            const bool generated = runtime->keeper->run(
                 [&](const ContextKeeper::ContextView& view) {
-                    SDOptPtr params = request.to_image_opt();
-                    if (view.force_vae_tiling) {
-                        sd_opt_set_bool(params.get(), "vae_tiling.enabled", true);
-                    }
-                    adetailer_failed = false;
-                    PromptImageCallbackGuard prompt_images(view.ctx, request.gen_params);
                     SDAPIPreviewGuard preview_guard(id_task, request.gen_params, img2img ? "img2img" : "txt2img", detailing);
-                    sd_result_t* produced = nullptr;
-                    if (!generate_sd_image(view.ctx, params, &produced)) {
+                    std::string message;
+                    if (!generate_server_images(view.ctx, request, results, message, view.force_vae_tiling)) {
                         return false;
                     }
-                    results.adopt(produced, view.params->lora_model_dir);
                     if (detailing && !results.empty()) {
                         preview_guard.begin_detailing();
-                    }
-                    if (!results.empty() && !apply_server_adetailer(*runtime, view.ctx, *view.params, request, view.force_vae_tiling, results)) {
-                        adetailer_failed = true;
-                        return false;
                     }
                     return true;
                 },
                 failure);
             if (!generated) {
-                if (adetailer_failed) {
-                    failure.message = failure.message.empty() ? "ADetailer failed" : "ADetailer failed: " + failure.message;
-                }
                 send_generation_failure(res, failure);
                 return;
             }
@@ -640,7 +618,8 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             json out;
             out["images"]     = json::array();
             out["parameters"] = j;
-            json jsoninfo     = prepare_info_field(results.generation_info(0));
+            auto metadata     = generation_metadata(results.generation_info(0));
+            json jsoninfo     = prepare_info_field(metadata);
 
             for (int i = 0; i < num_results; ++i) {
                 if (results[i].data == nullptr) {
@@ -649,7 +628,9 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
                 bool embed_meta = request.gen_params.embed_image_metadata;
 
-                std::string params = generation_info_to_webui(results.generation_info(i));
+                if (i != 0)
+                    metadata = generation_metadata(results.generation_info(i));
+                const auto params = metadata.value("infotext", "");
 
                 auto image_bytes = encode_image_to_vector(EncodedImageFormat::PNG,
                                                           results[i].data,
@@ -665,12 +646,12 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
                 out["images"].push_back(base64_encode(image_bytes));
 
-                const auto actual = json::parse(results.generation_info(i));
                 jsoninfo["infotexts"].push_back(params);
-                jsoninfo["all_seeds"].push_back(generation_seed(results.generation_info(i)));
-                jsoninfo["generation_info"].push_back(actual);
-                jsoninfo["all_prompts"].push_back(actual["prompt"]);
-                jsoninfo["all_negative_prompts"].push_back(actual["negative_prompt"]);
+                const auto seed = metadata.find("seed");
+                jsoninfo["all_seeds"].push_back(seed != metadata.end() && seed->is_number_integer() ? seed->get<int64_t>() : -1);
+                jsoninfo["generation_info"].push_back(results.generation_info(i));
+                jsoninfo["all_prompts"].push_back(metadata.value("prompt", ""));
+                jsoninfo["all_negative_prompts"].push_back(metadata.value("negative_prompt", ""));
             }
 
             // not a mistake: it is supposed to be a string in json format

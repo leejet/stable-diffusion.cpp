@@ -24,7 +24,7 @@ namespace sd {
             std::string marker;
             do {
                 if (codepoint > 0xffffd) {
-                    throw std::invalid_argument("Too many prompt image markers");
+                    throw std::invalid_argument("Too many prompt markers");
                 }
                 marker = {static_cast<char>(0xf0 | (codepoint >> 18)),
                           static_cast<char>(0x80 | ((codepoint >> 12) & 0x3f)),
@@ -34,7 +34,7 @@ namespace sd {
             } while (std::any_of(input->begin(), input->end(), [&](const PromptPart& source) {
                 return source.content.find(marker) != std::string::npos;
             }));
-            image_markers_.emplace(marker, i);
+            markers_.emplace(marker, i);
             text += marker;
         }
     }
@@ -48,9 +48,9 @@ namespace sd {
             if (begin == std::string::npos) {
                 break;
             }
-            const auto marker = image_markers_.find(formatted_text.substr(begin, 4));
+            const auto marker = markers_.find(formatted_text.substr(begin, 4));
             search            = begin + 1;
-            if (marker == image_markers_.end()) {
+            if (marker == markers_.end()) {
                 continue;
             }
             if (begin > cursor) {
@@ -66,12 +66,17 @@ namespace sd {
         return result;
     }
 
-    PromptInput parse_prompt_input(const std::string& text) {
+    PromptInput parse_prompt_input(const std::string& text, bool allow_embeddings) {
         PromptInput parts;
         std::string plain_text;
         size_t cursor = 0;
         while (cursor < text.size()) {
-            const size_t begin = text.find("<image:", cursor);
+            const size_t image       = text.find("<image:", cursor);
+            const size_t embedding   = allow_embeddings ? text.find("<embedding:", cursor) : std::string::npos;
+            const size_t begin       = std::min(image, embedding);
+            const bool is_embedding  = embedding != std::string::npos && begin == embedding;
+            const std::string marker = is_embedding ? "<embedding:" : "<image:";
+            const size_t path_begin  = begin + marker.size();
             if (begin == std::string::npos) {
                 plain_text += text.substr(cursor);
                 break;
@@ -82,20 +87,20 @@ namespace sd {
             }
             if (slashes % 2 != 0) {
                 plain_text += text.substr(cursor, begin - cursor - 1);
-                plain_text += "<image:";
-                cursor = begin + 7;
+                plain_text += marker;
+                cursor = path_begin;
                 continue;
             }
-            const size_t end = text.find('>', begin + 7);
-            if (end == std::string::npos || end == begin + 7) {
-                throw std::invalid_argument("Invalid <image:...> prompt marker at byte " + std::to_string(begin));
+            const size_t end = text.find('>', path_begin);
+            if (end == std::string::npos || end == path_begin) {
+                throw std::invalid_argument("Invalid " + marker + "...> prompt marker at byte " + std::to_string(begin));
             }
             plain_text += text.substr(cursor, begin - cursor);
             if (!plain_text.empty()) {
                 parts.push_back({PromptPart::Type::TEXT, std::move(plain_text), {}});
                 plain_text.clear();
             }
-            parts.push_back({PromptPart::Type::IMAGE, text.substr(begin + 7, end - begin - 7), {}});
+            parts.push_back({is_embedding ? PromptPart::Type::EMBEDDING : PromptPart::Type::IMAGE, text.substr(path_begin, end - path_begin), {}});
             cursor = end + 1;
         }
         if (!plain_text.empty() || parts.empty()) {

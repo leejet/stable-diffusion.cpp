@@ -20,7 +20,10 @@ test/*
 !test/agenti_guardiano_test.py
 !test/fuzz_model_loader.py
 tests/
+/dgl/*
+!/dgl/.gitkeep
 logs/
+output/
 .vscode/
 .idea/
 .cache/

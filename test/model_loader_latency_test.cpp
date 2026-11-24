@@ -34,7 +34,7 @@ static int failures = 0;
         }                              \
     } while (0)
 
-static constexpr int SIDE = 32;
+static constexpr int SIDE     = 32;
 static constexpr int ELEMENTS = SIDE * SIDE;
 
 static std::string tensor_name(int index) {
@@ -135,11 +135,11 @@ static double fastest_load_ms(const fs::path& file, int count, bool& all_ok, boo
     data_ok     = true;
     for (int round = 0; round < 10; ++round) {
         destination.clear();
-        bool ok            = false;
-        const double ms    = timed_load_ms(loader, destination, ok);
-        all_ok             = all_ok && ok;
-        data_ok            = data_ok && destination.matches(count);
-        best               = std::min(best, ms);
+        bool ok         = false;
+        const double ms = timed_load_ms(loader, destination, ok);
+        all_ok          = all_ok && ok;
+        data_ok         = data_ok && destination.matches(count);
+        best            = std::min(best, ms);
     }
     return best;
 }
@@ -167,7 +167,7 @@ int main() {
         ModelLoader loader;
         loader.set_n_threads(4);
         CHECK(loader.init_from_file(file.string()), "failure case: the file is read");
-        auto refuse = [](const TensorStorage&, ggml_tensor**) -> bool { return false; };
+        auto refuse      = [](const TensorStorage&, ggml_tensor**) -> bool { return false; };
         const auto start = std::chrono::steady_clock::now();
         const bool ok    = loader.load_tensors(refuse, false, nullptr, false);
         const double ms  = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();

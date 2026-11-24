@@ -220,34 +220,15 @@ static bool execute_sync_img_gen_request(ServerRuntime& runtime,
                                          ImgGenJobRequest& request,
                                          SDImageVec& results,
                                          GenerationFailure& failure) {
-    bool adetailer_failed = false;
-    const bool generated  = runtime.keeper->run(
+    const bool generated = runtime.keeper->run(
         [&](const ContextKeeper::ContextView& view) {
-            SDOptPtr params = request.to_image_opt();
-            if (view.force_vae_tiling) {
-                sd_opt_set_bool(params.get(), "vae_tiling.enabled", true);
-            }
-            adetailer_failed = false;
-            PromptImageCallbackGuard prompt_images(view.ctx, request.gen_params);
-            sd_result_t* produced = nullptr;
-            if (!generate_sd_image(view.ctx, params, &produced)) {
-                return false;
-            }
-            results.adopt(produced, view.params->lora_model_dir);
-            if (!results.empty() && !apply_server_adetailer(runtime, view.ctx, *view.params, request, view.force_vae_tiling, results)) {
-                adetailer_failed = true;
-                return false;
-            }
-            return true;
+            std::string message;
+            return generate_server_images(view.ctx, request, results, message, view.force_vae_tiling);
         },
         failure);
     if (!generated) {
-        if (adetailer_failed) {
-            failure.message = failure.message.empty() ? "ADetailer failed" : "ADetailer failed: " + failure.message;
-        }
         return false;
     }
-
     if (results.empty()) {
         failure         = GenerationFailure();
         failure.code    = SD_ERROR_UNKNOWN;
@@ -327,7 +308,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
                 json item;
                 item["b64_json"]        = base64_encode(image_bytes);
-                item["generation_info"] = json::parse(results.generation_info(i));
+                item["generation_info"] = results.generation_info(i);
                 out["data"].push_back(item);
             }
 
@@ -393,7 +374,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                                                             request.output_compression);
                 json item;
                 item["b64_json"]        = base64_encode(image_bytes);
-                item["generation_info"] = json::parse(results.generation_info(i));
+                item["generation_info"] = results.generation_info(i);
                 out["data"].push_back(item);
             }
 

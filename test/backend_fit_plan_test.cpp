@@ -84,9 +84,9 @@ static Outcome run(const std::vector<Component>& components,
     out.before   = compute_plan(components, devices, ram_gib * GiB, out.start);
     // As auto-fit plans: with --layer-split-fill auto, the fill that keeps more modules on the GPUs.
     sd::set_layer_split_fill(planned_fill);
-    out.changed  = plan_multi_gpu_runtimes_with_fill(components, devices, ram_gib * GiB, mode, explicit_runtime, allow_split, out.runtimes,
-                                                     out.notes);
-    out.plan     = compute_plan(components, devices, ram_gib * GiB, out.runtimes);
+    out.changed = plan_multi_gpu_runtimes_with_fill(components, devices, ram_gib * GiB, mode, explicit_runtime, allow_split, out.runtimes,
+                                                    out.notes);
+    out.plan    = compute_plan(components, devices, ram_gib * GiB, out.runtimes);
     return out;
 }
 

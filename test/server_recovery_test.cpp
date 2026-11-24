@@ -1637,6 +1637,71 @@ static void test_devices() {
     }
 }
 
+// DGL scripts and the release of idle weights use the context of the model; a script that comes while no model is
+// loaded gets a context of its own, made from the fallback settings and freed after the call.
+static void test_with_context() {
+    {
+        Env env;
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        bool called = false;
+        CHECK(!keeper.with_context([&](sd_ctx_t*) { called = true; return true; }, failure),
+              "without a model and without fallback settings the call does not run");
+        CHECK(!called && failure.code != SD_ERROR_NONE && env.loads.empty(), "and no context is created for it");
+        SDContextParams bare = base_params();
+        bare.model_path.clear();
+        sd_ctx_t* used = nullptr;
+        CHECK(keeper.with_context([&](sd_ctx_t* ctx) { used = ctx; return true; }, failure, &bare),
+              "without a model the call runs on a context of the fallback settings");
+        CHECK(used != nullptr && env.loads.size() == 1 && env.loads[0].model_path.empty(),
+              "that context comes from the fallback settings");
+        CHECK(!keeper.has_model() && keeper.status_name() == std::string("no_model"), "the call does not load a model");
+        bool idle_called = false;
+        CHECK(keeper.try_with_context([&](sd_ctx_t*) { idle_called = true; }) && !idle_called,
+              "without a model the idle release has nothing to reach");
+    }
+    {
+        Env env;
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        CHECK(keeper.start(failure), "start for the shared context");
+        Seen seen;
+        run_with(keeper, env, seen, succeed, failure);
+        sd_ctx_t* scripted_on = nullptr;
+        SDContextParams bare  = base_params();
+        bare.model_path.clear();
+        CHECK(keeper.with_context([&](sd_ctx_t* ctx) { scripted_on = ctx; return true; }, failure, &bare) &&
+                  !seen.contexts.empty() && scripted_on == seen.contexts.back() && env.loads.size() == 1,
+              "with a model the call runs on its context, and no other context is created");
+        CHECK(!keeper.with_context([](sd_ctx_t*) { return false; }, failure), "a call that fails is reported");
+        CHECK(keeper.has_model() && keeper.status_name() == std::string("ok") && env.loads.size() == 1,
+              "a failed call neither steps down nor reloads the model");
+
+        std::atomic<bool> inside{false};
+        std::atomic<bool> release{false};
+        std::thread generation([&] {
+            Seen running;
+            GenerationFailure result;
+            run_with(keeper, env, running, [&](const ContextKeeper::ContextView&) {
+                inside = true;
+                while (!release) {
+                    std::this_thread::yield();
+                }
+                return ok_result; }, result);
+        });
+        while (!inside) {
+            std::this_thread::yield();
+        }
+        bool idle_called = false;
+        CHECK(!keeper.try_with_context([&](sd_ctx_t*) { idle_called = true; }) && !idle_called,
+              "the idle release does not wait for a generation that holds the context");
+        release = true;
+        generation.join();
+        CHECK(keeper.try_with_context([&](sd_ctx_t*) { idle_called = true; }) && idle_called,
+              "after the generation the idle release reaches the context");
+    }
+}
+
 int main() {
     sd_set_log_callback([](enum sd_log_level_t, const char*, void*) {}, nullptr);
 
@@ -1652,6 +1717,7 @@ int main() {
     test_load_unload();
     test_cancel();
     test_cancel_threads();
+    test_with_context();
 
     printf("\n%s (%d failures)\n", failures ? "TEST FAILED" : "ALL TESTS PASSED", failures);
     return failures ? 1 : 0;

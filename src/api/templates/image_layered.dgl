@@ -1,0 +1,52 @@
+# version: 0.0.0
+
+var {
+{{variables}}
+}
+
+{% include "image_helpers" %}
+
+fn main({{inputs}}) {
+    base_model = {{model_loader}}(model_path{{model_options}})
+    base_text = load_text_encoder(text_path{{text_options}})
+    vae = {{vae_loader}}(vae_path{{vae_options}})
+{{loras}}
+    model = {{patched_model}}
+    text = {{patched_text}}
+    encode_rng = make_rng(rng_type, seed = seed)
+    image_shape = latent_shape(vae, width = width, height = height)
+    base = tensor::zeros([image_shape[0], image_shape[1], layers, image_shape[2], image_shape[3]])
+{{references}}
+{% if flags.control_image %}
+    control_pixels = image::to_f32(fit_canvas(input_control, width, height, mode = "nearest"), channels = 3)
+    control_model = controlnet::load(control_path{{control_options}})
+{% endif %}
+    positive_text = encode_prompt(text, prompt, width = width, height = height{{prompt_options}})
+{% if flags.encode_negative %}
+    negative_text = encode_prompt(text, {{negative_prompt_input}}, width = width, height = height{{negative_prompt_options}})
+{% else %}
+    negative_text = positive_text
+{% endif %}
+    positive = positive_text
+    negative = negative_text
+{% include "image_predictors" %}
+{% if flags.custom_sigmas %}
+    full_sigmas = tensor::vector(custom_sigmas, dtype = "f32")
+{% else %}
+    full_sigmas = make_sigmas({{schedule_predictor}}, latent = base, steps = steps, scheduler = scheduler{{schedule_options}})
+{% endif %}
+    sigmas = full_sigmas
+    rng = make_rng(rng_type, seed = seed)
+{% if flags.shared_rng %}
+    sampler_rng = rng
+{% else %}
+    sampler_rng = make_rng(sampler_rng_type, seed = seed)
+{% endif %}
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = sampler_rng, eta = eta{{sample_options}})
+{% if flags.hires %}
+{% include "image_hires" %}
+{% endif %}
+    image = map(tensor::to_list(tensor::arange(0, layers)), process = decode_layer, args = {vae = vae, latent = {{result_latent}}})
+    return {image = image, latent = {{result_latent}}}
+}

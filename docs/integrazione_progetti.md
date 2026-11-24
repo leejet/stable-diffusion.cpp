@@ -28,7 +28,7 @@ controllato:
 | Profili di risorse | `--profile lite\|balanced\|max\|auto` imposta in un colpo guardiano di memoria, VAE a tasselli, CFG non raggruppato e `--multi-gpu on`; il calcolo resta sulle GPU (l'encoder di testo sulla CPU non fa più parte di `lite`); `auto` sceglie dalla dimensione del modello e dalla memoria libera | **disattivo** (come `max`) |
 | Più GPU | con più GPU discrete dello stesso backend l'auto-fit sposta l'encoder di testo o il VAE su un'altra GPU, o divide per blocchi un modello che non sta in una sola; `--profile auto` ne somma la memoria. `--multi-gpu auto\|on\|off`. Non rende più veloce una singola immagine (per la produttività: un `sd-server` per GPU, sezione 3.6) | **attivo** (`auto`: la seconda GPU entra solo se serve) |
 | Errori classificati e memoria di sistema | dopo un fallimento `sd_get_last_error_code()` dà un codice (memoria esaurita, file del modello, backend, ...) e il motivo; `sd_get_system_memory()` riporta RAM totale, disponibile e del processo | sempre disponibile |
-| Server senza modello | `sd-server` parte anche senza `-m`: device e upscale funzionano, la generazione risponde con un errore chiaro | **attivo** |
+| Server senza modello | `sd-server` parte anche senza `-m`: device e script DGL (anche l'upscale) funzionano, la generazione risponde con un errore chiaro | **attivo** |
 | Server che resta in piedi | una richiesta che esaurisce la memoria non ferma `sd-server`: il modello viene ricaricato con un profilo più leggero (`max > balanced > lite > lite-disk > lite-hybrid > lite-cpu`: la CPU entra solo da `lite-hybrid` in poi) e la richiesta ripetuta; un device che si guasta viene sostituito da un'altra GPU prima che la CPU prenda il lavoro; se nemmeno il più leggero basta, risposta `503` con `Retry-After`; dopo una pausa il server risale. `GET /sdcpp/v1/health` (profilo, device, moduli sulla CPU) e `/resources` | **attivo** (`--disable-degradation` lo spegne) |
 | Autenticazione server | `--api-key` (Bearer o `X-API-Key`) e allowlist CORS `--cors-origins` | **disattivi** |
 | Pacchetto portabile | backend ggml come librerie dinamiche caricate a runtime: un solo pacchetto, ogni macchina usa ciò che ha | opzionale in build |
@@ -498,7 +498,9 @@ precompilate di un'altra.
 
 ### 3.2 Sequenza di inizializzazione consigliata
 
-Il ciclo di vita completo, nell'ordine tecnico corretto:
+L'API usa opzioni opache: si crea un oggetto di opzioni, si impostano le chiavi
+per nome con `sd_opt_set_*` e lo si passa alla funzione che lo usa. Il ciclo di
+vita completo, nell'ordine tecnico corretto:
 
 1. **Logging** (prima di tutto): `sd_set_log_callback(cb, user_data)` — senza
    callback la libreria non stampa nulla; ogni messaggio arriva con livello
@@ -507,53 +509,66 @@ Il ciclo di vita completo, nell'ordine tecnico corretto:
    `sd_get_device_count()` + `sd_get_device_info(i, &info)` — non caricano
    nulla, si possono chiamare subito e da più thread. Alla prima chiamata
    vengono scoperti i moduli backend dinamici ggml accanto all'eseguibile.
-3. **Parametri del contesto**: `sd_ctx_params_init(&cp)` — azzera e imposta i
-   default; poi valorizzare solo i campi necessari (tabella sotto).
-4. **Creazione del contesto**: `new_sd_ctx(&cp)` — carica il modello, sceglie
-   e inizializza i backend (auto-fit + fallback CPU); è l'operazione costosa
-   (secondi–minuti). Restituisce `NULL` in caso di errore (motivo con
-   `sd_get_last_error_code()` e nei log).
-5. **Avanzamento** (facoltativo): `sd_set_progress_callback(cb, data)` riceve
-   `(step, steps, time, data)` a ogni passo di campionamento — è ciò che serve
-   per una progress bar.
-6. **Parametri di generazione**: `sd_img_gen_params_init(&gp)`; poi prompt e
-   dimensioni. Default reali: 512×512, `strength` 0.75, `seed` -1 (= casuale),
-   `batch_count` 1, 20 passi.
-7. **Generazione**: `generate_image(ctx, &gp, &result)` con
-   `sd_image_generation_result_t* result = NULL` — bloccante; chiamarla da un
-   worker thread se l'app ha una UI. `result_out` è obbligatorio e in caso di
-   fallimento la libreria lo azzera.
+3. **Opzioni del contesto**: `sd_ctx_opt_t* cp = sd_ctx_opt_create()`, poi solo
+   le chiavi necessarie (tabella sotto), per esempio
+   `sd_opt_set_string(cp, "model_path", percorso)`. Ogni `sd_opt_set_*`
+   restituisce `SD_STATUS_OK` oppure un errore subito: una chiave sconosciuta o
+   un valore del tipo sbagliato non vengono ignorati in silenzio, e
+   `sd_get_last_error()` dice perché. Le stringhe vengono copiate.
+4. **Creazione del contesto**: `sd_ctx_create(cp, &ctx)` — copia e controlla le
+   opzioni (`cp` si può liberare subito con `sd_opt_free()`), ma non legge
+   ancora il modello: i pesi si caricano alla prima generazione, che per
+   questo dura di più (secondi–minuti), e restano nel contesto per le
+   successive. Restituisce `SD_STATUS_OK` o un codice d'errore (motivo con
+   `sd_get_last_error_code()` e nei log). `sd_ctx_supports_image_generation(ctx)`
+   legge solo i metadati del file: serve per sapere subito se il modello è
+   riconosciuto.
+5. **Avanzamento** (facoltativo):
+   `sd_set_generation_progress_callback(ctx, cb, data)` riceve a ogni passo
+   una struttura `sd_generation_progress_t` con fase, passo e totale — è ciò
+   che serve per una progress bar.
+6. **Opzioni di generazione**: `sd_img_gen_opt_t* gp = sd_img_gen_opt_create()`;
+   poi `prompt`, `width`, `height`, `seed`, `sample.steps`... Le chiavi non
+   impostate restano ai default della libreria; un `seed` non impostato è
+   casuale.
+7. **Generazione**: `sd_generate_image(ctx, gp, &result)` con
+   `sd_result_t* result = NULL` — bloccante; chiamarla da un worker thread se
+   l'app ha una UI. `result_out` è obbligatorio e in caso di fallimento la
+   libreria lo azzera.
 8. **Annullamento** (facoltativo, da un altro thread):
    `sd_cancel_generation(ctx, SD_CANCEL_ALL)` interrompe appena possibile;
    `SD_CANCEL_NEW_LATENTS` finisce l'immagine in corso e salta le successive.
-9. **Lettura del risultato**: `result->count` elementi in `result->items[i]`;
-   ognuno ha `image` (un `sd_image_t` con `width`, `height`, `channel` (3 = RGB)
-   e `data` — buffer di `width*height*channel` byte, righe contigue senza
-   padding, ordine RGB) e `generation_info` (JSON `sdcpp.generation/v1` con i
-   parametri per riprodurre l'immagine, vedi
+9. **Lettura del risultato**: `sd_result_get_image_count(result)` immagini;
+   `sd_result_get_image(result, i)` restituisce un `sd_tensor_t` U8 di forma
+   `[C,W,H]` (`sd_tensor_dim(t, 0)` = canali, 3 = RGB; `1` = larghezza;
+   `2` = altezza) e `sd_tensor_data(t)` il buffer di
+   `larghezza*altezza*canali` byte, righe contigue senza padding, ordine RGB;
+   `sd_result_get_generation_info(result, i)` il JSON `sdcpp.generation/v1`
+   con i parametri per riprodurre l'immagine (vedi
    [generation_metadata.md](generation_metadata.md)). Copiarli o convertirli
    subito.
-10. **Rilascio**: `free_sd_image_generation_result(result)` e poi
-    `free_sd_ctx(ctx)` — sempre le funzioni della libreria, mai `free()` del
+10. **Rilascio**: `sd_result_free(result)`, `sd_opt_free(gp)` e poi
+    `sd_ctx_free(ctx)` — sempre le funzioni della libreria, mai `free()` del
     chiamante (su Windows CRT diversi causerebbero corruzione). Il risultato
-    possiede pixel e JSON, resta valido anche dopo `free_sd_ctx()` e il suo
-    distruttore accetta `NULL`.
+    possiede pixel e JSON, resta valido anche dopo `sd_ctx_free()`, e queste
+    funzioni accettano `NULL`.
 
-Campi principali di `sd_ctx_params_t` (tutti gli altri possono restare ai
-default):
+Chiavi principali del contesto (tutte le altre possono restare ai default):
 
-| Campo | Significato | Default |
-|---|---|---|
-| `model_path` | checkpoint completo (`.safetensors`/`.gguf`/`.ckpt`) | obbligatorio* |
-| `diffusion_model_path` | in alternativa: solo modello di diffusione (componenti separati) | — |
-| `n_threads` | thread CPU; `<= 0` = core fisici | auto |
-| `backend` | assegnazione backend, es. `"cpu"`, `"vulkan0"`, `"diffusion=cuda0,te=cpu"`; vuoto = migliore disponibile | auto |
-| `params_backend` | dove risiedono i pesi: `"cpu"` (RAM), `"disk"`, per modulo | auto-fit |
-| `max_vram` | budget per device in GiB, es. `"6"` o `"cuda0=6,vulkan0=4"`; `-1` = riserva 1 GiB | memoria libera |
-| `memory_guard` | soglia % del guardiano di memoria (50–99): memoria del device, su CPU la RAM di sistema; `0` = spento | `0` |
-| `disable_backend_fallback` | `true` = fallire invece di ripiegare sulla CPU | `false` |
-| `enable_mmap` | mappa i pesi dal file invece di copiarli in RAM | `false` |
-| `wtype` | forza il tipo dei pesi (quantizzazione a caricamento) | tipo del file |
+| Chiave | Tipo | Significato | Default |
+|---|---|---|---|
+| `model_path` | stringa | checkpoint completo (`.safetensors`/`.gguf`/`.ckpt`) | obbligatorio* |
+| `diffusion_model_path` | stringa | in alternativa: solo modello di diffusione (componenti separati) | — |
+| `n_threads` | intero | thread CPU | core fisici |
+| `backend` | stringa | assegnazione backend, es. `"cpu"`, `"vulkan0"`, `"diffusion=cuda0,te=cpu"`; vuoto = migliore disponibile | auto |
+| `params_backend` | stringa | dove risiedono i pesi: `"cpu"` (RAM), `"disk"`, per modulo | auto-fit |
+| `max_vram` | stringa | budget per device in GiB, es. `"6"` o `"cuda0=6,vulkan0=4"` | memoria libera |
+| `memory_guard` | intero | soglia % del guardiano di memoria (0–100): memoria del device, su CPU la RAM di sistema; `0` = spento | `0` |
+| `disable_backend_fallback` | booleano | `true` = fallire invece di ripiegare sulla CPU | `false` |
+| `multi_gpu` | stringa | `auto`, `on` o `off`: quanto l'auto-fit usa le altre GPU | `auto` |
+| `layer_split_fill` | stringa | `auto`, `proportional` o `fill-first`: come lo split a livelli riempie i device | `auto` |
+| `enable_mmap` | booleano | mappa i pesi dal file invece di copiarli in RAM | `false` |
+| `wtype` | stringa | forza il tipo dei pesi (quantizzazione a caricamento), es. `"q8_0"` | tipo del file |
 
 *uno tra `model_path` e `diffusion_model_path` è obbligatorio.
 
@@ -563,7 +578,18 @@ Esempio compilato e collaudato con il percorso `find_package` qui sopra:
 #include <stdio.h>
 #include "stable-diffusion.h"
 
+static void print_error(const char* what) {
+    char reason[512];
+    enum sd_error_code_t code = sd_get_last_error_code(reason, sizeof(reason));
+    fprintf(stderr, "%s: %s: %s\n", what, sd_error_code_name(code), reason);
+}
+
 int main(int argc, char** argv) {
+    if (argc < 2) {
+        fprintf(stderr, "uso: %s modello.safetensors\n", argv[0]);
+        return 2;
+    }
+
     // 1. Rilevamento hardware (nessun modello caricato)
     for (size_t i = 0; i < sd_get_device_count(); i++) {
         sd_device_info_t d;
@@ -572,69 +598,82 @@ int main(int argc, char** argv) {
         }
     }
 
-    // 2. Contesto con memory guard; il fallback CPU è già attivo
-    sd_ctx_params_t cp;
-    sd_ctx_params_init(&cp);          // inizializza SEMPRE prima di impostare i campi
-    cp.model_path   = argv[1];
-    cp.memory_guard = 90;
-
-    sd_ctx_t* ctx = new_sd_ctx(&cp);
-    if (ctx == NULL) {                // modello non valido o backend non disponibile
-        char reason[512];
-        enum sd_error_code_t code = sd_get_last_error_code(reason, sizeof(reason));
-        fprintf(stderr, "new_sd_ctx: %s: %s\n", sd_error_code_name(code), reason);
+    // 2. Contesto con memory guard; il ripiego sulla CPU è già attivo
+    sd_ctx_opt_t* cp = sd_ctx_opt_create();
+    if (sd_opt_set_string(cp, "model_path", argv[1]) != SD_STATUS_OK ||
+        sd_opt_set_int(cp, "memory_guard", 90) != SD_STATUS_OK) {
+        fprintf(stderr, "opzione rifiutata: %s\n", sd_get_last_error());
+        sd_opt_free(cp);
+        return 1;
+    }
+    sd_ctx_t* ctx      = NULL;
+    sd_status_t status = sd_ctx_create(cp, &ctx);
+    sd_opt_free(cp);  // il contesto ha copiato le opzioni
+    if (status != SD_STATUS_OK) {
+        print_error("sd_ctx_create");
         return 1;
     }
 
-    // 3. Generazione
-    sd_img_gen_params_t gp;
-    sd_img_gen_params_init(&gp);
-    gp.prompt = "un gatto astronauta";
-    gp.width  = 512;
-    gp.height = 512;
-    gp.seed   = 42;
+    // 3. Generazione: i pesi si caricano qui, alla prima immagine
+    sd_img_gen_opt_t* gp = sd_img_gen_opt_create();
+    sd_opt_set_string(gp, "prompt", "un gatto astronauta");
+    sd_opt_set_int(gp, "width", 512);
+    sd_opt_set_int(gp, "height", 512);
+    sd_opt_set_int(gp, "seed", 42);
 
-    sd_image_generation_result_t* result = NULL;
-    int rc                               = 1;
-    if (generate_image(ctx, &gp, &result) && result->count > 0) {
-        rc = 0;                       // result->items[i].image: data / width / height / channel
+    sd_result_t* result = NULL;
+    int rc              = 1;
+    if (sd_generate_image(ctx, gp, &result) == SD_STATUS_OK && sd_result_get_image_count(result) > 0) {
+        const sd_tensor_t* image = sd_result_get_image(result, 0);  // U8 [C,W,H], dati in sd_tensor_data(image)
+        printf("%lld x %lld, %lld canali\n",
+               (long long)sd_tensor_dim(image, 1),
+               (long long)sd_tensor_dim(image, 2),
+               (long long)sd_tensor_dim(image, 0));
+        rc = 0;
+    } else {
+        print_error("sd_generate_image");
     }
 
-    free_sd_image_generation_result(result);  // sempre dalla libreria (evita problemi di CRT su Windows)
-    free_sd_ctx(ctx);
+    sd_result_free(result);  // sempre dalla libreria (evita problemi di CRT su Windows)
+    sd_opt_free(gp);
+    sd_ctx_free(ctx);
     return rc;
 }
 ```
 
 Regole importanti per chi integra:
 
-- Chiamare sempre `sd_ctx_params_init()` e `sd_img_gen_params_init()` prima di
-  valorizzare i campi: senza init i campi contengono valori casuali.
-- Controllare sempre il valore di ritorno di `new_sd_ctx()` e `generate_image()`.
-- **Errori**: dopo un fallimento `sd_get_last_error_code(buffer, dimensione)`
-  restituisce il codice (`SD_ERROR_OUT_OF_MEMORY`, `SD_ERROR_MODEL_FILE`,
-  `SD_ERROR_BACKEND`, `SD_ERROR_INVALID_ARGUMENT`, `SD_ERROR_BUSY`,
-  `SD_ERROR_CANCELLED`, `SD_ERROR_UNKNOWN`) e, se il buffer non è nullo, il
-  testo del primo errore registrato; `sd_error_code_name()` ne dà il nome. Vale per il thread che ha
-  fatto la chiamata, si azzera all'inizio di ogni chiamata e al successo. Con
+- Controllare il valore di ritorno di ogni `sd_opt_set_*`, di `sd_ctx_create()`
+  e di `sd_generate_image()`: `SD_STATUS_OK` è l'unico successo.
+- **Errori**: dopo un fallimento di `sd_ctx_create()`,
+  `sd_ctx_set_model_options*()`, `sd_generate_image()` o `sd_generate_video()`,
+  `sd_get_last_error_code(buffer, dimensione)` restituisce il codice
+  (`SD_ERROR_OUT_OF_MEMORY`, `SD_ERROR_MODEL_FILE`, `SD_ERROR_BACKEND`,
+  `SD_ERROR_INVALID_ARGUMENT`, `SD_ERROR_BUSY`, `SD_ERROR_CANCELLED`,
+  `SD_ERROR_UNKNOWN`) e, se il buffer non è nullo, il testo del primo errore
+  registrato; `sd_error_code_name()` ne dà il nome. Vale per il thread che ha
+  fatto la chiamata, si azzera all'inizio di ogni chiamata e al successo.
+  Siccome i pesi si caricano alla prima generazione, un file di modello
+  rovinato si scopre di solito lì (`SD_ERROR_MODEL_FILE`). Con
   `SD_ERROR_OUT_OF_MEMORY` ha senso ritentare con meno memoria (profilo più
   leggero, pesi su disco) o più tardi; il contesto resta utilizzabile dopo il
-  fallimento. Le eccezioni C++ non escono mai dall'API.
+  fallimento. `sd_get_last_error()` dà il testo dell'errore di qualunque
+  chiamata dell'API. Le eccezioni C++ non escono mai dall'API.
 - **Memoria di sistema**: `sd_get_system_memory(&m)` riporta RAM totale,
   disponibile e occupata dal processo, utile per decidere prima di caricare un
   modello o per un indicatore nell'interfaccia.
-- **Threading**: un contesto non è thread-safe; serializzare gli accessi (come
-  fa `sd-server` con un mutex) oppure usare un contesto per thread.
-  `sd_cancel_generation()` è pensata per essere chiamata da un altro thread.
-  Le funzioni di enumerazione dei device sono state provate da più thread in
-  parallelo. I callback (log, progress) arrivano dal thread che sta generando.
-- **Durata delle stringhe**: i campi `const char*` dei parametri non vengono
-  copiati al momento dell'assegnazione; devono restare validi fino alla
-  chiamata (`new_sd_ctx`/`generate_image`) che li consuma. Da linguaggi con
-  garbage collector (FFI), ancorare i buffer finché la chiamata non ritorna.
-- **Un contesto, molte generazioni**: il modello resta caricato; chiamare
-  `generate_image()` più volte sullo stesso contesto è il modo corretto di
-  servire più richieste (ricrearlo a ogni richiesta ricarica il modello).
+- **Threading**: un contesto esegue una generazione alla volta; una seconda
+  chiamata mentre la prima è in corso restituisce `SD_STATUS_BUSY`
+  (`SD_ERROR_BUSY`). Serializzare gli accessi (come fa `sd-server` con un
+  mutex) oppure usare un contesto per thread. `sd_cancel_generation()` è
+  pensata per essere chiamata da un altro thread. Le funzioni di enumerazione
+  dei device sono state provate da più thread in parallelo. I callback (log,
+  progress) arrivano dal thread che sta generando.
+- **Un contesto, molte generazioni**: i componenti caricati restano nel
+  contesto; chiamare `sd_generate_image()` più volte sullo stesso contesto è il
+  modo corretto di servire più richieste (ricrearlo a ogni richiesta ricarica
+  il modello). `sd_ctx_set_model_options(ctx, opzioni)` cambia modello su un
+  contesto inattivo.
 - **Processo e working directory**: con i backend dinamici i moduli ggml
   vengono cercati accanto all'eseguibile, non nella working directory.
 
@@ -647,11 +686,12 @@ Indicazioni tecniche per un binding FFI fatto in casa:
 
 - servono la libreria **dinamica** (`-DSD_BUILD_SHARED_LIBS=ON`) oppure il
   binding N-API/ctypes contro la statica ricompilata PIC;
-- dichiarare le strutture esattamente nell'ordine dei campi dell'header (sono
-  struct C semplici); dopo ogni aggiornamento del fork rigenerare le
-  dichiarazioni, perché i campi possono crescere in coda;
-- chiamare sempre `sd_ctx_params_init()` via FFI invece di costruire la struct
-  a mano: imposta i default corretti anche per i campi futuri;
+- opzioni, contesto, risultato e tensori sono opachi: via FFI bastano
+  puntatori e funzioni, e le opzioni si impostano per nome con `sd_opt_set_*`,
+  quindi una chiave aggiunta in futuro non cambia nessuna disposizione in
+  memoria; le poche struct pubbliche rimaste (`sd_device_info_t`,
+  `sd_system_memory_t`, `sd_lora_t`, ...) vanno dichiarate nell'ordine dei
+  campi dell'header, da rigenerare dopo ogni aggiornamento del fork;
 - i callback FFI (log/progress) arrivano da thread nativi: nel runtime del
   linguaggio usare il meccanismo apposito (es. `ThreadSafeFunction` in N-API).
 
@@ -1413,7 +1453,7 @@ sincronizzazioni future.
    forza l'esecuzione segmentata; best effort, mai fallimenti artificiali.
    Sui backend CPU misura la RAM di sistema e può rilasciare solo i pesi
    rileggibili dal file (`--params-backend disk`).
-   API: campo `memory_guard` in `sd_ctx_params_t`; CLI: `--memory-guard`.
+   API: chiave `memory_guard` delle opzioni del contesto; CLI: `--memory-guard`.
    Documentato in [performance.md](./performance.md).
 2. **API di rilevamento device** — `sd_get_device_count()`,
    `sd_get_device_info()` (nome, tipo, memoria libera/totale),
@@ -1497,8 +1537,8 @@ sincronizzazioni future.
     con modelli reali.
 
 15. **Errori classificati e memoria di sistema** — `src/core/last_error.{h,cpp}`
-    e `src/core/system_memory.{h,cpp}`. Dopo un fallimento di `new_sd_ctx()`,
-    `generate_image()` o `generate_video()`, `sd_get_last_error_code()` restituisce
+    e `src/core/system_memory.{h,cpp}`. Dopo un fallimento di `sd_ctx_create()`,
+    `sd_generate_image()` o `sd_generate_video()`, `sd_get_last_error_code()` restituisce
     un codice (`SD_ERROR_OUT_OF_MEMORY`, `SD_ERROR_MODEL_FILE`,
     `SD_ERROR_BACKEND`, `SD_ERROR_INVALID_ARGUMENT`, `SD_ERROR_BUSY`,
     `SD_ERROR_CANCELLED` per l'annullamento richiesto con
@@ -1597,7 +1637,7 @@ sincronizzazioni future.
     conviene un `--profile` più leggero fisso, oppure `--degradation-cooldown 0`.
 
 18. **Più GPU** — `--multi-gpu auto|on|off` (predefinito `auto`) in `sd-cli` e
-    `sd-server`, campo `multi_gpu` in coda a `sd_ctx_params_t`. In
+    `sd-server`, chiave `multi_gpu` delle opzioni del contesto. In
     `src/core/backend_fit.{h,cpp}`, con più GPU discrete dello stesso backend
     l'auto-fit prova prima a spostare l'encoder di testo o il VAE su un'altra GPU
     e poi divide per blocchi il modello di diffusione o l'encoder di testo sul
@@ -1770,8 +1810,8 @@ sincronizzazioni future.
       produttore prima della stessa scheda vista da Vulkan o OpenCL; a parità,
       più memoria libera; mai `RPC`), e solo alla fine `lite-cpu`. Una memoria
       esaurita scende i profili sullo stesso device. Finché resta una GPU da
-      provare il server imposta `disable_backend_fallback` (campo già presente di
-      `sd_ctx_params_t`) perché il motore non ripieghi da solo sulla CPU; con
+      provare il server imposta `disable_backend_fallback` (chiave delle opzioni del
+      contesto) perché il motore non ripieghi da solo sulla CPU; con
       `--disable-degradation` il motore si comporta come prima. Un `--backend`
       con moduli assegnati o più device non viene riscritto.
     - risalita: da una GPU un solo tentativo (il device di partenza se si è su un

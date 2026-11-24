@@ -4,13 +4,17 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cwctype>
 #include <iomanip>
+#include <limits>
 #include <sstream>
+#include <string_view>
 #include <thread>
 
 #include "common/log.h"
 #include "common/media_io.h"
 #include "common/resource_owners.hpp"
+#include "model_catalog.h"
 
 class JobCancellationMonitor {
     std::mutex mutex_;
@@ -118,12 +122,10 @@ static void finish_job_progress(AsyncGenerationJob& job) {
 class JobCallbacksGuard {
     sd_ctx_t* ctx_;
     AsyncGenerationJob& job_;
-    bool detailing_ = false;
 
     static void progress_callback(const sd_generation_progress_t* progress, void* data) {
         auto& guard = *static_cast<JobCallbacksGuard*>(data);
-        update_job_progress(guard.job_, guard.detailing_ ? "adetailer" : progress->stage,
-                            guard.detailing_ ? progress->stage : progress->detail,
+        update_job_progress(guard.job_, progress->stage, progress->detail,
                             progress->sample_pass, progress->completed, progress->total, progress->unit);
     }
 
@@ -140,12 +142,6 @@ public:
         clear_preview_callback();
     }
 
-    void begin_detailing() {
-        clear_preview_callback();
-        detailing_ = true;
-        update_job_progress(job_, "adetailer");
-    }
-
     JobCallbacksGuard(const JobCallbacksGuard&)            = delete;
     JobCallbacksGuard& operator=(const JobCallbacksGuard&) = delete;
 };
@@ -156,6 +152,8 @@ const char* async_job_kind_name(AsyncJobKind kind) {
             return "img_gen";
         case AsyncJobKind::VidGen:
             return "vid_gen";
+        case AsyncJobKind::Dgl:
+            return "dgl";
         default:
             return "img_gen";
     }
@@ -233,6 +231,8 @@ bool cancel_queued_job(AsyncJobManager& manager, AsyncGenerationJob& job) {
     }
 
     manager.queue.erase(new_end, manager.queue.end());
+    job.model.reset();
+    job.request_body = nullptr;
     job.cancel.requested.store(true);
     job.status       = AsyncJobStatus::Cancelled;
     job.completed_at = unix_timestamp_now_ms();
@@ -310,7 +310,9 @@ json make_async_job_json(const AsyncJobManager& manager, const AsyncGenerationJo
     }
 
     if (job.status == AsyncJobStatus::Completed) {
-        if (job.kind == AsyncJobKind::VidGen) {
+        if (job.kind == AsyncJobKind::Dgl) {
+            result["result"] = job.dgl_result_info;
+        } else if (job.kind == AsyncJobKind::VidGen) {
             result["result"] = {
                 {"output_format", job.vid_gen.output_format},
                 {"mime_type", job.result_media_mime_type},
@@ -384,6 +386,30 @@ static bool run_job(ServerRuntime& runtime,
     return runtime.keeper->run(attempt, failure, &job.cancel);
 }
 
+static bool prepare_native_job(ServerRuntime& runtime, AsyncGenerationJob& job, std::string& error_message) {
+    if (job.cancel.requested.load())
+        return false;
+    const SDMode mode = job.kind == AsyncJobKind::VidGen ? VID_GEN : IMG_GEN;
+    if (job.model) {
+        auto model = std::move(job.model);
+        return set_current_model(runtime, std::move(*model), mode, error_message);
+    }
+    auto body = std::move(job.request_body);
+    if (job.model_revision == runtime.models->revision)
+        return true;
+    // An earlier queued job can change the model and its defaults before this job starts.
+    if (!runtime_supports_generation_mode(runtime, mode)) {
+        error_message = unsupported_generation_mode_error(runtime, mode);
+        return false;
+    }
+    try {
+        return parse_native_job_request(body, runtime, job, error_message);
+    } catch (const std::exception& error) {
+        error_message = error.what();
+        return false;
+    }
+}
+
 bool execute_img_gen_job(ServerRuntime& runtime,
                          AsyncGenerationJob& job,
                          std::vector<std::string>& output_images,
@@ -392,41 +418,28 @@ bool execute_img_gen_job(ServerRuntime& runtime,
     output_info = json::array();
 
     SDImageVec results;
-    bool adetailer_failed = false;
-    const bool generated  = run_job(
-        runtime,
-        job,
-        [&](const ContextKeeper::ContextView& view) {
-            SDOptPtr params = job.img_gen.to_image_opt();
-            if (view.force_vae_tiling) {
-                sd_opt_set_bool(params.get(), "vae_tiling.enabled", true);
-            }
-            adetailer_failed = false;
-            JobCallbacksGuard callbacks(view.ctx, job);
-            PromptImageCallbackGuard prompt_images(view.ctx, job.img_gen.gen_params);
-            sd_result_t* produced = nullptr;
-            if (!generate_sd_image(view.ctx, params, &produced)) {
-                return false;
-            }
-            results.adopt(produced, view.params->lora_model_dir);
+    {
+        // The model switch and the generation share the lock: no other user of the context comes in between.
+        std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
+        std::string error_message;
+        if (!prepare_native_job(runtime, job, error_message)) {
             if (job.cancel.requested.load()) {
-                return true;
+                return fail_cancelled(failure);
             }
-            if (!results.empty() && job.img_gen.adetailer_enabled && !runtime.default_gen_params->ad_model_path.empty()) {
-                callbacks.begin_detailing();
-                if (!apply_server_adetailer(runtime, view.ctx, *view.params, job.img_gen, view.force_vae_tiling, results)) {
-                    adetailer_failed = true;
-                    return false;
-                }
-            }
-            return true;
-        },
-        failure);
-    if (!generated) {
-        if (adetailer_failed && failure.code != SD_ERROR_CANCELLED) {
-            failure.message = failure.message.empty() ? "ADetailer failed" : "ADetailer failed: " + failure.message;
+            return fail_with(failure, error_message.empty() ? "the model could not be prepared" : error_message.c_str());
         }
-        return false;
+        const bool generated = run_job(
+            runtime,
+            job,
+            [&](const ContextKeeper::ContextView& view) {
+                JobCallbacksGuard callbacks(view.ctx, job);
+                std::string message;
+                return generate_server_images(view.ctx, job.img_gen, results, message, view.force_vae_tiling);
+            },
+            failure);
+        if (!generated) {
+            return false;
+        }
     }
     if (job.cancel.requested.load()) {
         return fail_cancelled(failure);
@@ -464,7 +477,7 @@ bool execute_img_gen_job(ServerRuntime& runtime,
             continue;
         }
         output_images.push_back(base64_encode(image_bytes));
-        output_info.push_back(json::parse(results.generation_info(i)));
+        output_info.push_back(results.generation_info(i));
         update_job_progress(job, "encoding", "image", -1, i + 1, num_results, "images");
     }
 
@@ -489,28 +502,39 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
     int num_results          = 0;
     SDAudio* generated_audio = nullptr;
 
-    const bool generated = run_job(
-        runtime,
-        job,
-        [&](const ContextKeeper::ContextView& view) {
-            SDOptPtr params = job.vid_gen.to_video_opt();
-            if (view.force_vae_tiling) {
-                sd_opt_set_bool(params.get(), "vae_tiling.enabled", true);
+    {
+        // The model switch and the generation share the lock: no other user of the context comes in between.
+        std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
+        std::string error_message;
+        if (!prepare_native_job(runtime, job, error_message)) {
+            if (job.cancel.requested.load()) {
+                return fail_cancelled(failure);
             }
-            JobCallbacksGuard callbacks(view.ctx, job);
-            PromptImageCallbackGuard prompt_images(view.ctx, job.vid_gen.gen_params);
-            sd_result_t* produced = nullptr;
-            if (!generate_sd_video(view.ctx, params, &produced)) {
-                return false;
-            }
-            output_fps      = sd_result_get_fps(produced);
-            generated_audio = retain_result_audio(produced);
-            results.adopt_video(produced, view.params->lora_model_dir);
-            return true;
-        },
-        failure);
-    if (!generated) {
-        return false;
+            return fail_with(failure, error_message.empty() ? "the model could not be prepared" : error_message.c_str());
+        }
+        const bool generated = run_job(
+            runtime,
+            job,
+            [&](const ContextKeeper::ContextView& view) {
+                SDOptPtr params = job.vid_gen.to_video_opt();
+                if (view.force_vae_tiling) {
+                    sd_opt_set_bool(params.get(), "vae_tiling.enabled", true);
+                }
+                JobCallbacksGuard callbacks(view.ctx, job);
+                PromptImageCallbackGuard prompt_images(view.ctx, job.vid_gen.gen_params);
+                sd_result_t* produced = nullptr;
+                if (!generate_sd_video(view.ctx, params, &produced)) {
+                    return false;
+                }
+                output_fps      = sd_result_get_fps(produced);
+                generated_audio = retain_result_audio(produced);
+                results.adopt_video(produced);
+                return true;
+            },
+            failure);
+        if (!generated) {
+            return false;
+        }
     }
 
     num_results = results.count();
@@ -547,6 +571,269 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
     return true;
 }
 
+int64_t dgl_image_frame_count(const sd_tensor_t* tensor) {
+    if (!tensor || sd_tensor_type(tensor) != SD_TENSOR_U8)
+        return 0;
+    const auto rank = sd_tensor_rank(tensor);
+    if (rank != 3 && rank != 4)
+        return 0;
+    const auto channels = sd_tensor_dim(tensor, 0);
+    const auto width    = sd_tensor_dim(tensor, 1);
+    const auto height   = sd_tensor_dim(tensor, 2);
+    if (channels < 1 || channels > 4 || width <= 0 || height <= 0 ||
+        sd_tensor_byte_size(tensor) == 0 || sd_tensor_byte_size(tensor) > std::numeric_limits<int>::max())
+        return 0;
+    return rank == 3 ? 1 : sd_tensor_dim(tensor, 3);
+}
+
+static json describe_dgl_media(const sd_dgl_result_t* result) {
+    json media       = json::array();
+    size_t remaining = 64 * 1024 * 1024;
+    auto append      = [&](const sd_dgl_value_t* value, const std::string& name) {
+        if (sd_dgl_value_kind(value) != SD_DGL_VALUE_DICT)
+            return;
+        const auto* data = sd_dgl_value_field(value, "data");
+        const auto* mime = sd_dgl_value_field(value, "mime_type");
+        if (sd_dgl_value_kind(data) != SD_DGL_VALUE_BYTES || sd_dgl_value_kind(mime) != SD_DGL_VALUE_STRING)
+            return;
+        const char* mime_text = nullptr;
+        size_t mime_size      = 0;
+        const void* bytes     = nullptr;
+        size_t size           = 0;
+        if (sd_dgl_value_get_string(mime, &mime_text, &mime_size) != SD_STATUS_OK ||
+            sd_dgl_value_get_bytes(data, &bytes, &size) != SD_STATUS_OK)
+            throw std::runtime_error(sd_get_last_error());
+        const std::string mime_type(mime_text, mime_size);
+        if (mime_type != "image/png" && mime_type != "video/webm" && mime_type != "video/x-msvideo")
+            return;
+        json item = {{"name", name}, {"mime_type", mime_type}};
+        if (size > remaining) {
+            item["error"] = {{"code", "inline_too_large"}, {"message", "DGL media exceeds the 64 MiB inline result budget; use media::save"}};
+        } else {
+            item["b64_json"] = base64_encode(bytes, size);
+            remaining -= size;
+        }
+        media.push_back(std::move(item));
+    };
+    const auto* root = sd_dgl_result_root(result);
+    if (sd_dgl_value_kind(root) == SD_DGL_VALUE_DICT) {
+        append(root, "result");
+        if (media.empty())
+            for (size_t i = 0; i < sd_dgl_value_count(root); ++i) {
+                const auto* value = sd_dgl_value_at(root, i);
+                if (const auto* name = sd_dgl_value_name(value))
+                    append(value, name);
+            }
+    }
+    return media;
+}
+
+static json describe_dgl_result(const sd_dgl_result_t* result) {
+    const std::string type = sd_dgl_result_type(result);
+    json outputs           = json::array();
+    for (size_t i = 0; i < sd_dgl_result_count(result); ++i) {
+        const auto* name   = sd_dgl_result_name(result, i);
+        const auto* tensor = sd_dgl_result_tensor(result, name);
+        const auto dtype   = sd_tensor_type(tensor);
+        const auto bytes   = sd_tensor_byte_size(tensor);
+        std::vector<int64_t> shape;
+        for (size_t axis = 0; axis < sd_tensor_rank(tensor); ++axis)
+            shape.push_back(sd_tensor_dim(tensor, axis));
+        json output      = {{"name", name}, {"dtype", dtype}, {"shape", shape}, {"bytes", bytes}, {"frames", dgl_image_frame_count(tensor)}};
+        const auto* data = sd_tensor_data(tensor);
+        if (type == "string" && std::string_view(name) == "result") {
+            output["value"] = bytes ? std::string(static_cast<const char*>(data), bytes) : "";
+        } else if (shape.empty() && bytes != 0) {
+            switch (dtype) {
+                case SD_TENSOR_U8:
+                    output["value"] = *static_cast<const uint8_t*>(data);
+                    break;
+                case SD_TENSOR_I32:
+                    output["value"] = *static_cast<const int32_t*>(data);
+                    break;
+                case SD_TENSOR_I64:
+                    output["value"] = std::to_string(*static_cast<const int64_t*>(data));
+                    break;
+                case SD_TENSOR_F32:
+                    output["value"] = *static_cast<const float*>(data);
+                    break;
+                case SD_TENSOR_F64:
+                    output["value"] = *static_cast<const double*>(data);
+                    break;
+            }
+        }
+        outputs.push_back(std::move(output));
+    }
+    return {{"type", type}, {"outputs", std::move(outputs)}, {"media", describe_dgl_media(result)}};
+}
+
+namespace {
+    namespace fs = std::filesystem;
+
+    bool allowed_dgl_path(const char* path, sd_dgl_file_access_t access, void* userdata) try {
+        const auto& policy = *static_cast<const ServerFileAccess*>(userdata);
+        std::error_code error;
+        const auto file = fs::u8path(path);
+        if (file.empty())
+            return false;
+#ifdef _WIN32
+        if (file.native().compare(0, 4, L"\\\\?\\") == 0 || file.native().compare(0, 4, L"\\\\.\\") == 0)
+            return false;
+        for (const auto& part : file.relative_path()) {
+            const auto name = part.native();
+            if (name.empty() || name == L"." || name == L"..")
+                continue;
+            if (name.back() == L'.' || name.back() == L' ' || name.find(L':') != std::wstring::npos)
+                return false;
+            auto device = name.substr(0, name.find(L'.'));
+            while (!device.empty() && device.back() == L' ')
+                device.pop_back();
+            std::transform(device.begin(), device.end(), device.begin(), [](wchar_t ch) { return std::towupper(ch); });
+            if (device == L"CON" || device == L"PRN" || device == L"AUX" || device == L"NUL" ||
+                device == L"CONIN$" || device == L"CONOUT$" ||
+                (device.size() == 4 && (device.compare(0, 3, L"COM") == 0 || device.compare(0, 3, L"LPT") == 0) &&
+                 std::wstring_view(L"123456789\u00b9\u00b2\u00b3").find(device.back()) != std::wstring_view::npos))
+                return false;
+        }
+#endif
+        const auto absolute = fs::absolute(file, error);
+        if (error)
+            return false;
+        const auto resolved = fs::weakly_canonical(absolute, error);
+        if (error)
+            return false;
+        if (access == SD_DGL_FILE_WRITE) {
+            if (!model_path_inside(policy.output, resolved))
+                return false;
+            for (auto part = absolute; part != part.root_path(); part = part.parent_path()) {
+                const auto status = fs::symlink_status(part, error);
+                if (fs::is_symlink(status) || (error && status.type() != fs::file_type::not_found))
+                    return false;
+                error.clear();
+            }
+            const auto status = fs::symlink_status(resolved, error);
+            if (status.type() != fs::file_type::not_found) {
+                return !error && fs::is_regular_file(status) && fs::hard_link_count(resolved, error) == 1 && !error;
+            }
+            error.clear();
+            fs::create_directories(resolved.parent_path(), error);
+            return !error;
+        }
+        const auto status   = fs::status(resolved, error);
+        const bool readable = !error && (fs::is_regular_file(status) || fs::is_directory(status));
+        if (access == SD_DGL_FILE_READ)
+            return readable;
+        const auto key = model_path_key(resolved);
+        if (readable || status.type() == fs::file_type::not_found) {
+            if (policy.configured_files.count(key))
+                return true;
+            if (std::any_of(policy.model_bundles.begin(), policy.model_bundles.end(), [&](const fs::path& root) { return model_path_inside(root, resolved); }))
+                return true;
+        }
+        return readable && std::any_of(policy.models.begin(), policy.models.end(), [&](const ModelRoot& root) {
+                   return model_path_key(root.path) == key || model_path_inside(root.path, resolved);
+               });
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+void configure_server_file_access(ServerModels& models, const SDSvrParams& params, const SDContextParams& config) {
+    auto& policy                 = models.file_access;
+    policy                       = {get_model_roots(params), fs::weakly_canonical(fs::current_path()) / "output", {}, {}};
+    models.workspace_file_access = policy;
+    for (const auto* directory : {&config.lora_model_dir, &config.hires_upscalers_dir})
+        if (!directory->empty())
+            policy.models.push_back(make_model_root(fs::u8path(*directory), false));
+    for (const auto& entry : config.embedding_map)
+        policy.configured_files.insert(model_path_key(fs::weakly_canonical(fs::absolute(fs::u8path(entry.second)))));
+    add_startup_model_sources(policy, config);
+}
+
+bool apply_server_file_access(ServerModels& models, sd_ctx_t* ctx) {
+    return sd_ctx_set_file_access_callback(ctx, allowed_dgl_path, &models.file_access) == SD_STATUS_OK &&
+           sd_dgl_ctx_set_file_access_callback(sd_ctx_get_dgl_ctx(ctx), allowed_dgl_path, &models.workspace_file_access);
+}
+
+static bool execute_dgl_job(ServerRuntime& runtime,
+                            AsyncGenerationJob& job,
+                            std::shared_ptr<sd_dgl_result_t>& result,
+                            json& result_info,
+                            GenerationFailure& failure) {
+    auto source                 = std::move(job.dgl_source);
+    sd_dgl_result_t* raw_result = nullptr;
+    std::string error_message;
+    {
+        std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
+        update_job_progress(job, "executing", "dgl");
+        // A script shares the components of the loaded model; without a model it runs on a context of the
+        // server's settings that lasts for this job only.
+        const bool ran = runtime.keeper->with_context(
+            [&](sd_ctx_t* ctx) {
+                if (sd_dgl_run(sd_ctx_get_dgl_ctx(ctx), source.c_str(), nullptr, 0, &raw_result) == SD_STATUS_OK) {
+                    return true;
+                }
+                error_message = sd_dgl_error();
+                return false;
+            },
+            failure,
+            &runtime.models->base_context);
+        if (!ran) {
+            if (failure.code == SD_ERROR_NONE) {
+                failure.code    = SD_ERROR_UNKNOWN;
+                failure.message = error_message.empty() ? "the DGL script failed" : error_message;
+            }
+            return false;
+        }
+    }
+    result.reset(raw_result, sd_dgl_result_free);
+    result_info = describe_dgl_result(result.get());
+    return true;
+}
+
+void AsyncJobManager::record_context_job_completion(const SDSvrParams& params) {
+    const auto now = std::chrono::steady_clock::now();
+    if (params.weight_staging_ttl >= 0)
+        staging_deadline = now + std::chrono::seconds(params.weight_staging_ttl);
+    if (params.weight_residency_ttl >= 0)
+        residency_deadline = now + std::chrono::seconds(params.weight_residency_ttl);
+}
+
+static void wait_for_job(ServerRuntime& runtime, std::unique_lock<std::mutex>& lock) {
+    auto& manager       = *runtime.async_job_manager;
+    using Clock         = std::chrono::steady_clock;
+    const auto disabled = Clock::time_point::max();
+    while (!manager.stop && manager.queue.empty()) {
+        const auto deadline = std::min(manager.staging_deadline, manager.residency_deadline);
+        if (deadline == disabled || manager.synchronous_jobs != 0) {
+            manager.cv.wait(lock);
+            continue;
+        }
+        const auto now = Clock::now();
+        if (now < deadline) {
+            manager.cv.wait_until(lock, deadline);
+            continue;
+        }
+
+        // Keep job admission serialized with the idle check and the DGL release.
+        const bool unload  = now >= manager.residency_deadline;
+        sd_status_t status = SD_STATUS_OK;
+        const bool idle    = runtime.keeper->try_with_context([&](sd_ctx_t* ctx) {
+            auto* dgl = sd_ctx_get_dgl_ctx(ctx);
+            status    = unload ? sd_dgl_ctx_unload_models(dgl) : sd_dgl_ctx_release_staging(dgl);
+        });
+        if (!idle || status == SD_STATUS_BUSY) {
+            manager.cv.wait_for(lock, std::chrono::milliseconds(100));
+            continue;
+        }
+        if (status != SD_STATUS_OK)
+            LOG_WARN("idle weight release failed: %s", sd_dgl_error());
+        if (unload)
+            manager.residency_deadline = disabled;
+        manager.staging_deadline = disabled;
+    }
+}
+
 void async_job_worker(ServerRuntime& runtime) {
     AsyncJobManager& manager = *runtime.async_job_manager;
 
@@ -554,7 +841,7 @@ void async_job_worker(ServerRuntime& runtime) {
         std::shared_ptr<AsyncGenerationJob> job;
         {
             std::unique_lock<std::mutex> lock(manager.mutex);
-            manager.cv.wait(lock, [&]() { return manager.stop || !manager.queue.empty(); });
+            wait_for_job(runtime, lock);
 
             if (manager.stop && manager.queue.empty()) {
                 break;
@@ -585,6 +872,8 @@ void async_job_worker(ServerRuntime& runtime) {
         std::string output_media_mime_type;
         int output_frame_count = 0;
         int output_fps         = 0;
+        std::shared_ptr<sd_dgl_result_t> dgl_result;
+        json dgl_result_info;
         GenerationFailure failure;
         bool ok = false;
 
@@ -600,6 +889,8 @@ void async_job_worker(ServerRuntime& runtime) {
                                          output_fps,
                                          output_info,
                                          failure);
+            } else if (job->kind == AsyncJobKind::Dgl) {
+                ok = execute_dgl_job(runtime, *job, dgl_result, dgl_result_info, failure);
             } else {
                 fail_with(failure, "unsupported job kind");
             }
@@ -615,6 +906,7 @@ void async_job_worker(ServerRuntime& runtime) {
 
         {
             std::lock_guard<std::mutex> lock(manager.mutex);
+            manager.record_context_job_completion(*runtime.svr_params);
             auto it = manager.jobs.find(job->id);
             if (it == manager.jobs.end()) {
                 continue;
@@ -635,6 +927,8 @@ void async_job_worker(ServerRuntime& runtime) {
                 job->result_media_mime_type = std::move(output_media_mime_type);
                 job->result_frame_count     = output_frame_count;
                 job->result_fps             = output_fps;
+                job->dgl_result             = std::move(dgl_result);
+                job->dgl_result_info        = std::move(dgl_result_info);
                 job->error_code.clear();
                 job->error_message.clear();
             } else {

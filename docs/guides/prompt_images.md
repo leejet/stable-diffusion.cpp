@@ -75,8 +75,36 @@ within one prompt are loaded once and appear at every specified position.
 Resolved image pixels participate in conditioning-cache comparisons.
 
 Register or clear the callback while the context is idle. Different contexts
-have independent callbacks. Generation parameter structures and generation
-entry points are unchanged.
+have independent callbacks.
+
+## DGL
+The complete [MOSS-Image prompt-image example](../dgl/moss_image/moss-image-sft-inline-images.dgl)
+loads all components, binds the prompt image and saves the generated result.
+See the [DGL example collection](../dgl/README.md) for run instructions.
+
+Use the same markers with `encode_prompt`. DGL reads image paths relative to the
+working directory.
+LLM encoders accept `system` to customize the template while retaining image
+inputs. `raw=true` is the complete text-tokenizer-input path and cannot be
+combined with image/video bindings or `system`. See
+[prompt formatting](../dgl.md#independent-generation-components).
+
+```text
+condition = encode_prompt(encoder, "Draw <image:inputs/subject.png> in watercolor.")
+```
+
+To compose images inside the graph, pass a dictionary of tensors with keys
+matching the markers. Explicit bindings take precedence over opening a path.
+Only referenced bindings enter conditioning; additional dictionary entries do
+not add images. A referenced binding must contain a valid image tensor. If a
+name is absent, the normal file reader and permission callback still apply,
+including when the encoder has cached a previous result.
+
+```text
+subject = image::load("inputs/subject.png")
+condition = encode_prompt(encoder, "Draw <image:subject> in watercolor.",
+                          image_bindings = {subject = subject})
+```
 
 ## Server
 

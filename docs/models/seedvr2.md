@@ -1,18 +1,20 @@
 # SeedVR2
 
-SeedVR2 upscales images and videos with `-M vid_upscale`. Support is experimental.
+SeedVR2 upscales images and videos through dgl. Support is experimental.
+
+**Currently supported only through dgl.**
 
 ## Model files
 
-| Component | Weights and downloads | CLI option | Requirement |
+| Component | Weights and downloads | DGL usage | Requirement |
 | --- | --- | --- | --- |
-| Diffusion model | [ComfyUI SeedVR2](https://huggingface.co/Comfy-Org/SeedVR2) | `--diffusion-model` | Choose 3B or 7B Sharp below |
-| SeedVR2 VAE | `seedvr2_ema_vae_fp16.safetensors` from the same repository | `--vae` | Required; shared by both variants |
+| Diffusion model | [ComfyUI SeedVR2](https://huggingface.co/Comfy-Org/SeedVR2) | `load_dit` | Choose 3B or 7B Sharp below |
+| SeedVR2 VAE | `seedvr2_ema_vae_fp16.safetensors` from the same repository | `load_vae` | Required; shared by both variants |
 
 These [ComfyUI safetensors weights](https://huggingface.co/Comfy-Org/SeedVR2)
 load directly, without conversion or a separate text encoder:
 
-| Model | `--diffusion-model` | `--vae` |
+| Model | `load_dit` | `load_vae` |
 | --- | --- | --- |
 | 3B | `seedvr2_3b_int8_convrot.safetensors` | `seedvr2_ema_vae_fp16.safetensors` |
 | 7B Sharp | `seedvr2_7b_sharp_int8_convrot.safetensors` | `seedvr2_ema_vae_fp16.safetensors` |
@@ -21,103 +23,74 @@ Use the matching SeedVR2 VAE for either model. The 7B model requires more memory
 
 ## Usage
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
+### DGL
 
-### CLI
+| Example | Description |
+| --- | --- |
+| [Upscale an image](../dgl/seedvr2/seedvr2-3b-image-upscale.dgl) | Use the 3B diffusion model and matching SeedVR2 VAE. |
+| [Upscale a video](../dgl/seedvr2/seedvr2-3b-video-upscale.dgl) | Process frame windows and retain the source audio. |
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\seedvr2\seedvr2-3b-image-upscale.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/seedvr2/seedvr2-3b-image-upscale.dgl
+```
+
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+The [SeedVR2 script](../dgl/seedvr2/seedvr2-3b-video-upscale.dgl) loads the DiT and
+causal VAE independently. The script controls output resolution with
+bicubic resizing and pads each window to dimensions divisible by 16 and
+a frame count of `4n+1`. It uses the VAE posterior mode, the checkpoint's
+positive embedding, and a one-step Euler sampler. The condition contains
+the scaled VAE latent and a one-channel task mask. Each decoded window is
+cropped to its original frame count and target dimensions before stitching.
+The intermediate float tensors must fit the DGL tensor size limit of 256 MiB
+per tensor. For large output resolutions, use shorter pixel windows.
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 #### Upscale an image
 
-**Windows (PowerShell)**
-
-```powershell
-.\bin\Release\sd-cli.exe `
-  -M vid_upscale `
-  --diffusion-model ..\models\diffusion_models\seedvr2_3b_int8_convrot.safetensors `
-  --vae ..\models\vae\seedvr2_ema_vae_fp16.safetensors `
-  -i input.png `
-  --upscale-factor 2 `
-  -s 42 `
-  -o restored.png
-```
-
-**Linux/macOS**
-
-```sh
-./bin/sd-cli \
-  -M vid_upscale \
-  --diffusion-model ../models/diffusion_models/seedvr2_3b_int8_convrot.safetensors \
-  --vae ../models/vae/seedvr2_ema_vae_fp16.safetensors \
-  -i input.png \
-  --upscale-factor 2 \
-  -s 42 \
-  -o restored.png
-```
-
-`-i` / `--init-img` accepts a single image. Outputs can be PNG, JPEG, or WebP.
-No FPS or temporal chunk setting is needed for an image.
+The image script reads `input_path` and writes a PNG with `image::save`.
 
 #### Upscale a video
 
-Extract the video into numbered frames, then pass the frame directory:
+Set `input_path` to numbered frames or a video supported by `video::load`.
 
-**Windows (PowerShell)**
-
-```powershell
-mkdir frames
-ffmpeg -i input.mp4 -fps_mode passthrough frames\%06d.png
-.\bin\Release\sd-cli.exe `
-  -M vid_upscale `
-  --diffusion-model ..\models\diffusion_models\seedvr2_3b_int8_convrot.safetensors `
-  --vae ..\models\vae\seedvr2_ema_vae_fp16.safetensors `
-  --input-frames frames `
-  --upscale-factor 2 `
-  --fps 24 `
-  --vsr-temporal-chunk-size 1 `
-  -s 42 `
-  -o restored.avi
-```
-
-**Linux/macOS**
-
-```sh
-mkdir frames
-ffmpeg -i input.mp4 -fps_mode passthrough frames/%06d.png
-./bin/sd-cli \
-  -M vid_upscale \
-  --diffusion-model ../models/diffusion_models/seedvr2_3b_int8_convrot.safetensors \
-  --vae ../models/vae/seedvr2_ema_vae_fp16.safetensors \
-  --input-frames frames \
-  --upscale-factor 2 \
-  --fps 24 \
-  --vsr-temporal-chunk-size 1 \
-  -s 42 \
-  -o restored.avi
-```
-
-Set `--fps` to the source video's frame rate; 24 is only the example above.
-Frames are read in filename order. Use either `-i` or `--input-frames`, not both.
-
-Video outputs support AVI, WebM, and animated WebP. To save individual frames,
-use an output pattern such as `-o restored/%06d.png`.
+Set `fps` to the desired frame rate; the example uses 24. Frame directories
+are read in filename order. Video output is AVI, and the script passes the
+source audio separately to `video::save`.
 
 ## Notes and limitations
 
-- `--upscale-factor` is required and must be a positive integer. Output width
-  and height are exactly the input dimensions multiplied by this value.
-- `--vsr-temporal-chunk-size` controls how many video frames are processed
-  together. Valid values are 1, 5, 9, 13, and so on; the default is 5. A value of
-  1 processes each frame independently and uses less memory. Larger values use
-  neighboring frames but require more memory. Chunk boundaries may be visible.
-- Frame count and order are preserved, including a shorter final chunk. Audio
-  is not copied to the output.
-- If you run out of GPU memory, try `--vsr-temporal-chunk-size 1`. A five-frame
-  chunk at 1728x960 output resolution exceeded 24 GB of GPU memory in testing.
-- `--flash-attn auto` and `--conv-direct auto` are enabled by default. See
-  [backend selection](../guides/backend.md) to choose a device or weight placement.
-- SeedVR2 does not use sampler, scheduler, or step settings.
-  `--vsr-window-size` is a RelayVSR option and does not affect SeedVR2.
-
-3B has been tested on CUDA and CPU; 7B has been tested on CUDA with small inputs.
-Other backends have not been tested with this integration.
+- `factor` is a positive integer scale applied to pixel dimensions before
+  VAE encoding. Both 3B and 7B Sharp use the matching SeedVR2 VAE.
+- `window_size` controls processing granularity. The video example uses 1 to
+  process each frame independently and reduce memory; 5, 9, 13, … include
+  temporal context at higher memory cost. Each window is padded to `4n+1`
+  frames and cropped after decoding. Chunk boundaries may be visible.
+- Sampling uses the checkpoint's positive embedding and an explicit one-step
+  Euler flow; no text encoder is needed.
+- Input/output order and frame count are preserved. Input, output and
+  intermediate tensors must fit the 256 MiB per-tensor limit. For larger
+  output frames, reduce window size; long clips need incremental I/O.
+- The existing DGL workflow was tested with 3B and 7B Sharp on Vulkan. The
+  documentation examples in this collection are also statically checked;
+  this does not establish image quality or throughput on every backend.
 
 Model reference: [ByteDance-Seed/SeedVR](https://github.com/ByteDance-Seed/SeedVR).

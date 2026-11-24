@@ -450,11 +450,6 @@ struct ControlNet : public GGMLRunner {
     std::vector<ggml_tensor*> control_outputs_ggml;
     ggml_tensor* guided_hint_output_ggml = nullptr;
     std::vector<sd::Tensor<float>> controls;
-    bool guided_hint_cached = false;
-
-    static const char* guided_hint_cache_name() {
-        return "controlnet.guided_hint";
-    }
 
     bool is_union() const {
         return config.num_control_types > 0;
@@ -462,27 +457,33 @@ struct ControlNet : public GGMLRunner {
 
     // set the kind of the control image of the next generations, false (after saying why) when it
     // can't be used: a union model needs one of the types it was trained on
-    bool set_control_type(sd_control_type_t type) {
+    std::optional<int> control_index(sd_control_type_t type) const {
         if (!is_union()) {
             if (type != SD_CONTROL_TYPE_NONE) {
                 LOG_WARN("control type '%s' ignored: the ControlNet is not a union model", sd_control_type_name(type));
             }
-            control_type_index = -1;
-            return true;
+            return -1;
         }
         if (type == SD_CONTROL_TYPE_NONE) {
             LOG_ERROR("this ControlNet is a union model and needs a control type (openpose, depth, scribble, canny, normal, segment%s)",
                       config.num_control_types > 6 ? ", tile, repaint" : "");
-            return false;
+            return std::nullopt;
         }
         // the types of a union model, in training order: the enum without NONE
         const int index = static_cast<int>(type) - 1;
         if (index < 0 || index >= config.num_control_types) {
             LOG_ERROR("control type '%s' is not supported by this ControlNet Union (it has %d control types)",
                       sd_control_type_name(type), config.num_control_types);
-            return false;
+            return std::nullopt;
         }
-        control_type_index = index;
+        return index;
+    }
+
+    bool set_control_type(sd_control_type_t type) {
+        const auto index = control_index(type);
+        if (!index)
+            return false;
+        control_type_index = *index;
         return true;
     }
 
@@ -505,7 +506,6 @@ struct ControlNet : public GGMLRunner {
 
     void free_control_ctx() {
         guided_hint_output_ggml = nullptr;
-        guided_hint_cached      = false;
         control_outputs_ggml.clear();
         controls.clear();
         free_cache_ctx_and_buffer();
@@ -522,8 +522,10 @@ struct ControlNet : public GGMLRunner {
     ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor,
                              const sd::Tensor<float>& hint_tensor,
                              const sd::Tensor<float>& timesteps_tensor,
-                             const sd::Tensor<float>& context_tensor = {},
-                             const sd::Tensor<float>& y_tensor       = {}) {
+                             const sd::Tensor<float>& context_tensor,
+                             const sd::Tensor<float>& y_tensor,
+                             const std::string& hint_cache_key,
+                             int type_index) {
         ggml_cgraph* gf = new_graph_custom(CONTROL_NET_GRAPH_SIZE);
 
         ggml_tensor* x         = make_input(x_tensor);
@@ -535,13 +537,7 @@ struct ControlNet : public GGMLRunner {
         guided_hint_output_ggml = nullptr;
         control_outputs_ggml.clear();
 
-        ggml_tensor* guided_hint_input = nullptr;
-        if (guided_hint_cached) {
-            guided_hint_input = get_cache_tensor_by_name(guided_hint_cache_name());
-            if (guided_hint_input == nullptr) {
-                guided_hint_cached = false;
-            }
-        }
+        ggml_tensor* guided_hint_input = get_cache_tensor_by_name(hint_cache_key);
         if (guided_hint_input == nullptr) {
             hint = make_input(hint_tensor);
         }
@@ -551,7 +547,7 @@ struct ControlNet : public GGMLRunner {
             const int64_t batch = x_tensor.dim() >= 4 ? x_tensor.shape()[3] : 1;
             control_type_tensor = sd::zeros<float>({config.num_control_types * batch});
             for (int64_t i = 0; i < batch; i++) {
-                control_type_tensor[i * config.num_control_types + control_type_index] = 1.f;
+                control_type_tensor[i * config.num_control_types + type_index] = 1.f;
             }
             control_types = make_input(control_type_tensor);
         }
@@ -566,12 +562,12 @@ struct ControlNet : public GGMLRunner {
                                         context,
                                         y,
                                         control_types,
-                                        control_type_index);
+                                        type_index);
 
         if (guided_hint_input == nullptr && !outs.empty()) {
             guided_hint_output_ggml = outs[0];
             ggml_set_output(guided_hint_output_ggml);
-            runner_ctx.persist_cache_tensor(guided_hint_cache_name(), guided_hint_output_ggml);
+            runner_ctx.persist_cache_tensor(hint_cache_key, guided_hint_output_ggml);
         }
 
         control_outputs_ggml.reserve(outs.size() > 0 ? outs.size() - 1 : 0);
@@ -589,18 +585,21 @@ struct ControlNet : public GGMLRunner {
                                                           const sd::Tensor<float>& x,
                                                           const sd::Tensor<float>& hint,
                                                           const sd::Tensor<float>& timesteps,
-                                                          const sd::Tensor<float>& context = {},
-                                                          const sd::Tensor<float>& y       = {}) {
+                                                          const sd::Tensor<float>& context      = {},
+                                                          const sd::Tensor<float>& y            = {},
+                                                          const std::string& hint_cache_key     = "controlnet.guided_hint",
+                                                          std::optional<sd_control_type_t> type = {}) {
         // x: [N, in_channels, h, w]
         // timesteps: [N, ]
         // context: [N, max_position, hidden_size]([N, 77, 768]) or [1, max_position, hidden_size]
         // y: [N, adm_in_channels] or [1, adm_in_channels]
-        if (is_union() && control_type_index < 0) {
+        const auto index = type ? control_index(*type) : std::optional<int>(control_type_index);
+        if (!index || (is_union() && *index < 0)) {
             LOG_ERROR("ControlNet Union: no control type set");
             return std::nullopt;
         }
         auto get_graph = [&]() -> ggml_cgraph* {
-            return build_graph(x, hint, timesteps, context, y);
+            return build_graph(x, hint, timesteps, context, y, hint_cache_key, *index);
         };
 
         auto read_outputs = [&]() {
@@ -622,7 +621,6 @@ struct ControlNet : public GGMLRunner {
             controls.clear();
             return std::nullopt;
         }
-        guided_hint_cached = get_cache_tensor_by_name(guided_hint_cache_name()) != nullptr;
         return controls;
     }
 };

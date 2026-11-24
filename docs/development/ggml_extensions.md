@@ -172,6 +172,14 @@ CPU kernels and fusion rules live in `src/core/cpu/`, with registration collecte
 in `cpu/registration.cpp`. CUDA-style and Vulkan implementations live in their
 respective backend directories.
 
+`sd.i8_lora_merge.v1` takes an INT8 weight, its F32 scale tensor, and an F32 LoRA
+delta. It rotates the delta when the checkpoint uses convrot, adds it in the
+stored weight's basis, and packs a status word, the new scales, and the INT8
+weight into one tensor. Graph copy nodes use integer views to write both
+ranges into the cached weight buffers and retain only the status word for
+finalization. The views use I32 for aligned ranges and I8 for byte copies.
+Layouts without native copy support write back during graph finalization.
+
 `src/core/metal/int8.mm` registers Metal INT8 linear and ConvRot kernels. Their
 Metal source is embedded at build time and compiled for the selected device
 during registration. The public `ggml-ext-metal.h` services expose borrowed

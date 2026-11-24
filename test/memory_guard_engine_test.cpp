@@ -34,7 +34,7 @@ struct ScriptedManager : DeviceResidencyManager {
     bool prefetch_enabled() const override { return false; }
     void register_runtime_owner(uintptr_t) override {}
     void remove_runtime_owner(uintptr_t) override {}
-    bool fits_compute_backend_capacity(const DeviceMemoryRequest&, const std::vector<ggml_tensor*>&) const override {
+    bool fits_compute_backend_capacity(const DeviceMemoryRequest&, const std::vector<ggml_tensor*>&, bool) const override {
         return true;
     }
     bool assign_compute_backend(const std::vector<ggml_tensor*>&, ggml_backend_t) override { return true; }

@@ -39,6 +39,7 @@ struct SDBackendHandleDeleter {
 };
 
 using SDBackendHandle = std::unique_ptr<struct ggml_backend, SDBackendHandleDeleter>;
+using SDBackendPool   = std::unordered_map<std::string, SDBackendHandle>;
 
 enum class SDSplitMode {
     LAYER,
@@ -50,10 +51,13 @@ private:
     SDBackendAssignment runtime_assignment_;
     SDBackendAssignment params_assignment_;
     SDBackendAssignment split_mode_assignment_;
-    std::unordered_map<std::string, SDBackendHandle> backends_;
+    SDBackendPool backends_;
+    std::shared_ptr<SDBackendPool> shared_backends_;
 
 public:
     SDBackendManager() = default;
+    explicit SDBackendManager(std::shared_ptr<SDBackendPool> backends)
+        : shared_backends_(std::move(backends)) {}
     ~SDBackendManager();
 
     SDBackendManager(const SDBackendManager&)            = delete;
@@ -69,6 +73,7 @@ public:
     ggml_backend_t params_backend(SDBackendModule module);
 
     std::vector<ggml_backend_t> runtime_backends(SDBackendModule module);
+    ggml_backend_t existing_backend(ggml_backend_dev_t device) const;
 
     SDSplitMode split_mode(SDBackendModule module) const;
     ggml_backend_buffer_type_t split_buffer_type(ggml_backend_t backend,

@@ -37,10 +37,13 @@ measurement pair; it cannot interrupt an in-flight backend operation.
 Only use `candidate_faster` when `completed` is true. On incomplete probes,
 `error` reports why comparison failed and the timing totals may be partial.
 The caller handles logging, known architecture rules, fallback policy, and
-context-lifetime caching. Keep caches separate by operation (or key a shared
-cache by both operation and backend); an attention result must not select a
-convolution implementation. If shapes or settings vary within one context,
-include them in the corresponding cache key as well.
+context-lifetime caching. DGL uses one `BackendProbeCache` shared by all models
+in an execution context, including LoRA variants and models loaded by later
+programs. It caches both enabled and disabled decisions by operation and compute
+backend; CPU attention additionally keys the effective thread count. GPU results
+survive changes to the context's thread count. The cache serializes first-time
+probes and their decision logs. Explicit operator `on` and `off` bypass the cache.
+If probe shapes or other relevant settings become variable, add them to the key.
 
 Convolution results are cached separately for 2D and 3D, once per compute backend
 in the context, just like attention results. Each probe logs its backend, decision,

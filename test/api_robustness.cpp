@@ -6,22 +6,22 @@
 //       build/ggml/src/libggml-base.a <platform libs> -o api_robustness
 // Run: ./api_robustness ; exit code 0 = all checks passed.
 #include <cstdio>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <thread>
 #include <vector>
 
 #include "stable-diffusion.h"
 
 static int failures = 0;
-#define CHECK(cond, msg)                  \
-    do {                                  \
-        if (!(cond)) {                    \
-            printf("FAIL: %s\n", msg);    \
-            failures++;                   \
-        } else {                          \
-            printf("ok:   %s\n", msg);    \
-        }                                 \
+#define CHECK(cond, msg)               \
+    do {                               \
+        if (!(cond)) {                 \
+            printf("FAIL: %s\n", msg); \
+            failures++;                \
+        } else {                       \
+            printf("ok:   %s\n", msg); \
+        }                              \
     } while (0)
 
 int main() {
@@ -117,12 +117,21 @@ int main() {
           "a small message buffer is truncated and terminated");
     CHECK(sd_get_last_error_code(message, 0) == SD_ERROR_INVALID_ARGUMENT, "a zero-size buffer is accepted");
 
+    // The weights load at the first generation, so a missing model file is reported there.
     sd_ctx_opt_t* missing = sd_ctx_opt_create();
     sd_opt_set_string(missing, "model_path", "/nonexistent/diffusione/model.safetensors");
-    CHECK(sd_ctx_create(missing, &ctx) != SD_STATUS_OK && ctx == nullptr, "sd_ctx_create(missing model) fails");
+    CHECK(sd_ctx_create(missing, &ctx) == SD_STATUS_OK && ctx != nullptr, "sd_ctx_create does not read the model file yet");
     sd_opt_free(missing);
+    CHECK(ctx != nullptr && !sd_ctx_supports_image_generation(ctx), "a missing model supports no generation");
+    sd_img_gen_opt_t* request   = sd_img_gen_opt_create();
+    sd_result_t* missing_result = reinterpret_cast<sd_result_t*>(0x1);
+    CHECK(request != nullptr && sd_opt_set_string(request, "prompt", "a cat") == SD_STATUS_OK &&
+              sd_generate_image(ctx, request, &missing_result) != SD_STATUS_OK && missing_result == nullptr,
+          "generating with a missing model fails and clears the result");
     CHECK(sd_get_last_error_code(message, sizeof(message)) == SD_ERROR_MODEL_FILE && strstr(message, "nonexistent") != nullptr,
           "a missing model is a model file error that names the file");
+    sd_opt_free(request);
+    sd_ctx_free(ctx);
 
     sd_result_t* result = reinterpret_cast<sd_result_t*>(0x1);
     CHECK(sd_generate_image(nullptr, nullptr, &result) != SD_STATUS_OK && result == nullptr,

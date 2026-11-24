@@ -1,11 +1,32 @@
 #include "core/ggml_extensions.h"
 
+#include <cmath>
+
+void sd_ggml_rotate_convrot(float* values, int64_t width, int group) {
+    if (group <= 1)
+        return;
+    const float scale = 1.f / std::sqrt(static_cast<float>(group));
+    for (int64_t i = 0; i < width; ++i)
+        values[i] *= scale;
+    for (int stride = 1; stride < group; stride *= 4) {
+        for (int64_t base = 0; base < width; base += 4 * stride) {
+            for (int j = 0; j < stride; ++j) {
+                const int64_t i = base + j;
+                const float a = values[i], b = values[i + stride], c = values[i + 2 * stride], d = values[i + 3 * stride];
+                values[i]              = a + b + c - d;
+                values[i + stride]     = a + b - c + d;
+                values[i + 2 * stride] = a - b + c + d;
+                values[i + 3 * stride] = -a + b + c + d;
+            }
+        }
+    }
+}
+
 #ifndef SD_USE_UPSTREAM_GGML
 #include "core/cpu/registration.h"
 #include "ggml-ext.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstring>
 #include <mutex>
 #include <unordered_set>
@@ -268,6 +289,54 @@ bool sd_ggml_convrot_describe(const ggml_tensor* node, int* group) {
         return false;
     ggml_ext_tensor_desc output;
     return convrot_infer(node->src, 1, group, &output) && output.type == node->type && !std::memcmp(output.ne, node->ne, sizeof(output.ne));
+}
+
+static bool i8_lora_merge_infer(ggml_tensor* const* inputs, int count, const void* attributes, ggml_ext_tensor_desc* output) {
+    if (count != 3)
+        return false;
+    int32_t group;
+    std::memcpy(&group, attributes, sizeof(group));
+    const auto* weight = inputs[0];
+    const auto* scale  = inputs[1];
+    const auto* diff   = inputs[2];
+    const int64_t k = weight->ne[0], rows = weight->ne[1];
+    if (weight->type != GGML_TYPE_I8 || weight->ne[2] != 1 || weight->ne[3] != 1 ||
+        k <= 0 || rows <= 0 || k > (i8_size_limit / rows - int64_t(sizeof(SDI8LoRARowStats))) / int64_t(sizeof(float)) ||
+        diff->type != GGML_TYPE_F32 || !ggml_are_same_shape(weight, diff) ||
+        scale->type != GGML_TYPE_F32 || (ggml_nelements(scale) != 1 && ggml_nelements(scale) != rows) ||
+        !ggml_is_contiguous(weight) || !ggml_is_contiguous(diff) || !ggml_is_contiguous(scale) ||
+        (group != 0 && (!sd_ggml_valid_convrot_group(group) || k % group != 0)))
+        return false;
+
+    const SDI8LoRAMerge op = {weight, scale, diff, group};
+    const size_t bytes     = op.weight_offset() + ggml_nbytes(weight);
+    output->type           = GGML_TYPE_I8;
+    output->ne[0]          = GGML_PAD(bytes, sizeof(uint32_t));
+    output->ne[1] = output->ne[2] = output->ne[3] = 1;
+    return true;
+}
+
+ggml_ext_op_t sd_ggml_i8_lora_merge_op() {
+    static const auto op = [] {
+        const ggml_ext_op_desc desc = {GGML_EXT_ABI_VERSION, "sd.i8_lora_merge.v1", sizeof(int32_t), i8_lora_merge_infer};
+        auto result                 = ggml_ext_register_op(&desc);
+        GGML_ASSERT(result);
+        return result;
+    }();
+    return op;
+}
+
+bool sd_ggml_i8_lora_merge_describe(const ggml_tensor* node, SDI8LoRAMerge* op) {
+    if (!node || ggml_ext_op_get(node) != sd_ggml_i8_lora_merge_op())
+        return false;
+    const void* attributes = ggml_ext_op_attributes(node);
+    ggml_ext_tensor_desc output;
+    if (!i8_lora_merge_infer(node->src, 3, attributes, &output) || output.type != node->type ||
+        std::memcmp(output.ne, node->ne, sizeof(output.ne)) != 0 || !ggml_is_contiguous(node))
+        return false;
+    *op = {node->src[0], node->src[1], node->src[2], 0};
+    std::memcpy(&op->group, attributes, sizeof(op->group));
+    return true;
 }
 
 static bool w4_infer(ggml_tensor* const* inputs, int count, const void* attributes, ggml_ext_tensor_desc* out) {

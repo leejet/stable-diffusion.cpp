@@ -155,18 +155,20 @@ void send_generation_failure(httplib::Response& res, const GenerationFailure& fa
     res.set_content(safe_json_dump(body), "application/json");
 }
 
+SDCtxPtr create_context_from_params(const SDContextParams& params, GenerationFailure& failure) {
+    // to_context_opt() settles the backend assignments, so it works on a copy.
+    SDContextParams settled = params;
+    SDOptPtr options        = settled.to_context_opt();
+    SDCtxPtr ctx(options ? create_sd_context(options) : nullptr);
+    if (ctx == nullptr) {
+        failure = capture_failure();
+    }
+    return ctx;
+}
+
 static ContextKeeper::Hooks with_defaults(ContextKeeper::Hooks hooks) {
     if (!hooks.create_context) {
-        hooks.create_context = [](const SDContextParams& params, GenerationFailure& failure) {
-            // to_context_opt() settles the backend assignments, so it works on a copy.
-            SDContextParams settled = params;
-            SDOptPtr options        = settled.to_context_opt();
-            SDCtxPtr ctx(options ? create_sd_context(options) : nullptr);
-            if (ctx == nullptr) {
-                failure = capture_failure();
-            }
-            return ctx;
-        };
+        hooks.create_context = create_context_from_params;
     }
     if (!hooks.read_failure) {
         hooks.read_failure = capture_failure;
@@ -860,6 +862,41 @@ bool ContextKeeper::run(const Attempt& attempt, GenerationFailure& failure, cons
         }
         stepped_down = true;
     }
+}
+
+bool ContextKeeper::with_context(const std::function<bool(sd_ctx_t*)>& use,
+                                 GenerationFailure& failure,
+                                 const SDContextParams* fallback_params) {
+    failure = GenerationFailure();
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (ctx_ != nullptr) {
+        return use(ctx_.get());
+    }
+    if (fallback_params == nullptr) {
+        failure.code    = SD_ERROR_UNKNOWN;
+        failure.message = "no model is loaded";
+        return false;
+    }
+    SDCtxPtr ctx = hooks_.create_context(*fallback_params, failure);
+    if (ctx == nullptr) {
+        if (failure.code == SD_ERROR_NONE) {
+            failure.code    = SD_ERROR_UNKNOWN;
+            failure.message = "the context could not be created";
+        }
+        return false;
+    }
+    return use(ctx.get());
+}
+
+bool ContextKeeper::try_with_context(const std::function<void(sd_ctx_t*)>& use) {
+    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return false;
+    }
+    if (ctx_ != nullptr) {
+        use(ctx_.get());
+    }
+    return true;
 }
 
 ContextKeeper::BackendChoice ContextKeeper::backend_choice() const {

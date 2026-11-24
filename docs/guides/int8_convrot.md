@@ -1,5 +1,9 @@
 # INT8 Convrot Safetensors
 
+DGL versions of the generation examples are linked below. Edit each script's
+`var` block and follow the [DGL run instructions](../dgl/README.md).
+
+
 sd.cpp can load and execute ComfyUI `int8_tensorwise` safetensors with `convrot` metadata directly. The stored INT8 weights are not converted to another weight type at load time.
 
 This uses sd.cpp's INT8 tensorwise/convrot operators through the patched GGML
@@ -99,7 +103,18 @@ The packed runtime activation tensor contains the I8 activation rows and their f
 - MUSA shares the CUDA-style H256 activation kernels. INT8 GEMM falls back to CPU because the MUSA backend does not advertise INT8 BLAS support.
 - Vulkan provides H256 activation quantization and INT8 matrix multiplication when the build and device support accelerated packed INT8 dot products. Unsupported configurations and GPU backends without these kernels use the backend scheduler to fall back to CPU.
 
-LoRA adapters are applied at runtime without modifying the INT8 weights. The INT8 convrot path computes the base linear output, while LoRA, LoHa, LoKr, and raw weight-difference adapters compute their output corrections from the original, unrotated activation and add them to the base output. `--lora-apply-mode auto` selects this path for models containing INT8 tensorwise weights. If `immediately` is requested, sd.cpp falls back to runtime application because merging an adapter would require dequantizing and rotating its weight update, then recalculating the per-row scales and requantizing the result.
+`--lora-apply-mode auto` selects immediate merging for INT8 tensorwise models
+on the compute backend without row splitting. Use `--lora-apply-mode at_runtime`
+to compute each adapter's correction from the original activation and add it to
+the INT8 linear output.
+
+Immediate mode merges an adapter into INT8 tensorwise weights on first use.
+For convrot weights, sd.cpp rotates the adapter update before adding it to the
+dequantized weights. It then recalculates the weight
+scales and requantizes the result to INT8. The merge runs on the selected
+backend when it supports the operation, with ggml's usual CPU fallback. The
+additional quantization step can change the output compared with runtime
+application.
 
 The shared CUDA/HIP/MUSA convrot activation paths support H64 and H256. Vulkan also supports H64 activation quantization; its INT8 matrix multiplication path currently requires H256.
 

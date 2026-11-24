@@ -2,6 +2,7 @@
 #define __SD_MODEL_DIFFUSION_SEEDVR2_HPP__
 
 #include "model/common/vsr.hpp"
+#include "model/diffusion/model.hpp"
 
 namespace SeedVR2 {
 
@@ -272,10 +273,10 @@ namespace SeedVR2 {
                 blocks["vid_out_ada"]  = std::make_shared<AdaSingle>(config.dim, true);
             }
         }
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* input, ggml_tensor* timestep, const std::vector<WindowPlan>& plans, VSR::GraphInputs& inputs) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* input, ggml_tensor* timestep, const std::vector<WindowPlan>& plans, VSR::GraphInputs& inputs, ggml_tensor* context) {
             auto linear = [&](const std::string& name, ggml_tensor* x) { return std::dynamic_pointer_cast<Linear>(blocks[name])->forward(ctx, x); };
             auto vid    = linear("vid_in.proj", input);
-            auto txt    = linear("txt_in", params["positive_conditioning"]);
+            auto txt    = linear("txt_in", context ? context : params["positive_conditioning"]);
             auto emb    = linear("emb_in.proj_in", timestep);
             emb         = linear("emb_in.proj_hid", ggml_silu(ctx->ggml_ctx, emb));
             emb         = linear("emb_in.proj_out", ggml_silu(ctx->ggml_ctx, emb));
@@ -293,24 +294,39 @@ namespace SeedVR2 {
         }
     };
 
-    struct SeedVR2Runner : GGMLRunner {
+    struct SeedVR2Runner : DiffusionModelRunner {
         SeedVR2Config config;
         NaDiT model;
         sd::Tensor<float> timestep;
 
-        SeedVR2Runner(ggml_backend_t backend, const String2TensorStorage& weights, std::shared_ptr<DeviceResidencyManager> manager)
-            : GGMLRunner(backend, manager), config(SeedVR2Config::detect_from_weights(weights, "diffusion")), model(config), timestep({256}) {
-            model.init(params_ctx, weights, "diffusion");
-            for (int i = 0; i < 128; ++i) {
-                const double angle       = 1000.0 * std::pow(10000.0, -double(i) / 128);
-                timestep.data()[i]       = float(std::sin(angle));
-                timestep.data()[i + 128] = float(std::cos(angle));
-            }
+        SeedVR2Runner(ggml_backend_t backend, const String2TensorStorage& weights, std::shared_ptr<RunnerWeightManager> manager, const std::string& prefix = "diffusion")
+            : DiffusionModelRunner(backend, prefix, manager),
+              config(SeedVR2Config::detect_from_weights(weights, prefix)),
+              model(config),
+              timestep(timestep_embedding(1000.0)) {
+            model.init(params_ctx, weights, prefix);
         }
-        std::string get_desc() override { return "SeedVR2 DiT"; }
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) { model.get_param_tensors(tensors, "diffusion"); }
 
-        sd::Tensor<float> compute(int n_threads, const sd::Tensor<float>& input, int width, int height, int frames) {
+        static sd::Tensor<float> timestep_embedding(double time) {
+            sd::Tensor<float> embedding({256});
+            for (int i = 0; i < 128; ++i) {
+                const double angle = time * std::pow(10000.0, -double(i) / 128);
+                embedding[i]       = float(std::sin(angle));
+                embedding[i + 128] = float(std::cos(angle));
+            }
+            return embedding;
+        }
+
+        std::string get_desc() override { return "SeedVR2 DiT"; }
+        int get_patch_size() const override { return 2; }
+        using DiffusionModelRunner::get_param_tensors;
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
+            model.get_param_tensors(tensors, prefix);
+        }
+        std::string positive_embedding_weight() const { return prefix + ".positive_conditioning"; }
+
+        sd::Tensor<float> compute(int n_threads, const sd::Tensor<float>& input, int width, int height, int frames, const sd::Tensor<float>* context = nullptr, double time = 1000.0) {
+            const auto embedding = time == 1000.0 ? timestep : timestep_embedding(time);
             std::vector<WindowPlan> plans;
             for (bool shifted : {false, true})
                 plans.emplace_back(width, height, frames, config.text_len, shifted, config.swiglu);
@@ -319,12 +335,44 @@ namespace SeedVR2 {
                 inputs.begin_graph();
                 auto gf  = new_graph_custom(MAX_GRAPH_SIZE);
                 auto ctx = get_context(gf);
-                auto out = model.forward(&ctx, make_input(input), make_input(timestep), plans, inputs);
+                auto out = model.forward(&ctx, make_input(input), make_input(embedding), plans, inputs, context ? make_input(*context) : nullptr);
                 ggml_build_forward_expand(gf, out);
                 return gf;
             };
             auto output = GGMLRunner::compute(graph, n_threads);
-            return output ? *output : sd::Tensor<float>();
+            return take_or_empty(std::move(output));
+        }
+
+        sd::Tensor<float> compute(int n_threads, const DiffusionParams& params) override {
+            const auto& x         = tensor_or_empty(params.x);
+            const auto& condition = tensor_or_empty(params.c_concat);
+            const auto& times     = tensor_or_empty(params.timesteps);
+            const auto& context   = tensor_or_empty(params.context);
+            if (x.empty() || (x.dim() != 4 && x.dim() != 5) || x.shape().back() != 1 ||
+                x.shape()[0] % 2 || x.shape()[1] % 2 || x.shape()[x.dim() - 2] != 16 ||
+                times.numel() != 1 || !std::isfinite(times[0])) {
+                throw std::runtime_error("SeedVR2 requires a single 16-channel latent, even width and height, and one timestep");
+            }
+            const auto channels = x.dim() - 2;
+            const auto w = x.shape()[0], h = x.shape()[1], t = x.dim() == 5 ? x.shape()[2] : 1;
+            auto expected_condition      = x.shape();
+            expected_condition[channels] = 17;
+            if (condition.shape() != expected_condition)
+                throw std::runtime_error("SeedVR2 concat conditioning requires 16 latent channels and a one-channel task mask");
+            if (context.shape() != std::vector<int64_t>{config.text_dim, config.text_len})
+                throw std::runtime_error("SeedVR2 requires a matching crossattn embedding");
+
+            auto input = sd::ops::concat(x, condition, channels);
+            input.reshape_({2, w / 2, 2, h / 2, t, 33});
+            input.permute_({5, 0, 2, 1, 3, 4});
+            input.reshape_({132, (w / 2) * (h / 2) * t});
+            auto output = compute(n_threads, input, int(w / 2), int(h / 2), int(t), &context, times[0]);
+            if (output.empty())
+                return {};
+            output.reshape_({16, 2, 2, w / 2, h / 2, t});
+            output.permute_({1, 3, 2, 4, 5, 0});
+            output.reshape_(x.shape());
+            return output;
         }
     };
 }

@@ -1,0 +1,55 @@
+# version: 0.0.0
+# docs/models/sd.md — SDXL
+
+var {
+    model_path = "../models/checkpoints/sd_xl_base_1.0.safetensors"
+    vae_path = "../models/vae/sdxl_vae-fp16-fix.safetensors"
+
+    output_path = "output.png"
+
+    prompt = "a lovely cat"
+    negative_prompt = ""
+    zero_negative = true
+
+    seed = 42
+    rng_type = "cuda"
+    width = 1024
+    height = 1024
+
+    steps = 20
+    cfg_scale = 7.0
+    method = "euler_a"
+    scheduler = "discrete"
+}
+
+fn sdxl_zero_text(cond) {
+    zeroed = zero_out(cond, fields = ["crossattn"])
+    pooled_zeros = tensor::zeros_like(cond.vector[:1280])
+    adm = tensor::replace_slice(cond.vector, pooled_zeros, axis = 0, start = 0)
+    return {crossattn = zeroed.crossattn, vector = adm}
+}
+
+fn main() {
+    model = load_unet(model_path, family = "sdxl")
+    text = load_text_encoder(model_path, family = "sdxl")
+    vae = load_vae(vae_path, family = "sdxl", conv_scale = 0.03125)
+
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    positive = encode_prompt(text, prompt, width = width, height = height)
+    negative_text = encode_prompt(text, negative_prompt, width = width, height = height)
+    negative = if zero_negative {
+        sdxl_zero_text(negative_text)
+    } else {
+        {crossattn = negative_text.crossattn, vector = negative_text.vector}
+    }
+    pos = predictor(model, positive)
+    neg = predictor(model, negative)
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    image = vae_decode(vae, unet_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

@@ -43,7 +43,7 @@
   "video_constraints": {
     "frame_step": 8,
     "frame_offset": 1,
-    "frame_rounding": "floor",
+    "frame_rounding": "ceil",
     "min_frames": 1
   },
   "defaults": {

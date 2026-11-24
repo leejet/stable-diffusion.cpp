@@ -1,5 +1,8 @@
 # C API
 
+Handwritten equivalents of the generated image/video programs are available in
+the [DGL documentation examples](../dgl/README.md).
+
 Use purpose-specific opaque options for model loading, generation and
 postprocessing, and
 opaque `sd_result_t` objects to read generated outputs. The library allocates and
@@ -42,7 +45,7 @@ int generate(const char* model_path) {
     for (size_t i = 0; i < sd_result_get_image_count(result); ++i) {
         const sd_tensor_t* image = sd_result_get_image(result, i);
         const char* info = sd_result_get_generation_info(result, i);
-        /* Read pixels with sd_tensor_data(image), and consume the UTF-8 JSON info. */
+        /* Read pixels with sd_tensor_data(image), and consume the UTF-8 DGL source. */
         (void) image;
         (void) info;
     }
@@ -58,6 +61,30 @@ cleanup:
     return rc;
 }
 ```
+
+`sd_ctx_create()` retains the model configuration. The first generation call
+loads the components it needs and reports any loading errors through its return
+status. Weight residency follows `eager_load` and the memory budgets. Capability
+queries can probe the model family and reuse the detected type.
+
+Use `sd_ctx_set_model_options()` on an idle context to replace its model
+configuration. It copies the options and resets model detection. Later
+`sd_generate_image()` and `sd_generate_video()` calls use the new configuration.
+Use `sd_ctx_set_model_options_for_generation()` to probe the candidate against
+`SD_RESULT_IMAGE` or `SD_RESULT_VIDEO` before applying it. A failed check
+preserves the current configuration. Model setters return `SD_STATUS_BUSY`
+while model probing is in progress, including from file-access callbacks.
+The execution settings and component cache continue to serve generation and the
+DGL context borrowed through `sd_ctx_get_dgl_ctx()`. The borrowed pointer stays
+valid until `sd_ctx_free()`. Run scripts and generation calls one at a time. Set
+file-access callbacks for generated programs and scripts through
+`sd_ctx_set_file_access_callback()` and `sd_dgl_ctx_set_file_access_callback()`
+respectively.
+
+Use `sd_dgl_ctx_release_staging()` to release idle GPU staging copies backed by
+RAM weights. Use `sd_dgl_ctx_unload_models()` to release cached model components
+and reload them on demand. Both return `SD_STATUS_BUSY` while the context is
+running a script or generation.
 
 Use `sd_generate_video()` with options from `sd_vid_gen_opt_create()` to generate video. Its result
 exposes frames through the same image accessors, optional audio through
@@ -87,10 +114,6 @@ are required and set to `NULL` on failure. All outputs use `sd_result_t`.
 | `sd_vid_gen_opt_create()` | `sd_generate_video()` |
 | `sd_upscaler_opt_create()` | `sd_upscaler_create()` |
 | `sd_upscale_opt_create()` | `sd_upscale()` |
-| `sd_vid_upscaler_opt_create()` | `sd_vid_upscaler_create()` |
-| `sd_vid_upscale_opt_create()` | `sd_upscale_video()` |
-| `sd_adetailer_opt_create()` | `sd_adetailer_create()` |
-| `sd_adetail_opt_create()` | `sd_adetail()` |
 
 Image upscaling loads `model_path` with optional `n_threads`, `backend`,
 `params_backend`, `conv_direct` and `tile_size` (default 128). Execution takes
@@ -118,22 +141,20 @@ sd_upscaler_free(upscaler);
 sd_opt_free(load);
 ```
 
-Video-upscaler loading requires `diffusion_model_path`, `vae_path` and
-`upscale_factor`; backend/thread/attention settings are optional. The scale must
-match both checkpoints (RelayVSR uses 2 or 4). Execution takes RGB `frames` with
-equal dimensions. Defaults are FPS 24, seed 42, RelayVSR `window_size` 16, and
-SeedVR2 `temporal_chunk_size` 5. Free the model with `sd_vid_upscaler_free()`.
+ADetailer, independent video upscaling, AnimateDiff, PhotoMaker, PuLID,
+IP-Adapter, custom preprocessing, SLG, timestep shifting and
+automatic post-generation upscaling are explicit DGL workflows. Their former
+C operation handles or parameter keys are unavailable. Ordinary ControlNet
+remains supported with a configured model and a direct control image.
 
-ADetailer loading takes the detector `model_path` and optional backend/thread
-settings. Call `sd_adetail(adetailer, diffusion_ctx, opt, &result)` with an
-`sd_adetail_opt_t`. Set `image` for the source image, and reuse the applicable
-image-generation keys for inpainting: `prompt`, `negative_prompt`, dimensions,
-strength, seed, sampling, LoRAs, cache, VAE tiling and circular axes. Inpainting
-defaults to 512×512 and strength 0.4. `adetail.prompt` and
-`adetail.negative_prompt` supply region prompt overrides; `adetail.args` accepts
-the existing detector/mask/inpaint argument string documented by the CLI
-`--extra-ad-args` option. Reference/control images, hires and batching are not
-ADetailer options. Free the detector with `sd_adetailer_free()`.
+Contexts retain configuration snapshots and a persistent DGL execution context.
+Model metadata is probed lazily and cached with file dependencies. Creation can
+succeed before a missing or invalid model is discovered by a capability query
+or generation call. Component weights are loaded and reused by dgl.
+
+Reference inputs follow model defaults. Custom reference resizing, cropping,
+position indexing and conditioning must be written in DGL; there is no
+`ref_image_args` override string.
 
 ## String-valued modes
 
@@ -261,8 +282,7 @@ needed independently.
 
 Types below correspond to `sd_opt_set_<type>()`. `context`, `image` and `video`
 refer to model loading and image/video generation. Other operation labels match
-the corresponding option constructor, such as `vid_upscale` for
-`sd_vid_upscale_opt_create()`.
+the corresponding option constructor, `upscaler` or `upscale`.
 Array lengths are supplied to setters; there are no separately writable count keys.
 
 Top-level keys retain their existing parameter meanings. Nested names map as follows:
@@ -270,90 +290,113 @@ Top-level keys retain their existing parameter meanings. Nested names map as fol
 | Key prefix | Configuration |
 | --- | --- |
 | `sample.*` | Base sampling settings; `method`, `steps`, `sigmas`, `args` select the sampler, step count, custom schedule and extra arguments. |
-| `high_noise_sample.*` | High-noise sampling settings for two-stage video models. |
-| `sample.guidance.*` | Text/image CFG, distilled guidance and SLG settings. |
+| `sample.guidance.*` | Text/image CFG and distilled guidance settings. |
 | `cache.*` | [Inference cache](caching.md) settings. |
-| `hires.*` | High-resolution second pass and upscaling settings. |
 | `vae_tiling.*` | Spatial/temporal VAE tiling settings. |
-| `photomaker.*` | PhotoMaker identity images/embedding and style strength. |
-| `pulid.*` | PuLID identity embedding path and weight. |
-| `image_preprocess.rules` | [Image preprocessing](image_preprocessing.md) rule string. |
 
-The library supplies inference defaults. CLI/server inputs that are omitted do
-not override them. Model recipes may supply presets; explicit startup options
+The library supplies inference defaults. Omitted server inputs do not override
+them. The CLI retains its historical seed default of 42; `--seed -1` requests
+a random seed. Other omitted CLI inference options use the library defaults.
+Model recipes may supply presets; explicit startup options
 and request fields take priority over recipe values. A supplied value equal to
 a default is still explicit and undergoes model applicability checks.
 
 Generation defaults include 512×512, a random seed (`-1`), 20 sampling steps,
 model-selected sampler/scheduler, text CFG 7, distilled guidance 3.5, strength
-0.75, and disabled caching/hires/tiling. Image batches default to 1; videos default
+0.75, and disabled caching/tiling. Image batches default to 1; videos default
 to 6 requested frames at 16 FPS, subject to model alignment. Omitted eta, flow shift
 and image CFG retain automatic defaults; do not pass infinity to request defaults.
-Use `unset`. High-noise steps default to `-1` (automatic allocation). The high-noise pass
-shares the base scheduler, sigmas, flow shift and timestep shifting; set those
-through `sample.*`. Separate high-noise keys for these settings are not supported.
+Use `unset`. Wan dual experts share one `sample.*` configuration and one
+sigma sequence. `high_noise_sample.steps` defaults to -1: `sample.steps` is the
+total, split using `moe_boundary` (default 0.875). With a nonnegative high-noise
+count, the total is `sample.steps + high_noise_sample.steps`; the high-noise
+expert runs that prefix and the low-noise expert runs the remaining steps.
+Zero selects only the low-noise expert. Without a high-noise model this setting
+is ignored. Custom sigmas fix the total; a positive high-noise count is adjusted
+to retain the requested low-noise count when possible. Independent high-noise
+CFG and sampler overrides still require dgl.
+
+Image and LTX/MiniMax-H3 video hires passes use the same DGL execution path.
+Set `hires.enabled=true`. The default is latent bilinear upscaling by 2,
+followed by refinement with the original model and prompt conditions.
+`hires.steps=0` inherits the base step count; denoising strength defaults to
+0.7. Without custom sigmas, a schedule with `floor(steps / strength)` intervals
+is generated and its last `steps + 1` entries are used. `hires.sigmas` instead
+supplies the complete refinement schedule and is not sliced by strength.
+
+`hires.target_width` and `hires.target_height` override the scale. Supplying
+only one makes a square target. Output dimensions follow model alignment.
+Image upscalers are `latent`, `latent_nearest`, `latent_nearest_exact`,
+`latent_antialiased`, `latent_bicubic`, `latent_bicubic_antialiased`, `lanczos`,
+`nearest`, `model`, or `none`. `model` requires `hires.model_path`; images use
+an image upscaler and then VAE re-encoding. Videos accept latent interpolation
+or a compatible latent upscaler. LTX learned upscalers determine their output
+size and frame count from the checkpoint, overriding target dimensions;
+audio duration and keyframe conditioning follow that output. H3 learned
+upscalers use the requested target size. Other video families require an
+explicit DGL refinement workflow.
 
 Sampler/scheduler values follow the [sampling guide](sampling.md); `"auto"`
 requests automatic selection. RNG values are `std_default`, `cuda`, `cpu`, `auto`.
-Prediction modes are `auto`, `eps`, `v`, `edm_v`, `sd3_flow`, `flux_flow`,
+Prediction modes are `auto`, `eps`, `v`, `edm_v`, `flow`, `flux_flow`,
 `sefi_flow`, `minit2i_flow`, `sensenova_u1_flow`, `flux3_flow`, `h3_av_flow`,
 `ming_image_flow`. Weight types use the names returned by `sd_type_name()`,
 plus `auto`. VAE formats are `auto`, `flux`, `sd3`,
 `flux2`, `wan`. LoRA apply modes are `auto`, `immediately`, `at_runtime`.
 Cache modes are `disabled`, `easycache`, `ucache`, `dbcache`, `taylorseer`,
 `cache_dit`, `spectrum`. Control types are `none`, `openpose`, `depth`, `scribble`, `canny`, `normal`,
-`segment`, `tile`, `repaint`, with the existing aliases such as `hed` and `lineart`. Hires upscalers are `none`, `latent`,
-`latent_nearest`, `latent_nearest_exact`, `latent_antialiased`, `latent_bicubic`,
-`latent_bicubic_antialiased`, `lanczos`, `nearest`, `model`.
+`segment`, `tile`, `repaint`, with the existing aliases such as `hed` and `lineart`.
 
 Integers must fit the underlying field (32 bits except `seed`, which is signed
 64-bit). Dimensions, batch size, video frames, FPS and base steps are positive.
 Floating-point settings must be finite and fit float32; strength, denoising
 strength, percent/range settings and MOE boundary lie in [0, 1]. Custom sigma
 arrays are empty or strictly decreasing nonnegative finite values ending in zero,
-with at least two entries. SLG layer indices are nonnegative integers.
+with at least two entries.
+
+For SDXL's bundled VAE (no `vae_path`), generation emits
+`conv_scale = 0.03125` in the generated DGL to avoid FP16 overflow. Set
+`force_sdxl_vae_conv_scale = true` to apply the same scaling to an explicit
+`vae_path`. TAE decoding retains its own scaling.
 
 | Key | Setter type | Operation |
 | --- | --- | --- |
-| `adetail.args` | `string` | adetail |
-| `adetail.negative_prompt` | `string` | adetail |
-| `adetail.prompt` | `string` | adetail |
 | `attn_scale` | `float` | context |
 | `audio_encoder_path` | `string` | context |
 | `audio_vae_path` | `string` | context |
 | `auto_fit` | `bool` | context |
-| `backend` | `string` | context, upscaler, vid_upscaler, adetailer |
+| `backend` | `string` | context, upscaler |
 | `batch_count` | `int` | image |
 | `batched_cfg` | `bool` | context |
-| `cache.bn_compute_blocks` | `int` | image, video, adetail |
-| `cache.end_percent` | `float` | image, video, adetail |
-| `cache.error_decay_rate` | `float` | image, video, adetail |
-| `cache.fn_compute_blocks` | `int` | image, video, adetail |
-| `cache.max_cached_steps` | `int` | image, video, adetail |
-| `cache.max_continuous_cached_steps` | `int` | image, video, adetail |
-| `cache.max_warmup_steps` | `int` | image, video, adetail |
-| `cache.mode` | `string` | image, video, adetail |
-| `cache.reset_error_on_compute` | `bool` | image, video, adetail |
-| `cache.residual_diff_threshold` | `float` | image, video, adetail |
-| `cache.reuse_threshold` | `float` | image, video, adetail |
-| `cache.scm_mask` | `string` | image, video, adetail |
-| `cache.scm_policy_dynamic` | `bool` | image, video, adetail |
-| `cache.spectrum_flex_window` | `float` | image, video, adetail |
-| `cache.spectrum_lam` | `float` | image, video, adetail |
-| `cache.spectrum_m` | `int` | image, video, adetail |
-| `cache.spectrum_stop_percent` | `float` | image, video, adetail |
-| `cache.spectrum_w` | `float` | image, video, adetail |
-| `cache.spectrum_warmup_steps` | `int` | image, video, adetail |
-| `cache.spectrum_window_size` | `int` | image, video, adetail |
-| `cache.start_percent` | `float` | image, video, adetail |
-| `cache.taylorseer_n_derivatives` | `int` | image, video, adetail |
-| `cache.taylorseer_skip_interval` | `int` | image, video, adetail |
-| `cache.use_relative_threshold` | `bool` | image, video, adetail |
-| `circular_x` | `bool` | image, video, adetail |
-| `circular_y` | `bool` | image, video, adetail |
+| `cache.bn_compute_blocks` | `int` | image, video |
+| `cache.end_percent` | `float` | image, video |
+| `cache.error_decay_rate` | `float` | image, video |
+| `cache.fn_compute_blocks` | `int` | image, video |
+| `cache.max_cached_steps` | `int` | image, video. Negative values mean no limit. |
+| `cache.max_continuous_cached_steps` | `int` | image, video. Negative values mean no limit. |
+| `cache.max_warmup_steps` | `int` | image, video |
+| `cache.mode` | `string` | image, video |
+| `cache.reset_error_on_compute` | `bool` | image, video |
+| `cache.residual_diff_threshold` | `float` | image, video |
+| `cache.reuse_threshold` | `float` | image, video |
+| `cache.scm_mask` | `string` | image, video |
+| `cache.scm_policy_dynamic` | `bool` | image, video |
+| `cache.spectrum_flex_window` | `float` | image, video |
+| `cache.spectrum_lam` | `float` | image, video |
+| `cache.spectrum_m` | `int` | image, video |
+| `cache.spectrum_stop_percent` | `float` | image, video |
+| `cache.spectrum_w` | `float` | image, video |
+| `cache.spectrum_warmup_steps` | `int` | image, video |
+| `cache.spectrum_window_size` | `int` | image, video |
+| `cache.start_percent` | `float` | image, video |
+| `cache.taylorseer_n_derivatives` | `int` | image, video |
+| `cache.taylorseer_skip_interval` | `int` | image, video |
+| `cache.use_relative_threshold` | `bool` | image, video |
+| `circular_x` | `bool` | image, video |
+| `circular_y` | `bool` | image, video |
 | `clip_g_path` | `string` | context |
 | `clip_l_path` | `string` | context |
-| `clip_skip` | `int` | image, video, adetail |
+| `clip_skip` | `int` | image, video. Nonpositive values use the model default. |
 | `clip_vision_path` | `string` | context |
 | `conditioning_cache_size` | `int` | context |
 | `control_frames` | `tensor` | video |
@@ -362,10 +405,10 @@ with at least two entries. SLG layer indices are nonnegative integers.
 | `control_strength` | `float` | image |
 | `control_type` | `string` | image |
 | `conv_direct` | `bool` | upscaler |
-| `conv_direct_mode` | `string` | context, vid_upscaler |
+| `conv_direct_mode` | `string` | context |
 | `diffusion_conv_direct` | `bool` | context |
 | `diffusion_flash_attn` | `bool` | context |
-| `diffusion_model_path` | `string` | context, vid_upscaler |
+| `diffusion_model_path` | `string` | context |
 | `disable_prefetch` | `bool` | context |
 | `disable_segmented_compute` | `bool` | context |
 | `eager_load` | `bool` | context |
@@ -374,113 +417,80 @@ with at least two entries. SLG layer indices are nonnegative integers.
 | `enable_mmap` | `bool` | context |
 | `end_image` | `tensor` | video |
 | `flash_attn` | `bool` | context |
-| `flash_attn_mode` | `string` | context, vid_upscaler |
+| `flash_attn_mode` | `string` | context |
 | `force_sdxl_vae_conv_scale` | `bool` | context |
-| `fps` | `int` | video, vid_upscale |
-| `frames` | `tensor` | vid_upscale |
-| `height` | `int` | image, video, adetail |
+| `fps` | `int` | video |
+| `height` | `int` | image, video |
 | `high_noise_diffusion_model_path` | `string` | context |
-| `high_noise_sample.args` | `string` | video |
-| `high_noise_sample.eta` | `float` | video |
-| `high_noise_sample.guidance.distilled_guidance` | `float` | video |
-| `high_noise_sample.guidance.img_cfg` | `float` | video |
-| `high_noise_sample.guidance.slg.layer_end` | `float` | video |
-| `high_noise_sample.guidance.slg.layer_start` | `float` | video |
-| `high_noise_sample.guidance.slg.layers` | `ints` | video |
-| `high_noise_sample.guidance.slg.scale` | `float` | video |
-| `high_noise_sample.guidance.txt_cfg` | `float` | video |
-| `high_noise_sample.method` | `string` | video |
-| `high_noise_sample.steps` | `int` | video |
-| `hires.denoising_strength` | `float` | image, video |
-| `hires.enabled` | `bool` | image, video |
-| `hires.model_path` | `string` | image, video |
-| `hires.scale` | `float` | image, video |
-| `hires.sigmas` | `floats` | image, video |
-| `hires.steps` | `int` | image, video |
-| `hires.target_height` | `int` | image, video |
-| `hires.target_width` | `int` | image, video |
-| `hires.upscale_tile_size` | `int` | image, video |
-| `hires.upscaler` | `string` | image, video |
-| `image` | `tensor` | upscale, adetail |
-| `image_preprocess.rules` | `string` | image, video |
+| `image` | `tensor` | upscale |
 | `init_image` | `tensor` | image, video |
-| `ip_adapter_image` | `tensor` | image |
-| `ip_adapter_path` | `string` | context |
-| `ip_adapter_strength` | `float` | image |
 | `linear_scale` | `float` | context |
 | `llm_path` | `string` | context |
 | `llm_vision_path` | `string` | context |
 | `lora_apply_mode` | `string` | context |
-| `loras` | `loras` | image, video, adetail |
+| `loras` | `loras` | image, video |
 | `mask_image` | `tensor` | image |
+| `max_ram` | `string` | context |
 | `max_vram` | `string` | context |
 | `model_args` | `string` | context |
-| `model_path` | `string` | context, upscaler, adetailer |
+| `model_path` | `string` | context, upscaler |
 | `moe_boundary` | `float` | video |
-| `motion_module_path` | `string` | context |
-| `n_threads` | `int` | context, upscaler, vid_upscaler, adetailer |
-| `negative_prompt` | `string` | image, video, adetail |
-| `params_backend` | `string` | context, upscaler, vid_upscaler, adetailer |
-| `photo_maker_path` | `string` | context |
-| `photomaker.id_embed_path` | `string` | image |
-| `photomaker.id_images` | `tensors` | image |
-| `photomaker.style_strength` | `float` | image |
+| `high_noise_sample.steps` | `int` | video; -1 or nonnegative |
+| `hires.enabled` | `bool` | image, video |
+| `hires.upscaler`, `hires.model_path` | `string` | image, video |
+| `hires.scale` | `float` | image, video; positive, default 2 |
+| `hires.target_width`, `hires.target_height` | `int` | image, video; 0 selects scale |
+| `hires.steps` | `int` | image, video; 0 inherits base steps |
+| `hires.denoising_strength` | `float` | image, video; 0.0001..1 |
+| `hires.upscale_tile_size` | `int` | image model upscaling; default 128 |
+| `hires.sigmas` | `floats` | image, video; optional refinement schedule |
+| `n_threads` | `int` | context, upscaler |
+| `negative_prompt` | `string` | image, video |
+| `params_backend` | `string` | context, upscaler |
 | `prediction` | `string` | context |
-| `prompt` | `string` | image, video, adetail |
-| `pulid.id_embedding_path` | `string` | image |
-| `pulid.id_weight` | `float` | image |
-| `pulid_weights_path` | `string` | context |
+| `prompt` | `string` | image, video |
 | `qwen_image_layers` | `int` | image |
 | `ref_audios` | `audios` | video |
-| `ref_image_args` | `string` | image, video |
 | `ref_images` | `tensors` | image, video |
 | `ref_videos` | `videos` | video |
 | `rng_type` | `string` | context |
 | `rpc_servers` | `string` | context |
 | `sage_attn` | `bool` | context |
-| `sample.args` | `string` | image, video, adetail |
-| `sample.eta` | `float` | image, video, adetail |
-| `sample.flow_shift` | `float` | image, video, adetail |
-| `sample.guidance.distilled_guidance` | `float` | image, video, adetail |
-| `sample.guidance.img_cfg` | `float` | image, video, adetail |
-| `sample.guidance.slg.layer_end` | `float` | image, video, adetail |
-| `sample.guidance.slg.layer_start` | `float` | image, video, adetail |
-| `sample.guidance.slg.layers` | `ints` | image, video, adetail |
-| `sample.guidance.slg.scale` | `float` | image, video, adetail |
-| `sample.guidance.txt_cfg` | `float` | image, video, adetail |
-| `sample.method` | `string` | image, video, adetail |
-| `sample.scheduler` | `string` | image, video, adetail |
-| `sample.shifted_timestep` | `int` | image, video, adetail |
-| `sample.sigmas` | `floats` | image, video, adetail |
-| `sample.steps` | `int` | image, video, adetail |
+| `sample.args` | `string` | image, video |
+| `sample.eta` | `float` | image, video |
+| `sample.flow_shift` | `float` | image, video |
+| `sample.guidance.distilled_guidance` | `float` | image, video |
+| `sample.guidance.img_cfg` | `float` | image, video |
+| `sample.guidance.txt_cfg` | `float` | image, video |
+| `sample.method` | `string` | image, video |
+| `sample.scheduler` | `string` | image, video |
+| `sample.sigmas` | `floats` | image, video |
+| `sample.steps` | `int` | image, video |
 | `sampler_rng_type` | `string` | context |
-| `seed` | `int` | image, video, vid_upscale, adetail |
+| `seed` | `int` | image, video |
 | `split_mode` | `string` | context |
-| `strength` | `float` | image, video, adetail |
+| `strength` | `float` | image, video |
 | `t5xxl_path` | `string` | context |
 | `tae_preview_only` | `bool` | context |
 | `taesd_path` | `string` | context |
-| `temporal_chunk_size` | `int` | vid_upscale |
 | `tensor_type_rules` | `string` | context |
 | `tile_size` | `int` | upscaler |
 | `tokenizer` | `string` | context |
 | `uncond_diffusion_model_path` | `string` | context |
-| `upscale_factor` | `int` | vid_upscaler |
 | `vace_strength` | `float` | video |
 | `vae_conv_direct` | `bool` | context |
 | `vae_format` | `string` | context |
-| `vae_path` | `string` | context, vid_upscaler |
-| `vae_tiling.enabled` | `bool` | image, video, adetail |
-| `vae_tiling.extra_tiling_args` | `string` | image, video, adetail |
-| `vae_tiling.rel_size_h` | `float` | image, video, adetail |
-| `vae_tiling.rel_size_w` | `float` | image, video, adetail |
-| `vae_tiling.target_overlap` | `float` | image, video, adetail |
-| `vae_tiling.temporal_tiling` | `bool` | image, video, adetail |
-| `vae_tiling.tile_size_h` | `int` | image, video, adetail |
-| `vae_tiling.tile_size_w` | `int` | image, video, adetail |
+| `vae_path` | `string` | context |
+| `vae_tiling.enabled` | `bool` | image, video |
+| `vae_tiling.extra_tiling_args` | `string` | image, video |
+| `vae_tiling.rel_size_h` | `float` | image, video |
+| `vae_tiling.rel_size_w` | `float` | image, video |
+| `vae_tiling.target_overlap` | `float` | image, video |
+| `vae_tiling.temporal_tiling` | `bool` | image, video |
+| `vae_tiling.tile_size_h` | `int` | image, video |
+| `vae_tiling.tile_size_w` | `int` | image, video |
 | `video_frames` | `int` | video |
-| `width` | `int` | image, video, adetail |
-| `window_size` | `int` | vid_upscale |
+| `width` | `int` | image, video |
 | `wtype` | `string` | context |
 
 ## Migration
@@ -495,13 +505,39 @@ Create context/image/video options with the corresponding constructor, populate
 them through the shared typed setters, and use `sd_ctx_create()`,
 `sd_generate_image()` and `sd_generate_video()`. Read or retain outputs through
 `sd_result_get_*()` and `sd_tensor_retain()` and release the result with
-`sd_result_free()`. ADetailer and image/video upscalers use purpose-specific opt constructors and
-return the same opaque result type. Their former public parameter structures,
-long positional signatures and bool-returning entry points have been removed.
-Device selection and cancellation controls retain their interfaces. Preview
-registration now uses a mode string and returns a status.
+`sd_result_free()`. Standalone image upscaling retains its purpose-specific
+options and actual-scale queries. ADetailer and standalone video-upscale C
+handles have been removed; use explicit DGL workflows.
 
-Native generation JSON retains its existing schema and names, including
-`sample_params.sample_method`; translate these to the corresponding option keys
-(`sample.method`, etc.) when replaying metadata. See
-[generation results and metadata](generation_metadata.md).
+Generation results now contain the exact executed DGL source. They no longer
+contain generation JSON. See [generation results and metadata](generation_metadata.md).
+Context creation is lazy, and model errors can first surface in a capability
+query or generation call. Context options are copied, while media handles are
+retained. Cancellation, progress and preview retain their public contracts.
+
+### DGL region results
+
+DGL regions are ordinary dictionaries with integer `width` and `height` fields
+and an I64 `boxes` tensor shaped `[4,N]`. The dedicated region value kind has
+been removed. `SD_DGL_VALUE_OPAQUE` remains `11` and `SD_DGL_VALUE_VOID` remains
+`12`.
+
+Returning a region dict directly now gives a `SD_DGL_VALUE_DICT` root and flat
+outputs `boxes`, `width` and `height`. Returning `{regions=r}` gives the flat
+names `regions.boxes`, `regions.width` and `regions.height`. Replace root-region
+exports such as `--tensor result boxes.npy` with `--tensor boxes boxes.npy`.
+Coordinate tensors now use I64; cast old I32 files explicitly with
+`tensor::cast(boxes, "i64")` before passing them to `regions::from_boxes`.
+
+Detection results are also ordinary dicts: F32 `xyxy` `[4,N]`, F32 `scores`
+`[N]`, and I64 `class_ids` `[N]`, with at most 4,096 items. Empty results preserve
+all three fields and ranks. `detections::detect`, `detections::filter`,
+`detections::box_masks` and `detections::to_regions` replace the previous global
+detection helpers. Use `detections::detect` followed by `detections::to_regions`
+to replace the old direct-to-regions `detect` shortcut; detection executes once.
+
+Use `regions::from_boxes`, `regions::crop`, `regions::paste` and
+`regions::plan_mask_crops` for rectangle and mask tasks. The previous global
+region function names are no longer registered. See
+[DGL rectangular regions](../dgl.md#rectangular-regions) for validation and
+composition rules.

@@ -16,14 +16,34 @@
 
 namespace sd::api {
     size_t tensor_byte_size(sd_tensor_type_t type, const std::vector<int64_t>& shape);
+
+    template <typename T>
+    constexpr sd_tensor_type_t tensor_dtype() {
+        if constexpr (std::is_same_v<T, uint8_t>) {
+            return SD_TENSOR_U8;
+        } else if constexpr (std::is_same_v<T, int32_t>) {
+            return SD_TENSOR_I32;
+        } else if constexpr (std::is_same_v<T, int64_t>) {
+            return SD_TENSOR_I64;
+        } else if constexpr (std::is_same_v<T, float>) {
+            return SD_TENSOR_F32;
+        } else {
+            static_assert(std::is_same_v<T, double>, "unsupported tensor type");
+            return SD_TENSOR_F64;
+        }
+    }
 }
 
 struct sd_tensor_t {
     using Storage = std::variant<sd::Tensor<uint8_t>, sd::Tensor<int32_t>, sd::Tensor<int64_t>, sd::Tensor<float>, sd::Tensor<double>>;
+
+private:
+    const std::vector<int64_t> shape_;
+
+public:
     mutable std::atomic<size_t> references{1};
-    sd_tensor_type_t type;
-    std::vector<int64_t> shape;
-    size_t bytes;
+    const sd_tensor_type_t type;
+    const size_t bytes;
 
 private:
     Storage storage_;
@@ -33,17 +53,20 @@ public:
     sd_tensor_t(sd_tensor_type_t type, std::vector<int64_t> shape, const void* data, size_t size);
 
     template <typename T>
-    explicit sd_tensor_t(sd::Tensor<T> tensor)
-        : type(std::is_same_v<T, uint8_t> ? SD_TENSOR_U8 : std::is_same_v<T, int32_t> ? SD_TENSOR_I32
-                                                       : std::is_same_v<T, int64_t>   ? SD_TENSOR_I64
-                                                       : std::is_same_v<T, float>     ? SD_TENSOR_F32
-                                                                                      : SD_TENSOR_F64),
-          shape(tensor.shape()),
-          bytes(sd::api::tensor_byte_size(type, shape)),
+    explicit sd_tensor_t(sd::Tensor<T> tensor, bool scalar = false)
+        : shape_(scalar ? std::vector<int64_t>{} : tensor.shape()),
+          type(sd::api::tensor_dtype<T>()),
+          bytes(sd::api::tensor_byte_size(type, shape_)),
           storage_(std::move(tensor)) {
-        static_assert(std::is_same_v<T, uint8_t> || std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> || std::is_same_v<T, float> || std::is_same_v<T, double>, "unsupported tensor type");
-        if (std::get<sd::Tensor<T>>(storage_).numel() != static_cast<int64_t>(bytes / sizeof(T)))
+        if (as<T>().numel() != static_cast<int64_t>(bytes / sizeof(T)))
             throw std::invalid_argument("tensor shape and storage size do not match");
+    }
+
+    const std::vector<int64_t>& shape() const { return shape_; }
+
+    template <typename T>
+    const sd::Tensor<T>& as() const {
+        return std::get<sd::Tensor<T>>(storage_);
     }
 
     const void* data() const {
@@ -81,7 +104,6 @@ namespace sd::api {
         explicit operator bool() const { return tensor_ != nullptr; }
     };
 
-    size_t tensor_byte_size(sd_tensor_type_t type, const std::vector<int64_t>& shape);
     TensorRef own_tensor(sd_tensor_type_t type, std::vector<int64_t> shape, void* data);
     TensorRef allocate_tensor(sd_tensor_type_t type, std::vector<int64_t> shape);
     sd::Image image_view(const sd_tensor_t& tensor);
