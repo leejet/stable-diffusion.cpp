@@ -684,7 +684,8 @@ public:
         }
         sd::ggml_graph_cut::mark_graph_cut(h, "unet.middle_block", "h");
         if (controls.size() > 0) {
-            auto cs = ggml_ext_scale(ctx->ggml_ctx, controls[controls.size() - 1], control_strength, true);
+            // not in place, it segfaults the Vulkan backend with SDXL ControlNets (seen on RADV)
+            auto cs = ggml_ext_scale(ctx->ggml_ctx, controls[controls.size() - 1], control_strength, false);
             h       = ggml_add(ctx->ggml_ctx, h, cs);  // middle control
         }
         int control_offset = static_cast<int>(controls.size() - 2);
@@ -697,7 +698,8 @@ public:
                 hs.pop_back();
 
                 if (controls.size() > 0) {
-                    auto cs = ggml_ext_scale(ctx->ggml_ctx, controls[control_offset], control_strength, true);
+                    // not in place, see the middle control
+                    auto cs = ggml_ext_scale(ctx->ggml_ctx, controls[control_offset], control_strength, false);
                     h_skip  = ggml_add(ctx->ggml_ctx, h_skip, cs);  // control net condition
                     control_offset--;
                 }

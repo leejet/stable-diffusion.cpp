@@ -9,6 +9,7 @@ for f in src/*.cpp src/*.h src/*.hpp \
          src/conditioning/*.cpp src/conditioning/*.h src/conditioning/*.hpp \
          src/core/*.cpp src/core/*.h src/core/*.hpp \
          src/core/cpu/*.cpp src/core/cpu/*.h \
+         src/core/metal/*.mm src/core/metal/*.metal \
          src/core/cuda/*.cu src/core/cuda/*.cuh src/core/cuda/*.h \
          src/core/cuda/sageattention/*.cuh \
          src/core/probe/*.cpp src/core/probe/*.h \

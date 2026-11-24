@@ -29,6 +29,18 @@ PRs should include:
 - Linked issue/PR context when applicable.
 - Screenshots or sample outputs for UI/visual behavior changes.
 
+## Documentation
+
+Write model usage guides in `docs/` for users. Focus on supported weights,
+setup, runnable commands, parameter meanings, output behavior, and practical
+limits such as memory requirements. Include technical details only when they
+help users choose settings or troubleshoot a problem.
+
+Keep tensor layouts, internal class names, kernel implementation details,
+algorithm derivations, and development history out of usage guides. Keep task-specific
+profiling logs, numerical comparison procedures, and test artifacts local, and
+summarize relevant verification results in the PR description.
+
 ## README UI Listings
 
 The [UIs list in the README](README.md#uis) only includes open-source projects that use `stable-diffusion.cpp` as a backend. Do not submit PRs to add closed-source UIs.

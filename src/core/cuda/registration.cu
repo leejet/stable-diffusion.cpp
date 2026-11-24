@@ -4,6 +4,7 @@
 void sd_ggml_register_cuda_i8_gated_residual(ggml_backend_dev_t device);
 void sd_ggml_register_cuda_i8_projection(ggml_backend_dev_t device);
 void sd_ggml_register_cuda_attention(ggml_backend_dev_t device);
+void sd_ggml_register_cuda_window_attention(ggml_backend_dev_t device);
 #endif
 
 namespace SD_CUDA_NAMESPACE {
@@ -39,6 +40,7 @@ namespace SD_CUDA_NAMESPACE {
         sd_ggml_register_cuda_i8_projection(device);
         sd_ggml_register_cuda_i8_gated_residual(device);
         sd_ggml_register_cuda_attention(device);
+        sd_ggml_register_cuda_window_attention(device);
 #endif
     }
 }

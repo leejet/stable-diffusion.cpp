@@ -974,7 +974,8 @@ public:
             w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
         }
         x = ggml_rms_norm(ctx->ggml_ctx, x, eps);
-        x = ggml_mul_inplace(ctx->ggml_ctx, x, w);
+        // The affine multiply may run on a different backend after normalization falls back.
+        x = ggml_mul(ctx->ggml_ctx, x, w);
         return x;
     }
 };

@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "id": "hyperflow-h3-flash-ref2va",
+  "name": "HyperFlow H3 Flash Ref2VA",
+  "size_multiple": 32,
+  "description": "Generate video and audio with reference images. Use the HyperFlow H3 Flash Ref2VA transformer; video/audio references are not validated for these weights. Reuses MiniMax-H3 components with the HyperFlow 6-step schedule. Audio VAE is optional for silent video.",
+  "model_url": "https://huggingface.co/VideoRebirthAI/hyperflow-h3-flash",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true,
+      "label": "HyperFlow H3 Flash REF2VA Transformer"
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "MiniMax-H3 Qwen 3 VL 32B Text Encoder"
+    },
+    {
+      "id": "vae",
+      "required": false,
+      "label": "MiniMax H3 Video VAE"
+    },
+    {
+      "id": "tae",
+      "required": false
+    },
+    {
+      "id": "audio_vae",
+      "required": false,
+      "label": "MiniMax H3 Audio VAE"
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "video_constraints": {
+    "frame_step": 17,
+    "frame_offset": 5,
+    "frame_rounding": "ceil",
+    "min_frames": 5,
+    "fixed_fps": 24
+  },
+  "defaults": {
+    "video_frames": 124,
+    "fps": 24,
+    "cfg_scale": 1,
+    "width": 1344,
+    "height": 768,
+    "sampling_method": "euler",
+    "steps": 6,
+    "flow_shift": 12,
+    "custom_sigmas": [
+      1.0,
+      0.982655942,
+      0.914642572,
+      0.674755692,
+      0.385223746,
+      0.159055337,
+      0.0
+    ]
+  },
+  "features": [
+    "flow_shift",
+    "ref_images"
+  ],
+  "disabled_features": [
+    "img2img",
+    "mask_image"
+  ]
+}

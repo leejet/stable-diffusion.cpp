@@ -150,7 +150,7 @@ namespace sd_fattn_cute {
         }
     }
 
-    template <int Rows>
+    template <int Rows, bool Masked = false>
     struct Softmax {
         decltype(make_tensor<float>(Shape<Int<Rows>>{})) maximum, sum;
         template <bool First, typename Scores, typename Output>
@@ -180,8 +180,9 @@ namespace sd_fattn_cute {
                 }
 #pragma unroll
                 for (int n = 0; n < size<1>(scores); ++n) {
-                    const float value = exp2f(scores(m, n) * 1.4426950408889634f - next_max * 1.4426950408889634f);
-                    scores(m, n)      = value;
+                    const float safe_max = Masked && next_max == -INFINITY ? 0.f : next_max;
+                    const float value    = exp2f(scores(m, n) * 1.4426950408889634f - safe_max * 1.4426950408889634f);
+                    scores(m, n)         = value;
                     row_sum += value;
                 }
                 // Defer the four-lane sum reduction until the final output normalization.
@@ -196,7 +197,7 @@ namespace sd_fattn_cute {
                 float total = sum(m);
                 total += __shfl_xor_sync(0xffffffff, total, 2);
                 total += __shfl_xor_sync(0xffffffff, total, 1);
-                const float inverse = 1.f / total;
+                const float inverse = Masked && total == 0.f ? 0.f : 1.f / total;
 #pragma unroll
                 for (int n = 0; n < size<1>(output); ++n)
                     output(m, n) *= inverse;
@@ -236,6 +237,9 @@ namespace sd_fattn_cute {
         const cutlass::half_t *q, *k, *v;
         cutlass::half_t* o;
         int nq, nk, heads, kv_heads, dim;
+        float* output_f32  = nullptr;
+        float output_scale = 1.0f, output_bias = 0.0f;
+        bool scaled_output = false;
     };
 
     template <int BM, int BN, int D = 128, bool FullDim = true, int Warps = 4>
@@ -332,18 +336,34 @@ namespace sd_fattn_cute {
         auto tOrO    = threadO.retile_S(rO);
         auto tOsO    = threadO.partition_D(sO);
         cute::copy(copyO, tOrO, tOsO);
-        auto mO = make_tensor(make_gmem_ptr(p.o + int64_t(batch) * p.nq * p.heads * p.dim + int64_t(head) * p.dim),
-                              make_shape(p.nq, p.dim), make_stride(p.heads * p.dim, _1{}));
-        auto gO = local_tile(mO, Shape<Int<BM>, Int<D>>{}, make_coord(m_block, 0));
         typename T::OutputCopy output_copy;
         auto global_threadO = output_copy.get_thread_slice(tid);
         auto from_sO        = global_threadO.partition_S(sO);
-        auto to_gO          = global_threadO.partition_D(gO);
         auto output_id      = global_threadO.partition_D(make_identity_tensor(Shape<Int<BM>, Int<D>>{}));
         __syncthreads();
-        auto output_regs = make_tensor<Element>(shape(to_gO));
+        auto output_regs = make_tensor<Element>(shape(from_sO));
         cute::copy(output_copy, from_sO, output_regs);
-        copy_rows<false, false, FullDim>(output_copy, output_regs, to_gO, output_id, p.nq - m_block * BM, p.dim);
+        const int64_t output_offset = int64_t(batch) * p.nq * p.heads * p.dim + int64_t(head) * p.dim;
+        if (p.output_f32) {
+            auto float_copy = make_tiled_copy(Copy_Atom<AutoVectorizingCopyWithAssumedAlignment<128>, float>{},
+                                              typename T::GlobalLayout{}, Layout<Shape<_1, _8>>{});
+            auto mO         = make_tensor(make_gmem_ptr(p.output_f32 + output_offset), make_shape(p.nq, p.dim), make_stride(p.heads * p.dim, _1{}));
+            auto gO         = local_tile(mO, Shape<Int<BM>, Int<D>>{}, make_coord(m_block, 0));
+            auto to_gO      = float_copy.get_thread_slice(tid).partition_D(gO);
+            auto values     = make_tensor<float>(shape(output_regs));
+#pragma unroll
+            for (int i = 0; i < size(values); ++i) {
+                // Preserve the half-rounded attention result before applying the F32 epilogue.
+                const float value = float(output_regs(i));
+                values(i)         = p.scaled_output ? __fmaf_rn(value, p.output_scale, p.output_bias) : value;
+            }
+            copy_rows<false, false, FullDim>(float_copy, values, to_gO, output_id, p.nq - m_block * BM, p.dim);
+        } else {
+            auto mO    = make_tensor(make_gmem_ptr(p.o + output_offset), make_shape(p.nq, p.dim), make_stride(p.heads * p.dim, _1{}));
+            auto gO    = local_tile(mO, Shape<Int<BM>, Int<D>>{}, make_coord(m_block, 0));
+            auto to_gO = global_threadO.partition_D(gO);
+            copy_rows<false, false, FullDim>(output_copy, output_regs, to_gO, output_id, p.nq - m_block * BM, p.dim);
+        }
     }
 }
 
@@ -624,7 +644,18 @@ static void attention_optimize(ggml_backend_dev_t device, ggml_cgraph* graph, vo
 struct AttentionPlan {
     int index;
     size_t offsets[4];
+    bool direct_output;
 };
+
+static bool attention_direct_input(const ggml_tensor* src) {
+    size_t offset     = 0;
+    const auto* owner = src;
+    while (!owner->data && owner->view_src) {
+        offset += owner->view_offs;
+        owner = owner->view_src;
+    }
+    return src->type == GGML_TYPE_F16 && ggml_is_contiguous(src) && (uintptr_t(owner->data) + offset) % 16 == 0;
+}
 
 static ggml_status attention_prepare(ggml_backend_t, ggml_tensor* const* nodes, int count, void** state, size_t* workspace_size, void*) {
     auto* plan  = new AttentionPlan{};
@@ -632,9 +663,15 @@ static ggml_status attention_prepare(ggml_backend_t, ggml_tensor* const* nodes, 
     plan->index = ggml_ext_op_get(nodes[0]) == sd_ggml_i8_op() ? 5 : nodes[0]->op == GGML_OP_RMS_NORM ? 3
                                                                                                       : 0;
     GGML_ASSERT(plan->index < count);
-    const auto* attn = nodes[plan->index];
-    size_t size      = 0;
+    const auto* attn    = nodes[plan->index];
+    const auto* dst     = nodes[count - 1];
+    plan->direct_output = dst->type == GGML_TYPE_F32 && !dst->data && !dst->buffer && !dst->view_src;
+    size_t size         = 0;
     for (int i = 0; i < 4; ++i) {
+        if ((i > 0 && i < 3 && attention_direct_input(attn->src[i])) || (i == 3 && plan->direct_output)) {
+            plan->offsets[i] = SIZE_MAX;
+            continue;
+        }
         plan->offsets[i]   = size;
         const size_t bytes = size_t(ggml_nelements(i < 3 ? attn->src[i] : attn)) * sizeof(half);
         size += (bytes + 255) / 256 * 256;
@@ -680,7 +717,7 @@ static ggml_status attention_execute(const ggml_ext_execution_context* execution
     auto* base  = static_cast<char*>(ggml_backend_buffer_get_base(execution->workspace));
     half* work[4];
     for (int i = 0; i < 4; ++i)
-        work[i] = reinterpret_cast<half*>(base + plan.offsets[i]);
+        work[i] = plan.offsets[i] == SIZE_MAX ? nullptr : reinterpret_cast<half*>(base + plan.offsets[i]);
     const half* inputs[3] = {work[0], work[1], work[2]};
     for (int i = 0; i < 3; ++i) {
         const auto* src   = attn->src[i];
@@ -694,6 +731,8 @@ static ggml_status attention_execute(const ggml_ext_execution_context* execution
         } else if (i != 0 && src->type == GGML_TYPE_F16 && ggml_is_contiguous(src) && uintptr_t(src->data) % 16 == 0) {
             inputs[i] = static_cast<const half*>(src->data);
         } else {
+            if (!work[i])
+                return GGML_STATUS_FAILED;
             auto kernel = src->type == GGML_TYPE_F16 ? copy_to_half<half> : copy_to_half<float>;
             kernel<<<(ggml_nelements(src) + 255) / 256, 256, 0, stream>>>(static_cast<const char*>(src->data), work[i],
                                                                           ggml_nelements(src), src->ne[0], src->ne[1], src->ne[2], src->nb[1], src->nb[2], src->nb[3], scale);
@@ -701,12 +740,26 @@ static ggml_status attention_execute(const ggml_ext_execution_context* execution
         if (cudaGetLastError() != cudaSuccess)
             return GGML_STATUS_FAILED;
     }
-    const auto* q           = attn->src[0];
-    const auto* k           = attn->src[1];
+    const auto* q = attn->src[0];
+    const auto* k = attn->src[1];
+    auto* dst     = nodes[count - 1];
+    float scale = 1.0f, bias = 0.0f;
+    for (int i = plan.index + 1; i < count; ++i) {
+        if (nodes[i]->op == GGML_OP_SCALE) {
+            scale = param_f32(nodes[i], 0);
+            bias  = param_f32(nodes[i], 1);
+        }
+    }
     sd_fattn_cute::Params p = {reinterpret_cast<const cutlass::half_t*>(inputs[0]),
                                reinterpret_cast<const cutlass::half_t*>(inputs[1]), reinterpret_cast<const cutlass::half_t*>(inputs[2]),
                                reinterpret_cast<cutlass::half_t*>(work[3]), int(q->ne[1]), int(k->ne[1]), int(q->ne[2]), int(k->ne[2]), int(q->ne[0])};
-    cudaError_t error       = cudaErrorInvalidValue;
+    if (plan.direct_output) {
+        p.output_f32    = static_cast<float*>(dst->data);
+        p.output_scale  = scale;
+        p.output_bias   = bias;
+        p.scaled_output = dst->op == GGML_OP_SCALE;
+    }
+    cudaError_t error = cudaErrorInvalidValue;
     switch (padded_dim(p.dim)) {
         case 64:
             error = attention_launch<64>(context, p, q->ne[3]);
@@ -732,14 +785,8 @@ static ggml_status attention_execute(const ggml_ext_execution_context* execution
     }
     if (error != cudaSuccess)
         return GGML_STATUS_FAILED;
-    float scale = 1.0f, bias = 0.0f;
-    for (int i = plan.index + 1; i < count; ++i) {
-        if (nodes[i]->op == GGML_OP_SCALE) {
-            scale = param_f32(nodes[i], 0);
-            bias  = param_f32(nodes[i], 1);
-        }
-    }
-    auto* dst = nodes[count - 1];
+    if (plan.direct_output)
+        return GGML_STATUS_SUCCESS;
     int convrot_group;
     if (sd_ggml_convrot_describe(dst, &convrot_group)) {
         const int64_t width = dst->src[0]->ne[0], rows = ggml_nrows(dst->src[0]), padded_rows = (rows + 3) / 4 * 4;
@@ -790,3 +837,5 @@ void sd_ggml_register_cuda_attention(ggml_backend_dev_t device) {
     desc.priority  = 400;
     GGML_ASSERT(ggml_ext_register_kernel_ex(device, &desc, GGML_EXT_KERNEL_CAPTURE_SAFE | GGML_EXT_KERNEL_REPLAY_REUSABLE));
 }
+
+#include "window_attention.cuh"

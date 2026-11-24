@@ -21,6 +21,25 @@ git pull origin master
 git submodule update --init --recursive
 ```
 
+## MSVC compilation parallelism
+
+MSVC builds limit parallel C/C++ compilation within each project by default.
+For `n` logical processors, the limit is `n` when `n <= 2`, `n - 1` when
+`3 <= n <= 8`, and `n - 2` when `n > 8`. The default is calculated when the
+build directory is first configured with this setting. Override it with
+`-DSD_MSVC_MP_COUNT=4`, or pass `-USD_MSVC_MP_COUNT` to recalculate it.
+
+For Visual Studio builds, keep project-level parallelism at one to avoid
+multiplying the per-project limit:
+
+```shell
+cmake --build build --config Release --parallel 1
+```
+
+This setting controls MSVC's `/MP` option, not CUDA compiler parallelism or a
+hard CPU usage limit. Other build tools, such as Ninja, schedule compilation
+jobs separately; use `cmake --build build --parallel N` to limit those jobs.
+
 ## Selecting a GGML source tree
 
 By default, sd.cpp builds the patched GGML submodule in `ggml/`. To build with
