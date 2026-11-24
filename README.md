@@ -13,12 +13,7 @@ Devices with less than 16 GB of memory have not been validated. If memory is ins
 | Backend | Validated weights |
 |---|---|
 | Adreno GPU | Q4_0 GGUF |
-| Hexagon NPU | Q4_0, MXFP4, Q8_0 (GGUF); F8_E4M3 (safetensors) |
-| Hexagon NPU | ConvRot W4A4 safetensors with W4A8 HMX inference |
-
-- GGML tracking: [llama.cpp issue #28904](https://github.com/ggml-org/llama.cpp/issues/28904) and [PR #28952](https://github.com/ggml-org/llama.cpp/pull/28952)
-- SD.cpp integration: [stable-diffusion.cpp PR #1970](https://github.com/leejet/stable-diffusion.cpp/pull/1970)
-- Upstream project: [leejet/stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)
+| Hexagon NPU | Q4_0, MXFP4, Q8_0 (GGUF), F8_E4M3 (safetensors), ConvRot W4A4/W8A8 safetensors (W4A8/W8A8 HMX) |
 
 ## Weights
 
@@ -32,13 +27,13 @@ Shared VAE downloads for the DiT weight formats. [FLUX.2 VAE](https://huggingfac
 
 ### ConvRot safetensors
 
-- [Z-Image Turbo](https://huggingface.co/JoaoZaokk/Z-Image-Turbo-W4A4-ConvRot/resolve/main/zimage_turbo_w4a4.safetensors)
-- [FLUX.2 Klein 4B](https://huggingface.co/toxicdog/FLUX.2-klein-4B-INT4-ConvRot/resolve/main/flux-2-klein-4b-int4_convrot.safetensors)
-- [FLUX.2 Klein 9B](https://huggingface.co/ariaotp/INT4-ConvRot-W4A4-ComfyUI/resolve/main/Flux2-Klein-9B/flux-2-klein-9b-int4_convrot.safetensors)
-- [FLUX.3 Image Klein](https://huggingface.co/toxicdog/FLUX.3-Image-Klein-INT4-ConvRot-ComfyUI/resolve/main/diffusion_models/flux3_image_klein_sd_int4_convrot.safetensors)
-- [Qwen Image 2.1](https://huggingface.co/poor7/Models/resolve/main/qwen_image_2.1-int4_convrot.safetensors)
-- [Qwen Image 2.1 Turbo](https://huggingface.co/toxicdog/Qwen-Image-2.1-Turbo-INT4-ConvRot/resolve/main/diffusion_models/qwen_image_2.1_turbo_int4_convrot.safetensors)
-- [Krea 2 Turbo](https://huggingface.co/poor7/Models/resolve/main/krea2_turbo_int4.safetensors)
+- Z-Image Turbo · [W4A4](https://huggingface.co/JoaoZaokk/Z-Image-Turbo-W4A4-ConvRot/resolve/main/zimage_turbo_w4a4.safetensors) · [W8A8](https://huggingface.co/Comfy-Org/Z-Image-Turbo/resolve/main/split_files/diffusion_models/z_image_turbo_int8_convrot.safetensors)
+- FLUX.2 Klein 4B · [W4A4](https://huggingface.co/toxicdog/FLUX.2-klein-4B-INT4-ConvRot/resolve/main/flux-2-klein-4b-int4_convrot.safetensors) · [W8A8](https://huggingface.co/supermind/int8_convrot_models/resolve/main/diffusion_models/flux/flux-2-klein-4b_int8_convrot.safetensors)
+- FLUX.2 Klein 9B · [W4A4](https://huggingface.co/ariaotp/INT4-ConvRot-W4A4-ComfyUI/resolve/main/Flux2-Klein-9B/flux-2-klein-9b-int4_convrot.safetensors) · [W8A8](https://huggingface.co/supermind/int8_convrot_models/resolve/main/diffusion_models/flux/flux-2-klein-9b_int8_convrot.safetensors)
+- FLUX.3 Image Klein · [W4A4](https://huggingface.co/toxicdog/FLUX.3-Image-Klein-INT4-ConvRot-ComfyUI/resolve/main/diffusion_models/flux3_image_klein_sd_int4_convrot.safetensors) · [W8A8](https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy/resolve/main/diffusion_models/flux3-image-klein-int8-convrot.safetensors)
+- Qwen Image 2.1 · [W4A4](https://huggingface.co/poor7/Models/resolve/main/qwen_image_2.1-int4_convrot.safetensors) · [W8A8](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/diffusion_models/qwen_image_2.1_int8_convrot.safetensors)
+- Qwen Image 2.1 Turbo · [W4A4](https://huggingface.co/toxicdog/Qwen-Image-2.1-Turbo-INT4-ConvRot/resolve/main/diffusion_models/qwen_image_2.1_turbo_int4_convrot.safetensors) · [W8A8](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors)
+- Krea 2 Turbo · [W4A4](https://huggingface.co/poor7/Models/resolve/main/krea2_turbo_int4.safetensors) · [W8A8](https://huggingface.co/Comfy-Org/Krea-2/resolve/main/diffusion_models/krea2_turbo_int8_convrot.safetensors)
 
 ### GGUF
 
@@ -61,6 +56,7 @@ Shared VAE downloads for the DiT weight formats. [FLUX.2 VAE](https://huggingfac
 | 2026-09-20 | Added Hexagon NPU support for FLUX.2 Klein 9B. |
 | 2026-09-21 | Added Hexagon NPU support for Krea 2 Turbo and Qwen Image 2.1. |
 | 2026-10-31 | Added Hexagon NPU support for FLUX.3 Image Klein. |
+| 2026-11-24 | Added Hexagon NPU support for ConvRot W4A4 and W8A8 safetensors. |
 
 ## Hexagon NPU
 

@@ -246,14 +246,14 @@ ggml_tensor* ggml_ext_linear_i8_tensorwise(ggml_context* ctx,
     GGML_ABORT("I8 tensorwise matmul is not available in this ggml revision");
 }
 
-ggml_tensor* ggml_ext_linear_w4_convrot(ggml_context* ctx,
-                                       ggml_tensor* x,
-                                       ggml_tensor* w,
-                                       ggml_tensor* weight_scale,
-                                       ggml_tensor* bias,
-                                       int group,
-                                       float scale,
-                                       ggml_tensor* tail) {
+ggml_tensor* ggml_ext_linear_convrot(ggml_context* ctx,
+                                     ggml_tensor* x,
+                                     ggml_tensor* w,
+                                     ggml_tensor* weight_scale,
+                                     ggml_tensor* bias,
+                                     int group,
+                                     float scale,
+                                     ggml_tensor* tail) {
     if (scale != 1.f) {
         x = ggml_ext_scale(ctx, x, scale);
         if (tail) {

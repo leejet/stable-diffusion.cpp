@@ -156,13 +156,14 @@ protected:
         int8_convrot_group_size = 0;
         auto weight_storage     = tensor_storage_map.find(prefix + "weight");
         const bool w4           = weight_storage != tensor_storage_map.end() && weight_storage->second.w4_convrot_kind;
+        const bool convrot      = w4 || (weight_storage != tensor_storage_map.end() && weight_storage->second.int8_convrot);
         enum ggml_type wtype    = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
-        if (!w4 && (in_features % ggml_blck_size(wtype) != 0 || force_f32)) {
+        if (!convrot && (in_features % ggml_blck_size(wtype) != 0 || force_f32)) {
             wtype = GGML_TYPE_F32;
         }
         params["weight"] = ggml_new_tensor_2d(ctx, wtype, w4 ? in_features / 2 : in_features, out_features);
-        if (w4) {
-            params["weight"]->flags |= GGML_TENSOR_FLAG_W4_CONVROT;
+        if (convrot) {
+            params["weight"]->flags |= w4 ? GGML_TENSOR_FLAG_W4_CONVROT : GGML_TENSOR_FLAG_W8_CONVROT;
         }
         if (bias) {
             enum ggml_type wtype = GGML_TYPE_F32;
@@ -187,10 +188,10 @@ protected:
 
     ggml_tensor* forward_i8(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* w,
                             ggml_tensor* weight_scale, ggml_tensor* b, ggml_tensor* tail = nullptr) {
-        const bool w4 = w->flags & GGML_TENSOR_FLAG_W4_CONVROT;
+        const bool convrot = w->flags & (GGML_TENSOR_FLAG_W4_CONVROT | GGML_TENSOR_FLAG_W8_CONVROT);
         auto prepare_input = [&](ggml_tensor* input) {
             if (input->type != GGML_TYPE_F32) {
-                if (w4) {
+                if (convrot) {
                     return ggml_cast(ctx->ggml_ctx, input, GGML_TYPE_F32);
                 }
                 input = ggml_ext_cast_f32(ctx->ggml_ctx, ctx->backend, input);
@@ -204,8 +205,8 @@ protected:
         if (ctx->weight_adapter && b != nullptr) {
             b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
         }
-        auto* out = w4 ? ggml_ext_linear_w4_convrot(ctx->ggml_ctx, x, w, weight_scale, b, int8_convrot_group_size, scale, tail)
-                       : ggml_ext_linear_i8_tensorwise(ctx->ggml_ctx, x, w, weight_scale, b, int8_convrot_group_size, scale);
+        auto* out = convrot ? ggml_ext_linear_convrot(ctx->ggml_ctx, x, w, weight_scale, b, int8_convrot_group_size, scale, tail)
+                            : ggml_ext_linear_i8_tensorwise(ctx->ggml_ctx, x, w, weight_scale, b, int8_convrot_group_size, scale);
         if (ctx->weight_adapter) {
             WeightAdapter::ForwardParams forward_params;
             forward_params.op_type               = WeightAdapter::ForwardParams::op_type_t::OP_LINEAR;
@@ -213,7 +214,7 @@ protected:
             forward_params.linear.scale          = scale;
             auto* lora_input = tail ? ggml_concat(ctx->ggml_ctx, x, tail, 0) : x;
             ggml_tensor logical_weight;
-            if (w4) {
+            if (w->flags & GGML_TENSOR_FLAG_W4_CONVROT) {
                 logical_weight = *w;
                 logical_weight.ne[0] = in_features;
                 w = &logical_weight;
@@ -311,7 +312,7 @@ public:
                                    ggml_tensor* x0,
                                    ggml_tensor* x1) {
         ggml_tensor* w = params["weight"];
-        if (w->flags & GGML_TENSOR_FLAG_W4_CONVROT) {
+        if (w->flags & (GGML_TENSOR_FLAG_W4_CONVROT | GGML_TENSOR_FLAG_W8_CONVROT)) {
             return forward_i8(ctx, x0, w, params["weight_scale"], bias ? params["bias"] : nullptr, x1);
         }
         const bool segmented_weight = w->type == GGML_TYPE_F8_E4M3 ||
