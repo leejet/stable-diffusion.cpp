@@ -61,6 +61,17 @@ namespace Hunyuan {
         return ggml_reshape_4d(ctx->ggml_ctx, x, width, height, frames, channels * repeats);
     }
 
+    // Fold space so a temporal concat launches once across all channels on CUDA.
+    static ggml_tensor* flatten_video_frames(GGMLRunnerContext* ctx, ggml_tensor* x) {
+        return ggml_reshape_3d(ctx->ggml_ctx, ggml_ext_cont(ctx, x), x->ne[0] * x->ne[1], x->ne[2], x->ne[3]);
+    }
+
+    static ggml_tensor* concat_video_frames(GGMLRunnerContext* ctx, ggml_tensor* a, ggml_tensor* b) {
+        GGML_ASSERT(a->ne[0] == b->ne[0] && a->ne[1] == b->ne[1]);
+        auto joined = ggml_concat(ctx->ggml_ctx, flatten_video_frames(ctx, a), flatten_video_frames(ctx, b), 1);
+        return ggml_reshape_4d(ctx->ggml_ctx, joined, a->ne[0], a->ne[1], joined->ne[1], a->ne[3]);
+    }
+
     class CausalConv3d : public GGMLBlock {
     protected:
         std::tuple<int, int, int> kernel_size;
@@ -89,41 +100,56 @@ namespace Hunyuan {
             int pad_w = std::get<2>(kernel_size) / 2;
             int pad_h = std::get<1>(kernel_size) / 2;
             int pad_t = std::get<0>(kernel_size) - 1;
-            std::vector<ggml_tensor*> temporal_frames;
-            temporal_frames.reserve(x->ne[2] + pad_t);
+            auto padded = ggml_ext_cont(ctx, x);
             if (pad_t > 0) {
-                if (carry != nullptr && carry->is_continuation()) {
-                    auto previous = carry->take();
+                auto previous = carry != nullptr && carry->is_continuation() ? carry->take() : nullptr;
+                if (previous != nullptr) {
                     GGML_ASSERT(previous->ne[2] <= pad_t);
-                    for (int64_t frame = 0; frame < previous->ne[2]; frame++) {
-                        temporal_frames.push_back(ggml_ext_slice(ctx, previous, 2, frame, frame + 1));
+                    GGML_ASSERT(previous->ne[0] == x->ne[0] && previous->ne[1] == x->ne[1]);
+                }
+                const int64_t missing = pad_t - (previous != nullptr ? previous->ne[2] : 0);
+
+                auto input     = flatten_video_frames(ctx, padded);
+                auto prev_flat = previous != nullptr ? flatten_video_frames(ctx, previous) : nullptr;
+                auto prefix    = prev_flat;
+                if (missing > 0) {
+                    auto first = ggml_ext_slice(ctx, input, 1, 0, 1, false);
+                    if (missing > 1) {
+                        first = ggml_repeat_4d(ctx->ggml_ctx, first, first->ne[0], missing, first->ne[2], 1);
                     }
-                    for (int64_t frame = previous->ne[2]; frame < pad_t; frame++) {
-                        temporal_frames.push_back(ggml_ext_slice(ctx, x, 2, 0, 1));
-                    }
-                } else {
-                    auto first = ggml_ext_slice(ctx, x, 2, 0, 1);
-                    for (int frame = 0; frame < pad_t; frame++) {
-                        temporal_frames.push_back(first);
+                    prefix = prefix != nullptr ? ggml_concat(ctx->ggml_ctx, prefix, first, 1) : first;
+                }
+                padded = ggml_concat(ctx->ggml_ctx, prefix, input, 1);
+                padded = ggml_reshape_4d(ctx->ggml_ctx, padded, x->ne[0], x->ne[1], padded->ne[1], x->ne[3]);
+
+                if (carry != nullptr && carry->output != nullptr) {
+                    if (x->ne[2] < pad_t) {
+                        // Build the carry from previous/input directly so the temporary prefix is freed before the next chunk.
+                        const int64_t prev_frames = previous != nullptr ? previous->ne[2] : 0;
+                        const int64_t keep_prev   = std::max<int64_t>(0, prev_frames - x->ne[2]);
+                        const int64_t keep_first  = pad_t - x->ne[2] - keep_prev;
+                        ggml_tensor* tail         = input;
+                        if (keep_first > 0) {
+                            if (x->ne[2] == 1 && keep_prev == 0) {
+                                tail = ggml_repeat_4d(ctx->ggml_ctx, input, input->ne[0], pad_t, input->ne[2], 1);
+                            } else {
+                                auto first = ggml_ext_slice(ctx, input, 1, 0, 1, false);
+                                if (keep_first > 1) {
+                                    first = ggml_repeat_4d(ctx->ggml_ctx, first, first->ne[0], keep_first, first->ne[2], 1);
+                                }
+                                tail = ggml_concat(ctx->ggml_ctx, first, tail, 1);
+                            }
+                        }
+                        if (keep_prev > 0) {
+                            auto prev_tail = ggml_ext_slice(ctx, prev_flat, 1, prev_frames - keep_prev, prev_frames, false);
+                            tail           = ggml_concat(ctx->ggml_ctx, prev_tail, tail, 1);
+                        }
+                        carry->push(ggml_reshape_4d(ctx->ggml_ctx, tail, x->ne[0], x->ne[1], pad_t, x->ne[3]));
+                    } else {
+                        auto tail = ggml_ext_slice(ctx, x, 2, x->ne[2] - pad_t, x->ne[2], false);
+                        carry->push(ggml_cont(ctx->ggml_ctx, tail));
                     }
                 }
-            }
-            for (int64_t frame = 0; frame < x->ne[2]; frame++) {
-                temporal_frames.push_back(ggml_ext_slice(ctx, x, 2, frame, frame + 1));
-            }
-
-            if (pad_t > 0 && carry != nullptr && carry->output != nullptr) {
-                ggml_tensor* next = nullptr;
-                for (int frame = pad_t; frame > 0; frame--) {
-                    auto item = temporal_frames[temporal_frames.size() - frame];
-                    next      = next == nullptr ? item : ggml_concat(ctx->ggml_ctx, next, item, 2);
-                }
-                carry->push(ggml_cont(ctx->ggml_ctx, next));
-            }
-
-            ggml_tensor* padded = nullptr;
-            for (auto frame : temporal_frames) {
-                padded = padded == nullptr ? frame : ggml_concat(ctx->ggml_ctx, padded, frame, 2);
             }
             auto replicate_pad = [&](ggml_tensor* input, int dim, int left, int right) {
                 if (left > 0) {
@@ -463,8 +489,8 @@ namespace Hunyuan {
             x = mean_channel_groups(ctx, x, group_size);
 
             if (factor_t == 2) {
-                h = ggml_concat(ctx->ggml_ctx, h_first, h, 2);
-                x = ggml_concat(ctx->ggml_ctx, x_first, x, 2);
+                h = concat_video_frames(ctx, h_first, h);
+                x = concat_video_frames(ctx, x_first, x);
             }
             return ggml_add(ctx->ggml_ctx, h, x);
         }
@@ -732,7 +758,7 @@ namespace Hunyuan {
                 chunk = conv_out->forward(ctx, chunk, &carry);
                 carry.finish();
 
-                output      = output == nullptr ? chunk : ggml_concat(ctx->ggml_ctx, output, chunk, 2);
+                output      = output == nullptr ? chunk : concat_video_frames(ctx, output, chunk);
                 carry_input = std::move(carry_output);
             }
             return output;
