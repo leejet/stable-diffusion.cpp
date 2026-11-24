@@ -20,6 +20,26 @@
 
 namespace fs = std::filesystem;
 
+bool PromptImageCallbackGuard::load_image(const char* source, void* data, sd_image_t* image_out) {
+    const auto& params = static_cast<PromptImageCallbackGuard*>(data)->params_;
+    const auto it      = params.prompt_images.find(source);
+    if (it == params.prompt_images.end()) {
+        LOG_ERROR("Unknown prompt image ID: %s", source);
+        return false;
+    }
+    *image_out = it->second.get();
+    return image_out->data != nullptr;
+}
+
+PromptImageCallbackGuard::PromptImageCallbackGuard(sd_ctx_t* ctx, const SDGenerationParams& params)
+    : ctx_(ctx), params_(params) {
+    sd_set_prompt_image_callback(ctx_, load_image, this);
+}
+
+PromptImageCallbackGuard::~PromptImageCallbackGuard() {
+    sd_set_prompt_image_callback(ctx_, nullptr, nullptr);
+}
+
 bool validate_server_img_gen_request(const ServerRuntime& runtime,
                                      const ImgGenJobRequest& request,
                                      std::string& error_message) {
@@ -360,6 +380,12 @@ ArgOptions SDSvrParams::get_options() {
     options.int_options = {
         {"", "--listen-port", "server listen port (default: 1234)", &listen_port},
         {"", "--degradation-cooldown", "seconds the server waits, after stepping down to a lighter profile, before it tries the next heavier one again; a failed attempt doubles the wait up to one hour (default: 300, 0 = never go back up)", &degradation_cooldown},
+        {"", "--max-pending-jobs",
+         "maximum number of pending async jobs (default: 64)",
+         &max_pending_jobs},
+        {"", "--completed-ttl-seconds",
+         "retention time for completed async jobs in seconds (default: 600)",
+         &completed_ttl_seconds},
     };
 
     options.bool_options = {
@@ -403,6 +429,16 @@ bool SDSvrParams::validate() {
         return false;
     }
 
+    if (max_pending_jobs <= 0) {
+        LOG_ERROR("error: max_pending_jobs must be greater than 0");
+        return false;
+    }
+
+    if (completed_ttl_seconds < 0) {
+        LOG_ERROR("error: completed_ttl_seconds must be non-negative");
+        return false;
+    }
+
     if (!serve_html_path.empty() && !fs::exists(fs::u8path(serve_html_path))) {
         LOG_ERROR("error: serve_html_path file does not exist: %s", serve_html_path.c_str());
         return false;
@@ -423,6 +459,8 @@ std::string SDSvrParams::to_string() const {
         << "  log_level: " << log_level_name(log_level) << ",\n"
         << "  listen_ip: " << listen_ip << ",\n"
         << "  listen_port: \"" << listen_port << "\",\n"
+        << "  max_pending_jobs: " << max_pending_jobs << ",\n"
+        << "  completed_ttl_seconds: " << completed_ttl_seconds << ",\n"
         << "  serve_html_path: \"" << serve_html_path << "\",\n"
         << "  api_key: " << (api_key.empty() ? "(not set)" : "(set)") << ",\n"
         << "  cors_origins: \"" << cors_origins << "\",\n"

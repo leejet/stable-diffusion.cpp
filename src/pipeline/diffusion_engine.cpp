@@ -42,6 +42,7 @@
 #include "model/audio/wav2vec2.hpp"
 #include "model/diffusion/animatediff.hpp"
 #include "model/diffusion/control.hpp"
+#include "model/diffusion/minimax_h3.hpp"
 #include "model/diffusion/model.hpp"
 #include "model/diffusion/z_image.hpp"
 #include "model/vae/audio_vae.hpp"
@@ -874,11 +875,13 @@ bool StableDiffusionGGML::set_sage_attention_enabled(bool enabled) {
         if (ctx == nullptr) {
             return false;
         }
-        auto* q        = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 128, 128, 1, 1);
-        auto* k        = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 128, 128, 1, 1);
-        auto* v        = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 128, 128, 1, 1);
-        auto* op       = ggml_sage_attn(ctx, q, k, v, 1.f / sqrtf(128.f), GGML_SAGE_ATTN_AUTO);
-        bool supported = true;
+        auto* q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 128, 128, 1, 1);
+        auto* k = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 128, 128, 1, 1);
+        auto* v = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 128, 128, 1, 1);
+        GGMLRunnerContext probe_ctx;
+        probe_ctx.ggml_ctx = ctx;
+        auto* op           = ggml_ext_sage_attn(&probe_ctx, q, k, v, 1.f / sqrtf(128.f), GGML_SAGE_ATTN_AUTO);
+        bool supported     = true;
         for (auto backend : backend_manager.runtime_backends(SDBackendModule::DIFFUSION)) {
             if (!ggml_backend_supports_op(backend, op)) {
                 LOG_ERROR("SageAttention is unavailable on %s; it requires patched GGML, CUDA Toolkit 12.0 or newer, and SM80 or newer kernels",
@@ -1533,6 +1536,11 @@ bool StableDiffusionGGML::build_denoiser() {
             break;
         }
         case H3_AV_FLOW_PRED: {
+            if (version == VERSION_MINIMAX_H3_IMAGE) {
+                LOG_INFO("running in MiniMax H3 Image FLOW mode");
+                denoiser = std::make_shared<MiniMaxH3ImageDenoiser>(MiniMaxH3::pdd_sigmas);
+                break;
+            }
             LOG_INFO("running in MiniMax H3 AV FLOW mode");
             denoiser = std::make_shared<H3AVFlowDenoiser>(default_flow_shift, version == VERSION_P_H3_IMAGE ? 1.f : 3.f, get_latent_channel());
             break;
@@ -1913,7 +1921,41 @@ bool StableDiffusionGGML::apply_loras(const sd_lora_t* loras, uint32_t lora_coun
 }
 
 SDCondition StableDiffusionGGML::get_learned_condition(const ConditionerParams& params) {
-    return conditioning_cache_->get(*cond_stage_model, n_threads, params);
+    if (params.prompt_input != nullptr) {
+        return conditioning_cache_->get(*cond_stage_model, n_threads, params);
+    }
+    auto input    = sd::parse_prompt_input(params.text);
+    auto resolved = params;
+    if (sd::prompt_has_images(input)) {
+        if (!cond_stage_model->supports_prompt_images()) {
+            LOG_ERROR("Inline prompt images require a compatible LLM and vision weights");
+            return {};
+        }
+        if (prompt_image_callback == nullptr) {
+            LOG_ERROR("Inline prompt images require sd_set_prompt_image_callback()");
+            return {};
+        }
+        if (!sd::resolve_prompt_images(input, [&](const std::string& source) -> sd::Tensor<float> {
+                sd_image_t image{};
+                if (!prompt_image_callback(source.c_str(), prompt_image_callback_data, &image) ||
+                    image.data == nullptr || image.width == 0 || image.height == 0 || image.channel < 1 || image.channel > 4) {
+                    LOG_ERROR("Failed to resolve prompt image: %s", source.c_str());
+                    return {};
+                }
+                auto pixels = sd_image_to_tensor(image);
+                if (image.channel <= 2) {
+                    auto gray = sd::ops::slice(pixels, 2, 0, 1);
+                    return sd::ops::concat(sd::ops::concat(gray, gray, 2), gray, 2);
+                }
+                return image.channel == 3 ? pixels : sd::ops::slice(pixels, 2, 0, 3);
+            })) {
+            return {};
+        }
+        resolved.prompt_input = &input;
+    } else {
+        resolved.text = sd::prompt_input_text(input);
+    }
+    return conditioning_cache_->get(*cond_stage_model, n_threads, resolved);
 }
 
 void StableDiffusionGGML::reset_generation_extensions() {
@@ -2486,15 +2528,6 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                                                         : sampling_init_latent;
     sd::Tensor<float> denoised                    = x_t;
 
-#ifdef SD_USE_UPSTREAM_GGML
-    // workaround for sd.cpp #2149
-    const auto diffusion_backends = backend_manager.runtime_backends(SDBackendModule::DIFFUSION);
-    const bool batch_cfg_backend_ok = std::none_of(diffusion_backends.begin(), diffusion_backends.end(),
-            [](ggml_backend_t backend) { return sd_backend_is(backend, "MTL"); });
-#else
-    const bool batch_cfg_backend_ok = true;
-#endif
-
     auto denoise = [&](const sd::Tensor<float>& x, float sigma, int step) -> sd::guidance::GuiderOutput {
         if (get_cancel_flag() == SD_CANCEL_ALL) {
             LOG_VERBOSE("cancelling generation");
@@ -2659,7 +2692,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                     condition.c_position_ids.empty() ? nullptr : &condition.c_position_ids,
                     condition.c_ref_audios.empty() ? nullptr : &condition.c_ref_audios,
                     condition.c_reference_blocks.empty() ? nullptr : &condition.c_reference_blocks,
-                    version == VERSION_P_H3_IMAGE ? 2 : audio_length,
+                    version == VERSION_MINIMAX_H3_IMAGE ? 0 : (version == VERSION_P_H3_IMAGE ? 2 : audio_length),
                     std::isfinite(active_flow_shift) ? active_flow_shift : 12.f,
                     version == VERSION_P_H3_IMAGE ? 1.f : 3.f,
                     target_index > 0 && target_index < sigmas.size() ? sigmas[target_index] : NAN};
@@ -2817,7 +2850,6 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
         }
 
         const bool batch_cfg_ok = config_->params.batched_cfg &&
-                                  batch_cfg_backend_ok &&
                                   sd_version_is_unet(version) &&
                                   !uncond.empty() &&
                                   img_uncond.empty() &&
@@ -3102,7 +3134,7 @@ sd::Tensor<float> StableDiffusionGGML::decode_first_stage(const sd::Tensor<float
             return {};
         }
         auto decoded = first_stage_model->decode(n_threads, latents, tiling_params, decode_video, circular_x, circular_y);
-        if (version == VERSION_P_H3_IMAGE && !decoded.empty() && decoded.dim() == 5) {
+        if (sd_version_is_minimax_h3_image(version) && !decoded.empty() && decoded.dim() == 5) {
             decoded = decoded.squeeze(2);
         }
         if (!decoded.empty() ||

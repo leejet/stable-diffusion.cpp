@@ -21,8 +21,10 @@ class ContextKeeper;
 struct ServerModels;
 
 struct SDSvrParams {
-    std::string listen_ip = "127.0.0.1";
-    int listen_port       = 1234;
+    std::string listen_ip     = "127.0.0.1";
+    int listen_port           = 1234;
+    int max_pending_jobs      = 64;
+    int completed_ttl_seconds = 600;
     std::string serve_html_path;
     std::string api_key;       // empty = no authentication
     std::string cors_origins;  // comma-separated allowlist; empty = reflect any origin
@@ -94,6 +96,19 @@ struct ImgGenJobRequest {
     sd_img_gen_params_t to_sd_img_gen_params_t() {
         return gen_params.to_sd_img_gen_params_t();
     }
+};
+
+class PromptImageCallbackGuard {
+    sd_ctx_t* ctx_;
+    const SDGenerationParams& params_;
+
+    static bool load_image(const char* source, void* data, sd_image_t* image_out);
+
+public:
+    PromptImageCallbackGuard(sd_ctx_t* ctx, const SDGenerationParams& params);
+    ~PromptImageCallbackGuard();
+    PromptImageCallbackGuard(const PromptImageCallbackGuard&)            = delete;
+    PromptImageCallbackGuard& operator=(const PromptImageCallbackGuard&) = delete;
 };
 
 constexpr int k_max_generation_dimension = 4096;

@@ -403,6 +403,7 @@ bool execute_img_gen_job(ServerRuntime& runtime,
             }
             adetailer_failed = false;
             JobCallbacksGuard callbacks(view.ctx, job);
+            PromptImageCallbackGuard prompt_images(view.ctx, job.img_gen.gen_params);
             sd_image_generation_result_t* produced = nullptr;
             if (!generate_image(view.ctx, &attempt_params, &produced)) {
                 return false;
@@ -498,6 +499,7 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
                 attempt_params.vae_tiling_params.enabled = true;
             }
             JobCallbacksGuard callbacks(view.ctx, job);
+            PromptImageCallbackGuard prompt_images(view.ctx, job.vid_gen.gen_params);
             sd_video_generation_result_t* produced = nullptr;
             if (!generate_video(view.ctx, &attempt_params, &produced)) {
                 return false;

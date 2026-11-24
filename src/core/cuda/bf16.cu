@@ -29,7 +29,7 @@ namespace SD_CUDA_NAMESPACE {
         }
 
         static bool projection(const ggml_tensor* mat, const ggml_tensor* input) {
-            return mat->op == GGML_OP_MUL_MAT && mat->src[1] == input && mat->op_params[0] == GGML_PREC_DEFAULT &&
+            return mat->op == GGML_OP_MUL_MAT && mat->src[1] == input && ggml_prec_get_acc(mat) == GGML_PREC_UNDEFINED &&
                    matrix(input, GGML_TYPE_F32) && input->ne[1] >= 32 && ggml_nelements(input) <= INT_MAX &&
                    matrix(mat, GGML_TYPE_F32) && matrix(mat->src[0], GGML_TYPE_BF16) && !mat->view_src;
         }

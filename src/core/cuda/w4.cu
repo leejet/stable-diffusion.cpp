@@ -856,7 +856,7 @@ namespace SD_CUDA_NAMESPACE {
 #ifdef SD_CUDA_W4_CUTLASS
             if (plan->mma && op.kind == SDW4Kind::W4A4) {
                 if (!op.bias && aligned(dst, 16) && aligned(op.weight_scale, 16))
-                    plan->gemm = sd_cuda_i8_gemm_prepare(ggml_backend_get_device(backend), ggml_nrows(dst), dst->ne[0], op.input->ne[0], false, &gemm_bytes, true);
+                    plan->gemm = sd_cuda_i8_gemm_prepare(ggml_backend_get_device(backend), ggml_nrows(dst), dst->ne[0], op.input->ne[0], SDI8GemmActivation::None, &gemm_bytes, true);
                 plan->mma = plan->gemm != nullptr;
                 if (plan->gemm && gemm_bytes == 0)
                     gemm_bytes = 256;

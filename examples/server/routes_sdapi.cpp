@@ -609,6 +609,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                         params.vae_tiling_params.enabled = true;
                     }
                     adetailer_failed = false;
+                    PromptImageCallbackGuard prompt_images(view.ctx, request.gen_params);
                     SDAPIPreviewGuard preview_guard(id_task, params, img2img ? "img2img" : "txt2img", detailing);
                     sd_image_generation_result_t* produced = nullptr;
                     if (!generate_image(view.ctx, &params, &produced)) {

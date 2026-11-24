@@ -11,6 +11,7 @@ test/*
 !test/model_loader_latency_test.cpp
 !test/profile_test.cpp
 !test/backend_fit_plan_test.cpp
+!test/memory_guard_engine_test.cpp
 !test/package_windows_cuda_vulkan_test.sh
 !test/server_recovery_test.cpp
 !test/server_cancel_e2e.py
@@ -32,7 +33,7 @@ logs/
 *.exe
 *.gguf
 output*.png
-models*
+/models*
 *.log
 preview.png
 .claude/

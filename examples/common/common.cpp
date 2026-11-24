@@ -1611,6 +1611,8 @@ ArgOptions SDGenerationParams::get_options() {
             sigmas_str = "1.0,0.978453,0.95418,0.926626,0.89508,0.845148,0.704534,0.414568,0.0";
         } else if (sigmas_str == "p-h3-image") {
             sigmas_str = "1.0,0.984753,0.967905,0.951688,0.925372,0.881923,0.810083,0.528718,0.0";
+        } else if (sigmas_str == "minimax-h3-image") {
+            sigmas_str = "1.0,0.9675236940383911,0.8875485062599182,0.75,0.5327739119529724,0.23200887441635132,0.0";
         } else if (sigmas_str == "hyperflow-h3-flash-4") {
             sigmas_str = "1.0,0.962575853,0.755781889,0.312497854,0.0";
         } else if (sigmas_str == "hyperflow-h3-flash-6") {
@@ -1864,11 +1866,11 @@ ArgOptions SDGenerationParams::get_options() {
          on_scheduler_arg},
         {"",
          "--sigmas",
-         "custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\") or preset: qwen-image-2.1-turbo, p-h3-image, hyperflow-h3-flash-4, hyperflow-h3-flash-6, hyperflow-h3-flash-8.",
+         "custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\") or preset: qwen-image-2.1-turbo, p-h3-image, minimax-h3-image, hyperflow-h3-flash-4, hyperflow-h3-flash-6, hyperflow-h3-flash-8.",
          on_sigmas_arg},
         {"",
          "--hires-sigmas",
-         "custom sigma values for the highres fix second pass, comma-separated (e.g., \"0.85,0.725,0.421875,0.0\") or preset: qwen-image-2.1-turbo, p-h3-image, hyperflow-h3-flash-4, hyperflow-h3-flash-6, hyperflow-h3-flash-8.",
+         "custom sigma values for the highres fix second pass, comma-separated (e.g., \"0.85,0.725,0.421875,0.0\") or preset: qwen-image-2.1-turbo, p-h3-image, minimax-h3-image, hyperflow-h3-flash-4, hyperflow-h3-flash-6, hyperflow-h3-flash-8.",
          on_hires_sigmas_arg},
         {"",
          "--skip-layers",
@@ -2268,6 +2270,26 @@ bool SDGenerationParams::parse_image_preprocess_json(const std::string& json_str
     return true;
 }
 
+bool SDGenerationParams::parse_prompt_images_json(const std::string& json_str) {
+    auto images = json::parse(json_str, nullptr, false);
+    if (!images.is_object()) {
+        return false;
+    }
+    std::map<std::string, SDImageOwner> decoded;
+    for (auto it = images.begin(); it != images.end(); ++it) {
+        if (it.key().empty() || it.key().find('>') != std::string::npos || !it.value().is_string()) {
+            return false;
+        }
+        SDImageOwner image;
+        if (!decode_base64_image(it.value().get<std::string>(), 3, 0, 0, image)) {
+            return false;
+        }
+        decoded.emplace(it.key(), std::move(image));
+    }
+    prompt_images = std::move(decoded);
+    return true;
+}
+
 /** Populates generation params from a JSON payload (server APIs); returns false on any malformed field. */
 bool SDGenerationParams::from_json_str(
     const std::string& json_str,
@@ -2281,6 +2303,8 @@ bool SDGenerationParams::from_json_str(
     }
 
     if (j.contains("image_preprocess") && !parse_image_preprocess_json(j["image_preprocess"].dump()))
+        return false;
+    if (j.contains("prompt_images") && !parse_prompt_images_json(j["prompt_images"].dump()))
         return false;
 
     auto load_if_exists = [&](const char* key, auto& out) {

@@ -139,7 +139,7 @@ namespace SeedVR2 {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
             auto up     = std::dynamic_pointer_cast<Linear>(blocks["proj_in"])->forward(ctx, x);
             auto hidden = swiglu_ ? ggml_swiglu_split(ctx->ggml_ctx, std::dynamic_pointer_cast<Linear>(blocks["proj_in_gate"])->forward(ctx, x), up)
-                                  : ggml_ext_gelu(ctx->ggml_ctx, up);
+                                  : ggml_ext_gelu(ctx, up);
             return std::dynamic_pointer_cast<Linear>(blocks["proj_out"])->forward(ctx, hidden);
         }
     };
@@ -194,19 +194,26 @@ namespace SeedVR2 {
                     return x;
                 return std::dynamic_pointer_cast<AdaSingle>(blocks["ada." + branch(text)])->forward(ctx, x, emb, layer, gate);
             };
-            auto vqkv = linear("attn.proj_qkv", false, ada(ggml_rms_norm(c, vid, 1e-5f), false, "attn"));
-            auto tqkv = linear("attn.proj_qkv", true, ada(ggml_rms_norm(c, txt, 1e-5f), true, "attn"));
-            vqkv      = ggml_get_rows(c, vqkv, inputs.input(ctx, plan.order));
-            auto vpe  = rotation(ctx, inputs.input(ctx, plan.positions));
-            auto tpe  = rotation(ctx, inputs.input(ctx, plan.text_positions));
-            auto qkv  = [&](ggml_tensor* x, bool text, ggml_tensor* pe) {
-                auto parts = ggml_ext_chunk(c, x, 3, 0);
+            auto vqkv      = linear("attn.proj_qkv", false, ada(ggml_rms_norm(c, vid, 1e-5f), false, "attn"));
+            auto tqkv      = linear("attn.proj_qkv", true, ada(ggml_rms_norm(c, txt, 1e-5f), true, "attn"));
+            vqkv           = ggml_get_rows(c, vqkv, inputs.input(ctx, plan.order));
+            auto vpe       = rotation(ctx, inputs.input(ctx, plan.positions));
+            auto tpe       = rotation(ctx, inputs.input(ctx, plan.text_positions));
+            auto split_qkv = [&](ggml_tensor* x, int i) {
+                int64_t qkv_dim = x->ne[0] / 3;
+                return ggml_view_4d(c, x, 128, qkv_dim / 128, x->ne[1], x->ne[2] * x->ne[3],
+                                    128 * x->nb[0], x->nb[1], x->nb[2], i * qkv_dim * x->nb[0]);
+            };
+            auto qkv = [&](ggml_tensor* x, bool text, ggml_tensor* pe) {
+                std::vector<ggml_tensor*> parts{nullptr, nullptr, nullptr};
                 for (int i = 0; i < 2; ++i) {
-                    auto h   = ggml_reshape_3d(c, parts[i], 128, heads, x->ne[1]);
-                    h        = std::dynamic_pointer_cast<RMSNorm>(blocks[std::string(i == 0 ? "attn.norm_q." : "attn.norm_k.") + branch(text)])->forward(ctx, h);
+                    auto h   = std::dynamic_pointer_cast<RMSNorm>(blocks[std::string(i == 0 ? "attn.norm_q." : "attn.norm_k.") + branch(text)])->forward(ctx, split_qkv(x, i));
                     h        = ggml_reshape_2d(c, h, dim, x->ne[1]);
                     parts[i] = VSR::apply_rope(ctx, h, pe, heads);
                 }
+                // v must stay 3-D [dim, L, N]: the window loop slices dim 1 as tokens.
+                auto v   = split_qkv(x, 2);
+                parts[2] = ggml_view_3d(c, v, dim, x->ne[1], x->ne[2], v->nb[2], v->nb[3], 0);
                 return parts;
             };
             auto vp = qkv(vqkv, false, vpe), tp = qkv(tqkv, true, tpe);
@@ -216,15 +223,15 @@ namespace SeedVR2 {
             for (int length : plan.lengths) {
                 std::vector<ggml_tensor*> joined;
                 for (int i = 0; i < 3; ++i)
-                    joined.push_back(ggml_concat(c, ggml_ext_slice(c, vp[i], 1, start, start + length), tp[i], 1));
-                auto out = ggml_ext_attention_ext(c, ctx->backend, joined[0], joined[1], joined[2], heads, nullptr, false, ctx->flash_attn_enabled);
-                auto vo  = ggml_ext_slice(c, out, 1, 0, length);
-                auto to  = ggml_ext_slice(c, out, 1, length, length + txt->ne[1]);
+                    joined.push_back(ggml_concat(c, ggml_ext_slice(ctx, vp[i], 1, start, start + length), tp[i], 1));
+                auto out = ggml_ext_attention_ext(ctx, joined[0], joined[1], joined[2], heads, nullptr, false, ctx->flash_attn_enabled);
+                auto vo  = ggml_ext_slice(ctx, out, 1, 0, length);
+                auto to  = ggml_ext_slice(ctx, out, 1, length, length + txt->ne[1]);
                 video_windows.push_back(vo);
                 tout = tout ? ggml_add(c, tout, to) : to;
                 start += length;
             }
-            auto vout = ggml_ext_vec_concat(c, video_windows, 1);
+            auto vout = ggml_ext_vec_concat(ctx, video_windows, 1);
             vout      = ggml_get_rows(c, vout, inputs.input(ctx, plan.reverse));
             tout      = ggml_scale(c, tout, 1.f / plan.lengths.size());
             vid       = ggml_add(c, vid, ada(linear("attn.proj_out", false, vout), false, "attn", true));

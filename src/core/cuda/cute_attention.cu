@@ -37,6 +37,7 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <cutlass/numeric_conversion.h>
+#include <algorithm>
 #include <climits>
 #include <cstdlib>
 #include <cstring>
@@ -242,7 +243,7 @@ namespace sd_fattn_cute {
         bool scaled_output = false;
     };
 
-    template <int BM, int BN, int D = 128, bool FullDim = true, int Warps = 4>
+    template <int BM, int BN, int D = 128, bool FullDim = true, int Warps = 4, bool QRegs = false>
     __global__ __launch_bounds__(Warps * 32) void kernel(Params p) {
         using T       = Traits<BM, BN, D, Warps>;
         using Element = typename T::Element;
@@ -294,6 +295,11 @@ namespace sd_fattn_cute {
         copy_rows<false, true, FullDim>(global_copy, last_k, tKsK, tKVcKV, p.nk - block * BN, p.dim);
         cute::cp_async_fence();
         clear(acc_o);
+        if constexpr (QRegs) {
+            cute::cp_async_wait<0>();
+            __syncthreads();
+            cute::copy(copyQ, tSsQ, threadQ.retile_D(rQ));
+        }
         Softmax<2 * size<1>(acc_o)> softmax;
         auto step = [&](auto first_flag, int n) {
             constexpr bool First = decltype(first_flag)::value;
@@ -304,7 +310,7 @@ namespace sd_fattn_cute {
             auto v_tile = tVgV(_, _, _, n);
             copy_rows<!First, First, FullDim>(global_copy, v_tile, tVsV, tKVcKV, p.nk - n * BN, p.dim);
             cute::cp_async_fence();
-            gemm(acc_s, rQ, rK, tSsQ, tSsK, mma, copyQ, copyK, threadQ, threadK);
+            gemm<QRegs>(acc_s, rQ, rK, tSsQ, tSsK, mma, copyQ, copyK, threadQ, threadK);
             if constexpr (First) {
 #pragma unroll
                 for (int i = 0; i < size(acc_s); ++i) {
@@ -680,9 +686,9 @@ static ggml_status attention_prepare(ggml_backend_t, ggml_tensor* const* nodes, 
     return GGML_STATUS_SUCCESS;
 }
 
-template <int D, bool FullDim>
+template <int D, bool FullDim, bool QRegs = false>
 static cudaError_t attention_launch(const ggml_ext_cuda_context& context, const sd_fattn_cute::Params& p, int64_t batches) {
-    auto kernel                = sd_fattn_cute::kernel<64, 64, D, FullDim>;
+    auto kernel                = sd_fattn_cute::kernel<64, 64, D, FullDim, 4, QRegs>;
     constexpr int shared_bytes = sd_fattn_cute::Traits<64, 64, D>::SharedBytes;
     static std::mutex mutex;
     static std::unordered_map<int, bool> initialized;
@@ -705,11 +711,12 @@ static cudaError_t attention_launch(const ggml_ext_cuda_context& context, const 
 }
 
 static ggml_status attention_execute(const ggml_ext_execution_context* execution, ggml_tensor* const* nodes, int count, void* state, void*) {
-    const auto& plan = *static_cast<AttentionPlan*>(state);
-    const auto* attn = nodes[plan.index];
-    auto device      = ggml_backend_get_device(execution->backend);
-    auto reg         = ggml_backend_dev_backend_reg(device);
-    auto query       = reinterpret_cast<ggml_ext_cuda_context_fn>(ggml_backend_reg_get_proc_address(reg, "ggml_ext_cuda_context_v1"));
+    const auto& plan       = *static_cast<AttentionPlan*>(state);
+    const auto* attn       = nodes[plan.index];
+    auto device            = ggml_backend_get_device(execution->backend);
+    const auto& properties = cuda_device(device)->properties;
+    auto reg               = ggml_backend_dev_backend_reg(device);
+    auto query             = reinterpret_cast<ggml_ext_cuda_context_fn>(ggml_backend_reg_get_proc_address(reg, "ggml_ext_cuda_context_v1"));
     ggml_ext_cuda_context context;
     if (!query || !query(execution->backend, &context))
         return GGML_STATUS_FAILED;
@@ -774,7 +781,10 @@ static ggml_status attention_execute(const ggml_ext_execution_context* execution
             error = attention_launch<112, true>(context, p, q->ne[3]);
             break;
         case 128:
-            error = attention_launch<128>(context, p, q->ne[3]);
+            error = p.dim == 128 && p.nq >= 4096 && p.nq < 8192 && p.nk >= 4096 && p.nk < 8192 &&
+                            properties.major == 8 && properties.minor == 9
+                        ? attention_launch<128, true, true>(context, p, q->ne[3])
+                        : attention_launch<128>(context, p, q->ne[3]);
             break;
         case 192:
             error = attention_launch<192>(context, p, q->ne[3]);
@@ -794,7 +804,7 @@ static ggml_status attention_execute(const ggml_ext_execution_context* execution
         if (rows != padded_rows && cudaMemsetAsync(packed + width * rows, 0, width * (padded_rows - rows), stream) != cudaSuccess)
             return GGML_STATUS_FAILED;
         if (cudaFuncSetAttribute(quantize_attention, cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                 int(cuda_device(device)->properties.sharedMemPerBlockOptin - 128)) != cudaSuccess)
+                                 int(properties.sharedMemPerBlockOptin - 128)) != cudaSuccess)
             return GGML_STATUS_FAILED;
         quantize_attention<<<rows, 256, width * sizeof(float), stream>>>(work[3], packed,
                                                                          reinterpret_cast<float*>(packed + width * padded_rows), width, rows, scale, bias);
@@ -809,7 +819,18 @@ static void attention_destroy(void* state, void*) {
 }
 
 void sd_ggml_register_cuda_attention(ggml_backend_dev_t device) {
-    if (!cuda_device(device))
+    const auto* info = cuda_device(device);
+    if (!info || info->properties.major < 8)
+        return;
+    int previous;
+    if (cudaGetDevice(&previous) != cudaSuccess || cudaSetDevice(info->ordinal) != cudaSuccess)
+        return;
+    cudaFuncAttributes attributes{};
+    const auto error    = cudaFuncGetAttributes(&attributes, sd_fattn_cute::kernel<64, 64>);
+    const auto restored = cudaSetDevice(previous);
+    // JIT preserves instruction guards from the original PTX architecture.
+    if (restored != cudaSuccess || error != cudaSuccess ||
+        std::min(attributes.binaryVersion, attributes.ptxVersion) < 80)
         return;
     ggml_ext_kernel_desc desc = {};
     desc.abi_version          = GGML_EXT_ABI_VERSION;
