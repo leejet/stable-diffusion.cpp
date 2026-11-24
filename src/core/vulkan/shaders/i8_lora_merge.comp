@@ -1,0 +1,146 @@
+#version 450
+
+layout(local_size_x = 256) in;
+layout(constant_id = 0) const uint stage = 0;
+layout(push_constant) uniform Params {
+    uint k;
+    uint rows;
+    uint count;
+    uint group_size;
+    uint scalar;
+}
+p;
+layout(binding = 0, std430) readonly buffer Weight {
+    uint weight[];
+};
+layout(binding = 1, std430) readonly buffer OldScales {
+    float old_scales[];
+};
+layout(binding = 2, std430) readonly buffer Diff {
+    float diff[];
+};
+layout(binding = 3, std430) buffer Output {
+    uint packed[];
+};
+layout(binding = 4, std430) buffer Workspace {
+    uint scratch[];
+};
+
+const uint CHANGED   = 1;
+const uint NONFINITE = 2;
+shared float maxima[256];
+shared uint changed_rows[256];
+
+int weight_at(uint i) {
+    return bitfieldExtract(int(weight[i / 4]), int(i % 4) * 8, 8);
+}
+
+void combine_weights() {
+    const uint tid            = gl_LocalInvocationID.x;
+    const float normalization = p.group_size > 1 ? inversesqrt(float(p.group_size)) : 1.0;
+    for (uint base = gl_WorkGroupID.x * 256; base < p.count; base += gl_NumWorkGroups.x * 256) {
+        const uint i        = base + tid;
+        precise float value = i < p.count ? diff[i] : 0.0;
+        if (p.group_size > 1) {
+            maxima[tid] = value * normalization;
+            barrier();
+            for (uint stride = 1; stride < p.group_size; stride *= 4) {
+                const uint j     = tid / (4 * stride) * (4 * stride) + tid % stride;
+                const uint digit = (tid / stride) % 4;
+                const float a = maxima[j], b = maxima[j + stride], c = maxima[j + 2 * stride], d = maxima[j + 3 * stride];
+                value = (digit == 3 ? -a : a) + (digit == 2 ? -b : b) + (digit == 1 ? -c : c) + (digit == 0 ? -d : d);
+                barrier();
+                maxima[tid] = value;
+                barrier();
+            }
+        }
+        if (i < p.count) {
+            value += float(weight_at(i)) * old_scales[p.scalar != 0 ? 0 : i / p.k];
+            scratch[i] = floatBitsToUint(value);
+        }
+    }
+}
+
+void reduce_stats(float maximum, uint changed) {
+    const uint tid    = gl_LocalInvocationID.x;
+    maxima[tid]       = maximum;
+    changed_rows[tid] = changed;
+    barrier();
+    for (uint stride = 128; stride > 0; stride /= 2) {
+        if (tid < stride) {
+            maxima[tid] = max(maxima[tid], maxima[tid + stride]);
+            changed_rows[tid] |= changed_rows[tid + stride];
+        }
+        barrier();
+    }
+}
+
+void row_stats() {
+    const uint tid = gl_LocalInvocationID.x;
+    for (uint row = gl_WorkGroupID.x; row < p.rows; row += gl_NumWorkGroups.x) {
+        float maximum = 0.0;
+        uint changed  = 0;
+        for (uint col = tid; col < p.k; col += 256) {
+            const uint i      = row * p.k + col;
+            const float value = uintBitsToFloat(scratch[i]);
+            maximum           = max(maximum, isnan(value) ? uintBitsToFloat(0x7f800000u) : abs(value));
+            changed |= uint(diff[i] != 0.0);
+        }
+        reduce_stats(maximum, changed);
+        if (tid == 0) {
+            scratch[p.count + 2 * row]     = floatBitsToUint(maxima[0]);
+            scratch[p.count + 2 * row + 1] = changed_rows[0];
+        }
+        barrier();
+    }
+}
+
+void summarize() {
+    const uint tid = gl_LocalInvocationID.x;
+    float maximum  = 0.0;
+    uint changed   = 0;
+    for (uint row = tid; row < p.rows; row += 256) {
+        const uint row_changed = scratch[p.count + 2 * row + 1];
+        if (row_changed != 0 || p.scalar != 0)
+            maximum = max(maximum, uintBitsToFloat(scratch[p.count + 2 * row]));
+        changed |= row_changed;
+    }
+    reduce_stats(maximum, changed);
+    if (tid == 0) {
+        packed[0] = changed_rows[0] == 0 ? 0 : CHANGED | (isinf(maxima[0]) ? NONFINITE : 0);
+        if (p.scalar != 0)
+            packed[1] = floatBitsToUint(maxima[0] / 127.0);
+    }
+}
+
+void quantize_weights() {
+    const bool apply       = packed[0] == CHANGED;
+    const uint scale_count = p.scalar != 0 ? 1 : p.rows;
+    for (uint word = gl_GlobalInvocationID.x; word < p.count / 4; word += gl_NumWorkGroups.x * 256) {
+        uint result = 0;
+        for (uint lane = 0; lane < 4; ++lane) {
+            const uint i       = 4 * word + lane;
+            const uint row     = i / p.k;
+            const bool changed = apply && (p.scalar != 0 || scratch[p.count + 2 * row + 1] != 0);
+            const float scale  = changed ? (p.scalar != 0 ? uintBitsToFloat(packed[1]) : uintBitsToFloat(scratch[p.count + 2 * row]) / 127.0)
+                                         : old_scales[p.scalar != 0 ? 0 : row];
+            if (p.scalar != 0 ? (!apply && i == 0) : i % p.k == 0)
+                packed[1 + (p.scalar != 0 ? 0 : row)] = floatBitsToUint(scale);
+            const int q = changed ? (scale == 0.0 ? 0 : int(clamp(roundEven(uintBitsToFloat(scratch[i]) / scale), -127.0, 127.0))) : weight_at(i);
+            result |= (uint(q) & 255u) << (8 * lane);
+        }
+        packed[1 + scale_count + word] = result;
+    }
+}
+
+void main() {
+    if (stage == 0) {
+        combine_weights();
+    } else if (stage == 1) {
+        row_stats();
+    } else if (stage == 2) {
+        summarize();
+    } else {
+        quantize_weights();
+    }
+}

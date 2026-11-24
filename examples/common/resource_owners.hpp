@@ -12,7 +12,6 @@
 #include <vector>
 
 #include <optional>
-#include "generation_metadata.h"
 #include "log.h"
 #include "stable-diffusion.h"
 
@@ -123,17 +122,6 @@ static inline SDAudio* retain_result_audio(const sd_result_t* result) {
     return view;
 }
 
-static inline bool preprocess_canny(SDImage& image, float high, float low, float weak, float strong, bool inverse) {
-    auto input          = image_tensor(image);
-    sd_tensor_t* output = nullptr;
-    if (!input || sd_preprocess_canny(input.get(), high, low, weak, strong, inverse, &output) != SD_STATUS_OK)
-        return false;
-    sd_image_free(&image);
-    image         = tensor_image_view(output);
-    image.storage = output;
-    return true;
-}
-
 struct FreeDeleter {
     void operator()(void* ptr) const {
         free(ptr);
@@ -164,21 +152,12 @@ struct UpscalerCtxDeleter {
     }
 };
 
-struct ADetailerCtxDeleter {
-    void operator()(sd_adetailer_t* ctx) const {
-        if (ctx != nullptr) {
-            sd_adetailer_free(ctx);
-        }
-    }
-};
-
 template <typename T>
 using FreeUniquePtr = std::unique_ptr<T, FreeDeleter>;
 
-using FilePtr         = std::unique_ptr<FILE, FileCloser>;
-using SDCtxPtr        = std::unique_ptr<sd_ctx_t, SDCtxDeleter>;
-using UpscalerCtxPtr  = std::unique_ptr<sd_upscaler_t, UpscalerCtxDeleter>;
-using ADetailerCtxPtr = std::unique_ptr<sd_adetailer_t, ADetailerCtxDeleter>;
+using FilePtr        = std::unique_ptr<FILE, FileCloser>;
+using SDCtxPtr       = std::unique_ptr<sd_ctx_t, SDCtxDeleter>;
+using UpscalerCtxPtr = std::unique_ptr<sd_upscaler_t, UpscalerCtxDeleter>;
 
 struct SDOptDeleter {
     void operator()(sd_opt_t* opt) const { sd_opt_free(opt); }
@@ -359,86 +338,13 @@ static inline sd_upscaler_t* create_sd_upscaler(const char* path, std::optional<
     return result;
 }
 
-static inline bool upscale_sd_image(sd_upscaler_t* ctx, SDImage image, sd_result_t** result) {
+static inline bool upscale_sd_image(sd_upscaler_t* ctx, SDImage image, sd_result_t** result, int repeats = 1) {
     if (result)
         *result = nullptr;
     SDOptPtr opt(sd_upscale_opt_create());
     auto tensor = image_tensor(image);
     return opt && tensor && sd_opt_set_tensor(opt.get(), "image", tensor.get()) == SD_STATUS_OK &&
-           sd_upscale(ctx, opt.get(), result) == SD_STATUS_OK;
-}
-
-static inline sd_adetailer_t* create_sd_adetailer(const char* path, std::optional<int> threads, const char* backend, const char* params_backend) {
-    SDOptPtr opt(sd_adetailer_opt_create());
-    if (!opt || sd_opt_set_string(opt.get(), "model_path", path) != SD_STATUS_OK ||
-        (threads && sd_opt_set_int(opt.get(), "n_threads", *threads) != SD_STATUS_OK) ||
-        (backend && sd_opt_set_string(opt.get(), "backend", backend) != SD_STATUS_OK) ||
-        (params_backend && sd_opt_set_string(opt.get(), "params_backend", params_backend) != SD_STATUS_OK))
-        return nullptr;
-    sd_adetailer_t* result = nullptr;
-    sd_adetailer_create(opt.get(), &result);
-    return result;
-}
-
-static inline bool adetail_sd_image(sd_adetailer_t* detector, sd_ctx_t* ctx, SDImage image, SDOptPtr opt, sd_result_t** result) {
-    if (result)
-        *result = nullptr;
-    auto tensor = image_tensor(image);
-    return opt && tensor && sd_opt_set_tensor(opt.get(), "image", tensor.get()) == SD_STATUS_OK &&
-           sd_adetail(detector, ctx, opt.get(), result) == SD_STATUS_OK;
-}
-
-struct SDVideoUpscalerParams {
-    const char* diffusion_model_path{};
-    const char* vae_path{};
-    // Explicit output scale; RelayVSR requires 2 or 4 matching both checkpoints.
-    int upscale_factor{};
-    std::optional<int> n_threads;
-    const char* backend{};
-    const char* params_backend{};
-    // auto/on/off or diffusion/vae assignments; null selects auto.
-    const char* flash_attn_mode{};
-    const char* conv_direct_mode{};
-};
-
-struct SDVideoUpscaleParams {
-    const SDImage* frames{};
-    int frame_count{};
-    std::optional<int> fps;
-    std::optional<int64_t> seed;
-    // RelayVSR reference window, including both endpoints; defaults to 16.
-    std::optional<int> window_size;
-    // SeedVR2 independent temporal chunks in input frames (1 or 4n+1); defaults to 5.
-    std::optional<int> temporal_chunk_size;
-};
-
-static inline sd_vid_upscaler_t* create_sd_vid_upscaler(const SDVideoUpscalerParams& config) {
-    SDOptPtr opt(sd_vid_upscaler_opt_create());
-    if (!opt || sd_opt_set_string(opt.get(), "diffusion_model_path", config.diffusion_model_path) != SD_STATUS_OK ||
-        sd_opt_set_string(opt.get(), "vae_path", config.vae_path) != SD_STATUS_OK ||
-        sd_opt_set_int(opt.get(), "upscale_factor", config.upscale_factor) != SD_STATUS_OK ||
-        (config.n_threads && sd_opt_set_int(opt.get(), "n_threads", *config.n_threads) != SD_STATUS_OK) ||
-        (config.backend && sd_opt_set_string(opt.get(), "backend", config.backend) != SD_STATUS_OK) ||
-        (config.params_backend && sd_opt_set_string(opt.get(), "params_backend", config.params_backend) != SD_STATUS_OK) ||
-        (config.flash_attn_mode && sd_opt_set_string(opt.get(), "flash_attn_mode", config.flash_attn_mode) != SD_STATUS_OK) ||
-        (config.conv_direct_mode && sd_opt_set_string(opt.get(), "conv_direct_mode", config.conv_direct_mode) != SD_STATUS_OK))
-        return nullptr;
-    sd_vid_upscaler_t* result = nullptr;
-    sd_vid_upscaler_create(opt.get(), &result);
-    return result;
-}
-
-static inline bool upscale_sd_video(sd_vid_upscaler_t* ctx, const SDVideoUpscaleParams& config, sd_result_t** result) {
-    if (result)
-        *result = nullptr;
-    SDOptBuilder opt(sd_vid_upscale_opt_create());
-    opt.set_frames("frames", config.frames, config.frame_count);
-    opt.set_int("fps", config.fps);
-    opt.set_int("seed", config.seed);
-    opt.set_int("window_size", config.window_size);
-    opt.set_int("temporal_chunk_size", config.temporal_chunk_size);
-    auto params = opt.finish();
-    return params && sd_upscale_video(ctx, params.get(), result) == SD_STATUS_OK;
+           sd_opt_set_int(opt.get(), "repeats", repeats) == SD_STATUS_OK && sd_upscale(ctx, opt.get(), result) == SD_STATUS_OK;
 }
 
 static inline SDImage take_result_image(sd_result_t* result, size_t index) {
@@ -615,12 +521,12 @@ public:
         return index < generation_infos_.size() ? generation_infos_[index] : empty;
     }
 
-    void append_generation_info(size_t index, const std::string& info, const std::string& lora_model_dir = {}) {
+    void set_generation_info(size_t index, const std::string& source) {
         generation_infos_.resize(images_.size());
-        generation_infos_.at(index) = merge_generation_info(generation_infos_.at(index), generation_info_with_relative_lora_paths(info, lora_model_dir));
+        generation_infos_.at(index) = source;
     }
 
-    void adopt(sd_result_t* result, const std::string& lora_model_dir = {}) {
+    void adopt(sd_result_t* result) {
         clear();
         SDResultPtr owner(result);
         if (!result)
@@ -629,13 +535,14 @@ public:
         images_.reserve(count);
         generation_infos_.reserve(count);
         for (size_t i = 0; i < count; ++i) {
-            generation_infos_.push_back(generation_info_with_relative_lora_paths(sd_result_get_generation_info(result, i), lora_model_dir));
+            const auto* source = sd_result_get_generation_info(result, i);
+            generation_infos_.emplace_back(source ? source : "");
             images_.push_back(take_result_image(result, i));
         }
     }
 
-    void adopt_video(sd_result_t* result, const std::string& lora_model_dir = {}) {
-        adopt(result, lora_model_dir);
+    void adopt_video(sd_result_t* result) {
+        adopt(result);
     }
 
     void adopt(SDImage* images, int count) {

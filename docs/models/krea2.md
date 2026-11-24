@@ -13,8 +13,6 @@ Krea2 uses a Krea2 diffusion transformer, the Wan2.1 VAE, and Qwen3-VL 4B as the
 
 ## Usage
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
-
 ### Web UI
 
 Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
@@ -26,12 +24,50 @@ Use the files and compatibility requirements in [Model files](#model-files).
 | --- | --- |
 | Krea 2 Raw (`krea2-raw`) | `diffusion_model`, `llm`, `vae`, `tae` |
 | Krea 2 Turbo (`krea2-turbo`) | `diffusion_model`, `llm`, `vae`, `tae` |
+| Krea 2 Raw Edit (`krea2-raw-edit`) | `diffusion_model`, `llm`, `llm_vision`, `vae`, `tae` |
+| Krea 2 Turbo Edit (`krea2-turbo-edit`) | `diffusion_model`, `llm`, `llm_vision`, `vae`, `tae` |
 
 Slot IDs correspond to CLI component options: `diffusion_model` uses
 `--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
 Select optional components when required by your checkpoint or task.
 
-### CLI
+The Edit recipes require a matching Ostris-compatible community editing LoRA,
+selected separately, and reference images. Each reference goes through both
+the vision encoder and VAE. Select a vision projector in `llm_vision` when it
+is not bundled in the text encoder. The recipe does not load the LoRA
+automatically.
+
+### DGL
+
+| Example | Description |
+| --- | --- |
+| [Text to image](../dgl/krea2/krea2-raw-txt2img.dgl) | Krea2 Raw. |
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\krea2\krea2-raw-txt2img.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/krea2/krea2-raw-txt2img.dgl
+```
+
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+### Legacy CLI
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 #### Krea2
 

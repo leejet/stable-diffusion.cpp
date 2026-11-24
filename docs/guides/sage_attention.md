@@ -1,5 +1,9 @@
 # SageAttention
 
+DGL versions of the generation examples are linked below. Edit each script's
+`var` block and follow the [DGL run instructions](../dgl/README.md).
+
+
 `--sage-attn` enables native CUDA SageAttention in the diffusion model, including
 the high-noise diffusion model when present. Python, PyTorch, and Triton are not
 required at build time or runtime.
@@ -42,9 +46,10 @@ Add `--sage-attn` to enable SageAttention. For example,
 from the build directory:
 
 ```powershell
-.\bin\Release\sd-cli.exe -M vid_gen --diffusion-model  ..\models\diffusion_models\Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf --high-noise-diffusion-model  ..\models\diffusion_models\Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf --vae ..\models\vae\wan_2.1_vae.safetensors --t5xxl ..\models\text_encoders\umt5-xxl-encoder-Q8_0.gguf  -p "a lovely cat" --cfg-scale 3.5 --sampling-method euler --steps 10 --high-noise-cfg-scale 3.5 --high-noise-sampling-method euler --high-noise-steps 8 -v -n "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，
+.\bin\Release\sd-cli.exe -M vid_gen --diffusion-model  ..\models\diffusion_models\Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf --high-noise-diffusion-model  ..\models\diffusion_models\Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf --vae ..\models\vae\wan_2.1_vae.safetensors --t5xxl ..\models\text_encoders\umt5-xxl-encoder-Q8_0.gguf  -p "a lovely cat" --cfg-scale 3.5 --sampling-method euler --steps 10 --high-noise-steps 8 -v -n "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，
 形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走" -W 832 -H 480 --offload-to-cpu --video-frames 33 --sage-attn
 ```
+
 
 SageAttention currently handles unmasked attention with head dimensions from
 1 through 128, including grouped-query attention, different query/key lengths,

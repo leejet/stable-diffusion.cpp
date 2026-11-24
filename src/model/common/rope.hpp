@@ -62,6 +62,12 @@ namespace Rope {
         DECREASE,
     };
 
+    enum class RefRoPEAnchor {
+        MODEL_DEFAULT,
+        IMAGE_START,
+        TEXT_START,
+    };
+
     template <class T>
     __STATIC_INLINE__ std::vector<T> linspace(T start, T end, int num) {
         std::vector<T> result(num);

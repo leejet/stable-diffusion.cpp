@@ -15,6 +15,7 @@ on:
       [
         ".github/workflows/**",
         ".dockerignore",
+        "docs/dgl-builtins.md",
         "docker/Dockerfile*",
         "scripts/ci-cuda-cache.sh",
         "**/CMakeLists.txt",
@@ -38,6 +39,7 @@ on:
       [
         ".github/workflows/**",
         ".dockerignore",
+        "docs/dgl-builtins.md",
         "docker/Dockerfile*",
         "scripts/ci-cuda-cache.sh",
         "**/CMakeLists.txt",
@@ -100,6 +102,7 @@ jobs:
           cd build
           cmake .. -DSD_BUILD_SHARED_LIBS=ON -DGGML_NATIVE=OFF -DSD_BUILD_SHARED_GGML_LIB=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$ORIGIN'
           cmake --build . --config Release
+          cmake --build . --config Release --target dgl-check-builtins
 
       - name: Get commit hash
         id: commit
@@ -121,6 +124,8 @@ jobs:
         run: |
           cp ggml/LICENSE ./build/bin/ggml.txt
           cp LICENSE ./build/bin/stable-diffusion.cpp.txt
+          cp thirdparty/libwebm/LICENSE.TXT ./build/bin/libwebm.txt
+          cp thirdparty/libwebp/COPYING ./build/bin/libwebp.txt
           chmod +x start-server.sh
           zip -j sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip ./build/bin/* ./start-server.sh ./start-server.bat
 
@@ -186,6 +191,8 @@ jobs:
         run: |
           cp ggml/LICENSE ./build/bin/ggml.txt
           cp LICENSE ./build/bin/stable-diffusion.cpp.txt
+          cp thirdparty/libwebm/LICENSE.TXT ./build/bin/libwebm.txt
+          cp thirdparty/libwebp/COPYING ./build/bin/libwebp.txt
           chmod +x start-server.sh
           zip -j sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-vulkan.zip ./build/bin/* ./start-server.sh ./start-server.bat
 
@@ -366,6 +373,8 @@ jobs:
         run: |
           cp ggml/LICENSE ./build/bin/ggml.txt
           cp LICENSE ./build/bin/stable-diffusion.cpp.txt
+          cp thirdparty/libwebm/LICENSE.TXT ./build/bin/libwebm.txt
+          cp thirdparty/libwebp/COPYING ./build/bin/libwebp.txt
           chmod +x start-server.sh
           zip -j sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip ./build/bin/* ./start-server.sh ./start-server.bat
 
@@ -474,8 +483,11 @@ jobs:
             ls .\build\bin
             throw "Can't find stable-diffusion.dll"
           }
+          $binPath = Split-Path -Parent $filePath
+          Copy-Item thirdparty/libwebm/LICENSE.TXT (Join-Path $binPath 'libwebm.txt')
+          Copy-Item thirdparty/libwebp/COPYING (Join-Path $binPath 'libwebp.txt')
           if ("${{ matrix.build }}" -eq "cuda12") {
-            Copy-Item thirdparty/cutlass/LICENSE.txt (Join-Path (Split-Path -Parent $filePath) 'cutlass.txt')
+            Copy-Item thirdparty/cutlass/LICENSE.txt (Join-Path $binPath 'cutlass.txt')
           }
           7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip $filePath .\start-server.sh .\start-server.bat
 
@@ -633,6 +645,8 @@ jobs:
       - name: Pack artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         run: |
+          Copy-Item thirdparty/libwebm/LICENSE.TXT .\build\bin\libwebm.txt
+          Copy-Item thirdparty/libwebp/COPYING .\build\bin\libwebp.txt
           7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip .\build\bin\* .\start-server.sh .\start-server.bat
 
       - name: Upload artifacts
@@ -796,6 +810,8 @@ jobs:
         run: |
           cp ggml/LICENSE ./build/bin/ggml.txt
           cp LICENSE ./build/bin/stable-diffusion.cpp.txt
+          cp thirdparty/libwebm/LICENSE.TXT ./build/bin/libwebm.txt
+          cp thirdparty/libwebp/COPYING ./build/bin/libwebp.txt
           chmod +x start-server.sh
           zip -y -r sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm-${{ matrix.ROCM_VERSION }}.zip ./build/bin ./start-server.sh ./start-server.bat
 
@@ -819,7 +835,6 @@ jobs:
       - ubuntu-latest-cmake
       - ubuntu-latest-cmake-vulkan
       - ubuntu-latest-rocm
-      - build-and-push-docker-images
       - macOS-latest-cmake
       - windows-latest-cmake
       - windows-latest-rocm

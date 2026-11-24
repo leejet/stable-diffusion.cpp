@@ -1,0 +1,45 @@
+# version: 0.0.0
+
+var {
+    weights = "MOSS-Image-SFT-Q8_0.gguf"
+    encoder_path = "Qwen3.5-9B-Q4_K_M.gguf"
+    vision_path = "Qwen3.5-9B-mmproj-BF16.gguf"
+    tokenizer_path = "tokenizer_qwen3.5.json"
+    vae_path = "flux2_ae.safetensors"
+
+    image_path = "subject.png"
+    output_path = "moss-image-prompt.png"
+
+    prompt = "Draw the subject from <image:subject> in watercolor."
+    negative_prompt = ""
+
+    seed = 42
+    width = 1024
+    height = 1024
+
+    steps = 20
+    cfg_scale = 3
+}
+
+fn main() {
+    dit = load_dit(weights)
+    encoder = load_text_encoder(encoder_path, family_from = weights,
+        tokenizer = tokenizer_path, vision_path = vision_path)
+    vae = load_vae(vae_path, family_from = weights)
+    subject = image::load(image_path)
+    positive = encode_prompt(encoder, prompt,
+        image_bindings = {subject = subject}, width = width, height = height)
+    negative = encode_prompt(encoder, negative_prompt, width = width, height = height)
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    rng = make_rng("cuda", seed = seed)
+    noise = tensor::randn_like(base, rng = rng)
+    positive_predictor = predictor(dit, positive)
+    negative_predictor = predictor(dit, negative, skip_layers = [22])
+    guided = cfg(positive_predictor, negative_predictor, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, steps = steps)
+    start = add_noise(guided, base, noise, sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, rng = rng)
+    output = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    image::save(output_path, output)
+    return output
+}

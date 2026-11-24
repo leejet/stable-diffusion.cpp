@@ -83,7 +83,21 @@ bool ModelManager::populate_prefetch_block(PrefetchBlock& block) {
         return false;
     }
     const size_t alignment = ggml_backend_buft_get_alignment(buffer_type);
-    size_t backend_limit   = ggml_backend_buft_get_max_size(buffer_type);
+    bool host_capacity     = ggml_backend_buft_is_host(buffer_type);
+#ifdef _WIN32
+    host_capacity |= sd_backend_is(block.compute_backend, "CUDA");
+#endif
+    if (retain_weights_ && host_capacity) {
+        size_t bytes = 0;
+        for (const auto* state : block.states) {
+            const auto padded = GGML_PAD(ggml_backend_buft_get_alloc_size(buffer_type, state->tensor), alignment);
+            bytes += std::min(padded, SIZE_MAX - bytes);
+        }
+        const bool host = ggml_backend_buft_is_host(buffer_type);
+        if (!ensure_host_capacity(host ? bytes : 0, block.states, host, host ? 0 : bytes))
+            return false;
+    }
+    size_t backend_limit = ggml_backend_buft_get_max_size(buffer_type);
     if (!ggml_backend_buft_is_host(buffer_type) &&
         (backend_limit == 0 || backend_limit > MAX_RESIDENCY_BLOCK_BYTES)) {
         backend_limit = MAX_RESIDENCY_BLOCK_BYTES;
@@ -231,6 +245,11 @@ WeightPrefetchResult ModelManager::prepare_prefetch_params(
             is_optional_missing_tensor(state->name)) {
             continue;
         }
+        if (has_lora_int8_pair(*state)) {
+            // Synchronous staging keeps the merged weight and scale in the same block.
+            needs_synchronous_load = needs_synchronous_load || !state->staged_to_compute_backend;
+            continue;
+        }
         if (state->usage_op == GGML_OP_CUSTOM || state->compute_backend == state->params_backend) {
             needs_synchronous_load = needs_synchronous_load ||
                                      !state->loaded_to_params_backend;
@@ -296,6 +315,7 @@ bool ModelManager::activate_prefetched_params(
         [&](TensorState* state) {
             return state == nullptr || should_ignore(*state) ||
                    is_optional_missing_tensor(state->name) ||
+                   has_lora_int8_pair(*state) ||
                    state->usage_op == GGML_OP_CUSTOM ||
                    state->compute_backend == state->params_backend ||
                    state->staged_to_compute_backend;

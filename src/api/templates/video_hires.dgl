@@ -1,0 +1,70 @@
+    hires_source = latent[:, :, :tensor::shape(video_base)[2], :tensor::shape(video_base)[3]]
+{% if flags.hires_model %}
+    hires_upscaler = load_latent_upscaler(hires_model_path{{hires_model_options}})
+{% if flags.hires_ltx %}
+    hires_upscaled = upscale_latent(hires_upscaler, dit_to_vae_latents(vae, hires_source))
+    hires_upscaled_shape = tensor::shape(hires_upscaled)
+    hires_video = vae_to_dit_latents(vae, tensor::reshape(hires_upscaled, [hires_upscaled_shape[0], hires_upscaled_shape[1], hires_upscaled_shape[2], hires_upscaled_shape[3], 1]))
+{% else %}
+    hires_upscaled = upscale_latent(hires_upscaler, hires_source, width = math::floor(hires_target_width / hires_vae_scale), height = math::floor(hires_target_height / hires_vae_scale))
+    hires_upscaled_shape = tensor::shape(hires_upscaled)
+    hires_video = tensor::reshape(hires_upscaled, [hires_upscaled_shape[0], hires_upscaled_shape[1], hires_upscaled_shape[2], hires_upscaled_shape[3], 1])
+{% endif %}
+{% else %}
+    hires_video = tensor::interpolate(hires_source, size = [math::floor(hires_target_width / hires_vae_scale), math::floor(hires_target_height / hires_vae_scale)], mode = hires_mode, antialias = hires_antialias)
+{% endif %}
+    hires_video_shape = tensor::shape(hires_video)
+    hires_original_audio = unpack_audio(latent, channels = tensor::shape(video_base)[3], audio_shape = audio_shape, audio_scale = audio_scale)
+{% if flags.hires_ltx %}
+    hires_width = hires_video_shape[0] * hires_vae_scale
+    hires_height = hires_video_shape[1] * hires_vae_scale
+    hires_frames = (hires_video_shape[2] - 1) * 8 + 1
+{% if flags.decode_audio %}
+    hires_audio_shape = audio_latent_shape(audio_vae, frames = hires_frames, fps = fps)
+{% else %}
+    hires_audio_shape = [16, math::ceil(hires_frames * 25 / fps), 8, 1]
+{% endif %}
+    hires_audio_retained = math::min(audio_shape[1], hires_audio_shape[1])
+    hires_audio = tensor::pad(hires_original_audio[:, :hires_audio_retained], [0, 0, 0, hires_audio_shape[1] - hires_audio_retained])
+{% if flags.conditioned %}
+    hires_video_mask = tensor::full([hires_video_shape[0], hires_video_shape[1], hires_video_shape[2], 1, 1], 1)
+{% if flags.first %}
+    hires_first_pixels = tensor::unsqueeze(image::to_f32(fit_canvas(first_frame, hires_width, hires_height, mode = "nearest"), channels = 3), axis = 2)
+    hires_first_latent = vae_to_dit_latents(vae, vae_encode(vae, hires_first_pixels, rng = encode_rng{{vae_run_options}}))
+    hires_first = tensor::replace_slice(hires_video, hires_first_latent, axis = 2, start = 0)
+    hires_first_mask = tensor::index_fill(hires_video_mask, axis = 2, indices = [0], value = 0)
+{% else %}
+    hires_first = hires_video
+    hires_first_mask = hires_video_mask
+{% endif %}
+{% if flags.last %}
+    hires_last_pixels = tensor::unsqueeze(image::to_f32(fit_canvas(last_frame, hires_width, hires_height, mode = "nearest"), channels = 3), axis = 2)
+    hires_last_latent = vae_to_dit_latents(vae, vae_encode(vae, hires_last_pixels, rng = encode_rng{{vae_run_options}}))
+    hires_conditioned = tensor::concat([hires_first, hires_last_latent], axis = 2)
+    hires_condition_mask = tensor::concat([hires_first_mask, tensor::zeros([hires_video_shape[0], hires_video_shape[1], tensor::shape(hires_last_latent)[2], 1, 1])], axis = 2)
+    hires_positions = ltx::video_positions(hires_first, keyframe_latent_frames = tensor::shape(hires_last_latent)[2], keyframe_frame_index = hires_frames - 1, keyframe_pixel_frames = 1, fps = fps)
+{% else %}
+    hires_conditioned = hires_first
+    hires_condition_mask = hires_first_mask
+{% endif %}
+    hires_base = pack_av(hires_conditioned, hires_audio, audio_scale = audio_scale)
+    hires_packed_shape = tensor::shape(hires_base)
+    hires_packed_mask = tensor::concat([tensor::broadcast_to(hires_condition_mask, tensor::shape(hires_conditioned)), tensor::full([hires_packed_shape[0], hires_packed_shape[1], hires_packed_shape[2], hires_packed_shape[3] - hires_video_shape[3], 1], 1)], axis = 3)
+{% else %}
+    hires_base = pack_av(hires_video, hires_audio, audio_scale = audio_scale)
+{% endif %}
+    hires_pos = predictor(model, positive{{predictor_core}}, audio_length = hires_audio_shape[1], fps = fps{{hires_positions_option}})
+    hires_neg = predictor(model, negative{{predictor_core}}, audio_length = hires_audio_shape[1], fps = fps{{hires_positions_option}})
+    hires_guided = {{guidance_function}}(hires_pos, hires_neg, scale = cfg_scale{{guidance_options}})
+{% else %}
+    hires_audio_shape = audio_shape
+    hires_base = pack_av(hires_video, hires_original_audio, audio_scale = audio_scale)
+{% endif %}
+{% if flags.hires_custom_sigmas %}
+    hires_sigmas = tensor::vector(hires_custom_sigmas, dtype = "f32")
+{% else %}
+    hires_schedule = make_sigmas({{hires_schedule_predictor}}, latent = hires_base, steps = hires_scheduler_steps, scheduler = scheduler{{schedule_options}})
+    hires_sigmas = hires_schedule[-(hires_steps + 1):]
+{% endif %}
+    hires_start = add_noise({{hires_schedule_predictor}}, hires_base, tensor::randn_like(hires_base, rng = rng), sigma = hires_sigmas[0])
+    hires_latent = sample(hires_start, hires_sigmas, predict = {{hires_schedule_predictor}}, method = method, rng = sampler_rng, eta = eta{{hires_sample_options}})

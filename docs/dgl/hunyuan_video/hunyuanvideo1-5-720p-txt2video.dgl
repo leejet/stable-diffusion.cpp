@@ -1,0 +1,46 @@
+# version: 0.0.0
+# docs/models/hunyuan_video.md — Text-to-video example
+
+var {
+    model_path = "../models/diffusion_models/hunyuanvideo1.5_720p_t2v_fp16.safetensors"
+    text_path = "../models/text_encoders/qwen_2.5_vl_7b.safetensors"
+    t5_path = "../models/text_encoders/byt5_small_glyphxl_fp16.safetensors"
+    vae_path = "../models/vae/hunyuanvideo15_vae_fp16.safetensors"
+
+    output_path = "output.avi"
+
+    prompt = "a lovely cat"
+    negative_prompt = ""
+
+    seed = 42
+    rng_type = "cuda"
+    width = 1280
+    height = 720
+    frames = 33
+    fps = 16
+
+    steps = 20
+    cfg_scale = 6.0
+    method = "euler"
+    scheduler = "discrete"
+}
+
+fn main() {
+    model = load_dit(model_path, family = "hunyuan_video", params_backend = "cpu")
+    text = load_text_encoder(text_path, family = "hunyuan_video", params_backend = "cpu", t5_path = t5_path)
+    vae = load_vae(vae_path, family = "hunyuan_video", params_backend = "cpu")
+
+    base = tensor::zeros(latent_shape(vae, width = width, height = height, frames = frames))
+    positive = encode_prompt(text, prompt, width = width, height = height)
+    negative = encode_prompt(text, negative_prompt, width = width, height = height)
+    pos = predictor(model, positive)
+    neg = predictor(model, negative)
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    output_frames = vae_decode(vae, dit_to_vae_latents(vae, latent), tiling = tiling())
+    video::save(output_path, {frames = output_frames, fps_num = fps, fps_den = 1}, audio = {})
+    return {video = {frames = output_frames, fps_num = fps, fps_den = 1}, latent = latent, audio = {}}
+}

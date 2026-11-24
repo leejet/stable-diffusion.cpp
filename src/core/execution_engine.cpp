@@ -44,7 +44,7 @@ namespace sd {
         bool assign_graph_cut_layer_split_backends(ggml_cgraph* graph);
         ComputeWorkspace::Measurement measure(ggml_cgraph* graph, const std::unordered_set<const ggml_tensor*>* external_outputs = nullptr);
         std::vector<DeviceMemoryRequest> memory_requests(const std::vector<BackendBufferSize>& sizes, size_t pending_cache_bytes) const;
-        bool fits(const std::vector<DeviceMemoryRequest>& requests, const std::vector<ggml_tensor*>& params) const;
+        bool fits(const std::vector<DeviceMemoryRequest>& requests, const std::vector<ggml_tensor*>& params, bool allow_reclamation = false) const;
         bool execute_segment(ggml_cgraph* graph, int n_threads, const std::function<void()>& on_before_compute);
         bool execute_graph(ggml_cgraph* graph, int n_threads, bool no_return, const std::function<bool()>& read_outputs);
         bool is_multi_device() const { return !session_.extra_backends_.empty(); }
@@ -352,6 +352,13 @@ namespace sd {
         }
 
         sd::GraphCutLayerSplitAssignment assignment;
+        auto backend_limits = session_.backend_limits_;
+        backend_limits.resize(split_backends.size(), session_.max_backend_bytes_);
+        for (size_t i = 0; i < split_backends.size(); ++i) {
+            const auto context_limit = manager->context_vram_limit(split_backends[i]);
+            if (context_limit > 0)
+                backend_limits[i] = backend_limits[i] > 0 ? std::min(backend_limits[i], context_limit) : context_limit;
+        }
         auto canonicalize_param = [this](ggml_tensor* tensor) {
             return canonical_param_tensor(tensor);
         };
@@ -359,7 +366,7 @@ namespace sd {
                                                  gf,
                                                  plan,
                                                  split_backends,
-                                                 session_.backend_limits_,
+                                                 backend_limits,
                                                  session_.max_backend_bytes_,
                                                  session_.weight_assignments_,
                                                  canonicalize_param,
@@ -399,7 +406,9 @@ namespace sd {
         auto assign_nodes = [&](ggml_backend_sched_t scheduler, ggml_cgraph* copy) {
             pin_multi_device_nodes(scheduler, copy, graph);
         };
-        return session_.workspace_.measure(graph, external_backend, assign_nodes, !is_multi_device());
+        return session_.workspace_.measure(graph, external_backend, assign_nodes, !is_multi_device(), [&](size_t bytes) {
+            return manager_ == nullptr || manager_->ensure_host_memory(bytes, task_.weights);
+        });
     }
 
     std::vector<DeviceMemoryRequest> GraphExecution::memory_requests(
@@ -429,13 +438,14 @@ namespace sd {
     }
 
     bool GraphExecution::fits(const std::vector<DeviceMemoryRequest>& requests,
-                              const std::vector<ggml_tensor*>& params) const {
+                              const std::vector<ggml_tensor*>& params,
+                              bool allow_reclamation) const {
         auto manager = manager_;
         if (manager == nullptr) {
             return params.empty();
         }
         for (const auto& request : requests) {
-            if (!manager->fits_compute_backend_capacity(request, params)) {
+            if (!manager->fits_compute_backend_capacity(request, params, allow_reclamation)) {
                 return false;
             }
         }
@@ -528,10 +538,10 @@ namespace sd {
         const auto& cached_plan = resolve_graph_cut_plan(graph);
         auto manager            = manager_;
         const bool can_segment  = !is_multi_device() && !sd_backend_is_cpu(session_.backend_) &&
-                                  manager != nullptr && manager->segmented_compute_enabled() &&
+                                  session_.segmented_compute_ &&
                                   cached_plan.valid && cached_plan.has_cuts && cached_plan.segments.size() > 1;
         // An empty workspace request is a lower bound on the full graph's memory demand.
-        bool segmented = can_segment && !fits(memory_requests({{session_.backend_, 0}}, 0), params);
+        bool segmented = can_segment && !fits(memory_requests({{session_.backend_, 0}}, 0), params, true);
         ComputeWorkspace::Measurement full_measurement;
         if (!segmented) {
             full_measurement = measure(graph);
@@ -546,7 +556,7 @@ namespace sd {
                 for (auto& request : requests) {
                     request.pending_allocation_bytes = add_bytes(request.pending_allocation_bytes, planning_headroom);
                 }
-                segmented = !fits(requests, params);
+                segmented = !fits(requests, params, true);
             }
         }
         ggml_graph_cut::Plan monolithic_plan;
@@ -579,7 +589,7 @@ namespace sd {
         SegmentGraphBindings bindings(session_.cut_cache_, plan, graph);
         SegmentWeightPipeline weights(manager, session_.backend_, session_.owner_id(),
                                       graph, plan, params_tensor_set_,
-                                      segmented && manager != nullptr && manager->prefetch_enabled());
+                                      segmented && session_.prefetch_enabled_);
 
         std::map<ggml_backend_t, size_t> peak_compute_bytes;
         auto track_compute_buffer = [&](ggml_backend_t backend) {
@@ -669,10 +679,21 @@ namespace sd {
                 last_compute_status_ = GGML_STATUS_ALLOC_FAILED;
                 return fail_segment("output cache allocation");
             }
-            new_cache_bytes = add_bytes(last ? 0 : session_.cut_cache_.estimate_output_bytes(graph, segment), session_.cache_.pending_bytes(segment_graph));
-            if (!session_.workspace_.allocate(segment_graph, measurement, [&](ggml_backend_sched_t scheduler, ggml_cgraph* current) {
-                    pin_multi_device_nodes(scheduler, current);
-                })) {
+            new_cache_bytes         = add_bytes(last ? 0 : session_.cut_cache_.estimate_output_bytes(graph, segment), session_.cache_.pending_bytes(segment_graph));
+            auto ensure_host_memory = [&](size_t bytes) {
+                size_t device_commit = 0;
+#ifdef _WIN32
+                for (const auto& size : measurement.buffers) {
+                    if (sd_backend_is(size.backend, "CUDA")) {
+                        const auto pending = size.bytes - std::min(size.bytes, session_.workspace_.bytes(size.backend));
+                        device_commit      = add_bytes(device_commit, pending);
+                    }
+                }
+#endif
+                return manager == nullptr || manager->ensure_host_memory(bytes, weights.params(index), device_commit);
+            };
+            if (!session_.workspace_.allocate(
+                    segment_graph, measurement, [&](ggml_backend_sched_t scheduler, ggml_cgraph* current) { pin_multi_device_nodes(scheduler, current); }, ensure_host_memory)) {
                 last_compute_status_ = GGML_STATUS_ALLOC_FAILED;
                 return fail_segment("workspace allocation");
             }
@@ -736,7 +757,13 @@ namespace sd {
     }
 
     ExecutionSession::ExecutionSession(ggml_backend_t backend, const std::shared_ptr<DeviceResidencyManager>& manager)
-        : backend_(backend), residency_manager_(manager), cache_(backend), cut_cache_(backend), workspace_(backend) {
+        : backend_(backend),
+          residency_manager_(manager),
+          cache_(backend),
+          cut_cache_(backend),
+          workspace_(backend),
+          segmented_compute_(manager && manager->segmented_compute_enabled()),
+          prefetch_enabled_(manager && manager->prefetch_enabled()) {
         GGML_ASSERT(backend_ != nullptr);
     }
 
@@ -787,7 +814,7 @@ namespace sd {
     }
 
     ExecutionSession& ExecutionEngine::create_session(ggml_backend_t backend, const std::shared_ptr<DeviceResidencyManager>& manager) {
-        GGML_ASSERT(manager.get() == manager_);
+        GGML_ASSERT(manager ? manager->execution_engine().get() == this : manager_ == nullptr);
         auto session = std::make_unique<ExecutionSession>(backend, manager);
         auto& result = *session;
         sessions_.emplace(session->owner_id(), std::move(session));
@@ -865,7 +892,7 @@ namespace sd {
         }
         for (auto& entry : sessions_) {
             auto& session = *entry.second;
-            if (session.owner_id() != request.owner_id && session.workspace_.release()) {
+            if (session.owner_id() != request.owner_id && !session.executing_ && session.workspace_.release()) {
                 sync_residency(session);
                 if (capacity().fits(true)) {
                     return true;
@@ -895,11 +922,15 @@ namespace sd {
             return position;
         };
         std::stable_sort(candidates.begin(), candidates.end(), [&](const auto& lhs, const auto& rhs) {
+            if (lhs.next_use != rhs.next_use)
+                return lhs.next_use > rhs.next_use;
+            const auto left = preferred_position(lhs), right = preferred_position(rhs);
+            if (manager.retains_idle_weights() && (left == SIZE_MAX) != (right == SIZE_MAX))
+                return left == SIZE_MAX;
             if (lhs.requires_demotion != rhs.requires_demotion) {
                 return !lhs.requires_demotion;
             }
             if (!lhs.requires_demotion) {
-                const auto left = preferred_position(lhs), right = preferred_position(rhs);
                 if (left != right) {
                     return left < right;
                 }

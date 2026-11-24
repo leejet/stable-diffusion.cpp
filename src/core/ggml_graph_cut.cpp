@@ -1029,9 +1029,9 @@ namespace sd::ggml_graph_cut {
             plans.pop_back();
         }
         if (log_desc != nullptr) {
-            LOG_INFO("%s build cached graph cut plan done (taking %lld ms)",
-                     log_desc,
-                     ggml_time_ms() - t_plan_begin);
+            LOG_VERBOSE("%s build cached graph cut plan done (taking %lld ms)",
+                        log_desc,
+                        ggml_time_ms() - t_plan_begin);
         }
         return plans.front();
     }

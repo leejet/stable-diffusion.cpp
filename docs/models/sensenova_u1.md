@@ -15,8 +15,6 @@ and the tokenizer files.
 
 ## Usage
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
-
 ### Web UI
 
 Follow the server instructions for
@@ -25,7 +23,51 @@ Pass the complete repository directory with `--model` when starting the server,
 using the same model path as the CLI examples below. The browser then uses
 **Command-line model (all features)** for that loaded checkpoint.
 
-### CLI
+### DGL
+
+| Example | Description |
+| --- | --- |
+| [Text to image](../dgl/sensenova_u1/sensenova-u1-cuda-txt2img.dgl) | SenseNova U1.5 on CUDA. |
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\sensenova_u1\sensenova-u1-cuda-txt2img.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/sensenova_u1/sensenova-u1-cuda-txt2img.dgl
+```
+
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+#### Prompt formatting
+
+The [DGL example](../dgl/sensenova_u1/sensenova-u1-cuda-txt2img.dgl)
+uses the default system message for its positive prompt and passes the complete
+negative input with `raw=true`. Edit the user text inside that raw string to
+change its negative prompt. An empty negative still includes the user/assistant
+markers and `<img>`, and omits the positive template's `<think>` segment.
+Native CLI/C API generation builds this input automatically.
+
+For custom positive instructions, pass `system="your instruction"` to
+`encode_prompt`; `system=""` removes the system segment but keeps the positive
+assistant template. For a completely custom tokenizer input use `raw=true`
+without `system`. See [DGL prompt formatting](../dgl.md#independent-generation-components).
+
+### Legacy CLI
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 #### CUDA
 

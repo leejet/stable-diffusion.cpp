@@ -2,6 +2,7 @@
 #define __SD_MODEL_VAE_VAE_HPP__
 
 #include "config.h"
+#include "model/vae/geometry.hpp"
 
 #include <cmath>
 #include <limits>
@@ -11,6 +12,10 @@
 #include "model/vae/vae_tiling.hpp"
 #include "model_manager.h"
 #include "runtime/tiling.h"
+
+enum class VAEPosterior { ModelDefault,
+                          Sample,
+                          Mode };
 
 struct VAE : public GGMLRunner {
 protected:
@@ -175,26 +180,7 @@ public:
         : version(version), weight_prefix(weight_prefix), GGMLRunner(backend, weight_manager) {}
 
     int get_scale_factor() {
-        int scale_factor = 8;
-        if (version == VERSION_LTXAV) {
-            scale_factor = 32;
-        } else if (version == VERSION_WAN2_2_TI2V ||
-                   version == VERSION_QWEN_IMAGE_2_1 ||
-                   sd_version_is_hunyuan_video(version) ||
-                   sd_version_is_mage_flow(version) ||
-                   sd_version_is_minimax_h3(version)) {
-            scale_factor = 16;
-        } else if (sd_version_uses_flux2_vae(version)) {
-            scale_factor = 16;
-        } else if (version == VERSION_CHROMA_RADIANCE ||
-                   version == VERSION_HIDREAM_O1 ||
-                   sd_version_is_minit2i(version) ||
-                   sd_version_is_sensenova_u1(version) ||
-                   sd_version_is_z_image_l2p(version) ||
-                   version == VERSION_IRIS) {
-            scale_factor = 1;
-        }
-        return scale_factor;
+        return sd::vae::spatial_scale(version);
     }
 
     virtual int get_encoder_output_channels(int input_channels) = 0;
@@ -383,14 +369,17 @@ public:
             scale_tensor_to_0_1(&output);
         }
         int64_t t1 = ggml_time_ms();
-        LOG_VERBOSE("computing vae decode graph completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+        LOG_INFO("computing vae decode graph completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
         return std::move(output);
     }
 
-    virtual sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) = 0;
-    virtual sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latents)                           = 0;
-    virtual sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents)                           = 0;
-    virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors)                                   = 0;
+    virtual sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output,
+                                                    std::shared_ptr<RNG> rng,
+                                                    VAEPosterior posterior = VAEPosterior::ModelDefault,
+                                                    bool use_supplied_rng  = false)      = 0;
+    virtual sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latents) = 0;
+    virtual sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents) = 0;
+    virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors)         = 0;
     virtual void set_conv2d_scale(float scale) { SD_UNUSED(scale); };
 };
 
@@ -412,7 +401,7 @@ struct FakeVAE : public VAE {
         return z;
     }
 
-    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) override {
+    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng, VAEPosterior, bool) override {
         SD_UNUSED(rng);
         return vae_output;
     }

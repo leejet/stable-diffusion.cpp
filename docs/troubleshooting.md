@@ -51,3 +51,32 @@ If the problem persists after trying the relevant steps above,
 [submit a bug report](https://github.com/leejet/stable-diffusion.cpp/issues/new?template=bug_report.yml).
 Include your full command, backend and hardware, model and weight format, logs,
 and the scale values you tried with their results.
+
+## Windows: process exits immediately with 0xC0000135 (STATUS_DLL_NOT_FOUND)
+
+`sd-cli.exe` / `sd-server.exe` from the Windows ROCm prebuilt may exit with
+`0xC0000135` (`STATUS_DLL_NOT_FOUND`) and no output when the HIP runtime is
+not on `PATH`. `stable-diffusion.dll` statically imports `hipblas.dll` and
+`libhipblaslt.dll`, but the release archive only bundles `amd_comgr.dll`,
+`amdhip64_7.dll` and `rocm_kpack.dll`. This is a loader failure, unrelated to
+`--audio-vae` or other generation options; `0xC000001D`
+(`STATUS_ILLEGAL_INSTRUCTION`) would instead indicate a CPU instruction issue.
+
+Fix: prepend the ROCm SDK `bin` directories to `PATH` — with the Python ROCm
+wheels these are `<python home>\Lib\site-packages\_rocm_sdk_libraries\bin` and
+`_rocm_sdk_core\bin`. Do not copy individual DLLs: `rocblas.dll` and
+`libhipblaslt.dll` also need their sibling `rocblas\` and `hipblaslt\` data
+directories.
+
+Verify:
+
+```powershell
+.\sd-cli.exe --version
+'0x{0:X8}' -f $LASTEXITCODE
+```
+
+Expect the version string and `0x00000000`. If it still fails, inspect the
+whole DLL chain (`sd-cli.exe` -> `stable-diffusion.dll` -> ...): `dumpbin
+/dependents` lists only one image's direct imports, so use
+[Dependencies](https://github.com/lucasg/Dependencies) or also check
+`stable-diffusion.dll` to find the missing module.

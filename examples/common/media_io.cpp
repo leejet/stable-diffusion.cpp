@@ -1,5 +1,4 @@
 #include "media_io.h"
-#include "generation_metadata.h"
 #include "log.h"
 #include "media_metadata.h"
 #include "resource_owners.hpp"
@@ -377,7 +376,7 @@ bool encode_webp_image_to_vector(const uint8_t* image,
 
     out.assign(encoded.get(), encoded.get() + encoded_size);
 
-    return embed_webp_metadata(out, generation_info_to_image_metadata(parameters));
+    return embed_webp_metadata(out, parameters);
 }
 
 #ifdef SD_USE_WEBM
@@ -710,7 +709,6 @@ std::vector<uint8_t> encode_image_to_vector(EncodedImageFormat format,
                                             const std::string& parameters,
                                             int quality) {
     std::vector<uint8_t> buffer;
-    const auto metadata = format == EncodedImageFormat::WEBP ? std::string() : generation_info_to_image_metadata(parameters);
 
     auto write_func = [&buffer](void* context, void* data, int size) {
         (void)context;
@@ -733,7 +731,7 @@ std::vector<uint8_t> encode_image_to_vector(EncodedImageFormat format,
             result = stbi_write_jpg_to_func(c_func, &ctx, width, height, channels, image, quality);
             break;
         case EncodedImageFormat::PNG:
-            result = stbi_ext_write_png_to_func(c_func, &ctx, width, height, channels, image, width * channels, metadata.empty() ? nullptr : metadata.c_str());
+            result = stbi_ext_write_png_to_func(c_func, &ctx, width, height, channels, image, width * channels, nullptr);
             break;
         case EncodedImageFormat::WEBP:
 #ifdef SD_USE_WEBP
@@ -751,7 +749,8 @@ std::vector<uint8_t> encode_image_to_vector(EncodedImageFormat format,
             break;
     }
 
-    if (result && format == EncodedImageFormat::JPEG && !embed_jpeg_metadata(buffer, metadata)) {
+    if (result && ((format == EncodedImageFormat::JPEG && !embed_jpeg_metadata(buffer, parameters)) ||
+                   (format == EncodedImageFormat::PNG && !embed_png_metadata(buffer, parameters)))) {
         LOG_ERROR("generation metadata exceeds the container capacity or the encoded image is invalid");
         result = 0;
     }
@@ -813,27 +812,13 @@ uint8_t* load_image_from_memory(const char* image_bytes,
 }
 
 static void append_avi_metadata(std::vector<uint8_t>& data, const std::string& parameters) {
-    if (parameters.empty()) {
-        return;
-    }
-
-    std::vector<uint8_t> info_content;
-
-    write_fourcc(info_content, "INFO");
-
-    const size_t comment_size = parameters.size() + 1;
-    write_fourcc(info_content, "ICMT");
-    write_u32_le(info_content, static_cast<uint32_t>(comment_size));
-    info_content.insert(info_content.end(), parameters.begin(), parameters.end());
-    info_content.push_back(0);
-    if (comment_size & 1u) {
-        info_content.push_back(0);
-    }
-
-    write_fourcc(data, "LIST");
-    write_u32_le(data, static_cast<uint32_t>(info_content.size()));
-    data.insert(data.end(), info_content.begin(), info_content.end());
-    size_t start_pos = data.size();
+    const void* info = nullptr;
+    size_t size      = 0;
+    if (sd_get_metadata_chunk(parameters.c_str(), SD_METADATA_AVI, &info, &size) != SD_STATUS_OK)
+        throw std::runtime_error(sd_get_last_error());
+    const auto* bytes = static_cast<const uint8_t*>(info);
+    if (size)
+        data.insert(data.end(), bytes, bytes + size);
 }
 
 std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(SDImage* images, int num_images, int fps, int quality, const SDAudio* audio, const std::string& parameters) {

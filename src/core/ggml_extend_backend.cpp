@@ -638,50 +638,6 @@ void sd_backend_clear_buffer_cache(ggml_backend_t backend) {
     }
 }
 
-ggml_status sd_backend_graph_compute_with_eval_callback(ggml_backend_t backend,
-                                                        ggml_cgraph* gf,
-                                                        sd_graph_eval_callback_t callback_eval,
-                                                        void* callback_eval_user_data) {
-    if (callback_eval == nullptr) {
-        return ggml_backend_graph_compute(backend, gf);
-    }
-
-    ggml_status status = GGML_STATUS_SUCCESS;
-    const int n_nodes  = ggml_graph_n_nodes(gf);
-    bool stopped       = false;
-
-    for (int j0 = 0; j0 < n_nodes; ++j0) {
-        ggml_tensor* t = ggml_graph_node(gf, j0);
-        bool need      = callback_eval(t, true, callback_eval_user_data);
-        int j1         = j0;
-
-        while (!need && j1 < n_nodes - 1) {
-            t    = ggml_graph_node(gf, ++j1);
-            need = callback_eval(t, true, callback_eval_user_data);
-        }
-
-        status = ggml_backend_graph_compute_async_range(backend, gf, j0, j1 + 1);
-        if (status != GGML_STATUS_SUCCESS) {
-            break;
-        }
-
-        ggml_backend_synchronize(backend);
-
-        if (need && !callback_eval(t, false, callback_eval_user_data)) {
-            stopped = true;
-            break;
-        }
-
-        j0 = j1;
-    }
-
-    ggml_backend_synchronize(backend);
-    if (stopped && status == GGML_STATUS_SUCCESS) {
-        status = GGML_STATUS_ABORTED;
-    }
-    return status;
-}
-
 const char* sd_get_system_info() {
     static std::string cache_info = []() -> std::string {
         ggml_backend_load_all_once();
@@ -940,6 +896,15 @@ ggml_backend_t SDBackendManager::runtime_backend(SDBackendModule module) {
     return init_cached_backend(primary_device_name(runtime_assignment_.get(module)));
 }
 
+ggml_backend_t SDBackendManager::existing_backend(ggml_backend_dev_t device) const {
+    const auto& backends = shared_backends_ ? *shared_backends_ : backends_;
+    for (const auto& entry : backends) {
+        if (ggml_backend_get_device(entry.second.get()) == device)
+            return entry.second.get();
+    }
+    return nullptr;
+}
+
 std::vector<ggml_backend_t> SDBackendManager::runtime_backends(SDBackendModule module) {
     std::vector<ggml_backend_t> backends;
     for (const std::string& name : split_device_list(runtime_assignment_.get(module))) {
@@ -1154,13 +1119,14 @@ bool SDBackendManager::validate(std::string* error) const {
 }
 
 ggml_backend_t SDBackendManager::init_cached_backend(const std::string& name) {
+    auto& backends         = shared_backends_ ? *shared_backends_ : backends_;
     std::string resolved   = sd_backend_resolve_name(name);
     std::string key        = lower_copy(resolved);
     ggml_backend_t backend = nullptr;
 
     if (!key.empty()) {
-        auto it = backends_.find(key);
-        if (it != backends_.end()) {
+        auto it = backends.find(key);
+        if (it != backends.end()) {
             return it->second.get();
         }
     } else if (!is_default_backend_token(name)) {
@@ -1179,15 +1145,15 @@ ggml_backend_t SDBackendManager::init_cached_backend(const std::string& name) {
         actual_key = !key.empty() ? key : lower_copy(trim_copy(name));
     }
 
-    auto it = backends_.find(actual_key);
-    if (it != backends_.end()) {
+    auto it = backends.find(actual_key);
+    if (it != backends.end()) {
         ggml_backend_free(backend);
         return it->second.get();
     }
 
     SDBackendHandle handle(backend);
     sd_ggml_register_extensions(backend);
-    backends_.emplace(actual_key, std::move(handle));
+    backends.emplace(actual_key, std::move(handle));
     return backend;
 }
 

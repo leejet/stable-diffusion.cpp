@@ -57,6 +57,8 @@ namespace sd {
         size_t logged_segment_count_ = 0;
         bool started_                = false;
         bool executing_              = false;
+        bool segmented_compute_      = false;
+        bool prefetch_enabled_       = false;
 
         size_t resident_bytes(ggml_backend_t backend) const;
         uintptr_t owner_id() const { return reinterpret_cast<uintptr_t>(this); }

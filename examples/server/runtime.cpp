@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -9,6 +10,7 @@
 #include <mutex>
 #include <regex>
 #include <sstream>
+#include <string_view>
 
 #include "common/common.h"
 #include "common/log.h"
@@ -56,138 +58,19 @@ bool validate_server_img_gen_request(const ServerRuntime& runtime,
         (params.height && !within_dimension_limit(*params.height)))
         return false;
     if (params.hires_enabled.value_or(false)) {
-        if ((params.hires_width && !within_dimension_limit(*params.hires_width)) ||
-            (params.hires_height && !within_dimension_limit(*params.hires_height)))
+        const double width      = params.width.value_or(runtime.default_gen_params->width.value_or(512));
+        const double height     = params.height.value_or(runtime.default_gen_params->height.value_or(512));
+        const double scale      = params.hires_scale.value_or(2.f);
+        const auto target_width = params.hires_width.value_or(0), target_height = params.hires_height.value_or(0);
+        if (!within_dimension_limit(target_width > 0 ? target_width : target_height > 0 ? target_height
+                                                                                        : width * scale) ||
+            !within_dimension_limit(target_height > 0 ? target_height : target_width > 0 ? target_width
+                                                                                         : height * scale))
             return false;
-        if (params.hires_width.value_or(0) <= 0 && params.hires_height.value_or(0) <= 0) {
-            // Use the documented library defaults for this resource-policy check only.
-            const float scale = params.hires_scale.value_or(2.f);
-            if (!within_dimension_limit(std::round(params.width.value_or(512) * scale)) ||
-                !within_dimension_limit(std::round(params.height.value_or(512) * scale)))
-                return false;
-        }
     }
-    if (!request.adetailer_enabled || runtime.default_gen_params->ad_model_path.empty()) {
-        return true;
-    }
-    auto pass_valid = [&](const ServerADetailerPass& pass) {
-        if ((pass.width && !within_dimension_limit(*pass.width)) ||
-            (pass.height && !within_dimension_limit(*pass.height))) {
-            return false;
-        }
-        // Match the native key normalization, but leave full option parsing to ADetailer.
-        auto trim = [](const std::string& text) {
-            const auto first = text.find_first_not_of(" \t\r\n");
-            return first == std::string::npos ? std::string() : text.substr(first, text.find_last_not_of(" \t\r\n") - first + 1);
-        };
-        std::stringstream stream(pass.extra_args);
-        std::string item;
-        while (std::getline(stream, item, ',')) {
-            const auto equals = item.find('=');
-            if (equals == std::string::npos) {
-                continue;
-            }
-            auto key = trim(item.substr(0, equals));
-            std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (key != "inpaint_width" && key != "inpaint_height" && key != "steps") {
-                continue;
-            }
-            const auto value  = trim(item.substr(equals + 1));
-            const int minimum = key == "steps" ? 0 : 1;
-            const int maximum = key == "steps" ? k_max_adetailer_steps : k_max_generation_dimension;
-            try {
-                size_t used      = 0;
-                const int parsed = std::stoi(value, &used);
-                if (used == value.size() && parsed >= minimum && parsed <= maximum) {
-                    continue;
-                }
-            } catch (const std::exception&) {
-            }
-            error_message = "ADetailer " + key + " must be between " + std::to_string(minimum) + " and " + std::to_string(maximum);
-            return false;
-        }
-        return true;
-    };
-    if (request.adetailer_passes.empty()) {
-        ServerADetailerPass pass;
-        pass.extra_args = params.extra_ad_args;
-        return pass_valid(pass);
-    }
-    return std::all_of(request.adetailer_passes.begin(), request.adetailer_passes.end(), pass_valid);
-}
-
-bool apply_server_adetailer(ServerRuntime& runtime,
-                            ImgGenJobRequest& request,
-                            SDImageVec& results) {
-    auto& gen_params          = request.gen_params;
-    const auto& ad_model_path = runtime.default_gen_params->ad_model_path;
-    if (!request.adetailer_enabled || ad_model_path.empty()) {
-        return true;
-    }
-    std::string error_message;
-    if (!validate_server_img_gen_request(runtime, request, error_message)) {
-        LOG_ERROR("%s", error_message.c_str());
+    if ((!runtime.default_gen_params->ad_model_path.empty() && request.adetailer_enabled) || !request.adetailer_passes.empty()) {
+        error_message = "ADetailer requires a DGL script";
         return false;
-    }
-
-    std::vector<ServerADetailerPass> passes = request.adetailer_passes;
-    if (passes.empty()) {
-        ServerADetailerPass pass;
-        pass.prompt          = gen_params.ad_prompt;
-        pass.negative_prompt = gen_params.ad_negative_prompt;
-        pass.extra_args      = gen_params.extra_ad_args;
-        passes.push_back(std::move(pass));
-    }
-
-    ADetailerCtxPtr ad_ctx(create_sd_adetailer(ad_model_path.c_str(),
-                                               runtime.ctx_params->n_threads,
-                                               runtime.ctx_params->effective_backend.c_str(),
-                                               runtime.ctx_params->effective_params_backend.c_str()));
-    if (ad_ctx == nullptr) {
-        LOG_ERROR("sd_adetailer_create failed");
-        return false;
-    }
-
-    for (const auto& pass : passes) {
-        for (int i = 0; i < results.count(); ++i) {
-            if (results[i].data == nullptr) {
-                continue;
-            }
-            SDOptBuilder ad_options(gen_params.to_image_opt(true).release());
-            ad_options.unset("width");
-            ad_options.unset("height");
-            ad_options.unset("strength");
-            ad_options.set_string("adetail.prompt", pass.prompt);
-            ad_options.set_string("adetail.negative_prompt", pass.negative_prompt);
-            ad_options.set_string("adetail.args", pass.extra_args);
-            ad_options.set_int("seed", generation_seed(results.generation_info(i)));
-            ad_options.set_int("width", pass.width);
-            ad_options.set_int("height", pass.height);
-            ad_options.set_float("strength", pass.strength);
-            if (pass.clip_skip) {
-                ad_options.set_int("clip_skip", pass.clip_skip);
-            }
-            if (pass.automatic_scheduler) {
-                ad_options.set_string("sample.scheduler", "auto");
-            }
-
-            sd_result_t* detailed = nullptr;
-            if (!adetail_sd_image(ad_ctx.get(),
-                                  runtime.sd_ctx,
-                                  results[i],
-                                  ad_options.finish(),
-                                  &detailed) ||
-                detailed == nullptr || sd_result_get_image_count(detailed) <= 0 || sd_tensor_data(sd_result_get_image(detailed, 0)) == nullptr) {
-                sd_result_free(detailed);
-                LOG_ERROR("ADetailer failed for image %d", i + 1);
-                return false;
-            }
-            results.append_generation_info(i, sd_result_get_generation_info(detailed, 0), runtime.ctx_params->lora_model_dir);
-            sd_image_free(&results[i]);
-            results[i] = take_result_image(detailed, 0);
-
-            sd_result_free(detailed);
-        }
     }
     return true;
 }
@@ -210,11 +93,18 @@ static const std::string k_base64_chars =
     "0123456789+/";
 
 std::string base64_encode(const std::vector<uint8_t>& bytes) {
+    return base64_encode(bytes.data(), bytes.size());
+}
+
+std::string base64_encode(const void* data, size_t size) {
     std::string ret;
-    int val  = 0;
-    int valb = -6;
-    for (uint8_t c : bytes) {
-        val = (val << 8) + c;
+    ret.reserve((size + 2) / 3 * 4);
+    uint32_t val      = 0;
+    int valb          = -6;
+    const auto* bytes = static_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < size; ++i) {
+        const auto c = bytes[i];
+        val          = (val << 8) + c;
         valb += 8;
         while (valb >= 0) {
             ret.push_back(k_base64_chars[(val >> valb) & 0x3F]);
@@ -345,6 +235,9 @@ std::string video_mime_type(const std::string& output_format) {
 }
 
 bool runtime_supports_generation_mode(const ServerRuntime& runtime, SDMode mode) {
+    if (!has_current_model(runtime)) {
+        return false;
+    }
     if (mode == VID_GEN) {
         return sd_ctx_supports_video_generation(runtime.sd_ctx);
     }
@@ -354,14 +247,54 @@ bool runtime_supports_generation_mode(const ServerRuntime& runtime, SDMode mode)
     return true;
 }
 
+bool has_current_model(const ServerRuntime& runtime) {
+    return !runtime.ctx_params->model_path.empty() || !runtime.ctx_params->diffusion_model_path.empty();
+}
+
+bool generate_server_images(sd_ctx_t* ctx, ImgGenJobRequest& request, SDImageVec& results, std::string& error_message) {
+    auto params = request.to_image_opt();
+    PromptImageCallbackGuard prompt_images(ctx, request.gen_params);
+    sd_result_t* generated = nullptr;
+    if (!generate_sd_image(ctx, params, &generated)) {
+        error_message = sd_get_last_error();
+        if (error_message.empty())
+            error_message = "generate_image returned no results";
+        return false;
+    }
+    results.adopt(generated);
+    if (results.empty()) {
+        error_message = "generate_image returned no results";
+        return false;
+    }
+    return true;
+}
+
 std::string unsupported_generation_mode_error(SDMode mode) {
+    if (const auto* error = sd_get_last_error(); *error) {
+        return error;
+    }
     if (mode == VID_GEN) {
-        return "loaded model does not support vid_gen";
+        return "current model does not support vid_gen";
     }
     if (mode == IMG_GEN) {
-        return "loaded model does not support img_gen";
+        return "current model does not support img_gen";
     }
-    return "loaded model does not support requested mode";
+    return "current model does not support requested mode";
+}
+
+static int parse_weight_ttl(int argc, const char** argv, int index, int& ttl) {
+    if (index + 1 < argc) {
+        const std::string_view value = argv[index + 1];
+        const auto* end              = value.data() + value.size();
+        int seconds                  = 0;
+        const auto parsed            = std::from_chars(value.data(), end, seconds);
+        if (parsed.ec == std::errc{} && parsed.ptr == end && seconds >= -1) {
+            ttl = seconds;
+            return 1;
+        }
+    }
+    LOG_ERROR("%s expects an integer greater than or equal to -1", argv[index]);
+    return -1;
 }
 
 ArgOptions SDSvrParams::get_options() {
@@ -370,6 +303,7 @@ ArgOptions SDSvrParams::get_options() {
     options.string_options = {
         {"-l", "--listen-ip", "server listen ip (default: 127.0.0.1)", 0, &listen_ip},
         {"", "--serve-html-path", "path to HTML file to serve at root (optional)", 0, &serve_html_path},
+        {"", "--dgl-dir", "Web UI script directory (default: dgl)", 0, &dgl_dir},
     };
 
     options.int_options = {
@@ -394,6 +328,16 @@ ArgOptions SDSvrParams::get_options() {
 
     options.manual_options = {
         {"-h", "--help", "show this help message and exit", on_help_arg},
+        {"", "--weight-staging-ttl",
+         "idle seconds before releasing GPU staging copies of RAM weights (-1 disabled, 0 immediate; default: -1)",
+         [this](int argc, const char** argv, int index) {
+             return parse_weight_ttl(argc, argv, index, weight_staging_ttl);
+         }},
+        {"", "--weight-residency-ttl",
+         "idle seconds before unloading model components from RAM and VRAM (-1 disabled, 0 immediate; default: -1)",
+         [this](int argc, const char** argv, int index) {
+             return parse_weight_ttl(argc, argv, index, weight_residency_ttl);
+         }},
         {"", "--model-dir", "model root; repeat to search multiple directories (default: models)",
          [this](int argc, const char** argv, int index) {
              if (++index >= argc || argv[index][0] == '\0')
@@ -431,6 +375,10 @@ bool SDSvrParams::validate() {
         LOG_ERROR("error: serve_html_path file does not exist: %s", serve_html_path.c_str());
         return false;
     }
+    if (dgl_dir.empty()) {
+        LOG_ERROR("--dgl-dir requires a directory path");
+        return false;
+    }
     return true;
 }
 
@@ -449,7 +397,10 @@ std::string SDSvrParams::to_string() const {
         << "  listen_port: \"" << listen_port << "\",\n"
         << "  max_pending_jobs: " << max_pending_jobs << ",\n"
         << "  completed_ttl_seconds: " << completed_ttl_seconds << ",\n"
+        << "  weight_staging_ttl: " << weight_staging_ttl << ",\n"
+        << "  weight_residency_ttl: " << weight_residency_ttl << ",\n"
         << "  serve_html_path: \"" << serve_html_path << "\",\n"
+        << "  dgl_dir: \"" << dgl_dir << "\",\n"
         << "}";
     return oss.str();
 }
@@ -564,10 +515,9 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
                 UpscalerEntry upscaler_entry;
                 upscaler_entry.name = p.stem().u8string();
                 std::error_code abs_ec;
-                fs::path abs_path         = fs::absolute(p, abs_ec);
-                upscaler_entry.fullpath   = (abs_ec ? p : abs_path.lexically_normal()).u8string();
-                upscaler_entry.model_name = "ESRGAN_4x";
-                upscaler_entry.path       = p.filename().u8string();
+                fs::path abs_path       = fs::absolute(p, abs_ec);
+                upscaler_entry.fullpath = (abs_ec ? p : abs_path.lexically_normal()).u8string();
+                upscaler_entry.path     = p.filename().u8string();
 
                 std::error_code size_ec;
                 upscaler_entry.file_size = it->file_size(size_ec);
@@ -577,19 +527,15 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
                 }
 
                 std::error_code time_ec;
-                upscaler_entry.last_modified        = it->last_write_time(time_ec);
-                auto previous                       = std::find_if(previous_cache.begin(), previous_cache.end(), [&](const UpscalerEntry& cached) {
+                upscaler_entry.last_modified = it->last_write_time(time_ec);
+                auto previous                = std::find_if(previous_cache.begin(), previous_cache.end(), [&](const UpscalerEntry& cached) {
                     return cached.fullpath == upscaler_entry.fullpath &&
                            cached.file_size == upscaler_entry.file_size &&
                            (!time_ec && cached.last_modified == upscaler_entry.last_modified);
                 });
-                upscaler_entry.image_upscale_factor = previous != previous_cache.end()
-                                                          ? previous->image_upscale_factor
-                                                          : sd_upscaler_probe_scale(upscaler_entry.fullpath.c_str());
-                if (upscaler_entry.image_upscale_factor > 0) {
-                    upscaler_entry.scale      = upscaler_entry.image_upscale_factor;
-                    upscaler_entry.model_name = "ESRGAN_" + std::to_string(upscaler_entry.scale) + "x";
-                }
+                const int scale              = previous != previous_cache.end() ? previous->scale : sd_upscaler_probe_scale(upscaler_entry.fullpath.c_str());
+                upscaler_entry.scale         = scale > 0 ? scale : 4;
+                upscaler_entry.model_name    = "ESRGAN_" + std::to_string(upscaler_entry.scale) + "x";
 
                 new_cache.push_back(std::move(upscaler_entry));
                 it.increment(ec);

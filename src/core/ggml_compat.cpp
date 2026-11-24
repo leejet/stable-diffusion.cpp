@@ -151,17 +151,6 @@ bool ggml_graph_cpy_use_counts(const ggml_cgraph* src, ggml_cgraph* dst) {
     }
     return true;
 }
-
-ggml_status ggml_backend_graph_compute_async_range(ggml_backend_t backend, ggml_cgraph* graph, int first, int last) {
-    if (!backend || !graph || first < 0 || last < first || last > graph->n_nodes) {
-        return GGML_STATUS_FAILED;
-    }
-    if (first == last) {
-        return GGML_STATUS_SUCCESS;
-    }
-    auto view = ggml_graph_view(graph, first, last);
-    return ggml_backend_graph_compute_async(backend, &view);
-}
 #endif
 
 #ifdef SD_USE_UPSTREAM_GGML

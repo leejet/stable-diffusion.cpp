@@ -1011,10 +1011,11 @@ namespace Flux {
                                   ggml_tensor* y,
                                   ggml_tensor* guidance,
                                   ggml_tensor* pe,
-                                  ggml_tensor* mod_index_arange = nullptr,
-                                  std::vector<int> skip_layers  = {},
-                                  ggml_tensor* pulid_id         = nullptr,
-                                  float pulid_id_weight         = 1.0f) {
+                                  ggml_tensor* mod_index_arange                  = nullptr,
+                                  std::vector<int> skip_layers                   = {},
+                                  ggml_tensor* pulid_id                          = nullptr,
+                                  float pulid_id_weight                          = 1.0f,
+                                  const FluxImageBlockProcessor* image_processor = nullptr) {
             auto img_in      = std::dynamic_pointer_cast<Linear>(blocks["img_in"]);
             auto txt_in      = std::dynamic_pointer_cast<Linear>(blocks["txt_in"]);
             auto final_layer = std::dynamic_pointer_cast<LastLayer>(blocks["final_layer"]);
@@ -1124,6 +1125,10 @@ namespace Flux {
                     sd::ggml_graph_cut::mark_graph_cut(img, "flux.pulid_ca." + std::to_string(ca_idx), "img");
                     ca_idx++;
                 }
+                if (image_processor && image_processor->applies(false, i)) {
+                    img = image_processor->apply(*ctx, false, i, img);
+                    sd::ggml_graph_cut::mark_graph_cut(img, "flux.double_block_processor." + std::to_string(i), "img");
+                }
             }
 
             auto txt_img            = ggml_concat(ctx->ggml_ctx, txt, img, 1);  // [N, n_txt_token + n_img_token, hidden_size]
@@ -1137,9 +1142,9 @@ namespace Flux {
                 txt_img = block->forward(ctx, txt_img, vec, pe, txt_img_mask, ss_mods);
                 sd::ggml_graph_cut::mark_graph_cut(txt_img, "flux.single_blocks." + std::to_string(i), "txt_img");
 
-                if (pulid_run && (i % config.pulid_single_interval == 0)) {
-                    auto pulid_ca = std::dynamic_pointer_cast<PuLIDPerceiverAttentionCA>(
-                        blocks["pulid_ca." + std::to_string(ca_idx)]);
+                const bool native_pulid  = pulid_run && (i % config.pulid_single_interval == 0);
+                const bool process_image = image_processor && image_processor->applies(true, i);
+                if (native_pulid || process_image) {
                     ggml_tensor* txt_part = ggml_view_3d(ctx->ggml_ctx, txt_img,
                                                          txt_img->ne[0], n_txt_tok, txt_img->ne[2],
                                                          txt_img->nb[1], txt_img->nb[2],
@@ -1153,11 +1158,19 @@ namespace Flux {
                                                          n_txt_tok * txt_img->nb[1]);
                     txt_part              = ggml_cont(ctx->ggml_ctx, txt_part);
                     img_part              = ggml_cont(ctx->ggml_ctx, img_part);
-                    ggml_tensor* ca_out   = pulid_ca->forward(ctx, pulid_id, img_part);
-                    img_part              = ggml_add(ctx->ggml_ctx, img_part, ggml_scale(ctx->ggml_ctx, ca_out, pulid_id_weight));
-                    txt_img               = ggml_concat(ctx->ggml_ctx, txt_part, img_part, 1);
-                    sd::ggml_graph_cut::mark_graph_cut(txt_img, "flux.pulid_ca." + std::to_string(ca_idx), "txt_img");
-                    ca_idx++;
+                    if (native_pulid) {
+                        auto pulid_ca = std::dynamic_pointer_cast<PuLIDPerceiverAttentionCA>(
+                            blocks["pulid_ca." + std::to_string(ca_idx)]);
+                        auto* ca_out = pulid_ca->forward(ctx, pulid_id, img_part);
+                        img_part     = ggml_add(ctx->ggml_ctx, img_part, ggml_scale(ctx->ggml_ctx, ca_out, pulid_id_weight));
+                    }
+                    if (process_image)
+                        img_part = image_processor->apply(*ctx, true, i, img_part);
+                    txt_img = ggml_concat(ctx->ggml_ctx, txt_part, img_part, 1);
+                    if (native_pulid)
+                        sd::ggml_graph_cut::mark_graph_cut(txt_img, "flux.pulid_ca." + std::to_string(ca_idx++), "txt_img");
+                    else
+                        sd::ggml_graph_cut::mark_graph_cut(txt_img, "flux.single_block_processor." + std::to_string(i), "txt_img");
                 }
             }
 
@@ -1271,12 +1284,13 @@ namespace Flux {
                                          ggml_tensor* y,
                                          ggml_tensor* guidance,
                                          ggml_tensor* pe,
-                                         ggml_tensor* mod_index_arange         = nullptr,
-                                         ggml_tensor* dct                      = nullptr,
-                                         std::vector<ggml_tensor*> ref_latents = {},
-                                         std::vector<int> skip_layers          = {},
-                                         ggml_tensor* pulid_id                 = nullptr,
-                                         float pulid_id_weight                 = 1.0f) {
+                                         ggml_tensor* mod_index_arange                  = nullptr,
+                                         ggml_tensor* dct                               = nullptr,
+                                         std::vector<ggml_tensor*> ref_latents          = {},
+                                         std::vector<int> skip_layers                   = {},
+                                         ggml_tensor* pulid_id                          = nullptr,
+                                         float pulid_id_weight                          = 1.0f,
+                                         const FluxImageBlockProcessor* image_processor = nullptr) {
             GGML_ASSERT(x->ne[3] == 1);
 
             int64_t W      = x->ne[0];
@@ -1324,7 +1338,7 @@ namespace Flux {
             }
 
             auto out = forward_orig(ctx, img, context, timestep, y, guidance, pe, mod_index_arange, skip_layers,
-                                    pulid_id, pulid_id_weight);  // [N, num_tokens, C * patch_size * patch_size]
+                                    pulid_id, pulid_id_weight, image_processor);  // [N, num_tokens, C * patch_size * patch_size]
 
             if (out->ne[1] > img_tokens) {
                 out = ggml_view_3d(ctx->ggml_ctx, out, out->ne[0], img_tokens, out->ne[2], out->nb[1], out->nb[2], 0);
@@ -1343,12 +1357,13 @@ namespace Flux {
                              ggml_tensor* y,
                              ggml_tensor* guidance,
                              ggml_tensor* pe,
-                             ggml_tensor* mod_index_arange         = nullptr,
-                             ggml_tensor* dct                      = nullptr,
-                             std::vector<ggml_tensor*> ref_latents = {},
-                             std::vector<int> skip_layers          = {},
-                             ggml_tensor* pulid_id                 = nullptr,
-                             float pulid_id_weight                 = 1.0f) {
+                             ggml_tensor* mod_index_arange                  = nullptr,
+                             ggml_tensor* dct                               = nullptr,
+                             std::vector<ggml_tensor*> ref_latents          = {},
+                             std::vector<int> skip_layers                   = {},
+                             ggml_tensor* pulid_id                          = nullptr,
+                             float pulid_id_weight                          = 1.0f,
+                             const FluxImageBlockProcessor* image_processor = nullptr) {
             // Forward pass of DiT.
             // x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
             // timestep: (N,) tensor of diffusion timesteps
@@ -1388,7 +1403,8 @@ namespace Flux {
                                            ref_latents,
                                            skip_layers,
                                            pulid_id,
-                                           pulid_id_weight);
+                                           pulid_id_weight,
+                                           image_processor);
             }
         }
     };
@@ -1397,6 +1413,8 @@ namespace Flux {
         sd::PECache pe_cache_;
 
     public:
+        ggml_backend_t compute_backend() const { return runtime_backend; }
+
         FluxConfig config;
         Flux flux;
         std::vector<float> mod_index_arange_vec;
@@ -1505,7 +1523,8 @@ namespace Flux {
                                  Rope::RefIndexMode ref_index_mode                        = Rope::RefIndexMode::FIXED,
                                  std::vector<int> skip_layers                             = {},
                                  const sd::Tensor<float>& pulid_id_tensor                 = {},
-                                 float pulid_id_weight                                    = 1.0f) {
+                                 float pulid_id_weight                                    = 1.0f,
+                                 const FluxImageBlockProcessor* image_processor           = nullptr) {
             ggml_tensor* x         = make_input(x_tensor);
             ggml_tensor* timesteps = make_input(timesteps_tensor);
             ggml_tensor* context   = make_optional_input(context_tensor);
@@ -1527,7 +1546,7 @@ namespace Flux {
             }
 
             GGML_ASSERT(x->ne[3] == 1);
-            ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE);
+            ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE + (image_processor ? image_processor->extra_graph_size() : 0));
 
             ggml_tensor* mod_index_arange = nullptr;
             ggml_tensor* dct              = nullptr;  // for chroma radiance
@@ -1600,7 +1619,8 @@ namespace Flux {
                                             ref_latents,
                                             skip_layers,
                                             pulid_id,
-                                            pulid_id_weight);
+                                            pulid_id_weight,
+                                            image_processor);
 
             ggml_build_forward_expand(gf, out);
 
@@ -1618,7 +1638,8 @@ namespace Flux {
                                   Rope::RefIndexMode ref_index_mode                 = Rope::RefIndexMode::FIXED,
                                   std::vector<int> skip_layers                      = std::vector<int>(),
                                   const sd::Tensor<float>& pulid_id                 = {},
-                                  float pulid_id_weight                             = 1.0f) {
+                                  float pulid_id_weight                             = 1.0f,
+                                  const FluxImageBlockProcessor* image_processor    = nullptr) {
             // x: [N, in_channels, h, w]
             // timesteps: [N, ]
             // context: [N, max_position, hidden_size]
@@ -1626,7 +1647,7 @@ namespace Flux {
             // guidance: [N, ]
             // pulid_id: empty (no injection) or [N, num_id_tokens=32, kv_dim=2048]
             auto get_graph = [&]() -> ggml_cgraph* {
-                return build_graph(x, timesteps, context, c_concat, y, guidance, ref_latents, ref_index_mode, skip_layers, pulid_id, pulid_id_weight);
+                return build_graph(x, timesteps, context, c_concat, y, guidance, ref_latents, ref_index_mode, skip_layers, pulid_id, pulid_id_weight, image_processor);
             };
 
             auto result = restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
@@ -1647,11 +1668,12 @@ namespace Flux {
                            tensor_or_empty(diffusion_params.c_concat),
                            tensor_or_empty(diffusion_params.y),
                            tensor_or_empty(extra->guidance),
-                           diffusion_params.ref_latents && diffusion_params.ref_image_params.pass_to_dit ? *diffusion_params.ref_latents : empty_ref_latents,
-                           diffusion_params.ref_image_params.ref_index_mode,
+                           diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
+                           diffusion_params.ref_index_mode,
                            extra->skip_layers ? *extra->skip_layers : empty_skip_layers,
                            tensor_or_empty(extra->pulid_id),
-                           extra->pulid_id_weight);
+                           extra->pulid_id_weight,
+                           extra->image_processor);
         }
 
         void test() {
