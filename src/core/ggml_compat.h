@@ -29,13 +29,6 @@ bool ggml_graph_cpy_mapped(const struct ggml_cgraph* src, struct ggml_cgraph* ds
 // This preserves external consumers when constructing an inference graph segment.
 bool ggml_graph_cpy_use_counts(const struct ggml_cgraph* src, struct ggml_cgraph* dst);
 
-// Executes nodes [first, last) with the original graph's use counts. No graph ownership
-// is transferred. Tensor storage must already be allocated; invalid bounds fail.
-enum ggml_status ggml_backend_graph_compute_async_range(ggml_backend_t backend,
-                                                        struct ggml_cgraph* graph,
-                                                        int first,
-                                                        int last);
-
 #else
 #error "Patched ggml requires ggml-graph.h; select SD_USE_UPSTREAM_GGML for upstream compatibility"
 #endif
