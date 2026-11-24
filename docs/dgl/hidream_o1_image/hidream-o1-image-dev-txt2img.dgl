@@ -13,10 +13,11 @@ var {
     width = 1024
     height = 1024
 
-    steps = 20
-    method = "euler"
-    scheduler = "discrete"
+    steps = 28
+    method = "lcm"
+    scheduler = "lcm"
     noise_scale = 8.0
+    extra_sample_args = "noise_scale_start=7.5,noise_scale_end=7.5,noise_clip_std=2.5"
 }
 
 fn main() {
@@ -31,7 +32,7 @@ fn main() {
     rng = make_rng(rng_type, seed = seed)
     noise = tensor::affine(tensor::randn_like(base, rng = rng), scale = noise_scale)
     start = add_noise(predict, base, noise, sigma = sigmas[0])
-    latent = sample(start, sigmas, predict = predict, method = method, rng = rng)
+    latent = sample(start, sigmas, predict = predict, method = method, rng = rng, extra_args = extra_sample_args)
     image = vae_decode(vae, dit_to_vae_latents(vae, latent))
     image::save(output_path, image)
     return {image = image, latent = latent}

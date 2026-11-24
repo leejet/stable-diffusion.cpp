@@ -1,19 +1,21 @@
 # HiDream-O1-Image
 
-HiDream-O1-Image uses a bundled model checkpoint. The example below uses the Dev checkpoint.
+HiDream-O1-Image supports text-to-image generation and reference-image editing
+with a bundled model checkpoint. Choose the Dev or full checkpoint.
 
-Two checkpoints are supported, each with its own reference recipe. The sampler is not chosen
-for you: the global default is `euler`, which produces white speckle with the Dev checkpoint,
-so pass the sampler and the renoised-flow noise args explicitly.
+## Supported variants
 
-| Checkpoint | `--steps` | `--cfg-scale` | `-W` / `-H` | extra |
+Use the settings below for text-to-image in stable-diffusion.cpp.
+
+| Checkpoint | `--steps` | `--cfg-scale` | `-W` / `-H` | Sampling options |
 | --- | --- | --- | --- | --- |
 | Dev (distilled) | 28 | 1.0 | 1024 | `--sampling-method lcm --extra-sample-args noise_scale_start=7.5,noise_scale_end=7.5,noise_clip_std=2.5` |
 | HiDream-O1-Image (full) | 50 | 5.0 | 2048 (1024 works) | `--sampling-method euler` |
 
-These are manual settings for this model, not pipeline defaults. Dev needs both the `lcm`
-sampler and the three noise args: `lcm` alone collapses the image, and the default `euler`
-produces white speckle. The full checkpoint uses `euler` and needs no flow-shift override.
+For Dev, use `lcm` with the noise settings above to reduce white speckles seen
+with `euler`. The default LCM noise settings can produce nearly flat images.
+The Dev settings were tested with Q5_0 GGUF weights at 768×768 and 1024×1024.
+Use the default flow shift for the full checkpoint.
 
 ## Model files
 
@@ -30,8 +32,9 @@ Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
 server, then select the recipe matching your weights. Fill the component slots
 below and click **Load models**.
 Use the files and compatibility requirements in [Model files](#model-files).
-The recipe does not choose the sampler or pass the noise args, and the Web UI has no field
-for them, so use the CLI recipe below for the Dev checkpoint.
+The Dev recipe preselects `euler` in the Web UI sampler menu. To pass the LCM
+noise arguments for Dev text-to-image, use the [DGL script](#dgl) or the
+[Legacy CLI example](#hidream-o1-image-dev).
 
 | Recipe | Component slots |
 | --- | --- |
@@ -77,8 +80,9 @@ noise = tensor::affine(tensor::randn_like(base, rng = rng), scale = noise_scale)
 start = add_noise(predict, base, noise, sigma = sigmas[0])
 ```
 
-Use the same RNG for initial noise and sampling. The noise scale is independent
-of the sampler's `eta` parameter.
+Use the same RNG for initial noise and sampling. The initial noise scale is
+independent of the sampler's `eta` parameter. The script passes
+`extra_sample_args` to `sample` to control the noise added between LCM steps.
 
 ### Legacy CLI
 
@@ -116,6 +120,8 @@ CLI examples use the [shared path and shell conventions](README.md#example-conve
   -v
 ```
 
+<img width="256" alt="HiDream-O1-Image-Dev example" src="../../assets/hidream-o1/dev_example.png" />
+
 #### HiDream-O1-Image (full)
 
 **Windows (PowerShell)**
@@ -145,8 +151,6 @@ CLI examples use the [shared path and shell conventions](README.md#example-conve
   -W 1024 \
   -v
 ```
-
-<img width="256" alt="HiDream-O1-Image-Dev example" src="../../assets/hidream-o1/dev_example.png" />
 
 ## Options
 
