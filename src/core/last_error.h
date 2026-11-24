@@ -6,7 +6,7 @@
 #include "core/util.h"
 #include "stable-diffusion.h"
 
-// Why the latest API call of a thread failed (sd_get_last_error). The code is recorded where
+// Why the latest API call of a thread failed (sd_get_last_error_code). The code is recorded where
 // the cause is known; the text comes from the error log line written there.
 namespace sd::last_error {
 

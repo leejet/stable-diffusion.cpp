@@ -71,7 +71,8 @@ struct TaylorSeerState {
     }
 
     bool can_approximate() const {
-        return last_computed_step >= n_derivatives && !dY_prev.empty() && !dY_prev[0].empty();
+        return last_computed_step >= 0 && !dY_current.empty() &&
+               std::all_of(dY_current.begin(), dY_current.end(), [](const auto& derivative) { return !derivative.empty(); });
     }
 
     void update_derivatives(const float* Y, size_t size, int step) {
@@ -102,7 +103,7 @@ struct TaylorSeerState {
     }
 
     void approximate(float* output, size_t size, int target_step) const {
-        if (!can_approximate() || dY_prev[0].size() != size) {
+        if (!can_approximate() || dY_current[0].size() != size) {
             return;
         }
 
@@ -112,16 +113,16 @@ struct TaylorSeerState {
 
         std::fill(output, output + size, 0.0f);
         float factorial = 1.0f;
-        int order       = static_cast<int>(dY_prev.size());
+        int order       = static_cast<int>(dY_current.size());
 
         for (int o = 0; o < order; o++) {
-            if (dY_prev[o].empty() || dY_prev[o].size() != size)
+            if (dY_current[o].empty() || dY_current[o].size() != size)
                 continue;
             if (o > 0)
                 factorial *= static_cast<float>(o);
             float coeff = ::powf(static_cast<float>(elapsed), static_cast<float>(o)) / factorial;
             for (size_t i = 0; i < size; i++) {
-                output[i] += coeff * dY_prev[o][i];
+                output[i] += coeff * dY_current[o][i];
             }
         }
     }
@@ -638,46 +639,37 @@ inline void parse_taylorseer_options(const std::string& opts, TaylorSeerConfig& 
 struct CacheDitConditionState {
     DBCacheConfig config;
     TaylorSeerConfig taylor_config;
-    bool initialized = false;
-
+    bool initialized       = false;
     int current_step_index = -1;
     bool step_active       = false;
+    bool can_read_cache    = false;
     bool skip_current_step = false;
-    bool initial_step      = true;
     int warmup_remaining   = 0;
     std::vector<int> cached_steps;
     int continuous_cached_steps     = 0;
-    float accumulated_residual_diff = 0.0f;
+    float accumulated_residual_diff = 0.f;
     int total_steps_skipped         = 0;
-
-    const void* anchor_condition = nullptr;
+    const void* anchor_condition    = nullptr;
 
     struct CacheEntry {
         std::vector<float> diff;
         std::vector<float> prev_input;
-        std::vector<float> prev_output;
-        bool has_prev = false;
+        std::vector<int64_t> shape;
+        TaylorSeerState taylor;
     };
     std::unordered_map<const void*, CacheEntry> cache_diffs;
-
-    TaylorSeerState taylor_state;
-
     float start_sigma = std::numeric_limits<float>::max();
-    float end_sigma   = 0.0f;
+    float end_sigma   = 0.f;
 
     void reset_runtime() {
         current_step_index = -1;
-        step_active        = false;
-        skip_current_step  = false;
-        initial_step       = true;
-        warmup_remaining   = config.max_warmup_steps;
+        step_active = can_read_cache = skip_current_step = false;
+        warmup_remaining                                 = config.max_warmup_steps;
         cached_steps.clear();
-        continuous_cached_steps   = 0;
-        accumulated_residual_diff = 0.0f;
-        total_steps_skipped       = 0;
-        anchor_condition          = nullptr;
+        continuous_cached_steps = total_steps_skipped = 0;
+        accumulated_residual_diff                     = 0.f;
+        anchor_condition                              = nullptr;
         cache_diffs.clear();
-        taylor_state.reset();
     }
 
     void init(const DBCacheConfig& dbcfg, const TaylorSeerConfig& tcfg) {
@@ -685,211 +677,115 @@ struct CacheDitConditionState {
         taylor_config = tcfg;
         initialized   = dbcfg.enabled || tcfg.enabled;
         reset_runtime();
+    }
 
-        if (taylor_config.enabled) {
-            taylor_state.init(taylor_config.n_derivatives, 0);
+    void invalidate_condition(const void* condition) {
+        cache_diffs.erase(condition);
+        if (anchor_condition == condition) {
+            anchor_condition  = nullptr;
+            skip_current_step = can_read_cache = false;
+            continuous_cached_steps            = 0;
+            accumulated_residual_diff          = 0.f;
+            warmup_remaining                   = config.max_warmup_steps;
         }
     }
 
     void set_sigmas(const std::vector<float>& sigmas) {
         if (!initialized || sigmas.size() < 2)
             return;
-
-        float start_percent = 0.15f;
-        float end_percent   = 0.95f;
-
-        size_t n_steps    = sigmas.size() - 1;
-        size_t start_step = static_cast<size_t>(start_percent * n_steps);
-        size_t end_step   = static_cast<size_t>(end_percent * n_steps);
-
-        if (start_step >= n_steps)
-            start_step = n_steps - 1;
-        if (end_step >= n_steps)
-            end_step = n_steps - 1;
-
-        start_sigma = sigmas[start_step];
-        end_sigma   = sigmas[end_step];
-
-        if (start_sigma < end_sigma) {
+        const size_t n_steps = sigmas.size() - 1;
+        start_sigma          = sigmas[std::min(n_steps - 1, size_t(.15f * n_steps))];
+        end_sigma            = sigmas[std::min(n_steps - 1, size_t(.95f * n_steps))];
+        if (start_sigma < end_sigma)
             std::swap(start_sigma, end_sigma);
-        }
     }
 
-    bool enabled() const {
-        return initialized && (config.enabled || taylor_config.enabled);
-    }
+    bool enabled() const { return initialized && (config.enabled || taylor_config.enabled); }
+    bool step_is_active() const { return enabled() && step_active; }
+    bool is_step_skipped() const { return step_is_active() && skip_current_step; }
 
     void begin_step(int step_index, float sigma) {
-        if (!enabled())
+        if (!enabled() || step_index == current_step_index)
             return;
-        if (step_index == current_step_index)
-            return;
-
         current_step_index = step_index;
-        skip_current_step  = false;
-        step_active        = false;
-
-        if (sigma > start_sigma)
+        skip_current_step = can_read_cache = false;
+        step_active                        = sigma <= start_sigma && sigma > end_sigma;
+        if (!step_active)
             return;
-        if (!(sigma > end_sigma))
-            return;
-
-        step_active = true;
-
         if (warmup_remaining > 0) {
-            warmup_remaining--;
+            --warmup_remaining;
             return;
         }
-
-        if (!config.steps_computation_mask.empty()) {
-            if (step_index < static_cast<int>(config.steps_computation_mask.size())) {
-                if (config.steps_computation_mask[step_index] == 1) {
-                    return;
-                }
-            }
-        }
-
-        if (config.max_cached_steps >= 0 &&
-            static_cast<int>(cached_steps.size()) >= config.max_cached_steps) {
+        if (step_index < int(config.steps_computation_mask.size()) && config.steps_computation_mask[step_index] == 1)
             return;
-        }
-
-        if (config.max_continuous_cached_steps >= 0 &&
-            continuous_cached_steps >= config.max_continuous_cached_steps) {
+        if (config.max_cached_steps >= 0 && int(cached_steps.size()) >= config.max_cached_steps)
             return;
-        }
-    }
-
-    bool step_is_active() const {
-        return enabled() && step_active;
-    }
-
-    bool is_step_skipped() const {
-        return enabled() && step_active && skip_current_step;
-    }
-
-    bool has_cache(const void* cond) const {
-        auto it = cache_diffs.find(cond);
-        return it != cache_diffs.end() && !it->second.diff.empty();
-    }
-
-    void update_cache(const void* cond, const sd::Tensor<float>& input, const sd::Tensor<float>& output) {
-        CacheEntry& entry = cache_diffs[cond];
-        if (!sd::store_condition_cache_diff(&entry.diff, input, output)) {
-            entry.prev_input.clear();
-            entry.prev_output.clear();
-            entry.has_prev = false;
+        if (config.max_continuous_cached_steps >= 0 && continuous_cached_steps >= config.max_continuous_cached_steps)
             return;
-        }
-
-        size_t size              = static_cast<size_t>(output.numel());
-        const float* input_data  = input.data();
-        const float* output_data = output.data();
-        entry.prev_input.resize(size);
-        entry.prev_output.resize(size);
-        for (size_t i = 0; i < size; i++) {
-            entry.prev_input[i]  = input_data[i];
-            entry.prev_output[i] = output_data[i];
-        }
-        entry.has_prev = true;
+        can_read_cache = true;
     }
 
-    void apply_cache(const void* cond,
-                     const sd::Tensor<float>& input,
-                     sd::Tensor<float>* output) {
-        auto it = cache_diffs.find(cond);
-        if (it == cache_diffs.end() || it->second.diff.empty())
-            return;
-        sd::apply_condition_cache_diff(it->second.diff, input, output);
-    }
-
-    bool before_condition(const void* cond, const sd::Tensor<float>& input, sd::Tensor<float>* output, float sigma, int step_index) {
-        if (!enabled() || step_index < 0)
+    bool before_condition(const void* condition, const sd::Tensor<float>& input, sd::Tensor<float>* output, float sigma, int step_index) {
+        if (!enabled() || step_index < 0 || !condition || !output)
             return false;
-
-        if (step_index != current_step_index) {
+        if (step_index != current_step_index)
             begin_step(step_index, sigma);
-        }
-
         if (!step_active)
             return false;
-
-        if (initial_step) {
-            anchor_condition = cond;
-            initial_step     = false;
-        }
-
-        bool is_anchor = (cond == anchor_condition);
-
-        if (skip_current_step) {
-            if (has_cache(cond)) {
-                apply_cache(cond, input, output);
-                return true;
-            }
+        if (!anchor_condition)
+            anchor_condition = condition;
+        if (!can_read_cache)
             return false;
-        }
-
-        if (!is_anchor)
+        auto it = cache_diffs.find(condition);
+        if (it == cache_diffs.end() || it->second.shape != input.shape() || it->second.diff.empty())
             return false;
-
-        auto it = cache_diffs.find(cond);
-        if (it == cache_diffs.end() || !it->second.has_prev)
+        auto& entry = it->second;
+        if (taylor_config.enabled &&
+            (!entry.taylor.can_approximate() || taylor_config.skip_interval_steps <= 0 ||
+             current_step_index - entry.taylor.last_computed_step > taylor_config.skip_interval_steps))
             return false;
-
-        size_t ne = static_cast<size_t>(input.numel());
-        if (it->second.prev_input.size() != ne)
+        const bool anchor = condition == anchor_condition;
+        if (!anchor && !skip_current_step)
             return false;
-
-        const float* input_data = input.data();
-        float diff              = CacheDitState::calculate_residual_diff(
-            it->second.prev_input.data(), input_data, ne);
-
-        float effective_threshold = config.residual_diff_threshold;
-        if (config.Fn_compute_blocks > 0) {
-            float fn_confidence = 1.0f + 0.02f * (config.Fn_compute_blocks - 8);
-            fn_confidence       = std::max(0.5f, std::min(2.0f, fn_confidence));
-            effective_threshold *= fn_confidence;
+        float diff = 0.f;
+        if (anchor && config.enabled) {
+            diff = CacheDitState::calculate_residual_diff(entry.prev_input.data(), input.data(), input.numel());
+            if (!(diff < config.residual_diff_threshold))
+                return false;
         }
-        if (config.Bn_compute_blocks > 0) {
-            float bn_quality = 1.0f - 0.03f * config.Bn_compute_blocks;
-            bn_quality       = std::max(0.5f, std::min(1.0f, bn_quality));
-            effective_threshold *= bn_quality;
+        if (taylor_config.enabled) {
+            *output = sd::Tensor<float>(input.shape());
+            entry.taylor.approximate(output->data(), output->numel(), current_step_index);
+        } else {
+            sd::apply_condition_cache_diff(entry.diff, input, output);
         }
-
-        if (diff < effective_threshold) {
+        if (anchor && !skip_current_step) {
             skip_current_step = true;
-            total_steps_skipped++;
+            ++total_steps_skipped;
             cached_steps.push_back(current_step_index);
-            continuous_cached_steps++;
+            ++continuous_cached_steps;
             accumulated_residual_diff += diff;
-            apply_cache(cond, input, output);
-            return true;
         }
-
-        continuous_cached_steps = 0;
-        return false;
+        return true;
     }
 
-    void after_condition(const void* cond, const sd::Tensor<float>& input, const sd::Tensor<float>& output) {
+    void after_condition(const void* condition, const sd::Tensor<float>& input, const sd::Tensor<float>& output) {
         if (!step_is_active())
             return;
-
-        update_cache(cond, input, output);
-
-        if (cond == anchor_condition && taylor_config.enabled) {
-            taylor_state.update_derivatives(output.data(), static_cast<size_t>(output.numel()), current_step_index);
-        }
-    }
-
-    void log_metrics() const {
-        if (!enabled())
+        auto& entry = cache_diffs[condition];
+        if (!sd::store_condition_cache_diff(&entry.diff, input, output)) {
+            cache_diffs.erase(condition);
             return;
-
-        LOG_INFO("CacheDIT: steps_skipped=%d/%d (%.1f%%), accum_residual_diff=%.4f",
-                 total_steps_skipped,
-                 current_step_index + 1,
-                 (current_step_index > 0) ? (100.0f * total_steps_skipped / (current_step_index + 1)) : 0.0f,
-                 accumulated_residual_diff);
+        }
+        if (entry.shape != input.shape()) {
+            entry.taylor.init(taylor_config.n_derivatives, output.numel());
+            entry.shape = input.shape();
+        }
+        entry.prev_input = input.values();
+        if (taylor_config.enabled)
+            entry.taylor.update_derivatives(output.data(), output.numel(), current_step_index);
+        if (condition == anchor_condition)
+            continuous_cached_steps = 0;
     }
 };
 

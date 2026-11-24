@@ -7,6 +7,7 @@
 #include <cutlass/epilogue/threadblock/fusion/visitors.hpp>
 #include <mutex>
 #include <unordered_map>
+#include "convrot_kernel.h"
 #include "i8_gemm.h"
 
 namespace sd_i8_cutlass {
@@ -33,10 +34,12 @@ namespace sd_i8_cutlass {
         }
     };
 
-    template <int M, int N, int WM>
+    template <int M, int N, int WM, int Stages = 4, int Band = 1>
     struct TileConfig {
-        using Tile = cutlass::gemm::GemmShape<M, N, 64>;
-        using Warp = cutlass::gemm::GemmShape<WM, 64, 64>;
+        using Tile                   = cutlass::gemm::GemmShape<M, N, 64>;
+        using Warp                   = cutlass::gemm::GemmShape<WM, 64, 64>;
+        static constexpr int kStages = Stages;
+        static constexpr int kBand   = Band;
     };
 
     enum Tile {
@@ -73,6 +76,7 @@ namespace sd_i8_cutlass {
     struct DeviceInfo {
         int ordinal        = -1;
         int major          = 0;
+        int minor          = 0;
         int sms            = 0;
         int threads_per_sm = 0;
         size_t shared      = 0;
@@ -90,7 +94,7 @@ namespace sd_i8_cutlass {
         int ordinal          = query ? query(device) : -1;
         cudaDeviceProp props = {};
         if (ordinal >= 0 && cudaGetDeviceProperties(&props, ordinal) == cudaSuccess)
-            info = {ordinal, props.major, props.multiProcessorCount, props.maxThreadsPerMultiProcessor, size_t(props.sharedMemPerBlockOptin)};
+            info = {ordinal, props.major, props.minor, props.multiProcessorCount, props.maxThreadsPerMultiProcessor, size_t(props.sharedMemPerBlockOptin)};
         cache.emplace(device, info);
         return info;
     }
@@ -105,14 +109,64 @@ namespace sd_i8_cutlass {
         CUTLASS_HOST_DEVICE int64_t operator()(cutlass::MatrixCoord c) const { return c.row() + int64_t(c.column() / 2 + (c.column() % 2) * half_n) * stride; }
     };
 
+    template <class Base>
+    struct SplitWeightIterator : Base {
+        using Layout      = typename Base::Layout;
+        using Pointer     = typename Base::Pointer;
+        using TensorCoord = typename Base::TensorCoord;
+        using AccessType  = typename Base::AccessType;
+        struct Params : Base::Params {
+            const int8_t* up = nullptr;
+            int64_t k        = 0;
+            Params()         = default;
+            CUTLASS_HOST_DEVICE Params(const Layout& layout)
+                : Base::Params(layout), k(layout.stride(0)) {}
+        };
+        uintptr_t gate, up;
+        size_t gate_bytes;
+        CUTLASS_DEVICE SplitWeightIterator(const Params& params, Pointer pointer, TensorCoord extent, int thread, TensorCoord offset, const int* indices = nullptr)
+            : Base(params, pointer, extent, thread, offset, indices),
+              gate(reinterpret_cast<uintptr_t>(pointer)),
+              up(reinterpret_cast<uintptr_t>(params.up)),
+              gate_bytes(size_t(params.k) * (extent.column() / 2)) {}
+
+        CUTLASS_DEVICE AccessType* get() const {
+            auto* address = Base::get();
+            if (!address)
+                return nullptr;
+            // Keep the packed SwiGLU iterator's column pairing, but redirect its
+            // virtual up half to a separate allocation. Params.k stays full-sized
+            // even when Stream-K restricts this iterator's K extent.
+            const uintptr_t offset = reinterpret_cast<uintptr_t>(address) - gate;
+            return offset < gate_bytes ? address : reinterpret_cast<AccessType*>(up + offset - gate_bytes);
+        }
+    };
+
     template <class Map>
-    struct SwigluStore : cutlass::epilogue::threadblock::VisitorAuxStore<Map, float, cutlass::FloatRoundStyle::round_to_nearest, cute::Stride<int64_t, cute::_1, int64_t>> {
+    struct GatedStore : cutlass::epilogue::threadblock::VisitorAuxStore<Map, float, cutlass::FloatRoundStyle::round_to_nearest, cute::Stride<int64_t, cute::_1, int64_t>> {
         using Base = cutlass::epilogue::threadblock::VisitorAuxStore<Map, float, cutlass::FloatRoundStyle::round_to_nearest, cute::Stride<int64_t, cute::_1, int64_t>>;
-        using Base::Base;
+        struct Arguments : Base::Arguments {
+            bool situ = false;
+        };
+        using Params = Arguments;
+
+        template <class Shape>
+        static constexpr Params to_underlying_arguments(Shape const&, Arguments const& args, void*) {
+            return args;
+        }
+
+        GatedStore() = default;
+        CUTLASS_HOST_DEVICE GatedStore(Params const& params, typename Base::SharedStorage const& shared)
+            : Base(params, shared), situ(params.situ) {}
+
+        bool situ = false;
+
         template <class CB>
         struct Callbacks : CB {
-            CUTLASS_DEVICE Callbacks(CB const& base)
-                : CB(base) {}
+            bool situ;
+
+            CUTLASS_DEVICE Callbacks(CB const& base, bool situ)
+                : CB(base), situ(situ) {}
             CUTLASS_DEVICE void end_step(int step) {
                 auto src    = cute::filter(this->tC_rAux);
                 auto coords = cute::filter(this->tC_cAux(cute::_, cute::_, cute::_, step));
@@ -120,9 +174,10 @@ namespace sd_i8_cutlass {
                 for (int i = 0; i < cute::size(src); ++i) {
                     auto coord = coords(i);
                     if (cute::elem_less(coord, this->problem_shape)) {
-                        // Each vector contains two gate/up pairs; only their SwiGLU results are stored.
-                        const float4 a = *reinterpret_cast<const float4*>(&src(i));
-                        float2 value   = make_float2(__fmul_rn(a.x / (1.f + expf(-a.x)), a.y), __fmul_rn(a.z / (1.f + expf(-a.z)), a.w));
+                        // SwiGLU packs [gate | up] and SiTU packs [up | gate].
+                        const float4 a     = *reinterpret_cast<const float4*>(&src(i));
+                        const float2 value = situ ? make_float2(sd_cuda::sd_convrot::situ(a.y, a.x), sd_cuda::sd_convrot::situ(a.w, a.z))
+                                                  : make_float2(__fmul_rn(a.x / (1.f + expf(-a.x)), a.y), __fmul_rn(a.z / (1.f + expf(-a.z)), a.w));
                         int64_t n = cute::get<1>(this->problem_shape), m = cute::get<0>(this->problem_shape);
                         int64_t offset                                                 = cute::get<0>(coord) * (n / 2) + cute::get<1>(coord) / 2 + cute::get<2>(coord) * m * (n / 2);
                         *reinterpret_cast<float2*>(this->params_ptr->ptr_aux + offset) = value;
@@ -133,38 +188,56 @@ namespace sd_i8_cutlass {
         template <class Shape>
         CUTLASS_DEVICE auto get_callbacks(cutlass::gemm::GemmCoord tile, int tid, Shape shape) {
             auto cb = Base::get_callbacks(tile, tid, shape);
-            return Callbacks<decltype(cb)>(cb);
+            return Callbacks<decltype(cb)>(cb, situ);
         }
     };
 
-    static __global__ void pair_scales(const float* src, float* dst, int n) {
+    static __global__ void pair_scales(const float* src, const float* up, float* dst, int n) {
         const int i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i < n)
-            dst[i] = src[i / 2 + (i % 2) * (n / 2)];
+            dst[i] = up ? (i % 2 ? up[i / 2] : src[i / 2]) : src[i / 2 + (i % 2) * (n / 2)];
     }
 
-    template <class Config, bool StreamK>
+    template <class Fragment>
+    struct AddBias {
+        CUTLASS_DEVICE Fragment operator()(const Fragment& value, const Fragment& bias) const {
+            Fragment result;
+            // Prevent contraction with the preceding scale multiplication.
+            CUTLASS_PRAGMA_UNROLL
+            for (int i = 0; i < Fragment::kElements; ++i)
+                result[i] = __fadd_rn(value[i], bias[i]);
+            return result;
+        }
+    };
+
+    template <class Config, bool StreamK, bool PackedW4 = false>
     struct DenseTypes {
-        using Tile     = typename Config::Tile;
-        using Warp     = typename Config::Warp;
-        using Swizzle  = std::conditional_t<StreamK, BandedStreamK, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>>;
-        using Map      = cutlass::epilogue::threadblock::OutputTileThreadLayout<Tile, Warp, float, 4, 1>;
-        using Col      = cutlass::epilogue::threadblock::VisitorColBroadcast<Map, float, cute::Stride<cute::_1, cute::_0, int>>;
-        using Row      = cutlass::epilogue::threadblock::VisitorRowBroadcast<Map, float, cute::Stride<cute::_0, cute::_1, int>>;
-        using Mul      = cutlass::epilogue::threadblock::VisitorCompute<cutlass::multiplies, float, float, cutlass::FloatRoundStyle::round_to_nearest>;
-        using ScaleX   = cutlass::epilogue::threadblock::Sm80EVT<Mul, cutlass::epilogue::threadblock::VisitorAccFetch, Col>;
-        using ScaleW   = cutlass::epilogue::threadblock::Sm80EVT<Mul, ScaleX, Row>;
-        using Store    = cutlass::epilogue::threadblock::VisitorAuxStore<Map, float, cutlass::FloatRoundStyle::round_to_nearest, cute::Stride<int64_t, cute::_1, int64_t>>;
-        using Epilogue = cutlass::epilogue::threadblock::Sm80EVT<Store, ScaleW>;
-        using Kernel   = typename cutlass::gemm::kernel::DefaultGemmWithVisitor<
+        static constexpr bool kSplit = false;
+        static constexpr bool kGated = false;
+        static constexpr bool kBias  = !PackedW4;
+        using Weight                 = std::conditional_t<PackedW4, cutlass::int4b_t, int8_t>;
+        using Tile                   = typename Config::Tile;
+        using Warp                   = typename Config::Warp;
+        using Swizzle                = std::conditional_t<StreamK, BandedStreamK, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>>;
+        using Map                    = cutlass::epilogue::threadblock::OutputTileThreadLayout<Tile, Warp, float, 4, 1>;
+        using Col                    = cutlass::epilogue::threadblock::VisitorColBroadcast<Map, float, cute::Stride<cute::_1, cute::_0, int>>;
+        using Row                    = cutlass::epilogue::threadblock::VisitorRowBroadcast<Map, float, cute::Stride<cute::_0, cute::_1, int>>;
+        using Mul                    = cutlass::epilogue::threadblock::VisitorCompute<cutlass::multiplies, float, float, cutlass::FloatRoundStyle::round_to_nearest>;
+        using ScaleX                 = cutlass::epilogue::threadblock::Sm80EVT<Mul, cutlass::epilogue::threadblock::VisitorAccFetch, Col>;
+        using ScaleW                 = cutlass::epilogue::threadblock::Sm80EVT<Mul, ScaleX, Row>;
+        using Store                  = cutlass::epilogue::threadblock::VisitorAuxStore<Map, float, cutlass::FloatRoundStyle::round_to_nearest, cute::Stride<int64_t, cute::_1, int64_t>>;
+        using Add                    = cutlass::epilogue::threadblock::VisitorCompute<AddBias, float, float, cutlass::FloatRoundStyle::round_to_nearest>;
+        using Biased                 = cutlass::epilogue::threadblock::Sm80EVT<Add, ScaleW, Row>;
+        using Epilogue               = cutlass::epilogue::threadblock::Sm80EVT<Store, std::conditional_t<kBias, Biased, ScaleW>>;
+        using Kernel                 = typename cutlass::gemm::kernel::DefaultGemmWithVisitor<
             int8_t,
             cutlass::layout::RowMajor,
             cutlass::ComplexTransform::kNone,
             16,
-            int8_t,
+            Weight,
             cutlass::layout::ColumnMajor,
             cutlass::ComplexTransform::kNone,
-            16,
+            PackedW4 ? 32 : 16,
             float,
             cutlass::layout::RowMajor,
             4,
@@ -178,52 +251,80 @@ namespace sd_i8_cutlass {
             Epilogue,
             Swizzle,
             4,
-            cutlass::arch::OpMultiplyAddSaturate>::GemmKernel;
+            std::conditional_t<PackedW4, cutlass::arch::OpMultiplyAddMixedInputUpcast, cutlass::arch::OpMultiplyAddSaturate>>::GemmKernel;
         using Gemm = cutlass::gemm::device::GemmUniversalAdapter<Kernel>;
     };
-    template <class Config, bool StreamK>
-    struct SwigluTypes {
-        using Tile            = typename Config::Tile;
-        using Warp            = typename Config::Warp;
-        using Swizzle         = std::conditional_t<StreamK, BandedStreamK, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>>;
-        using Map             = cutlass::epilogue::threadblock::OutputTileThreadLayout<Tile, Warp, float, 4, 1>;
-        using Col             = cutlass::epilogue::threadblock::VisitorColBroadcast<Map, float, cute::Stride<cute::_1, cute::_0, int>>;
-        using Row             = cutlass::epilogue::threadblock::VisitorRowBroadcast<Map, float, cute::Stride<cute::_0, cute::_1, int>>;
-        using Mul             = cutlass::epilogue::threadblock::VisitorCompute<cutlass::multiplies, float, float, cutlass::FloatRoundStyle::round_to_nearest>;
-        using ScaleX          = cutlass::epilogue::threadblock::Sm80EVT<Mul, cutlass::epilogue::threadblock::VisitorAccFetch, Col>;
-        using ScaleW          = cutlass::epilogue::threadblock::Sm80EVT<Mul, ScaleX, Row>;
-        using Store           = SwigluStore<Map>;
-        using Epilogue        = cutlass::epilogue::threadblock::Sm80EVT<Store, ScaleW>;
-        using GemmBase        = typename cutlass::gemm::kernel::DefaultGemmUniversal<int8_t, cutlass::layout::RowMajor, cutlass::ComplexTransform::kNone, 16, int8_t, cutlass::layout::ColumnMajor, cutlass::ComplexTransform::kNone, 16, float, cutlass::layout::RowMajor, int, cutlass::arch::OpClassTensorOp, cutlass::arch::Sm80, Tile, Warp, cutlass::gemm::GemmShape<16, 8, 32>, cutlass::epilogue::thread::LinearCombination<float, 4, int, float>, Swizzle, 4, cutlass::arch::OpMultiplyAddSaturate, cutlass::gemm::SharedMemoryClearOption::kNone, false, false, false, cutlass::layout::NoPermute, cutlass::layout::NoPermute, WeightLayout>::GemmKernel;
-        using VisitorEpilogue = cutlass::epilogue::threadblock::EpilogueWithVisitorCallbacks<typename GemmBase::Epilogue, Epilogue, 1>;
-        using Kernel          = std::conditional_t<StreamK,
-                                                   cutlass::gemm::kernel::GemmWithEpilogueVisitorStreamk<typename GemmBase::Mma, VisitorEpilogue, Swizzle>,
-                                                   cutlass::gemm::kernel::GemmWithEpilogueVisitor<typename GemmBase::Mma, VisitorEpilogue, Swizzle>>;
-        using Gemm            = cutlass::gemm::device::GemmUniversalAdapter<Kernel>;
+    template <class Config, bool StreamK, bool Split = false>
+    struct GatedTypes {
+        static constexpr bool kSplit = Split;
+        static constexpr bool kBias  = false;
+        static constexpr bool kGated = true;
+        using Weight                 = int8_t;
+        using Tile                   = typename Config::Tile;
+        using Warp                   = typename Config::Warp;
+        using Swizzle                = std::conditional_t<StreamK, BandedStreamK, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<Config::kBand>>;
+        using Map                    = cutlass::epilogue::threadblock::OutputTileThreadLayout<Tile, Warp, float, 4, 1>;
+        using Col                    = cutlass::epilogue::threadblock::VisitorColBroadcast<Map, float, cute::Stride<cute::_1, cute::_0, int>>;
+        using Row                    = cutlass::epilogue::threadblock::VisitorRowBroadcast<Map, float, cute::Stride<cute::_0, cute::_1, int>>;
+        using Mul                    = cutlass::epilogue::threadblock::VisitorCompute<cutlass::multiplies, float, float, cutlass::FloatRoundStyle::round_to_nearest>;
+        using ScaleX                 = cutlass::epilogue::threadblock::Sm80EVT<Mul, cutlass::epilogue::threadblock::VisitorAccFetch, Col>;
+        using ScaleW                 = cutlass::epilogue::threadblock::Sm80EVT<Mul, ScaleX, Row>;
+        using Store                  = GatedStore<Map>;
+        using Epilogue               = cutlass::epilogue::threadblock::Sm80EVT<Store, ScaleW>;
+        using GemmBase               = typename cutlass::gemm::kernel::DefaultGemmUniversal<int8_t, cutlass::layout::RowMajor, cutlass::ComplexTransform::kNone, 16, int8_t, cutlass::layout::ColumnMajor, cutlass::ComplexTransform::kNone, 16, float, cutlass::layout::RowMajor, int, cutlass::arch::OpClassTensorOp, cutlass::arch::Sm80, Tile, Warp, cutlass::gemm::GemmShape<16, 8, 32>, cutlass::epilogue::thread::LinearCombination<float, 4, int, float>, Swizzle, Config::kStages, cutlass::arch::OpMultiplyAddSaturate, cutlass::gemm::SharedMemoryClearOption::kNone, false, false, false, cutlass::layout::NoPermute, cutlass::layout::NoPermute, WeightLayout>::GemmKernel;
+        using VisitorEpilogue        = cutlass::epilogue::threadblock::EpilogueWithVisitorCallbacks<typename GemmBase::Epilogue, Epilogue, 1>;
+        using BaseMma                = typename GemmBase::Mma;
+        using SplitMma               = cutlass::gemm::threadblock::MmaMultistage<
+            typename BaseMma::Shape,
+            typename BaseMma::IteratorA,
+            typename BaseMma::SmemIteratorA,
+            BaseMma::kCacheOpA,
+            SplitWeightIterator<typename BaseMma::IteratorB>,
+            typename BaseMma::SmemIteratorB,
+            BaseMma::kCacheOpB,
+            typename BaseMma::ElementC,
+            typename BaseMma::LayoutC,
+            typename BaseMma::Policy,
+            BaseMma::Detail::kStages>;
+        using Mma    = std::conditional_t<Split, SplitMma, BaseMma>;
+        using Kernel = std::conditional_t<StreamK,
+                                          cutlass::gemm::kernel::GemmWithEpilogueVisitorStreamk<Mma, VisitorEpilogue, Swizzle>,
+                                          cutlass::gemm::kernel::GemmWithEpilogueVisitor<Mma, VisitorEpilogue, Swizzle>>;
+        using Gemm   = cutlass::gemm::device::GemmUniversalAdapter<Kernel>;
     };
     struct Plan {
         DeviceInfo device;
         int64_t rows, n, k;
-        bool swiglu;
+        SDI8GemmActivation activation;
+        bool packed_w4;
+        bool split;
         size_t kernel_bytes = 0, scratch_offset = 0;
-        int occupancy                                                                                                       = 0;
-        ggml_status (*launch)(Plan&, const int8_t*, const int8_t*, const float*, const float*, float*, void*, cudaStream_t) = nullptr;
+        int occupancy                                                                                                                                                  = 0;
+        ggml_status (*launch)(Plan&, const int8_t*, const int8_t*, const float*, const float*, float*, void*, cudaStream_t, const int8_t*, const float*, const float*) = nullptr;
     };
     template <class Types>
-    static typename Types::Gemm::Arguments arguments(const Plan& p, const int8_t* x, const int8_t* w, const float* xs, const float* ws, float* out) {
-        typename Types::ScaleW::Arguments scales     = {{{}, {xs, 0.f, {}}, {}}, {ws, 0.f, {}}, {}};
-        typename Types::Epilogue::Arguments epilogue = {scales, {out, {p.n, cute::_1{}, p.rows * p.n}}};
-        return {cutlass::gemm::GemmUniversalMode::kGemm, {int(p.rows), int(p.n), int(p.k)}, 1, epilogue, x, w, nullptr, nullptr, p.rows * p.k, p.n * p.k, 0, 0, p.k, p.k, 0, 0};
+    static typename Types::Gemm::Arguments arguments(const Plan& p, const int8_t* x, const int8_t* w, const float* xs, const float* ws, float* out, const float* bias) {
+        typename Types::ScaleW::Arguments scales = {{{}, {xs, 0.f, {}}, {}}, {ws, 0.f, {}}, {}};
+        typename Types::Epilogue::Arguments epilogue;
+        if constexpr (Types::kBias) {
+            // A negative zero default preserves signed-zero outputs.
+            epilogue = {{scales, {bias, -0.f, {}}, {}}, {out, {p.n, cute::_1{}, p.rows * p.n}}};
+        } else if constexpr (Types::kGated) {
+            epilogue = {scales, {{out, {p.n, cute::_1{}, p.rows * p.n}}, p.activation == SDI8GemmActivation::Situ}};
+        } else {
+            epilogue = {scales, {out, {p.n, cute::_1{}, p.rows * p.n}}};
+        }
+        return {cutlass::gemm::GemmUniversalMode::kGemm, {int(p.rows), int(p.n), int(p.k)}, 1, epilogue, x, reinterpret_cast<const typename Types::Weight*>(w), nullptr, nullptr, p.rows * p.k, p.n * p.k, 0, 0, p.k, p.k, 0, 0};
     }
     template <class Types>
-    static ggml_status launch(Plan& p, const int8_t* x, const int8_t* w, const float* xs, const float* ws, float* out, void* scratch, cudaStream_t stream) {
+    static ggml_status launch(Plan& p, const int8_t* x, const int8_t* w, const float* xs, const float* ws, float* out, void* scratch, cudaStream_t stream, const int8_t* up, const float* up_scales, const float* bias) {
         using Kernel = typename Types::Kernel;
         if ((reinterpret_cast<uintptr_t>(x) | reinterpret_cast<uintptr_t>(w) | reinterpret_cast<uintptr_t>(xs) |
-             reinterpret_cast<uintptr_t>(ws) | reinterpret_cast<uintptr_t>(out)) %
+             reinterpret_cast<uintptr_t>(ws) | reinterpret_cast<uintptr_t>(out) | reinterpret_cast<uintptr_t>(up) | reinterpret_cast<uintptr_t>(up_scales) | reinterpret_cast<uintptr_t>(bias)) %
             16)
             return GGML_STATUS_FAILED;
         auto* paired = static_cast<float*>(scratch);
-        auto args    = arguments<Types>(p, x, w, xs, p.swiglu ? paired : ws, out);
+        auto args    = arguments<Types>(p, x, w, xs, p.activation != SDI8GemmActivation::None ? paired : ws, out, bias);
         if (Kernel::can_implement(args) != cutlass::Status::kSuccess)
             return GGML_STATUS_FAILED;
         if (!p.occupancy) {
@@ -236,14 +337,19 @@ namespace sd_i8_cutlass {
                 return GGML_STATUS_FAILED;
         }
         typename Kernel::Params params(args, p.device.sms, p.occupancy);
+        if constexpr (Types::kSplit) {
+            if (!up || !up_scales)
+                return GGML_STATUS_FAILED;
+            params.params_B.up = up;
+        }
         if (params.get_workspace_size() > p.kernel_bytes)
             return GGML_STATUS_FAILED;
-        if (p.swiglu) {
-            pair_scales<<<unsigned((p.n + 255) / 256), 256, 0, stream>>>(ws, paired, int(p.n));
+        if (p.activation != SDI8GemmActivation::None) {
+            pair_scales<<<unsigned((p.n + 255) / 256), 256, 0, stream>>>(ws, up_scales, paired, int(p.n));
             if (cudaGetLastError() != cudaSuccess)
                 return GGML_STATUS_FAILED;
         }
-        if (params.init_workspace(static_cast<char*>(scratch) + p.scratch_offset, stream) != cutlass::Status::kSuccess)
+        if (params.init_workspace(scratch ? static_cast<char*>(scratch) + p.scratch_offset : nullptr, stream) != cutlass::Status::kSuccess)
             return GGML_STATUS_FAILED;
         cutlass::arch::synclog_setup();
         cutlass::Kernel2<Kernel><<<params.get_grid_dims(), Kernel::kThreadCount, sizeof(typename Kernel::SharedStorage), stream>>>(params);
@@ -254,7 +360,7 @@ namespace sd_i8_cutlass {
         using Kernel = typename Types::Kernel;
         if (sizeof(typename Kernel::SharedStorage) > p.device.shared)
             return false;
-        auto args = arguments<Types>(p, nullptr, nullptr, nullptr, nullptr, nullptr);
+        auto args = arguments<Types>(p, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
         if (Kernel::can_implement(args) != cutlass::Status::kSuccess)
             return false;
         size_t bytes = 0;
@@ -266,17 +372,26 @@ namespace sd_i8_cutlass {
             bytes = std::max(bytes, params.get_workspace_size());
         }
         p.kernel_bytes   = bytes;
-        p.scratch_offset = p.swiglu ? (size_t(p.n) * sizeof(float) + 255) / 256 * 256 : 0;
+        p.scratch_offset = p.activation != SDI8GemmActivation::None ? (size_t(p.n) * sizeof(float) + 255) / 256 * 256 : 0;
         p.launch         = launch<Types>;
         return true;
     }
     template <class Config>
     static bool configure_tile(Plan& p) {
-        if (p.swiglu)
-            return p.rows >= 8192 ? configure_kernel<SwigluTypes<Config, true>>(p) : configure_kernel<SwigluTypes<Config, false>>(p);
+        if (p.packed_w4)
+            return configure_kernel<DenseTypes<Config, false, true>>(p);
+        if (p.split)
+            return p.rows >= 8192 ? configure_kernel<GatedTypes<Config, true, true>>(p) : configure_kernel<GatedTypes<Config, false, true>>(p);
+        if (p.activation != SDI8GemmActivation::None)
+            return p.rows >= 8192 ? configure_kernel<GatedTypes<Config, true>>(p) : configure_kernel<GatedTypes<Config, false>>(p);
         return p.rows >= 8192 ? configure_kernel<DenseTypes<Config, true>>(p) : configure_kernel<DenseTypes<Config, false>>(p);
     }
     static bool configure(Plan& p) {
+        // This SiTU shape fits two resident CTAs per SM with the narrower, three-stage tile on Ada.
+        if (p.device.major == 8 && p.device.minor == 9 && p.activation == SDI8GemmActivation::Situ && !p.split &&
+            p.rows >= 4096 && p.rows < 8192 && p.n == 16384 && p.k == 3072 &&
+            configure_kernel<GatedTypes<TileConfig<128, 128, 64, 3, 4>, false>>(p))
+            return true;
         auto try_tile = [&](Tile tile) {
             switch (tile) {
                 case TILE_128_256:
@@ -300,20 +415,23 @@ namespace sd_i8_cutlass {
     }
 }
 struct SDI8CudaGemmPlan : sd_i8_cutlass::Plan {};
-SDI8CudaGemmPlan* sd_cuda_i8_gemm_prepare(ggml_backend_dev_t device, int64_t rows, int64_t n, int64_t k, bool swiglu, size_t* workspace) {
+static SDI8CudaGemmPlan* prepare_gemm(ggml_backend_dev_t device, int64_t rows, int64_t n, int64_t k, SDI8GemmActivation activation, size_t* workspace, bool packed_w4, bool split) {
 #ifdef SD_CUDA_FORCE_CUBLAS
     return nullptr;
 #else
-    const auto info = sd_i8_cutlass::device_info(device);
-    if (info.major < 8 || rows < (sd_i8_cutlass::small_rows_enabled(rows, n, k) ? 1 : 128) ||
-        rows > INT_MAX || n < 1 || n > INT_MAX || k < 1 || k > INT_MAX || k % 64 || n % (swiglu ? 256 : 128))
+    const auto info  = sd_i8_cutlass::device_info(device);
+    const bool gated = activation != SDI8GemmActivation::None;
+    if ((packed_w4 && (gated || k > INT_MAX / 1024)) || info.major < 8 || rows < (sd_i8_cutlass::small_rows_enabled(rows, n, k) ? 1 : 128) ||
+        rows > INT_MAX || n < 1 || n > INT_MAX || k < 1 || k > INT_MAX || k % 64 || n % (gated ? 256 : 128))
         return nullptr;
-    auto* p   = new SDI8CudaGemmPlan;
-    p->device = info;
-    p->rows   = rows;
-    p->n      = n;
-    p->k      = k;
-    p->swiglu = swiglu;
+    auto* p       = new SDI8CudaGemmPlan;
+    p->device     = info;
+    p->rows       = rows;
+    p->n          = n;
+    p->k          = k;
+    p->activation = activation;
+    p->packed_w4  = packed_w4;
+    p->split      = split;
     if (!sd_i8_cutlass::configure(*p)) {
         delete p;
         return nullptr;
@@ -322,8 +440,21 @@ SDI8CudaGemmPlan* sd_cuda_i8_gemm_prepare(ggml_backend_dev_t device, int64_t row
     return p;
 #endif
 }
-ggml_status sd_cuda_i8_gemm_execute(SDI8CudaGemmPlan* plan, const int8_t* x, const int8_t* w, const float* xs, const float* ws, float* out, void* scratch, cudaStream_t stream) {
-    return plan->launch(*plan, x, w, xs, ws, out, scratch, stream);
+SDI8CudaGemmPlan* sd_cuda_i8_gemm_prepare(ggml_backend_dev_t device, int64_t rows, int64_t n, int64_t k, SDI8GemmActivation activation, size_t* workspace, bool packed_w4) {
+    return prepare_gemm(device, rows, n, k, activation, workspace, packed_w4, false);
+}
+SDI8CudaGemmPlan* sd_cuda_i8_gemm_prepare_split(ggml_backend_dev_t device, int64_t rows, int64_t n, int64_t k, size_t* workspace) {
+    if (n > INT_MAX / 2 || k > INT_MAX / 16384)
+        return nullptr;
+    return prepare_gemm(device, rows, 2 * n, k, SDI8GemmActivation::Swiglu, workspace, false, true);
+}
+ggml_status sd_cuda_i8_gemm_execute(SDI8CudaGemmPlan* plan, const int8_t* x, const int8_t* w, const float* xs, const float* ws, float* out, void* scratch, cudaStream_t stream, const float* bias) {
+    if (bias && (plan->activation != SDI8GemmActivation::None || plan->packed_w4))
+        return GGML_STATUS_FAILED;
+    return plan->launch(*plan, x, w, xs, ws, out, scratch, stream, nullptr, nullptr, bias);
+}
+ggml_status sd_cuda_i8_gemm_execute_split(SDI8CudaGemmPlan* plan, const int8_t* x, const int8_t* gate, const int8_t* up, const float* xs, const float* gate_scales, const float* up_scales, float* out, void* scratch, cudaStream_t stream) {
+    return plan->launch(*plan, x, gate, xs, gate_scales, out, scratch, stream, up, up_scales, nullptr);
 }
 void sd_cuda_i8_gemm_free(SDI8CudaGemmPlan* plan) {
     delete plan;

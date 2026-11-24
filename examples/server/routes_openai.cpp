@@ -37,8 +37,8 @@ static bool build_openai_generation_request(const httplib::Request& req,
     std::string size          = j.value("size", "");
     std::string output_format = j.value("output_format", "png");
     int output_compression    = j.value("output_compression", 100);
-    int width                 = runtime.default_gen_params->width > 0 ? runtime.default_gen_params->width : 512;
-    int height                = runtime.default_gen_params->height > 0 ? runtime.default_gen_params->height : 512;
+    auto width                = runtime.default_gen_params->width;
+    auto height               = runtime.default_gen_params->height;
     if (!size.empty()) {
         auto pos = size.find('x');
         if (pos != std::string::npos) {
@@ -96,10 +96,6 @@ static bool build_openai_edit_request(const httplib::Request& req,
 
     size_t image_count    = req.form.get_file_count("image[]");
     bool has_legacy_image = req.form.has_file("image");
-    if (image_count == 0 && !has_legacy_image) {
-        error_message = "at least one image[] required";
-        return false;
-    }
 
     std::vector<std::vector<uint8_t>> images_bytes;
     for (size_t i = 0; i < image_count; ++i) {
@@ -126,8 +122,8 @@ static bool build_openai_edit_request(const httplib::Request& req,
     }
 
     std::string size = req.form.get_field("size");
-    int width        = -1;
-    int height       = -1;
+    auto width       = runtime.default_gen_params->width;
+    auto height      = runtime.default_gen_params->height;
     if (!size.empty()) {
         auto pos = size.find('x');
         if (pos != std::string::npos) {
@@ -191,12 +187,12 @@ static bool build_openai_edit_request(const httplib::Request& req,
             mask_w, mask_h, mask_channel,
             0, 0, 1);
         request.gen_params.mask_image.reset({(uint32_t)mask_w, (uint32_t)mask_h, 1, mask_raw});
-        const sd_image_t& mask_image = request.gen_params.mask_image.get();
+        const SDImage& mask_image = request.gen_params.mask_image.get();
         request.gen_params.set_width_and_height_if_unset(mask_image.width, mask_image.height);
     } else {
         request.gen_params.mask_image.reset({
-            (uint32_t)request.gen_params.get_resolved_width(),
-            (uint32_t)request.gen_params.get_resolved_height(),
+            (uint32_t)request.gen_params.get_requested_width(),
+            (uint32_t)request.gen_params.get_requested_height(),
             1,
             nullptr,
         });
@@ -204,6 +200,10 @@ static bool build_openai_edit_request(const httplib::Request& req,
 
     if (!sd_cpp_extra_args_str.empty() && !request.gen_params.from_json_str(sd_cpp_extra_args_str)) {
         error_message = "invalid sd_cpp_extra_args";
+        return false;
+    }
+    if (images_bytes.empty() && request.gen_params.prompt_images.empty()) {
+        error_message = "at least one image[] or prompt_images in sd_cpp_extra_args required";
         return false;
     }
 
@@ -220,35 +220,15 @@ static bool execute_sync_img_gen_request(ServerRuntime& runtime,
                                          ImgGenJobRequest& request,
                                          SDImageVec& results,
                                          GenerationFailure& failure) {
-    const sd_img_gen_params_t img_gen_params = request.to_sd_img_gen_params_t();
-
-    bool adetailer_failed = false;
-    const bool generated  = runtime.keeper->run(
+    const bool generated = runtime.keeper->run(
         [&](const ContextKeeper::ContextView& view) {
-            sd_img_gen_params_t params = img_gen_params;
-            if (view.force_vae_tiling) {
-                params.vae_tiling_params.enabled = true;
-            }
-            adetailer_failed                       = false;
-            sd_image_generation_result_t* produced = nullptr;
-            if (!generate_image(view.ctx, &params, &produced)) {
-                return false;
-            }
-            results.adopt(produced, view.params->lora_model_dir);
-            if (!results.empty() && !apply_server_adetailer(runtime, view.ctx, *view.params, request, params, results)) {
-                adetailer_failed = true;
-                return false;
-            }
-            return true;
+            std::string message;
+            return generate_server_images(view.ctx, request, results, message, view.force_vae_tiling);
         },
         failure);
     if (!generated) {
-        if (adetailer_failed) {
-            failure.message = failure.message.empty() ? "ADetailer failed" : "ADetailer failed: " + failure.message;
-        }
         return false;
     }
-
     if (results.empty()) {
         failure         = GenerationFailure();
         failure.code    = SD_ERROR_UNKNOWN;
@@ -328,7 +308,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
                 json item;
                 item["b64_json"]        = base64_encode(image_bytes);
-                item["generation_info"] = json::parse(results.generation_info(i));
+                item["generation_info"] = results.generation_info(i);
                 out["data"].push_back(item);
             }
 
@@ -394,7 +374,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                                                             request.output_compression);
                 json item;
                 item["b64_json"]        = base64_encode(image_bytes);
-                item["generation_info"] = json::parse(results.generation_info(i));
+                item["generation_info"] = results.generation_info(i);
                 out["data"].push_back(item);
             }
 

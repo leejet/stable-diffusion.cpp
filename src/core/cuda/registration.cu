@@ -4,17 +4,22 @@
 void sd_ggml_register_cuda_i8_gated_residual(ggml_backend_dev_t device);
 void sd_ggml_register_cuda_i8_projection(ggml_backend_dev_t device);
 void sd_ggml_register_cuda_attention(ggml_backend_dev_t device);
+void sd_ggml_register_cuda_window_attention(ggml_backend_dev_t device);
 #endif
 
 namespace SD_CUDA_NAMESPACE {
     void register_rope(ggml_backend_dev_t device);
     void register_i8(ggml_backend_dev_t device);
+    void register_i8_lora_merge(ggml_backend_dev_t device);
     void register_w4(ggml_backend_dev_t device);
     void register_convrot(ggml_backend_dev_t device);
     void register_affine(ggml_backend_dev_t device);
     void register_modulate(ggml_backend_dev_t device);
     void register_bf16(ggml_backend_dev_t device);
     void register_rms_affine(ggml_backend_dev_t device);
+#if defined(SD_CUDA_VENDOR_HIP)
+    void register_wmma_attention(ggml_backend_dev_t device);
+#endif
 #if !defined(SD_CUDA_VENDOR_HIP) && !defined(SD_CUDA_VENDOR_MUSA)
     void register_sage_attention(ggml_backend_dev_t device);
     void register_sol_attention(ggml_backend_dev_t device);
@@ -26,11 +31,15 @@ namespace SD_CUDA_NAMESPACE {
         register_affine(device);
         register_modulate(device);
         register_i8(device);
+        register_i8_lora_merge(device);
         register_w4(device);
         register_convrot(device);
         register_rope(device);
         register_bf16(device);
         register_rms_affine(device);
+#if defined(SD_CUDA_VENDOR_HIP)
+        register_wmma_attention(device);
+#endif
 #if !defined(SD_CUDA_VENDOR_HIP) && !defined(SD_CUDA_VENDOR_MUSA)
         register_sage_attention(device);
         register_sol_attention(device);
@@ -39,6 +48,7 @@ namespace SD_CUDA_NAMESPACE {
         sd_ggml_register_cuda_i8_projection(device);
         sd_ggml_register_cuda_i8_gated_residual(device);
         sd_ggml_register_cuda_attention(device);
+        sd_ggml_register_cuda_window_attention(device);
 #endif
     }
 }

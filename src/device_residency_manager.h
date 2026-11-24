@@ -3,11 +3,16 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <vector>
 
 #include "ggml-backend.h"
 
 struct ggml_tensor;
+
+namespace sd {
+    class ExecutionEngine;
+}
 
 enum class WeightPrefetchResult {
     Scheduled,
@@ -36,22 +41,60 @@ struct DeviceMemoryRequest {
     }
 };
 
+struct DeviceMemoryCapacity {
+    size_t required_device_bytes  = 0;
+    size_t required_budget_bytes  = 0;
+    size_t available_device_bytes = SIZE_MAX;
+    size_t available_budget_bytes = SIZE_MAX;
+    bool requires_reclamation     = false;
+    bool valid                    = true;
+    bool wrapped_device_report    = false;
+
+    bool fits(bool after_reclamation = false) const {
+        return valid && !requires_reclamation &&
+               (after_reclamation || !wrapped_device_report) &&
+               required_device_bytes <= available_device_bytes &&
+               required_budget_bytes <= available_budget_bytes;
+    }
+};
+
+struct WeightResidencyBlock {
+    ggml_backend_buffer_t buffer = nullptr;
+    ggml_backend_t backend       = nullptr;
+    std::vector<ggml_tensor*> tensors;
+    size_t bytes            = 0;
+    uint64_t last_use_epoch = 0;
+    size_t next_use         = 0;
+    bool requires_demotion  = false;
+};
+
 struct DeviceResidencyManager {
+private:
+    std::shared_ptr<sd::ExecutionEngine> execution_engine_;
+
+public:
     virtual ~DeviceResidencyManager() = default;
 
-    virtual bool segmented_compute_enabled() const                                          = 0;
-    virtual bool prefetch_enabled() const                                                   = 0;
-    virtual void set_workspace_reclaimer(uintptr_t owner_id, std::function<bool()> reclaim) = 0;
-    virtual void remove_runtime_owner(uintptr_t owner_id)                                   = 0;
+    virtual std::shared_ptr<sd::ExecutionEngine> execution_engine();
+
+    virtual bool segmented_compute_enabled() const = 0;
+    virtual bool prefetch_enabled() const          = 0;
+    virtual bool retains_idle_weights() const { return false; }
+    virtual size_t context_vram_limit(ggml_backend_t) const { return 0; }
+    // Device bytes consume Windows commit without consuming physical host RAM.
+    virtual bool ensure_host_memory(size_t, const std::vector<ggml_tensor*>&, size_t = 0) { return true; }
+    virtual void register_runtime_owner(uintptr_t owner_id) = 0;
+    virtual void remove_runtime_owner(uintptr_t owner_id)   = 0;
     // Capacity requests select their backend's weights; protection spans all backends.
     virtual bool fits_compute_backend_capacity(const DeviceMemoryRequest& request,
-                                               const std::vector<ggml_tensor*>& required_params) const = 0;
+                                               const std::vector<ggml_tensor*>& required_params,
+                                               bool allow_reclamation) const = 0;
     // False when splitting a graph into segments cannot lower peak memory on a host backend:
     // no memory guard is set, or every weight stays resident once loaded.
     virtual bool segmenting_can_save_memory(const std::vector<ggml_tensor*>& params,
                                             ggml_backend_t compute_backend) const { return true; }
     virtual bool assign_compute_backend(const std::vector<ggml_tensor*>& tensors,
-                                        ggml_backend_t compute_backend)                                = 0;
+                                        ggml_backend_t compute_backend)      = 0;
     virtual ggml_tensor* resolve_param_tensor(ggml_tensor* tensor) const { return nullptr; }
     virtual bool prepare_params(const std::vector<ggml_tensor*>& tensors)                 = 0;
     virtual void release_compute_backend_params(const std::vector<ggml_tensor*>& tensors) = 0;
@@ -66,6 +109,26 @@ struct DeviceResidencyManager {
         const std::vector<ggml_tensor*>& required_params,
         const std::vector<std::vector<ggml_tensor*>>& preferred_eviction_order,
         const std::vector<ggml_tensor*>& protected_params) = 0;
+    virtual DeviceMemoryCapacity inspect_compute_backend_capacity(
+        const DeviceMemoryRequest& request,
+        const std::vector<ggml_tensor*>& params,
+        bool log_details = false) const {
+        DeviceMemoryCapacity result;
+        result.valid = false;
+        return result;
+    }
+    virtual std::vector<WeightResidencyBlock> evictable_compute_backend_blocks(
+        ggml_backend_t backend,
+        const std::vector<ggml_tensor*>& protected_params) const { return {}; }
+    virtual bool evict_compute_backend_block(const WeightResidencyBlock& block) { return false; }
+    // Memory guard: ensure_capacity frees memory until the request both fits and keeps the usage under
+    // the guard threshold, and accepts a request that fits when the threshold cannot be reached.
+    virtual bool memory_guard_ok(const DeviceMemoryRequest& request,
+                                 const std::vector<ggml_tensor*>& required_params) { return true; }
+    virtual void memory_guard_observe(const DeviceMemoryRequest& request,
+                                      const std::vector<ggml_tensor*>& required_params) {}
+    virtual void memory_guard_unreachable(const DeviceMemoryRequest& request,
+                                          const std::vector<ggml_tensor*>& required_params) {}
     virtual WeightPrefetchResult prefetch_params(
         uintptr_t owner_id,
         const std::vector<ggml_tensor*>& tensors) = 0;

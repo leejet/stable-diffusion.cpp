@@ -10,12 +10,14 @@
 #include <unordered_map>
 #include <vector>
 
+#include "model_catalog.h"
 #include "recovery.h"
 #include "runtime.h"
 
 enum class AsyncJobKind {
     ImgGen,
     VidGen,
+    Dgl,
 };
 
 enum class AsyncJobStatus {
@@ -29,15 +31,32 @@ enum class AsyncJobStatus {
 const char* async_job_kind_name(AsyncJobKind kind);
 const char* async_job_status_name(AsyncJobStatus status);
 
+struct AsyncJobProgress {
+    std::string stage = "queued";
+    std::string detail;
+    std::string unit;
+    int sample_pass                                     = 0;
+    int64_t completed                                   = 0;
+    int64_t total                                       = 0;
+    std::chrono::steady_clock::time_point stage_started = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point finished{};
+};
+
 struct AsyncGenerationJob {
     std::string id;
     AsyncJobKind kind     = AsyncJobKind::ImgGen;
     AsyncJobStatus status = AsyncJobStatus::Queued;
-    int64_t created_at    = unix_timestamp_now_ms();
-    int64_t started_at    = 0;
-    int64_t completed_at  = 0;
+    int64_t created_at   = unix_timestamp_now_ms();
+    int64_t started_at   = 0;
+    int64_t completed_at = 0;
+    std::unique_ptr<ServerModelSelection> model;
+    json request_body;
+    uint64_t model_revision = 0;
     ImgGenJobRequest img_gen;
     VidGenJobRequest vid_gen;
+    std::string dgl_source;
+    std::shared_ptr<sd_dgl_result_t> dgl_result;
+    json dgl_result_info;
     std::vector<std::string> result_images_b64;
     json result_generation_info;
     std::string result_media_b64;
@@ -50,6 +69,8 @@ struct AsyncGenerationJob {
     // the request to the library (see JobCancellationMonitor), because the library forgets a stop that arrives
     // before a generation pass begins.
     CancelToken cancel;
+    mutable std::mutex progress_mutex;
+    AsyncJobProgress progress;
     mutable std::mutex preview_mutex;
     std::string preview_b64;
     int preview_pass          = 0;
@@ -70,6 +91,12 @@ struct AsyncJobManager {
     size_t max_pending_jobs       = 64;
     int64_t completed_ttl_seconds = 600;
     int64_t failed_ttl_seconds    = 600;
+
+    size_t synchronous_jobs = 0;
+    std::chrono::steady_clock::time_point staging_deadline   = std::chrono::steady_clock::time_point::max();
+    std::chrono::steady_clock::time_point residency_deadline = std::chrono::steady_clock::time_point::max();
+
+    void record_context_job_completion(const SDSvrParams& params);
 };
 
 void purge_expired_jobs(AsyncJobManager& manager);
@@ -83,6 +110,8 @@ bool cancel_generating_job(ServerRuntime& runtime,
                            const std::shared_ptr<AsyncGenerationJob>& job,
                            std::chrono::milliseconds wait);
 json make_async_job_json(const AsyncJobManager& manager, const AsyncGenerationJob& job);
+int64_t dgl_image_frame_count(const sd_tensor_t* tensor);
+bool parse_native_job_request(const json& body, ServerRuntime& runtime, AsyncGenerationJob& job, std::string& error_message);
 bool execute_img_gen_job(ServerRuntime& runtime,
                          AsyncGenerationJob& job,
                          std::vector<std::string>& output_images,

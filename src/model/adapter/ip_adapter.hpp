@@ -115,17 +115,39 @@ namespace IPAdapter {
         }
     };
 
+    struct AttentionKV {
+        sd::Tensor<float> key;
+        sd::Tensor<float> value;
+    };
+
+    using AttentionCache = std::map<std::string, AttentionKV>;
+
     struct IPAdapterRunner : public GGMLRunner {
+        struct AttentionProjection {
+            Linear key;
+            Linear value;
+            int64_t width;
+
+            AttentionProjection(int64_t input_width, int64_t output_width)
+                : key(input_width, output_width, false), value(input_width, output_width, false), width(output_width) {}
+        };
+
         ImageProjModel image_proj;
         Resampler resampler;
         bool is_plus       = false;
         int64_t num_tokens = 4;
         std::string prefix;
+        std::map<std::string, AttentionProjection> attention;
+
+        int64_t token_width() const {
+            return is_plus ? resampler.output_dim : image_proj.ctx_dim;
+        }
 
         IPAdapterRunner(ggml_backend_t backend,
                         const String2TensorStorage& tensor_storage_map,
                         const std::string prefix,
-                        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+                        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr,
+                        bool load_attention                                 = false)
             : GGMLRunner(backend, weight_manager), prefix(prefix) {
             is_plus = tensor_storage_map.find(prefix + ".image_proj.latents") != tensor_storage_map.end();
             if (is_plus) {
@@ -175,6 +197,32 @@ namespace IPAdapter {
                 image_proj = ImageProjModel(num_tokens, ctx_dim, clip_dim);
                 image_proj.init(params_ctx, tensor_storage_map, prefix + ".image_proj");
             }
+            if (load_attention) {
+                init_attention(tensor_storage_map);
+            }
+        }
+
+        void init_attention(const String2TensorStorage& weights) {
+            const std::string layer_suffix  = ".attn2.to_k_ip.weight";
+            const std::string weight_suffix = ".to_k_ip.weight";
+            for (const auto& [name, key] : weights) {
+                if (name.size() <= layer_suffix.size() ||
+                    name.compare(name.size() - layer_suffix.size(), layer_suffix.size(), layer_suffix) != 0)
+                    continue;
+                auto layer       = name.substr(0, name.size() - weight_suffix.size());
+                const auto value = weights.find(layer + ".to_v_ip.weight");
+                if (value == weights.end() || key.n_dims != 2 || value->second.n_dims != 2 ||
+                    key.logical_ne0() != token_width() || value->second.logical_ne0() != token_width() ||
+                    key.ne[1] <= 0 || key.ne[1] != value->second.ne[1]) {
+                    throw std::runtime_error("invalid IP-Adapter key/value weights for '" + layer + "'");
+                }
+                auto& projection = attention.try_emplace(layer, token_width(), key.ne[1]).first->second;
+                projection.key.init(params_ctx, weights, layer + ".to_k_ip");
+                projection.value.init(params_ctx, weights, layer + ".to_v_ip");
+            }
+            if (attention.empty()) {
+                throw std::runtime_error("IP-Adapter has no attention weights for the selected family");
+            }
         }
 
         std::string get_desc() override {
@@ -187,6 +235,43 @@ namespace IPAdapter {
             } else {
                 image_proj.get_param_tensors(tensors, prefix + ".image_proj");
             }
+            for (auto& [layer, projection] : attention) {
+                projection.key.get_param_tensors(tensors, layer + ".to_k_ip");
+                projection.value.get_param_tensors(tensors, layer + ".to_v_ip");
+            }
+        }
+
+        AttentionCache compute_attention(int n_threads, const sd::Tensor<float>& tokens) {
+            std::map<std::string, std::pair<ggml_tensor*, ggml_tensor*>> outputs;
+            auto get_graph = [&]() {
+                auto* graph = new_graph_custom(1024 + 32 * attention.size());
+                auto* input = make_input(tokens);
+                auto ctx    = get_context();
+                for (auto& [layer, projection] : attention) {
+                    auto* key   = projection.key.forward(&ctx, input);
+                    auto* value = projection.value.forward(&ctx, input);
+                    ggml_set_output(key);
+                    ggml_set_output(value);
+                    ggml_build_forward_expand(graph, key);
+                    ggml_build_forward_expand(graph, value);
+                    outputs.insert_or_assign(layer, std::make_pair(key, value));
+                }
+                return graph;
+            };
+            AttentionCache cache;
+            auto read_outputs = [&]() {
+                for (const auto& [layer, kv] : outputs) {
+                    auto key   = sd::make_sd_tensor_from_ggml<float>(kv.first);
+                    auto value = sd::make_sd_tensor_from_ggml<float>(kv.second);
+                    if (key.empty() || value.empty())
+                        return false;
+                    cache.emplace(layer, AttentionKV{std::move(key), std::move(value)});
+                }
+                return true;
+            };
+            if (!GGMLRunner::compute(get_graph, n_threads, true, true, read_outputs).has_value())
+                return {};
+            return cache;
         }
 
         ggml_cgraph* build_graph(const sd::Tensor<float>& image_embeds_tensor) {

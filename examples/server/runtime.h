@@ -21,13 +21,18 @@ class ContextKeeper;
 struct ServerModels;
 
 struct SDSvrParams {
-    std::string listen_ip = "127.0.0.1";
-    int listen_port       = 1234;
+    std::string listen_ip     = "127.0.0.1";
+    int listen_port           = 1234;
+    int max_pending_jobs      = 64;
+    int completed_ttl_seconds = 600;
+    int weight_staging_ttl    = -1;
+    int weight_residency_ttl  = -1;
     std::string serve_html_path;
     std::string api_key;       // empty = no authentication
     std::string cors_origins;  // comma-separated allowlist; empty = reflect any origin
     bool disable_degradation = false;
     int degradation_cooldown = 300;  // seconds before the server tries a heavier profile again; 0 = never
+    std::string dgl_dir = "dgl";
     std::vector<std::string> model_dirs;
     bool normal_exit         = false;
     sd_log_level_t log_level = SD_LOG_INFO;
@@ -53,13 +58,14 @@ struct UpscalerEntry {
     std::string fullpath;
     std::string model_name;
     int scale                = 4;
-    int image_upscale_factor = 0;
     uintmax_t file_size      = 0;
     std::filesystem::file_time_type last_modified;
 };
 
 struct ServerRuntime {
     ContextKeeper* keeper;
+    // Held across a model switch and the generation that follows, and by every other user of the context.
+    std::mutex* sd_ctx_mutex;
     const SDSvrParams* svr_params;
     SDContextParams* ctx_params;
     SDGenerationParams* default_gen_params;
@@ -75,10 +81,10 @@ struct ServerADetailerPass {
     std::string prompt;
     std::string negative_prompt;
     std::string extra_args;
-    int width                = 512;
-    int height               = 512;
-    float strength           = 0.4f;
-    int clip_skip            = -1;
+    std::optional<int> width;
+    std::optional<int> height;
+    std::optional<float> strength;
+    std::optional<int> clip_skip;
     bool automatic_scheduler = false;
 };
 
@@ -91,9 +97,21 @@ struct ImgGenJobRequest {
     bool adetailer_enabled    = true;
     std::vector<ServerADetailerPass> adetailer_passes;
 
-    sd_img_gen_params_t to_sd_img_gen_params_t() {
-        return gen_params.to_sd_img_gen_params_t();
-    }
+    SDOptPtr to_image_opt() { return gen_params.to_image_opt(); }
+};
+
+class PromptImageCallbackGuard {
+    sd_ctx_t* ctx_;
+    const SDGenerationParams& params_;
+    SDTensorPtr image_tensor_;
+
+    static bool load_image(const char* source, void* data, const sd_tensor_t** image_out);
+
+public:
+    PromptImageCallbackGuard(sd_ctx_t* ctx, const SDGenerationParams& params);
+    ~PromptImageCallbackGuard();
+    PromptImageCallbackGuard(const PromptImageCallbackGuard&)            = delete;
+    PromptImageCallbackGuard& operator=(const PromptImageCallbackGuard&) = delete;
 };
 
 constexpr int k_max_generation_dimension = 4096;
@@ -110,12 +128,11 @@ struct VidGenJobRequest {
     std::string preview_mode  = "none";
     int preview_interval      = 1;
 
-    sd_vid_gen_params_t to_sd_vid_gen_params_t() {
-        return gen_params.to_sd_vid_gen_params_t();
-    }
+    SDOptPtr to_video_opt() { return gen_params.to_video_opt(); }
 };
 
 std::string base64_encode(const std::vector<uint8_t>& bytes);
+std::string base64_encode(const void* bytes, size_t size);
 std::string normalize_output_format(std::string output_format);
 std::vector<std::string> supported_img_output_formats(bool allow_webp = true);
 std::vector<std::string> supported_vid_output_formats();
@@ -130,16 +147,17 @@ bool assign_output_options(VidGenJobRequest& request,
                            std::string& error_message);
 std::string video_mime_type(const std::string& output_format);
 bool runtime_supports_generation_mode(const ServerRuntime& runtime, SDMode mode);
+bool has_current_model(const ServerRuntime& runtime);
+// Decides where the contexts may read and write files; apply_server_file_access() sets it on each context.
+void configure_server_file_access(ServerModels& models, const SDSvrParams& params, const SDContextParams& config);
+bool apply_server_file_access(ServerModels& models, sd_ctx_t* ctx);
+bool generate_server_images(sd_ctx_t* ctx,
+                            ImgGenJobRequest& request,
+                            SDImageVec& results,
+                            std::string& error_message,
+                            bool force_vae_tiling = false);
 std::string unsupported_generation_mode_error(const ServerRuntime& runtime, SDMode mode);
 void refresh_lora_cache(ServerRuntime& rt);
 std::string get_lora_full_path(ServerRuntime& rt, const std::string& path);
 void refresh_upscaler_cache(ServerRuntime& rt);
 int64_t unix_timestamp_now_ms();
-// Runs ADetailer on the results, with the context that made them and the settings it was created with: after
-// the server stepped down to a lighter profile, those differ from the ones it started with.
-bool apply_server_adetailer(ServerRuntime& runtime,
-                            sd_ctx_t* ctx,
-                            const SDContextParams& ctx_params,
-                            const ImgGenJobRequest& request,
-                            const sd_img_gen_params_t& params,
-                            SDImageVec& results);

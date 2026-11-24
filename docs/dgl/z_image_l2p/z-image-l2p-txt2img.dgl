@@ -1,0 +1,42 @@
+# version: 0.0.0
+# docs/models/z_image_l2p.md — Text-to-image
+
+var {
+    model_path = "../models/diffusion_models/model-1k-merge.safetensors"
+    text_path = "../models/text_encoders/qwen_3_4b.safetensors"
+
+    output_path = "z_image_l2p.png"
+
+    prompt = "an origami pig on fire in the middle of a dark room with a pentagram on the floor"
+    negative_prompt = ""
+
+    seed = 42
+    rng_type = "cuda"
+    width = 1024
+    height = 1024
+
+    steps = 30
+    cfg_scale = 2.0
+    method = "euler"
+    scheduler = "discrete"
+}
+
+fn main() {
+    model = load_dit(model_path, family = "z_image_l2p", wtype = "bf16")
+    text = load_text_encoder(text_path, family = "z_image_l2p", wtype = "bf16")
+    vae = load_vae(model_path, family = "z_image_l2p", wtype = "bf16")
+
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    positive = encode_prompt(text, prompt, width = width, height = height)
+    negative = encode_prompt(text, negative_prompt, width = width, height = height)
+    pos = predictor(model, positive)
+    neg = predictor(model, negative)
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    image = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <limits>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
@@ -25,7 +26,13 @@ namespace sd {
         }
     }
 
-    ggml_backend_sched_t ComputeWorkspace::make_scheduler(size_t graph_size) {
+    ggml_backend_sched_t ComputeWorkspace::make_scheduler(size_t graph_size, const std::function<bool(size_t)>& ensure_host_memory) {
+        // Round up ggml's 30 split inputs and two tensor copies per graph node.
+        const auto per_node    = 64 * ggml_tensor_overhead();
+        const auto graph_bytes = ggml_graph_overhead_custom(graph_size, false);
+        if (graph_size > (std::numeric_limits<size_t>::max() - graph_bytes) / per_node ||
+            (ensure_host_memory && !ensure_host_memory(graph_size * per_node + graph_bytes)))
+            return nullptr;
         std::vector<ggml_backend_t> backends{backend_};
         backends.insert(backends.end(), extra_backends_.begin(), extra_backends_.end());
         if (!sd_backend_is_cpu(backend_)) {
@@ -53,10 +60,12 @@ namespace sd {
         if (measurement.buffers.empty()) {
             return false;
         }
-        const bool grows = std::any_of(measurement.buffers.begin(), measurement.buffers.end(),
-                                       [&](const BackendBufferSize& size) { return size.bytes > bytes(size.backend); });
-        if (grows) {
-            release();
+        GGML_ASSERT(peak_scheduler_bytes_.empty() || peak_scheduler_bytes_.size() == measurement.buffers.size());
+        // The reported size includes per-graph scratch, which can shrink while the scheduler is retained.
+        for (size_t i = 0; i < peak_scheduler_bytes_.size(); ++i) {
+            if (measurement.buffers[i].bytes > peak_scheduler_bytes_[i]) {
+                return release_scheduler();
+            }
         }
         return true;
     }
@@ -64,26 +73,39 @@ namespace sd {
     bool ComputeWorkspace::release_excess(const Measurement& measurement) {
         return std::any_of(measurement.buffers.begin(), measurement.buffers.end(),
                            [&](const BackendBufferSize& size) { return bytes(size.backend) > size.bytes; }) &&
-               release();
+               release_scheduler();
     }
 
-    bool ComputeWorkspace::allocate(ggml_cgraph* graph, const AssignNodes& assign_nodes) {
+    bool ComputeWorkspace::allocate(ggml_cgraph* graph, const Measurement& measurement, const AssignNodes& assign_nodes, const std::function<bool(size_t)>& ensure_host_memory) {
         GGML_ASSERT(!active_);
         const size_t capacity = static_cast<size_t>(ggml_graph_n_nodes(graph) + ggml_graph_n_leafs(graph)) + 8;
         if (scheduler_ == nullptr || capacity > scheduler_capacity_) {
-            release();
-            scheduler_          = make_scheduler(capacity);
+            release_scheduler();
+            scheduler_          = make_scheduler(capacity, ensure_host_memory);
             scheduler_capacity_ = capacity;
         }
         if (scheduler_ == nullptr) {
             return false;
         }
+        size_t host_bytes = 0;
+        for (const auto& size : measurement.buffers) {
+            if (sd_backend_is_cpu(size.backend)) {
+                const auto pending = size.bytes - std::min(size.bytes, bytes(size.backend));
+                host_bytes += std::min(pending, SIZE_MAX - host_bytes);
+            }
+        }
+        if (ensure_host_memory && !ensure_host_memory(host_bytes))
+            return false;
         ggml_backend_sched_reset(scheduler_);
         assign_nodes(scheduler_, graph);
         // Scheduler allocation rewrites sources. Split the execution graph only once.
         if (!ggml_backend_sched_alloc_graph(scheduler_, graph)) {
             release();
             return false;
+        }
+        peak_scheduler_bytes_.resize(measurement.buffers.size());
+        for (size_t i = 0; i < measurement.buffers.size(); ++i) {
+            peak_scheduler_bytes_[i] = std::max(peak_scheduler_bytes_[i], bytes(measurement.buffers[i].backend));
         }
         active_ = true;
         return true;
@@ -93,7 +115,8 @@ namespace sd {
         ggml_cgraph* graph,
         const std::function<ggml_backend_t(const ggml_tensor*)>& external_backend,
         const AssignNodes& assign_nodes,
-        bool cache_measurement) {
+        bool cache_measurement,
+        const std::function<bool(size_t)>& ensure_host_memory) {
         std::vector<const ggml_tensor*> tensors;
         std::unordered_set<const ggml_tensor*> seen;
         auto visit = [&](const ggml_tensor* tensor) {
@@ -147,15 +170,20 @@ namespace sd {
                         append(type);
                     }
                 } else {
-                    const auto alignment_offset = reinterpret_cast<uintptr_t>(tensor->data) % ggml_backend_get_alignment(external);
-                    append(alignment_offset);
+                    append(tensor->buffer);
+                    append(tensor->data);
                 }
                 const int32_t uses = ggml_graph_use_count(graph, tensor);
                 append(uses);
             }
             // Match the full allocation metadata, including topology and external placement.
-            if (key == measurement_key_) {
-                return {measured_buffers_};
+            for (auto& cached : measurement_cache_) {
+                if (key == cached.key) {
+                    if (&cached != &measurement_cache_.front()) {
+                        std::swap(cached, measurement_cache_.front());
+                    }
+                    return {measurement_cache_.front().buffers};
+                }
             }
         }
         const size_t graph_size = tensors.size() + 8;
@@ -164,7 +192,7 @@ namespace sd {
             return {};
         }
         std::unordered_map<const ggml_tensor*, ggml_tensor*> copies;
-        std::map<ggml_backend_t, ggml_backend_buffer_t> external_buffers;
+        std::map<std::pair<ggml_backend_t, const void*>, ggml_backend_buffer_t> external_buffers;
         for (auto tensor : tensors) {
             auto copy      = ggml_dup_tensor(context, tensor);
             *copy          = *tensor;
@@ -179,7 +207,9 @@ namespace sd {
             }
             auto external = external_backend(source);
             if (external != nullptr && source->view_src == nullptr) {
-                auto& buffer = external_buffers[external];
+                // Preserve distinct external allocations so overlap checks do not invent aliases.
+                const void* storage = source->buffer ? static_cast<const void*>(source->buffer) : source;
+                auto& buffer        = external_buffers[{external, storage}];
                 if (buffer == nullptr) {
                     buffer = ggml_backend_alloc_buffer(external, 0);
                     GGML_ASSERT(buffer != nullptr);
@@ -191,6 +221,18 @@ namespace sd {
                 copy->extra = nullptr;
             }
         }
+        for (const auto& entry : copies) {
+            const auto* source = entry.first;
+            if (source->view_src && source->buffer) {
+                const auto* owner = source->view_src;
+                while (owner->view_src) {
+                    owner = owner->view_src;
+                }
+                if (external_backend(owner) != nullptr) {
+                    entry.second->buffer = copies.at(owner)->buffer;
+                }
+            }
+        }
         auto copy_graph = ggml_new_graph_custom(context, graph_size, false);
         auto map_tensor = [](const ggml_tensor* tensor, void* user_data) -> ggml_tensor* {
             const auto& mapped = *static_cast<const std::unordered_map<const ggml_tensor*, ggml_tensor*>*>(user_data);
@@ -199,7 +241,7 @@ namespace sd {
         };
         GGML_ASSERT(ggml_graph_cpy_mapped(graph, copy_graph, map_tensor, &copies));
         Measurement result;
-        auto scheduler = make_scheduler(graph_size);
+        auto scheduler = make_scheduler(graph_size, ensure_host_memory);
         if (scheduler != nullptr) {
             assign_nodes(scheduler, copy_graph);
             std::vector<size_t> sizes(extra_backends_.size() + 2);
@@ -215,8 +257,8 @@ namespace sd {
         }
         ggml_free(context);
         if (cache_measurement && !result.buffers.empty()) {
-            measurement_key_  = std::move(key);
-            measured_buffers_ = result.buffers;
+            measurement_cache_.back()  = std::move(measurement_cache_.front());
+            measurement_cache_.front() = {std::move(key), result.buffers};
         }
         return result;
     }
@@ -249,14 +291,36 @@ namespace sd {
     }
 
     bool ComputeWorkspace::release() {
+        if (!release_scheduler()) {
+            return false;
+        }
+        measurement_cache_ = {};
+        return true;
+    }
+
+    bool ComputeWorkspace::release_scheduler() {
         if (active_) {
             return false;
         }
-        measurement_key_.clear();
-        measured_buffers_.clear();
-        ggml_backend_sched_free(scheduler_);
+        if (scheduler_ != nullptr) {
+            const int n_backends = ggml_backend_sched_get_n_backends(scheduler_);
+            for (int i = 0; i < n_backends; ++i) {
+                auto backend      = ggml_backend_sched_get_backend(scheduler_, i);
+                const size_t size = bytes(backend);
+                if (size == 0) {
+                    continue;
+                }
+                auto buft = ggml_backend_sched_get_buffer_type(scheduler_, backend);
+                LOG_VERBOSE("free compute buffer: %.2f MB(%s) on %s",
+                            size / (1024.0 * 1024.0),
+                            ggml_backend_buft_is_host(buft) ? "RAM" : "VRAM",
+                            ggml_backend_name(backend));
+            }
+            ggml_backend_sched_free(scheduler_);
+        }
         scheduler_          = nullptr;
         scheduler_capacity_ = 0;
+        peak_scheduler_bytes_.clear();
         return true;
     }
 

@@ -1,0 +1,48 @@
+# version: 0.0.0
+# docs/models/relay_vsr.md — CLI
+
+var {
+    dit_path = "../models/diffusion_models/relayvsr_x2_lightx2v_int8_convrot.safetensors"
+    vae_path = "../models/vae/relayvsr_flash_vae_x2_fp32.safetensors"
+
+    input_path = "input_frames"
+    output_path = "output.avi"
+
+    seed = 42
+    fps = 24
+    window_size = 16
+
+    sampler = "euler"
+}
+
+fn keyframe_indices(frames, stride) {
+    count = tensor::shape(frames)[3]
+    last = count - 1
+    regular = tensor::arange(0, last, step = stride)
+    return tensor::concat([regular, tensor::vector([last], dtype = "i64")], axis = 0)
+}
+
+fn upscale_window(frames, dit, flash, rng, window_size, sampler) {
+    indices = keyframe_indices(frames, stride = window_size - 1)
+    keyframes = tensor::index_select(frames, axis = 3, indices = indices)
+    positive = { crossattn = relayvsr::positive_embedding(dit), lq_frames = keyframes }
+    base = tensor::zeros(relayvsr::latent_shape(dit, keyframes))
+    noise = tensor::randn_like(base, rng = rng)
+    sigmas = tensor::vector([1.0, 0.0])
+    positive_predictor = predictor(dit, positive)
+    latent = sample(noise, sigmas, predict = positive_predictor, method = sampler, rng = rng)
+    return relayvsr::decode(flash, latent, frames, keyframe_indices = indices)
+}
+
+fn main() {
+    dit = load_dit(dit_path)
+    flash = load_vae(vae_path)
+    clip = video::load(input_path, fps_num = fps)
+    frames = clip.video.frames
+    rng = make_rng("cuda", seed = seed)
+    windows = video::split_windows(frames, size = window_size, overlap = 1)
+    enhanced = map(windows, process = upscale_window, dit = dit, flash = flash, rng = rng, window_size = window_size, sampler = sampler)
+    pixels = video::join_windows(enhanced, overlap = 1)
+    video::save(output_path, {frames = pixels, fps_num = clip.video.fps_num, fps_den = clip.video.fps_den}, audio = clip.audio)
+    return { video = pixels }
+}

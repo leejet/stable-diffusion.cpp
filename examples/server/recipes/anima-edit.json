@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "anima-edit",
   "name": "Anima Edit (LoRA)",
-  "description": "Requires a matching community editing LoRA. Apply it after loading and supply reference images; uses the cosmos_reference preset.",
+  "description": "Select a matching community editing LoRA separately and supply reference images. References are VAE-encoded for diffusion conditioning; the recipe does not load the LoRA automatically.",
   "model_url": "https://huggingface.co/circlestone-labs/Anima",
   "slots": [
     {

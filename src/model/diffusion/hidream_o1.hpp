@@ -197,7 +197,7 @@ namespace HiDreamO1 {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* t) {
             auto mlp_0 = std::dynamic_pointer_cast<Linear>(blocks["mlp.0"]);
             auto mlp_2 = std::dynamic_pointer_cast<Linear>(blocks["mlp.2"]);
-            auto emb   = ggml_ext_timestep_embedding(ctx->ggml_ctx, t, frequency_embedding_size, 10000, 1000.0f);
+            auto emb   = ggml_ext_timestep_embedding(ctx, t, frequency_embedding_size, 10000, 1000.0f);
             emb        = mlp_0->forward(ctx, emb);
             emb        = ggml_silu_inplace(ctx->ggml_ctx, emb);
             emb        = mlp_2->forward(ctx, emb);
@@ -292,7 +292,6 @@ namespace HiDreamO1 {
 
         ggml_tensor* encode_image(GGMLRunnerContext* runner_ctx, ggml_tensor* image) {
             return LLM::LLMRunner::encode_image_common(this,
-                                                       compute_ctx,
                                                        runner_ctx,
                                                        image,
                                                        config.llm.vision,
@@ -398,7 +397,7 @@ namespace HiDreamO1 {
             auto t_emb          = t_embedder1->forward(&runner_ctx, timestep);
             int64_t txt_seq_len = txt->ne[1];
             if (txt_seq_len > 1) {
-                auto prefix = ggml_ext_slice(compute_ctx, txt, 1, 0, txt_seq_len - 1);
+                auto prefix = ggml_ext_slice(&runner_ctx, txt, 1, 0, txt_seq_len - 1);
                 txt         = ggml_concat(compute_ctx, prefix, ggml_reshape_3d(compute_ctx, t_emb, t_emb->ne[0], 1, 1), 1);
             } else {
                 txt = ggml_reshape_3d(compute_ctx, t_emb, t_emb->ne[0], 1, 1);
@@ -425,8 +424,8 @@ namespace HiDreamO1 {
                 }
                 x_pred_start = first_vinput;
             }
-            auto x_pred = ggml_ext_slice(compute_ctx, x_pred_all, 1, x_pred_start, x_pred_start + target_tokens);
-            x_pred      = DiT::unpatchify_and_crop(compute_ctx, x_pred, x->ne[1], x->ne[0], PATCH_SIZE, PATCH_SIZE);
+            auto x_pred = ggml_ext_slice(&runner_ctx, x_pred_all, 1, x_pred_start, x_pred_start + target_tokens);
+            x_pred      = DiT::unpatchify_and_crop(&runner_ctx, x_pred, x->ne[1], x->ne[0], PATCH_SIZE, PATCH_SIZE);
 
             float sigma = 1.0f - timestep_tensor.values()[0];
             sigma       = std::max(1e-6f, sigma);
@@ -475,6 +474,9 @@ namespace HiDreamO1 {
     };
 
     struct HiDreamO1Conditioner : public Conditioner {
+        bool supports_prompt_formatting() const override { return true; }
+        size_t max_reference_images() const override { return std::numeric_limits<size_t>::max(); }
+
         std::shared_ptr<Tokenizer> tokenizer;
         std::shared_ptr<HiDreamO1VisionRunner> vision_runner;
 
@@ -530,11 +532,13 @@ namespace HiDreamO1 {
             std::vector<std::array<int32_t, 3>> image_grids;
             std::vector<int32_t> skip_vision_start;
 
-            std::string prompt = "<|im_start|>user\n";
+            std::string prompt = sd::prompt_templates::with_system("<|im_start|>user\n", conditioner_params.system_prompt);
 
             if (ref_images.empty()) {
                 prompt += conditioner_params.text;
                 prompt += "<|im_end|>\n<|im_start|>assistant\n<|boi_token|><|tms_token|>";
+                if (conditioner_params.raw)
+                    prompt = conditioner_params.text;
                 std::vector<int> input_ids;
                 if (!tokenizer->encode(prompt, input_ids, nullptr)) {
                     return {};
@@ -629,6 +633,8 @@ namespace HiDreamO1 {
 
             prompt += conditioner_params.text;
             prompt += "<|im_end|>\n<|im_start|>assistant\n<|boi_token|><|tms_token|>";
+            if (conditioner_params.raw)
+                prompt = conditioner_params.text;
             std::vector<int> input_ids;
             if (!tokenizer->encode(prompt, input_ids, nullptr)) {
                 return {};

@@ -54,8 +54,6 @@ static sd_profile::Level parse_args(int argc,
         exit(ctx_params.print_devices() ? 0 : 1);
     }
 
-    const bool random_seed_requested = default_gen_params.seed < 0;
-
     sd_profile::Level profile_level = sd_profile::Level::MAX;
     if (!svr_params.resolve_and_validate() ||
         !ctx_params.resolve_and_validate(IMG_GEN, /*require_model=*/false) ||
@@ -67,9 +65,6 @@ static sd_profile::Level parse_args(int argc,
         exit(1);
     }
 
-    if (random_seed_requested) {
-        default_gen_params.seed = -1;
-    }
     return profile_level;
 }
 
@@ -139,16 +134,39 @@ int main(int argc, const char** argv) {
     LOG_DEBUG("%s", ctx_params.to_string().c_str());
     LOG_DEBUG("%s", default_gen_params.to_string().c_str());
 
+    if (!ctx_params.register_rpc_devices()) {
+        return 1;
+    }
+    ctx_params.rpc_servers.reset();
+
     const bool model_requested = !ctx_params.model_path.empty() || !ctx_params.diffusion_model_path.empty();
     ServerModels models;
+    try {
+        configure_server_file_access(models, svr_params, ctx_params);
+    } catch (const std::exception& error) {
+        LOG_ERROR("Context setup failed: %s", error.what());
+        return 1;
+    }
 
     ContextKeeper::Settings keeper_settings;
     keeper_settings.degradation      = !svr_params.disable_degradation;
     keeper_settings.cooldown_seconds = svr_params.degradation_cooldown;
-    ContextKeeper keeper(ctx_params, profile_level, keeper_settings);
+    ContextKeeper::Hooks keeper_hooks;
+    // Every context the keeper creates, after a step down too, reads files only where the server allows it.
+    keeper_hooks.create_context = [&models](const SDContextParams& params, GenerationFailure& failure) {
+        SDCtxPtr ctx = create_context_from_params(params, failure);
+        if (ctx != nullptr && !apply_server_file_access(models, ctx.get())) {
+            failure         = GenerationFailure();
+            failure.code    = SD_ERROR_UNKNOWN;
+            failure.message = std::string("could not restrict the file access of the context: ") + sd_get_last_error();
+            ctx.reset();
+        }
+        return ctx;
+    };
+    ContextKeeper keeper(ctx_params, profile_level, keeper_settings, keeper_hooks);
+    std::mutex sd_ctx_mutex;
 
     if (model_requested) {
-        const auto load_started = std::chrono::steady_clock::now();
         GenerationFailure failure;
         if (!keeper.start(failure)) {
             LOG_ERROR("the model could not be loaded: '%s' (%s: %s); check the model file and the logs above, then restart the server",
@@ -158,7 +176,6 @@ int main(int argc, const char** argv) {
                       failure.message.c_str());
             return 1;
         }
-        models.status["load_elapsed_seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - load_started).count();
         if (svr_params.disable_degradation) {
             LOG_INFO("a request that runs out of memory is answered with an error (--disable-degradation)");
         } else if (!keeper.can_step_down()) {
@@ -180,7 +197,7 @@ int main(int argc, const char** argv) {
         }
     } else {
         LOG_WARN(
-            "starting without a model: device and upscale endpoints work, "
+            "starting without a model: device and DGL script endpoints work, "
             "generation endpoints will report that no model is loaded "
             "(load one from the model catalog, or restart with -m/--diffusion-model)");
     }
@@ -190,8 +207,13 @@ int main(int argc, const char** argv) {
     std::vector<UpscalerEntry> upscaler_cache;
     std::mutex upscaler_mutex;
     AsyncJobManager async_job_manager;
+    async_job_manager.max_pending_jobs =
+        static_cast<size_t>(svr_params.max_pending_jobs);
+    async_job_manager.completed_ttl_seconds =
+        static_cast<int64_t>(svr_params.completed_ttl_seconds);
     ServerRuntime runtime = {
         &keeper,
+        &sd_ctx_mutex,
         &svr_params,
         &ctx_params,
         &default_gen_params,
@@ -248,6 +270,7 @@ int main(int argc, const char** argv) {
     register_openai_api_endpoints(svr, runtime);
     register_sdapi_endpoints(svr, runtime);
     register_sdcpp_api_endpoints(svr, runtime);
+    register_dgl_endpoints(svr, runtime);
     register_model_endpoints(svr, runtime);
 
     LOG_INFO("listening on: http://%s:%d\n", svr_params.listen_ip.c_str(), svr_params.listen_port);

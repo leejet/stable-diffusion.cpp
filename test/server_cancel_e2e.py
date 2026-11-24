@@ -325,7 +325,8 @@ def main():
     parser.add_argument("--port", type=int, default=0, help="port for the server this test starts (default: a free one)")
     parser.add_argument("--extra", action="append", default=[], help="an extra option for sd-server (repeatable)")
     parser.add_argument("--size", type=int, default=64, help="width and height of the images (default 64, the minimum)")
-    parser.add_argument("--steps", type=int, default=500, help="steps of the jobs that get stopped (they never run to the end)")
+    parser.add_argument("--steps", type=int, default=100,
+                        help="steps of the jobs that get stopped, at most 100 as the server allows (they never run to the end)")
     parser.add_argument("--start-timeout", type=int, default=300, help="seconds to wait for the server to load the model")
     parser.add_argument("--warmup-timeout", type=int, default=900, help="seconds for any job that must complete")
     args = parser.parse_args()
