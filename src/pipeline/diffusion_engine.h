@@ -156,7 +156,7 @@ public:
                                 &sd::ContextConfig::pulid_weights_path, &sd::ContextConfig::tensor_type_rules,
                                 &sd::ContextConfig::max_vram, &sd::ContextConfig::backend,
                                 &sd::ContextConfig::params_backend, &sd::ContextConfig::split_mode,
-                                &sd::ContextConfig::multi_gpu,
+                                &sd::ContextConfig::multi_gpu, &sd::ContextConfig::layer_split_fill,
                                 &sd::ContextConfig::rpc_servers, &sd::ContextConfig::model_args}) {
                 strings.emplace_back(SAFE_STR(initial.*member));
                 params.*member = strings.back().c_str();

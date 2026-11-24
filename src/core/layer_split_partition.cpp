@@ -1,6 +1,8 @@
 #include "core/layer_split_partition.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -121,13 +123,12 @@ namespace sd {
         return true;
     }
 
-    // Fill limits that size the contiguous ranges in proportion to the device capacities: the same
-    // fraction of every capacity, as small as possible while all segments still fit. Filling the
-    // first device up to its capacity would leave only the fixed headroom for compute, which is too
-    // small for large video graphs. A fraction of 1 is plain capacity-based placement, so every
-    // layout that fits the capacities is still found.
-    static std::vector<int64_t> graph_cut_layer_split_fill_limits(const std::vector<int64_t>& segment_bytes,
-                                                                  const std::vector<int64_t>& capacities) {
+    // The proportional limits: the same fraction of every capacity, as small as possible while all segments still
+    // fit. Filling the first device up to its capacity would leave only the fixed headroom for compute, which is too
+    // small for large video graphs. A fraction of 1 is plain capacity-based placement, so every layout that fits the
+    // capacities is still found.
+    static std::vector<int64_t> graph_cut_layer_split_proportional_limits(const std::vector<int64_t>& segment_bytes,
+                                                                          const std::vector<int64_t>& capacities) {
         const bool capacities_known = std::all_of(capacities.begin(), capacities.end(), [](int64_t capacity) {
             return capacity < graph_cut_layer_split_unknown_capacity;
         });
@@ -149,6 +150,84 @@ namespace sd {
             limits[i] = (int64_t)((double)capacities[i] * high);
         }
         return limits;
+    }
+
+    bool parse_layer_split_fill(const std::string& text, LayerSplitFill& fill) {
+        std::string value = text;
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (value.empty() || value == "auto") {
+            fill = LayerSplitFill::AUTO;
+        } else if (value == "proportional") {
+            fill = LayerSplitFill::PROPORTIONAL;
+        } else if (value == "fill-first") {
+            fill = LayerSplitFill::FILL_FIRST;
+        } else {
+            return false;
+        }
+        return true;
+    }
+
+    const char* layer_split_fill_name(LayerSplitFill fill) {
+        switch (fill) {
+            case LayerSplitFill::PROPORTIONAL:
+                return "proportional";
+            case LayerSplitFill::FILL_FIRST:
+                return "fill-first";
+            default:
+                return "auto";
+        }
+    }
+
+    static std::atomic<int> process_layer_split_fill{static_cast<int>(LayerSplitFill::AUTO)};
+
+    void set_layer_split_fill(LayerSplitFill fill) {
+        process_layer_split_fill.store(static_cast<int>(fill));
+    }
+
+    LayerSplitFill layer_split_fill() {
+        return static_cast<LayerSplitFill>(process_layer_split_fill.load());
+    }
+
+    LayerSplitFill resolve_layer_split_fill(LayerSplitFill fill, const std::vector<enum ggml_backend_dev_type>& device_types) {
+        if (fill != LayerSplitFill::AUTO) {
+            return fill;
+        }
+        const bool discrete_gpus_only = std::all_of(device_types.begin(), device_types.end(), [](enum ggml_backend_dev_type type) {
+            return type == GGML_BACKEND_DEVICE_TYPE_GPU;
+        });
+        return discrete_gpus_only ? LayerSplitFill::PROPORTIONAL : LayerSplitFill::FILL_FIRST;
+    }
+
+    std::vector<int64_t> layer_split_fill_limits(LayerSplitFill fill,
+                                                 const std::vector<int64_t>& segment_bytes,
+                                                 const std::vector<int64_t>& capacities) {
+        if (fill == LayerSplitFill::FILL_FIRST) {
+            return capacities;
+        }
+        return graph_cut_layer_split_proportional_limits(segment_bytes, capacities);
+    }
+
+    bool layer_split_place(const std::vector<int64_t>& segment_bytes,
+                           const std::vector<int64_t>& limits,
+                           std::vector<int64_t>& bytes_by_device) {
+        bytes_by_device.assign(limits.size(), 0);
+        if (limits.empty()) {
+            return segment_bytes.empty();
+        }
+        size_t device = 0;
+        int64_t used  = 0;
+        for (int64_t bytes : segment_bytes) {
+            while (device + 1 < limits.size() && bytes > 0 && used + bytes > limits[device]) {
+                device++;
+                used = 0;
+            }
+            if (bytes > 0 && used + bytes > limits[device]) {
+                return false;
+            }
+            used += bytes;
+            bytes_by_device[device] += bytes;
+        }
+        return true;
     }
 
     bool partition_graph_cut_layer_split(const char* desc,
@@ -205,10 +284,19 @@ namespace sd {
             return param_assignments.count(param) != 0;
         });
 
-        // Move to the next device at the proportional fill limit; the capacity stays the hard limit.
+        std::vector<enum ggml_backend_dev_type> device_types;
+        for (ggml_backend_t backend : split_backends) {
+            ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+            device_types.push_back(dev != nullptr ? ggml_backend_dev_type(dev) : GGML_BACKEND_DEVICE_TYPE_CPU);
+        }
+        const LayerSplitFill fill = resolve_layer_split_fill(layer_split_fill(), device_types);
+        if (!reuse_assignments) {
+            LOG_INFO("%s layer split fill: %s", desc, layer_split_fill_name(fill));
+        }
+        // Move to the next device at the fill limit; the capacity stays the hard limit.
         const std::vector<int64_t> backend_limits = reuse_assignments
                                                         ? backend_capacities
-                                                        : graph_cut_layer_split_fill_limits(segment_param_bytes, backend_capacities);
+                                                        : layer_split_fill_limits(fill, segment_param_bytes, backend_capacities);
 
         std::vector<ggml_backend_t> backend_by_segment(plan.segments.size(), split_backends[0]);
         size_t current_backend = 0;

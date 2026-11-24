@@ -91,6 +91,7 @@ namespace sd {
         split_mode                = nullptr;
         auto_fit                  = true;
         multi_gpu                 = nullptr;
+        layer_split_fill          = nullptr;
         memory_guard              = 0;
         disable_backend_fallback  = false;
         rpc_servers               = nullptr;

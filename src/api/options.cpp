@@ -328,6 +328,7 @@ static void add_context_specs(std::vector<ParamSpec>& specs) {
     ctx.string("llm_path", &sd::ContextConfig::llm_path);
     ctx.string("llm_vision_path", &sd::ContextConfig::llm_vision_path);
     ctx.choice("lora_apply_mode", &sd::ContextConfig::lora_apply_mode, str_to_lora_apply_mode, LORA_APPLY_MODE_COUNT);
+    ctx.string("layer_split_fill", &sd::ContextConfig::layer_split_fill);
     ctx.string("max_vram", &sd::ContextConfig::max_vram);
     ctx.integer("memory_guard", &sd::ContextConfig::memory_guard, 0, 100);
     ctx.string("model_args", &sd::ContextConfig::model_args);

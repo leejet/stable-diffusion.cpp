@@ -65,9 +65,21 @@ sd-cli -m model.safetensors -p "a cat" --backend "diffusion=cuda0&cuda1"
 ```
 
 The module's transformer blocks are then distributed across the listed devices
-in contiguous ranges: the first device takes blocks until its free memory (minus a
-compute-buffer headroom of about 2 GiB, and any `--max-vram` limit) is used up,
-then the next device, and so on. The module's graphs are executed with a
+in contiguous ranges, in list order. Each device can hold blocks up to its free
+memory minus a compute-buffer headroom of about 2 GiB (and any `--max-vram`
+limit); `--layer-split-fill` chooses how the ranges are sized:
+
+| `--layer-split-fill` | Ranges |
+| --- | --- |
+| `proportional` | Every device takes the same fraction of its capacity, the smallest that still places every block, so each keeps room for computing. Suits large graphs, such as video, on similar GPUs. |
+| `fill-first` | The first device takes blocks until it is full, then the next one, and so on: the first device carries the most. Suits a fast GPU next to a slower device. |
+| `auto` (default) | When `--auto-fit` plans the split, the fill that keeps more modules resident on the GPUs, proportional on a tie. A split given with `--backend` is proportional over discrete GPUs and fill-first as soon as an integrated GPU or the CPU takes part. |
+
+```shell
+sd-cli -m model.safetensors -p "a cat" --backend "diffusion=cuda0&vulkan1" --layer-split-fill fill-first
+```
+
+The log names the fill used for each split. The module's graphs are executed with a
 `ggml_backend_sched` that runs each block
 on the device holding its weights, copying the residual stream at the range
 boundaries. The first device in the list is the module's main device: it also

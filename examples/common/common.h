@@ -176,6 +176,7 @@ struct SDContextParams {
     std::optional<std::string> params_backend;
     std::optional<std::string> split_mode;
     std::string multi_gpu;
+    std::string layer_split_fill;
     std::optional<std::string> model_args;
     std::optional<bool> auto_fit;
     std::optional<std::string> rpc_servers;

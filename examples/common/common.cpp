@@ -573,6 +573,14 @@ ArgOptions SDContextParams::get_options() {
          0,
          &multi_gpu},
         {"",
+         "--layer-split-fill",
+         "how a module split over several devices fills them: auto (default; --auto-fit picks the way that keeps more modules on the GPUs, "
+         "proportional on a tie; a split given with --backend is proportional over discrete GPUs and fill-first as soon as an integrated GPU "
+         "or the CPU takes part), proportional (every device gets a share of the layers in proportion to its free memory, keeping room for "
+         "computing on each) or fill-first (the first device takes as many layers as it can, the next ones the rest)",
+         0,
+         &layer_split_fill},
+        {"",
          "--rpc-servers",
          "comma-separated list of RPC servers to connect to for offloading, in the format host:port, e.g. localhost:50052,192.168.1.3:50052",
          (int)',',
@@ -927,6 +935,13 @@ bool SDContextParams::validate(SDMode mode, bool require_model) {
         return false;
     }
 
+    std::string fill = layer_split_fill;
+    std::transform(fill.begin(), fill.end(), fill.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (!fill.empty() && fill != "auto" && fill != "proportional" && fill != "fill-first") {
+        LOG_ERROR("error: --layer-split-fill must be one of auto, proportional, fill-first (got '%s')", layer_split_fill.c_str());
+        return false;
+    }
+
     if (!multi_gpu.empty()) {
         std::string mode = multi_gpu;
         std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -1026,6 +1041,7 @@ std::string SDContextParams::to_string() const {
         << "  params_backend: \"" << params_backend << "\",\n"
         << "  split_mode: \"" << split_mode << "\",\n"
         << "  multi_gpu: \"" << multi_gpu << "\",\n"
+        << "  layer_split_fill: \"" << layer_split_fill << "\",\n"
         << "  model_args: \"" << model_args << "\",\n"
         << "  auto_fit: " << auto_fit << ",\n"
         << "  enable_mmap: " << enable_mmap << ",\n"
@@ -1111,6 +1127,7 @@ SDOptPtr SDContextParams::to_context_opt() {
         opt.set_string("params_backend", effective_params_backend);
     opt.set_string("split_mode", split_mode);
     opt.set_string("multi_gpu", multi_gpu);
+    opt.set_string("layer_split_fill", layer_split_fill);
     opt.set_int("memory_guard", memory_guard);
     opt.set_bool("disable_backend_fallback", disable_backend_fallback);
     opt.set_bool("auto_fit", auto_fit);

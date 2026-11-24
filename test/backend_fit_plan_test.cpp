@@ -61,6 +61,9 @@ struct Outcome {
 };
 
 // Starts the way derive_backend_specs does unless told otherwise: every module on the device with the largest budget.
+// The --layer-split-fill the planner is given; scenarios written for one way of filling set it.
+static sd::LayerSplitFill planned_fill = sd::LayerSplitFill::AUTO;
+
 static Outcome run(const std::vector<Component>& components,
                    const std::vector<Device>& devices,
                    MultiGpuMode mode,
@@ -79,7 +82,10 @@ static Outcome run(const std::vector<Component>& components,
     allow_split.resize(components.size(), true);
     out.runtimes = out.start;
     out.before   = compute_plan(components, devices, ram_gib * GiB, out.start);
-    out.changed  = plan_multi_gpu_runtimes(components, devices, ram_gib * GiB, mode, explicit_runtime, allow_split, out.runtimes, out.notes);
+    // As auto-fit plans: with --layer-split-fill auto, the fill that keeps more modules on the GPUs.
+    sd::set_layer_split_fill(planned_fill);
+    out.changed  = plan_multi_gpu_runtimes_with_fill(components, devices, ram_gib * GiB, mode, explicit_runtime, allow_split, out.runtimes,
+                                                     out.notes);
     out.plan     = compute_plan(components, devices, ram_gib * GiB, out.runtimes);
     return out;
 }
@@ -593,11 +599,19 @@ int main() {
     }
 
     {
+        using sd::LayerSplitFill;
         std::vector<int64_t> shares;
-        CHECK(estimate_split_shares(10 * GiB, {8 * GiB, 8 * GiB}, shares) && shares[0] == 8 * GiB && shares[1] == 2 * GiB,
-              "a split fills the first device before the next");
-        CHECK(!estimate_split_shares(16 * GiB, {8 * GiB, 8 * GiB}, shares), "a split needs room for the blocks that do not cut evenly");
-        CHECK(estimate_split_shares(14 * GiB, {8 * GiB, 8 * GiB}, shares) && shares[0] + shares[1] == 14 * GiB,
+        // The estimate cuts the weights into 256 even pieces, so a share can stop one piece short of a limit.
+        const int64_t piece = 10 * GiB / 256;
+        CHECK(estimate_split_shares(10 * GiB, {8 * GiB, 8 * GiB}, LayerSplitFill::FILL_FIRST, shares) &&
+                  shares[0] > 8 * GiB - piece && shares[0] <= 8 * GiB && shares[0] + shares[1] == 10 * GiB,
+              "fill-first fills the first device before the next");
+        CHECK(estimate_split_shares(10 * GiB, {8 * GiB, 8 * GiB}, LayerSplitFill::PROPORTIONAL, shares) &&
+                  shares[0] > 5 * GiB - piece && shares[0] < 5 * GiB + piece && shares[0] + shares[1] == 10 * GiB,
+              "proportional gives two equal devices half each");
+        CHECK(!estimate_split_shares(16 * GiB, {8 * GiB, 8 * GiB}, LayerSplitFill::PROPORTIONAL, shares),
+              "a split needs room for the blocks that do not cut evenly");
+        CHECK(estimate_split_shares(14 * GiB, {8 * GiB, 8 * GiB}, LayerSplitFill::FILL_FIRST, shares) && shares[0] + shares[1] == 14 * GiB,
               "the shares add up to the size of the weights");
     }
 
@@ -649,7 +663,9 @@ int main() {
 
     {
         const std::vector<Component> components = make_components(16, 2, 0.3);
+        planned_fill                            = sd::LayerSplitFill::FILL_FIRST;
         const Outcome out                       = run(components, two_gpus, MultiGpuMode::AUTO);
+        planned_fill                            = sd::LayerSplitFill::AUTO;
         CHECK(!resident(out.before, 0), "the diffusion model alone does not fit on one 12 GiB GPU");
         CHECK(out.changed && out.runtimes[0].name == "CUDA0&CUDA1" && out.runtimes[0].devices.size() == 2 && out.runtimes[0].estimate_shares,
               "16 GiB of diffusion weights are split across both GPUs");
@@ -665,8 +681,35 @@ int main() {
               "no GPU is given more than its budget less the compute reserve");
     }
     {
-        const Outcome out = run(make_components(16, 2, 0.3), two_gpus, MultiGpuMode::ON);
-        CHECK(same_names(out, "CUDA0&CUDA1", "CUDA1", "CUDA1"), "on and auto agree when the diffusion model needs both GPUs");
+        const std::vector<Component> components = make_components(16, 2, 0.3);
+        const Outcome out                       = run(components, two_gpus, MultiGpuMode::AUTO);
+        const auto& shares                      = out.plan.decisions[0].shares;
+        CHECK(out.runtimes[0].name == "CUDA0&CUDA1" && resident(out.plan, 0) && resident(out.plan, 1) && resident(out.plan, 2) &&
+                  shares.size() == 2 && shares[0] + shares[1] == 16 * GiB && shares[0] < shares[1] + GiB && shares[1] < shares[0] + GiB,
+              "with --layer-split-fill auto every module stays on the GPUs either way, so the split is proportional");
+        CHECK(mentions(out, "in proportion to their memory"), "and the choice is reported");
+        const std::vector<int64_t> used = weights_per_device(components, two_gpus, out);
+        CHECK(used[0] + 2 * GiB <= two_gpus[0].budget_bytes && used[1] + 2 * GiB <= two_gpus[1].budget_bytes,
+              "the proportional plan too stays within the budgets");
+        const Outcome on = run(components, two_gpus, MultiGpuMode::ON);
+        CHECK(on.runtimes[0].name == out.runtimes[0].name && on.runtimes[1].name == out.runtimes[1].name &&
+                  on.runtimes[2].name == out.runtimes[2].name,
+              "on and auto agree when the diffusion model needs both GPUs");
+    }
+    {
+        auto on_gpus = [](const Outcome& outcome) {
+            int count = 0;
+            for (size_t ci = 0; ci < 3; ++ci) {
+                count += resident(outcome.plan, ci) ? 1 : 0;
+            }
+            return count;
+        };
+        planned_fill        = sd::LayerSplitFill::PROPORTIONAL;
+        const Outcome even  = run(make_components(16, 2.5, 0.3), two_gpus, MultiGpuMode::AUTO);
+        planned_fill        = sd::LayerSplitFill::AUTO;
+        const Outcome chose = run(make_components(16, 2.5, 0.3), two_gpus, MultiGpuMode::AUTO);
+        CHECK(on_gpus(even) == 2 && on_gpus(chose) == 3 && mentions(chose, "first one first"),
+              "when a proportional split would push a module off the GPUs, auto fills the first GPU first and keeps all three on");
     }
     {
         const Outcome out = run(make_components(16, 2, 0.3), two_gpus, MultiGpuMode::OFF, 64);

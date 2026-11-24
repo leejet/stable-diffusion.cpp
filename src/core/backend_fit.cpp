@@ -1,5 +1,6 @@
 #include "backend_fit.h"
 #include "config.h"
+#include "core/layer_split_partition.h"
 
 #include <algorithm>
 #include <cctype>
@@ -268,10 +269,12 @@ namespace sd::backend_fit {
     static constexpr int64_t SPLIT_BOUNDARY_MARGIN = 256 * MiB;
     static constexpr int64_t SPLIT_SLACK_PERCENT   = 10;
 
-    // The layer split fills the devices in order, each up to its capacity, so the first one takes as much as it can.
-    // The slack and the margin per boundary cover blocks that cannot be cut where the capacity ends.
+    // The shares the layer split will give the devices, filled the way --layer-split-fill makes it fill them. The
+    // slack and the margin per boundary cover blocks that cannot be cut where a limit ends; an even cut into many
+    // pieces stands in for the blocks of the graph, which are not known yet.
     static bool estimate_split_shares(int64_t params_bytes,
                                       const std::vector<int64_t>& capacities,
+                                      sd::LayerSplitFill fill,
                                       std::vector<int64_t>& shares) {
         int64_t total = 0;
         for (int64_t capacity : capacities) {
@@ -283,12 +286,10 @@ namespace sd::backend_fit {
         if (total < required) {
             return false;
         }
-        int64_t left = params_bytes;
-        for (size_t i = 0; i < capacities.size() && left > 0; ++i) {
-            shares[i] = std::min(left, capacities[i]);
-            left -= shares[i];
-        }
-        return true;
+        constexpr int64_t pieces = 256;
+        std::vector<int64_t> segments(pieces, params_bytes / pieces);
+        segments.back() += params_bytes % pieces;
+        return sd::layer_split_place(segments, sd::layer_split_fill_limits(fill, segments, capacities), shares);
     }
 
     static Plan compute_plan(const std::vector<Component>& components,
@@ -362,7 +363,12 @@ namespace sd::backend_fit {
                 for (size_t di : runtime_devices) {
                     capacities.push_back(std::max<int64_t>(remaining[di] - headroom_for(ci, di), 0));
                 }
-                fits_runtime = !runtime_devices.empty() && estimate_split_shares(comp.params_bytes, capacities, shares);
+                std::vector<enum ggml_backend_dev_type> device_types;
+                for (size_t di : runtime_devices) {
+                    device_types.push_back(devices[di].discrete ? GGML_BACKEND_DEVICE_TYPE_GPU : GGML_BACKEND_DEVICE_TYPE_IGPU);
+                }
+                const sd::LayerSplitFill fill = sd::resolve_layer_split_fill(sd::layer_split_fill(), device_types);
+                fits_runtime                  = !runtime_devices.empty() && estimate_split_shares(comp.params_bytes, capacities, fill, shares);
             } else {
                 fits_runtime = !runtime_devices.empty() &&
                                std::all_of(runtime_devices.begin(), runtime_devices.end(), [&](size_t di) {
@@ -799,6 +805,66 @@ namespace sd::backend_fit {
         return changed;
     }
 
+    // Plans the multi-GPU runtimes. With --layer-split-fill auto it plans once for each way to fill a split and keeps
+    // the plan with more modules resident on the GPUs, proportional on a tie; the layer split is then told to fill
+    // the devices the way the plan counted on.
+    static bool plan_multi_gpu_runtimes_with_fill(const std::vector<Component>& components,
+                                                  const std::vector<Device>& devices,
+                                                  int64_t ram_budget_bytes,
+                                                  MultiGpuMode mode,
+                                                  const std::vector<bool>& explicit_runtime,
+                                                  const std::vector<bool>& allow_split,
+                                                  std::vector<Runtime>& runtimes,
+                                                  std::vector<std::string>& notes) {
+        const sd::LayerSplitFill requested_fill = sd::layer_split_fill();
+        std::vector<sd::LayerSplitFill> fills   = {requested_fill};
+        if (requested_fill == sd::LayerSplitFill::AUTO) {
+            fills = {sd::LayerSplitFill::PROPORTIONAL, sd::LayerSplitFill::FILL_FIRST};
+        }
+        std::vector<Runtime> best_runtimes;
+        std::vector<std::string> best_notes;
+        bool changed                   = false;
+        bool splits                    = false;
+        int best_resident              = -1;
+        sd::LayerSplitFill chosen_fill = requested_fill;
+        for (sd::LayerSplitFill fill : fills) {
+            sd::set_layer_split_fill(fill);
+            std::vector<Runtime> candidate = runtimes;
+            std::vector<std::string> candidate_notes;
+            const bool candidate_changed = plan_multi_gpu_runtimes(components, devices, ram_budget_bytes, mode, explicit_runtime,
+                                                                   allow_split, candidate, candidate_notes);
+            const Plan trial             = compute_plan(components, devices, ram_budget_bytes, candidate);
+            int resident                 = -1;
+            if (trial.valid) {
+                resident = 0;
+                for (size_t ci = 0; ci < components.size(); ++ci) {
+                    resident += components[ci].params_bytes > 0 && trial.decisions[ci].params_location == ParamsLocation::MAIN_GPU ? 1 : 0;
+                }
+            }
+            if (resident > best_resident) {
+                best_resident = resident;
+                chosen_fill   = fill;
+                changed       = candidate_changed;
+                best_runtimes = std::move(candidate);
+                best_notes    = std::move(candidate_notes);
+                splits        = changed && std::any_of(best_runtimes.begin(), best_runtimes.end(), [](const Runtime& runtime) {
+                             return runtime.estimate_shares && runtime.devices.size() > 1;
+                         });
+            }
+        }
+        sd::set_layer_split_fill(splits ? chosen_fill : requested_fill);
+        if (splits && requested_fill == sd::LayerSplitFill::AUTO) {
+            best_notes.push_back(std::string("the split fills the GPUs ") +
+                                 (chosen_fill == sd::LayerSplitFill::FILL_FIRST ? "first one first" : "in proportion to their memory") +
+                                 " (--layer-split-fill auto), which keeps the most modules on the GPUs");
+        }
+        notes.insert(notes.end(), best_notes.begin(), best_notes.end());
+        if (changed) {
+            runtimes = std::move(best_runtimes);
+        }
+        return changed;
+    }
+
     static bool resolve_runtimes(const std::vector<Component>& components,
                                  const std::vector<Device>& devices,
                                  std::string& runtime_spec,
@@ -893,14 +959,16 @@ namespace sd::backend_fit {
         const bool append_runtime_names = runtimes.empty();
         std::vector<std::string> multi_gpu_notes;
         if (!cpu_only) {
-            std::vector<Runtime> planned = runtimes;
-            if (planned.empty() && select_main_device(devices) != SIZE_MAX) {
+            std::vector<Runtime> base = runtimes;
+            if (base.empty() && select_main_device(devices) != SIZE_MAX) {
                 const size_t main_device = select_main_device(devices);
-                planned.assign(components.size(), Runtime{devices[main_device].name, {main_device}});
+                base.assign(components.size(), Runtime{devices[main_device].name, {main_device}});
             }
-            if (!planned.empty() &&
-                plan_multi_gpu_runtimes(components, devices, ram_budget, options.multi_gpu, explicit_runtime,
-                                        split_allowed(components, options.split_mode_spec), planned, multi_gpu_notes)) {
+            std::vector<Runtime> planned = base;
+            const bool changed           = !planned.empty() &&
+                                 plan_multi_gpu_runtimes_with_fill(components, devices, ram_budget, options.multi_gpu, explicit_runtime,
+                                                                   split_allowed(components, options.split_mode_spec), planned, multi_gpu_notes);
+            if (changed) {
                 if (!append_runtime_names) {
                     for (size_t ci = 0; ci < components.size(); ++ci) {
                         if (!explicit_runtime[ci] && components[ci].params_bytes > 0 && planned[ci].name != runtimes[ci].name) {

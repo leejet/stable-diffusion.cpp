@@ -159,6 +159,8 @@ namespace sd {
         bool auto_fit{};
         // How auto-fit uses several discrete GPUs of one backend: auto (default), on or off.
         const char* multi_gpu{};
+        // How the layer split fills the devices of a multi-device module: auto (default), proportional or fill-first.
+        const char* layer_split_fill{};
         // Memory usage percent (device memory, or system RAM on CPU backends) above which weights are evicted
         // and prefetching pauses; 0 turns the guard off.
         int memory_guard{};

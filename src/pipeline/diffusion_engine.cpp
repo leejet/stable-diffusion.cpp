@@ -1012,6 +1012,13 @@ bool StableDiffusionGGML::init(const sd::ContextConfig* sd_ctx_params) {
         LOG_ERROR("multi_gpu must be 'auto', 'on' or 'off' (got '%s')", multi_gpu_spec.c_str());
         return false;
     }
+    sd::LayerSplitFill split_fill = sd::LayerSplitFill::AUTO;
+    if (!sd::parse_layer_split_fill(SAFE_STR(sd_ctx_params->layer_split_fill), split_fill)) {
+        LOG_ERROR_CODE(SD_ERROR_INVALID_ARGUMENT, "layer_split_fill must be 'auto', 'proportional' or 'fill-first' (got '%s')",
+                       SAFE_STR(sd_ctx_params->layer_split_fill));
+        return false;
+    }
+    sd::set_layer_split_fill(split_fill);
     fit_options.split_mode_spec = split_mode_spec;
 
     if (auto_fit_enabled) {
