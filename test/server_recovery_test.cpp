@@ -27,6 +27,9 @@
 #include "httplib.h"
 #include "recovery.h"
 
+// The complete sd_ctx_t, so that the scripted contexts are what sd_ctx_free() releases.
+#include "api/api.h"
+
 using Level = sd_profile::Level;
 using Clock = ContextKeeper::Clock;
 using json  = nlohmann::json;
@@ -109,14 +112,17 @@ struct Env {
 
     ContextKeeper::Hooks hooks() {
         ContextKeeper::Hooks hooks;
-        hooks.create_context = [this](const sd_ctx_params_t& params, GenerationFailure& failure) -> SDCtxPtr {
+        hooks.create_context = [this](const SDContextParams& requested, GenerationFailure& failure) -> SDCtxPtr {
+            // What the library receives: the backend assignments settled the way to_context_opt() settles them.
+            SDContextParams params = requested;
+            params.prepare_backend_assignments();
             Load load{params.memory_guard,
-                      params.batched_cfg,
-                      params.backend != nullptr ? params.backend : "",
-                      params.params_backend != nullptr ? params.params_backend : "",
-                      params.eager_load,
-                      params.model_path != nullptr ? params.model_path : "",
-                      params.multi_gpu != nullptr ? params.multi_gpu : "",
+                      params.batched_cfg.value_or(true),
+                      params.effective_backend,
+                      params.effective_params_backend,
+                      params.eager_load.value_or(false),
+                      params.model_path,
+                      params.multi_gpu,
                       params.disable_backend_fallback};
             loads.push_back(load);
             if (on_create) {
@@ -127,16 +133,16 @@ struct Env {
                 failure = result;
                 return nullptr;
             }
-            // free_sd_ctx() accepts a context that holds no model.
-            return SDCtxPtr(static_cast<sd_ctx_t*>(calloc(1, 64)));
+            // sd_ctx_free() accepts a context that holds no model.
+            return SDCtxPtr(new sd_ctx_t());
         };
         hooks.read_failure    = [this] { return next_failure; };
         hooks.has_accelerator = [this] { return accelerator; };
         hooks.list_devices    = [this] { return devices; };
         hooks.now             = [this] { return now; };
         hooks.cancel_context  = [this](sd_ctx_t* ctx) {
-            // Touching the memory of a context the keeper no longer owns is what the address sanitizer reports.
-            reinterpret_cast<volatile char*>(ctx)[63] = 1;
+            // Reading the memory of a context the keeper no longer owns is what the address sanitizer reports.
+            (void)reinterpret_cast<volatile const char*>(ctx)[0];
             std::lock_guard<std::mutex> lock(cancel_mutex);
             cancel_calls.push_back(ctx);
             if (on_cancel) {

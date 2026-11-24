@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 
+#include "config.h"
 #include "core/ggml_graph_cut.h"
 #include "model_loader.h"
 #include "stable-diffusion.h"
@@ -34,7 +35,7 @@ namespace sd::backend_fit {
                               int& memory_guard_percent,
                               const Options& options);
 
-    bool prepare_vae_decode_retry_tiling(sd_tiling_params_t& tiling_params,
+    bool prepare_vae_decode_retry_tiling(sd::TilingConfig& tiling_params,
                                          bool prefer_temporal_tiling,
                                          ggml_status status,
                                          int latent_tile_size_w,

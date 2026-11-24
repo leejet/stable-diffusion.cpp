@@ -26,8 +26,11 @@ namespace {
 
     // The fields a profile changes, so that two levels that would load the same configuration compare equal.
     std::string describe(const SDContextParams& params) {
-        std::string text = std::to_string(params.memory_guard) + '|' + params.backend + '|' + params.params_backend + '|';
-        for (bool flag : {params.clip_on_cpu, params.vae_on_cpu, params.control_net_cpu, params.offload_params_to_cpu, params.batched_cfg, params.eager_load}) {
+        std::string text = std::to_string(params.memory_guard) + '|' + params.backend.value_or("") + '|' +
+                           params.params_backend.value_or("") + '|';
+        // An unset option loads like the library default, so it is described as that value.
+        for (bool flag : {params.clip_on_cpu, params.vae_on_cpu, params.control_net_cpu, params.offload_params_to_cpu,
+                          params.batched_cfg.value_or(true), params.eager_load.value_or(false)}) {
             text += flag ? '1' : '0';
         }
         return text;
@@ -65,7 +68,7 @@ namespace {
         GenerationFailure failure;
         char message[1024];
         message[0]      = '\0';
-        failure.code    = sd_get_last_error(message, sizeof(message));
+        failure.code    = sd_get_last_error_code(message, sizeof(message));
         failure.message = message;
         if (failure.code == SD_ERROR_NONE) {
             failure.code = SD_ERROR_UNKNOWN;
@@ -154,8 +157,11 @@ void send_generation_failure(httplib::Response& res, const GenerationFailure& fa
 
 static ContextKeeper::Hooks with_defaults(ContextKeeper::Hooks hooks) {
     if (!hooks.create_context) {
-        hooks.create_context = [](const sd_ctx_params_t& params, GenerationFailure& failure) {
-            SDCtxPtr ctx(new_sd_ctx(&params));
+        hooks.create_context = [](const SDContextParams& params, GenerationFailure& failure) {
+            // to_context_opt() settles the backend assignments, so it works on a copy.
+            SDContextParams settled = params;
+            SDOptPtr options        = settled.to_context_opt();
+            SDCtxPtr ctx(options ? create_sd_context(options) : nullptr);
             if (ctx == nullptr) {
                 failure = capture_failure();
             }
@@ -190,8 +196,8 @@ ContextKeeper::ContextKeeper(const SDContextParams& base_params,
       base_level_(base_level),
       cooldown_seconds_(std::max(settings.cooldown_seconds, 0)),
       started_at_(hooks_.now()) {
-    backend_choice_.backend               = base_params.backend;
-    backend_choice_.params_backend        = base_params.params_backend;
+    backend_choice_.backend               = base_params.backend.value_or("");
+    backend_choice_.params_backend        = base_params.params_backend.value_or("");
     backend_choice_.diffusion_conv_direct = base_params.diffusion_conv_direct;
     backend_choice_.n_threads             = base_params.n_threads;
     accelerator_                          = hooks_.has_accelerator();
@@ -232,7 +238,7 @@ std::unique_ptr<SDContextParams> ContextKeeper::params_for(sd_profile::Level lev
     }
     // The cpu profile names the cpu itself; below it, a device that fails to start must fail the load, not become a
     // quiet cpu fallback, as long as the keeper has somewhere else to go.
-    if (level != sd_profile::Level::LITE_CPU && lowercase(params->backend) != "cpu") {
+    if (level != sd_profile::Level::LITE_CPU && lowercase(params->backend.value_or("")) != "cpu") {
         if (slot > 0 && slot <= devices_.size()) {
             params->backend = devices_[slot - 1];
         }
@@ -279,7 +285,7 @@ std::vector<std::string> ContextKeeper::make_devices() const {
     }
     // A placement the host wrote itself (modules assigned to devices, several devices for one module) or a request
     // for the cpu is not rewritten; a single device it named is the engine's choice, so it is not an alternative.
-    const std::string pinned = lowercase(base_params_.backend);
+    const std::string pinned = lowercase(base_params_.backend.value_or(""));
     if (pinned.find_first_of("=&,") != std::string::npos || pinned == "cpu") {
         return names;
     }
@@ -410,8 +416,8 @@ bool ContextKeeper::load(const SDContextParams& params, GenerationFailure& failu
         cooldown_seconds_                     = std::max(settings_.cooldown_seconds, 0);
         restore_not_before_                   = Clock::time_point();
         restore_failure_                      = GenerationFailure();
-        backend_choice_.backend               = params.backend;
-        backend_choice_.params_backend        = params.params_backend;
+        backend_choice_.backend               = params.backend.value_or("");
+        backend_choice_.params_backend        = params.params_backend.value_or("");
         backend_choice_.diffusion_conv_direct = params.diffusion_conv_direct;
         backend_choice_.n_threads             = params.n_threads;
     }
@@ -461,11 +467,8 @@ void ContextKeeper::note_build_failure(const GenerationFailure& failure) {
 bool ContextKeeper::try_build(size_t index, size_t slot, GenerationFailure& failure) {
     const sd_profile::Level level           = ladder_[index];
     std::unique_ptr<SDContextParams> params = params_for(level, slot);
-    // The context may keep pointing into these strings, so they stay where they are for as long as it lives.
-    sd_ctx_params_t raw = params->to_sd_ctx_params_t();
-
     LOG_INFO("loading the model with %s", rung_text(index, slot).c_str());
-    SDCtxPtr ctx = hooks_.create_context(raw, failure);
+    SDCtxPtr ctx = hooks_.create_context(*params, failure);
     if (ctx == nullptr) {
         if (failure.code == SD_ERROR_NONE) {
             failure.code    = SD_ERROR_UNKNOWN;
@@ -495,13 +498,13 @@ bool ContextKeeper::try_build(size_t index, size_t slot, GenerationFailure& fail
         if (model_loaded_) {
             ++counters_.rebuilds;
         }
-        backend_choice_.backend               = ctx_params_->backend;
-        backend_choice_.params_backend        = ctx_params_->params_backend;
+        backend_choice_.backend               = ctx_params_->backend.value_or("");
+        backend_choice_.params_backend        = ctx_params_->params_backend.value_or("");
         backend_choice_.diffusion_conv_direct = ctx_params_->diffusion_conv_direct;
         backend_choice_.n_threads             = ctx_params_->n_threads;
-        device_                               = ctx_params_->backend.empty() ? "auto" : ctx_params_->backend;
+        device_                               = ctx_params_->backend.value_or("").empty() ? "auto" : *ctx_params_->backend;
         cpu_modules_.clear();
-        if (lowercase(ctx_params_->backend) == "cpu") {
+        if (lowercase(ctx_params_->backend.value_or("")) == "cpu") {
             cpu_modules_.push_back("all");
         } else {
             if (ctx_params_->clip_on_cpu) {

@@ -339,9 +339,9 @@ namespace SD_CUDA_NAMESPACE {
                 } else {
                     rotated = values[indices[i]];
                 }
-                int value           = row_scale == 0.0f ? 0 : __float2int_rn(rotated * inv_scale);
-                value               = max(-127, min(127, value));
-                output[indices[i]]  = (int8_t)value;
+                int value          = row_scale == 0.0f ? 0 : __float2int_rn(rotated * inv_scale);
+                value              = max(-127, min(127, value));
+                output[indices[i]] = (int8_t)value;
             }
             if (group == 0 && tid == 0 && dst_stride != k) {
                 *((float*)(dst + row * dst_stride + k)) = row_scale;

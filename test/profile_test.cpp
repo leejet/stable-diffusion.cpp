@@ -166,19 +166,21 @@ int main() {
         Parsed bad({"--multi-gpu", "sideways"});
         CHECK(bad.ok && !bad.ctx.validate(IMG_GEN, false), "--multi-gpu refuses anything but auto, on and off");
         Parsed passed({"--multi-gpu", "on"});
-        const sd_ctx_params_t raw = passed.ctx.to_sd_ctx_params_t();
-        CHECK(raw.multi_gpu != nullptr && strcmp(raw.multi_gpu, "on") == 0, "the value reaches the library");
+        SDOptPtr options = passed.ctx.to_context_opt();
+        CHECK(options != nullptr && passed.ctx.multi_gpu == "on" &&
+                  sd_opt_set_string(options.get(), "multi_gpu", passed.ctx.multi_gpu.c_str()) == SD_STATUS_OK,
+              "the value reaches the library, which knows the setting");
     }
     {
         Parsed p({});
         sd_profile::apply(Level::LITE, p.ctx, p.gen, true);
-        CHECK(p.ok && p.ctx.memory_guard == 85 && !p.ctx.batched_cfg && p.gen.vae_tiling_params.enabled,
+        CHECK(p.ok && p.ctx.memory_guard == 85 && !p.ctx.batched_cfg.value_or(true) && p.gen.vae_tiling_params.enabled,
               "lite sets the guard, unbatched CFG and VAE tiling");
-        CHECK(!p.ctx.clip_on_cpu && !p.ctx.vae_on_cpu && !p.ctx.control_net_cpu && p.ctx.backend.empty(),
+        CHECK(!p.ctx.clip_on_cpu && !p.ctx.vae_on_cpu && !p.ctx.control_net_cpu && p.ctx.backend.value_or("").empty(),
               "lite keeps every module on the GPU: the text encoder stays where auto-fit puts it");
         CHECK(p.ctx.multi_gpu == "on", "lite spreads the modules over every GPU of the backend");
         sd_profile::apply(Level::LITE, p.ctx, p.gen, true);
-        CHECK(p.ctx.memory_guard == 85 && p.ctx.params_backend.empty() && p.ctx.backend.empty() && p.ctx.multi_gpu == "on",
+        CHECK(p.ctx.memory_guard == 85 && p.ctx.params_backend.value_or("").empty() && p.ctx.backend.value_or("").empty() && p.ctx.multi_gpu == "on",
               "applying a level twice changes nothing more, and lite leaves the weights placement to auto-fit");
     }
     {
@@ -202,7 +204,7 @@ int main() {
             for (bool respect_explicit : {true, false}) {
                 Parsed p({});
                 sd_profile::apply(step, p.ctx, p.gen, respect_explicit);
-                stays_on_gpu = stays_on_gpu && !p.ctx.clip_on_cpu && !p.ctx.vae_on_cpu && !p.ctx.control_net_cpu && p.ctx.backend.empty();
+                stays_on_gpu = stays_on_gpu && !p.ctx.clip_on_cpu && !p.ctx.vae_on_cpu && !p.ctx.control_net_cpu && p.ctx.backend.value_or("").empty();
             }
         }
         CHECK(stays_on_gpu, "no step down to lite-disk moves a module to the CPU");
@@ -210,20 +212,20 @@ int main() {
     {
         Parsed p({});
         sd_profile::apply(Level::BALANCED, p.ctx, p.gen, true);
-        CHECK(p.ctx.memory_guard == 90 && !p.ctx.clip_on_cpu && p.ctx.batched_cfg && !p.gen.vae_tiling_params.enabled,
+        CHECK(p.ctx.memory_guard == 90 && !p.ctx.clip_on_cpu && p.ctx.batched_cfg.value_or(true) && !p.gen.vae_tiling_params.enabled,
               "balanced only turns the memory guard on");
     }
     {
         Parsed p({});
         sd_profile::apply(Level::MAX, p.ctx, p.gen, true);
-        CHECK(p.ctx.memory_guard == 0 && !p.ctx.clip_on_cpu && p.ctx.batched_cfg, "max changes nothing");
+        CHECK(p.ctx.memory_guard == 0 && !p.ctx.clip_on_cpu && p.ctx.batched_cfg.value_or(true), "max changes nothing");
     }
     {
         Parsed p({"--memory-guard", "70", "--batched-cfg", "on"});
         sd_profile::apply(Level::LITE, p.ctx, p.gen, true);
-        CHECK(p.ok && p.ctx.memory_guard == 70 && p.ctx.batched_cfg, "options given on the command line win");
+        CHECK(p.ok && p.ctx.memory_guard == 70 && p.ctx.batched_cfg.value_or(true), "options given on the command line win");
         sd_profile::apply(Level::LITE, p.ctx, p.gen, false);
-        CHECK(p.ctx.memory_guard == 70 && !p.ctx.batched_cfg, "a recovery step overrides them, but never raises the guard");
+        CHECK(p.ctx.memory_guard == 70 && !p.ctx.batched_cfg.value_or(true), "a recovery step overrides them, but never raises the guard");
     }
     {
         Parsed p({"--memory-guard", "0"});
@@ -247,9 +249,9 @@ int main() {
     {
         Parsed p({});
         sd_profile::apply(Level::LITE_HYBRID, p.ctx, p.gen, false);
-        CHECK(p.ctx.clip_on_cpu && !p.ctx.vae_on_cpu && !p.ctx.control_net_cpu && p.ctx.backend.empty(),
+        CHECK(p.ctx.clip_on_cpu && !p.ctx.vae_on_cpu && !p.ctx.control_net_cpu && p.ctx.backend.value_or("").empty(),
               "lite-hybrid moves only the text encoder to the CPU");
-        CHECK(p.ctx.params_backend == "disk" && !p.ctx.eager_load && p.ctx.memory_guard == 85 && !p.ctx.batched_cfg &&
+        CHECK(p.ctx.params_backend == "disk" && !p.ctx.eager_load.value_or(false) && p.ctx.memory_guard == 85 && !p.ctx.batched_cfg.value_or(true) &&
                   p.gen.vae_tiling_params.enabled && p.ctx.multi_gpu == "on",
               "and keeps everything the steps before it set");
         Parsed manual({"--backend", "cuda0"});
@@ -263,12 +265,12 @@ int main() {
     {
         Parsed p({"--params-backend", "cpu", "--offload-to-cpu", "--eager-load"});
         sd_profile::apply(Level::LITE_DISK, p.ctx, p.gen, true);
-        CHECK(p.ctx.params_backend == "cpu" && p.ctx.offload_params_to_cpu && p.ctx.eager_load,
+        CHECK(p.ctx.params_backend == "cpu" && p.ctx.offload_params_to_cpu && p.ctx.eager_load.value_or(false),
               "an explicit --params-backend is kept at startup");
         sd_profile::apply(Level::LITE_DISK, p.ctx, p.gen, false);
         CHECK(p.ctx.params_backend == "disk" && !p.ctx.offload_params_to_cpu, "lite-disk streams the weights from disk in a recovery");
-        CHECK(!p.ctx.eager_load, "and does not read all of them into memory first");
-        CHECK(!p.ctx.clip_on_cpu && p.ctx.backend.empty(), "while the compute stays on the GPU, the text encoder included");
+        CHECK(!p.ctx.eager_load.value_or(false), "and does not read all of them into memory first");
+        CHECK(!p.ctx.clip_on_cpu && p.ctx.backend.value_or("").empty(), "while the compute stays on the GPU, the text encoder included");
     }
     {
         Parsed p({"--backend", "cuda0"});

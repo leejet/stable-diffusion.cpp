@@ -27,7 +27,7 @@ controllato:
 | Memory guard | sopra una soglia di memoria libera pressione (evict dei pesi, prefetch sospeso) prima che l'allocazione fallisca | **disattivo** |
 | Profili di risorse | `--profile lite\|balanced\|max\|auto` imposta in un colpo guardiano di memoria, VAE a tasselli, CFG non raggruppato e `--multi-gpu on`; il calcolo resta sulle GPU (l'encoder di testo sulla CPU non fa più parte di `lite`); `auto` sceglie dalla dimensione del modello e dalla memoria libera | **disattivo** (come `max`) |
 | Più GPU | con più GPU discrete dello stesso backend l'auto-fit sposta l'encoder di testo o il VAE su un'altra GPU, o divide per blocchi un modello che non sta in una sola; `--profile auto` ne somma la memoria. `--multi-gpu auto\|on\|off`. Non rende più veloce una singola immagine (per la produttività: un `sd-server` per GPU, sezione 3.6) | **attivo** (`auto`: la seconda GPU entra solo se serve) |
-| Errori classificati e memoria di sistema | dopo un fallimento `sd_get_last_error()` dà un codice (memoria esaurita, file del modello, backend, ...) e il motivo; `sd_get_system_memory()` riporta RAM totale, disponibile e del processo | sempre disponibile |
+| Errori classificati e memoria di sistema | dopo un fallimento `sd_get_last_error_code()` dà un codice (memoria esaurita, file del modello, backend, ...) e il motivo; `sd_get_system_memory()` riporta RAM totale, disponibile e del processo | sempre disponibile |
 | Server senza modello | `sd-server` parte anche senza `-m`: device e upscale funzionano, la generazione risponde con un errore chiaro | **attivo** |
 | Server che resta in piedi | una richiesta che esaurisce la memoria non ferma `sd-server`: il modello viene ricaricato con un profilo più leggero (`max > balanced > lite > lite-disk > lite-hybrid > lite-cpu`: la CPU entra solo da `lite-hybrid` in poi) e la richiesta ripetuta; un device che si guasta viene sostituito da un'altra GPU prima che la CPU prenda il lavoro; se nemmeno il più leggero basta, risposta `503` con `Retry-After`; dopo una pausa il server risale. `GET /sdcpp/v1/health` (profilo, device, moduli sulla CPU) e `/resources` | **attivo** (`--disable-degradation` lo spegne) |
 | Autenticazione server | `--api-key` (Bearer o `X-API-Key`) e allowlist CORS `--cors-origins` | **disattivi** |
@@ -512,7 +512,7 @@ Il ciclo di vita completo, nell'ordine tecnico corretto:
 4. **Creazione del contesto**: `new_sd_ctx(&cp)` — carica il modello, sceglie
    e inizializza i backend (auto-fit + fallback CPU); è l'operazione costosa
    (secondi–minuti). Restituisce `NULL` in caso di errore (motivo con
-   `sd_get_last_error()` e nei log).
+   `sd_get_last_error_code()` e nei log).
 5. **Avanzamento** (facoltativo): `sd_set_progress_callback(cb, data)` riceve
    `(step, steps, time, data)` a ogni passo di campionamento — è ciò che serve
    per una progress bar.
@@ -581,7 +581,7 @@ int main(int argc, char** argv) {
     sd_ctx_t* ctx = new_sd_ctx(&cp);
     if (ctx == NULL) {                // modello non valido o backend non disponibile
         char reason[512];
-        enum sd_error_code_t code = sd_get_last_error(reason, sizeof(reason));
+        enum sd_error_code_t code = sd_get_last_error_code(reason, sizeof(reason));
         fprintf(stderr, "new_sd_ctx: %s: %s\n", sd_error_code_name(code), reason);
         return 1;
     }
@@ -611,7 +611,7 @@ Regole importanti per chi integra:
 - Chiamare sempre `sd_ctx_params_init()` e `sd_img_gen_params_init()` prima di
   valorizzare i campi: senza init i campi contengono valori casuali.
 - Controllare sempre il valore di ritorno di `new_sd_ctx()` e `generate_image()`.
-- **Errori**: dopo un fallimento `sd_get_last_error(buffer, dimensione)`
+- **Errori**: dopo un fallimento `sd_get_last_error_code(buffer, dimensione)`
   restituisce il codice (`SD_ERROR_OUT_OF_MEMORY`, `SD_ERROR_MODEL_FILE`,
   `SD_ERROR_BACKEND`, `SD_ERROR_INVALID_ARGUMENT`, `SD_ERROR_BUSY`,
   `SD_ERROR_CANCELLED`, `SD_ERROR_UNKNOWN`) e, se il buffer non è nullo, il
@@ -1498,7 +1498,7 @@ sincronizzazioni future.
 
 15. **Errori classificati e memoria di sistema** — `src/core/last_error.{h,cpp}`
     e `src/core/system_memory.{h,cpp}`. Dopo un fallimento di `new_sd_ctx()`,
-    `generate_image()` o `generate_video()`, `sd_get_last_error()` restituisce
+    `generate_image()` o `generate_video()`, `sd_get_last_error_code()` restituisce
     un codice (`SD_ERROR_OUT_OF_MEMORY`, `SD_ERROR_MODEL_FILE`,
     `SD_ERROR_BACKEND`, `SD_ERROR_INVALID_ARGUMENT`, `SD_ERROR_BUSY`,
     `SD_ERROR_CANCELLED` per l'annullamento richiesto con
@@ -1543,7 +1543,7 @@ sincronizzazioni future.
     `ContextKeeper` possiede il contesto del server (prima era una variabile di
     `main`) e tutte le generazioni dei tre gruppi di endpoint passano da
     `ContextKeeper::run()`. Su `out_of_memory` o `backend` (codici di
-    `sd_get_last_error()`) libera il modello, lo ricarica con il profilo più
+    `sd_get_last_error_code()`) libera il modello, lo ricarica con il profilo più
     leggero successivo e ripete la stessa richiesta (da `lite` in poi forza il
     VAE a tasselli); un guasto di device saltava direttamente a `lite-cpu`
     (dalla voce 24 prova prima le altre GPU). Il

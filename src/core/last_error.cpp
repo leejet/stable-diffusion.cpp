@@ -139,7 +139,7 @@ namespace sd::last_error {
 
 }  // namespace sd::last_error
 
-enum sd_error_code_t sd_get_last_error(char* message, size_t message_size) {
+enum sd_error_code_t sd_get_last_error_code(char* message, size_t message_size) {
     return sd::last_error::get(message, message_size);
 }
 

@@ -61,7 +61,7 @@ speed, and report model loading and first-step initialization separately.
 Quantization, smoothing, and format conversion costs are included in generation
 time, so short sequences may not benefit.
 
-Library callers set `sd_ctx_params_t.sage_attn = true` before `new_sd_ctx()`,
-like `diffusion_flash_attn`. Context creation fails if the requested feature is
-unavailable. Initialize the parameter structure with `sd_ctx_params_init()`.
+Library callers set `sage_attn` with `sd_opt_set_bool(ctx_opt, "sage_attn", true)`
+before `sd_ctx_create()`. Context creation fails if the requested feature is
+unavailable. Create options with `sd_ctx_opt_create()`.
 Rebuild library callers against the updated public header.

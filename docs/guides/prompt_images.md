@@ -47,24 +47,30 @@ smaller source image if this limit is exceeded.
 ## C API
 
 Register a context-local image resolver with `sd_set_prompt_image_callback()`,
-then call the existing `generate_image()` or `generate_video()` function. The
+then call `sd_generate_image()` or `sd_generate_video()`. The
 library passes each marker's `source` string unchanged to the callback, allowing
 paths, application resource IDs, or in-memory images. The library does not open
 files or fetch URLs itself.
 
 ```c
-bool load_prompt_image(const char* source, void* user_data, sd_image_t* image_out);
+bool load_prompt_image(const char* source, void* user_data, const sd_tensor_t** image_out);
 
-params.prompt = "Draw the subject from <image:subject> in a watercolor landscape.";
-sd_image_generation_result_t* result = NULL;
+sd_img_gen_opt_t* opt = sd_img_gen_opt_create();
+sd_status_t status = sd_opt_set_string(opt, "prompt",
+    "Draw the subject from <image:subject> in a watercolor landscape.");
+sd_result_t* result = NULL;
 sd_set_prompt_image_callback(ctx, load_prompt_image, application_images);
-bool ok = generate_image(ctx, &params, &result);
+if (status == SD_STATUS_OK)
+    status = sd_generate_image(ctx, opt, &result);
 sd_set_prompt_image_callback(ctx, NULL, NULL);
+sd_result_free(result);
+sd_opt_free(opt);
 ```
 
-The loader returns `true` with an image containing interleaved 8-bit pixels and
-one to four channels. The caller owns the pixels. The library copies them before
-calling the loader again, so a loader may reuse its buffer. Repeated sources
+The loader returns `true` with a borrowed U8 tensor of shape
+`[channels,width,height]`, containing interleaved pixels and one to four channels.
+The caller owns the tensor and keeps it valid until the next callback. The
+library copies its pixels before calling the loader again. Repeated sources
 within one prompt are loaded once and appear at every specified position.
 Resolved image pixels participate in conditioning-cache comparisons.
 

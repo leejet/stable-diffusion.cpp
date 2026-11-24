@@ -82,9 +82,9 @@ public:
     // Everything that touches the library or the machine, replaceable so that the logic can be tested
     // without a model. An empty function selects the real behavior.
     struct Hooks {
-        // Loads the model; returns null and describes the reason when it cannot. Default: new_sd_ctx.
-        std::function<SDCtxPtr(const sd_ctx_params_t&, GenerationFailure&)> create_context;
-        // The reason the attempt that just returned false failed. Default: sd_get_last_error().
+        // Loads the model; returns null and describes the reason when it cannot. Default: sd_ctx_create.
+        std::function<SDCtxPtr(const SDContextParams&, GenerationFailure&)> create_context;
+        // The reason the attempt that just returned false failed. Default: sd_get_last_error_code().
         std::function<GenerationFailure()> read_failure;
         // Whether a device other than the CPU is present. Default: asks the library.
         std::function<bool()> has_accelerator;
@@ -164,8 +164,9 @@ public:
     struct BackendChoice {
         std::string backend;
         std::string params_backend;
-        bool diffusion_conv_direct = false;
-        int n_threads              = -1;
+        // Unset: the library default.
+        std::optional<bool> diffusion_conv_direct;
+        std::optional<int> n_threads;
     };
     BackendChoice backend_choice() const;
 

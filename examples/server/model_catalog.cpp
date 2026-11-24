@@ -194,19 +194,26 @@ static void apply_recipe_defaults(const json& defaults, SDGenerationParams& para
             throw std::runtime_error(std::string(key) + " is out of range");
         }
         if (std::string(key) == "width")
-            params.width = static_cast<int>(value);
+            if (!params.width)
+                params.width = static_cast<int>(value);
         if (std::string(key) == "height")
-            params.height = static_cast<int>(value);
+            if (!params.height)
+                params.height = static_cast<int>(value);
         if (std::string(key) == "steps")
-            params.sample_params.sample_steps = static_cast<int>(value);
+            if (!params.sample_params.sample_steps)
+                params.sample_params.sample_steps = static_cast<int>(value);
         if (field == "shifted_timestep")
-            params.sample_params.shifted_timestep = static_cast<int>(value);
+            if (!params.sample_params.shifted_timestep)
+                params.sample_params.shifted_timestep = static_cast<int>(value);
         if (field == "video_frames")
-            params.video_frames = static_cast<int>(value);
+            if (!params.video_frames)
+                params.video_frames = static_cast<int>(value);
         if (field == "fps")
-            params.fps = static_cast<int>(value);
+            if (!params.fps)
+                params.fps = static_cast<int>(value);
         if (field == "high_noise_steps")
-            params.high_noise_sample_params.sample_steps = static_cast<int>(value);
+            if (!params.high_noise_sample_params.sample_steps)
+                params.high_noise_sample_params.sample_steps = static_cast<int>(value);
     }
     for (const char* key : {"cfg_scale", "strength", "moe_boundary", "img_cfg_scale", "distilled_guidance", "flow_shift", "high_noise_cfg_scale", "high_noise_flow_shift"}) {
         if (!defaults.contains(key)) {
@@ -220,21 +227,29 @@ static void apply_recipe_defaults(const json& defaults, SDGenerationParams& para
             throw std::runtime_error(std::string(key) + " is out of range");
         }
         if (std::string(key) == "strength")
-            params.strength = value;
+            if (!params.strength)
+                params.strength = value;
         if (std::string(key) == "moe_boundary")
-            params.moe_boundary = value;
+            if (!params.moe_boundary)
+                params.moe_boundary = value;
         if (std::string(key) == "cfg_scale")
-            params.sample_params.guidance.txt_cfg = value;
+            if (!params.sample_params.guidance.txt_cfg)
+                params.sample_params.guidance.txt_cfg = value;
         if (std::string(key) == "img_cfg_scale")
-            params.sample_params.guidance.img_cfg = value;
+            if (!params.sample_params.guidance.img_cfg)
+                params.sample_params.guidance.img_cfg = value;
         if (std::string(key) == "distilled_guidance")
-            params.sample_params.guidance.distilled_guidance = value;
+            if (!params.sample_params.guidance.distilled_guidance)
+                params.sample_params.guidance.distilled_guidance = value;
         if (std::string(key) == "flow_shift")
-            params.sample_params.flow_shift = value;
+            if (!params.sample_params.flow_shift && !params.high_noise_sample_params.flow_shift)
+                params.sample_params.flow_shift = value;
         if (std::string(key) == "high_noise_cfg_scale")
-            params.high_noise_sample_params.guidance.txt_cfg = value;
+            if (!params.high_noise_sample_params.guidance.txt_cfg)
+                params.high_noise_sample_params.guidance.txt_cfg = value;
         if (std::string(key) == "high_noise_flow_shift")
-            params.high_noise_sample_params.flow_shift = value;
+            if (!params.sample_params.flow_shift && !params.high_noise_sample_params.flow_shift)
+                params.high_noise_sample_params.flow_shift = value;
     }
     if (defaults.contains("custom_sigmas")) {
         const auto& sigmas = defaults.at("custom_sigmas");
@@ -244,40 +259,28 @@ static void apply_recipe_defaults(const json& defaults, SDGenerationParams& para
             if (!sigma.is_number() || !std::isfinite(sigma.get<float>()) || sigma.get<float>() < 0)
                 throw std::runtime_error("custom_sigmas must contain finite nonnegative numbers");
         }
-        params.custom_sigmas = sigmas.get<std::vector<float>>();
+        if (!params.custom_sigmas)
+            params.custom_sigmas = sigmas.get<std::vector<float>>();
     }
     for (const char* key : {"sampling_method", "high_noise_sampling_method"}) {
         if (!defaults.contains(key))
             continue;
         auto& sample    = std::string(key) == "sampling_method" ? params.sample_params : params.high_noise_sample_params;
         const auto name = defaults.at(key).get<std::string>();
-        bool found      = false;
-        for (int i = 0; i < SAMPLE_METHOD_COUNT; ++i) {
-            if (name == sd_sample_method_name(static_cast<sample_method_t>(i))) {
-                sample.sample_method = static_cast<sample_method_t>(i);
-                found                = true;
-                break;
-            }
-        }
-        if (!found)
+        if (!example_options::contains(example_options::sample_methods, name))
             throw std::runtime_error(std::string("unknown ") + key);
+        if (!sample.sample_method)
+            sample.sample_method = name;
     }
     for (const char* key : {"scheduler", "high_noise_scheduler"}) {
         if (!defaults.contains(key))
             continue;
         auto& sample    = std::string(key) == "scheduler" ? params.sample_params : params.high_noise_sample_params;
         const auto name = defaults.at(key).get<std::string>();
-        bool found      = false;
-        for (int i = 0; i < SCHEDULER_COUNT; ++i) {
-            if (name == sd_scheduler_name(static_cast<scheduler_t>(i)) ||
-                (name == "normal" && i == DISCRETE_SCHEDULER)) {
-                sample.scheduler = static_cast<scheduler_t>(i);
-                found            = true;
-                break;
-            }
-        }
-        if (!found)
+        if (!example_options::contains(example_options::schedulers, name) && name != "normal")
             throw std::runtime_error(std::string("unknown ") + key);
+        if (!params.sample_params.scheduler && !params.high_noise_sample_params.scheduler)
+            sample.scheduler = name;
     }
 }
 
@@ -287,16 +290,20 @@ static void apply_recipe_context(const json& settings, SDContextParams& params) 
         const auto format = settings.at("vae_format").get<std::string>();
         if (format != "auto" && format != "flux" && format != "sd3" && format != "flux2" && format != "wan")
             throw std::runtime_error("unknown vae_format");
-        params.vae_format = format;
+        if (!params.vae_format)
+            params.vae_format = format;
     }
     if (settings.contains("model_args")) {
-        params.model_args = settings.at("model_args").get<std::string>();
+        if (!params.model_args)
+            params.model_args = settings.at("model_args").get<std::string>();
     }
     if (settings.contains("backend")) {
-        params.backend = settings.at("backend").get<std::string>();
+        if (!params.backend)
+            params.backend = settings.at("backend").get<std::string>();
     }
     if (settings.contains("params_backend")) {
-        params.params_backend = settings.at("params_backend").get<std::string>();
+        if (!params.params_backend)
+            params.params_backend = settings.at("params_backend").get<std::string>();
     }
 }
 

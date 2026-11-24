@@ -54,8 +54,6 @@ static sd_profile::Level parse_args(int argc,
         exit(ctx_params.print_devices() ? 0 : 1);
     }
 
-    const bool random_seed_requested = default_gen_params.seed < 0;
-
     sd_profile::Level profile_level = sd_profile::Level::MAX;
     if (!svr_params.resolve_and_validate() ||
         !ctx_params.resolve_and_validate(IMG_GEN, /*require_model=*/false) ||
@@ -67,9 +65,6 @@ static sd_profile::Level parse_args(int argc,
         exit(1);
     }
 
-    if (random_seed_requested) {
-        default_gen_params.seed = -1;
-    }
     return profile_level;
 }
 

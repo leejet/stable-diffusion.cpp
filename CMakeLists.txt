@@ -240,6 +240,8 @@ file(GLOB SD_LIB_SOURCES CONFIGURE_DEPENDS
     "src/*.h"
     "src/*.cpp"
     "src/*.hpp"
+    "src/api/*.h"
+    "src/api/*.cpp"
     "src/conditioning/*.h"
     "src/conditioning/*.cpp"
     "src/conditioning/*.hpp"
@@ -432,6 +434,9 @@ target_include_directories(${SD_LIB} PUBLIC include)
 target_include_directories(${SD_LIB} PRIVATE src src/core)
 target_include_directories(${SD_LIB} PUBLIC thirdparty)
 target_compile_features(${SD_LIB} PUBLIC c_std_11 cxx_std_17)
+set_target_properties(${SD_LIB} PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON)
 
 
 if (SD_BUILD_EXAMPLES)

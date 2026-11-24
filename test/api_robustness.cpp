@@ -76,14 +76,13 @@ int main() {
     }
     CHECK(total_bad == 0, "8-thread enumeration stress without errors");
 
-    sd_ctx_params_t p;
-    sd_ctx_params_init(&p);
-    CHECK(p.memory_guard == 0 && !p.disable_backend_fallback,
-          "safe defaults: guard off, fallback on");
-    char* s = sd_ctx_params_to_str(&p);
-    CHECK(s != nullptr && strstr(s, "memory_guard") && strstr(s, "disable_backend_fallback"),
-          "to_str includes new fields");
-    free(s);
+    sd_ctx_opt_t* p = sd_ctx_opt_create();
+    CHECK(p != nullptr && sd_opt_set_int(p, "memory_guard", 0) == SD_STATUS_OK &&
+              sd_opt_set_bool(p, "disable_backend_fallback", false) == SD_STATUS_OK &&
+              sd_opt_set_string(p, "multi_gpu", "auto") == SD_STATUS_OK,
+          "the context options know memory_guard, disable_backend_fallback and multi_gpu");
+    CHECK(sd_opt_set_int(p, "memory_guard", 101) != SD_STATUS_OK, "memory_guard refuses a percent above 100");
+    sd_opt_free(p);
 
     sd_system_memory_t memory;
     CHECK(!sd_get_system_memory(nullptr), "system_memory(null out) rejected");
@@ -106,34 +105,35 @@ int main() {
     }
 
     char message[256];
-    CHECK(sd_get_last_error(nullptr, 0) == SD_ERROR_NONE, "no error before any failure; null buffer accepted");
-    CHECK(new_sd_ctx(nullptr) == nullptr, "new_sd_ctx(null) fails");
-    CHECK(sd_get_last_error(message, sizeof(message)) == SD_ERROR_INVALID_ARGUMENT && message[0] != '\0',
+    CHECK(sd_get_last_error_code(nullptr, 0) == SD_ERROR_NONE, "no error before any failure; null buffer accepted");
+    sd_ctx_t* ctx = reinterpret_cast<sd_ctx_t*>(0x1);
+    CHECK(sd_ctx_create(nullptr, &ctx) != SD_STATUS_OK && ctx == nullptr, "sd_ctx_create(null) fails");
+    CHECK(sd_get_last_error_code(message, sizeof(message)) == SD_ERROR_INVALID_ARGUMENT && message[0] != '\0',
           "null parameters are an invalid argument, with a message");
     char tiny_message[8];
     memset(tiny_message, 'x', sizeof(tiny_message));
-    CHECK(sd_get_last_error(tiny_message, sizeof(tiny_message)) == SD_ERROR_INVALID_ARGUMENT &&
+    CHECK(sd_get_last_error_code(tiny_message, sizeof(tiny_message)) == SD_ERROR_INVALID_ARGUMENT &&
               memchr(tiny_message, 0, sizeof(tiny_message)) != nullptr,
           "a small message buffer is truncated and terminated");
-    CHECK(sd_get_last_error(message, 0) == SD_ERROR_INVALID_ARGUMENT, "a zero-size buffer is accepted");
+    CHECK(sd_get_last_error_code(message, 0) == SD_ERROR_INVALID_ARGUMENT, "a zero-size buffer is accepted");
 
-    sd_ctx_params_t missing;
-    sd_ctx_params_init(&missing);
-    missing.model_path = "/nonexistent/diffusione/model.safetensors";
-    CHECK(new_sd_ctx(&missing) == nullptr, "new_sd_ctx(missing model) fails");
-    CHECK(sd_get_last_error(message, sizeof(message)) == SD_ERROR_MODEL_FILE && strstr(message, "nonexistent") != nullptr,
+    sd_ctx_opt_t* missing = sd_ctx_opt_create();
+    sd_opt_set_string(missing, "model_path", "/nonexistent/diffusione/model.safetensors");
+    CHECK(sd_ctx_create(missing, &ctx) != SD_STATUS_OK && ctx == nullptr, "sd_ctx_create(missing model) fails");
+    sd_opt_free(missing);
+    CHECK(sd_get_last_error_code(message, sizeof(message)) == SD_ERROR_MODEL_FILE && strstr(message, "nonexistent") != nullptr,
           "a missing model is a model file error that names the file");
 
-    sd_image_generation_result_t* result = (sd_image_generation_result_t*)0x1;
-    CHECK(!generate_image(nullptr, nullptr, &result) && result == nullptr,
-          "generate_image(null) fails and clears the result");
-    CHECK(sd_get_last_error(message, sizeof(message)) == SD_ERROR_INVALID_ARGUMENT, "generate_image(null) is an invalid argument");
-    CHECK(!generate_image(nullptr, nullptr, nullptr) &&
-              sd_get_last_error(message, sizeof(message)) == SD_ERROR_INVALID_ARGUMENT,
-          "generate_image without a place for the result is an invalid argument");
+    sd_result_t* result = reinterpret_cast<sd_result_t*>(0x1);
+    CHECK(sd_generate_image(nullptr, nullptr, &result) != SD_STATUS_OK && result == nullptr,
+          "sd_generate_image(null) fails and clears the result");
+    CHECK(sd_get_last_error_code(message, sizeof(message)) == SD_ERROR_INVALID_ARGUMENT, "sd_generate_image(null) is an invalid argument");
+    CHECK(sd_generate_image(nullptr, nullptr, nullptr) != SD_STATUS_OK &&
+              sd_get_last_error_code(message, sizeof(message)) == SD_ERROR_INVALID_ARGUMENT,
+          "sd_generate_image without a place for the result is an invalid argument");
 
     std::thread other([&] {
-        CHECK(sd_get_last_error(nullptr, 0) == SD_ERROR_NONE, "the error state belongs to the thread that made the call");
+        CHECK(sd_get_last_error_code(nullptr, 0) == SD_ERROR_NONE, "the error state belongs to the thread that made the call");
     });
     other.join();
 

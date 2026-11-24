@@ -156,23 +156,23 @@ user rules for replay with the same input images; image encodings and channel co
 
 ## C API
 
-Set `image_preprocess` on the existing image/video generation parameters.
-Generation returns media and actual parameters together; see [generation metadata](generation_metadata.md):
+Set the `image_preprocess.rules` key on image/video options. Generation returns
+media and actual parameters together; see [generation metadata](generation_metadata.md):
 
 ```c
-sd_img_gen_params_t params;
-sd_img_gen_params_init(&params);
+sd_img_gen_opt_t* opt = sd_img_gen_opt_create();
+sd_result_t* result = NULL;
 /* Set prompt, original-resolution input images, and generation options. */
-params.image_preprocess.rules = "target=init,mode=crop-resize,filter=lanczos;"
-                                "target=mask,filter=nearest-exact";
-sd_image_generation_result_t* result = NULL;
-bool ok = generate_image(ctx, &params, &result);
-/* Consume result->items and their generation_info on success. */
-free_sd_image_generation_result(result);
+sd_status_t status = sd_opt_set_string(opt, "image_preprocess.rules",
+    "target=init,mode=crop-resize,filter=lanczos;target=mask,filter=nearest-exact");
+if (status == SD_STATUS_OK)
+    status = sd_generate_image(ctx, opt, &result);
+/* Read outputs through sd_result_get_*() on success. */
+sd_result_free(result);
+sd_opt_free(opt);
 ```
 
-Both generation parameter initializers set `image_preprocess.rules` to `NULL`,
-selecting input presets. Rule strings are borrowed for the synchronous call.
+Leaving the key unset selects input presets. Rule strings are copied by setters.
 The library owns temporary transformed pixels; caller images and arrays are
 not modified. Add `canny=true` to the desired target's rule in
 `image_preprocess.rules` to enable Canny.

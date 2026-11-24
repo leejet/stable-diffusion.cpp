@@ -43,14 +43,18 @@ public:
     }
 };
 
-static void preview_callback(int step, int frame_count, sd_image_t* frames, bool is_noisy, void* data) {
+static void preview_callback(int step, int frame_count, const sd_tensor_t* const* tensors, bool is_noisy, void* data) {
+    std::vector<SDImage> views;
+    for (int i = 0; i < frame_count; ++i)
+        views.push_back(tensor_image_view(tensors[i]));
+    SDImage* frames = views.data();
     (void)is_noisy;
     if (frame_count <= 0 || frames == nullptr || frames[0].data == nullptr) {
         return;
     }
 
     AsyncGenerationJob* job      = static_cast<AsyncGenerationJob*>(data);
-    const sd_image_t& frame      = frames[0];
+    const SDImage& frame         = frames[0];
     const sd_preview_info_t info = sd_get_preview_info();
 
     auto image_bytes = encode_image_to_vector(EncodedImageFormat::PNG,
@@ -73,23 +77,20 @@ static void preview_callback(int step, int frame_count, sd_image_t* frames, bool
 }
 
 static void clear_preview_callback() {
-    sd_set_preview_callback(nullptr, PREVIEW_NONE, 1, false, false, nullptr);
+    sd_set_preview_callback(nullptr, "none", 1, false, false, nullptr);
 }
 
 static void set_preview_callback(AsyncGenerationJob& job) {
-    preview_t mode = str_to_preview(job.kind == AsyncJobKind::ImgGen
-                                        ? job.img_gen.preview_mode.c_str()
-                                        : job.vid_gen.preview_mode.c_str());
-    if (mode == PREVIEW_COUNT || mode == PREVIEW_NONE) {
+    const auto& mode = job.kind == AsyncJobKind::ImgGen ? job.img_gen.preview_mode : job.vid_gen.preview_mode;
+    if (mode == "none")
         return;
-    }
     int interval = job.kind == AsyncJobKind::ImgGen
                        ? job.img_gen.preview_interval
                        : job.vid_gen.preview_interval;
     if (interval <= 0) {
         interval = 1;
     }
-    sd_set_preview_callback(preview_callback, mode, interval, true, false, &job);
+    sd_set_preview_callback(preview_callback, mode.c_str(), interval, true, false, &job);
 }
 
 static void update_job_progress(AsyncGenerationJob& job, const char* stage, const char* detail = "", int sample_pass = -1, int64_t completed = 0, int64_t total = 0, const char* unit = "") {
@@ -388,8 +389,7 @@ bool execute_img_gen_job(ServerRuntime& runtime,
                          std::vector<std::string>& output_images,
                          json& output_info,
                          GenerationFailure& failure) {
-    output_info                      = json::array();
-    const sd_img_gen_params_t params = job.img_gen.to_sd_img_gen_params_t();
+    output_info = json::array();
 
     SDImageVec results;
     bool adetailer_failed = false;
@@ -397,15 +397,15 @@ bool execute_img_gen_job(ServerRuntime& runtime,
         runtime,
         job,
         [&](const ContextKeeper::ContextView& view) {
-            sd_img_gen_params_t attempt_params = params;
+            SDOptPtr params = job.img_gen.to_image_opt();
             if (view.force_vae_tiling) {
-                attempt_params.vae_tiling_params.enabled = true;
+                sd_opt_set_bool(params.get(), "vae_tiling.enabled", true);
             }
             adetailer_failed = false;
             JobCallbacksGuard callbacks(view.ctx, job);
             PromptImageCallbackGuard prompt_images(view.ctx, job.img_gen.gen_params);
-            sd_image_generation_result_t* produced = nullptr;
-            if (!generate_image(view.ctx, &attempt_params, &produced)) {
+            sd_result_t* produced = nullptr;
+            if (!generate_sd_image(view.ctx, params, &produced)) {
                 return false;
             }
             results.adopt(produced, view.params->lora_model_dir);
@@ -414,7 +414,7 @@ bool execute_img_gen_job(ServerRuntime& runtime,
             }
             if (!results.empty() && job.img_gen.adetailer_enabled && !runtime.default_gen_params->ad_model_path.empty()) {
                 callbacks.begin_detailing();
-                if (!apply_server_adetailer(runtime, view.ctx, *view.params, job.img_gen, attempt_params, results)) {
+                if (!apply_server_adetailer(runtime, view.ctx, *view.params, job.img_gen, view.force_vae_tiling, results)) {
                     adetailer_failed = true;
                     return false;
                 }
@@ -483,30 +483,28 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
                          int& output_fps,
                          json& output_info,
                          GenerationFailure& failure) {
-    const sd_vid_gen_params_t params = job.vid_gen.to_sd_vid_gen_params_t();
     std::string str_params;
 
     SDImageVec results;
-    int num_results             = 0;
-    sd_audio_t* generated_audio = nullptr;
+    int num_results          = 0;
+    SDAudio* generated_audio = nullptr;
 
     const bool generated = run_job(
         runtime,
         job,
         [&](const ContextKeeper::ContextView& view) {
-            sd_vid_gen_params_t attempt_params = params;
+            SDOptPtr params = job.vid_gen.to_video_opt();
             if (view.force_vae_tiling) {
-                attempt_params.vae_tiling_params.enabled = true;
+                sd_opt_set_bool(params.get(), "vae_tiling.enabled", true);
             }
             JobCallbacksGuard callbacks(view.ctx, job);
             PromptImageCallbackGuard prompt_images(view.ctx, job.vid_gen.gen_params);
-            sd_video_generation_result_t* produced = nullptr;
-            if (!generate_video(view.ctx, &attempt_params, &produced)) {
+            sd_result_t* produced = nullptr;
+            if (!generate_sd_video(view.ctx, params, &produced)) {
                 return false;
             }
-            output_fps      = produced->fps;
-            generated_audio = produced->audio;
-            produced->audio = nullptr;
+            output_fps      = sd_result_get_fps(produced);
+            generated_audio = retain_result_audio(produced);
             results.adopt_video(produced, view.params->lora_model_dir);
             return true;
         },
