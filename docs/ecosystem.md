@@ -31,3 +31,4 @@ applications that integrate it as an image generation backend.
 - [Quo](https://github.com/quo-ai/quo)
 - [Prisme](https://github.com/d3Ita/prisme)
 - [Off Grid AI](https://github.com/off-grid-ai/OGAD)
+- [Hatchlight](https://github.com/hatchlight/hatchlight)
