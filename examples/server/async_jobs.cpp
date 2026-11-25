@@ -10,6 +10,7 @@
 #include <sstream>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 #include "common/log.h"
 #include "common/media_io.h"
@@ -25,16 +26,22 @@ class JobCancellationMonitor {
 public:
     // The caller holds sd_ctx_mutex until this monitor has joined, keeping the
     // context alive and preventing cancellation from reaching another request.
-    JobCancellationMonitor(sd_ctx_t* ctx, const AsyncGenerationJob& job)
-        : thread_([this, ctx, &job]() {
+    template <typename Cancel>
+    JobCancellationMonitor(const AsyncGenerationJob& job, Cancel cancel)
+        : thread_([this, &job, cancel = std::move(cancel)]() {
               std::unique_lock<std::mutex> lock(mutex_);
               while (!done_) {
                   if (job.cancel_requested.load()) {
-                      // Each generation pass resets the library flag, including ADetailer.
-                      sd_cancel_generation(ctx, SD_CANCEL_ALL);
+                      cancel();
                   }
                   cv_.wait_for(lock, std::chrono::milliseconds(10), [this]() { return done_; });
               }
+          }) {}
+
+    JobCancellationMonitor(sd_ctx_t* ctx, const AsyncGenerationJob& job)
+        : JobCancellationMonitor(job, [ctx]() {
+              // Each generation pass resets the library flag, including ADetailer.
+              sd_cancel_generation(ctx, SD_CANCEL_ALL);
           }) {}
 
     ~JobCancellationMonitor() {
@@ -233,6 +240,7 @@ bool cancel_queued_job(AsyncJobManager& manager, AsyncGenerationJob& job) {
     manager.queue.erase(new_end, manager.queue.end());
     job.model.reset();
     job.request_body = nullptr;
+    job.dgl_source.clear();
     job.cancel_requested.store(true);
     job.status       = AsyncJobStatus::Cancelled;
     job.completed_at = unix_timestamp_now_ms();
@@ -689,6 +697,11 @@ static bool execute_dgl_job(ServerRuntime& runtime,
         sd_dgl_result_t* raw_result = nullptr;
         {
             std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
+            if (job.cancel_requested.load())
+                return false;
+            JobCancellationMonitor cancellation(job, [ctx = runtime.sd_ctx]() {
+                sd_dgl_ctx_cancel(sd_ctx_get_dgl_ctx(ctx));
+            });
             update_job_progress(job, "executing", "dgl");
             if (sd_dgl_run(sd_ctx_get_dgl_ctx(runtime.sd_ctx), source.c_str(), nullptr, 0, &raw_result) != SD_STATUS_OK) {
                 error_message = sd_dgl_error();

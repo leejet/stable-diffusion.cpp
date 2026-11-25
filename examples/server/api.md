@@ -1839,11 +1839,18 @@ the working directory's ./dgl directory unless --dgl-dir is set.
 | POST /sdcpp/v1/dgl/script | Saves UTF-8 source with the given name. Pass previous_source to update an existing script. A conflict returns HTTP 409. |
 | POST /sdcpp/v1/dgl/jobs | Queues the source string and returns a job ID with HTTP 202 |
 | GET /sdcpp/v1/dgl/jobs/{id} | Returns the job status, error or result with tensor descriptions and inline encoded media |
+| POST /sdcpp/v1/dgl/jobs/{id}/cancel | Cancels a queued job or requests cancellation of a running job. Send `Content-Type: application/json`. |
 | GET /sdcpp/v1/dgl/jobs/{id}/outputs/{index}?frame=0 | Returns a PNG of an image output or a video frame. Output and frame indexes start at zero. |
 
 Scripts share the component cache and execution settings used for generation.
 Model reads are restricted to the configured model directories. Script writes
 are restricted to output/ in the server's working directory.
+
+Cancellation returns the current job status with HTTP 200. A queued job
+becomes `cancelled` immediately. A running job sets the `cancel_requested`
+flag. Poll the status endpoint until it reports `cancelled`. Execution stops
+at a DGL cancellation check, so an operation currently running may have to
+finish first. A terminal job returns its current status.
 
 ### Encoded DGL results
 

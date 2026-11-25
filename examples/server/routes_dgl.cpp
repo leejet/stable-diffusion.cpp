@@ -259,6 +259,23 @@ void register_dgl_endpoints(httplib::Server& svr, ServerRuntime& runtime) {
                     send_json(res, 200, make_async_job_json(manager, *job));
             }));
 
+    svr.Post(R"(/sdcpp/v1/dgl/jobs/([A-Za-z0-9_-]+)/cancel)", local_dgl_route([&runtime](const Request& req, Response& res) {
+                 auto& manager = *runtime.async_job_manager;
+                 std::lock_guard<std::mutex> lock(manager.mutex);
+                 auto job = find_dgl_job(manager, req.matches[1].str(), res);
+                 if (!job)
+                     return;
+                 if (job->status == AsyncJobStatus::Queued) {
+                     if (!cancel_queued_job(manager, *job)) {
+                         send_error(res, 409, "Job queue state changed before cancellation");
+                         return;
+                     }
+                 } else if (job->status == AsyncJobStatus::Generating) {
+                     job->cancel_requested.store(true);
+                 }
+                 send_json(res, 200, make_async_job_json(manager, *job));
+             }));
+
     svr.Get(R"(/sdcpp/v1/dgl/jobs/([A-Za-z0-9_-]+)/outputs/([0-9]+))", local_dgl_route([&runtime](const Request& req, Response& res) {
                 auto& manager = *runtime.async_job_manager;
                 std::shared_ptr<sd_dgl_result_t> result;
