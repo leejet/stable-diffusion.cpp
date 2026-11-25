@@ -59,7 +59,7 @@ void SDSvrParams::add_access_options(ArgOptions& options, const std::vector<ArgO
                    api_key_file = argv_to_utf8(index, argv);
                    return true;
                });
-    add_option("--cors-origins", "web origins allowed to read cross-origin responses, comma-separated (default: any)",
+    add_option("--cors-origins", "additional web origins allowed to make cross-origin requests, comma-separated (default: none)",
                [this](int index, const char** argv) {
                    return append_option_list(argv[index - 1], argv[index], "origin", cors_origins);
                });
@@ -125,23 +125,78 @@ static bool has_valid_api_key(const httplib::Request& req, const std::vector<std
     return key_start != std::string::npos && api_key_matches(keys, std::string_view(auth).substr(key_start));
 }
 
+static bool is_allowed_origin(const std::vector<std::string>& allowed, std::string_view origin) {
+    return !origin.empty() && std::find(allowed.begin(), allowed.end(), origin) != allowed.end();
+}
+
 static void set_cors_headers(const httplib::Request& req, httplib::Response& res, const std::vector<std::string>& allowed) {
     const bool preflight = req.method == "OPTIONS";
-    res.set_header("Vary", preflight ? "Origin, Access-Control-Request-Headers" : "Origin");
+    res.set_header("Vary", preflight ? "Origin, Sec-Fetch-Site, Access-Control-Request-Headers" : "Origin, Sec-Fetch-Site");
 
     const auto origin = req.get_header_value("Origin");
-    if (!allowed.empty() && std::find(allowed.begin(), allowed.end(), origin) == allowed.end()) {
+    if (!is_allowed_origin(allowed, origin)) {
         return;
     }
-    res.set_header("Access-Control-Allow-Origin", origin.empty() ? "*" : origin);
+    res.set_header("Access-Control-Allow-Origin", origin);
     res.set_header("Access-Control-Allow-Credentials", "true");
-    res.set_header("Access-Control-Allow-Methods", "*");
+    res.set_header("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS");
     const auto headers = preflight ? req.get_header_value("Access-Control-Request-Headers") : std::string{};
     res.set_header("Access-Control-Allow-Headers", headers.empty() ? "*" : headers);
 }
 
+static bool is_server_host(std::string_view host, const std::string& listen_ip) {
+    if (host.empty())
+        return false;
+    if (host.back() != ']') {
+        const auto port_separator = host.rfind(':');
+        if (port_separator != std::string_view::npos) {
+            const auto port = host.substr(port_separator + 1);
+            if (port.empty() || port.find_first_not_of("0123456789") != std::string_view::npos)
+                return false;
+            host = host.substr(0, port_separator);
+        }
+    }
+    if (host == "localhost" || host == listen_ip)
+        return true;
+    if (host.size() > 2 && host.front() == '[' && host.back() == ']') {
+        const std::string ipv6(host.substr(1, host.size() - 2));
+        in6_addr address{};
+        return inet_pton(AF_INET6, ipv6.c_str(), &address) == 1;
+    }
+    const std::string ipv4(host);
+    in_addr address{};
+    return inet_pton(AF_INET, ipv4.c_str(), &address) == 1;
+}
+
+static bool is_allowed_request_origin(const httplib::Request& req, const SDSvrParams& params) {
+    if (req.get_header_value_count("Host") != 1 ||
+        req.get_header_value_count("Origin") > 1 || req.get_header_value_count("Sec-Fetch-Site") > 1)
+        return false;
+
+    // Same-origin browser headers alone do not distinguish a DNS-rebound hostname.
+    const auto host         = req.get_header_value("Host");
+    const auto http_origin  = "http://" + host;
+    const auto https_origin = "https://" + host;
+    if (!is_server_host(host, params.listen_ip) && !is_allowed_origin(params.cors_origins, http_origin) &&
+        !is_allowed_origin(params.cors_origins, https_origin))
+        return false;
+
+    const auto origin = req.get_header_value("Origin");
+    if (is_allowed_origin(params.cors_origins, origin))
+        return true;
+    const auto site = req.get_header_value("Sec-Fetch-Site");
+    return (site.empty() || site == "same-origin" || site == "none") &&
+           (origin.empty() || origin == http_origin);
+}
+
 SDHttpServer::SDHttpServer(const SDSvrParams& params) {
     set_pre_routing_handler([&params](const httplib::Request& req, httplib::Response& res) {
+        if (!is_allowed_request_origin(req, params)) {
+            res.status = 403;
+            res.set_content(R"({"error":"Request origin is not allowed"})", "application/json");
+            close_after_response_ = true;
+            return HandlerResponse::Handled;
+        }
         if (req.method == "OPTIONS") {
             close_after_response_ = req.has_header("Transfer-Encoding") || req.get_header_value_u64("Content-Length") > 0;
             res.status            = 204;
@@ -168,6 +223,7 @@ SDHttpServer::SDHttpServer(const SDSvrParams& params) {
             res.headers.erase("Cache-Control");
             res.set_header("Cache-Control", "no-store");
         }
+        res.set_header("Cross-Origin-Resource-Policy", "same-origin");
         set_cors_headers(req, res, params.cors_origins);
     });
 }

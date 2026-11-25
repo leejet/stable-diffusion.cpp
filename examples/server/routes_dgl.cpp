@@ -32,31 +32,9 @@ namespace {
         res.set_content(json({{"error", message}}).dump(-1, ' ', false, json::error_handler_t::replace), "application/json");
     }
 
-    bool local_origin(const Request& req) {
-        if (req.remote_addr != "127.0.0.1" && req.remote_addr != "::1" && req.remote_addr != "::ffff:127.0.0.1")
-            return false;
-        const auto host   = req.get_header_value("Host");
-        const auto port   = ":" + std::to_string(req.local_port);
-        const auto origin = req.get_header_value("Origin");
-        const auto site   = req.get_header_value("Sec-Fetch-Site");
-        if ((!site.empty() && site != "same-origin" && site != "none") ||
-            (!origin.empty() && origin != "http://" + host && origin != "https://" + host))
-            return false;
-        for (const std::string address : {"localhost", "127.0.0.1", "[::1]"}) {
-            if (host == address || host == address + port)
-                return true;
-        }
-        return false;
-    }
-
-    httplib::Server::Handler local_dgl_route(httplib::Server::Handler handler) {
+    httplib::Server::Handler with_dgl_errors(httplib::Server::Handler handler) {
         return [handler = std::move(handler)](const Request& req, Response& res) {
             res.set_header("Cache-Control", "no-store");
-            res.set_header("Cross-Origin-Resource-Policy", "same-origin");
-            if (!local_origin(req)) {
-                send_error(res, 403, "DGL is available from the local server's Web UI");
-                return;
-            }
             if (req.method == "POST") {
                 const auto content_type = req.get_header_value("Content-Type");
                 if (content_type.substr(0, content_type.find(';')) != "application/json") {
@@ -172,7 +150,7 @@ namespace {
 
 void register_dgl_endpoints(httplib::Server& svr, ServerRuntime& runtime) {
     auto workspace = std::make_shared<DglWorkspace>(runtime.svr_params->dgl_dir);
-    svr.Get("/sdcpp/v1/dgl/scripts", local_dgl_route([workspace](const Request&, Response& res) {
+    svr.Get("/sdcpp/v1/dgl/scripts", with_dgl_errors([workspace](const Request&, Response& res) {
                 std::lock_guard<std::mutex> lock(workspace->mutex);
                 std::vector<std::string> names;
                 if (fs::exists(workspace->directory)) {
@@ -186,7 +164,7 @@ void register_dgl_endpoints(httplib::Server& svr, ServerRuntime& runtime) {
                 send_json(res, 200, {{"directory", workspace->directory.generic_u8string()}, {"scripts", names}});
             }));
 
-    svr.Get("/sdcpp/v1/dgl/script", local_dgl_route([workspace](const Request& req, Response& res) {
+    svr.Get("/sdcpp/v1/dgl/script", with_dgl_errors([workspace](const Request& req, Response& res) {
                 const auto name = req.get_param_value("name");
                 if (!valid_script_name(name)) {
                     send_error(res, 400, "Expected a .dgl file name");
@@ -201,7 +179,7 @@ void register_dgl_endpoints(httplib::Server& svr, ServerRuntime& runtime) {
                 send_json(res, 200, {{"source", read_script(path)}});
             }));
 
-    svr.Post("/sdcpp/v1/dgl/script", local_dgl_route([workspace](const Request& req, Response& res) {
+    svr.Post("/sdcpp/v1/dgl/script", with_dgl_errors([workspace](const Request& req, Response& res) {
                  const auto body   = json::parse(req.body);
                  const auto name   = body.at("name").get<std::string>();
                  const auto source = body.at("source").get<std::string>();
@@ -227,7 +205,7 @@ void register_dgl_endpoints(httplib::Server& svr, ServerRuntime& runtime) {
                  send_json(res, updating ? 200 : 201, {{"name", name}});
              }));
 
-    svr.Post("/sdcpp/v1/dgl/jobs", local_dgl_route([&runtime](const Request& req, Response& res) {
+    svr.Post("/sdcpp/v1/dgl/jobs", with_dgl_errors([&runtime](const Request& req, Response& res) {
                  auto source = json::parse(req.body).at("source").get<std::string>();
                  if (source.empty() || !valid_source(source)) {
                      send_error(res, 400, "Expected non-empty UTF-8 source");
@@ -252,14 +230,14 @@ void register_dgl_endpoints(httplib::Server& svr, ServerRuntime& runtime) {
                  manager.cv.notify_one();
              }));
 
-    svr.Get(R"(/sdcpp/v1/dgl/jobs/([A-Za-z0-9_-]+))", local_dgl_route([&runtime](const Request& req, Response& res) {
+    svr.Get(R"(/sdcpp/v1/dgl/jobs/([A-Za-z0-9_-]+))", with_dgl_errors([&runtime](const Request& req, Response& res) {
                 auto& manager = *runtime.async_job_manager;
                 std::lock_guard<std::mutex> lock(manager.mutex);
                 if (auto job = find_dgl_job(manager, req.matches[1].str(), res))
                     send_json(res, 200, make_async_job_json(manager, *job));
             }));
 
-    svr.Post(R"(/sdcpp/v1/dgl/jobs/([A-Za-z0-9_-]+)/cancel)", local_dgl_route([&runtime](const Request& req, Response& res) {
+    svr.Post(R"(/sdcpp/v1/dgl/jobs/([A-Za-z0-9_-]+)/cancel)", with_dgl_errors([&runtime](const Request& req, Response& res) {
                  auto& manager = *runtime.async_job_manager;
                  std::lock_guard<std::mutex> lock(manager.mutex);
                  auto job = find_dgl_job(manager, req.matches[1].str(), res);
@@ -276,7 +254,7 @@ void register_dgl_endpoints(httplib::Server& svr, ServerRuntime& runtime) {
                  send_json(res, 200, make_async_job_json(manager, *job));
              }));
 
-    svr.Get(R"(/sdcpp/v1/dgl/jobs/([A-Za-z0-9_-]+)/outputs/([0-9]+))", local_dgl_route([&runtime](const Request& req, Response& res) {
+    svr.Get(R"(/sdcpp/v1/dgl/jobs/([A-Za-z0-9_-]+)/outputs/([0-9]+))", with_dgl_errors([&runtime](const Request& req, Response& res) {
                 auto& manager = *runtime.async_job_manager;
                 std::shared_ptr<sd_dgl_result_t> result;
                 {

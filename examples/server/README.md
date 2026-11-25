@@ -126,7 +126,10 @@ and are not parsed by the native server API.
 
 ### DGL editor
 
-Open the Web UI using the local server address and select **DGL** in the header.
+Open the Web UI and select **DGL** in the header. The workspace follows the
+server's `--listen-ip` setting. The default `127.0.0.1` limits access to the
+server machine. When the server listens on a LAN interface, open the Web UI
+using the server's LAN IP and port to use the workspace from another device.
 Select a saved script or choose **New**. **Duplicate** saves a copy of the
 current editor text under a new name. Edit **File name** before saving to save
 under a different name. **Run** submits the editor text to the generation queue,
@@ -433,29 +436,34 @@ configured defaults.
 | --- | --- | --- |
 | `--listen-ip <ip>` | `127.0.0.1` | Server listen address |
 | `--listen-port <port>` | `1234` | Server listen port |
-| `--dgl-dir <path>` | `dgl` | Script directory for the local DGL editor |
+| `--dgl-dir <path>` | `dgl` | Script directory for the DGL editor |
 | `--max-pending-jobs <count>` | `64` | Maximum async jobs queued or generating |
 | `--completed-ttl-seconds <seconds>` | `600` | Retention time for completed async jobs |
 
 ### Access
 
-By default any program on the machine, and any web page open in a browser on
-it, can call the server. To limit that:
+The default listener accepts connections from the server machine. A listener
+bound to a LAN interface also accepts connections from devices that can reach
+it. The Web UI and HTTP APIs use the same access rules. Browser requests are
+same-origin by default. Use an IP address, `localhost`, or the hostname
+configured as the listen address when connecting directly.
 
 | Option | Default | Purpose |
 | --- | --- | --- |
 | `--api-key <key>` | none | Key clients must send as `Authorization: Bearer <key>` or `X-Api-Key: <key>`. Separate multiple keys with commas. |
 | `--api-key-file <file>` | none | The same, one key per line, so keys don't show in the process list |
-| `--cors-origins <origins>` | any | Web origins allowed to read the server's answers in a browser, comma-separated |
+| `--cors-origins <origins>` | none | Additional browser origins allowed to make cross-origin requests, comma-separated |
 
 With a key, the page at `/` still loads, but the bundled Web UI can't send
 the key, so its calls get `401`; it is meant for use without a key.
 Authentication failures return `401` with a `WWW-Authenticate` Bearer challenge.
 Protected responses include `Cache-Control: no-store`.
 
-`--cors-origins` only decides which web pages may read the answers: other
-pages get no CORS headers, but their requests still reach the server. To
-refuse requests, set a key as well.
+The server rejects requests from other browser origins with `403` unless their
+origin is listed in `--cors-origins`. For a reverse proxy that preserves the
+public Host header, include its full public origin in that list, such as
+`https://sd.example.com`. The origin policy applies to DGL requests
+as well as the generation APIs.
 
 Startup fails if an access option is missing its value, a list is empty
 (such as `--api-key ,`), or the key file contains no keys.

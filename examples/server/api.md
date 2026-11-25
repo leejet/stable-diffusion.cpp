@@ -1829,8 +1829,8 @@ Example cancelled job:
 
 ## DGL editor API
 
-These endpoints are available to the local, same-origin Web UI. The server uses
-the working directory's ./dgl directory unless --dgl-dir is set.
+These endpoints follow the server's access rules and `--listen-ip`. The server
+uses `./dgl` in the working directory unless `--dgl-dir` is set.
 
 | Method and path | Request or response |
 | --- | --- |
