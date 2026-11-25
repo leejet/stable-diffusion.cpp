@@ -89,8 +89,12 @@ bool SDSvrParams::load_api_keys() {
     return true;
 }
 
+static bool is_web_ui_request(const httplib::Request& req) {
+    return req.method == "GET" && req.path == "/";
+}
+
 static bool requires_api_key(const SDSvrParams& params, const httplib::Request& req) {
-    return !params.api_keys.empty() && req.method != "OPTIONS" && !(req.method == "GET" && req.path == "/");
+    return !params.api_keys.empty() && req.method != "OPTIONS" && !is_web_ui_request(req);
 }
 
 static bool api_key_matches(const std::vector<std::string>& keys, std::string_view key) {
@@ -131,7 +135,12 @@ static bool is_allowed_origin(const std::vector<std::string>& allowed, std::stri
 
 static void set_cors_headers(const httplib::Request& req, httplib::Response& res, const std::vector<std::string>& allowed) {
     const bool preflight = req.method == "OPTIONS";
-    res.set_header("Vary", preflight ? "Origin, Sec-Fetch-Site, Access-Control-Request-Headers" : "Origin, Sec-Fetch-Site");
+    std::string vary     = "Origin, Sec-Fetch-Site";
+    if (preflight)
+        vary += ", Access-Control-Request-Headers";
+    else if (is_web_ui_request(req))
+        vary += ", Sec-Fetch-Mode, Sec-Fetch-Dest";
+    res.set_header("Vary", vary);
 
     const auto origin = req.get_header_value("Origin");
     if (!is_allowed_origin(allowed, origin)) {
@@ -180,6 +189,11 @@ static bool is_allowed_request_origin(const httplib::Request& req, const SDSvrPa
     if (!is_server_host(host, params.listen_ip) && !is_allowed_origin(params.cors_origins, http_origin) &&
         !is_allowed_origin(params.cors_origins, https_origin))
         return false;
+
+    if (is_web_ui_request(req) && req.get_header_value_count("Sec-Fetch-Mode") == 1 &&
+        req.get_header_value_count("Sec-Fetch-Dest") == 1 && req.get_header_value("Sec-Fetch-Mode") == "navigate" &&
+        req.get_header_value("Sec-Fetch-Dest") == "document")
+        return true;
 
     const auto origin = req.get_header_value("Origin");
     if (is_allowed_origin(params.cors_origins, origin))

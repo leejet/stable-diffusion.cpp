@@ -152,6 +152,56 @@ namespace media_view {
         return FileHandle();
     }
 
+    static size_t ebml_vint_width(std::string_view bytes, size_t max_width) {
+        if (bytes.empty())
+            return 0;
+        const auto first = static_cast<unsigned char>(bytes.front());
+        for (size_t width = 1; width <= std::min(max_width, bytes.size()); ++width) {
+            if (first & (0x80u >> (width - 1)))
+                return width;
+        }
+        return 0;
+    }
+
+    static bool read_ebml_size(std::string_view& bytes, uint64_t& size) {
+        const auto width = ebml_vint_width(bytes, 8);
+        if (width == 0)
+            return false;
+        size = static_cast<unsigned char>(bytes.front()) & (0xffu >> width);
+        for (size_t i = 1; i < width; ++i)
+            size = (size << 8) | static_cast<unsigned char>(bytes[i]);
+        bytes.remove_prefix(width);
+        return size != (uint64_t{1} << (7 * width)) - 1;
+    }
+
+    static bool has_webm_doctype(std::string_view header, uint64_t file_size) {
+        constexpr std::string_view ebml_id = "\x1a\x45\xdf\xa3";
+        if (header.substr(0, ebml_id.size()) != ebml_id)
+            return false;
+        const auto probe_size = header.size();
+        header.remove_prefix(ebml_id.size());
+        uint64_t size;
+        if (!read_ebml_size(header, size))
+            return false;
+        const auto prefix_size = probe_size - header.size();
+        if (prefix_size > file_size || size > file_size - prefix_size)
+            return false;
+        header = header.substr(0, static_cast<size_t>(size));
+        while (!header.empty()) {
+            const auto width = ebml_vint_width(header, 4);
+            if (width == 0)
+                return false;
+            const bool is_doctype = header.substr(0, width) == "\x42\x82";
+            header.remove_prefix(width);
+            if (!read_ebml_size(header, size) || size > header.size())
+                return false;
+            if (is_doctype)
+                return header.substr(0, static_cast<size_t>(size)) == "webm";
+            header.remove_prefix(static_cast<size_t>(size));
+        }
+        return false;
+    }
+
     static const char* media_type(std::string extension, std::string_view header, uint64_t size) {
         for (auto& ch : extension) {
             if (ch >= 'A' && ch <= 'Z')
@@ -166,8 +216,7 @@ namespace media_view {
         if (extension == ".webp" && header.size() >= 16 && header.substr(0, 4) == "RIFF" && header.substr(8, 7) == "WEBPVP8" &&
             (header[15] == ' ' || header[15] == 'L' || header[15] == 'X'))
             return "image/webp";
-        if (extension == ".webm" && header.substr(0, 4) == "\x1a\x45\xdf\xa3" &&
-            header.find("\x42\x82\x84webm", 4) != std::string_view::npos)
+        if (extension == ".webm" && has_webm_doctype(header, size))
             return "video/webm";
         if (extension == ".avi" && header.size() >= 12 && header.substr(0, 4) == "RIFF" && header.substr(8, 4) == "AVI ")
             return "video/x-msvideo";

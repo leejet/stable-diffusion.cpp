@@ -467,8 +467,8 @@ configured defaults.
 
 The default listener accepts connections from the server machine. A listener
 bound to a LAN interface also accepts connections from devices that can reach
-it. The Web UI and HTTP APIs use the same access rules. Browser requests are
-same-origin by default. Use an IP address, `localhost`, or the hostname
+it. You can open the Web UI from a link on another site. Browser API requests
+are same-origin by default. Use an IP address, `localhost`, or the hostname
 configured as the listen address when connecting directly.
 
 | Option | Default | Purpose |

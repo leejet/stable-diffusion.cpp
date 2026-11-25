@@ -45,6 +45,16 @@ namespace sd::dgl {
             run.progress_.report("loading", "", completed, total, "tensors");
     }
 
+    void RunEvents::render_sample_progress(int completed, int total_steps, float time) {
+        const bool console_only = forces_console_progress();
+        const bool renders_line = console_only || !sd_get_progress_callback();
+        if (console_only)
+            pretty_console_progress(completed, total_steps, time);
+        else
+            pretty_progress(completed, total_steps, time);
+        sample_line_open_ = renders_line && completed > 0 && completed < total_steps;
+    }
+
     void RunEvents::begin_sample(int total_steps) {
         check_cancelled();
         finish_sample_line();
@@ -54,7 +64,7 @@ namespace sd::dgl {
             sd_begin_preview_pass(total_steps);
         last_progress_us_ = ggml_time_us();
         if (uses_console_progress())
-            pretty_progress(0, total_steps, 0.f);
+            render_sample_progress(0, total_steps, 0.f);
         progress_.begin_sample(total_steps, "");
         check_cancelled();
     }
@@ -62,9 +72,8 @@ namespace sd::dgl {
     void RunEvents::sample_step(int completed, int total_steps) {
         if (uses_console_progress()) {
             const auto now = ggml_time_us();
-            pretty_progress(completed, total_steps, (now - last_progress_us_) / 1000000.f);
+            render_sample_progress(completed, total_steps, (now - last_progress_us_) / 1000000.f);
             last_progress_us_ = now;
-            sample_line_open_ = completed > 0 && completed < total_steps && !sd_get_progress_callback();
         }
         progress_.report_sample(completed, total_steps);
         check_cancelled();
@@ -90,8 +99,8 @@ namespace sd::dgl {
 
     RunEventsScope::RunEventsScope(RunEvents& events)
         : previous_(active_events),
-          byte_progress_(events.uses_legacy_progress() ? nullptr : RunEvents::report_loading, &events),
-          console_progress_(events.uses_console_progress()) {
+          byte_progress_(!events.uses_legacy_progress() && events.callbacks().progress ? RunEvents::report_loading : nullptr, &events),
+          console_progress_(events.forces_console_progress()) {
         active_events = &events;
     }
     RunEventsScope::~RunEventsScope() {
