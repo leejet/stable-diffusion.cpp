@@ -87,19 +87,19 @@ namespace RelayVSR {
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* context, ggml_tensor* query_rope, ggml_tensor* key_rope, const VSR::LocalAttention* local, const std::string& cut_group, const std::string& attention_name) {
-            auto to_q            = std::dynamic_pointer_cast<Linear>(blocks["to_q"]);
-            auto to_k            = std::dynamic_pointer_cast<Linear>(blocks["to_k"]);
-            auto to_v            = std::dynamic_pointer_cast<Linear>(blocks["to_v"]);
-            auto to_out_0        = std::dynamic_pointer_cast<Linear>(blocks["to_out.0"]);
-            auto norm_q          = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_q"]);
-            auto norm_k          = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_k"]);
-            auto c               = ctx->ggml_ctx;
-            auto q               = norm_q->forward(ctx, to_q->forward(ctx, x));
+            auto to_q             = std::dynamic_pointer_cast<Linear>(blocks["to_q"]);
+            auto to_k             = std::dynamic_pointer_cast<Linear>(blocks["to_k"]);
+            auto to_v             = std::dynamic_pointer_cast<Linear>(blocks["to_v"]);
+            auto to_out_0         = std::dynamic_pointer_cast<Linear>(blocks["to_out.0"]);
+            auto norm_q           = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_q"]);
+            auto norm_k           = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_k"]);
+            auto c                = ctx->ggml_ctx;
+            auto q                = norm_q->forward(ctx, to_q->forward(ctx, x));
             const auto cache_name = cut_group + "." + attention_name;
-            auto past_k          = ctx->get_cache_tensor(cache_name + ".key");
-            auto past_v          = ctx->get_cache_tensor(cache_name + ".value");
-            ggml_tensor* k = nullptr;
-            ggml_tensor* v = nullptr;
+            auto past_k           = ctx->get_cache_tensor(cache_name + ".key");
+            auto past_v           = ctx->get_cache_tensor(cache_name + ".value");
+            ggml_tensor* k        = nullptr;
+            ggml_tensor* v        = nullptr;
             if (context && past_k) {
                 k = past_k;
                 v = past_v;

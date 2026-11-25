@@ -28,6 +28,7 @@ struct SDSvrParams {
     int weight_residency_ttl  = -1;
     std::string serve_html_path;
     std::string dgl_dir = "dgl";
+    bool media_view = true;
     std::vector<std::string> model_dirs;
     std::vector<std::string> api_keys;
     std::string api_key_file;

@@ -126,22 +126,25 @@ static void finish_job_progress(AsyncGenerationJob& job) {
     job.progress.finished = std::chrono::steady_clock::now();
 }
 
+static void job_progress_callback(const sd_generation_progress_t* progress, void* data) noexcept {
+    try {
+        auto& job = *static_cast<AsyncGenerationJob*>(data);
+        update_job_progress(job, progress->stage, progress->detail,
+                            progress->sample_pass, progress->completed, progress->total, progress->unit);
+    } catch (...) {
+        // Progress callbacks must not unwind into the generation context.
+    }
+}
+
 class JobCallbacksGuard {
     sd_ctx_t* ctx_;
-    AsyncGenerationJob& job_;
-
-    static void progress_callback(const sd_generation_progress_t* progress, void* data) {
-        auto& guard = *static_cast<JobCallbacksGuard*>(data);
-        update_job_progress(guard.job_, progress->stage, progress->detail,
-                            progress->sample_pass, progress->completed, progress->total, progress->unit);
-    }
 
 public:
     JobCallbacksGuard(sd_ctx_t* ctx, AsyncGenerationJob& job)
-        : ctx_(ctx), job_(job) {
+        : ctx_(ctx) {
         clear_preview_callback();
         set_preview_callback(job);
-        sd_set_generation_progress_callback(ctx_, progress_callback, this);
+        sd_set_generation_progress_callback(ctx_, job_progress_callback, &job);
     }
 
     ~JobCallbacksGuard() {
@@ -151,6 +154,24 @@ public:
 
     JobCallbacksGuard(const JobCallbacksGuard&)            = delete;
     JobCallbacksGuard& operator=(const JobCallbacksGuard&) = delete;
+};
+
+class DglJobProgressGuard {
+    sd_dgl_ctx_t* ctx_;
+
+public:
+    DglJobProgressGuard(sd_dgl_ctx_t* ctx, AsyncGenerationJob& job) : ctx_(ctx) {
+        if (sd_dgl_ctx_set_progress_callback(ctx_, job_progress_callback, &job) != SD_STATUS_OK)
+            throw std::runtime_error(sd_dgl_error());
+    }
+
+    ~DglJobProgressGuard() {
+        if (sd_dgl_ctx_set_progress_callback(ctx_, nullptr, nullptr) != SD_STATUS_OK)
+            LOG_WARN("could not clear DGL job progress callback: %s", sd_dgl_error());
+    }
+
+    DglJobProgressGuard(const DglJobProgressGuard&)            = delete;
+    DglJobProgressGuard& operator=(const DglJobProgressGuard&) = delete;
 };
 
 const char* async_job_kind_name(AsyncJobKind kind) {
@@ -503,7 +524,7 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
     return true;
 }
 
-int64_t dgl_image_frame_count(const sd_tensor_t* tensor) {
+static int64_t dgl_image_frame_count(const sd_tensor_t* tensor) {
     if (!tensor || sd_tensor_type(tensor) != SD_TENSOR_U8)
         return 0;
     const auto rank = sd_tensor_rank(tensor);
@@ -602,6 +623,23 @@ static json describe_dgl_result(const sd_dgl_result_t* result) {
 namespace {
     namespace fs = std::filesystem;
 
+    bool has_resolved_model_parent(const fs::path& path) {
+        std::error_code error;
+        for (auto part = path; !part.empty(); part = part.parent_path()) {
+            const auto status = fs::symlink_status(part, error);
+            if (status.type() != fs::file_type::not_found) {
+                if (error || !fs::is_directory(status))
+                    return false;
+                // A dangling link or junction must not be treated as a missing dependency.
+                const auto canonical = fs::canonical(part, error);
+                return !error && model_path_key(canonical) == model_path_key(part);
+            }
+            if (part == part.root_path())
+                break;
+        }
+        return false;
+    }
+
     bool allowed_dgl_path(const char* path, sd_dgl_file_access_t access, void* userdata) try {
         const auto& policy = *static_cast<const ServerFileAccess*>(userdata);
         std::error_code error;
@@ -655,16 +693,18 @@ namespace {
         const bool readable = !error && (fs::is_regular_file(status) || fs::is_directory(status));
         if (access == SD_DGL_FILE_READ)
             return readable;
-        const auto key = model_path_key(resolved);
-        if (readable || status.type() == fs::file_type::not_found) {
-            if (policy.configured_files.count(key))
-                return true;
-            if (std::any_of(policy.model_bundles.begin(), policy.model_bundles.end(), [&](const fs::path& root) { return model_path_inside(root, resolved); }))
-                return true;
-        }
-        return readable && std::any_of(policy.models.begin(), policy.models.end(), [&](const ModelRoot& root) {
-                   return model_path_key(root.path) == key || model_path_inside(root.path, resolved);
-               });
+        if (!readable && status.type() != fs::file_type::not_found)
+            return false;
+
+        const auto key     = model_path_key(resolved);
+        const bool allowed = policy.configured_files.count(key) ||
+                             std::any_of(policy.model_bundles.begin(), policy.model_bundles.end(), [&](const fs::path& root) {
+                                 return model_path_inside(root, resolved);
+                             }) ||
+                             std::any_of(policy.models.begin(), policy.models.end(), [&](const ModelRoot& root) {
+                                 return model_path_key(root.path) == key || model_path_inside(root.path, resolved);
+                             });
+        return allowed && (readable || has_resolved_model_parent(resolved));
     } catch (const std::exception&) {
         return false;
     }
@@ -689,7 +729,6 @@ void configure_server_file_access(ServerModels& models, const SDSvrParams& param
 
 static sd_status_t execute_dgl_job(ServerRuntime& runtime,
                                    AsyncGenerationJob& job,
-                                   std::shared_ptr<sd_dgl_result_t>& result,
                                    json& result_info,
                                    std::string& error_message) {
     try {
@@ -699,17 +738,19 @@ static sd_status_t execute_dgl_job(ServerRuntime& runtime,
             std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
             if (job.cancel_requested.load())
                 return SD_STATUS_CANCELLED;
-            JobCancellationMonitor cancellation(job, [ctx = runtime.sd_ctx]() {
-                sd_dgl_ctx_cancel(sd_ctx_get_dgl_ctx(ctx));
+            auto* ctx = sd_ctx_get_dgl_ctx(runtime.sd_ctx);
+            DglJobProgressGuard progress(ctx, job);
+            JobCancellationMonitor cancellation(job, [ctx]() {
+                sd_dgl_ctx_cancel(ctx);
             });
             update_job_progress(job, "executing", "dgl");
-            const auto status = sd_dgl_run(sd_ctx_get_dgl_ctx(runtime.sd_ctx), source.c_str(), nullptr, 0, &raw_result);
+            const auto status = sd_dgl_run(ctx, source.c_str(), nullptr, 0, &raw_result);
             if (status != SD_STATUS_OK) {
                 error_message = sd_dgl_error();
                 return status;
             }
         }
-        result.reset(raw_result, sd_dgl_result_free);
+        std::unique_ptr<sd_dgl_result_t, decltype(&sd_dgl_result_free)> result(raw_result, sd_dgl_result_free);
         result_info = describe_dgl_result(result.get());
         return SD_STATUS_OK;
     } catch (const std::exception& error) {
@@ -796,11 +837,10 @@ void async_job_worker(ServerRuntime& runtime) {
         std::string output_media_mime_type;
         int output_frame_count = 0;
         int output_fps         = 0;
-        std::shared_ptr<sd_dgl_result_t> dgl_result;
         json dgl_result_info;
         std::string error_message;
         const char* error_code = "generation_failed";
-        bool ok = false;
+        bool ok                = false;
 
         if (job->kind == AsyncJobKind::ImgGen) {
             ok = execute_img_gen_job(runtime, *job, output_images, output_info, error_message);
@@ -814,7 +854,7 @@ void async_job_worker(ServerRuntime& runtime) {
                                      output_info,
                                      error_message);
         } else if (job->kind == AsyncJobKind::Dgl) {
-            const auto status = execute_dgl_job(runtime, *job, dgl_result, dgl_result_info, error_message);
+            const auto status = execute_dgl_job(runtime, *job, dgl_result_info, error_message);
             ok                = status == SD_STATUS_OK;
             if (status == SD_STATUS_OUT_OF_MEMORY) {
                 error_code = "out_of_memory";
@@ -845,7 +885,6 @@ void async_job_worker(ServerRuntime& runtime) {
                 job->result_media_mime_type = std::move(output_media_mime_type);
                 job->result_frame_count     = output_frame_count;
                 job->result_fps             = output_fps;
-                job->dgl_result             = std::move(dgl_result);
                 job->dgl_result_info        = std::move(dgl_result_info);
                 job->error_code.clear();
                 job->error_message.clear();

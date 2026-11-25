@@ -1,14 +1,11 @@
 #include "routes.h"
 
 #include <algorithm>
-#include <charconv>
 #include <fstream>
-#include <optional>
 #include <stdexcept>
 #include <string_view>
 
 #include "async_jobs.h"
-#include "common/media_io.h"
 
 namespace {
     namespace fs   = std::filesystem;
@@ -32,31 +29,9 @@ namespace {
         res.set_content(json({{"error", message}}).dump(-1, ' ', false, json::error_handler_t::replace), "application/json");
     }
 
-    bool local_origin(const Request& req) {
-        if (req.remote_addr != "127.0.0.1" && req.remote_addr != "::1" && req.remote_addr != "::ffff:127.0.0.1")
-            return false;
-        const auto host   = req.get_header_value("Host");
-        const auto port   = ":" + std::to_string(req.local_port);
-        const auto origin = req.get_header_value("Origin");
-        const auto site   = req.get_header_value("Sec-Fetch-Site");
-        if ((!site.empty() && site != "same-origin" && site != "none") ||
-            (!origin.empty() && origin != "http://" + host && origin != "https://" + host))
-            return false;
-        for (const std::string address : {"localhost", "127.0.0.1", "[::1]"}) {
-            if (host == address || host == address + port)
-                return true;
-        }
-        return false;
-    }
-
-    httplib::Server::Handler local_dgl_route(httplib::Server::Handler handler) {
+    httplib::Server::Handler with_dgl_errors(httplib::Server::Handler handler) {
         return [handler = std::move(handler)](const Request& req, Response& res) {
             res.set_header("Cache-Control", "no-store");
-            res.set_header("Cross-Origin-Resource-Policy", "same-origin");
-            if (!local_origin(req)) {
-                send_error(res, 403, "DGL is available from the local server's Web UI");
-                return;
-            }
             if (req.method == "POST") {
                 const auto content_type = req.get_header_value("Content-Type");
                 if (content_type.substr(0, content_type.find(';')) != "application/json") {
@@ -125,54 +100,11 @@ namespace {
         std::error_code ignored;
         fs::remove(staging, ignored);
     }
-
-    std::optional<size_t> parse_index(std::string_view value) {
-        size_t index      = 0;
-        const auto parsed = std::from_chars(value.data(), value.data() + value.size(), index);
-        if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size())
-            return std::nullopt;
-        return index;
-    }
-
-    std::shared_ptr<AsyncGenerationJob> find_dgl_job(AsyncJobManager& manager, const std::string& id, Response& res) {
-        purge_expired_jobs(manager);
-        auto it = manager.jobs.find(id);
-        if (it != manager.jobs.end() && it->second->kind == AsyncJobKind::Dgl)
-            return it->second;
-        const bool expired = manager.expired_jobs.count(id) != 0;
-        send_error(res, expired ? 410 : 404, expired ? "Job expired" : "Job not found");
-        return {};
-    }
-
-    void send_output_preview(const Request& req, Response& res, const sd_dgl_result_t* result) {
-        const auto output = parse_index(req.matches[2].str());
-        if (!output || *output >= sd_dgl_result_count(result)) {
-            send_error(res, 404, "Output not found");
-            return;
-        }
-        const auto* tensor = sd_dgl_result_tensor(result, sd_dgl_result_name(result, *output));
-        const auto frames  = dgl_image_frame_count(tensor);
-        const auto frame   = req.has_param("frame") ? parse_index(req.get_param_value("frame")) : std::optional<size_t>(0);
-        if (!frame || *frame >= static_cast<size_t>(frames)) {
-            send_error(res, 404, "Frame not found");
-            return;
-        }
-        const size_t stride = sd_tensor_byte_size(tensor) / static_cast<size_t>(frames);
-        const auto* pixels  = static_cast<const uint8_t*>(sd_tensor_data(tensor)) + *frame * stride;
-        const auto png      = encode_image_to_vector(EncodedImageFormat::PNG, pixels,
-                                                     int(sd_tensor_dim(tensor, 1)), int(sd_tensor_dim(tensor, 2)),
-                                                     int(sd_tensor_dim(tensor, 0)));
-        if (png.empty()) {
-            send_error(res, 500, "Could not encode preview");
-            return;
-        }
-        res.set_content(reinterpret_cast<const char*>(png.data()), png.size(), "image/png");
-    }
 }
 
 void register_dgl_endpoints(httplib::Server& svr, ServerRuntime& runtime) {
     auto workspace = std::make_shared<DglWorkspace>(runtime.svr_params->dgl_dir);
-    svr.Get("/sdcpp/v1/dgl/scripts", local_dgl_route([workspace](const Request&, Response& res) {
+    svr.Get("/sdcpp/v1/dgl/scripts", with_dgl_errors([workspace](const Request&, Response& res) {
                 std::lock_guard<std::mutex> lock(workspace->mutex);
                 std::vector<std::string> names;
                 if (fs::exists(workspace->directory)) {
@@ -186,7 +118,7 @@ void register_dgl_endpoints(httplib::Server& svr, ServerRuntime& runtime) {
                 send_json(res, 200, {{"directory", workspace->directory.generic_u8string()}, {"scripts", names}});
             }));
 
-    svr.Get("/sdcpp/v1/dgl/script", local_dgl_route([workspace](const Request& req, Response& res) {
+    svr.Get("/sdcpp/v1/dgl/script", with_dgl_errors([workspace](const Request& req, Response& res) {
                 const auto name = req.get_param_value("name");
                 if (!valid_script_name(name)) {
                     send_error(res, 400, "Expected a .dgl file name");
@@ -201,7 +133,7 @@ void register_dgl_endpoints(httplib::Server& svr, ServerRuntime& runtime) {
                 send_json(res, 200, {{"source", read_script(path)}});
             }));
 
-    svr.Post("/sdcpp/v1/dgl/script", local_dgl_route([workspace](const Request& req, Response& res) {
+    svr.Post("/sdcpp/v1/dgl/script", with_dgl_errors([workspace](const Request& req, Response& res) {
                  const auto body   = json::parse(req.body);
                  const auto name   = body.at("name").get<std::string>();
                  const auto source = body.at("source").get<std::string>();
@@ -227,7 +159,7 @@ void register_dgl_endpoints(httplib::Server& svr, ServerRuntime& runtime) {
                  send_json(res, updating ? 200 : 201, {{"name", name}});
              }));
 
-    svr.Post("/sdcpp/v1/dgl/jobs", local_dgl_route([&runtime](const Request& req, Response& res) {
+    svr.Post("/sdcpp/v1/dgl/jobs", with_dgl_errors([&runtime](const Request& req, Response& res) {
                  auto source = json::parse(req.body).at("source").get<std::string>();
                  if (source.empty() || !valid_source(source)) {
                      send_error(res, 400, "Expected non-empty UTF-8 source");
@@ -247,49 +179,10 @@ void register_dgl_endpoints(httplib::Server& svr, ServerRuntime& runtime) {
                      job->id = make_async_job_id(manager);
                      manager.jobs.emplace(job->id, job);
                      manager.queue.push_back(job->id);
-                     send_json(res, 202, make_async_job_json(manager, *job));
+                     auto response        = make_async_job_json(manager, *job);
+                     response["poll_url"] = "/sdcpp/v1/jobs/" + job->id;
+                     send_json(res, 202, response);
                  }
                  manager.cv.notify_one();
              }));
-
-    svr.Get(R"(/sdcpp/v1/dgl/jobs/([A-Za-z0-9_-]+))", local_dgl_route([&runtime](const Request& req, Response& res) {
-                auto& manager = *runtime.async_job_manager;
-                std::lock_guard<std::mutex> lock(manager.mutex);
-                if (auto job = find_dgl_job(manager, req.matches[1].str(), res))
-                    send_json(res, 200, make_async_job_json(manager, *job));
-            }));
-
-    svr.Post(R"(/sdcpp/v1/dgl/jobs/([A-Za-z0-9_-]+)/cancel)", local_dgl_route([&runtime](const Request& req, Response& res) {
-                 auto& manager = *runtime.async_job_manager;
-                 std::lock_guard<std::mutex> lock(manager.mutex);
-                 auto job = find_dgl_job(manager, req.matches[1].str(), res);
-                 if (!job)
-                     return;
-                 if (job->status == AsyncJobStatus::Queued) {
-                     if (!cancel_queued_job(manager, *job)) {
-                         send_error(res, 409, "Job queue state changed before cancellation");
-                         return;
-                     }
-                 } else if (job->status == AsyncJobStatus::Generating) {
-                     job->cancel_requested.store(true);
-                 }
-                 send_json(res, 200, make_async_job_json(manager, *job));
-             }));
-
-    svr.Get(R"(/sdcpp/v1/dgl/jobs/([A-Za-z0-9_-]+)/outputs/([0-9]+))", local_dgl_route([&runtime](const Request& req, Response& res) {
-                auto& manager = *runtime.async_job_manager;
-                std::shared_ptr<sd_dgl_result_t> result;
-                {
-                    std::lock_guard<std::mutex> lock(manager.mutex);
-                    const auto job = find_dgl_job(manager, req.matches[1].str(), res);
-                    if (!job)
-                        return;
-                    result = job->dgl_result;
-                }
-                if (!result) {
-                    send_error(res, 404, "Job has no result");
-                    return;
-                }
-                send_output_preview(req, res, result.get());
-            }));
 }

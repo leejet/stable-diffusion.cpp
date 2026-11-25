@@ -132,6 +132,9 @@ namespace sd::dgl {
             if (!parse_strict_bool(value, enabled))
                 throw std::runtime_error("batched_cfg expects a boolean");
             batched_cfg = enabled;
+        } else if (key == "console_progress") {
+            if (!parse_strict_bool(value, callbacks.console_progress))
+                throw std::runtime_error("console_progress expects a boolean");
         } else if (key == "max_vram") {
             ggml_graph_cut::MaxVramAssignment limit;
             std::string error;
