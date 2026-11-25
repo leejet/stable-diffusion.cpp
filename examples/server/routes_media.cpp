@@ -1,0 +1,227 @@
+#include "routes.h"
+
+#include <array>
+#include <limits>
+#include <string_view>
+#include <utility>
+
+#ifdef _WIN32
+#include <winternl.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
+namespace media_view {
+#ifdef _WIN32
+    class FileHandle {
+        HANDLE handle_;
+
+    public:
+        explicit FileHandle(HANDLE handle = INVALID_HANDLE_VALUE) : handle_(handle) {}
+        ~FileHandle() {
+            if (*this)
+                CloseHandle(handle_);
+        }
+        FileHandle(FileHandle&& other) noexcept : handle_(std::exchange(other.handle_, INVALID_HANDLE_VALUE)) {}
+        FileHandle& operator=(FileHandle&& other) noexcept {
+            std::swap(handle_, other.handle_);
+            return *this;
+        }
+        explicit operator bool() const { return handle_ != INVALID_HANDLE_VALUE; }
+        HANDLE get() const { return handle_; }
+    };
+
+    static FileHandle working_directory() {
+        return FileHandle(CreateFileW(L".", FILE_TRAVERSE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                      OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+    }
+
+    static FileHandle open_child(const FileHandle& parent, const std::string& part, bool directory) {
+        static const auto open_file = reinterpret_cast<decltype(&NtOpenFile)>(
+            GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtOpenFile"));
+        if (!open_file)
+            return FileHandle();
+        auto name = std::filesystem::u8path(part).native();
+        const auto bytes = static_cast<USHORT>(name.size() * sizeof(wchar_t));
+        UNICODE_STRING relative{bytes, bytes, name.data()};
+        OBJECT_ATTRIBUTES object;
+        InitializeObjectAttributes(&object, &relative, OBJ_CASE_INSENSITIVE, parent.get(), nullptr);
+        IO_STATUS_BLOCK status{};
+        HANDLE handle = INVALID_HANDLE_VALUE;
+        const auto access = (directory ? FILE_TRAVERSE : FILE_READ_DATA) | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
+        // A handle-relative open keeps every component under the directory already checked.
+        if (open_file(&handle, access, &object, &status, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                      FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT) < 0)
+            return FileHandle();
+        FileHandle file(handle);
+        BY_HANDLE_FILE_INFORMATION info{};
+        if (GetFileType(handle) != FILE_TYPE_DISK || !GetFileInformationByHandle(handle, &info) ||
+            (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+            static_cast<bool>(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != directory ||
+            (!directory && info.nNumberOfLinks != 1))
+            return FileHandle();
+        return file;
+    }
+
+    static uint64_t file_size(const FileHandle& file) {
+        LARGE_INTEGER size{};
+        return GetFileSizeEx(file.get(), &size) && size.QuadPart > 0 ? static_cast<uint64_t>(size.QuadPart) : 0;
+    }
+
+    static size_t read_at(const FileHandle& file, size_t offset, char* buffer, size_t length) {
+        LARGE_INTEGER position{};
+        position.QuadPart = static_cast<LONGLONG>(offset);
+        DWORD count = 0;
+        if (!SetFilePointerEx(file.get(), position, nullptr, FILE_BEGIN) ||
+            !ReadFile(file.get(), buffer, static_cast<DWORD>(length), &count, nullptr))
+            return 0;
+        return count;
+    }
+#else
+    class FileHandle {
+        int fd_;
+
+    public:
+        explicit FileHandle(int fd = -1) : fd_(fd) {}
+        ~FileHandle() {
+            if (*this)
+                close(fd_);
+        }
+        FileHandle(FileHandle&& other) noexcept : fd_(std::exchange(other.fd_, -1)) {}
+        FileHandle& operator=(FileHandle&& other) noexcept {
+            std::swap(fd_, other.fd_);
+            return *this;
+        }
+        explicit operator bool() const { return fd_ >= 0; }
+        int get() const { return fd_; }
+    };
+
+    static FileHandle working_directory() {
+        return FileHandle(open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+    }
+
+    static FileHandle open_child(const FileHandle& parent, const std::string& part, bool directory) {
+        const auto flags = O_RDONLY | O_NOFOLLOW | O_CLOEXEC | (directory ? O_DIRECTORY : O_NONBLOCK);
+        return FileHandle(openat(parent.get(), part.c_str(), flags));
+    }
+
+    static uint64_t file_size(const FileHandle& file) {
+        struct stat info {};
+        if (fstat(file.get(), &info) != 0 || !S_ISREG(info.st_mode) || info.st_nlink != 1 || info.st_size <= 0)
+            return 0;
+        return static_cast<uint64_t>(info.st_size);
+    }
+
+    static size_t read_at(const FileHandle& file, size_t offset, char* buffer, size_t length) {
+        ssize_t count;
+        do {
+            count = pread(file.get(), buffer, length, static_cast<off_t>(offset));
+        } while (count < 0 && errno == EINTR);
+        return count > 0 ? static_cast<size_t>(count) : 0;
+    }
+#endif
+
+    static bool valid_component(std::string_view part) {
+        return !part.empty() && part.size() <= 1020 && part != "." && part != ".." &&
+               part.back() != '.' && part.back() != ' ' && part.find_first_of("\\:*?\"<>|") == std::string_view::npos &&
+               std::none_of(part.begin(), part.end(), [](unsigned char c) { return c < 32 || c == 127; });
+    }
+
+    static FileHandle open_media(const std::string& root, std::string_view path) {
+        if (root != "input" && root != "output" && root != "assets")
+            return FileHandle();
+        const auto cwd = working_directory();
+        if (!cwd)
+            return FileHandle();
+        auto parent = open_child(cwd, root, true);
+        while (parent) {
+            const auto slash = path.find('/');
+            const auto part = path.substr(0, slash);
+            if (!valid_component(part))
+                break;
+            const bool directory = slash != std::string_view::npos;
+            auto child = open_child(parent, std::string(part), directory);
+            if (!directory)
+                return child;
+            parent = std::move(child);
+            path.remove_prefix(slash + 1);
+        }
+        return FileHandle();
+    }
+
+    static const char* media_type(std::string extension, std::string_view header, uint64_t size) {
+        for (auto& ch : extension) {
+            if (ch >= 'A' && ch <= 'Z')
+                ch += 'a' - 'A';
+        }
+        if (extension == ".png" && header.substr(0, 8) == "\x89PNG\r\n\x1a\n")
+            return "image/png";
+        if ((extension == ".jpg" || extension == ".jpeg") && header.substr(0, 3) == "\xff\xd8\xff")
+            return "image/jpeg";
+        if (extension == ".gif" && (header.substr(0, 6) == "GIF87a" || header.substr(0, 6) == "GIF89a"))
+            return "image/gif";
+        if (extension == ".webp" && header.size() >= 16 && header.substr(0, 4) == "RIFF" && header.substr(8, 7) == "WEBPVP8" &&
+            (header[15] == ' ' || header[15] == 'L' || header[15] == 'X'))
+            return "image/webp";
+        if (extension == ".webm" && header.substr(0, 4) == "\x1a\x45\xdf\xa3" &&
+            header.find("\x42\x82\x84webm", 4) != std::string_view::npos)
+            return "video/webm";
+        if (extension == ".avi" && header.size() >= 12 && header.substr(0, 4) == "RIFF" && header.substr(8, 4) == "AVI ")
+            return "video/x-msvideo";
+        if (extension == ".mp4" && header.size() >= 16 && header.substr(4, 4) == "ftyp") {
+            uint32_t box_size = 0;
+            for (size_t i = 0; i < 4; ++i)
+                box_size = (box_size << 8) | static_cast<unsigned char>(header[i]);
+            if (box_size >= 16 && box_size <= size)
+                return "video/mp4";
+        }
+        return nullptr;
+    }
+
+    static bool set_media_content(const std::string& root, const std::string& path, httplib::Response& res) {
+        auto file = open_media(root, path);
+        if (!file)
+            return false;
+        const auto size = file_size(file);
+        if (size == 0 || size > std::numeric_limits<size_t>::max())
+            return false;
+        std::array<char, 256> header;
+        const auto count = read_at(file, 0, header.data(), header.size());
+        const auto extension = path.find_last_of('.');
+        if (extension == std::string::npos)
+            return false;
+        const auto* type = media_type(path.substr(extension), {header.data(), count}, size);
+        if (!type)
+            return false;
+        res.set_header("Accept-Ranges", "bytes");
+        res.set_content_provider(static_cast<size_t>(size), type,
+                                 [file = std::make_shared<FileHandle>(std::move(file))](size_t offset, size_t length, httplib::DataSink& sink) {
+                                     std::array<char, 64 * 1024> buffer;
+                                     const auto count = read_at(*file, offset, buffer.data(), std::min(length, buffer.size()));
+                                     return count != 0 && sink.write(buffer.data(), count);
+                                 });
+        return true;
+    }
+}
+
+void register_media_view_endpoint(httplib::Server& svr, const SDSvrParams& params) {
+    svr.Get("/sdcpp/v1/view", [enabled = params.media_view](const httplib::Request& req, httplib::Response& res) {
+        res.set_header("Cache-Control", "no-store");
+        res.set_header("X-Content-Type-Options", "nosniff");
+        if (!enabled) {
+            res.status = 403;
+            return;
+        }
+        try {
+            if (req.get_param_value_count("root") == 1 && req.get_param_value_count("path") == 1 &&
+                media_view::set_media_content(req.get_param_value("root"), req.get_param_value("path"), res))
+                return;
+        } catch (const std::system_error&) {
+            // Invalid path encodings are treated like unavailable files.
+        }
+        res.status = 404;
+    });
+}

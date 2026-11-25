@@ -78,6 +78,7 @@ add_executable(${TARGET}
     routes_sdapi.cpp
     routes_sdcpp.cpp
     routes_dgl.cpp
+    routes_media.cpp
 )
 if(APPLE)
     sd_set_macos_rpaths(${TARGET})

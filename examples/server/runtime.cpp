@@ -318,6 +318,7 @@ ArgOptions SDSvrParams::get_options() {
 
     options.bool_options = {
         {"", "--color", "colors the logging tags according to level", true, &color},
+        {"", "--no-media-view", "disable media file viewing", false, &media_view},
     };
 
     auto on_help_arg = [&](int, const char**, int, bool& valid) {
@@ -400,6 +401,7 @@ std::string SDSvrParams::to_string() const {
         << "  dgl_dir: \"" << dgl_dir << "\",\n"
         << "  api_keys: " << api_keys.size() << ",\n"
         << "  cors_origins: " << cors_origins.size() << ",\n"
+        << "  media_view: " << std::boolalpha << media_view << ",\n"
         << "}";
     return oss.str();
 }

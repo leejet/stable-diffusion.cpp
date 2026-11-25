@@ -858,6 +858,7 @@ Top-level fields:
 | `loras` | `array<object>` | Available LoRA entries |
 | `upscalers` | `array<object>` | Available highres upscalers, built-in and model-backed |
 | `preview_modes` | `array<string>` | Available preview modes, e.g. `["none", "proj", "tae", "vae"]` |
+| `media_view` | `boolean` | Whether the media view endpoint is enabled |
 | `limits` | `object` | Shared queue and size limits |
 
 `model`
@@ -1827,6 +1828,18 @@ Example cancelled job:
 - `503 Service Unavailable` when the request uses the current model and the server has none configured
 - `429 Too Many Requests` when the job queue is full
 - `500 Internal Server Error` for unexpected server exceptions during submission
+
+## Media view
+
+`GET /sdcpp/v1/view?root=assets&path=reference.png` serves an image or video
+over the configured listener. `root` selects `input`, `output`, or `assets`
+in the server's working directory. `path` is a slash-separated relative path
+within that directory. Supported formats are PNG, JPEG, GIF, WebP, WebM, MP4,
+and AVI. The endpoint supports HTTP byte ranges and sends `Cache-Control: no-store`.
+
+The server returns `403` when access is denied or the server was started with
+`--no-media-view`. Unavailable paths, links, and unsupported files return
+`404`.
 
 ## DGL editor API
 

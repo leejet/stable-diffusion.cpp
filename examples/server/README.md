@@ -436,6 +436,7 @@ configured defaults.
 | `--listen-ip <ip>` | `127.0.0.1` | Server listen address |
 | `--listen-port <port>` | `1234` | Server listen port |
 | `--dgl-dir <path>` | `dgl` | Script directory for the DGL editor |
+| `--no-media-view` | Off | Disable the media view endpoint |
 | `--max-pending-jobs <count>` | `64` | Maximum async jobs queued or generating |
 | `--completed-ttl-seconds <seconds>` | `600` | Retention time for completed async jobs |
 
@@ -461,7 +462,7 @@ Protected responses include `Cache-Control: no-store`.
 The server rejects requests from other browser origins with `403` unless their
 origin is listed in `--cors-origins`. For a reverse proxy that preserves the
 public Host header, include its full public origin in that list, such as
-`https://sd.example.com`. The origin policy applies to DGL requests
+`https://sd.example.com`. The origin policy applies to DGL and media requests
 as well as the generation APIs.
 
 Startup fails if an access option is missing its value, a list is empty
