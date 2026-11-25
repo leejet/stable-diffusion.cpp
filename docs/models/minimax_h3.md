@@ -12,7 +12,7 @@ Pass the four MiniMax-H3 components separately:
 - `--diffusion-model`: MiniMax-H3 diffusion transformer
 - `--vae`: MiniMax-H3 video VAE
 - `--audio-vae`: MiniMax-H3 audio VAE
-- `--llm`: the MiniMax-H3 Qwen3-VL-32B text encoder, or Qwen3-VL-4B with the P-H3 text connector
+- `--llm`: the MiniMax-H3 Qwen3-VL-32B text encoder, Qwen3-VL-4B with the P-H3 text connector, or Qwen3-VL-4B/8B with the ClipProj projection
 
 For the 32B option, use the MiniMax-H3 variant: Qwen3-VL-32B truncated to 50
 language layers and exported without the final language-model normalization.
@@ -51,10 +51,35 @@ or:
   --embeddings-connectors ../models/text_encoders/p-h3-image_text_connector.safetensors
 ```
 
+or use a plain Qwen3-VL-4B or Qwen3-VL-8B with the
+[ClipProj projection](https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3), a
+small learned matrix that replaces the 32B encoder:
+
+**Windows (PowerShell) arguments**
+
+```text
+--llm ..\models\text_encoders\qwen3vl_4b.gguf `
+  --embeddings-connectors ..\models\text_encoders\mmh3-4b-ClipProj-v3.1.safetensors
+```
+
+**Linux/macOS arguments**
+
+```text
+--llm ../models/text_encoders/qwen3vl_4b.gguf \
+  --embeddings-connectors ../models/text_encoders/mmh3-4b-ClipProj-v3.1.safetensors
+```
+
+The `mmh3-4b-*` matrices expect a Qwen3-VL-4B encoder and the `mmh3-8b-*`
+matrices a Qwen3-VL-8B encoder; match the two. Only the linear matrices are
+supported, not the `-mlp` residual variants. ClipProj is a community proof of
+concept: outputs are close to, not identical to, the 32B encoder. See the
+[model card](https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3) for
+measurements and limitations.
+
 Reference-image and reference-video conditioning needs the matching encoder's
-Qwen3-VL vision tower, including the three DeepStack mergers. If stored
-separately, pass it with `--llm_vision`. Keep using the MiniMax-H3 video and audio
-VAEs with either text encoder.
+Qwen3-VL vision tower; the official 32B encoder includes the three DeepStack mergers.
+If stored separately, pass it with `--llm_vision`. Keep using the MiniMax-H3
+video and audio VAEs with any text encoder.
 
 In DGL, use `load_text_encoder` with `family = "minimax_h3"`. For a separate
 4B connector or vision projector, pass `connectors_path` or `vision_path` to
@@ -76,6 +101,7 @@ are detected from their weights.
 | minimax_h3_fl2va/minimax_h3_ref2va | [Safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/tree/main/diffusion_models)<br>[GGUF](https://huggingface.co/leejet/MiniMax-H3-GGUF/tree/main) | `--diffusion-model` | Required |
 | qwen3vl_32b_minimax_h3 | [Safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/tree/main/text_encoders)<br>[GGUF](https://huggingface.co/leejet/MiniMax-H3-GGUF/tree/main) | `--llm` | Use matching text encoder |
 | P-H3-Image text encoder (Qwen3-VL-4B with the text connector) | [Safetensors](https://huggingface.co/PrunaAI/P-H3-Image-Comfy/tree/main/text_encoders) | `--llm` | Use matching text encoder |
+| ClipProj projection (for a plain Qwen3-VL-4B or Qwen3-VL-8B) | [Safetensors](https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3) | `--embeddings-connectors` | Pair with a matching Qwen3-VL-4B/8B `--llm` |
 | vae | [Safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/tree/main/vae) | `--vae` | Use matching VAE |
 | audio vae | [Safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/tree/main/vae) | `--audio-vae` | Required |
 
