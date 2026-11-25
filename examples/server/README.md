@@ -444,6 +444,9 @@ configured defaults.
 | `--weight-staging-ttl <seconds>` | `-1` | GPU staging copies of weights backed by RAM, including components placed on CPU by `--params-backend cpu` or auto-fit. The next request uploads the needed weights from RAM. |
 | `--weight-residency-ttl <seconds>` | `-1` | Cached model components, including RAM weights, GPU weights, staging copies, and component caches. The next request loads the needed components from their files. |
 
+Both options also clear idle reusable buffers on supported backends after
+releasing weights.
+
 For either option, `-1` disables release, `0` releases as soon as the shared
 context is idle, and a positive integer sets the idle time in seconds. The
 timer starts when the last job finishes. Running and queued generation or DGL
