@@ -36,6 +36,13 @@ namespace {
         return lock;
     }
 
+    static void clear_backend_buffer_caches(const Context& ctx) {
+        // Idle weight release can refill a cache that runner cleanup already cleared.
+        for (const auto& entry : *ctx.backends) {
+            sd_backend_clear_buffer_cache(entry.second.get());
+        }
+    }
+
     class ActiveRun {
         Context& context_;
 
@@ -145,6 +152,7 @@ sd_status_t sd_dgl_ctx_release_staging(sd_dgl_ctx_t* ctx) {
     return api_call([&] {
         auto lock = lock_idle(ctx);
         ctx->models->release_idle_gpu_staging();
+        clear_backend_buffer_caches(*ctx);
     });
 }
 
@@ -152,6 +160,7 @@ sd_status_t sd_dgl_ctx_unload_models(sd_dgl_ctx_t* ctx) {
     return api_call([&] {
         auto lock = lock_idle(ctx);
         ctx->unload_models();
+        clear_backend_buffer_caches(*ctx);
     });
 }
 
