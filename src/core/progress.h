@@ -4,6 +4,7 @@
 #include <cstdint>
 
 void pretty_progress(int step, int steps, float time);
+void pretty_console_progress(int step, int steps, float time);
 void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds);
 
 namespace sd {

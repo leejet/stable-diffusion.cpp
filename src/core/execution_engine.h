@@ -33,6 +33,7 @@ namespace sd {
     struct ComputeResult {
         ggml_status status = GGML_STATUS_FAILED;
         Tensor<float> output;
+        std::string device_memory_error;
     };
 
     class ExecutionSession {
@@ -100,7 +101,8 @@ namespace sd {
                              const DeviceMemoryRequest& request,
                              const std::vector<ggml_tensor*>& required_params,
                              const std::vector<std::vector<ggml_tensor*>>& preferred_eviction_order,
-                             const std::vector<ggml_tensor*>& protected_params);
+                             const std::vector<ggml_tensor*>& protected_params,
+                             std::string* device_memory_error = nullptr);
         // Graphs, input data and output callbacks remain borrowed until execute returns.
         ComputeResult execute(ExecutionSession& session, const ComputeTask& task);
     };

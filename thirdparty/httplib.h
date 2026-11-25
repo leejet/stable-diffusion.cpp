@@ -6216,7 +6216,7 @@ inline bool range_error(Request &req, Response &res) {
       }
 
       if (first_pos == -1) {
-        first_pos = content_len - last_pos;
+        first_pos = content_len - (std::min)(content_len, last_pos);
         last_pos = content_len - 1;
       }
 

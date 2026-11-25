@@ -32,6 +32,7 @@ namespace sd {
         std::unordered_set<const ggml_tensor*> params_tensor_set_;
         ggml_status last_compute_status_ = GGML_STATUS_FAILED;
         Tensor<float> output_;
+        std::string device_memory_error_;
 
         using GraphCutPlan = ggml_graph_cut::Plan;
         ggml_tensor* canonical_param_tensor(ggml_tensor* tensor);
@@ -78,9 +79,9 @@ namespace sd {
 
         ComputeResult run() {
             if (!execute_graph(task_.graph, task_.n_threads, task_.no_return, task_.read_outputs)) {
-                return {last_compute_status_, {}};
+                return {last_compute_status_, {}, std::move(device_memory_error_)};
             }
-            return {GGML_STATUS_SUCCESS, std::move(output_)};
+            return {GGML_STATUS_SUCCESS, std::move(output_), {}};
         }
     };
 
@@ -630,8 +631,12 @@ namespace sd {
             const auto& segment = plan.segments[index];
             const bool last     = index + 1 == plan.segments.size();
             auto fail_segment   = [&](const char* phase) {
-                LOG_ERROR("%s segment %zu/%zu (%s) failed during %s", task_.description.c_str(),
-                          index + 1, plan.segments.size(), segment.group_name.c_str(), phase);
+                auto message = sd_format("%s segment %zu/%zu (%s) failed during %s", task_.description.c_str(),
+                                         index + 1, plan.segments.size(), segment.group_name.c_str(), phase);
+                LOG_ERROR("%s", message.c_str());
+                if (!device_memory_error_.empty()) {
+                    device_memory_error_ = message + ": " + device_memory_error_;
+                }
                 return false;
             };
             // A device excluded while the graph runs is refused at the next segment; the line says why on its own.
@@ -693,7 +698,7 @@ namespace sd {
                     sync_runtime_residency();
                     requests = memory_requests(measurement.buffers, new_cache_bytes);
                 }
-                const bool ready = weights.ensure_segment_capacity(index, requests);
+                const bool ready = weights.ensure_segment_capacity(index, requests, &device_memory_error_);
                 if (!ready && manager != nullptr) {
                     last_compute_status_ = GGML_STATUS_ALLOC_FAILED;
                 }
@@ -915,7 +920,8 @@ namespace sd {
         const DeviceMemoryRequest& request,
         const std::vector<ggml_tensor*>& required_params,
         const std::vector<std::vector<ggml_tensor*>>& preferred_eviction_order,
-        const std::vector<ggml_tensor*>& protected_params) {
+        const std::vector<ggml_tensor*>& protected_params,
+        std::string* device_memory_error) {
         GGML_ASSERT(&manager == manager_);
         auto capacity      = [&]() { return manager.inspect_compute_backend_capacity(request, required_params); };
         auto guard_ok      = [&]() { return manager.memory_guard_ok(request, required_params); };
@@ -1013,10 +1019,14 @@ namespace sd {
         const auto budget_bytes = available.available_budget_bytes == SIZE_MAX
                                       ? std::string("unlimited")
                                       : sd_format("%.2f MB", available.available_budget_bytes / (1024.0 * 1024.0));
-        LOG_WARN("execution engine cannot make enough memory available on %s: need %.2f MB device / %.2f MB budget, available %s device / %s budget",
-                 ggml_backend_name(request.compute_backend),
-                 available.required_device_bytes / (1024.0 * 1024.0),
-                 available.required_budget_bytes / (1024.0 * 1024.0), device_bytes.c_str(), budget_bytes.c_str());
+        auto message            = sd_format("execution engine cannot make enough memory available on %s: need %.2f MB device / %.2f MB budget, available %s device / %s budget",
+                                            ggml_backend_name(request.compute_backend),
+                                            available.required_device_bytes / (1024.0 * 1024.0),
+                                            available.required_budget_bytes / (1024.0 * 1024.0), device_bytes.c_str(), budget_bytes.c_str());
+        LOG_WARN("%s", message.c_str());
+        if (device_memory_error != nullptr && available.valid) {
+            *device_memory_error = std::move(message);
+        }
         return false;
     }
 

@@ -17,6 +17,7 @@ namespace sd::dgl {
         int interval                         = 0;
         bool denoised                        = false;
         bool noisy                           = false;
+        bool console_progress                = false;
     };
 
     class RunEvents {
@@ -28,8 +29,10 @@ namespace sd::dgl {
         void* legacy_preview_data_      = nullptr;
         bool legacy_progress_           = false;
         int64_t last_progress_us_       = 0;
+        bool sample_line_open_          = false;
 
         static void preview_bridge(int step, int frame_count, const sd_tensor_t* const* frames, bool noisy, void* userdata);
+        void render_sample_progress(int completed, int total_steps, float time);
 
     public:
         RunEvents(const RunCallbacks& callbacks, bool legacy_callbacks);
@@ -41,8 +44,11 @@ namespace sd::dgl {
         void report_frames(const char* stage, int completed, int total) const;
         static void report_loading(int completed, int total, void* data);
         bool uses_legacy_progress() const { return legacy_progress_; }
+        bool forces_console_progress() const { return !legacy_progress_ && callbacks_.console_progress; }
+        bool uses_console_progress() const { return legacy_progress_ || !callbacks_.progress || forces_console_progress(); }
         void begin_sample(int total_steps);
         void sample_step(int completed, int total_steps);
+        void finish_sample_line();
         const RunCallbacks& callbacks() const { return callbacks_; }
         const sd_preview_info_t& preview_info() const { return preview_info_; }
         bool uses_legacy_preview() const { return legacy_preview_ != nullptr; }

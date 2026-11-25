@@ -1,11 +1,13 @@
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
-#include "httplib.h"
+// cpp-httplib must include Winsock2 before other headers include windows.h.
+#include "server_access.h"
 
 #include "async_jobs.h"
 #include "common/common.h"
@@ -42,6 +44,7 @@ static sd_profile::Level parse_args(int argc,
         ctx_params.get_options(),
         default_gen_params.get_options(),
     };
+    svr_params.add_access_options(options_vec[0], options_vec);
 
     if (!parse_options(argc, argv, options_vec)) {
         print_usage(argv[0], options_vec);
@@ -72,47 +75,6 @@ static sd_profile::Level parse_args(int argc,
 void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     SDSvrParams* svr_params = (SDSvrParams*)data;
     log_print(level, log, svr_params->log_level, svr_params->color);
-}
-
-static bool equals_constant_time(const std::string& a, const std::string& b) {
-    if (a.size() != b.size()) {
-        return false;
-    }
-    unsigned char diff = 0;
-    for (size_t i = 0; i < a.size(); i++) {
-        diff |= static_cast<unsigned char>(a[i] ^ b[i]);
-    }
-    return diff == 0;
-}
-
-static bool request_authorized(const httplib::Request& req, const std::string& api_key) {
-    const std::string bearer = req.get_header_value("Authorization");
-    if (bearer.rfind("Bearer ", 0) == 0 && equals_constant_time(bearer.substr(7), api_key)) {
-        return true;
-    }
-    return equals_constant_time(req.get_header_value("X-API-Key"), api_key);
-}
-
-static bool origin_allowed(const std::string& allowed_csv, const std::string& origin) {
-    if (allowed_csv.empty()) {
-        return true;
-    }
-    size_t start = 0;
-    while (start <= allowed_csv.size()) {
-        size_t end      = allowed_csv.find(',', start);
-        size_t len      = (end == std::string::npos ? allowed_csv.size() : end) - start;
-        std::string one = allowed_csv.substr(start, len);
-        one.erase(0, one.find_first_not_of(" \t"));
-        one.erase(one.find_last_not_of(" \t") + 1);
-        if (!one.empty() && one == origin) {
-            return true;
-        }
-        if (end == std::string::npos) {
-            break;
-        }
-        start = end + 1;
-    }
-    return false;
 }
 
 int main(int argc, const char** argv) {
@@ -164,13 +126,23 @@ int main(int argc, const char** argv) {
     keeper_settings.cooldown_seconds = svr_params.degradation_cooldown;
     ContextKeeper::Hooks keeper_hooks;
     keeper_hooks.halted = [&guardian] { return guardian.evaluate().halted; };
-    // Every context the keeper creates, after a step down too, reads files only where the server allows it.
+    // Every context the keeper creates, after a step down too, reads files only where the server allows it, and
+    // its DGL jobs show their progress on the console as well as in the job.
     keeper_hooks.create_context = [&models](const SDContextParams& params, GenerationFailure& failure) {
         SDCtxPtr ctx = create_context_from_params(params, failure);
-        if (ctx != nullptr && !apply_server_file_access(models, ctx.get())) {
+        if (ctx == nullptr) {
+            return ctx;
+        }
+        std::string problem;
+        if (!apply_server_file_access(models, ctx.get())) {
+            problem = std::string("could not restrict the file access of the context: ") + sd_get_last_error();
+        } else if (!sd_dgl_ctx_set(sd_ctx_get_dgl_ctx(ctx.get()), "console_progress", "on")) {
+            problem = std::string("could not keep the progress of DGL jobs on the console: ") + sd_dgl_error();
+        }
+        if (!problem.empty()) {
             failure         = GenerationFailure();
             failure.code    = SD_ERROR_UNKNOWN;
-            failure.message = std::string("could not restrict the file access of the context: ") + sd_get_last_error();
+            failure.message = problem;
             ctx.reset();
         }
         return ctx;
@@ -248,31 +220,7 @@ int main(int argc, const char** argv) {
     std::thread async_worker(async_job_worker, std::ref(runtime));
     guardian.watch([&runtime](const Guardian::State& state) { stop_work_for_guardian(runtime, state.reason); });
 
-    httplib::Server svr;
-
-    svr.set_pre_routing_handler([&svr_params](const httplib::Request& req, httplib::Response& res) {
-        std::string origin = req.get_header_value("Origin");
-        if (origin.empty()) {
-            origin = "*";
-        }
-        if (origin_allowed(svr_params.cors_origins, origin)) {
-            res.set_header("Access-Control-Allow-Origin", origin);
-            res.set_header("Access-Control-Allow-Credentials", "true");
-            res.set_header("Access-Control-Allow-Methods", "*");
-            res.set_header("Access-Control-Allow-Headers", "*");
-        }
-
-        if (req.method == "OPTIONS") {
-            res.status = 204;
-            return httplib::Server::HandlerResponse::Handled;
-        }
-        if (!svr_params.api_key.empty() && !request_authorized(req, svr_params.api_key)) {
-            res.status = 401;
-            res.set_content(R"({"error":"unauthorized: missing or invalid API key"})", "application/json");
-            return httplib::Server::HandlerResponse::Handled;
-        }
-        return httplib::Server::HandlerResponse::Unhandled;
-    });
+    SDHttpServer svr(svr_params);
 
     std::string index_html;
 #ifdef HAVE_INDEX_HTML
@@ -281,6 +229,7 @@ int main(int argc, const char** argv) {
     index_html = "Stable Diffusion Server is running";
 #endif
     register_index_endpoints(svr, svr_params, index_html);
+    register_media_view_endpoint(svr, svr_params);
     register_openai_api_endpoints(svr, runtime);
     register_sdapi_endpoints(svr, runtime);
     register_sdcpp_api_endpoints(svr, runtime);

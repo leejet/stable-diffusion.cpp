@@ -270,9 +270,13 @@ breve a inizio richiesta, ma toglie core alla chat in quel momento) o a
   processi, ciascuno con il proprio `--backend cudaN` e la propria porta (vedi
   [backend.md](./backend.md#several-gpus---multi-gpu-autoonoff)).
 - `--listen-ip` è `127.0.0.1` per default: lascialo così se serve solo in
-  locale. Se una pagina web chiama il motore direttamente, imposta
-  `--cors-origins` con l'origine della pagina (di default il server accetta
-  qualsiasi origine) e `--api-key`. Vedi
+  locale. Di default il server risponde alle sue pagine e ai programmi che non
+  mandano un'origine (curl, Python, Node, il processo principale di Electron);
+  una pagina web di un'altra origine riceve `403`. Se una pagina web chiama il
+  motore direttamente, imposta `--cors-origins` con l'origine della pagina, e
+  `--api-key`. Anche chi raggiunge il server con un nome che non è `localhost`
+  né un indirizzo IP (un nome di rete, il nome di un container Docker) riceve
+  `403`, finché `http://nome:porta` non è in `--cors-origins`. Vedi
   [sicurezza](./integrazione_progetti.md#5-sicurezza-cosa-sapere-e-cosa-fare).
 
 ### 4.2 Vita del processo figlio
@@ -310,7 +314,8 @@ breve a inizio richiesta, ma toglie core alla chat in quel momento) o a
 | `429` | coda piena (`queue.max` in `/health`, 64) | riprova dopo `Retry-After` (10 secondi) |
 | `202` su `cancel?wait=…` | lo stop è stato chiesto e dopo l'attesa il job sta ancora finendo (`cancel_requested: true`); senza `?wait=` la risposta è invece subito `200`, con il job ancora `generating` | ripeti `cancel` o interroga il job finché diventa `cancelled` |
 | `409` su `cancel` | server più vecchio: il job sta generando e non si può fermare | aspetta o termina il processo |
-| `401` | manca la chiave API | `Authorization: Bearer <chiave>` oppure `X-API-Key` |
+| `401` | manca la chiave API, o è sbagliata | `Authorization: Bearer <chiave>` oppure `X-Api-Key: <chiave>` |
+| `403` `Request origin is not allowed` | la richiesta viene da una pagina di un'altra origine, o chiama il server con un nome che non è `localhost` né un indirizzo IP | aggiungi l'origine della pagina, o `http://nome:porta`, a `--cors-origins` |
 | `400` `invalid_argument` | la richiesta non è generabile così | non ripeterla uguale |
 | `200` dopo una discesa di profilo o un cambio di device | servita con un profilo più leggero o su un altro device | `/health` mostra `status: degraded`, il `profile` e il `device` in uso (e `cpu_modules` se la CPU fa parte del lavoro); dopo `--degradation-cooldown` il server prova a risalire |
 

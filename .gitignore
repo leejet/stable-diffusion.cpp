@@ -27,6 +27,7 @@ tests/
 /dgl/*
 !/dgl/.gitkeep
 logs/
+input/
 output/
 .vscode/
 .idea/

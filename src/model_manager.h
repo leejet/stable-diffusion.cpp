@@ -397,7 +397,8 @@ public:
         const DeviceMemoryRequest& request,
         const std::vector<ggml_tensor*>& required_params,
         const std::vector<std::vector<ggml_tensor*>>& preferred_eviction_order,
-        const std::vector<ggml_tensor*>& protected_params) override;
+        const std::vector<ggml_tensor*>& protected_params,
+        std::string* device_memory_error) override;
     DeviceMemoryCapacity inspect_compute_backend_capacity(
         const DeviceMemoryRequest& request,
         const std::vector<ggml_tensor*>& params,
@@ -540,8 +541,12 @@ public:
     bool ensure_host_memory(size_t pending, const std::vector<ggml_tensor*>& protected_params, size_t pending_device_commit = 0) override {
         return manager_->ensure_host_memory(pending, protected_params, pending_device_commit);
     }
-    bool ensure_compute_backend_capacity(const DeviceMemoryRequest& request, const std::vector<ggml_tensor*>& required, const std::vector<std::vector<ggml_tensor*>>& preferred, const std::vector<ggml_tensor*>& protected_params) override {
-        return manager_->ensure_compute_backend_capacity(request, required, preferred, protected_params);
+    bool ensure_compute_backend_capacity(const DeviceMemoryRequest& request,
+                                         const std::vector<ggml_tensor*>& required,
+                                         const std::vector<std::vector<ggml_tensor*>>& preferred,
+                                         const std::vector<ggml_tensor*>& protected_params,
+                                         std::string* device_memory_error) override {
+        return manager_->ensure_compute_backend_capacity(request, required, preferred, protected_params, device_memory_error);
     }
     DeviceMemoryCapacity inspect_compute_backend_capacity(const DeviceMemoryRequest& request,
                                                           const std::vector<ggml_tensor*>& params,

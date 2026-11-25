@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -50,7 +51,8 @@ namespace sd {
 
         const std::vector<ggml_tensor*>& params(size_t index) const { return segment_params_[index]; }
         bool ensure_segment_capacity(size_t segment_index,
-                                     const std::vector<DeviceMemoryRequest>& requests);
+                                     const std::vector<DeviceMemoryRequest>& requests,
+                                     std::string* device_memory_error);
         bool segment_start(size_t segment_index, const std::function<bool()>& ensure_capacity);
         void segment_end();
         // Prefetch is best effort; segment_start falls back to synchronous loading.

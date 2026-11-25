@@ -46,8 +46,10 @@ struct ScriptedManager : DeviceResidencyManager {
     bool ensure_compute_backend_capacity(const DeviceMemoryRequest& request,
                                          const std::vector<ggml_tensor*>& required_params,
                                          const std::vector<std::vector<ggml_tensor*>>& preferred_eviction_order,
-                                         const std::vector<ggml_tensor*>& protected_params) override {
-        return execution_engine()->ensure_capacity(*this, request, required_params, preferred_eviction_order, protected_params);
+                                         const std::vector<ggml_tensor*>& protected_params,
+                                         std::string* device_memory_error) override {
+        return execution_engine()->ensure_capacity(*this, request, required_params, preferred_eviction_order, protected_params,
+                                                   device_memory_error);
     }
     DeviceMemoryCapacity inspect_compute_backend_capacity(const DeviceMemoryRequest&,
                                                           const std::vector<ggml_tensor*>&,
@@ -90,7 +92,7 @@ static bool run(ScriptedManager& manager, ggml_backend_t backend) {
     DeviceMemoryRequest request;
     request.compute_backend = backend;
     request.owner_id        = 1;
-    return manager.ensure_compute_backend_capacity(request, {}, {}, {});
+    return manager.ensure_compute_backend_capacity(request, {}, {}, {}, nullptr);
 }
 
 int main() {
