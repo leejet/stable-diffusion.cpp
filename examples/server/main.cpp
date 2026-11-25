@@ -135,6 +135,9 @@ int main(int argc, const char** argv) {
     LOG_DEBUG("%s", ctx_params.to_string().c_str());
     LOG_DEBUG("%s", default_gen_params.to_string().c_str());
 
+    if (!ctx_params.apply_device_health_option()) {
+        return 1;
+    }
     if (!ctx_params.register_rpc_devices()) {
         return 1;
     }

@@ -15,8 +15,13 @@ Through POST /sdcpp/v1/devices/{device}/pressure it checks that:
   - every compute device reported critical while a job computes on it: the job stops, the model is not loaded
     anywhere else, and the server stays halted after the signals until an operator resumes it
     (POST /sdcpp/v1/guardian/resume);
-  - a second server with --guardian off never halts: a critical report only changes device health;
-  - termico.py osserva --segnala, with the fake GPU of test/termico_test.py, reports to that server.
+  - a second server, with --guardian off and --device-health levels=2,step=20,quiet=5, never halts: a critical report
+    only changes device health; its components have two levels of strain (80%, 60%, then excluded) and come back one
+    step every 5 s;
+  - termico.py osserva --segnala, with the fake GPU of test/termico_test.py, reports to that server: the attention
+    band as level 1, and the critical band as level 2, the last of the two, not as an exclusion;
+  - sd-cli, next to the server or given with --cli, applies --device-health at start, in the DGL mode too, and
+    refuses values against the rules.
 
 The test starts its servers with an API key of its own, to check that the reports need it. Extra options for the
 servers (a backend, ...) go after --extra, one each, for example --extra=--backend --extra=cpu. To use a server that
@@ -335,10 +340,10 @@ def run_scenarios(client, args):
     check(now.get("cancelled", 0) - before.get("cancelled", 0) == 3, "the two jobs and the request that the guardian stopped count as cancelled")
 
 
-def run_termico(client, args):
-    """termico.py osserva --segnala with the fake GPU of test/termico_test.py, at 82 C (the attention band): its
-    report reaches the server as level 1 of the CPU, named explicitly so that the scenario does not depend on the
-    GPUs of the machine, and is withdrawn when termico.py ends."""
+def run_termico(client, args, temperature, mask, band, level):
+    """termico.py osserva --segnala with the fake GPU of test/termico_test.py at the given temperature: its report
+    reaches the server as that level of the CPU, named explicitly so that the scenario does not depend on the GPUs of
+    the machine, and is withdrawn when termico.py ends; the CPU then comes back with the quiet periods of 5 s."""
     here = os.path.dirname(os.path.abspath(__file__))
     termico = os.path.join(here, "..", "scripts", "diagnostica_termica", "termico.py")
     spec = importlib.util.spec_from_file_location("termico_test", os.path.join(here, "termico_test.py"))
@@ -349,7 +354,7 @@ def run_termico(client, args):
         fake_gpu = os.path.join(folder, "nvidia-smi-finto.py")
         with open(fake_gpu, "w") as handle:
             handle.write(fakes.GPU_FINTA)
-        for name, value in (("temp", "82"), ("mask", "0000000000000004")):
+        for name, value in (("temp", str(temperature)), ("mask", mask.zfill(16))):
             with open(os.path.join(folder, name), "w") as handle:
                 handle.write(value)
         environment = dict(os.environ, FAKE_DIR=folder)
@@ -363,36 +368,70 @@ def run_termico(client, args):
 
         def reported():
             cpu.update(device(client.health()[1], "CPU"))
-            return cpu.get("level") == 1 and cpu.get("held_ms", 0) > 0
+            return cpu.get("level") == level and cpu.get("held_ms", 0) > 0
 
         seen = wait_until(reported, 10)
         output, _ = process.communicate(timeout=60)
-        check(seen and "termico: GPU a 82 C, fascia attenzione" in cpu.get("reason", ""),
-              "termico.py --segnala: the attention band reaches the server as level 1, with the reason (%s)" % cpu.get("reason"))
+        check(seen and "termico: GPU a %d C, fascia %s" % (temperature, band) in cpu.get("reason", "") and cpu.get("excluded") is False,
+              "termico.py --segnala at %d C: the %s band reaches the server as level %d of 2, with the reason (%s)" %
+              (temperature, band, level, cpu.get("reason")))
         after = device(client.health()[1], "CPU")
-        check(process.returncode == 0 and after.get("held_ms") == 0 and after.get("level") == 1,
-              "termico.py --segnala: when it ends its signal is withdrawn, and the level comes down with the quiet periods")
+        check(process.returncode == 0 and after.get("held_ms") == 0 and 0 < after.get("level", 0) <= level,
+              "termico.py --segnala: when it ends its signal is withdrawn, and the level does not drop at once")
+        check(wait_until(lambda: device(client.health()[1], "CPU").get("level") == 0, 5 * level + 10),
+              "termico.py --segnala: the CPU comes back one step every 5 s")
         check(args.api_key not in output, "termico.py --segnala: the API key does not appear in its output")
+        return output
     finally:
         shutil.rmtree(folder, ignore_errors=True)
 
 
 def run_guardian_off(args, log_path):
+    """The second server: --guardian off, and the values of device health changed with --device-health."""
     with open(log_path, "wb") as log:
-        process, base_url = start_server(args, log, ["--guardian", "off"])
+        process, base_url = start_server(args, log, ["--guardian", "off", "--device-health", "levels=2,step=20,quiet=5"])
         client = Client(base_url, args.api_key)
         try:
             health = wait_ready(client, process, args.start_timeout)
             check(health.get("guardian", {}).get("enabled") is False, "--guardian off: the health says the guardian is off")
+            check(health.get("devices") and all(entry.get("strain_levels") == 2 for entry in health["devices"]),
+                  "--device-health levels=2: every component has two levels of strain")
+            shares = []
+            for level in (1, 2, 3):
+                status, body, _ = client.pressure("disk", {"level": level, "source": "e2e", "duration_seconds": 60})
+                disk = body.get("device", {}) if status == 200 else {}
+                shares.append((disk.get("share_percent"), disk.get("excluded")))
+            check(shares == [(80, False), (60, False), (0, True)],
+                  "--device-health step=20: the levels offer 80%% and 60%%, and level 3 excludes (%s)" % shares)
+            client.pressure("disk", {"level": 0, "source": "e2e"})
+            check(wait_until(lambda: device(client.health()[1], "disk").get("level") == 0, 30),
+                  "--device-health quiet=5: withdrawn, the disk comes back one step every 5 s")
             status, body, _ = client.pressure("RAM", {"level": "critical", "source": "e2e", "reason": "test overheat", "duration_seconds": 30})
             check(status == 200 and device({"devices": [body.get("device", {})]}, "RAM").get("critical") is True and
                   body.get("guardian", {}).get("halted") is False,
                   "--guardian off: a critical report reaches device health but does not halt the server")
             done = client.wait_for(client.submit(2, 8, args.size), ("completed",), args.warmup_timeout)
             check(done["status"] == "completed", "--guardian off: the server keeps working")
-            run_termico(client, args)
+            run_termico(client, args, 82, "4", "attenzione", 1)
+            output = run_termico(client, args, 88, "1", "critica", 2)
+            check("2 livelli di sforzo" in output, "termico.py --segnala: the critical band stops at the last of the two levels, and it says so")
         finally:
             stop_server(process)
+
+
+def run_cli_option(args):
+    """--device-health in sd-cli, in the DGL mode that checks a script without loading a model: a value against the
+    rules stops the program at start, and a valid one is applied and named in the log."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    script = os.path.join(here, "..", "docs", "dgl", "sd", "sd1-5-txt2img.dgl")
+    command = [args.cli, "-M", "dgl", "--script", script, "--check", "--device-health"]
+    wrong = subprocess.run(command + ["levels=0"], capture_output=True, text=True, timeout=120)
+    check(wrong.returncode == 1 and "--device-health: levels=0" in wrong.stdout + wrong.stderr,
+          "sd-cli --device-health levels=0: refused at start, with the rules")
+    right = subprocess.run(command + ["quiet=600"], capture_output=True, text=True, timeout=120)
+    check(right.returncode == 0 and "device health: 3 levels of strain" in right.stdout + right.stderr and
+          "a quiet period of 600 s" in right.stdout + right.stderr,
+          "sd-cli --device-health quiet=600: applied in the DGL mode too, and named in the log")
 
 
 def log_lines(path, offset=0):
@@ -404,6 +443,7 @@ def log_lines(path, offset=0):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--server", default="build/bin/sd-server", help="path to sd-server")
+    parser.add_argument("--cli", help="path to sd-cli, for its --device-health (default: next to --server; skipped if it is not there)")
     parser.add_argument("--model", help="model for the servers to load")
     parser.add_argument("--url", help="use a server that is already running instead of starting one")
     parser.add_argument("--api-key", help="API key of the server (default: one of the test's own for the servers it starts)")
@@ -449,6 +489,13 @@ def main():
             run_guardian_off(args, off_log_path)
         except Abort as error:
             check(False, "--guardian off: " + str(error))
+
+    if not args.cli:
+        args.cli = os.path.join(os.path.dirname(args.server), "sd-cli" + (".exe" if os.name == "nt" else ""))
+    if os.path.isfile(args.cli):
+        run_cli_option(args)
+    else:
+        print("sd-cli not found at %s: its --device-health is not checked" % args.cli)
 
     if log_path is not None:
         text = log_lines(log_path)

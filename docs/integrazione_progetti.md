@@ -1986,6 +1986,42 @@ sincronizzazioni future.
     registro nel motore (12 controlli, non nel repository). **Non provato**:
     GPU vere, uno split a livelli fra due device, `termico.py --segnala` con una
     NVIDIA reale, Windows.
+27. **I valori della salute dei device** — i valori della voce 26, decisi il
+    25 novembre (tre livelli, 15% della capacità e 25% dei thread della CPU per
+    livello, 300 secondi di calma, 10 secondi fra due eventi del motore), ora
+    si leggono e si cambiano. API C, solo aggiunte:
+    `sd_device_health_settings_t`, `sd_get_device_health_settings()`,
+    `sd_set_device_health_settings()`. Opzione `--device-health` di `sd-cli` e
+    `sd-server` con le chiavi `levels`, `step`, `cpu-step`, `quiet` e `spacing`,
+    anche solo alcune (`examples/common/common.cpp`): vale appena lette le
+    opzioni, anche nel modo DGL, e un valore fuori regola ferma il programma
+    con le regole. Documentata nella sezione «Device health» di
+    [backend.md](./guides/backend.md), in `examples/server/api.md` e nel README
+    del server.
+
+    Il registro rifiuta ora attese oltre un giorno e passi che, moltiplicati
+    per i livelli, non stanno in un `int`; quando i valori cambiano, ogni
+    componente resta nel suo stato (prima, con meno livelli, un livello di
+    sforzo poteva diventare un'esclusione e, con più livelli, un escluso
+    tornare sotto sforzo); gli stessi valori riscritti non cambiano la
+    revisione, che farebbe ripiazzare i modelli. `termico.py --segnala` legge
+    i livelli del device da `/sdcpp/v1/health` e dalle risposte e non manda mai
+    più dell'ultimo: con due livelli la fascia critica vale 2, non
+    l'esclusione.
+
+    Test, su una build per CPU: i dodici programmi di `test/` passano, con
+    `device_health_test` (135 controlli) e il nuovo
+    `device_health_option_test` (30); `server_recovery_test` e
+    `server_guardian_test` anche con ThreadSanitizer. Versioni rotte del codice
+    nuovo che i test devono scoprire: registro e API C 12, opzione 9,
+    `termico.py` 6, collegamento in `sd-server` e `sd-cli` 2, tutte scoperte.
+    Con il modello SD 1.5 sintetico: `test/server_guardian_e2e.py` passa i suoi
+    70 controlli tre volte di fila (il secondo server con
+    `--device-health levels=2,step=20,quiet=5`, e `sd-cli` nel modo DGL);
+    `termico_test.py` 161; `server_cancel_e2e.py` 35; `agenti_guardiano_test.py`
+    66 senza server e 91 con il server vero; `security_smoke.sh`;
+    `dgl-check-builtins`; la prova d'integrazione del registro nel motore (12
+    controlli, non nel repository). **Non provato**: GPU vere, Windows.
 
 Passaggi previsti e non ancora svolti: collaudo del workflow di release sui
 runner GitHub, prova di `--multi-gpu` su una macchina con due GPU, generazione

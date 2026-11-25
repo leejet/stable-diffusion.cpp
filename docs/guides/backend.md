@@ -360,6 +360,46 @@ What it does and does not do:
 - `--profile auto` counts the free memory of the GPUs together (less 2 GiB of
   working memory for each GPU after the first) when `--multi-gpu` is not `off`.
 
+## Device health (`--device-health`)
+
+The engine keeps, for the whole process, a record of how each device, the RAM and
+the disk are doing. A component under strain offers less of its capacity, one step
+per level, and the work it gives up goes to the others: the planner gives it that
+share of its memory, the layer split that share of its capacity, and the CPU computes
+with fewer threads. An excluded device is never computed on.
+
+A level rises when a compute fails, a backend does not start, the memory guard cannot
+get under its threshold or a read of the weights fails, and when an outside watcher
+reports a signal: `sd-server` takes them on `POST /sdcpp/v1/devices/{device}/pressure`
+(see [Device health and the guardian](../../examples/server/api.md#device-health-and-the-guardian)),
+a host application calls `sd_report_device_pressure()`. Without failures and without
+signals nothing changes. A level comes back one step after each quiet period.
+
+`--device-health` sets the values for the run, in `sd-cli` and in `sd-server`, as a
+list of any of these keys:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `levels` | 3 | levels of strain before exclusion, 1 to 10; the level after the last one excludes |
+| `step` | 15 | percent of its capacity a component gives up at each level: 85%, 70%, 55% |
+| `cpu-step` | 25 | percent of its compute threads the CPU gives up at each level |
+| `quiet` | 300 | seconds without events before a level comes back one step, 1 to 86400 |
+| `spacing` | 10 | seconds under which two events of the engine on one component count once, 0 to 86400 |
+
+`step` and `cpu-step` times `levels` stay under 100, so the last level of strain still
+offers something. The values are checked at start: a list that breaks the rules stops
+the program and says them, and the log names the values used.
+
+```shell
+sd-server -m model.safetensors --device-health quiet=600
+sd-cli -m model.safetensors -p "a cat" --device-health levels=2,step=20
+```
+
+Host applications read and change the same values with
+`sd_get_device_health_settings()` and `sd_set_device_health_settings()`. When they
+change, every component keeps its state: an excluded one stays excluded, and a level of
+strain above the new last one comes down to it.
+
 ## Direct convolution (`--conv-direct on|off|auto`)
 
 `--conv-direct` defaults to `auto` and accepts module assignments for

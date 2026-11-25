@@ -627,6 +627,23 @@ SD_API bool sd_report_device_pressure(const char* component,
 // back to the last level of strain.
 SD_API void sd_resume_device_health(void);
 
+// The values of device health, for the whole process: read them, change some and write them back. The defaults are
+// 3 levels of strain, 15% of the capacity and 25% of the CPU threads per level, a quiet period of 300 s, and 10 s
+// under which two events of the engine on one component count once.
+typedef struct {
+    int strain_levels;            // levels of strain before exclusion, 1..10
+    int step_percent;             // capacity a component gives up at each level, at least 1
+    int cpu_thread_step_percent;  // compute threads the CPU gives up at each level, at least 0
+    int quiet_period_seconds;     // a level comes back one step after this long without events, 1..86400
+    int event_spacing_seconds;    // events of the engine on one component closer than this count once, 0..86400
+} sd_device_health_settings_t;
+
+SD_API void sd_get_device_health_settings(sd_device_health_settings_t* settings);
+// Returns false, and changes nothing, when a value is out of its range or a step times strain_levels reaches 100.
+// Every component keeps its state: an excluded one stays excluded, and a level of strain above the new last one
+// comes down to it. Writing the same values again changes nothing.
+SD_API bool sd_set_device_health_settings(const sd_device_health_settings_t* settings);
+
 // Why a call failed, in finer terms than sd_status_t: a lack of memory, which a lighter configuration may get
 // around, is told apart from a compute backend that failed. sd_ctx_create, sd_ctx_set_model_options*,
 // sd_generate_image and sd_generate_video record the reason on the calling thread when they fail; a call that

@@ -550,6 +550,9 @@ int main(int argc, const char* argv[]) {
 
     sd_set_log_callback(sd_log_cb, (void*)&cli_params);
     parse_args(argc, argv, cli_params, ctx_params, gen_params);
+    if (!ctx_params.apply_device_health_option()) {
+        return 1;
+    }
 
     if (cli_params.mode == DGL) {
         return cli_params.dgl.run(ctx_params, gen_params.embed_image_metadata);

@@ -175,6 +175,7 @@ struct SDContextParams {
     std::optional<std::string> split_mode;
     std::string multi_gpu;
     std::string layer_split_fill;
+    std::string device_health;
     std::optional<std::string> model_args;
     std::optional<bool> auto_fit;
     std::optional<std::string> rpc_servers;
@@ -210,7 +211,13 @@ struct SDContextParams {
     SDOptPtr to_context_opt();
     bool configure_dgl(sd_dgl_ctx_t* ctx) const;
     bool register_rpc_devices() const;
+    // For the whole process. False, with the reason logged, when the list cannot be read or breaks the rules.
+    bool apply_device_health_option() const;
 };
+
+// settings changes only when the whole list can be read; the rules are checked when the values are written, by
+// sd_set_device_health_settings().
+bool parse_device_health_settings(const std::string& list, sd_device_health_settings_t& settings, std::string& error);
 
 struct SDGenerationParams {
     // User-facing input fields.

@@ -378,7 +378,8 @@ serve.
 
 Con `--segnala` il programma non si limita a guardare: a ogni campione manda a `sd-server` la fascia della GPU come
 livello di salute del suo device, e il motore le toglie lavoro un gradino alla volta (85%, 70%, 55% di quello che può
-tenere) e lo passa agli altri device; una GPU esclusa non calcola più niente finché non si riprende.
+tenere, con i valori di partenza) e lo passa agli altri device; una GPU esclusa non calcola più niente finché non si
+riprende.
 
 ```shell
 python scripts/diagnostica_termica/termico.py osserva --motore http://127.0.0.1:1234 --segnala
@@ -397,9 +398,13 @@ python scripts/diagnostica_termica/termico.py osserva --motore http://127.0.0.1:
   che dà `nvidia-smi`; la stessa scheda vista da CUDA e da Vulkan va bene con l'uno o l'altro nome, perché il motore
   riconosce la scheda e passa il segnale anche all'altro. Con due schede uguali, o se il nome non si trova, indica il
   device: `--segnala CUDA0` (i nomi li elenca `GET /sdcpp/v1/health`, sotto `devices`).
+- **Un motore con altri livelli.** Il motore può avere più o meno di tre livelli di sforzo (`--device-health levels=N`):
+  il programma li legge da `GET /sdcpp/v1/health` e non va mai oltre l'ultimo, perché il livello dopo è l'esclusione.
+  Con due livelli la fascia critica vale 2, e lo dice all'inizio; l'esclusione arriva solo con il throttling hardware.
 - **Quanto dura.** Il segnale vale qualche campione (5 secondi con `--ogni 1`) e si ripete finché la fascia resta.
   Tornata la GPU normale, e quando il programma si ferma, il segnale si ritira; il livello poi scende di un gradino
-  ogni 5 minuti di calma, non di colpo. Se il programma cade, il segnale scade da solo dopo pochi secondi.
+  ogni 5 minuti di calma (con i valori di partenza), non di colpo. Se il programma cade, il segnale scade da solo
+  dopo pochi secondi.
 - **Cosa non fa.** Non ferma mai il motore da solo: manda al massimo "escluso", e il motore si ferma del tutto solo se
   non gli resta nessun device su cui calcolare (sezione "Device health and the guardian" della
   [guida dell'API](../../examples/server/api.md#device-health-and-the-guardian)).
@@ -596,14 +601,16 @@ uscita (il nome della prova viene ripulito: non può far uscire i file dalla car
 
 ## 11. Cosa è verificato e cosa no
 
-**Verificato**, con 127 controlli automatici in [`test/termico_test.py`](../../test/termico_test.py) (circa 80
-secondi; una GPU finta che risponde come `nvidia-smi`, un motore finto, e il programma lanciato davvero): calcolo di
+**Verificato**, con 161 controlli automatici in [`test/termico_test.py`](../../test/termico_test.py) (due minuti e
+mezzo; una GPU finta che risponde come `nvidia-smi`, un motore finto, e il programma lanciato davvero): calcolo di
 fasce, giudizi, pendenze e riepiloghi; lettura e scrittura del CSV (anche con righe troncate); `stato` con tutti i
 codici di uscita; `osserva` con file di stato letto in continuazione senza mai trovarlo a metà; `riepilogo` di una
 prova interrotta con un segnale di terminazione; la sessione guidata pilotata come da una persona (compreso l'Invio
 premuto per sbaglio durante una fase automatica); `confronta`; motore spento, motore che si spegne a metà, chiave API
-giusta e sbagliata, GPU che risponde a intermittenza o per niente; la chiave non compare mai nell'uscita né nei file.
-Inoltre `termico.py` e `carico_motore.py` sono stati provati contro un vero `sd-server` (build per CPU, modello
+giusta e sbagliata, GPU che risponde a intermittenza o per niente; la chiave non compare mai nell'uscita né nei file;
+`osserva --segnala` con motori finti a tre, due e un livello di sforzo, e contro un vero `sd-server` in
+[`test/server_guardian_e2e.py`](../../test/server_guardian_e2e.py), anche con `--device-health levels=2`. Inoltre
+`termico.py` e `carico_motore.py` sono stati provati contro un vero `sd-server` (build per CPU, modello
 sintetico, GPU simulata) mentre generava, con uno script di prova che non fa parte del repository: sei job completati
 e uno fermato con `cancel`, i contatori letti da `termico.py` uguali a quelli di `/health`, nessuna discesa di
 profilo. Per vedere che i controlli servano a qualcosa, durante lo sviluppo sono stati inseriti di proposito 42 errori

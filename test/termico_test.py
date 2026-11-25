@@ -4,7 +4,7 @@
 Non serve nessuna GPU, nessun driver e nessun modello: la GPU e il motore sono processi e server locali che il
 test crea e distrugge. Serve solo Python 3.8 o più recente, senza pacchetti.
 
-  python3 test/termico_test.py            tutto (circa 1-2 minuti)
+  python3 test/termico_test.py            tutto (circa 2-3 minuti)
   python3 test/termico_test.py --veloce   solo le prove delle funzioni, senza lanciare il programma
 
 Codice di uscita 0 = tutti i controlli superati. Su Windows la prova della sessione guidata (che usa uno
@@ -193,12 +193,15 @@ NOME_GPU_FINTA = "NVIDIA GeForce RTX 3060 Laptop GPU"
 class MotoreFinto:
     DISPOSITIVI = ("CPU", "CUDA0", "Vulkan0", "RAM", "disk")
 
-    def __init__(self, chiave=None, stato="ok", profilo="max", descrizione_gpu="gpu", ritardo_segnali=0.0):
+    def __init__(self, chiave=None, stato="ok", profilo="max", descrizione_gpu="gpu", ritardo_segnali=0.0, livelli=3,
+                 livelli_in_salute=True):
         self.chiave = chiave
         self.stato = stato
         self.profilo = profilo
         self.descrizione_gpu = descrizione_gpu
         self.ritardo_segnali = ritardo_segnali
+        self.livelli = livelli  # livelli di sforzo dei device (--device-health); None = un motore che non li dice
+        self.livelli_in_salute = livelli_in_salute  # False: li dicono solo le risposte alle segnalazioni
         self.richieste = []
         self.segnali = []  # (device, corpo) di ogni segnalazione accettata, in ordine
         self.avvio = time.time()
@@ -226,14 +229,17 @@ class MotoreFinto:
                 passato = time.time() - motore.avvio
                 if self.path == "/sdcpp/v1/health":
                     riuscite = int(passato / 1.5)
-                    return self.rispondi(503 if motore.stato == "unavailable" else 200, {
+                    corpo = {
                         "status": motore.stato, "model_loaded": True, "profile": motore.profilo,
                         "base_profile": "max", "degradation": True, "busy": True,
                         "counters": {"requests": riuscite + 1, "succeeded": riuscite, "failed": 0, "cancelled": 0,
                                      "recovered": 0, "step_downs": 0, "promotions": 0, "failed_promotions": 0,
                                      "rebuilds": 1},
                         "last_error": None, "next_promotion_seconds": None, "uptime_seconds": int(passato) + 100,
-                        "version": "stable-diffusion.cpp finto", "queue": {"pending": 1, "waiting": 0, "max": 64}})
+                        "version": "stable-diffusion.cpp finto", "queue": {"pending": 1, "waiting": 0, "max": 64}}
+                    if motore.livelli is not None and motore.livelli_in_salute:
+                        corpo["devices"] = [motore.stato_device(nome) for nome in MotoreFinto.DISPOSITIVI]
+                    return self.rispondi(503 if motore.stato == "unavailable" else 200, corpo)
                 if self.path == "/sdcpp/v1/resources":
                     return self.rispondi(200, {
                         "system_memory": {"total_bytes": 17179869184, "available_bytes": 9126805504,
@@ -262,8 +268,12 @@ class MotoreFinto:
                 dispositivo = urllib.parse.unquote(parti[4])
                 if dispositivo not in MotoreFinto.DISPOSITIVI:
                     return self.rispondi(404, {"error": "no device is named " + dispositivo, "code": "unknown_device"})
+                # Come sd-server: un livello oltre l'esclusione è rifiutato.
+                livello = corpo.get("level") if isinstance(corpo, dict) else None
+                if isinstance(livello, int) and not 0 <= livello <= (motore.livelli or 3) + 1:
+                    return self.rispondi(400, {"error": "level out of range", "code": "invalid_report"})
                 motore.segnali.append((dispositivo, corpo))
-                self.rispondi(200, {"device": {"name": dispositivo, "level": 0}, "guardian": {"enabled": True, "halted": False}})
+                self.rispondi(200, {"device": motore.stato_device(dispositivo), "guardian": {"enabled": True, "halted": False}})
 
             do_PUT = do_DELETE = do_PATCH = altro
 
@@ -271,6 +281,13 @@ class MotoreFinto:
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.url = "http://127.0.0.1:%d" % self.server.server_address[1]
+
+    def stato_device(self, nome):
+        stato = {"name": nome, "level": 0, "share_percent": 100, "excluded": False, "critical": False, "reason": "",
+                 "held_ms": 0, "next_step_ms": 0}
+        if self.livelli is not None:
+            stato["strain_levels"] = self.livelli
+        return stato
 
     def ferma(self):
         self.server.shutdown()
@@ -515,6 +532,13 @@ def prove_funzioni_segnala(tm):
     controlla(L("critica", 0x1) == 3 and L("critica", 0x20) == 3 and L("critica", 0x40) == 4,
               "livello_segnale: critica = 3, con throttling termico hardware = escluso (4)")
     controlla(L(None, 0x40) is None, "livello_segnale: temperatura illeggibile = nessuna segnalazione")
+    P = tm.livello_per_il_motore
+    controlla(P(1, 3) == 1 and P(3, 3) == 3 and P(0, 3) == 0 and P(tm.LIVELLO_ESCLUSO, 3) == "excluded",
+              "livello_per_il_motore: con tre livelli le fasce passano come sono, l'esclusione si manda per nome")
+    controlla(P(3, 2) == 2 and P(2, 2) == 2 and P(2, 1) == 1 and P(3, 1) == 1 and P(tm.LIVELLO_ESCLUSO, 1) == "excluded",
+              "livello_per_il_motore: con meno livelli una fascia si ferma all'ultimo e non diventa un'esclusione")
+    controlla(P(3, None) == 3 and P(3, 5) == 3 and P(1, 5) == 1,
+              "livello_per_il_motore: un motore che non dice i livelli ne ha tre; con più livelli le fasce restano 1, 2, 3")
     motivo = tm.motivo_segnale({"temp": 86.0, "mask": 0x20}, "attenzione")
     controlla("86 C" in motivo and "attenzione" in motivo and "throttling termico" in motivo and "\n" not in motivo,
               "motivo_segnale: temperatura, fascia e throttling in una riga (%s)" % motivo)
@@ -879,6 +903,34 @@ def prove_segnala(gpu, base):
     controlla(segnali and segnali[-1][1] == {"level": 0, "source": "termico"} and sum(1 for _, c in segnali if c["level"] == 0) == 1,
               "--segnala: tornata normale, il segnale si ritira una volta sola")
     controlla("CUDA0" in uscita and "segnal" in uscita.lower(), "--segnala: all'inizio dice a quale device del motore segnala")
+
+    # Un motore con meno livelli di sforzo (--device-health levels=2, o 1): le fasce si fermano all'ultimo e nessuna
+    # diventa un'esclusione; un motore che non dice i livelli ne ha tre.
+    # La GPU già critica al primo campione: i livelli si chiedono prima del primo segnale. Un motore che li dice solo
+    # nelle risposte: dalla seconda segnalazione valgono quelli.
+    casi = ((2, True, [(82, "4"), (82, "20"), (88, "1"), (88, "40"), (60, "1")], [1, 2, "excluded", 0]),
+            (1, True, [(82, "4"), (88, "1"), (88, "40"), (60, "1")], [1, "excluded", 0]),
+            (2, True, [(88, "1"), (60, "1")], [2, 0]),
+            (2, False, [(82, "4"), (88, "1"), (60, "1")], [1, 2, 0]),
+            (None, True, [(88, "1"), (60, "1")], [3, 0]))
+    for livelli, in_salute, passi, attesi in casi:
+        motore = MotoreFinto(descrizione_gpu=NOME_GPU_FINTA, livelli=livelli, livelli_in_salute=in_salute)
+        try:
+            codice, uscita, _ = osserva_con_passi(gpu, ["--segnala", "--motore", motore.url, "--ogni", "0.3",
+                                                        "--durata", str(int(1.5 * len(passi)) + 2),
+                                                        "--uscita", os.path.join(base, "segnala-livelli-%s-%d" % (livelli, len(passi)))],
+                                                  passi, 1.5)
+            segnali = list(motore.segnali)
+        finally:
+            motore.ferma()
+        quale = ("a %d livell%s" % (livelli, "o" if livelli == 1 else "i")) if livelli else "che non dice i livelli"
+        if not in_salute:
+            quale += ", detti solo nelle risposte"
+        elif passi[0][0] >= 87:
+            quale += ", con la GPU già critica"
+        controlla(codice == 0 and livelli_di(segnali) == attesi and (livelli is None or "di sforzo" in uscita) and
+                  "rifiutata" not in uscita,
+                  "--segnala con un motore %s: manda %s, e con meno di tre livelli lo dice (%s)" % (quale, attesi, livelli_di(segnali)))
 
     # Device indicato, chiave API, ritiro alla fine.
     protetto = MotoreFinto(chiave="k-77", descrizione_gpu=NOME_GPU_FINTA)

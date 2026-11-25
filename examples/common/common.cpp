@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -560,6 +561,15 @@ ArgOptions SDContextParams::get_options() {
          0,
          &layer_split_fill},
         {"",
+         "--device-health",
+         "values of device health, for the whole process, as a key=value list with any of the keys: levels (levels of strain "
+         "before a device is excluded, 1 to 10, default 3), step (percent of its capacity a device gives up at each level, "
+         "default 15), cpu-step (percent of its compute threads the CPU gives up at each level, default 25), quiet (seconds "
+         "without events before a level comes back one step, default 300) and spacing (seconds under which two events of the "
+         "engine on one device count once, default 10), e.g. quiet=600",
+         (int)',',
+         &device_health},
+        {"",
          "--rpc-servers",
          "comma-separated list of RPC servers to connect to for offloading, in the format host:port, e.g. localhost:50052,192.168.1.3:50052",
          (int)',',
@@ -820,6 +830,93 @@ bool SDContextParams::register_rpc_devices() const {
     return !rpc_servers || sd_add_rpc_servers(rpc_servers->c_str());
 }
 
+static std::string trimmed(const std::string& text) {
+    const size_t first = text.find_first_not_of(" \t");
+    if (first == std::string::npos) {
+        return "";
+    }
+    return text.substr(first, text.find_last_not_of(" \t") - first + 1);
+}
+
+bool parse_device_health_settings(const std::string& list, sd_device_health_settings_t& settings, std::string& error) {
+    static const char* keys            = "the keys are levels, step, cpu-step, quiet and spacing";
+    sd_device_health_settings_t parsed = settings;
+    std::set<std::string> seen;
+    size_t start = 0;
+    while (true) {
+        const size_t comma     = list.find(',', start);
+        const std::string item = trimmed(list.substr(start, comma == std::string::npos ? std::string::npos : comma - start));
+        const size_t equals    = item.find('=');
+        if (equals == std::string::npos) {
+            error = "--device-health: '" + item + "' is not key=value; " + keys;
+            return false;
+        }
+        const std::string key   = trimmed(item.substr(0, equals));
+        const std::string value = trimmed(item.substr(equals + 1));
+        int* target             = key == "levels"     ? &parsed.strain_levels
+                                  : key == "step"     ? &parsed.step_percent
+                                  : key == "cpu-step" ? &parsed.cpu_thread_step_percent
+                                  : key == "quiet"    ? &parsed.quiet_period_seconds
+                                  : key == "spacing"  ? &parsed.event_spacing_seconds
+                                                      : nullptr;
+        if (target == nullptr) {
+            error = "--device-health: unknown key '" + key + "'; " + keys;
+            return false;
+        }
+        if (!seen.insert(key).second) {
+            error = "--device-health: " + key + " is given twice";
+            return false;
+        }
+        int number        = 0;
+        const char* end   = value.data() + value.size();
+        const auto result = std::from_chars(value.data(), end, number);
+        if (value.empty() || result.ec != std::errc() || result.ptr != end) {
+            error = "--device-health: " + key + " needs a whole number, not '" + value + "'";
+            return false;
+        }
+        *target = number;
+        if (comma == std::string::npos) {
+            break;
+        }
+        start = comma + 1;
+    }
+    settings = parsed;
+    return true;
+}
+
+bool SDContextParams::apply_device_health_option() const {
+    if (device_health.empty()) {
+        return true;
+    }
+    sd_device_health_settings_t settings = {};
+    sd_get_device_health_settings(&settings);
+    std::string error;
+    if (!parse_device_health_settings(device_health, settings, error)) {
+        LOG_ERROR("error: %s", error.c_str());
+        return false;
+    }
+    if (!sd_set_device_health_settings(&settings)) {
+        LOG_ERROR(
+            "error: --device-health: levels=%d, step=%d, cpu-step=%d, quiet=%d, spacing=%d break the rules: levels from 1 to 10, "
+            "step at least 1, step and cpu-step times levels under 100, quiet from 1 to 86400 seconds, spacing from 0 to 86400",
+            settings.strain_levels,
+            settings.step_percent,
+            settings.cpu_thread_step_percent,
+            settings.quiet_period_seconds,
+            settings.event_spacing_seconds);
+        return false;
+    }
+    LOG_INFO(
+        "device health: %d levels of strain, %d%% of the capacity and %d%% of the CPU threads per level, "
+        "a quiet period of %d s, events of the engine closer than %d s count once",
+        settings.strain_levels,
+        settings.step_percent,
+        settings.cpu_thread_step_percent,
+        settings.quiet_period_seconds,
+        settings.event_spacing_seconds);
+    return true;
+}
+
 bool SDContextParams::print_devices() const {
     if (!register_rpc_devices()) {
         return false;
@@ -1023,6 +1120,7 @@ std::string SDContextParams::to_string() const {
         << "  split_mode: \"" << split_mode << "\",\n"
         << "  multi_gpu: \"" << multi_gpu << "\",\n"
         << "  layer_split_fill: \"" << layer_split_fill << "\",\n"
+        << "  device_health: \"" << device_health << "\",\n"
         << "  model_args: \"" << model_args << "\",\n"
         << "  auto_fit: " << auto_fit << ",\n"
         << "  enable_mmap: " << enable_mmap << ",\n"

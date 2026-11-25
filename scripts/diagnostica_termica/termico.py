@@ -438,6 +438,7 @@ class OsservatoreMotore:
 
 FONTE_SEGNALE = "termico"
 LIVELLO_ESCLUSO = 4  # il livello dopo i tre di sforzo del motore
+LIVELLI_PREDEFINITI = 3  # i livelli di sforzo di un motore che non li dice (--device-health levels li cambia)
 BIT_TERMICO_HW = 0x40
 
 
@@ -452,6 +453,14 @@ def livello_segnale(fascia, mask):
         return 2 if termico else 1
     # Il driver che rallenta la GPU per il caldo sotto la fascia di attenzione: le fasce sono più alte del suo limite.
     return 1 if termico else 0
+
+
+def livello_per_il_motore(livello, livelli):
+    """Il "level" da mandare a un motore con quei livelli di sforzo (None se non li dice: tre). Una fascia si ferma
+    all'ultimo livello di sforzo, perché il livello dopo è l'esclusione; l'esclusione si manda per nome."""
+    if livello == LIVELLO_ESCLUSO:
+        return "excluded"
+    return min(livello, livelli or LIVELLI_PREDEFINITI)
 
 
 def motivo_segnale(c, fascia):
@@ -494,6 +503,9 @@ class SegnalatoreMotore:
         self.dispositivo = dispositivo  # None: si cerca dal nome della GPU
         self.nome_gpu = nome_gpu
         self.durata = durata
+        self.livelli = None             # i livelli di sforzo del device nel motore, da /sdcpp/v1/health e dalle risposte
+        self._livelli_chiesti = False
+        self._ultima_richiesta_livelli = None
         self._voluto = None             # (livello, motivo) dell'ultimo campione, non ancora mandato
         self._attivo = False            # il motore tiene un segnale di questa fonte
         self._fermo = False
@@ -552,7 +564,32 @@ class SegnalatoreMotore:
         if self.dispositivo is not None and not self._annunciato:
             self._annunciato = True
             print(f"  Segnalo al motore la GPU come device {self.dispositivo}.", flush=True)
+        if self.dispositivo is not None:
+            self._chiedi_livelli()
         return self.dispositivo
+
+    def _chiedi_livelli(self):
+        if self._livelli_chiesti or (self._ultima_richiesta_livelli is not None and
+                                     time.monotonic() - self._ultima_richiesta_livelli < 10):
+            return
+        self._ultima_richiesta_livelli = time.monotonic()
+        codice, salute = chiedi_json(self.url, self.chiave, "/sdcpp/v1/health", 3.0)
+        if codice not in (200, 503) or not isinstance(salute, dict):
+            return
+        self._livelli_chiesti = True
+        voluto = self.dispositivo.lower()
+        for stato in salute.get("devices") or []:
+            if isinstance(stato, dict) and str(stato.get("name") or "").lower() == voluto:
+                self._prendi_livelli(stato.get("strain_levels"))
+
+    def _prendi_livelli(self, livelli):
+        if not isinstance(livelli, int) or isinstance(livelli, bool) or livelli < 1 or livelli == self.livelli:
+            return
+        self.livelli = livelli
+        if livelli < LIVELLI_PREDEFINITI:
+            parola = "livello" if livelli == 1 else "livelli"
+            self._avvisa(f"livelli{livelli}", f"Il motore ha {livelli} {parola} di sforzo: le fasce che varrebbero "
+                                              f"di più valgono {livelli}, e solo il throttling hardware esclude la GPU.")
 
     def _avvisa_errore(self, codice, risposta):
         if codice is None:
@@ -575,12 +612,15 @@ class SegnalatoreMotore:
         if livello == 0:
             corpo = {"level": 0, "source": FONTE_SEGNALE}
         else:
-            corpo = {"level": "excluded" if livello == LIVELLO_ESCLUSO else livello, "source": FONTE_SEGNALE,
+            corpo = {"level": livello_per_il_motore(livello, self.livelli), "source": FONTE_SEGNALE,
                      "reason": motivo, "duration_seconds": self.durata}
         percorso = "/sdcpp/v1/devices/" + urllib.parse.quote(dispositivo, safe="") + "/pressure"
         codice, risposta = manda_json(self.url, self.chiave, percorso, corpo, 3.0)
         if codice == 200:
             self._attivo = livello != 0
+            stato = risposta.get("device") if isinstance(risposta, dict) else None
+            if isinstance(stato, dict):
+                self._prendi_livelli(stato.get("strain_levels"))
         else:
             self._avvisa_errore(codice, risposta)
 
@@ -1449,8 +1489,9 @@ def crea_parser():
     osserva.add_argument("--durata", type=int, default=0, metavar="S", help="secondi da registrare (default: fino a Ctrl+C)")
     osserva.add_argument("--segnala", nargs="?", const="", default=None, metavar="DEVICE",
                          help="manda al motore (--motore) la fascia della GPU come livello di salute del suo device: "
-                              "attenzione 1, con throttling termico 2, critica 3, critica con throttling hardware "
-                              "esclusa; DEVICE è il nome nel motore (CUDA0, Vulkan0...), senza si trova dal nome della GPU")
+                              "attenzione 1, con throttling termico 2, critica 3 (mai oltre l'ultimo livello di sforzo "
+                              "del motore), critica con throttling hardware esclusa; DEVICE è il nome nel motore "
+                              "(CUDA0, Vulkan0...), senza si trova dal nome della GPU")
     osserva.add_argument("--file-stato", dest="file_stato", metavar="FILE",
                          help="file JSON riscritto a ogni campione con l'ultima lettura (per altri programmi)")
     osserva.set_defaults(esegui=comando_osserva)

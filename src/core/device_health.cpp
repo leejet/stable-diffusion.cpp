@@ -17,6 +17,7 @@ namespace sd {
     static constexpr size_t max_source_length  = 32;
     static constexpr size_t max_reason_length  = 160;
     static constexpr std::chrono::seconds max_signal_duration{24 * 60 * 60};
+    static constexpr std::chrono::seconds max_settings_wait{24 * 60 * 60};
 
     static std::string lowercase(std::string text) {
         std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -77,26 +78,38 @@ namespace sd {
     }
 
     bool DeviceHealth::set_settings(const Settings& settings) {
+        // Each step is checked alone first, so the products below cannot overflow.
         const bool valid = settings.strain_levels >= 1 && settings.strain_levels <= 10 &&
-                           settings.step_percent >= 1 && settings.step_percent * settings.strain_levels < 100 &&
-                           settings.cpu_thread_step_percent >= 0 &&
+                           settings.step_percent >= 1 && settings.step_percent < 100 &&
+                           settings.step_percent * settings.strain_levels < 100 &&
+                           settings.cpu_thread_step_percent >= 0 && settings.cpu_thread_step_percent < 100 &&
                            settings.cpu_thread_step_percent * settings.strain_levels < 100 &&
-                           settings.quiet_period >= std::chrono::seconds(1) &&
-                           settings.event_spacing >= std::chrono::seconds(0);
+                           settings.quiet_period >= std::chrono::seconds(1) && settings.quiet_period <= max_settings_wait &&
+                           settings.event_spacing >= std::chrono::seconds(0) && settings.event_spacing <= max_settings_wait;
         if (!valid) {
             return false;
         }
         std::lock_guard<std::mutex> lock(mutex_);
-        settings_ = settings;
+        // A new revision makes the next generation place its models again.
+        if (settings.enabled == settings_.enabled && settings.strain_levels == settings_.strain_levels &&
+            settings.step_percent == settings_.step_percent && settings.cpu_thread_step_percent == settings_.cpu_thread_step_percent &&
+            settings.quiet_period == settings_.quiet_period && settings.event_spacing == settings_.event_spacing) {
+            return true;
+        }
+        const int old_top = top_locked();
+        settings_         = settings;
         if (!settings_.enabled) {
             entries_.clear();
             listed_ = false;
         }
+        // Every component keeps its state: an excluded one stays excluded, one under strain stays under strain, at
+        // most on the new last level.
         const int top = top_locked();
+        auto moved    = [&](int level) { return level >= old_top ? top : std::min(level, settings_.strain_levels); };
         for (auto& entry : entries_) {
-            entry.level = std::min(entry.level, top);
+            entry.level = moved(entry.level);
             for (auto& held : entry.signals) {
-                held.level = std::min(held.level, top);
+                held.level = moved(held.level);
             }
         }
         revision_++;
@@ -562,4 +575,29 @@ bool sd_report_device_pressure(const char* component,
 
 void sd_resume_device_health(void) {
     sd::device_health().resume();
+}
+
+void sd_get_device_health_settings(sd_device_health_settings_t* settings) {
+    if (settings == nullptr) {
+        return;
+    }
+    const auto current                = sd::device_health().settings();
+    settings->strain_levels           = current.strain_levels;
+    settings->step_percent            = current.step_percent;
+    settings->cpu_thread_step_percent = current.cpu_thread_step_percent;
+    settings->quiet_period_seconds    = static_cast<int>(current.quiet_period.count());
+    settings->event_spacing_seconds   = static_cast<int>(current.event_spacing.count());
+}
+
+bool sd_set_device_health_settings(const sd_device_health_settings_t* settings) {
+    if (settings == nullptr) {
+        return false;
+    }
+    auto next                    = sd::device_health().settings();
+    next.strain_levels           = settings->strain_levels;
+    next.step_percent            = settings->step_percent;
+    next.cpu_thread_step_percent = settings->cpu_thread_step_percent;
+    next.quiet_period            = std::chrono::seconds(settings->quiet_period_seconds);
+    next.event_spacing           = std::chrono::seconds(settings->event_spacing_seconds);
+    return sd::device_health().set_settings(next);
 }

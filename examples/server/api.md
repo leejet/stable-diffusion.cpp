@@ -186,13 +186,13 @@ when the CPU was reached through memory failures, the climb is one profile up, a
 
 The engine keeps, for the whole process, a record of how each component is doing: every device the engine lists
 (`CUDA0`, `Vulkan1`, `CPU`, ...), the `RAM` and the `disk`. Each one is healthy (level 0), under strain (levels 1 to 3)
-or excluded (level 4).
+or excluded (level 4). These are the default values; `--device-health` changes them (see below).
 
 | Level | What the component offers |
 | --- | --- |
 | 0 | all of its capacity |
 | 1, 2, 3 | 85%, 70%, 55%: the planner gives it that share of its memory, the layer split that share of its capacity, and the CPU computes with 25% fewer threads per level (at least one) |
-| 4, excluded | nothing: the engine never computes on it, the planner gives it no module, the server does not load the model on it nor climb back to it, and an excluded CPU takes no work handed over from the GPUs. The RAM is never cut below the share of level 3; an excluded disk is not read during a generation, and a model that would need it fails with `out_of_memory` |
+| 4, excluded | nothing: the engine never computes on it, the planner gives it no module, the server does not load the model on it nor climb back to it, and an excluded CPU takes no work handed over from the GPUs. The RAM is never cut below the share of the last level of strain; an excluded disk is not read during a generation, and a model that would need it fails with `out_of_memory` |
 
 What raises a level, one step at a time: a compute that fails on a device (not for lack of memory: the profiles deal
 with that), a backend that does not start, the memory guard that cannot bring the memory below its threshold (it
@@ -202,8 +202,13 @@ one device less than 10 seconds apart count once. Outside watchers report too, w
 lasts, and reaches the other listings of the same card (`CUDA0` and `Vulkan0` of one GPU), which a failure of one backend
 does not. A level comes down one step after each quiet period of 300 seconds, counted from the last event and from the
 end of the signals that held it; withdrawing a signal does not make the component healthy at once. When the record
-changes, the next generation places the model again with the new shares, which costs loading the weights again. The
-values are provisional.
+changes, the next generation places the model again with the new shares, which costs loading the weights again.
+
+`--device-health` changes the values when the server starts, with any of the keys of
+`levels=3,step=15,cpu-step=25,quiet=300,spacing=10` (the defaults): the levels of strain, the share and the CPU
+threads given up at each level, the quiet period and the spacing of the events, in seconds. The level after the last
+level of strain excludes; each component in `/sdcpp/v1/health` gives its `strain_levels`, so a watcher knows which
+level that is. See [Backend selection](../../docs/guides/backend.md#device-health---device-health) for the rules.
 
 The guardian stops all the work of the server when the machine cannot take it: a component is reported `critical`, or
 every compute device is excluded (the GPUs and the CPU; the `RAM` and the `disk` do not count). While it is halted:
@@ -1360,7 +1365,7 @@ Request body:
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `level` | `integer \| string` | `0` withdraws the signal of this source; `1` to `3` put the component under strain; `4` or `"excluded"` exclude it; `"critical"` excludes it and asks the guardian to stop all work while the signal lasts |
+| `level` | `integer \| string` | `0` withdraws the signal of this source; `1` to `strain_levels` (3 by default) put the component under strain; `strain_levels + 1` or `"excluded"` exclude it; `"critical"` excludes it and asks the guardian to stop all work while the signal lasts |
 | `reason` | `string` | Optional, one line. The health shows it as `source: reason` |
 | `duration_seconds` | `integer` | Optional, 1 to 86400, default 60. The signal ends by itself after this time, so a watcher repeats it while the condition lasts |
 | `source` | `string` | Optional, default `http`: 1 to 32 letters, digits, `.`, `_` or `-`. Each source holds one signal per component, and a new one replaces the old one; name it when more than one watcher reports |

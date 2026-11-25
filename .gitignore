@@ -14,6 +14,7 @@ test/*
 !test/memory_guard_engine_test.cpp
 !test/layer_split_fill_test.cpp
 !test/device_health_test.cpp
+!test/device_health_option_test.cpp
 !test/package_windows_cuda_vulkan_test.sh
 !test/server_recovery_test.cpp
 !test/server_cancel_e2e.py

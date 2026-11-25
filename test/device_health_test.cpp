@@ -1,7 +1,8 @@
 // Test of the registry of device health (src/core/device_health.*): levels that rise one step per event, events
 // of the engine that come too close together, the way back after each quiet period, the signals of outside
-// watchers (sources, durations, critical), the same card seen by two backends, and what the levels offer: the
-// share of a device and the threads of the CPU. A fake clock replaces waiting; no GPU and no model are needed.
+// watchers (sources, durations, critical), the same card seen by two backends, what the levels offer (the share of
+// a device and the threads of the CPU) and the values, changed at run time and through the C API. A fake clock
+// replaces waiting; no GPU and no model are needed.
 // Build (from the repository root, after building the static library into build/):
 //   c++ -std=c++17 -DGGML_MAX_NAME=160 -Isrc -Isrc/core -Iinclude -Ithirdparty -Iggml/include \
 //       test/device_health_test.cpp build/libstable-diffusion.a build/ggml/src/libggml.a \
@@ -307,9 +308,23 @@ static void test_settings() {
     settings              = DeviceHealth::Settings();
     settings.step_percent = 40;
     check(!health.set_settings(settings), "steps that would leave nothing before exclusion are refused");
+    settings.step_percent = 1431655766;
+    check(!health.set_settings(settings), "even when the step times the levels does not fit in an int");
+    settings                         = DeviceHealth::Settings();
+    settings.cpu_thread_step_percent = 1431655766;
+    check(!health.set_settings(settings), "and so are such steps for the CPU threads");
     settings              = DeviceHealth::Settings();
     settings.quiet_period = std::chrono::seconds(0);
     check(!health.set_settings(settings), "a quiet period of zero is refused");
+    settings.quiet_period = std::chrono::seconds(24 * 60 * 60 + 1);
+    check(!health.set_settings(settings), "a quiet period longer than a day is refused");
+    settings.quiet_period = std::chrono::seconds(24 * 60 * 60);
+    check(health.set_settings(settings), "a day is accepted");
+    settings               = DeviceHealth::Settings();
+    settings.event_spacing = std::chrono::seconds(-1);
+    check(!health.set_settings(settings), "a negative spacing of events is refused");
+    settings.event_spacing = std::chrono::seconds(24 * 60 * 60 + 1);
+    check(!health.set_settings(settings), "a spacing of events longer than a day is refused too");
     settings              = DeviceHealth::Settings();
     settings.step_percent = 20;
     check(health.set_settings(settings), "sensible settings are accepted");
@@ -325,6 +340,50 @@ static void test_settings() {
     check(!off.report("CUDA0", signal("termico", 2, 60)), "a disabled registry refuses signals");
     check(off.level("CUDA0") == 0 && same(off.share("CUDA0"), 1.0) && off.revision() == revision,
           "and changes nothing for the events of the engine");
+}
+
+// New settings while components are under strain or excluded: each one stays in its state, and the same settings
+// written again change nothing, so the models are not placed again for nothing.
+static void test_settings_change_at_run_time() {
+    DeviceHealth health;
+    prepare(health);
+    for (int i = 0; i < 4; ++i) {
+        health.note_strain("CUDA0", "compute failed");
+        advance(10);
+    }
+    for (int i = 0; i < 3; ++i) {
+        health.note_strain("Vulkan1", "compute failed");
+        advance(10);
+    }
+    health.report("CPU", signal("termico", 3, 600));
+    const auto before = health.revision();
+    check(health.set_settings(DeviceHealth::Settings()) && health.revision() == before,
+          "the same settings written again change nothing, not even the revision");
+
+    DeviceHealth::Settings two;
+    two.strain_levels = 2;
+    check(health.set_settings(two) && health.revision() != before, "fewer levels are accepted and change the revision");
+    check(health.excluded("CUDA0"), "an excluded device stays excluded with fewer levels");
+    check(health.level("Vulkan1") == 2 && !health.excluded("Vulkan1"),
+          "a device on the last level of strain moves to the new last one, not to exclusion");
+    check(health.level("CPU") == 2 && !health.excluded("CPU"), "and so does the level a signal holds");
+
+    DeviceHealth::Settings five;
+    five.strain_levels           = 5;
+    five.step_percent            = 10;
+    five.cpu_thread_step_percent = 15;
+    check(health.set_settings(five), "more levels are accepted");
+    check(health.excluded("CUDA0") && health.level("CUDA0") == 6, "an excluded device stays excluded with more levels");
+    check(health.level("Vulkan1") == 2 && same(health.share("Vulkan1"), 0.80), "a device under strain keeps its level, with the new step");
+    advance(400);
+    check(health.level("CPU") == 2, "a signal keeps holding its level after the change, past a quiet period");
+
+    DeviceHealth held;
+    prepare(held);
+    held.report("Vulkan1", signal("termico", 4, 3600));
+    check(held.set_settings(five) && held.excluded("Vulkan1"), "an exclusion held by a signal stays an exclusion with more levels");
+    advance(400);
+    check(held.excluded("Vulkan1"), "and the signal keeps holding it past a quiet period");
 }
 
 static void test_snapshot_and_revision() {
@@ -383,6 +442,63 @@ static void test_c_api() {
     check(cpu != nullptr && cpu->excluded && cpu->critical && cpu->share_percent == 0, "a critical component is excluded");
     sd_resume_device_health();
     check(!health.any_critical() && health.level("CPU") == 3, "the C API resumes the registry");
+    health.set_clock(nullptr);
+    health.set_component_lister(nullptr);
+    health.reset();
+}
+
+// The C functions a host reads and changes the values with: read them, change some, write them back.
+static void test_c_api_settings() {
+    DeviceHealth& health = sd::device_health();
+    prepare(health);
+    sd_device_health_settings_t settings = {};
+    sd_get_device_health_settings(&settings);
+    check(settings.strain_levels == 3 && settings.step_percent == 15 && settings.cpu_thread_step_percent == 25 &&
+              settings.quiet_period_seconds == 300 && settings.event_spacing_seconds == 10,
+          "the C API reads the values: 3 levels, 15% and 25% per level, 300 s, 10 s");
+    settings.strain_levels           = 2;
+    settings.step_percent            = 20;
+    settings.cpu_thread_step_percent = 30;
+    settings.quiet_period_seconds    = 60;
+    settings.event_spacing_seconds   = 5;
+    check(sd_set_device_health_settings(&settings), "and writes new ones");
+    health.note_strain("CUDA0", "compute failed");
+    check(same(health.share("CUDA0"), 0.80), "which the registry uses: the step");
+    advance(59);
+    check(health.level("CUDA0") == 1, "and the quiet period");
+    advance(1);
+    check(health.level("CUDA0") == 0, "to the second");
+    health.note_strain("CPU", "too hot");
+    check(health.cpu_threads(10) == 7, "the CPU step: 10 threads to 7");
+    advance(4);
+    health.note_strain("CPU", "too hot");
+    check(health.level("CPU") == 1, "and the spacing: an event 4 s later counts once");
+    advance(1);
+    health.note_strain("CPU", "too hot");
+    check(health.level("CPU") == 2, "one 5 s later counts again");
+    sd_device_health_settings_t read_back = {};
+    sd_get_device_health_settings(&read_back);
+    check(read_back.strain_levels == 2 && read_back.step_percent == 20 && read_back.cpu_thread_step_percent == 30 &&
+              read_back.quiet_period_seconds == 60 && read_back.event_spacing_seconds == 5,
+          "the values read back are the ones written");
+    const size_t count = sd_get_device_health(nullptr, 0);
+    std::vector<sd_device_health_t> entries(count);
+    sd_get_device_health(entries.data(), entries.size());
+    check(count > 0 && entries[0].strain_levels == 2, "the entries carry the new number of levels");
+
+    sd_device_health_settings_t wrong = read_back;
+    wrong.step_percent                = 50;
+    check(!sd_set_device_health_settings(&wrong), "values that make no sense are refused: 2 levels of 50% leave nothing");
+    wrong                      = read_back;
+    wrong.quiet_period_seconds = 24 * 60 * 60 + 1;
+    check(!sd_set_device_health_settings(&wrong), "as is a quiet period longer than a day");
+    sd_get_device_health_settings(&read_back);
+    check(read_back.step_percent == 20 && read_back.quiet_period_seconds == 60, "and change nothing");
+    check(!sd_set_device_health_settings(nullptr), "a missing pointer is refused");
+    sd_get_device_health_settings(nullptr);
+    check(health.settings().strain_levels == 2, "and reading into none changes nothing either");
+
+    health.set_settings(DeviceHealth::Settings());
     health.set_clock(nullptr);
     health.set_component_lister(nullptr);
     health.reset();
@@ -457,10 +573,12 @@ int main() {
     test_resume();
     test_cpu_threads();
     test_settings();
+    test_settings_change_at_run_time();
     test_snapshot_and_revision();
     test_backend_names();
     test_engine_hooks();
     test_c_api();
+    test_c_api_settings();
 
     std::printf("\n%s (%d failures)\n", failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED", failures);
     return failures == 0 ? 0 : 1;
