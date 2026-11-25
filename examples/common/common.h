@@ -100,6 +100,7 @@ struct ManualOption {
     std::string long_name;
     std::string desc;
     ManualFunction cb;
+    bool requires_value = false;
 };
 
 struct ArgOptions {

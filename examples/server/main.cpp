@@ -1,8 +1,10 @@
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -65,7 +67,7 @@ static void parse_args(int argc,
 
 // api_key_matches compares in constant time, so the answer's timing
 // doesn't tell how much of a key was right.
-static bool api_key_matches(const std::vector<std::string>& keys, const std::string& key) {
+static bool api_key_matches(const std::vector<std::string>& keys, std::string_view key) {
     bool found = false;
     for (const auto& k : keys) {
         unsigned char diff = k.size() != key.size();
@@ -75,6 +77,115 @@ static bool api_key_matches(const std::vector<std::string>& keys, const std::str
         found |= diff == 0;
     }
     return found;
+}
+
+static bool needs_api_key(const httplib::Request& req) {
+    return req.method != "OPTIONS" && !(req.method == "GET" && req.path == "/");
+}
+
+static bool has_valid_api_key(const httplib::Request& req, const std::vector<std::string>& keys) {
+    const auto key = req.get_header_value("X-Api-Key");
+    if (!key.empty()) {
+        return api_key_matches(keys, key);
+    }
+
+    constexpr std::string_view scheme = "bearer";
+    const auto auth                   = req.get_header_value("Authorization");
+    const auto separator              = auth.find(' ');
+    if (separator != scheme.size() ||
+        !std::equal(scheme.begin(), scheme.end(), auth.begin(), [](char expected, unsigned char actual) {
+            return expected == std::tolower(actual);
+        })) {
+        return false;
+    }
+    const auto key_start = auth.find_first_not_of(' ', separator);
+    return key_start != std::string::npos && api_key_matches(keys, std::string_view(auth).substr(key_start));
+}
+
+class SDHttpServer final : public httplib::Server {
+public:
+    void close_after_response() {
+        close_after_response_ = true;
+    }
+
+    bool will_close_after_response() const {
+        return close_after_response_;
+    }
+
+private:
+    // cpp-httplib writes Connection: close for errors but does not stop its
+    // keep-alive loop when a handler rejects a request before reading the body.
+    bool process_and_close_socket(socket_t socket) override {
+        std::string remote_addr;
+        std::string local_addr;
+        int remote_port = 0;
+        int local_port  = 0;
+        httplib::detail::get_remote_ip_and_port(socket, remote_addr, remote_port);
+        httplib::detail::get_local_ip_and_port(socket, local_addr, local_port);
+        const bool result = httplib::detail::process_server_socket(
+            svr_sock_, socket, keep_alive_max_count_, keep_alive_timeout_sec_,
+            read_timeout_sec_, read_timeout_usec_, write_timeout_sec_, write_timeout_usec_,
+            [&](httplib::Stream& stream, bool close_connection, bool& connection_closed) {
+                close_after_response_ = false;
+                const bool written    = process_request(stream, remote_addr, remote_port, local_addr,
+                                                        local_port, close_connection, connection_closed, nullptr);
+                connection_closed |= close_after_response_;
+                return written;
+            });
+        httplib::detail::shutdown_socket(socket);
+        httplib::detail::close_socket(socket);
+        return result;
+    }
+
+    static inline thread_local bool close_after_response_ = false;
+};
+
+static void configure_server_access(SDHttpServer& svr, const SDSvrParams& params) {
+    using HandlerResponse = httplib::Server::HandlerResponse;
+
+    svr.set_pre_routing_handler([&svr, &params](const httplib::Request& req, httplib::Response& res) {
+        if (req.method == "OPTIONS") {
+            if (req.has_header("Transfer-Encoding") || req.get_header_value_u64("Content-Length") > 0) {
+                svr.close_after_response();
+            }
+            res.status = 204;
+            return HandlerResponse::Handled;
+        }
+        if (!params.api_keys.empty() && needs_api_key(req) && !has_valid_api_key(req, params.api_keys)) {
+            res.status = 401;
+            res.set_header("WWW-Authenticate", "Bearer realm=\"sd-server\"");
+            res.set_content(R"({"error":{"code":401,"message":"Invalid API Key","type":"authentication_error"}})",
+                            "application/json");
+            svr.close_after_response();
+            return HandlerResponse::Handled;
+        }
+        return HandlerResponse::Unhandled;
+    });
+
+    svr.set_post_routing_handler([&svr, &params](const httplib::Request& req, httplib::Response& res) {
+        if (svr.will_close_after_response()) {
+            res.headers.erase("Connection");
+            res.headers.erase("Keep-Alive");
+            res.set_header("Connection", "close");
+        }
+        if (!params.api_keys.empty() && needs_api_key(req)) {
+            res.headers.erase("Cache-Control");
+            res.set_header("Cache-Control", "no-store");
+        }
+
+        const bool preflight = req.method == "OPTIONS";
+        res.set_header("Vary", preflight ? "Origin, Access-Control-Request-Headers" : "Origin");
+
+        const auto& allowed = params.cors_origins;
+        const auto origin   = req.get_header_value("Origin");
+        if (allowed.empty() || std::find(allowed.begin(), allowed.end(), origin) != allowed.end()) {
+            res.set_header("Access-Control-Allow-Origin", origin.empty() ? "*" : origin);
+            res.set_header("Access-Control-Allow-Credentials", "true");
+            res.set_header("Access-Control-Allow-Methods", "*");
+            const auto headers = preflight ? req.get_header_value("Access-Control-Request-Headers") : std::string{};
+            res.set_header("Access-Control-Allow-Headers", headers.empty() ? "*" : headers);
+        }
+    });
 }
 
 void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
@@ -155,45 +266,8 @@ int main(int argc, const char** argv) {
 
     std::thread async_worker(async_job_worker, std::ref(runtime));
 
-    httplib::Server svr;
-
-    svr.set_pre_routing_handler([&svr_params](const httplib::Request& req, httplib::Response& res) {
-        // CORS: with --cors-origins only those origins get the headers, so a
-        // browser keeps other web pages out; without it, any origin (as before).
-        const auto& allowed = svr_params.cors_origins;
-        std::string origin  = req.get_header_value("Origin");
-        if (allowed.empty() || std::find(allowed.begin(), allowed.end(), origin) != allowed.end()) {
-            res.set_header("Access-Control-Allow-Origin", origin.empty() ? "*" : origin);
-            res.set_header("Access-Control-Allow-Credentials", "true");
-            res.set_header("Access-Control-Allow-Methods", "*");
-            // With credentials, browsers take "*" literally and never let
-            // Authorization through a wildcard: name the headers asked for.
-            std::string headers = req.get_header_value("Access-Control-Request-Headers");
-            res.set_header("Access-Control-Allow-Headers", headers.empty() ? "*" : headers);
-        }
-
-        if (req.method == "OPTIONS") {
-            res.status = 204;
-            return httplib::Server::HandlerResponse::Handled;
-        }
-
-        // API key: every request but the web page itself needs one.
-        if (!svr_params.api_keys.empty() && !(req.method == "GET" && req.path == "/")) {
-            std::string key = req.get_header_value("X-Api-Key");
-            const std::string auth = req.get_header_value("Authorization");
-            const std::string bearer = "Bearer ";
-            if (key.empty() && auth.compare(0, bearer.size(), bearer) == 0) {
-                key = auth.substr(bearer.size());
-            }
-            if (!api_key_matches(svr_params.api_keys, key)) {
-                res.status = 401;
-                res.set_content(R"({"error":{"code":401,"message":"Invalid API Key","type":"authentication_error"}})",
-                                "application/json");
-                return httplib::Server::HandlerResponse::Handled;
-            }
-        }
-        return httplib::Server::HandlerResponse::Unhandled;
-    });
+    SDHttpServer svr;
+    configure_server_access(svr, svr_params);
 
     std::string index_html;
 #ifdef HAVE_INDEX_HTML

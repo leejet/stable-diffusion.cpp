@@ -346,32 +346,29 @@ ArgOptions SDSvrParams::get_options() {
     options.manual_options = {
         {"-h", "--help", "show this help message and exit", on_help_arg},
         {"", "--api-key", "API key clients must send (Authorization: Bearer KEY or X-Api-Key); comma-separated for several",
-         [this, split_list](int argc, const char** argv, int index) {
-             if (++index >= argc || argv[index][0] == '\0')
-                 return -1;
-             if (!split_list(argv[index], api_keys)) {
+         [this, split_list](int, const char** argv, int index) {
+             if (!split_list(argv[index + 1], api_keys)) {
                  LOG_ERROR("error: --api-key needs at least one key");
                  return -1;
              }
              return 1;
-         }},
+         },
+         true},
         {"", "--api-key-file", "file with API keys, one per line (keeps them off the command line)",
-         [this](int argc, const char** argv, int index) {
-             if (++index >= argc || argv[index][0] == '\0')
-                 return -1;
-             api_key_file = argv_to_utf8(index, argv);
+         [this](int, const char** argv, int index) {
+             api_key_file = argv_to_utf8(index + 1, argv);
              return 1;
-         }},
-        {"", "--cors-origins", "web origins allowed to call the server, comma-separated (default: any)",
-         [this, split_list](int argc, const char** argv, int index) {
-             if (++index >= argc || argv[index][0] == '\0')
-                 return -1;
-             if (!split_list(argv[index], cors_origins)) {
+         },
+         true},
+        {"", "--cors-origins", "web origins allowed to read cross-origin responses, comma-separated (default: any)",
+         [this, split_list](int, const char** argv, int index) {
+             if (!split_list(argv[index + 1], cors_origins)) {
                  LOG_ERROR("error: --cors-origins needs at least one origin");
                  return -1;
              }
              return 1;
-         }},
+         },
+         true},
         {"", "--weight-staging-ttl",
          "idle seconds before releasing GPU staging copies of RAM weights (-1 disabled, 0 immediate; default: -1)",
          [this](int argc, const char** argv, int index) {

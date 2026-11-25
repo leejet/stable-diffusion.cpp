@@ -444,19 +444,21 @@ it, can call the server. To limit that:
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `--api-key <key>` | none | Key clients must send as `Authorization: Bearer <key>` or `X-Api-Key: <key>`; comma-separated for several. Requests without a valid key get `401`. |
+| `--api-key <key>` | none | Key clients must send as `Authorization: Bearer <key>` or `X-Api-Key: <key>`. Separate multiple keys with commas. |
 | `--api-key-file <file>` | none | The same, one key per line, so keys don't show in the process list |
 | `--cors-origins <origins>` | any | Web origins allowed to read the server's answers in a browser, comma-separated |
 
 With a key, the page at `/` still loads, but the bundled Web UI can't send
 the key, so its calls get `401`; it is meant for use without a key.
+Authentication failures return `401` with a `WWW-Authenticate` Bearer challenge.
+Protected responses include `Cache-Control: no-store`.
 
 `--cors-origins` only decides which web pages may read the answers: other
 pages get no CORS headers, but their requests still reach the server. To
 refuse requests, set a key as well.
 
-An empty list (such as `--api-key ,`) or a key file without keys stops the
-server at startup instead of leaving it open.
+Startup fails if an access option is missing its value, a list is empty
+(such as `--api-key ,`), or the key file contains no keys.
 
 ### Idle weight release
 
