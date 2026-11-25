@@ -20,12 +20,12 @@
 #include "core/util.h"
 #include "model/diffusion/model.hpp"
 #include "model/te/clip.hpp"
+#include "model/te/clipproj_connector.hpp"
 #include "model/te/llada_image_te.hpp"
 #include "model/te/llm.hpp"
 #include "model/te/ltx_connector.hpp"
 #include "model/te/ming_image_te.hpp"
 #include "model/te/ph3_image_connector.hpp"
-#include "model/te/clipproj_connector.hpp"
 #include "model/te/t5.hpp"
 #include "model_loader.h"
 #include "tokenizers/sensenova_u1_tokenizer.h"
@@ -2067,14 +2067,14 @@ struct LLMEmbedder : public Conditioner {
                                                enable_vision,
                                                weight_manager);
         if (sd_version_is_minimax_h3(version)) {
-            const bool has_ph3_connector = tensor_storage_map.count(std::string(PH3ImageTextConnectorRunner::prefix) + ".proj.weight") != 0;
+            const bool has_ph3_connector      = tensor_storage_map.count(std::string(PH3ImageTextConnectorRunner::prefix) + ".proj.weight") != 0;
             const bool has_clipproj_connector = tensor_storage_map.count(std::string(ClipProjConnectorRunner::prefix) + ".W") != 0;
             if (has_ph3_connector) {
                 if (llm->config.num_layers != 36 || llm->config.hidden_size != 2560) {
                     throw std::runtime_error("The P-H3-Image text connector requires the Qwen3-VL-4B text encoder");
                 }
                 ph3_connector = std::make_shared<PH3ImageTextConnectorRunner>(backend, tensor_storage_map, weight_manager);
-            } else if(has_clipproj_connector){
+            } else if (has_clipproj_connector) {
                 clipproj_connector = std::make_shared<ClipProjConnectorRunner>(backend, llm->config.hidden_size, tensor_storage_map, weight_manager);
             } else if (llm->config.hidden_size == 2560) {
                 throw std::runtime_error(
@@ -2125,7 +2125,7 @@ struct LLMEmbedder : public Conditioner {
         if (ph3_connector) {
             ph3_connector->get_param_tensors(tensors);
         }
-        if(clipproj_connector){
+        if (clipproj_connector) {
             clipproj_connector->get_param_tensors(tensors);
         }
         if (byt5) {
@@ -2493,7 +2493,7 @@ struct LLMEmbedder : public Conditioner {
             if (hidden_states.empty()) {
                 return {};
             }
-        } else if(clipproj_connector){
+        } else if (clipproj_connector) {
             hidden_states = clipproj_connector->compute(n_threads, hidden_states);
             if (hidden_states.empty()) {
                 return {};
