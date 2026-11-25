@@ -602,6 +602,23 @@ static json describe_dgl_result(const sd_dgl_result_t* result) {
 namespace {
     namespace fs = std::filesystem;
 
+    bool has_resolved_model_parent(const fs::path& path) {
+        std::error_code error;
+        for (auto part = path; !part.empty(); part = part.parent_path()) {
+            const auto status = fs::symlink_status(part, error);
+            if (status.type() != fs::file_type::not_found) {
+                if (error || !fs::is_directory(status))
+                    return false;
+                // A dangling link or junction must not be treated as a missing dependency.
+                const auto canonical = fs::canonical(part, error);
+                return !error && model_path_key(canonical) == model_path_key(part);
+            }
+            if (part == part.root_path())
+                break;
+        }
+        return false;
+    }
+
     bool allowed_dgl_path(const char* path, sd_dgl_file_access_t access, void* userdata) try {
         const auto& policy = *static_cast<const ServerFileAccess*>(userdata);
         std::error_code error;
@@ -655,16 +672,18 @@ namespace {
         const bool readable = !error && (fs::is_regular_file(status) || fs::is_directory(status));
         if (access == SD_DGL_FILE_READ)
             return readable;
+        if (!readable && status.type() != fs::file_type::not_found)
+            return false;
+
         const auto key = model_path_key(resolved);
-        if (readable || status.type() == fs::file_type::not_found) {
-            if (policy.configured_files.count(key))
-                return true;
-            if (std::any_of(policy.model_bundles.begin(), policy.model_bundles.end(), [&](const fs::path& root) { return model_path_inside(root, resolved); }))
-                return true;
-        }
-        return readable && std::any_of(policy.models.begin(), policy.models.end(), [&](const ModelRoot& root) {
-                   return model_path_key(root.path) == key || model_path_inside(root.path, resolved);
-               });
+        const bool allowed = policy.configured_files.count(key) ||
+                             std::any_of(policy.model_bundles.begin(), policy.model_bundles.end(), [&](const fs::path& root) {
+                                 return model_path_inside(root, resolved);
+                             }) ||
+                             std::any_of(policy.models.begin(), policy.models.end(), [&](const ModelRoot& root) {
+                                 return model_path_key(root.path) == key || model_path_inside(root.path, resolved);
+                             });
+        return allowed && (readable || has_resolved_model_parent(resolved));
     } catch (const std::exception&) {
         return false;
     }
