@@ -31,8 +31,7 @@ small encoder with `--llm` and the matching matrix with
 `--embeddings-connectors`. It needs much less memory (about 4.5 GB with a 4B
 INT8 encoder, versus 18 GB for the 32B encoder in Q4_K_M). The `mmh3-4b-*`
 matrices expect a Qwen3-VL-4B encoder and the `mmh3-8b-*` matrices a
-Qwen3-VL-8B encoder; match the two. Only the linear matrices are supported,
-not the `-mlp` residual variants. Reference-image editing needs the encoder's
+Qwen3-VL-8B encoder; match the two. Reference-image editing needs the encoder's
 vision tower in the text encoder or in `--llm_vision`. ClipProj is a community
 proof of concept: outputs are close to, not identical to, the 32B encoder. See
 the [model card](https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3) for
