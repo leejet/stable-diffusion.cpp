@@ -978,10 +978,10 @@ namespace sd {
         const auto budget_bytes = available.available_budget_bytes == SIZE_MAX
                                       ? std::string("unlimited")
                                       : sd_format("%.2f MB", available.available_budget_bytes / (1024.0 * 1024.0));
-        auto message = sd_format("execution engine cannot make enough memory available on %s: need %.2f MB device / %.2f MB budget, available %s device / %s budget",
-                                 ggml_backend_name(request.compute_backend),
-                                 available.required_device_bytes / (1024.0 * 1024.0),
-                                 available.required_budget_bytes / (1024.0 * 1024.0), device_bytes.c_str(), budget_bytes.c_str());
+        auto message            = sd_format("execution engine cannot make enough memory available on %s: need %.2f MB device / %.2f MB budget, available %s device / %s budget",
+                                            ggml_backend_name(request.compute_backend),
+                                            available.required_device_bytes / (1024.0 * 1024.0),
+                                            available.required_budget_bytes / (1024.0 * 1024.0), device_bytes.c_str(), budget_bytes.c_str());
         LOG_WARN("%s", message.c_str());
         if (device_memory_error != nullptr && available.valid) {
             *device_memory_error = std::move(message);

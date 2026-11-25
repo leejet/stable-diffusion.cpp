@@ -8,10 +8,10 @@
 #ifdef _WIN32
 #include <winternl.h>
 #else
-#include <cerrno>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <cerrno>
 #endif
 
 namespace media_view {
@@ -44,13 +44,13 @@ namespace media_view {
             GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtOpenFile"));
         if (!open_file)
             return FileHandle();
-        auto name = std::filesystem::u8path(part).native();
+        auto name        = std::filesystem::u8path(part).native();
         const auto bytes = static_cast<USHORT>(name.size() * sizeof(wchar_t));
         UNICODE_STRING relative{bytes, bytes, name.data()};
         OBJECT_ATTRIBUTES object;
         InitializeObjectAttributes(&object, &relative, OBJ_CASE_INSENSITIVE, parent.get(), nullptr);
         IO_STATUS_BLOCK status{};
-        HANDLE handle = INVALID_HANDLE_VALUE;
+        HANDLE handle     = INVALID_HANDLE_VALUE;
         const auto access = (directory ? FILE_TRAVERSE : FILE_READ_DATA) | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
         // A handle-relative open keeps every component under the directory already checked.
         if (open_file(&handle, access, &object, &status, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -74,7 +74,7 @@ namespace media_view {
     static size_t read_at(const FileHandle& file, size_t offset, char* buffer, size_t length) {
         LARGE_INTEGER position{};
         position.QuadPart = static_cast<LONGLONG>(offset);
-        DWORD count = 0;
+        DWORD count       = 0;
         if (!SetFilePointerEx(file.get(), position, nullptr, FILE_BEGIN) ||
             !ReadFile(file.get(), buffer, static_cast<DWORD>(length), &count, nullptr))
             return 0;
@@ -109,7 +109,7 @@ namespace media_view {
     }
 
     static uint64_t file_size(const FileHandle& file) {
-        struct stat info {};
+        struct stat info{};
         if (fstat(file.get(), &info) != 0 || !S_ISREG(info.st_mode) || info.st_nlink != 1 || info.st_size <= 0)
             return 0;
         return static_cast<uint64_t>(info.st_size);
@@ -139,11 +139,11 @@ namespace media_view {
         auto parent = open_child(cwd, root, true);
         while (parent) {
             const auto slash = path.find('/');
-            const auto part = path.substr(0, slash);
+            const auto part  = path.substr(0, slash);
             if (!valid_component(part))
                 break;
             const bool directory = slash != std::string_view::npos;
-            auto child = open_child(parent, std::string(part), directory);
+            auto child           = open_child(parent, std::string(part), directory);
             if (!directory)
                 return child;
             parent = std::move(child);
@@ -238,7 +238,7 @@ namespace media_view {
         if (size == 0 || size > std::numeric_limits<size_t>::max())
             return false;
         std::array<char, 256> header;
-        const auto count = read_at(file, 0, header.data(), header.size());
+        const auto count     = read_at(file, 0, header.data(), header.size());
         const auto extension = path.find_last_of('.');
         if (extension == std::string::npos)
             return false;

@@ -202,8 +202,8 @@ namespace sd::dgl::models {
                 return decoded;
             }
             if (!sd::backend_fit::prepare_vae_decode_retry_tiling(tiling_params, prefer_temporal_tiling,
-                                                                first_stage_model->last_compute_status(),
-                                                                tile_size_w, tile_size_h, first_stage_model->get_scale_factor())) {
+                                                                  first_stage_model->last_compute_status(),
+                                                                  tile_size_w, tile_size_h, first_stage_model->get_scale_factor())) {
                 break;
             }
         }

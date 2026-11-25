@@ -341,7 +341,7 @@ static json make_capabilities_json(ServerRuntime& runtime) {
     };
     result["generation_features"]        = generation_features;
     result["generation_model_selection"] = true;
-    result["media_view"] = runtime.svr_params->media_view;
+    result["media_view"]                 = runtime.svr_params->media_view;
     result["runtime"]                    = model_status(runtime);
     result["current_mode"]               = current_mode;
     result["supported_modes"]            = supported_modes;

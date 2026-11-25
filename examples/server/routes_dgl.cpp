@@ -179,7 +179,7 @@ void register_dgl_endpoints(httplib::Server& svr, ServerRuntime& runtime) {
                      job->id = make_async_job_id(manager);
                      manager.jobs.emplace(job->id, job);
                      manager.queue.push_back(job->id);
-                     auto response = make_async_job_json(manager, *job);
+                     auto response        = make_async_job_json(manager, *job);
                      response["poll_url"] = "/sdcpp/v1/jobs/" + job->id;
                      send_json(res, 202, response);
                  }

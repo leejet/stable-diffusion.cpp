@@ -696,7 +696,7 @@ namespace {
         if (!readable && status.type() != fs::file_type::not_found)
             return false;
 
-        const auto key = model_path_key(resolved);
+        const auto key     = model_path_key(resolved);
         const bool allowed = policy.configured_files.count(key) ||
                              std::any_of(policy.model_bundles.begin(), policy.model_bundles.end(), [&](const fs::path& root) {
                                  return model_path_inside(root, resolved);
@@ -840,7 +840,7 @@ void async_job_worker(ServerRuntime& runtime) {
         json dgl_result_info;
         std::string error_message;
         const char* error_code = "generation_failed";
-        bool ok = false;
+        bool ok                = false;
 
         if (job->kind == AsyncJobKind::ImgGen) {
             ok = execute_img_gen_job(runtime, *job, output_images, output_info, error_message);
