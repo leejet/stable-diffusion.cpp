@@ -1071,11 +1071,12 @@ Typical status codes:
 
 #### `POST /sdcpp/v1/jobs/{id}/cancel`
 
-Cancels a queued job immediately, or requests interruption of a generating image or
-video job. A generating job returns `200 OK` with `cancel_requested: true` and
-remains `generating` until execution stops at a cancellation checkpoint. Continue
-polling until its status becomes `cancelled`. Cancelled jobs have no result.
-Repeated cancellation requests are safe; terminal jobs are returned unchanged.
+Cancels a queued image, video, or DGL job immediately, or requests interruption
+if it is already running. No request body is required. A running job returns
+`200 OK` with `cancel_requested: true` and remains `generating` until it reaches
+a cancellation checkpoint. Poll `GET /sdcpp/v1/jobs/{id}` for the final status.
+Cancelled jobs have no result. Repeated cancellation requests are safe and
+return the current status of terminal jobs.
 
 Typical status codes:
 
@@ -1837,10 +1838,9 @@ uses `./dgl` in the working directory unless `--dgl-dir` is set.
 | GET /sdcpp/v1/dgl/scripts | Returns directory and a list of scripts |
 | GET /sdcpp/v1/dgl/script?name=example.dgl | Returns the script as source |
 | POST /sdcpp/v1/dgl/script | Saves UTF-8 source with the given name. Pass previous_source to update an existing script. A conflict returns HTTP 409. |
-| POST /sdcpp/v1/dgl/jobs | Queues the source string and returns a job ID with HTTP 202 |
-| GET /sdcpp/v1/dgl/jobs/{id} | Returns the job status, error or result with tensor descriptions and inline encoded media |
-| POST /sdcpp/v1/dgl/jobs/{id}/cancel | Cancels a queued job or requests cancellation of a running job. Send `Content-Type: application/json`. |
-| GET /sdcpp/v1/dgl/jobs/{id}/outputs/{index}?frame=0 | Returns a PNG of an image output or a video frame. Output and frame indexes start at zero. |
+| POST /sdcpp/v1/dgl/jobs | Queues the source string and returns a job ID and `poll_url` with HTTP 202 |
+| GET /sdcpp/v1/jobs/{id} | Returns job status and progress, plus any error or result with tensor descriptions and inline encoded media |
+| POST /sdcpp/v1/jobs/{id}/cancel | Cancels a queued job or requests cancellation of a running job |
 
 Failed jobs report `error.code` and `error.message`. When execution reports
 `out_of_memory`, the message includes the memory failure details available
@@ -1878,9 +1878,7 @@ The name of a root media dict is `result`.
 
 The script encodes media once. After execution releases the generation lock,
 the server converts returned bytes to Base64 once, before publishing
-`completed`. Polling returns the stored result; it does not encode a video,
-convert Base64 again, or require frame requests. The frame endpoint remains
-available for explicit tensor inspection. Native `/sdcpp/v1/vid_gen` is unchanged.
+`completed`. Polling returns the stored metadata and inline Base64 media.
 
 Inline media share a 64 MiB raw-byte budget per job. An item that exceeds the
 remaining budget has no `b64_json`; it instead contains

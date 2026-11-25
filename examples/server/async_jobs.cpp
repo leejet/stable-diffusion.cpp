@@ -503,7 +503,7 @@ bool execute_vid_gen_job(ServerRuntime& runtime,
     return true;
 }
 
-int64_t dgl_image_frame_count(const sd_tensor_t* tensor) {
+static int64_t dgl_image_frame_count(const sd_tensor_t* tensor) {
     if (!tensor || sd_tensor_type(tensor) != SD_TENSOR_U8)
         return 0;
     const auto rank = sd_tensor_rank(tensor);
@@ -708,7 +708,6 @@ void configure_server_file_access(ServerModels& models, const SDSvrParams& param
 
 static sd_status_t execute_dgl_job(ServerRuntime& runtime,
                                    AsyncGenerationJob& job,
-                                   std::shared_ptr<sd_dgl_result_t>& result,
                                    json& result_info,
                                    std::string& error_message) {
     try {
@@ -728,7 +727,7 @@ static sd_status_t execute_dgl_job(ServerRuntime& runtime,
                 return status;
             }
         }
-        result.reset(raw_result, sd_dgl_result_free);
+        std::unique_ptr<sd_dgl_result_t, decltype(&sd_dgl_result_free)> result(raw_result, sd_dgl_result_free);
         result_info = describe_dgl_result(result.get());
         return SD_STATUS_OK;
     } catch (const std::exception& error) {
@@ -815,7 +814,6 @@ void async_job_worker(ServerRuntime& runtime) {
         std::string output_media_mime_type;
         int output_frame_count = 0;
         int output_fps         = 0;
-        std::shared_ptr<sd_dgl_result_t> dgl_result;
         json dgl_result_info;
         std::string error_message;
         const char* error_code = "generation_failed";
@@ -833,7 +831,7 @@ void async_job_worker(ServerRuntime& runtime) {
                                      output_info,
                                      error_message);
         } else if (job->kind == AsyncJobKind::Dgl) {
-            const auto status = execute_dgl_job(runtime, *job, dgl_result, dgl_result_info, error_message);
+            const auto status = execute_dgl_job(runtime, *job, dgl_result_info, error_message);
             ok                = status == SD_STATUS_OK;
             if (status == SD_STATUS_OUT_OF_MEMORY) {
                 error_code = "out_of_memory";
@@ -864,7 +862,6 @@ void async_job_worker(ServerRuntime& runtime) {
                 job->result_media_mime_type = std::move(output_media_mime_type);
                 job->result_frame_count     = output_frame_count;
                 job->result_fps             = output_fps;
-                job->dgl_result             = std::move(dgl_result);
                 job->dgl_result_info        = std::move(dgl_result_info);
                 job->error_code.clear();
                 job->error_message.clear();

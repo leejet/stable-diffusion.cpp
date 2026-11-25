@@ -1163,8 +1163,7 @@ return {cover = cover, clip = clip, latent = latent}
 `media::save(path, media)` writes these exact bytes, with no re-encoding or
 metadata changes. It checks file-write permission and the extension against the
 MIME type. Omit the save calls for in-memory results only. The server's DGL
-editor displays returned media from the existing job result; ordinary tensors
-remain available for inspection.
+editor displays returned media and ordinary tensor metadata in the job result.
 
 | Encoding | MIME type | Requirements |
 | --- | --- | --- |

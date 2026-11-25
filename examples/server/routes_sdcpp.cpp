@@ -549,17 +549,13 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
     });
 
     routes.get(R"(/sdcpp/v1/jobs/([A-Za-z0-9_\-]+))", [runtime](const httplib::Request& req, httplib::Response& res) {
+        res.set_header("Cache-Control", "no-store");
         AsyncJobManager& manager = *runtime->async_job_manager;
         std::lock_guard<std::mutex> lock(manager.mutex);
         purge_expired_jobs(manager);
 
         std::string job_id = req.matches[1];
         auto it            = manager.jobs.find(job_id);
-        if (it != manager.jobs.end() && it->second->kind == AsyncJobKind::Dgl) {
-            res.status = 404;
-            res.set_content(R"({"error":"job not found"})", "application/json");
-            return;
-        }
         if (it == manager.jobs.end()) {
             if (manager.expired_jobs.find(job_id) != manager.expired_jobs.end()) {
                 res.status = 410;
@@ -576,6 +572,7 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
     });
 
     routes.post(R"(/sdcpp/v1/jobs/([A-Za-z0-9_\-]+)/cancel)", [runtime](const httplib::Request& req, httplib::Response& res) {
+        res.set_header("Cache-Control", "no-store");
         AsyncJobManager& manager = *runtime->async_job_manager;
         std::lock_guard<std::mutex> lock(manager.mutex);
         purge_expired_jobs(manager);
@@ -594,27 +591,14 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         }
 
         auto& job = *it->second;
-        if (job.kind == AsyncJobKind::Dgl) {
-            res.status = 404;
-            res.set_content(R"({"error":"job not found"})", "application/json");
-            return;
-        }
         if (job.status == AsyncJobStatus::Queued) {
             if (!cancel_queued_job(manager, job)) {
                 res.status = 409;
                 res.set_content(R"({"error":"job queue state changed before cancellation"})", "application/json");
                 return;
             }
-            res.status = 200;
-            res.set_content(make_async_job_json(manager, job).dump(), "application/json");
-            return;
-        }
-
-        if (job.status == AsyncJobStatus::Generating) {
+        } else if (job.status == AsyncJobStatus::Generating) {
             job.cancel_requested.store(true);
-            res.status = 200;
-            res.set_content(make_async_job_json(manager, job).dump(), "application/json");
-            return;
         }
 
         res.status = 200;

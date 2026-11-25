@@ -142,8 +142,7 @@ Use `image::encode` or `video::encode` and return their `{data, mime_type}`
 dicts, either directly or as named fields of the root dict. To save the same
 encoded output, call `media::save("output/cover.png", cover)` before returning
 it. Saving is optional. The job result contains the same encoded bytes, and
-polling does not encode them again. Tensor frames can be inspected separately
-with **Inspect tensor frames**; they are not fetched automatically.
+polling returns them without re-encoding.
 
 DGL jobs share an execution context for the lifetime of the server. Compatible
 scripts can reuse loaded model components across runs. The context can release
