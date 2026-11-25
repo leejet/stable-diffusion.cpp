@@ -13,8 +13,7 @@ struct ClipProjConnector : public UnaryBlock {
     void init_params(ggml_context* ctx,
                      const String2TensorStorage& tensor_storage_map = {},
                      const std::string prefix                       = "") override {
-        enum ggml_type wtype    = get_type(prefix + "W", tensor_storage_map, GGML_TYPE_F32);
-        params["W"] = ggml_new_tensor_2d(ctx, wtype, output_dim, input_dim);
+        params["W"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, output_dim, input_dim);
         for (const auto* name : {"mean_in", "std_in"}) {
             params[name] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, input_dim);
         }
