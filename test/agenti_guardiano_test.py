@@ -34,7 +34,7 @@ QUI = os.path.dirname(os.path.abspath(__file__))
 DOCUMENTO = os.path.join(QUI, "..", "docs", "agenti_indipendenti.md")
 TERMICO = os.path.join(QUI, "..", "scripts", "diagnostica_termica", "termico.py")
 TITOLO_GUARDIANO = "## 9. Un guardiano d'esempio"
-RICHIESTA_LUNGA = {"prompt": "a", "width": 64, "height": 64, "seed": 3, "sample_params": {"sample_steps": 500}}
+RICHIESTA_LUNGA = {"prompt": "a", "width": 64, "height": 64, "seed": 3, "sample_params": {"sample_steps": 100}}  # il massimo del server
 RICHIESTA_BREVE = {"prompt": "b", "width": 64, "height": 64, "seed": 4, "sample_params": {"sample_steps": 4}}
 
 errori = 0
@@ -543,7 +543,7 @@ def prove_con_server_vero(args, ns, cartella):
         controlla(conta(url)["counters"]["requests"] == richieste + 1, "B: al motore è arrivata una sola richiesta")
 
         # E: il job di un altro programma non si tocca
-        altro = manda_lavoro(url, 500, seme=9)
+        altro = manda_lavoro(url, 100, seme=9)
         time.sleep(3)
         g2 = ns["Guardiano"]()
         percorso, perche = ns["avvia_lavoro"](g2, RICHIESTA_LUNGA)
@@ -573,7 +573,7 @@ def prove_con_server_vero(args, ns, cartella):
                   "C: con il dato vecchio non parte niente (%s)" % perche)
 
         # D: senza dati il lavoro in corso continua fino alla sua scadenza, poi si ferma
-        id_job = manda_lavoro(url, 500, seme=11)
+        id_job = manda_lavoro(url, 100, seme=11)
         inizio = time.time()
         job, fermato = ns["segui_lavoro"](g3, "/sdcpp/v1/jobs/" + id_job, scadenza_s=8)
         controlla(job["status"] == "cancelled" and fermato == "scaduto" and 8 <= time.time() - inizio < 30,
