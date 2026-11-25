@@ -1,5 +1,6 @@
 #include "options.h"
 #include "core/option_types.h"
+#include "core/util.h"
 #include "tensor.h"
 
 #include <algorithm>
@@ -8,6 +9,7 @@
 #include <limits>
 #include <map>
 #include <new>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -97,16 +99,6 @@ static sd_vae_format_t parse_vae_format(const char* text) {
     return SD_VAE_FORMAT_COUNT;
 }
 
-static sd_hires_upscaler_t parse_hires_upscaler(const char* text) {
-    static const char* names[] = {"none", "latent", "latent_nearest", "latent_nearest_exact",
-                                  "latent_antialiased", "latent_bicubic", "latent_bicubic_antialiased",
-                                  "lanczos", "nearest", "model"};
-    for (int i = 0; i < SD_HIRES_UPSCALER_COUNT; ++i)
-        if (strcmp(text, names[i]) == 0)
-            return static_cast<sd_hires_upscaler_t>(i);
-    return SD_HIRES_UPSCALER_COUNT;
-}
-
 static bool valid_sigmas(const ParamValue& value) {
     const auto& sigmas = std::get<std::vector<float>>(value);
     if (sigmas.empty())
@@ -117,11 +109,6 @@ static bool valid_sigmas(const ParamValue& value) {
         if (sigmas[i] < 0.f || (i && sigmas[i] >= sigmas[i - 1]))
             return false;
     return true;
-}
-
-static bool valid_layers(const ParamValue& value) {
-    const auto& layers = std::get<std::vector<int>>(value);
-    return std::all_of(layers.begin(), layers.end(), [](int index) { return index >= 0; });
 }
 
 template <typename Value, typename Apply>
@@ -311,6 +298,7 @@ static void add_context_specs(std::vector<ParamSpec>& specs) {
     ctx.string("clip_vision_path", &sd::ContextConfig::clip_vision_path);
     ctx.integer("conditioning_cache_size", &sd::ContextConfig::conditioning_cache_size, 0, INT32_MAX);
     ctx.string("control_net_path", &sd::ContextConfig::control_net_path);
+    ctx.string("max_ram", &sd::ContextConfig::max_ram);
     ctx.boolean("diffusion_conv_direct", &sd::ContextConfig::diffusion_conv_direct);
     ctx.boolean("diffusion_flash_attn", &sd::ContextConfig::diffusion_flash_attn);
     ctx.boolean("disable_prefetch", &sd::ContextConfig::disable_prefetch);
@@ -322,18 +310,14 @@ static void add_context_specs(std::vector<ParamSpec>& specs) {
     ctx.boolean("flash_attn", &sd::ContextConfig::flash_attn);
     ctx.boolean("force_sdxl_vae_conv_scale", &sd::ContextConfig::force_sdxl_vae_conv_scale);
     ctx.string("high_noise_diffusion_model_path", &sd::ContextConfig::high_noise_diffusion_model_path);
-    ctx.string("ip_adapter_path", &sd::ContextConfig::ip_adapter_path);
     ctx.number("linear_scale", &sd::ContextConfig::linear_scale, 0, std::numeric_limits<float>::max());
     ctx.string("llm_path", &sd::ContextConfig::llm_path);
     ctx.string("llm_vision_path", &sd::ContextConfig::llm_vision_path);
     ctx.choice("lora_apply_mode", &sd::ContextConfig::lora_apply_mode, str_to_lora_apply_mode, LORA_APPLY_MODE_COUNT);
     ctx.string("max_vram", &sd::ContextConfig::max_vram);
     ctx.string("model_args", &sd::ContextConfig::model_args);
-    ctx.for_operations(Context | Upscaler | ADetailer).string("model_path", &sd::ContextConfig::model_path);
-    ctx.string("motion_module_path", &sd::ContextConfig::motion_module_path);
-    ctx.string("photo_maker_path", &sd::ContextConfig::photo_maker_path);
+    ctx.for_operations(Context | Upscaler).string("model_path", &sd::ContextConfig::model_path);
     ctx.choice("prediction", &sd::ContextConfig::prediction, str_to_prediction, PREDICTION_COUNT, true);
-    ctx.string("pulid_weights_path", &sd::ContextConfig::pulid_weights_path);
     ctx.choice("rng_type", &sd::ContextConfig::rng_type, str_to_rng_type, RNG_TYPE_COUNT, true);
     ctx.string("rpc_servers", &sd::ContextConfig::rpc_servers);
     ctx.boolean("sage_attn", &sd::ContextConfig::sage_attn);
@@ -349,116 +333,78 @@ static void add_context_specs(std::vector<ParamSpec>& specs) {
     ctx.choice("vae_format", &sd::ContextConfig::vae_format, parse_vae_format, SD_VAE_FORMAT_COUNT);
     ctx.choice("wtype", &sd::ContextConfig::wtype, str_to_sd_type, SD_TYPE_COUNT, true);
 
-    specs.push_back(parameter<std::string>("backend", ParamType::String, Context | Upscaler | VidUpscaler | ADetailer, [](const std::string& value, sd::OptConfig& config) { config.context.backend = value.c_str(); config.post.video_upscaler.backend = value.c_str(); }));
-    specs.push_back(parameter<std::string>("conv_direct_mode", ParamType::String, Context | VidUpscaler, [](const std::string& value, sd::OptConfig& config) { config.context.conv_direct_mode = value.c_str(); config.post.video_upscaler.conv_direct_mode = value.c_str(); }));
-    specs.push_back(parameter<std::string>("diffusion_model_path", ParamType::String, Context | VidUpscaler, [](const std::string& value, sd::OptConfig& config) { config.context.diffusion_model_path = value.c_str(); config.post.video_upscaler.diffusion_model_path = value.c_str(); }));
-    specs.push_back(parameter<std::string>("flash_attn_mode", ParamType::String, Context | VidUpscaler, [](const std::string& value, sd::OptConfig& config) { config.context.flash_attn_mode = value.c_str(); config.post.video_upscaler.flash_attn_mode = value.c_str(); }));
+    specs.push_back(parameter<std::string>("backend", ParamType::String, Context | Upscaler, [](const std::string& value, sd::OptConfig& config) { config.context.backend = value.c_str(); }));
+    specs.push_back(parameter<std::string>("conv_direct_mode", ParamType::String, Context, [](const std::string& value, sd::OptConfig& config) { config.context.conv_direct_mode = value.c_str(); }));
+    specs.push_back(parameter<std::string>("diffusion_model_path", ParamType::String, Context, [](const std::string& value, sd::OptConfig& config) { config.context.diffusion_model_path = value.c_str(); }));
+    specs.push_back(parameter<std::string>("flash_attn_mode", ParamType::String, Context, [](const std::string& value, sd::OptConfig& config) { config.context.flash_attn_mode = value.c_str(); }));
     specs.push_back(integer_parameter(
-        "n_threads", Context | Upscaler | VidUpscaler | ADetailer, [](const int64_t& value, sd::OptConfig& config) { config.context.n_threads = static_cast<int>(value); config.post.video_upscaler.n_threads = static_cast<int>(value); }, 1, INT32_MAX));
-    specs.push_back(parameter<std::string>("params_backend", ParamType::String, Context | Upscaler | VidUpscaler | ADetailer, [](const std::string& value, sd::OptConfig& config) { config.context.params_backend = value.c_str(); config.post.video_upscaler.params_backend = value.c_str(); }));
-    specs.push_back(parameter<std::string>("vae_path", ParamType::String, Context | VidUpscaler, [](const std::string& value, sd::OptConfig& config) { config.context.vae_path = value.c_str(); config.post.video_upscaler.vae_path = value.c_str(); }));
+        "n_threads", Context | Upscaler, [](const int64_t& value, sd::OptConfig& config) { config.context.n_threads = static_cast<int>(value); }, 1, INT32_MAX));
+    specs.push_back(parameter<std::string>("params_backend", ParamType::String, Context | Upscaler, [](const std::string& value, sd::OptConfig& config) { config.context.params_backend = value.c_str(); }));
+    specs.push_back(parameter<std::string>("vae_path", ParamType::String, Context, [](const std::string& value, sd::OptConfig& config) { config.context.vae_path = value.c_str(); }));
 }
 
 static void add_generation_specs(std::vector<ParamSpec>& specs) {
     using namespace sd::api;
     ParamGroup img(specs, Image, [](sd::OptConfig& config) { return std::tie(config.image); });
     ParamGroup vid(specs, Video, [](sd::OptConfig& config) { return std::tie(config.video); });
-    ParamGroup preprocess(specs, Image | Video, [](sd::OptConfig& config) { return std::tie(config.image.image_preprocess, config.video.image_preprocess); });
-    ParamGroup photomaker(specs, Image, [](sd::OptConfig& config) { return std::tie(config.image.pm_params); });
-    ParamGroup pulid(specs, Image, [](sd::OptConfig& config) { return std::tie(config.image.pulid_params); });
 
     img.integer("batch_count", &sd::ImageConfig::batch_count, 1, INT32_MAX);
     img.image("control_image", &sd::ImageConfig::control_image);
     img.number("control_strength", &sd::ImageConfig::control_strength, 0, std::numeric_limits<float>::max());
     img.choice("control_type", &sd::ImageConfig::control_type, str_to_sd_control_type, SD_CONTROL_TYPE_COUNT);
-    img.image("ip_adapter_image", &sd::ImageConfig::ip_adapter_image);
-    img.number("ip_adapter_strength", &sd::ImageConfig::ip_adapter_strength, 0, std::numeric_limits<float>::max());
     img.image("mask_image", &sd::ImageConfig::mask_image);
     img.integer("qwen_image_layers", &sd::ImageConfig::qwen_image_layers, 0, INT32_MAX);
 
     vid.frames("control_frames", &sd::VideoConfig::control_frames, &sd::VideoConfig::control_frames_size);
     vid.image("end_image", &sd::VideoConfig::end_image);
     vid.number("moe_boundary", &sd::VideoConfig::moe_boundary, 0, 1);
+    vid.integer("high_noise_sample.steps", &sd::VideoConfig::high_noise_steps, -1, INT32_MAX);
     vid.array("ref_audios", &sd::VideoConfig::ref_audios, &sd::VideoConfig::ref_audios_count);
     vid.array("ref_videos", &sd::VideoConfig::ref_videos, &sd::VideoConfig::ref_videos_count);
     vid.number("vace_strength", &sd::VideoConfig::vace_strength, 0, std::numeric_limits<float>::max());
     vid.integer("video_frames", &sd::VideoConfig::video_frames, 1, INT32_MAX);
 
-    preprocess.string("image_preprocess.rules", &sd::ImagePreprocessConfig::rules);
-
-    photomaker.string("photomaker.id_embed_path", &sd::PhotoMakerConfig::id_embed_path);
-    photomaker.array("photomaker.id_images", &sd::PhotoMakerConfig::id_images, &sd::PhotoMakerConfig::id_images_count);
-    photomaker.number("photomaker.style_strength", &sd::PhotoMakerConfig::style_strength, 0, 100);
-
-    pulid.string("pulid.id_embedding_path", &sd::PuLIDConfig::id_embedding_path);
-    pulid.number("pulid.id_weight", &sd::PuLIDConfig::id_weight, 0, std::numeric_limits<float>::max());
-
-    specs.push_back(parameter<bool>("circular_x", ParamType::Bool, Image | Video | ADetail, [](const bool& value, sd::OptConfig& config) { config.image.circular_x = value; config.video.circular_x = value; }));
-    specs.push_back(parameter<bool>("circular_y", ParamType::Bool, Image | Video | ADetail, [](const bool& value, sd::OptConfig& config) { config.image.circular_y = value; config.video.circular_y = value; }));
+    specs.push_back(parameter<bool>("circular_x", ParamType::Bool, Image | Video, [](const bool& value, sd::OptConfig& config) { config.image.circular_x = value; config.video.circular_x = value; }));
+    specs.push_back(parameter<bool>("circular_y", ParamType::Bool, Image | Video, [](const bool& value, sd::OptConfig& config) { config.image.circular_y = value; config.video.circular_y = value; }));
     specs.push_back(integer_parameter(
-        "clip_skip", Image | Video | ADetail, [](const int64_t& value, sd::OptConfig& config) { config.image.clip_skip = static_cast<int>(value); config.video.clip_skip = static_cast<int>(value); }, INT32_MIN, INT32_MAX));
+        "clip_skip", Image | Video, [](const int64_t& value, sd::OptConfig& config) { config.image.clip_skip = static_cast<int>(value); config.video.clip_skip = static_cast<int>(value); }, INT32_MIN, INT32_MAX));
     specs.push_back(integer_parameter(
-        "fps", Video | VidUpscale, [](const int64_t& value, sd::OptConfig& config) { config.video.fps = static_cast<int>(value); config.post.video_upscale.fps = static_cast<int>(value); }, 1, INT32_MAX));
+        "fps", Video, [](const int64_t& value, sd::OptConfig& config) { config.video.fps = static_cast<int>(value); }, 1, INT32_MAX));
     specs.push_back(integer_parameter(
-        "height", Image | Video | ADetail, [](const int64_t& value, sd::OptConfig& config) { config.image.height = static_cast<int>(value); config.video.height = static_cast<int>(value); }, 1, INT32_MAX));
+        "height", Image | Video, [](const int64_t& value, sd::OptConfig& config) { config.image.height = static_cast<int>(value); config.video.height = static_cast<int>(value); }, 1, INT32_MAX));
     specs.push_back(parameter<TensorValue>("init_image", ParamType::Tensor, Image | Video, [](const TensorValue& value, sd::OptConfig& config) { config.image.init_image = sd::api::image_view(*value.tensor.get()); config.video.init_image = config.image.init_image; }));
-    specs.push_back(parameter<LoraValues>("loras", ParamType::Loras, Image | Video | ADetail, [](const LoraValues& value, sd::OptConfig& config) { config.image.loras = value.items.data(); config.image.lora_count = static_cast<decltype(config.image.lora_count)>(value.items.size()); config.video.loras = value.items.data(); config.video.lora_count = static_cast<decltype(config.video.lora_count)>(value.items.size()); }));
-    specs.push_back(parameter<std::string>("negative_prompt", ParamType::String, Image | Video | ADetail, [](const std::string& value, sd::OptConfig& config) { config.image.negative_prompt = value.c_str(); config.video.negative_prompt = value.c_str(); }));
-    specs.push_back(parameter<std::string>("prompt", ParamType::String, Image | Video | ADetail, [](const std::string& value, sd::OptConfig& config) { config.image.prompt = value.c_str(); config.video.prompt = value.c_str(); }));
-    specs.push_back(parameter<std::string>("ref_image_args", ParamType::String, Image | Video, [](const std::string& value, sd::OptConfig& config) { config.image.ref_image_args = value.c_str(); config.video.ref_image_args = value.c_str(); }));
+    specs.push_back(parameter<LoraValues>("loras", ParamType::Loras, Image | Video, [](const LoraValues& value, sd::OptConfig& config) { config.image.loras = value.items.data(); config.image.lora_count = static_cast<decltype(config.image.lora_count)>(value.items.size()); config.video.loras = value.items.data(); config.video.lora_count = static_cast<decltype(config.video.lora_count)>(value.items.size()); }));
+    specs.push_back(parameter<std::string>("negative_prompt", ParamType::String, Image | Video, [](const std::string& value, sd::OptConfig& config) { config.image.negative_prompt = value.c_str(); config.video.negative_prompt = value.c_str(); }));
+    specs.push_back(parameter<std::string>("prompt", ParamType::String, Image | Video, [](const std::string& value, sd::OptConfig& config) { config.image.prompt = value.c_str(); config.video.prompt = value.c_str(); }));
     specs.push_back(parameter<ImageValues>("ref_images", ParamType::Tensors, Image | Video, [](const ImageValues& value, sd::OptConfig& config) { config.image.ref_images = const_cast<sd::Image*>(value.items.data()); config.image.ref_images_count = static_cast<int>(value.items.size()); config.video.ref_images = config.image.ref_images; config.video.ref_images_count = config.image.ref_images_count; }));
-    specs.push_back(integer_parameter("seed", Image | Video | VidUpscale | ADetail, [](const int64_t& value, sd::OptConfig& config) { config.image.seed = static_cast<int64_t>(value); config.video.seed = static_cast<int64_t>(value); config.post.video_upscale.seed = value; }));
+    specs.push_back(integer_parameter("seed", Image | Video, [](const int64_t& value, sd::OptConfig& config) { config.image.seed = static_cast<int64_t>(value); config.video.seed = static_cast<int64_t>(value); }));
     specs.push_back(float_parameter(
-        "strength", Image | Video | ADetail, [](const double& value, sd::OptConfig& config) { config.image.strength = static_cast<float>(value); config.video.strength = static_cast<float>(value); }, 0, 1));
+        "strength", Image | Video, [](const double& value, sd::OptConfig& config) { config.image.strength = static_cast<float>(value); config.video.strength = static_cast<float>(value); }, 0, 1));
     specs.push_back(integer_parameter(
-        "width", Image | Video | ADetail, [](const int64_t& value, sd::OptConfig& config) { config.image.width = static_cast<int>(value); config.video.width = static_cast<int>(value); }, 1, INT32_MAX));
+        "width", Image | Video, [](const int64_t& value, sd::OptConfig& config) { config.image.width = static_cast<int>(value); config.video.width = static_cast<int>(value); }, 1, INT32_MAX));
 }
 
 static void add_sampling_specs(std::vector<ParamSpec>& specs) {
     using namespace sd::api;
-    ParamGroup high_noise(specs, Video, [](sd::OptConfig& config) { return std::tie(config.video.high_noise_sample_params); });
-    ParamGroup high_noise_guidance(specs, Video, [](sd::OptConfig& config) { return std::tie(config.video.high_noise_sample_params.guidance); });
-    ParamGroup high_noise_slg(specs, Video, [](sd::OptConfig& config) { return std::tie(config.video.high_noise_sample_params.guidance.slg); });
-    ParamGroup sample(specs, Image | Video | ADetail, [](sd::OptConfig& config) { return std::tie(config.image.sample_params, config.video.sample_params); });
-    ParamGroup guidance(specs, Image | Video | ADetail, [](sd::OptConfig& config) { return std::tie(config.image.sample_params.guidance, config.video.sample_params.guidance); });
-    ParamGroup slg(specs, Image | Video | ADetail, [](sd::OptConfig& config) { return std::tie(config.image.sample_params.guidance.slg, config.video.sample_params.guidance.slg); });
-
-    high_noise.string("high_noise_sample.args", &sd::SampleConfig::extra_sample_args);
-    high_noise.number("high_noise_sample.eta", &sd::SampleConfig::eta, 0, std::numeric_limits<float>::max());
-    high_noise.choice("high_noise_sample.method", &sd::SampleConfig::sample_method, str_to_sample_method, SAMPLE_METHOD_COUNT, true);
-    high_noise.integer("high_noise_sample.steps", &sd::SampleConfig::sample_steps, -1, INT32_MAX);
-
-    high_noise_guidance.number("high_noise_sample.guidance.distilled_guidance", &sd::GuidanceConfig::distilled_guidance);
-    high_noise_guidance.number("high_noise_sample.guidance.img_cfg", &sd::GuidanceConfig::img_cfg);
-    high_noise_guidance.number("high_noise_sample.guidance.txt_cfg", &sd::GuidanceConfig::txt_cfg);
-
-    high_noise_slg.number("high_noise_sample.guidance.slg.layer_end", &sd::SLGConfig::layer_end, 0, 1);
-    high_noise_slg.number("high_noise_sample.guidance.slg.layer_start", &sd::SLGConfig::layer_start, 0, 1);
-    high_noise_slg.array("high_noise_sample.guidance.slg.layers", &sd::SLGConfig::layers, &sd::SLGConfig::layer_count, valid_layers, "layer indices must be nonnegative");
-    high_noise_slg.number("high_noise_sample.guidance.slg.scale", &sd::SLGConfig::scale, 0, std::numeric_limits<float>::max());
+    ParamGroup sample(specs, Image | Video, [](sd::OptConfig& config) { return std::tie(config.image.sample_params, config.video.sample_params); });
+    ParamGroup guidance(specs, Image | Video, [](sd::OptConfig& config) { return std::tie(config.image.sample_params.guidance, config.video.sample_params.guidance); });
 
     sample.string("sample.args", &sd::SampleConfig::extra_sample_args);
     sample.number("sample.eta", &sd::SampleConfig::eta, 0, std::numeric_limits<float>::max());
     sample.number("sample.flow_shift", &sd::SampleConfig::flow_shift, 0, std::numeric_limits<float>::max());
     sample.choice("sample.method", &sd::SampleConfig::sample_method, str_to_sample_method, SAMPLE_METHOD_COUNT, true);
     sample.choice("sample.scheduler", &sd::SampleConfig::scheduler, str_to_scheduler, SCHEDULER_COUNT, true);
-    sample.integer("sample.shifted_timestep", &sd::SampleConfig::shifted_timestep, 0, INT32_MAX);
     sample.array("sample.sigmas", &sd::SampleConfig::custom_sigmas, &sd::SampleConfig::custom_sigmas_count, valid_sigmas, "sigmas require at least two strictly decreasing nonnegative entries ending in zero, or an empty array");
     sample.integer("sample.steps", &sd::SampleConfig::sample_steps, 1, INT32_MAX);
 
     guidance.number("sample.guidance.distilled_guidance", &sd::GuidanceConfig::distilled_guidance);
     guidance.number("sample.guidance.img_cfg", &sd::GuidanceConfig::img_cfg);
     guidance.number("sample.guidance.txt_cfg", &sd::GuidanceConfig::txt_cfg);
-
-    slg.number("sample.guidance.slg.layer_end", &sd::SLGConfig::layer_end, 0, 1);
-    slg.number("sample.guidance.slg.layer_start", &sd::SLGConfig::layer_start, 0, 1);
-    slg.array("sample.guidance.slg.layers", &sd::SLGConfig::layers, &sd::SLGConfig::layer_count, valid_layers, "layer indices must be nonnegative");
-    slg.number("sample.guidance.slg.scale", &sd::SLGConfig::scale, 0, std::numeric_limits<float>::max());
 }
 
 static void add_cache_specs(std::vector<ParamSpec>& specs) {
     using namespace sd::api;
-    ParamGroup cache(specs, Image | Video | ADetail, [](sd::OptConfig& config) { return std::tie(config.image.cache, config.video.cache); });
+    ParamGroup cache(specs, Image | Video, [](sd::OptConfig& config) { return std::tie(config.image.cache, config.video.cache); });
 
     cache.integer("cache.bn_compute_blocks", &sd::CacheConfig::Bn_compute_blocks, 0, INT32_MAX);
     cache.number("cache.end_percent", &sd::CacheConfig::end_percent, 0, 1);
@@ -489,22 +435,21 @@ static void add_cache_specs(std::vector<ParamSpec>& specs) {
 static void add_hires_specs(std::vector<ParamSpec>& specs) {
     using namespace sd::api;
     ParamGroup hires(specs, Image | Video, [](sd::OptConfig& config) { return std::tie(config.image.hires, config.video.hires); });
-
-    hires.number("hires.denoising_strength", &sd::HiresConfig::denoising_strength, 0, 1);
     hires.boolean("hires.enabled", &sd::HiresConfig::enabled);
+    hires.string("hires.upscaler", &sd::HiresConfig::upscaler);
     hires.string("hires.model_path", &sd::HiresConfig::model_path);
-    hires.number("hires.scale", &sd::HiresConfig::scale, 0, std::numeric_limits<float>::max());
-    hires.array("hires.sigmas", &sd::HiresConfig::custom_sigmas, &sd::HiresConfig::custom_sigmas_count, valid_sigmas, "sigmas require at least two strictly decreasing nonnegative entries ending in zero, or an empty array");
-    hires.integer("hires.steps", &sd::HiresConfig::steps, 0, INT32_MAX);
-    hires.integer("hires.target_height", &sd::HiresConfig::target_height, 0, INT32_MAX);
-    hires.integer("hires.target_width", &sd::HiresConfig::target_width, 0, INT32_MAX);
+    hires.number("hires.scale", &sd::HiresConfig::scale, std::numeric_limits<float>::min(), 64);
+    hires.integer("hires.target_width", &sd::HiresConfig::target_width, 0, 16384);
+    hires.integer("hires.target_height", &sd::HiresConfig::target_height, 0, 16384);
+    hires.integer("hires.steps", &sd::HiresConfig::steps, 0, 10000);
+    hires.number("hires.denoising_strength", &sd::HiresConfig::denoising_strength, 0.0001, 1);
     hires.integer("hires.upscale_tile_size", &sd::HiresConfig::upscale_tile_size, 1, INT32_MAX);
-    hires.choice("hires.upscaler", &sd::HiresConfig::upscaler, parse_hires_upscaler, SD_HIRES_UPSCALER_COUNT);
+    hires.array("hires.sigmas", &sd::HiresConfig::custom_sigmas, &sd::HiresConfig::custom_sigmas_count, valid_sigmas, "hires sigmas require at least two strictly decreasing nonnegative entries ending in zero, or an empty array");
 }
 
 static void add_tiling_specs(std::vector<ParamSpec>& specs) {
     using namespace sd::api;
-    ParamGroup tiling(specs, Image | Video | ADetail, [](sd::OptConfig& config) { return std::tie(config.image.vae_tiling_params, config.video.vae_tiling_params); });
+    ParamGroup tiling(specs, Image | Video, [](sd::OptConfig& config) { return std::tie(config.image.vae_tiling_params, config.video.vae_tiling_params); });
 
     tiling.boolean("vae_tiling.enabled", &sd::TilingConfig::enabled);
     tiling.string("vae_tiling.extra_tiling_args", &sd::TilingConfig::extra_tiling_args);
@@ -518,26 +463,23 @@ static void add_tiling_specs(std::vector<ParamSpec>& specs) {
 
 static void add_postprocess_specs(std::vector<ParamSpec>& specs) {
     using namespace sd::api;
-    ParamGroup input(specs, Upscale | ADetail, [](sd::OptConfig& config) { return std::tie(config.post); });
+    ParamGroup input(specs, Upscale, [](sd::OptConfig& config) { return std::tie(config.post); });
     ParamGroup upscaler(specs, Upscaler, [](sd::OptConfig& config) { return std::tie(config.post); });
-    ParamGroup video_upscaler(specs, VidUpscaler, [](sd::OptConfig& config) { return std::tie(config.post.video_upscaler); });
-    ParamGroup video_upscale(specs, VidUpscale, [](sd::OptConfig& config) { return std::tie(config.post.video_upscale); });
-    ParamGroup adetail(specs, ADetail, [](sd::OptConfig& config) { return std::tie(config.post.adetail); });
-
     input.image("image", &sd::PostprocessConfig::image);
-
+    input.integer("repeats", &sd::PostprocessConfig::repeats, 1, 16);
     upscaler.boolean("conv_direct", &sd::PostprocessConfig::conv_direct);
     upscaler.integer("tile_size", &sd::PostprocessConfig::tile_size, 1, INT32_MAX);
+}
 
-    video_upscaler.integer("upscale_factor", &sd::VideoUpscalerConfig::upscale_factor, 1, INT32_MAX);
-
-    video_upscale.frames("frames", &sd::VideoUpscaleConfig::frames, &sd::VideoUpscaleConfig::frame_count);
-    video_upscale.integer("window_size", &sd::VideoUpscaleConfig::window_size, 1, INT32_MAX);
-    video_upscale.integer("temporal_chunk_size", &sd::VideoUpscaleConfig::temporal_chunk_size, 1, INT32_MAX);
-
-    adetail.string("adetail.prompt", &sd::ADetailConfig::prompt);
-    adetail.string("adetail.negative_prompt", &sd::ADetailConfig::negative_prompt);
-    adetail.string("adetail.args", &sd::ADetailConfig::extra_ad_args);
+static bool dgl_only_parameter(const char* key) {
+    const std::string name = key;
+    if (name == "high_noise_sample.steps")
+        return false;
+    for (const auto* prefix : {"photomaker.", "pulid.", "high_noise_sample.", "sample.guidance.slg.", "adetail."})
+        if (name.rfind(prefix, 0) == 0)
+            return true;
+    static const std::set<std::string> names{"ip_adapter_path", "ip_adapter_image", "ip_adapter_strength", "motion_module_path", "photo_maker_path", "pulid_weights_path", "image_preprocess.rules", "sample.shifted_timestep"};
+    return names.count(name) != 0;
 }
 
 static std::vector<ParamSpec> make_specs() {
@@ -565,6 +507,8 @@ static const ParamSpec* find_spec(const char* key) {
 static sd_status_t check_key(sd_opt_t* params, const char* key, ParamType type, const ParamSpec** out) {
     if (!params || !key)
         return sd::api::error(SD_STATUS_INVALID_ARGUMENT, key, "params and key are required");
+    if (dgl_only_parameter(key))
+        return sd::api::error(SD_STATUS_UNSUPPORTED, key, "this parameter requires an explicit DGL workflow (-M dgl --script FILE)");
     *out = find_spec(key);
     if (!*out)
         return sd::api::error(SD_STATUS_UNKNOWN_KEY, key, "unknown parameter");
@@ -589,6 +533,8 @@ static sd_status_t store_value(sd_opt_t* params, const ParamSpec& spec, ParamVal
     if (spec.valid && !spec.valid(value))
         return sd::api::error(SD_STATUS_INVALID_ARGUMENT, spec.key, spec.invalid_reason);
     params->values.insert_or_assign(spec.key, std::move(value));
+    if (strcmp(spec.key, "cache.fn_compute_blocks") == 0 || strcmp(spec.key, "cache.bn_compute_blocks") == 0)
+        LOG_WARN("parameter '%s' is ignored: condition-level caching does not support front/back block counts", spec.key);
     return SD_STATUS_OK;
 }
 
@@ -613,22 +559,6 @@ sd_upscaler_opt_t* sd_upscaler_opt_create(void) {
 
 sd_upscale_opt_t* sd_upscale_opt_create(void) {
     return create_opt(sd::api::Upscale);
-}
-
-sd_vid_upscaler_opt_t* sd_vid_upscaler_opt_create(void) {
-    return create_opt(sd::api::VidUpscaler);
-}
-
-sd_vid_upscale_opt_t* sd_vid_upscale_opt_create(void) {
-    return create_opt(sd::api::VidUpscale);
-}
-
-sd_adetailer_opt_t* sd_adetailer_opt_create(void) {
-    return create_opt(sd::api::ADetailer);
-}
-
-sd_adetail_opt_t* sd_adetail_opt_create(void) {
-    return create_opt(sd::api::ADetail);
 }
 
 void sd_opt_free(sd_opt_t* params) {
@@ -820,6 +750,8 @@ sd_status_t sd_opt_unset(sd_opt_t* params, const char* key) {
     return sd::api::call([&] {
         if (!params || !key)
             return sd::api::error(SD_STATUS_INVALID_ARGUMENT, key, "params and key are required");
+        if (dgl_only_parameter(key))
+            return sd::api::error(SD_STATUS_UNSUPPORTED, key, "this parameter requires an explicit DGL workflow (-M dgl --script FILE)");
         const auto* spec = find_spec(key);
         if (!spec)
             return sd::api::error(SD_STATUS_UNKNOWN_KEY, key, "unknown parameter");
@@ -832,6 +764,96 @@ sd_status_t sd_opt_unset(sd_opt_t* params, const char* key) {
 
 bool sd::api::is_set(const sd_opt_t* params, const char* key) {
     return params && params->values.count(key) != 0;
+}
+
+std::shared_ptr<sd_opt_t> sd::api::copy_options(const sd_opt_t* params) {
+    if (!params)
+        throw sd::dgl::Error(SD_STATUS_INVALID_ARGUMENT, "params is required");
+    auto copy = std::make_shared<sd_opt_t>(*params);
+    for (auto& [key, value] : copy->values) {
+        if (auto* loras = std::get_if<LoraValues>(&value)) {
+            for (size_t i = 0; i < loras->items.size(); ++i)
+                loras->items[i].path = loras->paths[i].c_str();
+        } else if (auto* embeddings = std::get_if<EmbeddingValues>(&value)) {
+            for (size_t i = 0; i < embeddings->items.size(); ++i) {
+                embeddings->items[i].name = embeddings->strings[i * 2].c_str();
+                embeddings->items[i].path = embeddings->strings[i * 2 + 1].c_str();
+            }
+        } else if (auto* videos = std::get_if<VideoValues>(&value)) {
+            for (size_t i = 0; i < videos->items.size(); ++i)
+                videos->items[i].frames = videos->frames[i].data();
+        }
+    }
+    return copy;
+}
+
+std::vector<std::string> sd::api::explicit_keys(const sd_opt_t* params) {
+    std::vector<std::string> keys;
+    if (params)
+        for (const auto& [key, value] : params->values)
+            keys.push_back(key);
+    return keys;
+}
+
+const sd_tensor_t* sd::api::bound_tensor(const sd_opt_t* params, const char* key) {
+    if (!params)
+        return nullptr;
+    const auto found = params->values.find(key);
+    if (found == params->values.end())
+        return nullptr;
+    const auto* value = std::get_if<TensorValue>(&found->second);
+    return value ? value->tensor.get() : nullptr;
+}
+
+std::vector<const sd_tensor_t*> sd::api::bound_tensors(const sd_opt_t* params, const char* key) {
+    std::vector<const sd_tensor_t*> tensors;
+    if (!params)
+        return tensors;
+    const auto found = params->values.find(key);
+    if (found == params->values.end())
+        return tensors;
+    if (const auto* values = std::get_if<ImageValues>(&found->second))
+        for (const auto& tensor : values->tensors)
+            tensors.push_back(tensor.get());
+    return tensors;
+}
+
+std::vector<sd_audio_t> sd::api::bound_audios(const sd_opt_t* params, const char* key) {
+    std::vector<sd_audio_t> audios;
+    if (params && params->values.count(key))
+        if (const auto* values = std::get_if<AudioValues>(&params->values.at(key)))
+            for (size_t i = 0; i < values->items.size(); ++i)
+                audios.push_back({uint32_t(values->items[i].sample_rate), values->tensors[i].get()});
+    return audios;
+}
+
+std::vector<sd_video_t> sd::api::bound_videos(const sd_opt_t* params, const char* key) {
+    std::vector<sd_video_t> videos;
+    if (params && params->values.count(key))
+        if (const auto* values = std::get_if<VideoValues>(&params->values.at(key))) {
+            size_t tensor = 0;
+            for (const auto& item : values->items) {
+                sd_video_t video{values->tensors[tensor++].get(), item.fps, {}};
+                if (item.audio.data)
+                    video.audio = {uint32_t(item.audio.sample_rate), values->tensors[tensor++].get()};
+                videos.push_back(video);
+            }
+        }
+    return videos;
+}
+
+nlohmann::json sd::api::scalar_values(const sd_opt_t* params) {
+    auto values = nlohmann::json::object();
+    if (params)
+        for (const auto& entry : params->values)
+            std::visit([&](const auto& item) {
+                using T = std::decay_t<decltype(item)>;
+                if constexpr (std::is_arithmetic_v<T> || std::is_same_v<T, std::string> ||
+                              std::is_same_v<T, std::vector<float>> || std::is_same_v<T, std::vector<int>>)
+                    values[entry.first] = item;
+            },
+                       entry.second);
+    return values;
 }
 
 bool sd::api::has_prefix(const sd_opt_t* params, const char* prefix) {
@@ -847,51 +869,18 @@ sd_status_t sd::api::resolve(const sd_opt_t* params, Operation operation, OptCon
     if (params->operation != operation)
         return error(SD_STATUS_UNSUPPORTED, nullptr, "option object has the wrong purpose for this operation");
     config = OptConfig{};
-    if (operation == ADetail)
-        config.image.strength = 0.4f;
     for (const auto& entry : params->values) {
         const auto* spec = find_spec(entry.first.c_str());
-        if (!(spec->operations & operation))
-            return error(SD_STATUS_UNSUPPORTED, spec->key, "parameter does not apply to this operation");
+        if (!spec || !(spec->operations & operation))
+            return error(SD_STATUS_UNSUPPORTED, entry.first.c_str(), "parameter does not apply to this operation");
         spec->apply(entry.second, config);
     }
-    const auto& image   = config.image;
-    const auto& video   = config.video;
-    const bool sampling = operation == Image || operation == Video || operation == ADetail;
-    const auto& cache   = operation == Video ? video.cache : image.cache;
-    if (sampling && cache.mode != SD_CACHE_DISABLED) {
-        if (cache.start_percent >= cache.end_percent)
-            return error(SD_STATUS_INVALID_ARGUMENT, "cache", "start_percent must precede end_percent");
-    }
-    if (sampling) {
-        const auto& sample = operation == Video ? video.sample_params : image.sample_params;
-        if (sample.guidance.slg.layer_start > sample.guidance.slg.layer_end)
-            return error(SD_STATUS_INVALID_ARGUMENT, "sample.guidance.slg", "layer_start must not exceed layer_end");
-        const auto& hires = operation == Video ? video.hires : image.hires;
-        if (hires.enabled && hires.upscaler != SD_HIRES_UPSCALER_NONE &&
-            hires.scale <= 0.f && hires.target_width <= 0 && hires.target_height <= 0)
-            return error(SD_STATUS_INVALID_ARGUMENT, "hires", "enabled hires requires a positive scale or target size");
-    }
-    if (operation == Video && video.high_noise_sample_params.guidance.slg.layer_start > video.high_noise_sample_params.guidance.slg.layer_end)
-        return error(SD_STATUS_INVALID_ARGUMENT, "high_noise_sample.guidance.slg", "layer_start must not exceed layer_end");
-    if ((operation == Upscaler || operation == ADetailer) && (!config.context.model_path || !*config.context.model_path))
+    const auto& cache = operation == Video ? config.video.cache : config.image.cache;
+    if ((operation == Image || operation == Video) && cache.mode != SD_CACHE_DISABLED && cache.start_percent >= cache.end_percent)
+        return error(SD_STATUS_INVALID_ARGUMENT, "cache", "start_percent must precede end_percent");
+    if (operation == Upscaler && (!config.context.model_path || !*config.context.model_path))
         return error(SD_STATUS_INVALID_ARGUMENT, "model_path", "model path is required");
-    if (operation == VidUpscaler) {
-        const auto& load = config.post.video_upscaler;
-        if (!load.diffusion_model_path || !*load.diffusion_model_path || !load.vae_path || !*load.vae_path || load.upscale_factor <= 0)
-            return error(SD_STATUS_INVALID_ARGUMENT, nullptr, "diffusion_model_path, vae_path and upscale_factor are required");
-    }
-    if ((operation == Upscale || operation == ADetail) && !config.post.image.data)
-        return error(SD_STATUS_INVALID_ARGUMENT, "image", "input image is required");
-    if (operation == Upscale && config.post.image.channel != 3)
+    if (operation == Upscale && (!config.post.image.data || config.post.image.channel != 3))
         return error(SD_STATUS_INVALID_ARGUMENT, "image", "upscaling requires an RGB image");
-    if (operation == VidUpscale) {
-        const auto& input = config.post.video_upscale;
-        if (!input.frames || input.frame_count <= 0)
-            return error(SD_STATUS_INVALID_ARGUMENT, "frames", "video upscaling requires nonempty frames");
-        for (int i = 0; i < input.frame_count; ++i)
-            if (input.frames[i].channel != 3 || input.frames[i].width != input.frames[0].width || input.frames[i].height != input.frames[0].height)
-                return error(SD_STATUS_INVALID_ARGUMENT, "frames", "frames must be RGB and have equal dimensions");
-    }
     return SD_STATUS_OK;
 }

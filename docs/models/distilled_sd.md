@@ -131,8 +131,6 @@ For the use of this model, both options `--cfg-scale 1` and `--steps 1` are agai
 
 ## Usage
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
-
 ### Web UI
 
 Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
@@ -151,7 +149,38 @@ Slot IDs correspond to CLI component options: `diffusion_model` uses
 `--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
 Select optional components when required by your checkpoint or task.
 
-### CLI
+### DGL
+
+| Example | Description |
+| --- | --- |
+| [SSD1B](../dgl/distilled_sd/ssd1b-txt2img.dgl) | Text-to-image generation. |
+| [SDXS-512-DreamShaper](../dgl/distilled_sd/sdxs-512-dreamshaper-txt2img.dgl) | Distilled text-to-image generation. |
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\distilled_sd\ssd1b-txt2img.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/distilled_sd/ssd1b-txt2img.dgl
+```
+
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+### Legacy CLI
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 #### SSD1B
 
@@ -196,6 +225,9 @@ Both options: `--cfg-scale 1` and  `--steps 1` are mandatory here.
 SSD-1B, Vega, and Tiny SD variants reduce the base model size. Details are in the
 [SSD-1B paper](https://arxiv.org/abs/2401.02677v1) and
 [Tiny SD paper](https://arxiv.org/pdf/2305.15798.pdf). Follow the [SDXS generation settings](#sdxs-512-dreamshaper); CFG 1 and one step are required.
+
+For SDXS, a configured `taesd_path` is used for final output even when
+`tae_preview_only` is enabled, because these models require the tiny autoencoder.
 
 Run the Python conversion commands in [Model files](#model-files) from the source repository root,
 with the listed conversion script and Python dependencies installed. Return to

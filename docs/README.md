@@ -15,6 +15,8 @@ For the project overview and supported models, see the [project README](../READM
 
 ## Generation and inputs
 
+- [DGL generation scripts](dgl.md)
+- [DGL model examples](dgl/README.md)
 - [C API and migration](guides/c_api.md)
 - [Sampling methods and schedulers](guides/sampling.md)
 - [Image editing](guides/edit.md)
@@ -40,6 +42,7 @@ For the project overview and supported models, see the [project README](../READM
 ## Development
 
 - [C API internals](development/c_api.md)
+- [DGL architecture](development/dgl.md)
 - [Model configuration and integration conventions](development/model_config.md)
 - [ggml operator extensions](development/ggml_extensions.md)
 - [Backend performance probes](development/backend_probe.md)

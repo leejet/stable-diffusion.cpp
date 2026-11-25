@@ -1,7 +1,7 @@
 #include "model/diffusion/lingbot_video.hpp"
 #include "conditioning/conditioner.hpp"
+#include "model_build_context.h"
 #include "model_definition.h"
-#include "pipeline/model_builders.h"
 
 static bool build_lingbot_video(const sd::model_builders::Context& ctx, const TokenizerConfig& tokenizers, sd::model_builders::CoreRunners& result) {
     const auto* sd_ctx_params      = &ctx.params;
@@ -15,18 +15,22 @@ static bool build_lingbot_video(const sd::model_builders::Context& ctx, const To
             break;
         }
     }
-    result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
-                                                       tensor_storage_map,
-                                                       version,
-                                                       "",
-                                                       enable_vision,
-                                                       weight_manager,
-                                                       tokenizers);
-    result.diffusion   = std::make_shared<LingBotVideo::LingBotVideoRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
-                                                                            tensor_storage_map,
-                                                                            "model.diffusion_model",
-                                                                            weight_manager,
-                                                                            sd_ctx_params->model_args);
+    if (ctx.build_conditioner) {
+        result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
+                                                           tensor_storage_map,
+                                                           version,
+                                                           "",
+                                                           enable_vision,
+                                                           weight_manager,
+                                                           tokenizers);
+    }
+    if (ctx.build_diffusion) {
+        result.diffusion = std::make_shared<LingBotVideo::LingBotVideoRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                              tensor_storage_map,
+                                                                              "model.diffusion_model",
+                                                                              weight_manager,
+                                                                              sd_ctx_params->model_args.c_str());
+    }
     return true;
 }
 
@@ -38,6 +42,7 @@ const std::vector<ModelDefinition>& lingbot_video_definitions() {
             definition.version                          = VERSION_LINGBOT_VIDEO;
             definition.geometry                         = {2, 16, 3};
             definition.name                             = "LingBot Video";
+            definition.id                               = "lingbot_video";
             definition.traits.is_dit                    = true;
             definition.traits.supports_video_generation = true;
             definition.traits.vae_kind                  = ModelVAEKind::WAN;

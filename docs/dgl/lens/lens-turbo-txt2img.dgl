@@ -1,0 +1,39 @@
+# version: 0.0.0
+# docs/models/lens.md — Lens Turbo
+
+var {
+    model_path = "../models/diffusion_models/lens_turbo_bf16.safetensors"
+    text_path = "../models/text_encoders/gpt-oss-20b-UD-Q8_K_XL.gguf"
+    tokenizer_path = "../models/tokenizers/tokenizer_gpt_oss.json"
+    vae_path = "../models/vae/flux2_ae.safetensors"
+
+    output_path = "output.png"
+
+    prompt = "A crystal dragon soaring through an aurora borealis sky, its entire body made of transparent faceted crystal refracting the green and purple aurora light into rainbow spectra, ice particles trailing from its wings, high fantasy digital art"
+
+    seed = 42
+    rng_type = "cuda"
+    width = 512
+    height = 512
+
+    steps = 4
+    method = "euler"
+    scheduler = "discrete"
+}
+
+fn main() {
+    model = load_dit(model_path, family = "lens")
+    text = load_text_encoder(text_path, family = "lens", tokenizer = tokenizer_path)
+    vae = load_vae(vae_path, family = "lens")
+
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    condition = encode_prompt(text, prompt, width = width, height = height)
+    predict = predictor(model, condition)
+    sigmas = make_sigmas(predict, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(predict, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = predict, method = method, rng = rng)
+    image = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

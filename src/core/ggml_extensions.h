@@ -4,6 +4,7 @@
 #include "ggml-backend.h"
 
 void sd_ggml_register_extensions(ggml_backend_t backend);
+void sd_ggml_rotate_convrot(float* values, int64_t width, int group);
 
 #ifndef SD_USE_UPSTREAM_GGML
 #include "ggml-ext.h"
@@ -47,6 +48,31 @@ ggml_ext_op_t sd_ggml_convrot_op();
 bool sd_ggml_i8_describe(const ggml_tensor* node, SDI8Operation* operation);
 
 bool sd_ggml_convrot_describe(const ggml_tensor* node, int* group_size);
+
+enum SDI8LoRAMergeFlags : uint32_t {
+    SD_I8_LORA_CHANGED   = 1,
+    SD_I8_LORA_NONFINITE = 2,
+};
+
+struct SDI8LoRARowStats {
+    float maximum;
+    uint32_t changed;
+};
+
+struct SDI8LoRAMerge {
+    const ggml_tensor* weight;
+    const ggml_tensor* scale;
+    const ggml_tensor* diff;
+    int32_t group;
+
+    bool scalar_scale() const { return ggml_nelements(scale) == 1; }
+    size_t scale_offset() const { return sizeof(uint32_t); }
+    size_t weight_offset() const { return scale_offset() + ggml_nbytes(scale); }
+    size_t workspace_size() const { return ggml_nbytes(diff) + ggml_nrows(weight) * sizeof(SDI8LoRARowStats); }
+};
+
+ggml_ext_op_t sd_ggml_i8_lora_merge_op();
+bool sd_ggml_i8_lora_merge_describe(const ggml_tensor* node, SDI8LoRAMerge* op);
 
 enum class SDW4Kind : int32_t { W4A4 = 1,
                                 W4A8 = 2 };

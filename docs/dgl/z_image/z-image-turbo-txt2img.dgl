@@ -1,0 +1,38 @@
+# version: 0.0.0
+# docs/models/z_image.md — Z-Image-Turbo
+
+var {
+    model_path = "../models/diffusion_models/z_image_turbo-Q3_K.gguf"
+    text_path = "../models/text_encoders/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+    vae_path = "../models/vae/ae.sft"
+
+    output_path = "output.png"
+
+    prompt = "A cinematic, melancholic photograph of a solitary hooded figure walking through a sprawling, rain-slicked metropolis at night. The city lights are a chaotic blur of neon orange and cool blue, reflecting on the wet asphalt. The scene evokes a sense of being a single component in a vast machine. Superimposed over the image in a sleek, modern, slightly glitched font is the philosophical quote: 'THE CITY IS A CIRCUIT BOARD, AND I AM A BROKEN TRANSISTOR.' -- moody, atmospheric, profound, dark academic"
+
+    seed = 42
+    rng_type = "cuda"
+    width = 512
+    height = 1024
+
+    steps = 8
+    method = "euler"
+    scheduler = "discrete"
+}
+
+fn main() {
+    model = load_dit(model_path, family = "z_image", params_backend = "cpu")
+    text = load_text_encoder(text_path, family = "z_image", params_backend = "cpu")
+    vae = load_vae(vae_path, family = "z_image", params_backend = "cpu")
+
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    condition = encode_prompt(text, prompt, width = width, height = height)
+    predict = predictor(model, condition)
+    sigmas = make_sigmas(predict, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(predict, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = predict, method = method, rng = rng)
+    image = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

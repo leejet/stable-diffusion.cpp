@@ -375,16 +375,13 @@ static bool build_sdapi_img_gen_request(const json& j,
         }
     }
 
-    if (j.contains("ref_image_args")) {
-        if (!j["ref_image_args"].is_string()) {
-            error_message = "ref_image_args must be a string";
-            return false;
-        }
-        request.gen_params.ref_image_args = j["ref_image_args"].get<std::string>();
+    if (j.contains("ref_image_args") && j["ref_image_args"] != "") {
+        error_message = "reference overrides require a DGL script";
+        return false;
     }
 
-    if (j.contains("image_preprocess") && !request.gen_params.parse_image_preprocess_json(j["image_preprocess"].dump())) {
-        error_message = "invalid image_preprocess";
+    if (j.contains("image_preprocess")) {
+        error_message = "image_preprocess requires a DGL script";
         return false;
     }
 
@@ -453,26 +450,22 @@ static bool build_sdapi_img_gen_request(const json& j,
            validate_server_img_gen_request(runtime, request, error_message);
 }
 
-static nlohmann::json prepare_info_field(const std::string& generation_info) {
-    const auto info       = nlohmann::json::parse(generation_info);
-    const auto& sampling  = info.at("sample_params");
-    nlohmann::json result = {{"prompt", info.at("prompt")},
-                             {"negative_prompt", info.at("negative_prompt")},
-                             {"seed", generation_seed(generation_info)},
-                             {"cfg_scale", sampling.at("guidance").at("txt_cfg")},
-                             {"width", info.at("width")},
-                             {"height", info.at("height")},
-                             {"steps", sampling.contains("custom_sigmas") ? json(sampling.at("custom_sigmas").size() - 1) : sampling.at("sample_steps")},
-                             {"sampler_name", sampling.at("sample_method")},
-                             {"version", "stable-diffusion.cpp"}};
-    if (info.contains("clip_skip"))
-        result["clip_skip"] = info.at("clip_skip");
-    if (info.contains("strength"))
-        result["denoising_strength"] = info.at("strength");
-    if (sampling.contains("scheduler"))
-        result["extra_generation_params"]["Schedule type"] = sampling.at("scheduler");
+static json generation_metadata(const std::string& source) {
+    const auto* metadata = sd_get_generation_metadata(source.c_str());
+    return metadata ? json::parse(metadata) : json::object();
+}
+
+static nlohmann::json prepare_info_field(const json& info) {
+    auto result = json::object();
+    const std::map<std::string, std::string> names{{"prompt", "prompt"}, {"negative_prompt", "negative_prompt"}, {"seed", "seed"}, {"cfg_scale", "cfg_scale"}, {"width", "width"}, {"height", "height"}, {"steps", "steps"}, {"method", "sampler_name"}, {"clip_skip", "clip_skip"}, {"strength", "denoising_strength"}};
+    for (const auto& [key, output] : names)
+        if (info.contains(key))
+            result[output] = info.at(key);
+    if (info.contains("scheduler"))
+        result["extra_generation_params"]["Schedule type"] = info.at("scheduler");
+    result["version"] = "stable-diffusion.cpp";
     for (const auto* key : {"infotexts", "all_prompts", "all_negative_prompts", "all_seeds", "generation_info"})
-        result[key] = nlohmann::json::array();
+        result[key] = json::array();
     return result;
 }
 
@@ -589,38 +582,29 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             LOG_DEBUG("%s\n", request.gen_params.to_string().c_str());
 
-            SDOptPtr img_gen_params = request.to_image_opt();
             SDImageVec results;
             int num_results = 0;
 
             {
-                std::lock_guard<std::mutex> lock(*runtime->sd_ctx_mutex);
-                PromptImageCallbackGuard prompt_images(runtime->sd_ctx, request.gen_params);
                 const bool detailing = request.adetailer_enabled && !runtime->default_gen_params->ad_model_path.empty();
                 SDAPIPreviewGuard preview_guard(id_task, request.gen_params, img2img ? "img2img" : "txt2img", detailing);
-                sd_result_t* generated = nullptr;
-                generate_sd_image(runtime->sd_ctx, img_gen_params, &generated);
-                results.adopt(generated, runtime->ctx_params->lora_model_dir);
+                generate_server_images(runtime->sd_ctx, request, results, error_message);
                 num_results = results.count();
                 if (detailing && !results.empty())
                     preview_guard.begin_detailing();
-                if (!results.empty() && !apply_server_adetailer(*runtime, request, results)) {
-                    res.status = 500;
-                    res.set_content(R"({"error":"ADetailer failed"})", "application/json");
-                    return;
-                }
             }
 
             if (results.empty()) {
                 res.status = 500;
-                res.set_content(R"({"error":"generate_image returned no results"})", "application/json");
+                res.set_content(json({{"error", error_message}}).dump(), "application/json");
                 return;
             }
 
             json out;
             out["images"]     = json::array();
             out["parameters"] = j;
-            json jsoninfo     = prepare_info_field(results.generation_info(0));
+            auto metadata     = generation_metadata(results.generation_info(0));
+            json jsoninfo     = prepare_info_field(metadata);
 
             for (int i = 0; i < num_results; ++i) {
                 if (results[i].data == nullptr) {
@@ -629,7 +613,9 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
                 bool embed_meta = request.gen_params.embed_image_metadata;
 
-                std::string params = generation_info_to_webui(results.generation_info(i));
+                if (i != 0)
+                    metadata = generation_metadata(results.generation_info(i));
+                const auto params = metadata.value("infotext", "");
 
                 auto image_bytes = encode_image_to_vector(EncodedImageFormat::PNG,
                                                           results[i].data,
@@ -645,12 +631,12 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
                 out["images"].push_back(base64_encode(image_bytes));
 
-                const auto actual = json::parse(results.generation_info(i));
                 jsoninfo["infotexts"].push_back(params);
-                jsoninfo["all_seeds"].push_back(generation_seed(results.generation_info(i)));
-                jsoninfo["generation_info"].push_back(actual);
-                jsoninfo["all_prompts"].push_back(actual["prompt"]);
-                jsoninfo["all_negative_prompts"].push_back(actual["negative_prompt"]);
+                const auto seed = metadata.find("seed");
+                jsoninfo["all_seeds"].push_back(seed != metadata.end() && seed->is_number_integer() ? seed->get<int64_t>() : -1);
+                jsoninfo["generation_info"].push_back(results.generation_info(i));
+                jsoninfo["all_prompts"].push_back(metadata.value("prompt", ""));
+                jsoninfo["all_negative_prompts"].push_back(metadata.value("negative_prompt", ""));
             }
 
             // not a mistake: it is supposed to be a string in json format
@@ -786,7 +772,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         entry["sha256"]     = "8888888888888888888888888888888888888888888888888888888888888888";
         entry["config"]     = nullptr;
         json r              = json::array();
-        if (runtime->sd_ctx) {
+        if (has_current_model(*runtime)) {
             r.push_back(entry);
         }
         res.set_content(r.dump(), "application/json");
@@ -798,6 +784,50 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         r["samples_format"]      = "png";
         r["sd_model_checkpoint"] = model_path.stem().u8string();
         res.set_content(r.dump(), "application/json");
+    });
+
+    // A1111 clients (e.g. SDAI) fetch these during setup and abort on 404. sd-server has no
+    // equivalent concept, so they report "nothing available" in A1111's response shapes.
+    routes.get("/sdapi/v1/embeddings", [](const httplib::Request&, httplib::Response& res) {
+        json r;
+        r["loaded"]  = json::object();
+        r["skipped"] = json::object();
+        res.set_content(r.dump(), "application/json");
+    });
+
+    for (const char* path : {"/sdapi/v1/hypernetworks",
+                             "/sdapi/v1/sd-modules",
+                             "/sdapi/v1/extensions",
+                             "/sdapi/v1/script-info"}) {
+        routes.get(path, [](const httplib::Request&, httplib::Response& res) {
+            res.set_content(json::array().dump(), "application/json");
+        });
+    }
+
+    routes.get("/sdapi/v1/scripts", [](const httplib::Request&, httplib::Response& res) {
+        json r;
+        r["txt2img"] = json::array();
+        r["img2img"] = json::array();
+        res.set_content(r.dump(), "application/json");
+    });
+
+    // Server options are fixed at launch; accept and ignore updates so clients that save
+    // settings before generating keep working.
+    routes.post("/sdapi/v1/options", [](const httplib::Request&, httplib::Response& res) {
+        res.set_content(json::object().dump(), "application/json");
+    });
+
+    routes.post("/sdapi/v1/interrupt", [runtime](const httplib::Request&, httplib::Response& res) {
+        // Hold the preview lock through the cancel: the generation's preview guard clears
+        // `active` under this lock before sd_ctx_mutex is released, so the next queued
+        // generation cannot start (and be cancelled by mistake) between check and cancel.
+        // protect() holds runtime_mutex (shared) for this handler, so sd_ctx cannot be
+        // unloaded underneath us. sd_cancel_generation only stores an atomic flag.
+        std::lock_guard<std::mutex> lock(g_preview.mutex);
+        if (g_preview.active && runtime->sd_ctx) {
+            sd_cancel_generation(runtime->sd_ctx, SD_CANCEL_ALL);
+        }
+        res.set_content(json::object().dump(), "application/json");
     });
 
     routes.get("/sdapi/v1/progress", [](const httplib::Request& req, httplib::Response& res) {

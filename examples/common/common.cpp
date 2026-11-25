@@ -30,12 +30,11 @@ namespace fs = std::filesystem;
 
 const char* const modes_str[] = {
     "img_gen",
-    "adetailer",
     "vid_gen",
     "convert",
     "upscale",
     "metadata",
-    "vid_upscale",
+    "dgl",
 };
 
 static void prepend_backend_assignment(std::string& spec, const char* assignment) {
@@ -485,16 +484,6 @@ ArgOptions SDContextParams::get_options() {
          0,
          &control_net_path},
         {"",
-         "--ip-adapter",
-         "path to IP-Adapter model (requires --clip_vision)",
-         0,
-         &ip_adapter_path},
-        {"",
-         "--motion-module",
-         "path to AnimateDiff motion module (SD 1.5); enables video generation on --video-frames > 1",
-         0,
-         &motion_module_path},
-        {"",
          "--embd-dir",
          "embeddings directory",
          0,
@@ -521,16 +510,6 @@ ArgOptions SDContextParams::get_options() {
          "qwen_image_2_1_prefix_cache_type (auto or a type name from --type)",
          (int)',',
          &model_args},
-        {"",
-         "--photo-maker",
-         "path to PHOTOMAKER model",
-         0,
-         &photo_maker_path},
-        {"",
-         "--pulid-weights",
-         "path to PuLID Flux weights",
-         0,
-         &pulid_weights_path},
         {"",
          "--upscale-model",
          "path to esrgan model.",
@@ -779,23 +758,25 @@ ArgOptions SDContextParams::get_options() {
          on_sampler_rng_arg},
         {"",
          "--prediction",
-         "prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow, sefi_flow, minit2i_flow, sensenova_u1_flow, flux3_flow, h3_av_flow, ming_image_flow]",
+         "prediction type override, one of [eps, v, edm_v, flow, flux_flow, sefi_flow, minit2i_flow, sensenova_u1_flow, flux3_flow, h3_av_flow, ming_image_flow]",
          on_prediction_arg},
         {"",
          "--lora-apply-mode",
-         "the way to apply LoRA, one of [auto, immediately, at_runtime], default is auto. "
-         "In auto mode, if the model weights contain any quantized parameters, the at_runtime mode will be used; otherwise, immediately will be used."
-         "The immediately mode may have precision and compatibility issues with quantized parameters, "
-         "but it usually offers faster inference speed and, in some cases, lower memory usage. "
-         "The at_runtime mode, on the other hand, is exactly the opposite.",
+         "Select auto (default), immediately, or at_runtime for LoRA application. "
+         "Auto merges unquantized weights on the compute backend when row splitting is off. "
+         "It applies LoRA at runtime for quantized, offloaded, or row-split weights.",
          on_lora_apply_mode_arg},
     };
 
     return options;
 }
 
+bool SDContextParams::register_rpc_devices() const {
+    return !rpc_servers || sd_add_rpc_servers(rpc_servers->c_str());
+}
+
 bool SDContextParams::print_devices() const {
-    if (!sd_add_rpc_servers(rpc_servers ? rpc_servers->c_str() : nullptr)) {
+    if (!register_rpc_devices()) {
         return false;
     }
     size_t device_list_size = sd_list_devices(nullptr, 0);
@@ -979,6 +960,21 @@ std::string SDContextParams::to_string() const {
     return oss.str();
 }
 
+bool SDContextParams::configure_dgl(sd_dgl_ctx_t* ctx) const {
+    auto set = [ctx](const char* key, const auto& option) {
+        return !option || sd_dgl_ctx_set(ctx, key, std::to_string(*option).c_str());
+    };
+    return (!max_vram || sd_dgl_ctx_set(ctx, "max_vram", max_vram->c_str())) &&
+           set("auto_fit", auto_fit) &&
+           set("conditioning_cache_size", conditioning_cache_size) &&
+           set("batched_cfg", batched_cfg) &&
+           set("n_threads", n_threads) &&
+           set("enable_mmap", enable_mmap) &&
+           set("eager_load", eager_load) &&
+           set("disable_prefetch", disable_prefetch) &&
+           set("disable_segmented_compute", disable_segmented_compute);
+}
+
 SDOptPtr SDContextParams::to_context_opt() {
     prepare_backend_assignments();
     embedding_vec.clear();
@@ -1008,10 +1004,14 @@ SDOptPtr SDContextParams::to_context_opt() {
     opt.set_string("audio_encoder_path", audio_encoder_path);
     opt.set_string("taesd_path", taesd_path);
     opt.set_string("control_net_path", control_net_path);
-    opt.set_string("ip_adapter_path", ip_adapter_path);
-    opt.set_string("motion_module_path", motion_module_path);
-    opt.set_string("photo_maker_path", photo_maker_path);
-    opt.set_string("pulid_weights_path", pulid_weights_path);
+    if (!ip_adapter_path.empty())
+        opt.set_string("ip_adapter_path", ip_adapter_path);
+    if (!motion_module_path.empty())
+        opt.set_string("motion_module_path", motion_module_path);
+    if (!photo_maker_path.empty())
+        opt.set_string("photo_maker_path", photo_maker_path);
+    if (!pulid_weights_path.empty())
+        opt.set_string("pulid_weights_path", pulid_weights_path);
     opt.set_string("tensor_type_rules", tensor_type_rules);
     opt.set_int("n_threads", n_threads);
     opt.set_int("conditioning_cache_size", conditioning_cache_size);
@@ -1065,29 +1065,9 @@ ArgOptions SDGenerationParams::get_options() {
          "the negative prompt (default: \"\")",
          0,
          &negative_prompt},
-        {"",
-         "--ad-model",
-         "path to a converted YOLOv8 detection model for ADetailer",
-         0,
-         &ad_model_path},
-        {"",
-         "--ad-prompt",
-         "ADetailer prompt; empty inherits the main prompt, supports [PROMPT], [SEP], and [SKIP]",
-         0,
-         &ad_prompt},
-        {"",
-         "--ad-negative-prompt",
-         "ADetailer negative prompt; empty inherits the main negative prompt, supports [PROMPT] and [SEP]",
-         0,
-         &ad_negative_prompt},
-        {"",
-         "--extra-ad-args",
-         "extra ADetailer args, key=value list. Supports input_size, confidence, nms, max_detections, mask_k_largest, mask_min_ratio, mask_max_ratio, dilate_erode, x_offset, y_offset, mask_mode, merge_masks, invert_mask, mask_blur, inpaint_padding, inpaint_width, inpaint_height, denoising_strength, steps, cfg_scale, sample_method, scheduler, sort_by",
-         (int)',',
-         &extra_ad_args},
         {"-i",
          "--init-img",
-         "path to the init image, or a single input image for vid_upscale",
+         "path to the init image",
          0,
          &init_image_path},
         {"",
@@ -1106,32 +1086,11 @@ ArgOptions SDGenerationParams::get_options() {
          0,
          &control_image_path},
         {"",
-         "--ip-adapter-image",
-         "path to the IP-Adapter reference image",
-         0,
-         &ip_adapter_image_path},
-        {"",
          "--control-video",
-         "path to control video frames, It must be a directory path. The video frames inside should be stored as images in "
-         "lexicographical (character) order. For example, if the control video path is `frames`, the directory contain images "
-         "such as 00.png, 01.png, ... etc.",
+         "control video file (AVI, WebP or independent-frame VP8 WebM) or frame directory in filename order; "
+         "files are sampled at the output FPS without audio",
          0,
          &control_video_path},
-        {"",
-         "--pm-id-images-dir",
-         "path to PHOTOMAKER input id images dir",
-         0,
-         &pm_id_images_dir},
-        {"",
-         "--pm-id-embed-path",
-         "path to PHOTOMAKER v2 id embed",
-         0,
-         &pm_id_embed_path},
-        {"",
-         "--pulid-id-embedding",
-         "path to PuLID id embedding",
-         0,
-         &pulid_id_embedding_path},
         {"",
          "--hires-upscaler",
          "highres fix upscaler, Lanczos, Nearest, Latent, Latent (nearest), Latent (nearest-exact), "
@@ -1148,7 +1107,7 @@ ArgOptions SDGenerationParams::get_options() {
          &control_type},
         {"",
          "--extra-sample-args",
-         "extra sampler/scheduler/guidance args, key=value list. CFG supports guidance_schedule; APG supports apg_eta, apg_momentum, apg_norm_threshold, apg_norm_threshold_smoothing; SLG supports slg_uncond; lcm supports noise_clip_std, noise_scale_start, noise_scale_end; flux supports base_shift, max_shift; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma; beta scheduler supports alpha, beta; logit_normal supports mu, std, logsnr_min, logsnr_max, resolution_aware; llada_image supports uniform; lms supports lms_max_order, lms_shift, lms_divisions; noise-injecting samplers support noise_sampler with value iid (default except for dpm++2m_sde_bt) or brownian_tree; brownian_tree_rng supports cpu (default), cuda, std_default or sampler_rng",
+         "extra sampler/scheduler/guidance args, key=value list. CFG supports guidance_schedule; APG supports apg_eta, apg_momentum, apg_norm_threshold, apg_norm_threshold_smoothing; lcm supports noise_clip_std, noise_scale_start, noise_scale_end; flux supports base_shift, max_shift; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma; beta scheduler supports alpha, beta; logit_normal supports mu, std, logsnr_min, logsnr_max, resolution_aware; llada_image supports uniform; lms supports lms_max_order, lms_shift, lms_divisions; noise-injecting samplers support noise_sampler with value iid (default except for dpm++2m_sde_bt) or brownian_tree; brownian_tree_rng supports cpu (default), cuda, std_default or sampler_rng",
          (int)',',
          &extra_sample_args},
         {"",
@@ -1156,14 +1115,6 @@ ArgOptions SDGenerationParams::get_options() {
          "extra VAE tiling args, key=value list. Supported video VAEs accept temporal_tile_frames/temporal_tile_size (default: 4), temporal_tile_overlap (default: 1); Wan2.2 TI2V 5B accepts temporal_decode_frames (default: 1)",
          (int)',',
          &extra_tiling_args},
-        {"",
-         "--ref-image-args",
-         "Key-value list to set up the way the reference images are processed (empty = auto-detect from model weigths)",
-         (int)',',
-         &ref_image_args},
-        {"", "--image-preprocess",
-         "Image preprocessing rule: target=init|end|mask|control|ref|ip-adapter|id|control-frame,index=N,mode=auto|none|stretch|crop|crop-resize|fit-pad,filter=auto|nearest|nearest-exact|bilinear|bicubic|lanczos,antialias=auto|true|false,width=W,height=H,anchor=center|top|bottom|left|right,pad_color=#RRGGBB[AA],canny=true|false. Repeat for multiple rules.",
-         (int)';', &image_preprocess},
     };
 
     options.int_options = {
@@ -1181,7 +1132,7 @@ ArgOptions SDGenerationParams::get_options() {
          &sample_params.sample_steps},
         {"",
          "--high-noise-steps",
-         "(high noise) number of sample steps (default: -1 = auto)",
+         "high-noise steps; >= 0 adds to --steps, -1 splits --steps at --moe-boundary (default: -1)",
          &high_noise_sample_params.sample_steps},
         {"",
          "--clip-skip",
@@ -1204,11 +1155,6 @@ ArgOptions SDGenerationParams::get_options() {
          "--fps",
          "fps (default: 24)",
          &fps},
-        {"",
-         "--timestep-shift",
-         "shift timestep for NitroFusion models (default: 0). "
-         "recommended N for NitroSD-Realism around 250 and 500 for NitroSD-Vibrant",
-         &sample_params.shifted_timestep},
         {"",
          "--upscale-repeats",
          "Run the ESRGAN upscaler this many times (default: 1)",
@@ -1249,18 +1195,6 @@ ArgOptions SDGenerationParams::get_options() {
          "distilled guidance scale for models with guidance input (default: 3.5)",
          &sample_params.guidance.distilled_guidance},
         {"",
-         "--slg-scale",
-         "skip layer guidance (SLG) scale, only for DiT models: (default: 0). 0 means disabled, a value of 2.5 is nice for sd3.5 medium",
-         &sample_params.guidance.slg.scale},
-        {"",
-         "--skip-layer-start",
-         "SLG enabling point (default: 0.01)",
-         &sample_params.guidance.slg.layer_start},
-        {"",
-         "--skip-layer-end",
-         "SLG disabling point (default: 0.2)",
-         &sample_params.guidance.slg.layer_end},
-        {"",
          "--eta",
          "noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a, er_sde, dpm++2s_a, dpm++2m_sde and dpm++2m_sde_bt)",
          &sample_params.eta},
@@ -1269,53 +1203,13 @@ ArgOptions SDGenerationParams::get_options() {
          "shift value for Flow models like SD3.x or WAN (default: auto)",
          &sample_params.flow_shift},
         {"",
-         "--high-noise-cfg-scale",
-         "(high noise) unconditional guidance scale: (default: 7.0)",
-         &high_noise_sample_params.guidance.txt_cfg},
-        {"",
-         "--high-noise-img-cfg-scale",
-         "(high noise) image guidance scale for inpaint or image edit models (default: same as --cfg-scale)",
-         &high_noise_sample_params.guidance.img_cfg},
-        {"",
-         "--high-noise-guidance",
-         "(high noise) distilled guidance scale for models with guidance input (default: 3.5)",
-         &high_noise_sample_params.guidance.distilled_guidance},
-        {"",
-         "--high-noise-slg-scale",
-         "(high noise) skip layer guidance (SLG) scale, only for DiT models: (default: 0)",
-         &high_noise_sample_params.guidance.slg.scale},
-        {"",
-         "--high-noise-skip-layer-start",
-         "(high noise) SLG enabling point (default: 0.01)",
-         &high_noise_sample_params.guidance.slg.layer_start},
-        {"",
-         "--high-noise-skip-layer-end",
-         "(high noise) SLG disabling point (default: 0.2)",
-         &high_noise_sample_params.guidance.slg.layer_end},
-        {"",
-         "--high-noise-eta",
-         "(high noise) noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a, er_sde, dpm++2s_a, dpm++2m_sde and dpm++2m_sde_bt)",
-         &high_noise_sample_params.eta},
-        {"",
          "--strength",
          "strength for noising/unnoising (default: 0.75)",
          &strength},
         {"",
-         "--pm-style-strength",
-         "",
-         &pm_style_strength},
-        {"",
-         "--pulid-id-weight",
-         "strength of PuLID identity injection",
-         &pulid_id_weight},
-        {"",
          "--control-strength",
          "strength to apply Control Net (default: 0.9). 1.0 corresponds to full destruction of information in init image",
          &control_strength},
-        {"",
-         "--ip-adapter-strength",
-         "strength to apply IP-Adapter (default: 1.0)",
-         &ip_adapter_strength},
         {"",
          "--moe-boundary",
          "timestep boundary for Wan2.2 MoE model. (default: 0.875). Only enabled if `--high-noise-steps` is set to -1",
@@ -1340,11 +1234,6 @@ ArgOptions SDGenerationParams::get_options() {
 
     options.bool_options = {
         {"",
-         "--increase-ref-index",
-         "automatically increase the indices of references images based on the order they are listed (starting with 1).",
-         true,
-         &increase_ref_index},
-        {"",
          "--circular",
          "enable circular padding on both axes for tileable output",
          true, &circular},
@@ -1358,7 +1247,7 @@ ArgOptions SDGenerationParams::get_options() {
          true, &circular_y},
         {"",
          "--disable-image-metadata",
-         "do not embed generation metadata on image files",
+         "do not embed generation metadata in image or video files (including DGL saves)",
          false,
          &embed_image_metadata},
         {"",
@@ -1395,83 +1284,12 @@ ArgOptions SDGenerationParams::get_options() {
         return 1;
     };
 
-    auto on_high_noise_sample_method_arg = [&](int argc, const char** argv, int index) {
-        if (++index >= argc) {
-            return -1;
-        }
-        const char* arg                        = argv[index];
-        high_noise_sample_params.sample_method = arg;
-        return 1;
-    };
-
     auto on_scheduler_arg = [&](int argc, const char** argv, int index) {
         if (++index >= argc) {
             return -1;
         }
         const char* arg         = argv[index];
         sample_params.scheduler = arg;
-        return 1;
-    };
-
-    auto on_skip_layers_arg = [&](int argc, const char** argv, int index) {
-        if (++index >= argc) {
-            return -1;
-        }
-        std::string layers_str = argv[index];
-        if (layers_str.size() < 2 || layers_str.front() != '[' || layers_str.back() != ']') {
-            return -1;
-        }
-
-        layers_str = layers_str.substr(1, layers_str.size() - 2);
-
-        std::regex regex("[, ]+");
-        std::sregex_token_iterator iter(layers_str.begin(), layers_str.end(), regex, -1);
-        std::sregex_token_iterator end;
-        std::vector<std::string> tokens(iter, end);
-        std::vector<int> layers;
-        for (const auto& token : tokens) {
-            try {
-                size_t used     = 0;
-                const int layer = std::stoi(token, &used);
-                if (used != token.size())
-                    return -1;
-                layers.push_back(layer);
-            } catch (const std::exception&) {
-                return -1;
-            }
-        }
-        skip_layers = layers;
-        return 1;
-    };
-
-    auto on_high_noise_skip_layers_arg = [&](int argc, const char** argv, int index) {
-        if (++index >= argc) {
-            return -1;
-        }
-        std::string layers_str = argv[index];
-        if (layers_str.size() < 2 || layers_str.front() != '[' || layers_str.back() != ']') {
-            return -1;
-        }
-
-        layers_str = layers_str.substr(1, layers_str.size() - 2);
-
-        std::regex regex("[, ]+");
-        std::sregex_token_iterator iter(layers_str.begin(), layers_str.end(), regex, -1);
-        std::sregex_token_iterator end;
-        std::vector<std::string> tokens(iter, end);
-        std::vector<int> layers;
-        for (const auto& token : tokens) {
-            try {
-                size_t used     = 0;
-                const int layer = std::stoi(token, &used);
-                if (used != token.size())
-                    return -1;
-                layers.push_back(layer);
-            } catch (const std::exception&) {
-                return -1;
-            }
-        }
-        high_noise_skip_layers = layers;
         return 1;
     };
 
@@ -1724,18 +1542,13 @@ ArgOptions SDGenerationParams::get_options() {
     options.manual_options = {
         {"-s",
          "--seed",
-         "RNG seed; unset or a negative value requests a random seed",
+         "RNG seed (default: " + (seed ? std::to_string(*seed) : "random") + "); a negative value requests a random seed",
          on_seed_arg},
         {"",
          "--sampling-method",
          "sampling method, one of [" + sample_methods + "], "
                                                         "default: euler for Flux/SD3/Wan, euler_a otherwise",
          on_sample_method_arg},
-        {"",
-         "--high-noise-sampling-method",
-         "(high noise) sampling method, one of [" + sample_methods + "], "
-                                                                     "default: euler for Flux/SD3/Wan, euler_a otherwise",
-         on_high_noise_sample_method_arg},
         {"",
          "--scheduler",
          "denoiser sigma scheduler, one of [" + schedulers + "], "
@@ -1749,25 +1562,17 @@ ArgOptions SDGenerationParams::get_options() {
          "--hires-sigmas",
          "custom sigma values for the highres fix second pass, comma-separated (e.g., \"0.85,0.725,0.421875,0.0\") or preset: qwen-image-2.1-turbo, p-h3-image, minimax-h3-image, hyperflow-h3-flash-4, hyperflow-h3-flash-6, hyperflow-h3-flash-8.",
          on_hires_sigmas_arg},
-        {"",
-         "--skip-layers",
-         "layers to skip for SLG steps; unset uses the library default",
-         on_skip_layers_arg},
-        {"",
-         "--high-noise-skip-layers",
-         "(high noise) layers to skip for SLG steps; unset uses the library default",
-         on_high_noise_skip_layers_arg},
         {"-r",
          "--ref-image",
          "reference image for Flux Kontext or MiniMax-H3 Ref2VA (can be used multiple times)",
          on_ref_image_arg},
         {"",
          "--ref-video",
-         "MiniMax-H3 Ref2VA reference video frame directory at 24 fps (can be used multiple times)",
+         "MiniMax-H3 Ref2VA reference video file or frame directory, sampled at 24 fps (can be used multiple times)",
          on_ref_video_arg},
         {"",
          "--ref-video-audio",
-         "WAV soundtrack paired by index with --ref-video (can be used multiple times)",
+         "WAV soundtrack overriding embedded audio, paired by index with --ref-video (can be used multiple times)",
          on_ref_video_audio_arg},
         {"",
          "--ref-audio",
@@ -1779,11 +1584,11 @@ ArgOptions SDGenerationParams::get_options() {
          on_audio_arg},
         {"",
          "--cache-mode",
-         "caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level), 'spectrum' (UNET/DiT Chebyshev+Taylor forecasting)",
+         "caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT condition-level), 'spectrum' (UNET/DiT Chebyshev+Taylor forecasting)",
          on_cache_mode_arg},
         {"",
          "--cache-option",
-         "named cache params (key=value format, comma-separated). easycache/ucache: threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=; spectrum: w=,m=,lam=,window=,flex=,warmup=,stop=. Examples: \"threshold=0.25\" or \"threshold=1.5,reset=0\"",
+         "named cache params (key=value format, comma-separated). easycache/ucache: threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: threshold=,warmup= (Fn/Bn are ignored with a warning); spectrum: w=,m=,lam=,window=,flex=,warmup=,stop=. Examples: \"threshold=0.25\" or \"threshold=1.5,reset=0\"",
          on_cache_option_arg},
         {"",
          "--scm-mask",
@@ -2124,29 +1929,6 @@ static bool resolve_model_file_from_dir(const std::string& model_name,
     return false;
 }
 
-bool SDGenerationParams::parse_image_preprocess_json(const std::string& json_str) {
-    const auto value = json::parse(json_str, nullptr, false);
-    std::string rules;
-    if (value.is_string()) {
-        rules = value.get<std::string>();
-    } else if (value.is_array()) {
-        for (const auto& item : value) {
-            if (!item.is_string()) {
-                LOG_ERROR("image_preprocess must contain rule strings");
-                return false;
-            }
-            if (!rules.empty())
-                rules += ";";
-            rules += item.get<std::string>();
-        }
-    } else {
-        LOG_ERROR("image_preprocess must be a string or array of strings");
-        return false;
-    }
-    image_preprocess = std::move(rules);
-    return true;
-}
-
 bool SDGenerationParams::parse_prompt_images_json(const std::string& json_str) {
     auto images = json::parse(json_str, nullptr, false);
     if (!images.is_object()) {
@@ -2213,11 +1995,14 @@ bool SDGenerationParams::from_json_str(
         return false;
     }
 
-    if (j.contains("image_preprocess") && !parse_image_preprocess_json(j["image_preprocess"].dump()))
-        return false;
+    if (j.contains("image_preprocess"))
+        throw std::invalid_argument("image_preprocess requires a DGL script");
     if (j.contains("prompt_images") && !parse_prompt_images_json(j["prompt_images"].dump()))
         return false;
 
+    if ((j.contains("ref_image_args") && j["ref_image_args"] != "") ||
+        (j.contains("increase_ref_index") && j["increase_ref_index"] != false))
+        throw std::invalid_argument("reference overrides require a DGL script");
     auto load_if_exists = [&](const char* key, auto& out) { load_json_input(j, key, out); };
 
     load_if_exists("prompt", prompt);
@@ -2229,7 +2014,6 @@ bool SDGenerationParams::from_json_str(
     load_if_exists("cache_mode", cache_mode);
     load_if_exists("cache_option", cache_option);
     load_if_exists("scm_mask", scm_mask);
-    load_if_exists("ref_image_args", ref_image_args);
 
     load_if_exists("clip_skip", clip_skip);
     load_if_exists("width", width);
@@ -2248,7 +2032,6 @@ bool SDGenerationParams::from_json_str(
     load_if_exists("moe_boundary", moe_boundary);
     load_if_exists("vace_strength", vace_strength);
 
-    load_if_exists("increase_ref_index", increase_ref_index);
     load_if_exists("embed_image_metadata", embed_image_metadata);
 
     if (j.contains("hires") && j["hires"].is_object()) {
@@ -2479,10 +2262,10 @@ bool SDGenerationParams::initialize_cache_params() {
                     cache_params.use_relative_threshold = (std::stof(val) != 0.0f);
                 } else if (key == "reset") {
                     cache_params.reset_error_on_compute = (std::stof(val) != 0.0f);
-                } else if (key == "Fn" || key == "fn") {
-                    cache_params.Fn_compute_blocks = std::stoi(val);
-                } else if (key == "Bn" || key == "bn") {
-                    cache_params.Bn_compute_blocks = std::stoi(val);
+                } else if (key == "Fn" || key == "fn" || key == "Bn" || key == "bn") {
+                    if (std::stoi(val) < 0)
+                        throw std::out_of_range("block count must be nonnegative");
+                    LOG_WARN("cache option '%s' is ignored: condition-level caching does not support front/back block counts", key.c_str());
                 } else if (key == "warmup") {
                     if (cache_mode == "spectrum") {
                         cache_params.spectrum_warmup_steps = std::stoi(val);
@@ -2592,10 +2375,6 @@ bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::s
 
 /** Validates params for a generation mode; enforces mode-specific input rules. */
 bool SDGenerationParams::validate(SDMode mode) {
-    if (!image_preprocess.empty() && mode != IMG_GEN && mode != VID_GEN) {
-        LOG_ERROR("--image-preprocess requires img_gen or vid_gen mode");
-        return false;
-    }
     if (ref_video_audio_paths.size() + ref_video_audios.size() > ref_video_paths.size() + ref_videos.size()) {
         LOG_ERROR("error: each --ref-video-audio needs a corresponding --ref-video");
         return false;
@@ -2611,21 +2390,15 @@ bool SDGenerationParams::validate(SDMode mode) {
         return false;
     }
 
-    if (mode == UPSCALE || mode == ADETAILER) {
+    if (mode == UPSCALE) {
         if (init_image_path.length() == 0) {
-            LOG_ERROR("error: %s mode needs an init image (--init-img)\n",
-                      mode == UPSCALE ? "upscale" : "adetailer");
+            LOG_ERROR("error: upscale mode needs an init image (--init-img)");
             return false;
         }
     }
 
-    if (mode == ADETAILER && ad_model_path.empty()) {
-        LOG_ERROR("error: adetailer mode needs a detector model (--ad-model)\n");
-        return false;
-    }
-
-    if (mode == IMG_GEN || mode == ADETAILER || mode == VID_GEN) {
-        auto opt = mode == VID_GEN ? to_video_opt() : to_image_opt(mode == ADETAILER);
+    if (mode == IMG_GEN || mode == VID_GEN) {
+        auto opt = mode == VID_GEN ? to_video_opt() : to_image_opt();
         if (!opt) {
             LOG_ERROR("%s", sd_get_last_error());
             return false;
@@ -2671,10 +2444,13 @@ static void set_sample_options(SDOptBuilder& opt, const std::string& prefix, con
 }
 
 static void set_cache_options(SDOptBuilder& opt, const SDCacheParams& params) {
-    opt.set_int("cache.bn_compute_blocks", params.Bn_compute_blocks);
+    const SDCacheParams defaults;
+    if (params.Bn_compute_blocks != defaults.Bn_compute_blocks)
+        opt.set_int("cache.bn_compute_blocks", params.Bn_compute_blocks);
     opt.set_float("cache.end_percent", params.end_percent);
     opt.set_float("cache.error_decay_rate", params.error_decay_rate);
-    opt.set_int("cache.fn_compute_blocks", params.Fn_compute_blocks);
+    if (params.Fn_compute_blocks != defaults.Fn_compute_blocks)
+        opt.set_int("cache.fn_compute_blocks", params.Fn_compute_blocks);
     opt.set_int("cache.max_cached_steps", params.max_cached_steps);
     opt.set_int("cache.max_continuous_cached_steps", params.max_continuous_cached_steps);
     opt.set_int("cache.max_warmup_steps", params.max_warmup_steps);
@@ -2708,7 +2484,7 @@ static void set_tiling_options(SDOptBuilder& opt, const SDTilingParams& params) 
     opt.set_int("vae_tiling.tile_size_w", params.tile_size_w);
 }
 
-SDOptPtr SDGenerationParams::to_image_opt(bool adetail) {
+SDOptPtr SDGenerationParams::to_image_opt() {
     lora_vec.clear();
     lora_vec.reserve(lora_map.size() + high_noise_lora_map.size());
     for (const auto& kv : lora_map) {
@@ -2724,68 +2500,37 @@ SDOptPtr SDGenerationParams::to_image_opt(bool adetail) {
         ref_image_views.push_back(ref_image.get());
     }
 
-    pm_id_image_views.clear();
-    pm_id_image_views.reserve(pm_id_images.size());
-    for (auto& image : pm_id_images) {
-        pm_id_image_views.push_back(image.get());
-    }
-
     vae_tiling_params.extra_tiling_args = extra_tiling_args.empty() ? nullptr : extra_tiling_args.c_str();
     cache_params.scm_mask               = scm_mask.empty() ? nullptr : scm_mask.c_str();
 
-    std::string effective_ref_image_args = ref_image_args;
-    if (!adetail && increase_ref_index) {
-        if (!effective_ref_image_args.empty())
-            effective_ref_image_args += ",";
-        effective_ref_image_args += "ref_index_mode=increase";
-    }
-
-    SDOptBuilder opt(adetail ? sd_adetail_opt_create() : sd_img_gen_opt_create());
+    SDOptBuilder opt(sd_img_gen_opt_create());
     opt.set_string("prompt", prompt);
     opt.set_string("negative_prompt", negative_prompt);
     opt.set_int("clip_skip", clip_skip);
-    if (!adetail)
-        opt.set_image("init_image", init_image.get());
-    if (!adetail)
-        opt.set_string("ref_image_args", effective_ref_image_args);
-    if (!adetail)
-        opt.set_image("mask_image", mask_image.get());
+    opt.set_image("init_image", init_image.get());
+    opt.set_image("mask_image", mask_image.get());
     opt.set_int("width", width);
     opt.set_int("height", height);
     opt.set_float("strength", strength);
     opt.set_int("seed", seed);
-    if (!adetail)
-        opt.set_int("batch_count", batch_count);
-    if (!adetail)
-        opt.set_int("qwen_image_layers", qwen_image_layers);
-    if (!adetail)
-        opt.set_image("control_image", control_image.get());
-    if (!adetail)
-        opt.set_float("control_strength", control_strength);
-    if (!adetail)
-        opt.set_string("control_type", control_type);
-    if (!adetail)
-        opt.set_image("ip_adapter_image", ip_adapter_image.get());
-    if (!adetail)
-        opt.set_float("ip_adapter_strength", ip_adapter_strength);
-    if (!adetail)
+    opt.set_int("batch_count", batch_count);
+    opt.set_int("qwen_image_layers", qwen_image_layers);
+    opt.set_image("control_image", control_image.get());
+    opt.set_float("control_strength", control_strength);
+    opt.set_string("control_type", control_type);
+    opt.set_image("ip_adapter_image", ip_adapter_image.get());
+    opt.set_float("ip_adapter_strength", ip_adapter_strength);
+    if (hires_enabled.value_or(false))
         opt.set_bool("hires.enabled", hires_enabled);
-    if (!adetail)
-        opt.set_string("hires.upscaler", resolved_hires_upscaler.empty() ? hires_upscaler : std::optional<std::string>(resolved_hires_upscaler));
-    if (!adetail)
+    opt.set_string("hires.upscaler", resolved_hires_upscaler.empty() ? hires_upscaler : std::optional<std::string>(resolved_hires_upscaler));
+    if (!hires_upscaler_model_path.empty())
         opt.set_string("hires.model_path", hires_upscaler_model_path);
-    if (!adetail)
-        opt.set_float("hires.scale", hires_scale);
-    if (!adetail)
-        opt.set_int("hires.target_width", hires_width);
-    if (!adetail)
-        opt.set_int("hires.target_height", hires_height);
-    if (!adetail)
-        opt.set_int("hires.steps", hires_steps);
-    if (!adetail)
-        opt.set_float("hires.denoising_strength", hires_denoising_strength);
-    if (!adetail)
-        opt.set_int("hires.upscale_tile_size", hires_upscale_tile_size);
+    opt.set_float("hires.scale", hires_scale);
+    opt.set_int("hires.target_width", hires_width);
+    opt.set_int("hires.target_height", hires_height);
+    opt.set_int("hires.steps", hires_steps);
+    opt.set_float("hires.denoising_strength", hires_denoising_strength);
+    opt.set_int("hires.upscale_tile_size", hires_upscale_tile_size);
     if (circular)
         opt.set_bool("circular_x", true);
     else
@@ -2795,32 +2540,11 @@ SDOptPtr SDGenerationParams::to_image_opt(bool adetail) {
     else
         opt.set_bool("circular_y", circular_y);
     opt.set_loras("loras", lora_vec.data(), lora_vec.size());
-    if (!adetail)
-        opt.set_images("ref_images", ref_image_views.data(), ref_image_views.size());
-    if (!adetail)
-        opt.set_images("photomaker.id_images", pm_id_image_views.data(), pm_id_image_views.size());
-    if (!adetail)
-        opt.set_string("photomaker.id_embed_path", pm_id_embed_path);
-    if (!adetail)
-        opt.set_float("photomaker.style_strength", pm_style_strength);
-    if (!adetail)
-        opt.set_string("pulid.id_embedding_path", pulid_id_embedding_path);
-    if (!adetail)
-        opt.set_float("pulid.id_weight", pulid_id_weight);
-    if (!adetail)
-        opt.set_floats("hires.sigmas", hires_custom_sigmas);
-    if (!adetail)
-        opt.set_string("image_preprocess.rules", image_preprocess);
+    opt.set_images("ref_images", ref_image_views.data(), ref_image_views.size());
+    opt.set_floats("hires.sigmas", hires_custom_sigmas);
     set_sample_options(opt, "sample.", sample_params, skip_layers, custom_sigmas, extra_sample_args);
     set_cache_options(opt, cache_params);
     set_tiling_options(opt, vae_tiling_params);
-    if (adetail) {
-        if (!ad_prompt.empty())
-            opt.set_string("adetail.prompt", ad_prompt);
-        if (!ad_negative_prompt.empty())
-            opt.set_string("adetail.negative_prompt", ad_negative_prompt);
-        opt.set_string("adetail.args", extra_ad_args);
-    }
     return opt.finish();
 }
 
@@ -2886,9 +2610,11 @@ SDOptPtr SDGenerationParams::to_video_opt() {
     opt.set_int("video_frames", video_frames);
     opt.set_int("fps", fps);
     opt.set_float("vace_strength", vace_strength);
-    opt.set_bool("hires.enabled", hires_enabled);
+    if (hires_enabled.value_or(false))
+        opt.set_bool("hires.enabled", hires_enabled);
     opt.set_string("hires.upscaler", resolved_hires_upscaler.empty() ? hires_upscaler : std::optional<std::string>(resolved_hires_upscaler));
-    opt.set_string("hires.model_path", hires_upscaler_model_path);
+    if (!hires_upscaler_model_path.empty())
+        opt.set_string("hires.model_path", hires_upscaler_model_path);
     opt.set_float("hires.scale", hires_scale);
     opt.set_int("hires.target_width", hires_width);
     opt.set_int("hires.target_height", hires_height);
@@ -2903,14 +2629,12 @@ SDOptPtr SDGenerationParams::to_video_opt() {
         opt.set_bool("circular_y", true);
     else
         opt.set_bool("circular_y", circular_y);
-    opt.set_string("ref_image_args", ref_image_args);
     opt.set_loras("loras", lora_vec.data(), lora_vec.size());
     opt.set_images("ref_images", ref_image_views.data(), ref_image_views.size());
     opt.set_videos("ref_videos", ref_video_views.data(), ref_video_views.size());
     opt.set_audios("ref_audios", ref_audio_views.data(), ref_audio_views.size());
     opt.set_frames("control_frames", control_frame_views.data(), control_frame_views.size());
     opt.set_floats("hires.sigmas", hires_custom_sigmas);
-    opt.set_string("image_preprocess.rules", image_preprocess);
     opt.set_string("sample.scheduler", high_noise_sample_params.scheduler);
     opt.set_float("sample.flow_shift", high_noise_sample_params.flow_shift);
     opt.set_int("sample.shifted_timestep", high_noise_sample_params.shifted_timestep);
@@ -2974,12 +2698,6 @@ std::string SDGenerationParams::to_string() const {
         << "  ref_video_audio_paths: " << vec_str_to_string(ref_video_audio_paths) << ",\n"
         << "  ref_audio_paths: " << vec_str_to_string(ref_audio_paths) << ",\n"
         << "  control_video_path: \"" << control_video_path << "\",\n"
-        << "  image_preprocess: " << image_preprocess << ",\n"
-        << "  ref_image_args: " << ref_image_args << ",\n"
-        << "  increase_ref_index: " << (increase_ref_index ? "true" : "false") << ",\n"
-        << "  pm_id_images_dir: \"" << pm_id_images_dir << "\",\n"
-        << "  pm_id_embed_path: \"" << pm_id_embed_path << "\",\n"
-        << "  pm_style_strength: " << pm_style_strength << ",\n"
         << "  skip_layers: " << (skip_layers ? vec_to_string(*skip_layers) : "unset") << ",\n"
         << "  sample_params: " << SAFE_STR(sample_params_str.c_str()) << ",\n"
         << "  high_noise_skip_layers: " << (high_noise_skip_layers ? vec_to_string(*high_noise_skip_layers) : "unset") << ",\n"

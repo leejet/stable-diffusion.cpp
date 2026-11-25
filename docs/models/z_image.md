@@ -12,10 +12,9 @@ You can run Z-Image with stable-diffusion.cpp on GPUs with 4GB of VRAM — or ev
 | Z-Image | [Safetensors](https://huggingface.co/Comfy-Org/z_image/tree/main/split_files/diffusion_models)<br>[GGUF](https://huggingface.co/unsloth/Z-Image-GGUF/tree/main) | `--diffusion-model` | Choose matching variant |
 | vae | [Safetensors](https://huggingface.co/black-forest-labs/FLUX.1-schnell/tree/main) | `--vae` | Use matching VAE |
 | Qwen3 4b | [Safetensors](https://huggingface.co/Comfy-Org/z_image_turbo/tree/main/split_files/text_encoders)<br>[GGUF](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/tree/main) | `--llm` | Use matching text encoder |
+| ControlNet | Z-Image control checkpoint with `control_all_x_embedder.2-1.weight` | `--control-net` or DGL `controlnet::load` | Optional. Match the DiT architecture |
 
 ## Usage
-
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 ### Web UI
 
@@ -33,7 +32,51 @@ Slot IDs correspond to CLI component options: `diffusion_model` uses
 `--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
 Select optional components when required by your checkpoint or task.
 
-### CLI
+### DGL
+
+| Example | Description |
+| --- | --- |
+| [Turbo: text to image](../dgl/z_image/z-image-turbo-txt2img.dgl) | Distilled generation. |
+| [Base: text to image](../dgl/z_image/z-image-base-txt2img.dgl) | Base checkpoint. |
+| [Turbo with ControlNet](../dgl/z_image/z-image-turbo-controlnet.dgl) | Load and apply control weights separately. |
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\z_image\z-image-turbo-txt2img.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/z_image/z-image-turbo-txt2img.dgl
+```
+
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+#### ControlNet
+
+The [Z-Image ControlNet script](../dgl/z_image/z-image-turbo-controlnet.dgl)
+loads the diffusion and control weights as separate models. Set the four
+checkpoint paths and the prepared control image path in the script. The script
+encodes the image with the FLUX VAE in posterior mode, converts it to diffusion
+latents and pads the channel axis to 33 before calling `controlnet::apply`.
+Each control model shares the DiT's compute backend. Repeated
+`controlnet::apply` calls combine the controls before sampling. In the current
+Z-Image model, control conditions and reference latents require separate
+predictions.
+
+### Legacy CLI
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 #### Z-Image-Turbo
 

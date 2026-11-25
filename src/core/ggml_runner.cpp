@@ -193,6 +193,7 @@ GGMLRunnerContext GGMLRunner::get_context(ggml_cgraph* graph) {
     runner_ctx.backend               = runtime_backend;
     runner_ctx.flash_attn_enabled    = flash_attn_enabled;
     runner_ctx.sage_attn_enabled     = sage_attn_enabled;
+    runner_ctx.conv_scale            = conv_scale;
     runner_ctx.linear_scale          = linear_scale;
     runner_ctx.attn_scale            = attn_scale;
     runner_ctx.conv2d_direct_enabled = conv2d_direct_enabled;
@@ -266,6 +267,7 @@ std::optional<sd::Tensor<float>> GGMLRunner::compute(get_graph_cb_t get_graph,
                                                      bool no_return,
                                                      const std::function<bool()>& read_outputs) {
     last_compute_status_ = GGML_STATUS_FAILED;
+    clear_device_memory_error();
     if (graph_active_) {
         LOG_ERROR("%s does not support reentrant graph execution", get_desc().c_str());
         return std::nullopt;
@@ -316,6 +318,7 @@ std::optional<sd::Tensor<float>> GGMLRunner::compute(get_graph_cb_t get_graph,
         task.read_outputs    = read_outputs;
         auto result          = execution_engine_->execute(execution_session_, task);
         last_compute_status_ = result.status;
+        device_memory_error_ = std::move(result.device_memory_error);
         success              = result.status == GGML_STATUS_SUCCESS;
         if (success) {
             return std::move(result.output);

@@ -1,5 +1,9 @@
 # Building and Using the RPC Server with `stable-diffusion.cpp`
 
+DGL versions of the generation examples are linked below. Edit each script's
+`var` block and follow the [DGL run instructions](../dgl/README.md).
+
+
 This guide covers how to build a version of [the RPC server from `llama.cpp`](https://github.com/ggml-org/llama.cpp/blob/master/tools/rpc/README.md) that is compatible with your version of `stable-diffusion.cpp` to manage multi-backends setups. RPC allows you to offload specific model components to a remote server.
 
 > **Note on Model Location:** The model files (e.g., `.safetensors` or `.gguf`) remain on the **Client** machine. The client parses the file and transmits the necessary tensor data and computational graphs to the server. The server does not need to store the model files locally.
@@ -165,6 +169,7 @@ Example: Setting the main backend to the RPC0 device for doing all the work on t
 ./sd-cli -m models/sd1.5.safetensors -p "A cat" --rpc-servers localhost:50052  --backend RPC0
 ```
 
+
 ---
 
 ## 5. Scaling: Multiple RPC Servers
@@ -210,6 +215,7 @@ Pass multiple server addresses separated by commas.
 ```bash
 ./sd-cli --rpc-servers 192.168.1.10:50052,192.168.1.10:50053,192.168.1.11:50052 [...]
 ```
+
 
 The client will map these servers to sequential device IDs (e.g., RPC0 from the first server, RPC2, RPC3 from the second, and RPC4 from the third). With this setup, you could for example use RPC0 for the main backend, RPC1 and RPC2 for the text encoders, and RPC3 for the VAE.
 

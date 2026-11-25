@@ -1,0 +1,128 @@
+# version: 0.0.0
+# docs/models/adetailer.md — Repair generated images
+
+var {
+    weights = "../models/checkpoints/model.safetensors"
+    model_path = "../models/detectors/face_yolov8n.safetensors"
+
+    output_path = "output.png"
+
+    prompt = "portrait photo"
+    detail_prompt = "portrait photo, detailed face"
+    negative_prompt = ""
+
+    seed = 42
+
+    settings = {
+        size = [512, 512],
+        steps = 20,
+        strength = 0.4,
+        cfg_scale = 7.0,
+        method = "euler_a",
+        scheduler = "karras",
+        mask_blur = 4
+    }
+}
+
+fn latent_mask(mask, like) {
+    shape = tensor::shape(like)
+    w = shape[0]
+    h = shape[1]
+    batch = shape[3]
+    resized = tensor::interpolate(image::to_f32(mask), size = [w, h], mode = "nearest")
+    return tensor::broadcast_to(resized, [w, h, 1, batch])
+}
+
+fn slice_sigmas_by_strength(sigmas, strength) {
+    steps = tensor::numel(sigmas) - 1
+    retained = math::floor(steps * strength)
+    return sigmas[steps - retained:]
+}
+
+fn dilate(mask) {
+    return tensor::max_pool2d(mask, kernel = [4, 4], axes = [1, 2], padding_before = [2, 2], padding_after = [1, 1], pad_value = 0)
+}
+
+fn inpaint_patch(image, mask, unet, text, vae, prompt, negative_prompt, seed, settings) {
+    pixels = image::to_f32(image)
+    encode_rng = make_rng("cuda", seed = seed)
+    base = vae_to_unet_latents(vae, vae_encode(vae, pixels, rng = encode_rng))
+    latent_region = latent_mask(mask, like = base)
+    rng = make_rng("cuda", seed = seed)
+    pos = predictor(unet, encode_prompt(text, prompt), prediction = "eps")
+    neg = predictor(unet, encode_prompt(text, negative_prompt), prediction = "eps")
+    guided = cfg(pos, neg, scale = settings.cfg_scale)
+    sigmas = slice_sigmas_by_strength(make_sigmas(guided, latent = base, scheduler = settings.scheduler, steps = settings.steps), strength = settings.strength)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    denoise_mask = tensor::max_pool2d(latent_region, kernel = [3, 3], padding_before = [1, 1])
+    latent = sample(start, sigmas, predict = guided, method = settings.method, base = base, denoise_mask = denoise_mask, rng = rng)
+    return vae_decode(vae, unet_to_vae_latents(vae, latent))
+}
+
+fn paste_region(canvas, patch, feather, origin, extent) {
+    background = tensor::crop(canvas, axes = [1, 2], start = origin, size = extent)
+    foreground = tensor::interpolate(patch, size = extent, axes = [1, 2], mode = "bilinear")
+    mask = tensor::crop(feather, axes = [1, 2], start = origin, size = extent)
+    weight = tensor::affine(tensor::cast(mask, "f32"), scale = 0.00392156862745098)
+    blended = tensor::lerp(background, foreground, weight)
+    y = origin[1]
+    rows = tensor::crop(canvas, axes = [2], start = [y], size = [extent[1]])
+    band = tensor::replace_slice(rows, blended, axis = 1, start = origin[0])
+    return tensor::replace_slice(canvas, band, axis = 2, start = y)
+}
+
+fn refine_region(canvas, region, unet, text, vae, prompt, negative_prompt, seed, settings) {
+    origin = region.box[:2]
+    extent = region.box[2:4]
+    channels = tensor::shape(canvas)[0]
+    last = channels - 1
+    rgb = tensor::index_select(canvas, axis = 0, indices = [0, math::min(1, last), math::min(2, last)])
+    image_crop = tensor::crop(rgb, axes = [1, 2], start = origin, size = extent)
+    mask_crop = tensor::crop(region.mask, axes = [1, 2], start = origin, size = extent)
+    image = tensor::interpolate(image_crop, size = settings.size, axes = [1, 2], mode = "bilinear")
+    mask = tensor::interpolate(mask_crop, size = settings.size, axes = [1, 2], mode = "nearest_exact")
+    region_seed = seed + region.index
+    patch = inpaint_patch(image, mask, unet, text, vae, prompt, negative_prompt, region_seed, settings)
+    radius = math::ceil(settings.mask_blur * 2.5)
+    feather = tensor::gaussian_blur(region.mask, sigma = settings.mask_blur, radius = radius, axes = [1, 2])
+    refined = paste_region(rgb, patch, feather, origin, extent)
+    alpha = canvas[math::min(3, channels):]
+    return tensor::concat([refined, alpha], axis = 0)
+}
+
+fn generate_canvas(unet, text, vae, prompt, negative_prompt, seed) {
+    width = 512
+    height = 512
+    scheduler = "discrete"
+    steps = 20
+    cfg_scale = 7
+    method = "euler_a"
+
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    rng = make_rng("cuda", seed = seed)
+    pos = encode_prompt(text, prompt)
+    neg = encode_prompt(text, negative_prompt)
+    positive_predictor = predictor(unet, pos, prediction = "eps")
+    negative_predictor = predictor(unet, neg, prediction = "eps")
+    guided = cfg(positive_predictor, negative_predictor, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, scheduler = scheduler, steps = steps)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    return vae_decode(vae, unet_to_vae_latents(vae, latent))
+}
+
+fn main() {
+    unet = load_unet(weights)
+    text = load_text_encoder(weights)
+    vae = load_vae(weights)
+    detector = load_detector(model_path)
+    image = generate_canvas(unet, text, vae, prompt, negative_prompt, seed)
+    detections = detections::detect(detector, image, confidence = 0.3)
+    selected = detections::filter(image, detections, top_k = 4)
+    masks = map(detections::box_masks(image, selected), process = dilate)
+    regions = regions::plan_mask_crops(masks, aspect = settings.size, padding = 32)
+    refined = fold(regions, image, process = refine_region, unet = unet, text = text, vae = vae,
+                   prompt = detail_prompt, negative_prompt = negative_prompt, seed = seed, settings = settings)
+    image::save(output_path, refined)
+    return { image = refined, detections = selected, regions = regions }
+}

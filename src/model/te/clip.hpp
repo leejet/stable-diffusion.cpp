@@ -166,7 +166,9 @@ public:
 
     ggml_tensor* forward(GGMLRunnerContext* ctx,
                          ggml_tensor* input_ids,
-                         ggml_tensor* custom_embed_weight) {
+                         ggml_tensor* custom_embed_weight,
+                         ggml_tensor* inline_vectors   = nullptr,
+                         ggml_tensor* inline_positions = nullptr) {
         // input_ids: [N, n_token]
         auto token_embed_weight    = params["token_embedding.weight"];
         auto position_embed_weight = params["position_embedding.weight"];
@@ -175,6 +177,13 @@ public:
         input_ids            = ggml_reshape_3d(ctx->ggml_ctx, input_ids, input_ids->ne[0], 1, input_ids->ne[1]);
         auto token_embedding = ggml_get_rows(ctx->ggml_ctx, custom_embed_weight != nullptr ? custom_embed_weight : token_embed_weight, input_ids);
         token_embedding      = ggml_reshape_3d(ctx->ggml_ctx, token_embedding, token_embedding->ne[0], token_embedding->ne[1], token_embedding->ne[3]);
+
+        if (inline_vectors) {
+            const int64_t tokens = token_embedding->ne[1], batch = token_embedding->ne[2];
+            token_embedding = ggml_reshape_2d(ctx->ggml_ctx, token_embedding, token_embedding->ne[0], tokens * batch);
+            token_embedding = ggml_set_rows(ctx->ggml_ctx, token_embedding, inline_vectors, inline_positions);
+            token_embedding = ggml_reshape_3d(ctx->ggml_ctx, token_embedding, token_embedding->ne[0], tokens, batch);
+        }
 
         // token_embedding + position_embedding
         auto x = ggml_add(ctx->ggml_ctx,
@@ -305,16 +314,18 @@ public:
     ggml_tensor* forward(GGMLRunnerContext* ctx,
                          ggml_tensor* input_ids,
                          ggml_tensor* tkn_embeddings,
-                         ggml_tensor* mask    = nullptr,
-                         size_t max_token_idx = 0,
-                         bool return_pooled   = false,
-                         int clip_skip        = -1) {
+                         ggml_tensor* mask             = nullptr,
+                         size_t max_token_idx          = 0,
+                         bool return_pooled            = false,
+                         int clip_skip                 = -1,
+                         ggml_tensor* inline_vectors   = nullptr,
+                         ggml_tensor* inline_positions = nullptr) {
         // input_ids: [N, n_token]
         auto embeddings       = std::dynamic_pointer_cast<CLIPEmbeddings>(blocks["embeddings"]);
         auto encoder          = std::dynamic_pointer_cast<CLIPEncoder>(blocks["encoder"]);
         auto final_layer_norm = std::dynamic_pointer_cast<LayerNorm>(blocks["final_layer_norm"]);
 
-        auto x = embeddings->forward(ctx, input_ids, tkn_embeddings);  // [N, n_token, hidden_size]
+        auto x = embeddings->forward(ctx, input_ids, tkn_embeddings, inline_vectors, inline_positions);  // [N, n_token, hidden_size]
         sd::ggml_graph_cut::mark_graph_cut(x, "clip_text.prelude", "x");
         x = encoder->forward(ctx, x, mask, return_pooled ? -1 : clip_skip, "clip_text");
         if (return_pooled || with_final_ln) {
@@ -474,6 +485,9 @@ struct CLIPTextModelRunner : public GGMLRunner {
     CLIPTextModel model;
 
     std::vector<float> attention_mask_vec;
+    sd::Tensor<int32_t> inline_ids_;
+    sd::Tensor<float> inline_vectors_;
+    sd::Tensor<int64_t> inline_positions_;
 
     CLIPTextModelRunner(ggml_backend_t backend,
                         const String2TensorStorage& tensor_storage_map,
@@ -509,9 +523,11 @@ struct CLIPTextModelRunner : public GGMLRunner {
                          ggml_tensor* input_ids,
                          ggml_tensor* embeddings,
                          ggml_tensor* mask,
-                         size_t max_token_idx = 0,
-                         bool return_pooled   = false,
-                         int clip_skip        = -1) {
+                         size_t max_token_idx          = 0,
+                         bool return_pooled            = false,
+                         int clip_skip                 = -1,
+                         ggml_tensor* inline_vectors   = nullptr,
+                         ggml_tensor* inline_positions = nullptr) {
         size_t N       = input_ids->ne[1];
         size_t n_token = input_ids->ne[0];
         if (input_ids->ne[0] > model.n_token) {
@@ -519,17 +535,46 @@ struct CLIPTextModelRunner : public GGMLRunner {
             input_ids = ggml_reshape_2d(ctx->ggml_ctx, input_ids, model.n_token, input_ids->ne[0] / model.n_token);
         }
 
-        return model.forward(ctx, input_ids, embeddings, mask, max_token_idx, return_pooled, clip_skip);
+        return model.forward(ctx, input_ids, embeddings, mask, max_token_idx, return_pooled, clip_skip, inline_vectors, inline_positions);
     }
 
     ggml_cgraph* build_graph(const sd::Tensor<int32_t>& input_ids_tensor,
-                             int num_custom_embeddings    = 0,
-                             void* custom_embeddings_data = nullptr,
-                             size_t max_token_idx         = 0,
-                             bool return_pooled           = false,
-                             int clip_skip                = -1) {
-        ggml_cgraph* gf        = new_graph_custom(2048);
-        ggml_tensor* input_ids = make_input(input_ids_tensor);
+                             int num_custom_embeddings          = 0,
+                             void* custom_embeddings_data       = nullptr,
+                             size_t max_token_idx               = 0,
+                             bool return_pooled                 = false,
+                             int clip_skip                      = -1,
+                             const sd::Tensor<float>* inversion = nullptr) {
+        ggml_cgraph* gf               = new_graph_custom(2048);
+        ggml_tensor* inline_vectors   = nullptr;
+        ggml_tensor* inline_positions = nullptr;
+        const auto* ids               = &input_ids_tensor;
+        if (inversion) {
+            std::vector<int64_t> positions;
+            std::vector<float> vectors;
+            for (int64_t i = 0; i < input_ids_tensor.numel(); ++i) {
+                const int row = input_ids_tensor.values()[i] - model.vocab_size;
+                if (row < 0)
+                    continue;
+                if (inversion->dim() != 2 || inversion->shape()[0] != model.hidden_size || row >= inversion->shape()[1])
+                    throw std::runtime_error("invalid inline CLIP embedding row");
+                positions.push_back(i);
+                const float* begin = inversion->data() + row * model.hidden_size;
+                vectors.insert(vectors.end(), begin, begin + model.hidden_size);
+            }
+            if (!positions.empty()) {
+                inline_ids_ = input_ids_tensor;
+                for (auto i : positions)
+                    inline_ids_.values()[i] = 0;
+                ids                 = &inline_ids_;
+                const int64_t count = positions.size();
+                inline_vectors_     = sd::Tensor<float>({model.hidden_size, count}, std::move(vectors));
+                inline_positions_   = sd::Tensor<int64_t>({count}, std::move(positions));
+                inline_vectors      = make_input(inline_vectors_);
+                inline_positions    = make_input(inline_positions_);
+            }
+        }
+        ggml_tensor* input_ids = make_input(*ids);
 
         ggml_tensor* embeddings = nullptr;
 
@@ -561,7 +606,7 @@ struct CLIPTextModelRunner : public GGMLRunner {
 
         auto runner_ctx = get_context();
 
-        ggml_tensor* hidden_states = forward(&runner_ctx, input_ids, embeddings, attention_mask, max_token_idx, return_pooled, clip_skip);
+        ggml_tensor* hidden_states = forward(&runner_ctx, input_ids, embeddings, attention_mask, max_token_idx, return_pooled, clip_skip, inline_vectors, inline_positions);
 
         ggml_build_forward_expand(gf, hidden_states);
 
@@ -575,9 +620,10 @@ struct CLIPTextModelRunner : public GGMLRunner {
                               size_t max_token_idx,
                               bool return_pooled,
                               int clip_skip,
-                              bool auto_runner_end = true) {
+                              bool auto_runner_end               = true,
+                              const sd::Tensor<float>* inversion = nullptr) {
         auto get_graph = [&]() -> ggml_cgraph* {
-            return build_graph(input_ids, num_custom_embeddings, custom_embeddings_data, max_token_idx, return_pooled, clip_skip);
+            return build_graph(input_ids, num_custom_embeddings, custom_embeddings_data, max_token_idx, return_pooled, clip_skip, inversion);
         };
         auto result = GGMLRunner::compute(get_graph, n_threads, auto_runner_end);
         if (return_pooled) {

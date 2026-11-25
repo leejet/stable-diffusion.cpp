@@ -1,0 +1,42 @@
+# version: 0.0.0
+# docs/models/animatediff.md — Text-to-video
+
+var {
+    weights = "../models/checkpoints/realisticVisionV60B1.safetensors"
+    model_path = "../models/motion_modules/animatediff/mm_sd15_v3.safetensors"
+
+    output_path = "out.avi"
+
+    prompt = "a red apple on a wooden table"
+    negative_prompt = ""
+
+    seed = 42
+    width = 512
+    height = 512
+    frames = 8
+    fps = 8
+
+    steps = 20
+    cfg_scale = 8.0
+    method = "euler"
+    scheduler = "discrete"
+}
+
+fn main() {
+    base_unet = load_unet(weights, params_backend = "cpu")
+    motion = animatediff::load(model_path, params_backend = "cpu")
+    unet = animatediff::apply(base_unet, motion)
+    text = load_text_encoder(weights, params_backend = "cpu")
+    vae = load_vae(weights, params_backend = "cpu")
+    base = tensor::zeros(latent_shape(vae, width = width, height = height, batch = frames))
+    rng = make_rng("cuda", seed = seed)
+    pos = predictor(unet, encode_prompt(text, prompt), prediction = "eps")
+    neg = predictor(unet, encode_prompt(text, negative_prompt), prediction = "eps")
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, scheduler = scheduler, steps = steps)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    video = vae_decode(vae, unet_to_vae_latents(vae, latent))
+    video::save(output_path, {frames = video, fps_num = fps, fps_den = 1})
+    return { video = video, latent = latent }
+}
