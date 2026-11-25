@@ -698,7 +698,7 @@ static sd_status_t execute_dgl_job(ServerRuntime& runtime,
         {
             std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
             if (job.cancel_requested.load())
-                return false;
+                return SD_STATUS_CANCELLED;
             JobCancellationMonitor cancellation(job, [ctx = runtime.sd_ctx]() {
                 sd_dgl_ctx_cancel(sd_ctx_get_dgl_ctx(ctx));
             });

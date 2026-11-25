@@ -29,14 +29,21 @@ struct SDSvrParams {
     std::string serve_html_path;
     std::string dgl_dir = "dgl";
     std::vector<std::string> model_dirs;
+    std::vector<std::string> api_keys;
+    std::string api_key_file;
+    std::vector<std::string> cors_origins;
     bool normal_exit         = false;
     sd_log_level_t log_level = SD_LOG_INFO;
     bool color               = false;
 
     ArgOptions get_options();
+    void add_access_options(ArgOptions& options, const std::vector<ArgOptions>& groups);
     bool validate();
     bool resolve_and_validate();
     std::string to_string() const;
+
+private:
+    bool load_api_keys();
 };
 
 struct LoraEntry {
