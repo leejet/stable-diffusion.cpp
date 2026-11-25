@@ -2799,7 +2799,8 @@ bool ModelManager::ensure_compute_backend_capacity(
     const DeviceMemoryRequest& request,
     const std::vector<ggml_tensor*>& required_params,
     const std::vector<std::vector<ggml_tensor*>>& preferred_eviction_order,
-    const std::vector<ggml_tensor*>& protected_params) {
+    const std::vector<ggml_tensor*>& protected_params,
+    std::string* device_memory_error) {
     if (retain_weights_) {
         std::vector<TensorState*> states;
         if (!resolve_required_tensor_states(required_params, states, request.compute_backend))
@@ -2816,10 +2817,10 @@ bool ModelManager::ensure_compute_backend_capacity(
                 const DeviceMemoryRequest peer{backend, request.owner_id,
                                                pending > SIZE_MAX - missing ? SIZE_MAX : pending + missing,
                                                request.runtime_resident_bytes, limit};
-                if (!execution_engine()->ensure_capacity(*this, peer, {}, preferred_eviction_order, protected_weights))
+                if (!execution_engine()->ensure_capacity(*this, peer, {}, preferred_eviction_order, protected_weights, device_memory_error))
                     return false;
             }
         }
     }
-    return execution_engine()->ensure_capacity(*this, request, required_params, preferred_eviction_order, protected_params);
+    return execution_engine()->ensure_capacity(*this, request, required_params, preferred_eviction_order, protected_params, device_memory_error);
 }

@@ -358,6 +358,7 @@ static json make_capabilities_json(ServerRuntime& runtime) {
     };
     result["generation_features"]        = generation_features;
     result["generation_model_selection"] = true;
+    result["media_view"]                 = runtime.svr_params->media_view;
     result["runtime"]                    = model_status(runtime);
     result["current_mode"]               = current_mode;
     result["supported_modes"]            = supported_modes;
@@ -616,17 +617,13 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
     });
 
     routes.get(R"(/sdcpp/v1/jobs/([A-Za-z0-9_\-]+))", [runtime](const httplib::Request& req, httplib::Response& res) {
+        res.set_header("Cache-Control", "no-store");
         AsyncJobManager& manager = *runtime->async_job_manager;
         std::lock_guard<std::mutex> lock(manager.mutex);
         purge_expired_jobs(manager);
 
         std::string job_id = req.matches[1];
         auto it            = manager.jobs.find(job_id);
-        if (it != manager.jobs.end() && it->second->kind == AsyncJobKind::Dgl) {
-            res.status = 404;
-            res.set_content(R"({"error":"job not found"})", "application/json");
-            return;
-        }
         if (it == manager.jobs.end()) {
             if (manager.expired_jobs.find(job_id) != manager.expired_jobs.end()) {
                 res.status = 410;
@@ -650,6 +647,7 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
     // its read timeout of 5 seconds to be sure there is none. RuntimeRoutes would not add anything here: it leaves
     // the job routes alone.
     svr.Post(R"(/sdcpp/v1/jobs/([A-Za-z0-9_\-]+)/cancel)", [runtime](const httplib::Request& req, httplib::Response& res, const httplib::ContentReader& body) {
+        res.set_header("Cache-Control", "no-store");
         if (req.has_header("Content-Length") || req.has_header("Transfer-Encoding")) {
             body([](const char*, size_t) { return true; });
         }
@@ -681,11 +679,6 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
         }
 
         auto& job = *it->second;
-        if (job.kind == AsyncJobKind::Dgl) {
-            res.status = 404;
-            res.set_content(R"({"error":"job not found"})", "application/json");
-            return;
-        }
         if (job.status == AsyncJobStatus::Queued) {
             if (!cancel_queued_job(manager, job)) {
                 res.status = 409;

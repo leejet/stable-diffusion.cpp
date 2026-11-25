@@ -140,6 +140,7 @@ private:
     std::shared_ptr<sd::ExecutionEngine> execution_engine_;
     sd::ExecutionSession& execution_session_;
     ggml_status last_compute_status_ = GGML_STATUS_SUCCESS;
+    std::string device_memory_error_;
 
 protected:
     typedef std::function<ggml_cgraph*()> get_graph_cb_t;
@@ -301,6 +302,8 @@ public:
                                              const std::function<bool()>& read_outputs = {});
 
     ggml_status last_compute_status() const { return last_compute_status_; }
+    const std::string& device_memory_error() const { return device_memory_error_; }
+    void clear_device_memory_error() { device_memory_error_.clear(); }
 
     void set_flash_attention_enabled(bool enabled) {
         flash_attn_enabled = enabled;

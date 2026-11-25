@@ -82,7 +82,8 @@ namespace sd {
 
     bool SegmentWeightPipeline::ensure_segment_capacity(
         size_t segment_index,
-        const std::vector<DeviceMemoryRequest>& requests) {
+        const std::vector<DeviceMemoryRequest>& requests,
+        std::string* device_memory_error) {
         if (segment_index >= segment_params_.size()) {
             return false;
         }
@@ -94,7 +95,7 @@ namespace sd {
         protected_params.insert(protected_params.end(), queued_params_.begin(), queued_params_.end());
         for (const auto& request : requests) {
             if (!manager->ensure_compute_backend_capacity(request, segment_params_[segment_index],
-                                                          preferred_eviction_order(), protected_params)) {
+                                                          preferred_eviction_order(), protected_params, device_memory_error)) {
                 return false;
             }
         }

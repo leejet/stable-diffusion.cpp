@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "ggml-backend.h"
@@ -108,7 +109,8 @@ public:
         const DeviceMemoryRequest& request,
         const std::vector<ggml_tensor*>& required_params,
         const std::vector<std::vector<ggml_tensor*>>& preferred_eviction_order,
-        const std::vector<ggml_tensor*>& protected_params) = 0;
+        const std::vector<ggml_tensor*>& protected_params,
+        std::string* device_memory_error = nullptr) = 0;
     virtual DeviceMemoryCapacity inspect_compute_backend_capacity(
         const DeviceMemoryRequest& request,
         const std::vector<ggml_tensor*>& params,

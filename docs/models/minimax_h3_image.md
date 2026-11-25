@@ -10,7 +10,7 @@ Pass the three MiniMax-H3-Image components separately:
 
 - `--diffusion-model`: MiniMax-H3-Image diffusion transformer
 - `--vae`: MiniMax-H3-Image VAE
-- `--llm`: the MiniMax-H3 Qwen3-VL-32B text encoder checkpoint
+- `--llm`: the MiniMax-H3 Qwen3-VL-32B text encoder checkpoint, or a Qwen3-VL-4B/8B with a text connector
 
 Use the MiniMax-H3 text encoder, including its Qwen3-VL vision tower and
 DeepStack mergers. An existing MiniMax-H3 text encoder can be reused. If the
@@ -25,6 +25,19 @@ with `--llm` and the [separate text connector](https://huggingface.co/PrunaAI/P-
 with `--embeddings-connectors`. Reference-image editing needs the Qwen3-VL-4B
 vision tower in the text encoder or in `--llm_vision`.
 
+A [ClipProj projection](https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3)
+can replace the 32B encoder with a plain Qwen3-VL-4B or Qwen3-VL-8B: pass the
+small encoder with `--llm` and the matching matrix with
+`--embeddings-connectors`. It needs much less memory (about 4.5 GB with a 4B
+INT8 encoder, versus 18 GB for the 32B encoder in Q4_K_M). The `mmh3-4b-*`
+matrices expect a Qwen3-VL-4B encoder and the `mmh3-8b-*` matrices a
+Qwen3-VL-8B encoder; match the two. Only the linear matrices are supported,
+not the `-mlp` residual variants. Reference-image editing needs the encoder's
+vision tower in the text encoder or in `--llm_vision`. ClipProj is a community
+proof of concept: outputs are close to, not identical to, the 32B encoder. See
+the [model card](https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3) for
+measurements and limitations.
+
 Use a single-file diffusion checkpoint with the six-step PDD output heads
 included, such as `minimax_h3_image_pruned_bf16.safetensors` or its INT8 ConvRot
 version. Use the MiniMax-H3-Image VAE; the MiniMax-H3 video VAE and P-H3-Image
@@ -37,6 +50,7 @@ VAE are incompatible. No audio VAE is needed.
 | minimax_h3_image_pruned | [Safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3-Image/tree/main/diffusion_models) | `--diffusion-model` | Required |
 | qwen3vl_32b_minimax_h3 | [Safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3-Image/tree/main/text_encoders)<br>[GGUF](https://huggingface.co/leejet/MiniMax-H3-GGUF/tree/main) | `--llm` | Use matching text encoder |
 | P-H3-Image text encoder (Qwen3-VL-4B with the text connector) | [Safetensors](https://huggingface.co/PrunaAI/P-H3-Image-Comfy/tree/main/text_encoders) | `--llm` | Use matching text encoder |
+| ClipProj projection (for a plain Qwen3-VL-4B or Qwen3-VL-8B) | [Safetensors](https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3) | `--embeddings-connectors` | Pair with a matching Qwen3-VL-4B/8B `--llm` |
 | vae | [Safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3-Image/tree/main/vae) | `--vae` | Use matching VAE |
 
 ## Usage
@@ -145,6 +159,23 @@ With the P-H3-Image text encoder, replace the `--llm` argument:
 
 ```text
 --llm ../models/text_encoders/p-h3-image_text_encoder_int8_convrot.safetensors
+```
+
+With a ClipProj projection, replace the `--llm` argument with the small
+encoder plus the matching matrix:
+
+**Windows (PowerShell) arguments**
+
+```text
+--llm ..\models\text_encoders\qwen3vl_4b_bf16.safetensors `
+  --embeddings-connectors ..\models\text_encoders\mmh3-4b-ClipProj-v3.1.safetensors
+```
+
+**Linux/macOS arguments**
+
+```text
+--llm ../models/text_encoders/qwen3vl_4b_bf16.safetensors \
+  --embeddings-connectors ../models/text_encoders/mmh3-4b-ClipProj-v3.1.safetensors
 ```
 
 Use Euler, CFG 1, and `--sigmas minimax-h3-image` for the model's six-step

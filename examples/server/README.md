@@ -126,21 +126,46 @@ and are not parsed by the native server API.
 
 ### DGL editor
 
-Open the Web UI using the local server address and select **DGL** in the header.
-Select a saved script or choose **New**. **Duplicate** saves a copy of the
-current editor text under a new name. Edit **File name** before saving to save
-under a different name. **Run** submits the editor text to the generation queue,
-so you can run unsaved edits. The results panel shows text, scalar and tensor
-information and returned encoded media. PNG appears as an image, WebM as a
-video player, and AVI as a download. WebM encoding is silent; use AVI for
-a PCM16 soundtrack.
+Open the Web UI and select **DGL** in the header. The workspace follows the
+server's `--listen-ip` setting. The default `127.0.0.1` limits access to the
+server machine. When the server listens on a LAN interface, open the Web UI
+using the server's LAN IP and port to use the workspace from another device.
+Use **Search scripts** to filter the script list, then select a saved script or
+choose **New**. **Save** updates the current file or asks for a name for a new
+script. Use **Save as…** to save a copy. The editor reopens the last saved script
+used in that browser when it is still available. **Run** submits the current
+editor text to the generation queue, including unsaved edits. The status bar
+below the editor shows progress and keeps the final status and elapsed time.
+The server terminal displays weight-loading throughput and sampling speed.
+
+When a script returns values, **View result** appears in the status bar. Open it
+to inspect text, scalars, tensor metadata, and encoded media. PNG appears as an
+image, WebM as a video player, and AVI as a download. WebM encoding is silent.
+Use AVI for a PCM16 soundtrack.
 
 Use `image::encode` or `video::encode` and return their `{data, mime_type}`
 dicts, either directly or as named fields of the root dict. To save the same
 encoded output, call `media::save("output/cover.png", cover)` before returning
 it. Saving is optional. The job result contains the same encoded bytes, and
-polling does not encode them again. Tensor frames can be inspected separately
-with **Inspect tensor frames**; they are not fetched automatically.
+polling returns them without re-encoding.
+
+The editor underlines supported media paths and shows compact previews below
+their lines. Previews align with the code indentation, and files on the same
+line appear side by side when space permits. Media loads near the visible area
+of the editor. An output path without a file stays collapsed, and a completed
+run refreshes its preview when the file becomes available. Drag the handle in
+a preview's lower-right corner to resize it, or double-click the handle to reset it.
+Click an image or video preview to open it at a larger size. Expanded videos
+open at the current playback position. Click the picture to play or pause, or
+drag the timeline below it to seek. AVI path previews support MJPEG and
+uncompressed 24-bit RGB video with up to 64 MiB of PCM or 32-bit float audio.
+The speaker button mutes the preview. To adjust volume in an inline preview,
+hover or focus the speaker button to open the volume slider.
+Use a relative path under the server's working directory, such as
+`assets/reference.png` or `output/clip.webm`. Turn off **Media view** in the
+editor toolbar to hide the preview. The server previews files under `input/`,
+`output/`, and `assets/`. Start the server
+with `--no-media-view` to disable file previews at the server.
 
 DGL jobs share an execution context for the lifetime of the server. Compatible
 scripts can reuse loaded model components across runs. The context can release
@@ -433,9 +458,40 @@ configured defaults.
 | --- | --- | --- |
 | `--listen-ip <ip>` | `127.0.0.1` | Server listen address |
 | `--listen-port <port>` | `1234` | Server listen port |
-| `--dgl-dir <path>` | `dgl` | Script directory for the local DGL editor |
+| `--dgl-dir <path>` | `dgl` | Script directory for the DGL editor |
+| `--no-media-view` | Off | Disable the media view endpoint |
 | `--max-pending-jobs <count>` | `64` | Maximum async jobs queued or generating |
 | `--completed-ttl-seconds <seconds>` | `600` | Retention time for completed async jobs |
+
+### Access
+
+The default listener accepts connections from the server machine. A listener
+bound to a LAN interface also accepts connections from devices that can reach
+it. You can open the Web UI from a link on another site. Browser API requests
+are same-origin by default. Use an IP address, `localhost`, or the hostname
+configured as the listen address when connecting directly.
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--api-key <key>` | none | Key clients must send as `Authorization: Bearer <key>` or `X-Api-Key: <key>`. Separate multiple keys with commas. |
+| `--api-key-file <file>` | none | The same, one key per line, so keys don't show in the process list |
+| `--cors-origins <origins>` | none | Additional browser origins allowed to make cross-origin requests, comma-separated |
+
+With a key, the page at `/` still loads. Enter the key in **Settings → Server API Key**
+and select **Apply**. The Web UI saves it for that server in the current browser tab.
+Leave **Base URL** blank when connecting to the server that serves the Web UI.
+DGL scripts and media previews use the server that serves the Web UI.
+Authentication failures return `401` with a `WWW-Authenticate` Bearer challenge.
+Protected responses include `Cache-Control: no-store`.
+
+The server rejects requests from other browser origins with `403` unless their
+origin is listed in `--cors-origins`. For a reverse proxy that preserves the
+public Host header, include its full public origin in that list, such as
+`https://sd.example.com`. The origin policy applies to DGL and media requests
+as well as the generation APIs.
+
+Startup fails if an access option is missing its value, a list is empty
+(such as `--api-key ,`), or the key file contains no keys.
 
 ### Idle weight release
 
@@ -443,6 +499,9 @@ configured defaults.
 | --- | --- | --- |
 | `--weight-staging-ttl <seconds>` | `-1` | GPU staging copies of weights backed by RAM, including components placed on CPU by `--params-backend cpu` or auto-fit. The next request uploads the needed weights from RAM. |
 | `--weight-residency-ttl <seconds>` | `-1` | Cached model components, including RAM weights, GPU weights, staging copies, and component caches. The next request loads the needed components from their files. |
+
+Both options also clear idle reusable buffers on supported backends after
+releasing weights.
 
 For either option, `-1` disables release, `0` releases as soon as the shared
 context is idle, and a positive integer sets the idle time in seconds. The

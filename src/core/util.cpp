@@ -595,14 +595,17 @@ static void print_progress_line(int step, int steps, const std::string& speed_te
     fflush(stdout);  // for linux
 }
 
-static int show_eta      = -1;  // -1 - estimate duration, 0 - hide, 1 - show
-static float passed_time = 0.f;
-
 void pretty_progress(int step, int steps, float time) {
     if (sd_progress_cb) {
         sd_progress_cb(step, steps, time, sd_progress_cb_data);
         return;
     }
+    pretty_console_progress(step, steps, time);
+}
+
+void pretty_console_progress(int step, int steps, float time) {
+    static thread_local int show_eta      = -1;  // -1 - estimate duration, 0 - hide, 1 - show
+    static thread_local float passed_time = 0.f;
     if (step == 0) {
         show_eta    = -1;  // reinitialize for batch generations
         passed_time = 0.f;
@@ -657,7 +660,7 @@ void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float 
         if (!byte_progress_console)
             return;
     }
-    if (sd_progress_cb) {
+    if (!byte_progress_console && sd_progress_cb) {
         float time = elapsed_seconds / (step + 1e-6f);
         sd_progress_cb(step, steps, time, sd_progress_cb_data);
         return;

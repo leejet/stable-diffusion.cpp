@@ -311,8 +311,6 @@ ArgOptions SDSvrParams::get_options() {
     options.string_options = {
         {"-l", "--listen-ip", "server listen ip (default: 127.0.0.1)", 0, &listen_ip},
         {"", "--serve-html-path", "path to HTML file to serve at root (optional)", 0, &serve_html_path},
-        {"", "--api-key", "require this API key on every request, via 'Authorization: Bearer <key>' or 'X-API-Key: <key>' (default: empty, no authentication)", 0, &api_key},
-        {"", "--cors-origins", "comma-separated list of allowed CORS origins, e.g. http://localhost:3000 (default: empty, any origin is reflected)", 0, &cors_origins},
         {"", "--dgl-dir", "Web UI script directory (default: dgl)", 0, &dgl_dir},
     };
 
@@ -330,6 +328,7 @@ ArgOptions SDSvrParams::get_options() {
     options.bool_options = {
         {"", "--color", "colors the logging tags according to level", true, &color},
         {"", "--disable-degradation", "answer a request that runs out of memory with an error (503) instead of loading the model again with a lighter profile and repeating the request", true, &disable_degradation},
+        {"", "--no-media-view", "disable media file viewing", false, &media_view},
     };
 
     auto on_help_arg = [&](int, const char**, int, bool& valid) {
@@ -400,10 +399,7 @@ bool SDSvrParams::validate() {
 }
 
 bool SDSvrParams::resolve_and_validate() {
-    if (!validate()) {
-        return false;
-    }
-    return true;
+    return validate() && load_api_keys();
 }
 
 std::string SDSvrParams::to_string() const {
@@ -417,11 +413,12 @@ std::string SDSvrParams::to_string() const {
         << "  weight_staging_ttl: " << weight_staging_ttl << ",\n"
         << "  weight_residency_ttl: " << weight_residency_ttl << ",\n"
         << "  serve_html_path: \"" << serve_html_path << "\",\n"
-        << "  api_key: " << (api_key.empty() ? "(not set)" : "(set)") << ",\n"
-        << "  cors_origins: \"" << cors_origins << "\",\n"
         << "  disable_degradation: " << (disable_degradation ? "true" : "false") << ",\n"
         << "  degradation_cooldown: " << degradation_cooldown << ",\n"
         << "  dgl_dir: \"" << dgl_dir << "\",\n"
+        << "  api_keys: " << api_keys.size() << ",\n"
+        << "  cors_origins: " << cors_origins.size() << ",\n"
+        << "  media_view: " << std::boolalpha << media_view << ",\n"
         << "}";
     return oss.str();
 }

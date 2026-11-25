@@ -55,7 +55,6 @@ struct AsyncGenerationJob {
     ImgGenJobRequest img_gen;
     VidGenJobRequest vid_gen;
     std::string dgl_source;
-    std::shared_ptr<sd_dgl_result_t> dgl_result;
     json dgl_result_info;
     std::vector<std::string> result_images_b64;
     json result_generation_info;
@@ -110,7 +109,6 @@ bool cancel_generating_job(ServerRuntime& runtime,
                            const std::shared_ptr<AsyncGenerationJob>& job,
                            std::chrono::milliseconds wait);
 json make_async_job_json(const AsyncJobManager& manager, const AsyncGenerationJob& job);
-int64_t dgl_image_frame_count(const sd_tensor_t* tensor);
 bool parse_native_job_request(const json& body, ServerRuntime& runtime, AsyncGenerationJob& job, std::string& error_message);
 bool execute_img_gen_job(ServerRuntime& runtime,
                          AsyncGenerationJob& job,

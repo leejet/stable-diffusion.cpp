@@ -30,7 +30,7 @@ controllato:
 | Errori classificati e memoria di sistema | dopo un fallimento `sd_get_last_error_code()` dà un codice (memoria esaurita, file del modello, backend, ...) e il motivo; `sd_get_system_memory()` riporta RAM totale, disponibile e del processo | sempre disponibile |
 | Server senza modello | `sd-server` parte anche senza `-m`: device e script DGL (anche l'upscale) funzionano, la generazione risponde con un errore chiaro | **attivo** |
 | Server che resta in piedi | una richiesta che esaurisce la memoria non ferma `sd-server`: il modello viene ricaricato con un profilo più leggero (`max > balanced > lite > lite-disk > lite-hybrid > lite-cpu`: la CPU entra solo da `lite-hybrid` in poi) e la richiesta ripetuta; un device che si guasta viene sostituito da un'altra GPU prima che la CPU prenda il lavoro; se nemmeno il più leggero basta, risposta `503` con `Retry-After`; dopo una pausa il server risale. `GET /sdcpp/v1/health` (profilo, device, moduli sulla CPU) e `/resources` | **attivo** (`--disable-degradation` lo spegne) |
-| Autenticazione server | `--api-key` (Bearer o `X-API-Key`) e allowlist CORS `--cors-origins` | **disattivi** |
+| Autenticazione server | `--api-key` (Bearer o `X-Api-Key`; più chiavi separate da virgole, o `--api-key-file`); le pagine di altre origini ricevono `403`, `--cors-origins` aggiunge quelle ammesse | chiave **disattiva**; controllo dell'origine **attivo** |
 | Pacchetto portabile | backend ggml come librerie dinamiche caricate a runtime: un solo pacchetto, ogni macchina usa ciò che ha | opzionale in build |
 | Release automatiche | workflow `release-portable.yml`: zip con GPU (Windows CUDA 12 e Vulkan, Linux Vulkan, macOS Metal) a ogni tag `portable-v*` o avvio manuale | su tag |
 | Uso da parte di assistenti AI | sezione 3.6: strumenti (`generate_image`, `engine_status`), preset, ricette per nessuna, una o più GPU e regole di sicurezza per chat e agenti che controllano il browser | documentazione |
@@ -1140,10 +1140,13 @@ quale dei due è il problema.
    dimensioni dai `limits` e i passi dai default, e non lascia al modello né le
    une né gli altri.
 3. **Chiave API e CORS.** Un agente che controlla il browser sulla stessa
-   macchina apre pagine che non controlla nessuno: con il CORS predefinito
-   (riflette ogni `Origin`, con credenziali) una di esse può chiamare
-   `127.0.0.1:1234`. Con `--api-key` le richieste senza chiave ricevono `401`;
-   `--cors-origins` limita le origini (sezione 5).
+   macchina apre pagine che non controlla nessuno. Il server rifiuta con `403`
+   le richieste che il browser manda da una pagina di un'altra origine (lo
+   dicono le intestazioni `Origin` e `Sec-Fetch-Site`) e quelle che lo
+   chiamano con un nome che non è il suo (difesa dal DNS rebinding);
+   `--cors-origins` aggiunge le origini ammesse. Una pagina ammessa, o un
+   programma sulla stessa macchina, arriva comunque al motore: con
+   `--api-key` le richieste senza chiave ricevono `401` (sezione 5).
 4. **Il modello sceglie solo i valori dello schema.** Indirizzi dei server,
    chiave, cartella di uscita e percorsi vengono dalla configurazione
    dell'applicazione, mai dagli argomenti dello strumento: `run_tool` scarta
@@ -1333,16 +1336,28 @@ richieste di rete: sono i due punti da proteggere.
 
 - Ascolta su `127.0.0.1` per impostazione predefinita: **non cambiare
   `--listen-ip` verso `0.0.0.0` senza protezioni**.
-- **Autenticazione opzionale** (consigliata): `--api-key <chiave>` richiede su
-  ogni richiesta l'header `Authorization: Bearer <chiave>` oppure
-  `X-API-Key: <chiave>`; senza chiave valida risponde 401. Il confronto è a
-  tempo costante e la chiave non viene mai scritta nei log. Default: nessuna
-  autenticazione (comportamento upstream).
-- **CORS**: per default riflette qualsiasi `Origin` con
-  `Allow-Credentials: true` (comportamento upstream); con
-  `--cors-origins "http://localhost:3000,https://mia-app.example"` solo le
-  origini elencate ricevono gli header CORS, le altre vengono bloccate dal
-  browser.
+- **Autenticazione opzionale** (consigliata): `--api-key <chiave>` richiede
+  l'header `Authorization: Bearer <chiave>` oppure `X-Api-Key: <chiave>`;
+  senza chiave valida risponde `401`. Più chiavi si separano con virgole o si
+  ripete l'opzione; `--api-key-file <file>` le legge da un file, una per riga,
+  così non compaiono nell'elenco dei processi. La chiave non serve per
+  `OPTIONS` né per `GET /`, la pagina web del server: le chiamate della
+  pagina la chiedono comunque. Il confronto non si ferma al primo carattere
+  diverso e la chiave non viene mai scritta nei log. Default: nessuna
+  autenticazione.
+- **Origine delle richieste e CORS**: per default il server accetta solo la
+  propria origine. Una richiesta che un browser manda da una pagina di
+  un'altra origine riceve `403`, prima di qualsiasi rotta; i programmi che
+  non mandano un'origine (curl, Python, Node) passano. Riceve `403` anche una
+  richiesta il cui `Host` non è `localhost`, l'indirizzo di `--listen-ip` o
+  un indirizzo IP: un nome che punta a `127.0.0.1` non basta per arrivare al
+  motore (difesa dal DNS rebinding). Con
+  `--cors-origins "http://localhost:3000,https://mia-app.example"` le origini
+  elencate sono ammesse e ricevono gli header CORS con le credenziali; un nome
+  di rete o di un container con cui si raggiunge il server si aggiunge allo
+  stesso modo (`http://nome:porta`). Prima della sincronizzazione fino a
+  `52491bd` (voce 25) il server rifletteva invece qualsiasi `Origin` con
+  `Allow-Credentials: true`.
 
 Esempio di avvio protetto:
 
@@ -1351,9 +1366,15 @@ sd-server -m modello.safetensors --api-key "$(openssl rand -hex 24)" \
           --cors-origins "http://localhost:3000"
 ```
 
-Verifica dal vivo eseguita: 401 senza chiave o con chiave errata, 200 con
-`Bearer` o `X-API-Key` corretti, preflight `OPTIONS` libero (204), header CORS
-presenti solo per le origini consentite.
+Verifica dal vivo eseguita dopo la sincronizzazione fino a `52491bd`, su un
+vero `sd-server` senza modello (31 controlli): `401` con `WWW-Authenticate`
+senza chiave, con una chiave errata o con solo l'inizio di una chiave; `200`
+con `Bearer` (anche in minuscolo) o `X-API-Key` corretti, con più chiavi e con
+il file delle chiavi (spazi e `CRLF` tolti); `GET /` senza chiave; preflight
+`OPTIONS` dall'origine elencata con `204` e gli header CORS; `403` senza header
+CORS per un'altra origine anche con la chiave, per una richiesta cross-site
+senza `Origin` e per un `Host` estraneo; il server non parte con `--api-key ,`,
+con un file di chiavi assente o vuoto, o con `--api-key` senza valore.
 
 Raccomandazioni per chi integra:
 
@@ -1483,7 +1504,10 @@ sincronizzazioni future.
    0 scoperte.
 9. **Autenticazione e CORS del server** — `--api-key` (Bearer/`X-API-Key`,
    confronto a tempo costante) e `--cors-origins` (allowlist), default
-   invariati. Testati dal vivo.
+   invariati. Testati dal vivo. Dalla sincronizzazione fino a `52491bd`
+   (voce 25) al loro posto c'è il controllo di upstream
+   (`examples/server/server_access.cpp`), con un default diverso per le
+   origini (sezione 5).
 10. **Packaging e release** — `scripts/package_portable.sh` (zip rilocabile
     con binari, moduli backend, licenze, LEGGIMI) e workflow
     `.github/workflows/release-portable.yml` per Linux/macOS/Windows su tag
@@ -1905,6 +1929,59 @@ sincronizzazioni future.
     reale, più GPU (la scelta dei device di `planned_backend_spec()` non è
     coperta da nessun test: servono almeno due GPU; il pianificatore in sé ha
     i suoi test con GPU simulate), Windows.
+
+    La sincronizzazione successiva, fino a `52491bd`, porta sei commit di
+    upstream (#2418, #2419, #2420, #2367, #2410, #2423):
+    - accesso al server: `SDHttpServer` di upstream
+      (`examples/server/server_access.{h,cpp}`) prende il posto del controllo
+      di chiave e CORS del fork (voce 9). Le chiavi possono essere più di una
+      (virgole, o `--api-key` ripetuto) o stare in un file
+      (`--api-key-file`); `GET /` e `OPTIONS` non chiedono la chiave. Cambia
+      il default delle origini: prima il server rifletteva ogni `Origin` con
+      le credenziali, ora accetta solo la propria origine e risponde `403`
+      alle pagine di altre origini e a un `Host` che non è `localhost`,
+      l'indirizzo di ascolto o un indirizzo IP (sezione 5). Non cambia niente
+      per i programmi che non mandano un'origine, come Aletheia (chiama il
+      motore dal processo principale di Electron), `termico.py` e gli script
+      del fork;
+    - job DGL: si seguono con `GET /sdcpp/v1/jobs/{id}` e si fermano con
+      `POST /sdcpp/v1/jobs/{id}/cancel`, anche con `?wait=`, come i job di
+      immagini; `GET /sdcpp/v1/dgl/jobs/{id}` e `.../outputs/{index}` non ci
+      sono più. In upstream lo stop raggiunge l'unico contesto del server;
+      qui lo script gira sul contesto del custode, o su uno temporaneo
+      (`ContextKeeper::with_context()`), quindi `execute_dgl_job()` avvia il
+      `JobCancellationMonitor` dentro `with_context()`, con un'azione che
+      chiama `sd_dgl_ctx_cancel()` proprio su quel contesto. Il job riporta
+      l'avanzamento in `progress`, e ogni contesto creato dal custode mostra
+      l'avanzamento degli script anche sulla console (`console_progress`, nel
+      gancio `create_context` del custode). Uno script che esaurisce la
+      memoria finisce con il codice `out_of_memory`; dove il motore sa quale
+      memoria mancava, il messaggio lo dice. Uno script legge i modelli solo
+      dalle cartelle dei modelli (`--model-dir`), non il file dato con `-m`,
+      come in upstream;
+    - `GET /sdcpp/v1/view` serve alla pagina del server immagini e video di
+      `input/`, `output/` e `assets/` (`--no-media-view` lo spegne);
+    - libreria: ClipProj di MiniMax H3 senza MLP, tagli della cache KV di
+      RelayVSR corretti, buffer riutilizzabili dei backend liberati anche
+      dopo il rilascio dei pesi inattivi. `ensure_compute_backend_capacity()`
+      riceve dove scrivere il motivo di un esaurimento della memoria, e
+      `test/memory_guard_engine_test.cpp` segue la nuova firma.
+
+    Test, su una build per CPU: i nove programmi di `test/` passano;
+    `test/server_cancel_e2e.py` ora ferma anche i job DGL e passa i suoi 46
+    controlli (i 35 di prima e 11 sui job DGL) con il modello sintetico; con
+    un server in cui lo stop non arriva allo script, due di quei controlli
+    falliscono. Una prova a mano dell'accesso (31 controlli, non nel
+    repository: chiavi, file delle chiavi, origini, `Host` estraneo,
+    `GET /`, preflight, `/sdcpp/v1/view`, opzioni sbagliate) e la prova a
+    mano del server (22 controlli, ora con il `poll_url` dei job DGL)
+    passano; passano anche `test/security_smoke.sh` (19 controlli),
+    `test/termico_test.py` (127) e `test/agenti_guardiano_test.py` (66
+    controlli senza server; 91 con un vero server, una volta portati a 100 i
+    passi dei suoi job, come fa la correzione che sta su `fix_to_claude`); il
+    catalogo dei built-in DGL è aggiornato. **Non provato**: una GPU reale,
+    uno script che esaurisce la memoria, Windows (`routes_media.cpp` ha un
+    ramo proprio per Windows), un proxy inverso davanti al server.
 
 Passaggi previsti e non ancora svolti: collaudo del workflow di release sui
 runner GitHub, prova di `--multi-gpu` su una macchina con due GPU, generazione

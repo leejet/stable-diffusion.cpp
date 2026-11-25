@@ -28,20 +28,26 @@ struct SDSvrParams {
     int weight_staging_ttl    = -1;
     int weight_residency_ttl  = -1;
     std::string serve_html_path;
-    std::string api_key;       // empty = no authentication
-    std::string cors_origins;  // comma-separated allowlist; empty = reflect any origin
     bool disable_degradation = false;
     int degradation_cooldown = 300;  // seconds before the server tries a heavier profile again; 0 = never
     std::string dgl_dir = "dgl";
+    bool media_view = true;
     std::vector<std::string> model_dirs;
+    std::vector<std::string> api_keys;
+    std::string api_key_file;
+    std::vector<std::string> cors_origins;
     bool normal_exit         = false;
     sd_log_level_t log_level = SD_LOG_INFO;
     bool color               = false;
 
     ArgOptions get_options();
+    void add_access_options(ArgOptions& options, const std::vector<ArgOptions>& groups);
     bool validate();
     bool resolve_and_validate();
     std::string to_string() const;
+
+private:
+    bool load_api_keys();
 };
 
 struct LoraEntry {

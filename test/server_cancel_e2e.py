@@ -18,6 +18,11 @@ Without ?wait= the cancel route answers at once, with the job still generating, 
 library forgets a stop that arrives before the generation has begun, so the test asks again when the job does
 not end, as a client of the route does. With ?wait=N the server repeats the stop itself and answers 200 when
 the job has ended or 202 when it has not.
+
+The last part stops DGL jobs the same way. Its script is SD 1.x text to image, so it needs an SD 1.x model
+given with --model; --skip-dgl leaves it out for other models. A DGL script reads models only from the model
+directories, so the test starts the server with --model-dir set to the folder of the model; a server given
+with --url needs the same.
 """
 import argparse
 import json
@@ -121,6 +126,52 @@ class Client:
     def health(self):
         return self.call("GET", "/sdcpp/v1/health")[1]
 
+    def submit_dgl(self, source):
+        status, job, _ = self.call("POST", "/sdcpp/v1/dgl/jobs", {"source": source})
+        if status != 202:
+            raise Abort("the server did not accept a DGL job: %s %s" % (status, job))
+        return job
+
+    def wait_for_progress(self, job_id, timeout):
+        """Waits until a generating job reports at least one completed step, so a stop reaches the work itself."""
+        started = time.time()
+        while time.time() - started < timeout:
+            job = self.job(job_id)
+            if job["status"] in ("completed", "failed", "cancelled"):
+                raise Abort("job %s ended as %s before it reported any progress: %s" % (job_id, job["status"], job.get("error")))
+            completed = (job.get("progress") or {}).get("completed")
+            if job["status"] == "generating" and completed:
+                return job
+            time.sleep(0.1)
+        return None
+
+
+def dgl_script(model_path, steps, size, seed):
+    """An SD 1.5 text-to-image script that returns the latent, so it writes no file."""
+    return """# version: 0.0.0
+var {
+    model_path = "%s"
+    steps = %d
+    size = %d
+    seed = %d
+}
+
+fn main() {
+    model = load_unet(model_path, family = "sd1")
+    text = load_text_encoder(model_path, family = "sd1")
+    vae = load_vae(model_path, family = "sd1")
+    base = tensor::zeros(latent_shape(vae, width = size, height = size))
+    positive = encode_prompt(text, "a test", width = size, height = size)
+    negative = encode_prompt(text, "", width = size, height = size)
+    guided = cfg(predictor(model, positive), predictor(model, negative), scale = 7.0)
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = "discrete")
+    rng = make_rng("cuda", seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = "euler_a", rng = rng)
+    return {latent = latent}
+}
+""" % (model_path.replace("\\", "/"), steps, size, seed)
+
 
 def free_port():
     with socket.socket() as sock:
@@ -131,6 +182,9 @@ def free_port():
 def start_server(args, log):
     port = args.port or free_port()
     command = [args.server, "-m", args.model, "--listen-ip", "127.0.0.1", "--listen-port", str(port)]
+    if not args.skip_dgl:
+        # A DGL script reads models only from the model directories, not the file given with -m.
+        command += ["--model-dir", os.path.dirname(os.path.abspath(args.model))]
     if args.api_key:
         command += ["--api-key", args.api_key]
     command += args.extra
@@ -316,6 +370,59 @@ def run_scenarios(client, args, mark_log):
     check(now["step_downs"] == before["step_downs"], "no step down happened")
 
 
+def run_dgl_scenarios(client, args):
+    """8. DGL jobs are polled and stopped through the same job routes; the stop reaches the script while it runs."""
+    model, size, steps = os.path.abspath(args.model), args.size, args.steps
+    start = client.health()
+
+    # 8a. A generating DGL job reports its progress and is stopped without ?wait=.
+    job = client.submit_dgl(dgl_script(model, steps, size, 21))
+    job_id = job["id"]
+    check(job.get("poll_url") == "/sdcpp/v1/jobs/" + job_id, "a DGL job is accepted with the poll_url of the job routes")
+    client.wait_for(job_id, ("generating",), 120)
+    running = client.wait_for_progress(job_id, 120)
+    check(running is not None, "a generating DGL job reports its progress (%s)" % (running or {}).get("progress"))
+    status, body, seconds = client.call("POST", "/sdcpp/v1/jobs/%s/cancel" % job_id)
+    if status == 200 and body["status"] == "completed":
+        raise Abort("the DGL job finished before it could be cancelled: raise --steps or --size")
+    check(status == 200 and body["status"] == "generating" and body.get("cancel_requested") is True and seconds < 2.0,
+          "without ?wait= the stop of a DGL job is answered at once, with the job still generating (%s, %.2f s)"
+          % (status, seconds))
+    body, repeated = client.stop_until_ended(job_id, 120)
+    check(body["status"] == "cancelled" and body["error"]["code"] == "cancelled" and body["result"] is None,
+          "the DGL job ends as cancelled, without a result")
+    check(repeated == 0, "one stop was enough: the server keeps sending it to the script while it runs")
+
+    # 8b. A queued DGL job is cancelled at once; ?wait= works for the running one.
+    running = client.submit_dgl(dgl_script(model, steps, size, 22))["id"]
+    queued = client.submit_dgl(dgl_script(model, steps, size, 23))["id"]
+    client.wait_for(running, ("generating",), 120)
+    status, body, _ = client.call("POST", "/sdcpp/v1/jobs/%s/cancel" % queued)
+    check(status == 200 and body["status"] == "cancelled" and body["started"] is None,
+          "a queued DGL job is cancelled at once, without ever starting")
+    client.wait_for_progress(running, 120)
+    wait_seconds = 30
+    status, body, seconds = client.call("POST", "/sdcpp/v1/jobs/%s/cancel?wait=%d" % (running, wait_seconds))
+    check(status == 200 and body["status"] == "cancelled" and seconds < wait_seconds - 1,
+          "?wait=%d answers 200 with the DGL job cancelled as soon as it ended (%s after %.1f s)"
+          % (wait_seconds, status, seconds))
+    if status == 202:
+        client.stop_until_ended(running, 120)
+    check(client.job(queued)["status"] == "cancelled", "the queued DGL job stayed cancelled and never ran")
+
+    # 8c. The stops did not stay behind: a DGL job and an image job complete afterwards.
+    done_id = client.submit_dgl(dgl_script(model, 2, size, 24))["id"]
+    done = client.wait_for(done_id, ("completed",), args.warmup_timeout)
+    outputs = (done.get("result") or {}).get("outputs") or []
+    check(done["status"] == "completed" and len(outputs) >= 1, "a short DGL job after the stops completes with its output")
+    image = client.wait_for(client.submit(2, 25, size), ("completed",), args.warmup_timeout)
+    check(image["status"] == "completed", "and so does an image job on the same context")
+    health = client.health()
+    check(health["status"] == start["status"] and health["busy"] is False and
+          health["counters"]["step_downs"] == start["counters"]["step_downs"],
+          "the server is idle and as healthy as before the DGL jobs")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--server", default="build/bin/sd-server", help="path to sd-server")
@@ -329,6 +436,7 @@ def main():
                         help="steps of the jobs that get stopped, at most 100 as the server allows (they never run to the end)")
     parser.add_argument("--start-timeout", type=int, default=300, help="seconds to wait for the server to load the model")
     parser.add_argument("--warmup-timeout", type=int, default=900, help="seconds for any job that must complete")
+    parser.add_argument("--skip-dgl", action="store_true", help="leave out the DGL jobs, whose script needs an SD 1.x model")
     args = parser.parse_args()
     if not args.url and not args.model:
         parser.error("give --model (and --server), or --url of a running server")
@@ -357,6 +465,12 @@ def main():
     try:
         wait_ready(client, process, args.start_timeout)
         run_scenarios(client, args, mark_log)
+        if args.skip_dgl:
+            print("DGL jobs skipped (--skip-dgl)", flush=True)
+        elif args.model:
+            run_dgl_scenarios(client, args)
+        else:
+            print("DGL jobs skipped: they need --model, the path of the model as the server sees it", flush=True)
     except Abort as error:
         check(False, str(error))
     finally:
