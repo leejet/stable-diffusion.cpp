@@ -29,6 +29,7 @@ struct SDSvrParams {
     std::string serve_html_path;
     std::string dgl_dir = "dgl";
     std::vector<std::string> model_dirs;
+    std::vector<std::string> recipe_files;
     bool normal_exit         = false;
     sd_log_level_t log_level = SD_LOG_INFO;
     bool color               = false;
