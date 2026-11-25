@@ -1841,6 +1841,10 @@ the working directory's ./dgl directory unless --dgl-dir is set.
 | GET /sdcpp/v1/dgl/jobs/{id} | Returns the job status, error or result with tensor descriptions and inline encoded media |
 | GET /sdcpp/v1/dgl/jobs/{id}/outputs/{index}?frame=0 | Returns a PNG of an image output or a video frame. Output and frame indexes start at zero. |
 
+Failed jobs report `error.code` and `error.message`. When execution reports
+`out_of_memory`, the message includes the memory failure details available
+from the runtime.
+
 Scripts share the component cache and execution settings used for generation.
 Model reads are restricted to the configured model directories. Script writes
 are restricted to output/ in the server's working directory.

@@ -5,6 +5,7 @@
 #include "conditioning/conditioner.hpp"
 #include "core/ggml_tensor_utils.h"
 #include "core/util.h"
+#include "dgl/diagnostic.h"
 #include "dgl/models/component_builders.h"
 #include "dgl/models/component_sources.h"
 #include "dgl/models/control.h"
@@ -406,7 +407,15 @@ namespace sd::dgl::models {
                 z_image_controls.push_back(binding->model->z_image_input(*binding, input));
             params.extra = ZImageDiffusionExtra{nullptr, 1.f, &z_image_controls};
         }
+        diffusion_model->clear_device_memory_error();
         auto result = diffusion_model->compute(n_threads, params);
+        if (result.empty()) {
+            const auto& error = diffusion_model->device_memory_error();
+            if (!error.empty()) {
+                throw Error(SD_STATUS_OUT_OF_MEMORY, error);
+            }
+            throw std::runtime_error("diffusion compute failed");
+        }
         if (result.shape() != shape) {
             throw std::runtime_error("diffusion output shape " + sd::tensor_shape_to_string(result.shape()) +
                                      " does not match input " + sd::tensor_shape_to_string(shape));
