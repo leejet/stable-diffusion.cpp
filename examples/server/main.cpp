@@ -1,6 +1,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -103,6 +104,8 @@ int main(int argc, const char** argv) {
     }
     try {
         configure_server_file_access(models, svr_params, ctx_params);
+        if (!sd_dgl_ctx_set(sd_ctx_get_dgl_ctx(models.context.get()), "console_progress", "on"))
+            throw std::runtime_error(sd_dgl_error());
     } catch (const std::exception& error) {
         LOG_ERROR("Context setup failed: %s", error.what());
         return 1;

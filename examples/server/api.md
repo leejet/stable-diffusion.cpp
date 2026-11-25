@@ -768,8 +768,8 @@ Field types:
 the elapsed generation time in seconds, including output encoding and excluding
 queue time.
 
-`progress` is available independently of the preview setting, for both image
-and video jobs. Continue polling until `status` is terminal: a sampling pass
+`progress` is available independently of the preview setting for image, video,
+and local DGL jobs. Continue polling until `status` is terminal: a sampling pass
 can finish before decoding, ADetailer, or output encoding finishes.
 
 | Field | Type | Notes |

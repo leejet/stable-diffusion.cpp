@@ -1891,7 +1891,8 @@ clears the registration. The sampling pass counter starts at one on each
 run. Progress can report model loading in tensors, sampling in steps, video
 upscaling in frames, or a stage with no known total.
 Without a progress callback, the DGL execution layer displays sampling and
-weight-loading progress bars. With a callback, the host controls their display.
+weight-loading progress bars. Set `sd_dgl_ctx_set(ctx, "console_progress", "on")`
+on an idle context to display those bars alongside a progress callback.
 
 The default observer handles previews. Preview mode `proj` uses latent projection. Modes `tae` and `vae`
 use the decoder supplied to `preview(decoder=...)`, falling back to projection. A positive interval

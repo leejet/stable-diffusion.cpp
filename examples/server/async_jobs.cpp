@@ -126,22 +126,25 @@ static void finish_job_progress(AsyncGenerationJob& job) {
     job.progress.finished = std::chrono::steady_clock::now();
 }
 
+static void job_progress_callback(const sd_generation_progress_t* progress, void* data) noexcept {
+    try {
+        auto& job = *static_cast<AsyncGenerationJob*>(data);
+        update_job_progress(job, progress->stage, progress->detail,
+                            progress->sample_pass, progress->completed, progress->total, progress->unit);
+    } catch (...) {
+        // Progress callbacks must not unwind into the generation context.
+    }
+}
+
 class JobCallbacksGuard {
     sd_ctx_t* ctx_;
-    AsyncGenerationJob& job_;
-
-    static void progress_callback(const sd_generation_progress_t* progress, void* data) {
-        auto& guard = *static_cast<JobCallbacksGuard*>(data);
-        update_job_progress(guard.job_, progress->stage, progress->detail,
-                            progress->sample_pass, progress->completed, progress->total, progress->unit);
-    }
 
 public:
     JobCallbacksGuard(sd_ctx_t* ctx, AsyncGenerationJob& job)
-        : ctx_(ctx), job_(job) {
+        : ctx_(ctx) {
         clear_preview_callback();
         set_preview_callback(job);
-        sd_set_generation_progress_callback(ctx_, progress_callback, this);
+        sd_set_generation_progress_callback(ctx_, job_progress_callback, &job);
     }
 
     ~JobCallbacksGuard() {
@@ -151,6 +154,24 @@ public:
 
     JobCallbacksGuard(const JobCallbacksGuard&)            = delete;
     JobCallbacksGuard& operator=(const JobCallbacksGuard&) = delete;
+};
+
+class DglJobProgressGuard {
+    sd_dgl_ctx_t* ctx_;
+
+public:
+    DglJobProgressGuard(sd_dgl_ctx_t* ctx, AsyncGenerationJob& job) : ctx_(ctx) {
+        if (sd_dgl_ctx_set_progress_callback(ctx_, job_progress_callback, &job) != SD_STATUS_OK)
+            throw std::runtime_error(sd_dgl_error());
+    }
+
+    ~DglJobProgressGuard() {
+        if (sd_dgl_ctx_set_progress_callback(ctx_, nullptr, nullptr) != SD_STATUS_OK)
+            LOG_WARN("could not clear DGL job progress callback: %s", sd_dgl_error());
+    }
+
+    DglJobProgressGuard(const DglJobProgressGuard&)            = delete;
+    DglJobProgressGuard& operator=(const DglJobProgressGuard&) = delete;
 };
 
 const char* async_job_kind_name(AsyncJobKind kind) {
@@ -717,11 +738,13 @@ static sd_status_t execute_dgl_job(ServerRuntime& runtime,
             std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
             if (job.cancel_requested.load())
                 return SD_STATUS_CANCELLED;
-            JobCancellationMonitor cancellation(job, [ctx = runtime.sd_ctx]() {
-                sd_dgl_ctx_cancel(sd_ctx_get_dgl_ctx(ctx));
+            auto* ctx = sd_ctx_get_dgl_ctx(runtime.sd_ctx);
+            DglJobProgressGuard progress(ctx, job);
+            JobCancellationMonitor cancellation(job, [ctx]() {
+                sd_dgl_ctx_cancel(ctx);
             });
             update_job_progress(job, "executing", "dgl");
-            const auto status = sd_dgl_run(sd_ctx_get_dgl_ctx(runtime.sd_ctx), source.c_str(), nullptr, 0, &raw_result);
+            const auto status = sd_dgl_run(ctx, source.c_str(), nullptr, 0, &raw_result);
             if (status != SD_STATUS_OK) {
                 error_message = sd_dgl_error();
                 return status;

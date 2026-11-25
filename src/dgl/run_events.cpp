@@ -1,5 +1,7 @@
 #include "run_events.h"
 
+#include <cstdio>
+
 #include "diagnostic.h"
 
 namespace sd::dgl {
@@ -45,25 +47,35 @@ namespace sd::dgl {
 
     void RunEvents::begin_sample(int total_steps) {
         check_cancelled();
+        finish_sample_line();
         ++preview_info_.sample_pass;
         preview_info_.total_steps = total_steps;
         if (legacy_preview_)
             sd_begin_preview_pass(total_steps);
         last_progress_us_ = ggml_time_us();
-        if (legacy_progress_ || !callbacks_.progress)
+        if (uses_console_progress())
             pretty_progress(0, total_steps, 0.f);
         progress_.begin_sample(total_steps, "");
         check_cancelled();
     }
 
     void RunEvents::sample_step(int completed, int total_steps) {
-        if (legacy_progress_ || !callbacks_.progress) {
+        if (uses_console_progress()) {
             const auto now = ggml_time_us();
             pretty_progress(completed, total_steps, (now - last_progress_us_) / 1000000.f);
             last_progress_us_ = now;
+            sample_line_open_ = completed > 0 && completed < total_steps && !sd_get_progress_callback();
         }
         progress_.report_sample(completed, total_steps);
         check_cancelled();
+    }
+
+    void RunEvents::finish_sample_line() {
+        if (sample_line_open_) {
+            std::fputc('\n', stdout);
+            std::fflush(stdout);
+            sample_line_open_ = false;
+        }
     }
 
     void RunEvents::preview_bridge(int step, int frame_count, const sd_tensor_t* const* frames, bool noisy, void* userdata) {
@@ -79,10 +91,11 @@ namespace sd::dgl {
     RunEventsScope::RunEventsScope(RunEvents& events)
         : previous_(active_events),
           byte_progress_(events.uses_legacy_progress() ? nullptr : RunEvents::report_loading, &events),
-          console_progress_(events.uses_legacy_progress() || !events.callbacks().progress) {
+          console_progress_(events.uses_console_progress()) {
         active_events = &events;
     }
     RunEventsScope::~RunEventsScope() {
+        active_events->finish_sample_line();
         active_events = previous_;
     }
 
