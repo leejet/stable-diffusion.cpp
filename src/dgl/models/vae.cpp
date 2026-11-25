@@ -6,6 +6,7 @@
 #include "core/ggml_tensor_utils.h"
 #include "core/image_geometry.h"
 #include "core/util.h"
+#include "dgl/diagnostic.h"
 #include "dgl/models/component_builders.h"
 #include "dgl/models/component_sources.h"
 #include "dgl/run_events.h"
@@ -152,8 +153,13 @@ namespace sd::dgl::models {
                 input    = &adjusted;
             }
         }
+        first_stage_model->clear_device_memory_error();
         auto latents = first_stage_model->encode(n_threads, *input, vae_tiling_params, circular_x, circular_y);
         if (latents.empty()) {
+            const auto& error = first_stage_model->device_memory_error();
+            if (!error.empty()) {
+                throw Error(SD_STATUS_OUT_OF_MEMORY, error);
+            }
             return {};
         }
         return first_stage_model->vae_output_to_latents(latents, rng,
@@ -175,6 +181,7 @@ namespace sd::dgl::models {
 
     sd::Tensor<float> VAE::decode_vae_latents(const sd::Tensor<float>& latents, bool decode_video) {
         report_run_progress("vae_decode");
+        first_stage_model->clear_device_memory_error();
         auto tiling_params                = first_stage_model->resolve_tiling_params(vae_tiling_params);
         const bool prefer_temporal_tiling = decode_video && latents.dim() == 5 && latents.shape()[2] > 1 &&
                                             first_stage_model->can_temporal_tile_decode();
@@ -185,19 +192,26 @@ namespace sd::dgl::models {
             if (tiling_params.enabled &&
                 !first_stage_model->get_tile_sizes(tile_size_w, tile_size_h, tile_overlap, tiling_params,
                                                    latents.shape()[0], latents.shape()[1])) {
-                return {};
+                break;
             }
             auto decoded = first_stage_model->decode(n_threads, latents, tiling_params, decode_video, circular_x, circular_y);
             if (sd_version_is_minimax_h3_image(version()) && !decoded.empty() && decoded.dim() == 5) {
                 decoded = decoded.squeeze(2);
             }
-            if (!decoded.empty() ||
-                !sd::backend_fit::prepare_vae_decode_retry_tiling(tiling_params, prefer_temporal_tiling,
-                                                                  first_stage_model->last_compute_status(),
-                                                                  tile_size_w, tile_size_h, first_stage_model->get_scale_factor())) {
+            if (!decoded.empty()) {
                 return decoded;
             }
+            if (!sd::backend_fit::prepare_vae_decode_retry_tiling(tiling_params, prefer_temporal_tiling,
+                                                                first_stage_model->last_compute_status(),
+                                                                tile_size_w, tile_size_h, first_stage_model->get_scale_factor())) {
+                break;
+            }
         }
+        const auto& error = first_stage_model->device_memory_error();
+        if (!error.empty()) {
+            throw Error(SD_STATUS_OUT_OF_MEMORY, error);
+        }
+        return {};
     }
 
 }  // namespace sd::dgl::models

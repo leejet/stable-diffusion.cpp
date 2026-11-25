@@ -679,28 +679,29 @@ void configure_server_file_access(ServerModels& models, const SDSvrParams& param
         throw std::runtime_error(sd_get_last_error());
 }
 
-static bool execute_dgl_job(ServerRuntime& runtime,
-                            AsyncGenerationJob& job,
-                            std::shared_ptr<sd_dgl_result_t>& result,
-                            json& result_info,
-                            std::string& error_message) {
+static sd_status_t execute_dgl_job(ServerRuntime& runtime,
+                                   AsyncGenerationJob& job,
+                                   std::shared_ptr<sd_dgl_result_t>& result,
+                                   json& result_info,
+                                   std::string& error_message) {
     try {
         auto source                 = std::move(job.dgl_source);
         sd_dgl_result_t* raw_result = nullptr;
         {
             std::lock_guard<std::mutex> lock(*runtime.sd_ctx_mutex);
             update_job_progress(job, "executing", "dgl");
-            if (sd_dgl_run(sd_ctx_get_dgl_ctx(runtime.sd_ctx), source.c_str(), nullptr, 0, &raw_result) != SD_STATUS_OK) {
+            const auto status = sd_dgl_run(sd_ctx_get_dgl_ctx(runtime.sd_ctx), source.c_str(), nullptr, 0, &raw_result);
+            if (status != SD_STATUS_OK) {
                 error_message = sd_dgl_error();
-                return false;
+                return status;
             }
         }
         result.reset(raw_result, sd_dgl_result_free);
         result_info = describe_dgl_result(result.get());
-        return true;
+        return SD_STATUS_OK;
     } catch (const std::exception& error) {
         error_message = error.what();
-        return false;
+        return SD_STATUS_GENERATION_FAILED;
     }
 }
 
@@ -785,6 +786,7 @@ void async_job_worker(ServerRuntime& runtime) {
         std::shared_ptr<sd_dgl_result_t> dgl_result;
         json dgl_result_info;
         std::string error_message;
+        const char* error_code = "generation_failed";
         bool ok = false;
 
         if (job->kind == AsyncJobKind::ImgGen) {
@@ -799,7 +801,11 @@ void async_job_worker(ServerRuntime& runtime) {
                                      output_info,
                                      error_message);
         } else if (job->kind == AsyncJobKind::Dgl) {
-            ok = execute_dgl_job(runtime, *job, dgl_result, dgl_result_info, error_message);
+            const auto status = execute_dgl_job(runtime, *job, dgl_result, dgl_result_info, error_message);
+            ok                = status == SD_STATUS_OK;
+            if (status == SD_STATUS_OUT_OF_MEMORY) {
+                error_code = "out_of_memory";
+            }
         } else {
             error_message = "unsupported job kind";
         }
@@ -832,7 +838,7 @@ void async_job_worker(ServerRuntime& runtime) {
                 job->error_message.clear();
             } else {
                 job->status        = AsyncJobStatus::Failed;
-                job->error_code    = "generation_failed";
+                job->error_code    = error_code;
                 job->error_message = error_message.empty() ? "unknown generation error" : error_message;
                 job->result_images_b64.clear();
                 job->result_generation_info = nullptr;
