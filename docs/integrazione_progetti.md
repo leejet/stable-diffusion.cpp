@@ -1905,6 +1905,87 @@ sincronizzazioni future.
     reale, più GPU (la scelta dei device di `planned_backend_spec()` non è
     coperta da nessun test: servono almeno due GPU; il pianificatore in sé ha
     i suoi test con GPU simulate), Windows.
+26. **Salute dei device, watchdog e watchGuardian** — il motore tiene un
+    registro della salute di ogni componente e sposta il lavoro prima che un
+    componente ceda; il server si ferma del tutto solo quando la macchina non
+    regge più. Il piano, fase per fase, è nel documento «Piano del watchdog e
+    del watchGuardian».
+
+    Fase 1, il registro: `src/core/device_health.{h,cpp}` (`sd::DeviceHealth`,
+    uno per processo). Componenti: i device di ggml, `RAM` e `disk`; livelli 0,
+    da 1 a 3 sotto sforzo (85%, 70%, 55% della capacità), 4 escluso. Eventi del
+    motore, un gradino ciascuno e una volta sola se a meno di 10 secondi l'uno
+    dall'altro: un calcolo fallito (`execution_engine.cpp`), un backend che non
+    parte (`ggml_extend_backend.cpp`), il memory guard che non scende sotto la
+    soglia (`model_manager.cpp`), una lettura dei pesi fallita
+    (`model_loader.cpp`). Segnali esterni con fonte e durata (da 1 secondo a un
+    giorno, al più 8 fonti per componente; il critico esclude e chiede la
+    fermata); la stessa scheda vista da due backend riceve i segnali esterni
+    ma non i guasti dell'altro backend. Un livello scende di un gradino dopo
+    ogni periodo tranquillo di 300 secondi. API C, solo aggiunte e in forma
+    provvisoria: `sd_device_health_t`, `sd_get_device_health()`,
+    `sd_report_device_pressure()`, `sd_resume_device_health()`.
+
+    Fase 2, lo split a gradini: `layer_split_apply_shares()`
+    (`src/core/layer_split_partition.*`); quando il registro cambia, la
+    generazione successiva rilascia i modelli in cache e rifà il piano
+    (`Context::follow_device_health()` in `dgl::run`).
+
+    Fase 3: i budget del piano di esecuzione e del pianificatore multi-GPU
+    valgono la quota del device (`backend_fit.cpp`, `run_plan.cpp`; la chiave
+    della cache dei piani comprende la revisione del registro in
+    `generation_program.cpp`); un device escluso non è mai il predefinito e il
+    motore non calcola su di lui (errore `backend` all'inizio del segmento,
+    con una riga di log sola); thread della CPU -25% per livello; il ripiego
+    sulla CPU è rifiutato se la CPU è esclusa (`model_runtime.cpp`); la RAM non
+    scende sotto la quota del livello 3; con il disco escluso i pesi da leggere
+    durante il calcolo sono rifiutati (`out_of_memory`).
+
+    Fase 4, il guardiano del server: `examples/server/guardian.{h,cpp}`. Si
+    ferma con un componente critico o senza più device di calcolo. Un
+    sorvegliante (un thread: ogni secondo e subito dopo una segnalazione)
+    ferma la generazione in corso: un job finisce `failed` con il codice
+    `halted`, una richiesta sincrona riceve `503` `halted`. Le richieste nuove
+    (img_gen, vid_gen, A1111, OpenAI, script DGL, caricamento del modello)
+    ricevono `503` `halted` con `Retry-After`; i job in coda aspettano;
+    `/sdcpp/v1/health` mostra `guardian`, `devices` e lo stato `halted`. Riparte
+    da solo quando la causa finisce, o con `POST /sdcpp/v1/guardian/resume`.
+    `--guardian on|off`, acceso per default. Il custode salta i device esclusi,
+    non risale verso di loro e, con il server fermo, non ricarica il modello né
+    scende di profilo (hook `halted`).
+
+    Fase 5, i segnali dall'esterno: `POST /sdcpp/v1/devices/{device}/pressure`;
+    `termico.py osserva --segnala [DEVICE]` manda la fascia della GPU come
+    livello (attenzione 1, con throttling termico 2, critica 3, critica con
+    throttling hardware esclusa; in fascia normale il throttling termico vale
+    1). Nella guida sugli agenti (sezione 9) il guardiano d'esempio si affianca
+    a `--segnala` e non manda mai il segnale critico, che ferma il lavoro di
+    tutti (sezione 6). Documentato in `examples/server/api.md` («Device health
+    and the guardian» e i due endpoint), `examples/server/README.md`,
+    `scripts/diagnostica_termica/README.md` (7.1) e
+    [agenti_indipendenti.md](./agenti_indipendenti.md) (9). I valori sono
+    provvisori.
+
+    Anche: `test/agenti_guardiano_test.py` con il server vero falliva dalla
+    voce 25, perché chiedeva 500 passi e il server ne accetta al massimo 100:
+    ora ne chiede 100.
+
+    Test, su una build per CPU: gli undici programmi di `test/` passano, con i
+    nuovi `device_health_test` e `server_guardian_test`;
+    `server_recovery_test` e `server_guardian_test` anche con
+    ThreadSanitizer, senza avvisi. Versioni rotte del codice che i test devono
+    scoprire: registro 10, guardiano 24, custode 9, `termico.py --segnala` 10,
+    tutte scoperte; delle 3 del collegamento nel server vero, 2 le scopre
+    `test/server_guardian_e2e.py` e la terza (il custode che non sa della
+    fermata) solo `server_recovery_test`, perché sul server vero lo stop del
+    sorvegliante arriva sempre prima. Con il modello SD 1.5 sintetico:
+    `test/server_guardian_e2e.py` passa i suoi 59 controlli tre volte di fila
+    contro un vero `sd-server`; `server_cancel_e2e.py` 35; `termico_test.py`
+    153; `agenti_guardiano_test.py` 66 senza server e 91 con il server vero;
+    `security_smoke.sh`; `dgl-check-builtins`; una prova d'integrazione del
+    registro nel motore (12 controlli, non nel repository). **Non provato**:
+    GPU vere, uno split a livelli fra due device, `termico.py --segnala` con una
+    NVIDIA reale, Windows.
 
 Passaggi previsti e non ancora svolti: collaudo del workflow di release sui
 runner GitHub, prova di `--multi-gpu` su una macchina con due GPU, generazione
@@ -1915,7 +1996,10 @@ stessa GPU (scenari in [convivenza_applicazioni.md](./convivenza_applicazioni.md
 sezione 5), prova di `termico.py` su una GPU NVIDIA reale e su Windows e del
 guardiano della guida sugli agenti con una GPU vera sotto carico, test su
 CUDA/Vulkan e su Windows (il ramo Windows della
-memoria di sistema è stato solo controllato nella sintassi), taratura delle
+memoria di sistema è stato solo controllato nella sintassi), prova della salute
+dei device (voce 26) su GPU vere, con uno split a livelli fra la scheda
+discreta e la GPU integrata e `termico.py --segnala` su una NVIDIA reale,
+taratura dei valori della salute dei device, taratura delle
 soglie di `--profile auto` e dei preset della sezione 3.6, e il livello di
 astrazione `ImageRuntime` nell'applicazione ospite (fuori da questo
 repository).

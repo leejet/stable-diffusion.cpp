@@ -5,6 +5,7 @@
 #include <type_traits>
 
 #include "conditioning/conditioner.hpp"
+#include "core/device_health.h"
 #include "core/ggml_runner.h"
 #include "core/ggml_tensor_utils.h"
 #include "core/last_error.h"
@@ -346,6 +347,11 @@ namespace sd::dgl::models {
         const bool already_cpu = (backend_spec_ == "cpu" || backend_spec_ == "CPU") && params_backend_spec_.empty();
         if (model_.backend_fallback_disabled_ || already_cpu) {
             LOG_ERROR_CODE(SD_ERROR_BACKEND, "%s backend config failed: %s", model_component_name(component), error.c_str());
+            return false;
+        }
+        if (sd::device_health().excluded("CPU")) {
+            LOG_ERROR_CODE(SD_ERROR_BACKEND, "%s backend config failed (%s), and the CPU is excluded by device health",
+                           model_component_name(component), error.c_str());
             return false;
         }
         LOG_WARN("%s backend config failed (%s); falling back to the cpu backend (use --disable-backend-fallback to fail instead)",

@@ -4,8 +4,10 @@
 Misura temperatura, potenza, frequenza e motivi di throttling con nvidia-smi, a fasi, e può affiancare alla
 stessa linea del tempo lo stato del motore (sd-server: /sdcpp/v1/health e /sdcpp/v1/resources).
 
-Solo lettura: non cambia nessuna impostazione della GPU, non avvia nessun carico e scrive soltanto nella
-cartella di uscita. Serve Python 3.8 o più recente; nessun pacchetto da installare.
+Non cambia nessuna impostazione della GPU, non avvia nessun carico e scrive soltanto nella cartella di uscita.
+Al motore chiede soltanto il suo stato, salvo con osserva --segnala: allora gli manda anche la fascia della GPU
+come livello di salute del device (POST /sdcpp/v1/devices/{device}/pressure), e il motore sposta il lavoro.
+Serve Python 3.8 o più recente; nessun pacchetto da installare.
 
 Comandi (guida completa: README.md di questa cartella):
   guidata    sessione a fasi (riposo, motore, chat, insieme, raffreddamento); è il comando predefinito
@@ -18,6 +20,7 @@ import argparse
 import csv
 import datetime as dt
 import json
+import math
 import os
 import re
 import shutil
@@ -298,7 +301,7 @@ def fascia_di(temp, fasce):
 
 
 # ----------------------------------------------------------------------------------------------------------
-# Motore (sd-server): solo richieste GET
+# Motore (sd-server): letture con GET; le segnalazioni di --segnala sono le sole POST
 # ----------------------------------------------------------------------------------------------------------
 
 def normalizza_url(testo):
@@ -316,8 +319,8 @@ def url_senza_credenziali(url):
     return f"{parti.scheme}://{host}" + (f":{parti.port}" if parti.port else "")
 
 
-def chiedi_json(url, chiave, percorso, timeout):
-    richiesta = urllib.request.Request(url + percorso, headers={"Accept": "application/json"})
+def apri_json(richiesta, chiave, timeout):
+    """(codice HTTP, corpo JSON); (None, None) se il motore non risponde."""
     if chiave:
         richiesta.add_header("Authorization", "Bearer " + chiave)
     # Il motore è di solito su questo stesso PC: niente proxy di sistema.
@@ -332,6 +335,16 @@ def chiedi_json(url, chiave, percorso, timeout):
             return errore.code, None
     except (urllib.error.URLError, OSError, ValueError):
         return None, None
+
+
+def chiedi_json(url, chiave, percorso, timeout):
+    return apri_json(urllib.request.Request(url + percorso, headers={"Accept": "application/json"}), chiave, timeout)
+
+
+def manda_json(url, chiave, percorso, corpo, timeout):
+    richiesta = urllib.request.Request(url + percorso, data=json.dumps(corpo).encode("utf-8"), method="POST",
+                                       headers={"Accept": "application/json", "Content-Type": "application/json"})
+    return apri_json(richiesta, chiave, timeout)
 
 
 def leggi_salute(url, chiave, timeout=3.0):
@@ -415,6 +428,161 @@ class OsservatoreMotore:
         if ultimo is None or time.monotonic() - ultimo[0] > max(10.0, 5 * self.intervallo):
             return None
         return dict(ultimo[1])
+
+
+# ----------------------------------------------------------------------------------------------------------
+# Segnalazioni al motore (osserva --segnala): la fascia della GPU diventa il livello di salute del suo device.
+# Il motore toglie lavoro al device un gradino alla volta e, se lo esclude, lo sposta altrove; il segnale dura
+# qualche campione e si ripete finché la condizione resta, così scade da solo se questo programma si ferma.
+# ----------------------------------------------------------------------------------------------------------
+
+FONTE_SEGNALE = "termico"
+LIVELLO_ESCLUSO = 4  # il livello dopo i tre di sforzo del motore
+BIT_TERMICO_HW = 0x40
+
+
+def livello_segnale(fascia, mask):
+    """Il livello che fascia e motivi di throttling valgono per il motore; None se la temperatura non si legge."""
+    if fascia is None:
+        return None
+    termico = (mask or 0) & BIT_TERMICI
+    if fascia == "critica":
+        return LIVELLO_ESCLUSO if (mask or 0) & BIT_TERMICO_HW else 3
+    if fascia == "attenzione":
+        return 2 if termico else 1
+    # Il driver che rallenta la GPU per il caldo sotto la fascia di attenzione: le fasce sono più alte del suo limite.
+    return 1 if termico else 0
+
+
+def motivo_segnale(c, fascia):
+    mask = c.get("mask") or 0
+    motivo = f"GPU a {c['temp']:.0f} C, fascia {fascia}"
+    if mask & BIT_TERMICO_HW:
+        motivo += ", throttling termico hardware"
+    elif mask & BIT_TERMICI:
+        motivo += ", throttling termico"
+    return motivo
+
+
+def durata_segnale(ogni):
+    """Qualche campione, mai meno di 5 secondi."""
+    return max(5, int(math.ceil(3 * ogni)))
+
+
+def dispositivo_del_motore(dispositivi, nome_gpu):
+    """Il device del motore per la GPU, dal nome che il motore ne dà (/sdcpp/v1/resources); None se non c'è o se
+    due schede uguali non si distinguono. La stessa scheda vista da CUDA e da Vulkan va bene con l'uno o l'altro
+    nome: il motore riconosce la scheda e passa il segnale anche all'altro."""
+    voluto = (nome_gpu or "").strip().lower()
+    trovati = [d.get("name") for d in dispositivi or [] if isinstance(d, dict) and d.get("name") and
+               d.get("type") in ("gpu", "igpu") and str(d.get("description") or "").strip().lower() == voluto]
+    if not voluto or not trovati:
+        return None
+    backend = [re.sub(r"\d+$", "", nome) for nome in trovati]
+    if len(set(backend)) != len(backend):
+        return None
+    return trovati[0]
+
+
+class SegnalatoreMotore:
+    """Manda al motore il livello della GPU in un thread a parte, così un motore lento non rallenta le letture.
+    Un livello sopra 0 si ripete a ogni campione; tornato 0 il segnale si ritira una volta, e così alla fine."""
+
+    def __init__(self, url, chiave, dispositivo, nome_gpu, durata):
+        self.url = url
+        self.chiave = chiave
+        self.dispositivo = dispositivo  # None: si cerca dal nome della GPU
+        self.nome_gpu = nome_gpu
+        self.durata = durata
+        self._voluto = None             # (livello, motivo) dell'ultimo campione, non ancora mandato
+        self._attivo = False            # il motore tiene un segnale di questa fonte
+        self._fermo = False
+        self._annunciato = False
+        self._avvisi = set()
+        self._ultima_ricerca = None
+        self._condizione = threading.Condition()
+        self._thread = threading.Thread(target=self._ciclo, daemon=True)
+
+    def avvia(self):
+        self._thread.start()
+
+    def aggiorna(self, livello, motivo):
+        with self._condizione:
+            self._voluto = (livello, motivo)
+            self._condizione.notify()
+
+    def ferma(self):
+        with self._condizione:
+            self._fermo = True
+            self._condizione.notify()
+        self._thread.join(timeout=10)
+
+    def _avvisa(self, chiave, testo):
+        if chiave not in self._avvisi:
+            self._avvisi.add(chiave)
+            print("  " + testo, flush=True)
+
+    def _ciclo(self):
+        self._trova_dispositivo()
+        while True:
+            with self._condizione:
+                while self._voluto is None and not self._fermo:
+                    self._condizione.wait()
+                voluto, self._voluto = self._voluto, None
+                fermo = self._fermo
+            if fermo:
+                if self._attivo:
+                    self._invia(0, "")
+                return
+            self._invia(*voluto)
+
+    def _trova_dispositivo(self):
+        if self.dispositivo is None and (self._ultima_ricerca is None or time.monotonic() - self._ultima_ricerca >= 10):
+            self._ultima_ricerca = time.monotonic()
+            codice, risorse = chiedi_json(self.url, self.chiave, "/sdcpp/v1/resources", 3.0)
+            if codice == 200 and isinstance(risorse, dict):
+                dispositivi = risorse.get("devices") or []
+                self.dispositivo = dispositivo_del_motore(dispositivi, self.nome_gpu)
+                if self.dispositivo is None:
+                    nomi = ", ".join(str(d.get("name")) for d in dispositivi if isinstance(d, dict)) or "nessuno"
+                    self._avvisa("gpu_ignota", f"Nel motore non trovo la GPU {self.nome_gpu} fra i device ({nomi}): "
+                                               "indica il suo nome con --segnala NOME.")
+            else:
+                self._avvisa_errore(codice, risorse)
+        if self.dispositivo is not None and not self._annunciato:
+            self._annunciato = True
+            print(f"  Segnalo al motore la GPU come device {self.dispositivo}.", flush=True)
+        return self.dispositivo
+
+    def _avvisa_errore(self, codice, risposta):
+        if codice is None:
+            self._avvisa("irraggiungibile", "Segnalazione al motore non riuscita: il motore non risponde. Riprovo al prossimo campione.")
+        elif codice == 401:
+            self._avvisa("401", "Segnalazione al motore rifiutata: chiave API mancante o errata (--chiave-api o TERMICO_CHIAVE_API).")
+        elif codice == 404:
+            self._avvisa("404", f"Il motore non conosce il device {self.dispositivo}: i nomi sono quelli di "
+                                "/sdcpp/v1/health (CPU, CUDA0, Vulkan0...).")
+        else:
+            errore = risposta.get("error") if isinstance(risposta, dict) else None
+            self._avvisa(f"http{codice}", f"Segnalazione al motore rifiutata (HTTP {codice})" + (f": {errore}" if errore else "."))
+
+    def _invia(self, livello, motivo):
+        if livello == 0 and not self._attivo:
+            return
+        dispositivo = self._trova_dispositivo()
+        if dispositivo is None:
+            return
+        if livello == 0:
+            corpo = {"level": 0, "source": FONTE_SEGNALE}
+        else:
+            corpo = {"level": "excluded" if livello == LIVELLO_ESCLUSO else livello, "source": FONTE_SEGNALE,
+                     "reason": motivo, "duration_seconds": self.durata}
+        percorso = "/sdcpp/v1/devices/" + urllib.parse.quote(dispositivo, safe="") + "/pressure"
+        codice, risposta = manda_json(self.url, self.chiave, percorso, corpo, 3.0)
+        if codice == 200:
+            self._attivo = livello != 0
+        else:
+            self._avvisa_errore(codice, risposta)
 
 
 # ----------------------------------------------------------------------------------------------------------
@@ -1003,12 +1171,22 @@ def comando_guidata(args):
 
 
 def comando_osserva(args):
+    if args.segnala is not None and not args.motore:
+        sys.exit("--segnala manda la fascia della GPU al motore: indica anche --motore URL.")
     nvsmi, info, campo_motivi, osservatore = prepara(args)
     sessione = crea_sessione(args, nvsmi, info, campo_motivi, osservatore, ["OSSERVAZIONE"])
     print(f"GPU: {info['nome']}, driver {info['driver']}")
     print(f"Fasce di temperatura (indicative): attenzione da {sessione.fasce['attenzione_da_c']:.0f} C, "
           f"critica da {sessione.fasce['critica_da_c']:.0f} C. Origine: {sessione.fasce['origine']}.")
     sessione.descrivi_motore()
+    segnalatore = None
+    if args.segnala is not None:
+        segnalatore = SegnalatoreMotore(normalizza_url(args.motore), args.chiave_api, args.segnala or None, info["nome"],
+                                        durata_segnale(args.ogni))
+        print(f"Segnalazioni al motore: la fascia diventa il livello di salute del device (attenzione 1, con throttling "
+              f"termico 2, critica 3, critica con throttling hardware esclusa), ripetuta a ogni campione con una durata "
+              f"di {segnalatore.durata} s; tornata normale, e alla fine, il segnale si ritira.")
+        segnalatore.avvia()
     if args.file_stato:
         print(f"Stato aggiornato a ogni campione in {args.file_stato} (un file più vecchio di qualche secondo non vale).")
     print("Ctrl+C per fermare: il riepilogo viene scritto lo stesso." if not args.durata
@@ -1022,6 +1200,11 @@ def comando_osserva(args):
     stato_non_scritto = [False]
 
     def dopo_campione(t, c, campioni):
+        if segnalatore is not None:
+            fascia = fascia_di(c["temp"], sessione.fasce)
+            livello = livello_segnale(fascia, c["mask"])
+            if livello is not None:
+                segnalatore.aggiorna(livello, motivo_segnale(c, fascia))
         if args.file_stato:
             try:
                 scrivi_json(args.file_stato, costruisci_quadro(info, sessione.fasce, c, campioni[-70:]))
@@ -1042,6 +1225,9 @@ def comando_osserva(args):
     except (RuntimeError, OSError) as errore:
         print(f"\nErrore: {errore}.")
         esito = 1
+    finally:
+        if segnalatore is not None:
+            segnalatore.ferma()
     return chiudi_e_riferisci(sessione, esito == 1)
 
 
@@ -1261,6 +1447,10 @@ def crea_parser():
 
     osserva = sotto.add_parser("osserva", parents=[gpu, motore, registrazione], help="registra senza fasi")
     osserva.add_argument("--durata", type=int, default=0, metavar="S", help="secondi da registrare (default: fino a Ctrl+C)")
+    osserva.add_argument("--segnala", nargs="?", const="", default=None, metavar="DEVICE",
+                         help="manda al motore (--motore) la fascia della GPU come livello di salute del suo device: "
+                              "attenzione 1, con throttling termico 2, critica 3, critica con throttling hardware "
+                              "esclusa; DEVICE è il nome nel motore (CUDA0, Vulkan0...), senza si trova dal nome della GPU")
     osserva.add_argument("--file-stato", dest="file_stato", metavar="FILE",
                          help="file JSON riscritto a ogni campione con l'ultima lettura (per altri programmi)")
     osserva.set_defaults(esegui=comando_osserva)

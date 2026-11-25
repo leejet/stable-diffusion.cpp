@@ -84,6 +84,35 @@ int main() {
               "every byte is placed and no device gets more than its capacity");
     }
 
+    {
+        const std::vector<int64_t> capacities = {10 * GiB, 10 * GiB};
+        check(sd::layer_split_apply_shares(capacities, {1.0, 1.0}) == capacities, "healthy devices offer all of their capacity");
+        const auto strained = sd::layer_split_apply_shares(capacities, {0.70, 1.0});
+        check(strained[0] == 7 * GiB && strained[1] == 10 * GiB, "a device under strain at 70% offers 70% of its capacity");
+
+        const auto fill_first = place(LayerSplitFill::FILL_FIRST, segments, strained);
+        check(fill_first.size() == 2 && near(fill_first[0], 7 * GiB, segments[0]) && near(fill_first[1], GiB, segments[0]),
+              "fill-first: the next device takes what the device under strain gives up");
+        const auto healthy      = place(LayerSplitFill::PROPORTIONAL, segments, capacities);
+        const auto proportional = place(LayerSplitFill::PROPORTIONAL, segments, strained);
+        check(proportional.size() == 2 && near(proportional[0], 8 * GiB * 7 / 17, segments[0]) &&
+                  near(proportional[1], 8 * GiB * 10 / 17, segments[0]),
+              "proportional: what it gives up is spread in proportion to the capacities");
+        check(!healthy.empty() && !proportional.empty() && proportional[0] < healthy[0],
+              "so the device under strain holds less than when it was healthy");
+
+        const auto excluded = place(LayerSplitFill::PROPORTIONAL, segments, sd::layer_split_apply_shares(capacities, {0.0, 1.0}));
+        check(excluded.size() == 2 && excluded[0] == 0 && excluded[1] == 8 * GiB, "an excluded device takes nothing");
+        check(place(LayerSplitFill::FILL_FIRST, segments, sd::layer_split_apply_shares({10 * GiB, 5 * GiB}, {0.0, 1.0})).empty(),
+              "when the others cannot hold what an excluded device leaves, nothing is placed");
+        check(place(LayerSplitFill::PROPORTIONAL, segments, sd::layer_split_apply_shares(capacities, {1.0, 1.0})) == healthy,
+              "when the device recovers, its share comes back");
+
+        const auto unknown = sd::layer_split_apply_shares({sd::layer_split_unknown_capacity, 10 * GiB}, {0.85, 1.0});
+        check(unknown[0] == sd::layer_split_unknown_capacity, "a capacity the device does not report stays unknown");
+        check(sd::layer_split_apply_shares({sd::layer_split_unknown_capacity}, {0.0})[0] == 0, "unless the device is excluded");
+    }
+
     const auto gpu  = GGML_BACKEND_DEVICE_TYPE_GPU;
     const auto igpu = GGML_BACKEND_DEVICE_TYPE_IGPU;
     const auto cpu  = GGML_BACKEND_DEVICE_TYPE_CPU;

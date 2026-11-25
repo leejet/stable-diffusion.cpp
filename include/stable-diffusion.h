@@ -593,6 +593,40 @@ typedef struct {
 // Returns false when none of them can be determined on this platform.
 SD_API bool sd_get_system_memory(sd_system_memory_t* info);
 
+// Device health. The engine and outside watchers report how the devices, the RAM and the disk are doing: a
+// component under strain offers less of its capacity, one step per level, and the work it gives up goes to the
+// others; an excluded device is never computed on. A level comes back one step after each quiet period. The
+// components are the devices sd_get_device_info() lists, "RAM" and "disk".
+typedef struct {
+    char name[64];
+    int level;             // 0 healthy, 1..strain_levels under strain, strain_levels + 1 excluded
+    int strain_levels;     // levels of strain before exclusion
+    int share_percent;     // what the component offers of its capacity
+    bool excluded;         // never computed on
+    bool critical;         // a watcher asks to stop all work
+    char reason[200];      // why it is not healthy; empty when it is
+    int64_t held_ms;       // how long the signals that hold this level still last; 0 when none does
+    int64_t next_step_ms;  // until the level comes down one step if nothing else happens; 0 when none is due
+} sd_device_health_t;
+
+// Fills up to capacity entries and returns the number of components; with health NULL or capacity 0 it only
+// counts them.
+SD_API size_t sd_get_device_health(sd_device_health_t* health, size_t capacity);
+// Reports the signal of an outside watcher, named by source; each source holds one signal per component. Level 0
+// withdraws the signal of that source, 1..strain_levels puts the component under strain, strain_levels + 1 excludes
+// it; critical asks to stop all work while the signal lasts, and excludes the component too. A signal reaches the
+// listings of the same card through other backends and ends after duration_seconds, so a watcher repeats it while
+// the condition lasts. Returns false, and changes nothing, when the component is unknown or the signal not valid.
+SD_API bool sd_report_device_pressure(const char* component,
+                                      const char* source,
+                                      int level,
+                                      bool critical,
+                                      const char* reason,
+                                      int duration_seconds);
+// An operator says the machine was checked: the critical signals are withdrawn and the excluded components come
+// back to the last level of strain.
+SD_API void sd_resume_device_health(void);
+
 // Why a call failed, in finer terms than sd_status_t: a lack of memory, which a lighter configuration may get
 // around, is told apart from a compute backend that failed. sd_ctx_create, sd_ctx_set_model_options*,
 // sd_generate_image and sd_generate_video record the reason on the calling thread when they fail; a call that

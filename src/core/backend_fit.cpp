@@ -1,5 +1,6 @@
 #include "backend_fit.h"
 #include "config.h"
+#include "core/device_health.h"
 #include "core/layer_split_partition.h"
 
 #include <algorithm>
@@ -177,6 +178,18 @@ namespace sd::backend_fit {
         }
     }
 
+    // What each device offers after the registry of device health: a device under strain is chosen last, and an
+    // excluded one has no budget, so no module goes to it.
+    static void apply_device_health(std::vector<Device>& devices) {
+        for (Device& device : devices) {
+            const double share = sd::device_health().share(device.name);
+            if (share < 1.0) {
+                device.free_bytes   = (int64_t)((double)device.free_bytes * share);
+                device.budget_bytes = (int64_t)((double)device.budget_bytes * share);
+            }
+        }
+    }
+
     static std::vector<Device> enumerate_gpu_devices(const sd::ggml_graph_cut::MaxVramAssignment& budgets,
                                                      bool include_other_devices,
                                                      const AvailableVRAM& available_vram) {
@@ -220,6 +233,7 @@ namespace sd::backend_fit {
             }
             out.push_back(std::move(device));
         }
+        apply_device_health(out);
         mark_shadowed_devices(out);
         return out;
     }
@@ -1068,7 +1082,14 @@ namespace sd::backend_fit {
         const auto fallback = sd_backend_resolve_name("");
         const auto devices  = enumerate_gpu_devices(budgets, false, available_vram);
         const auto selected = select_main_device(devices);
-        return selected == SIZE_MAX ? fallback : devices[selected].name;
+        if (selected != SIZE_MAX) {
+            return devices[selected].name;
+        }
+        if (sd::device_health().excluded(fallback) && !sd::device_health().excluded("CPU")) {
+            LOG_WARN("auto-fit: %s is excluded by device health; the models run on the CPU", fallback.c_str());
+            return "CPU";
+        }
+        return fallback;
     }
 
     bool derive_backend_specs(ModelLoader& loader,

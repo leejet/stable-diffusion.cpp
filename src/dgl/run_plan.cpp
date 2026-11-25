@@ -5,6 +5,7 @@
 
 #include "context.h"
 #include "core/backend_fit.h"
+#include "core/device_health.h"
 #include "core/util.h"
 #include "executor.h"
 #include "model_value.h"
@@ -63,7 +64,7 @@ namespace sd::dgl {
                 auto available = state.context.models->available_vram_for_fit(backend, free, total);
                 if (!state.context.models->max_vram_bytes(backend))
                     available -= std::min(available, 512 * MiB);
-                budgets_[backend] = available;
+                budgets_[backend] = sd::health_scaled_bytes(backend, available);
             }
         const auto ram = state.context.models->available_ram_for_fit();
         ram_budget_    = ram.weights;
@@ -212,6 +213,10 @@ namespace sd::dgl {
             }
             memory.params_backend = target;
             disk                  = peak_bytes(target, index, false) > ram_budget_ || peak_bytes(target, index) > host_budget_;
+            if (disk && sd::device_health().excluded("disk"))
+                throw Error(SD_STATUS_OUT_OF_MEMORY, "the weights of " + entry.name +
+                                                         " do not fit in memory and would be read from the disk during the run, "
+                                                         "which device health excludes");
             if (disk) {
                 target                = memory.compute_backends.front();
                 memory.params_backend = target;
@@ -279,7 +284,7 @@ namespace sd::dgl {
                     auto available = state_.context.models->available_vram_for_fit(backend, free, total);
                     if (!state_.context.models->max_vram_bytes(backend))
                         available -= std::min(available, 512 * MiB);
-                    budgets_[backend] = available;
+                    budgets_[backend] = sd::health_scaled_bytes(backend, available);
                 }
             const auto ram = state_.context.models->available_ram_for_fit();
             ram_budget_    = ram.weights;

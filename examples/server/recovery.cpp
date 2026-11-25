@@ -64,6 +64,18 @@ namespace {
         return text;
     }
 
+    bool device_health_excludes(const std::string& name) {
+        std::vector<sd_device_health_t> components(sd_get_device_health(nullptr, 0));
+        const size_t count       = std::min(sd_get_device_health(components.data(), components.size()), components.size());
+        const std::string wanted = lowercase(name);
+        for (size_t i = 0; i < count; ++i) {
+            if (lowercase(components[i].name) == wanted) {
+                return components[i].excluded;
+            }
+        }
+        return false;
+    }
+
     GenerationFailure capture_failure() {
         GenerationFailure failure;
         char message[1024];
@@ -178,6 +190,12 @@ static ContextKeeper::Hooks with_defaults(ContextKeeper::Hooks hooks) {
     }
     if (!hooks.list_devices) {
         hooks.list_devices = list_devices;
+    }
+    if (!hooks.device_excluded) {
+        hooks.device_excluded = device_health_excludes;
+    }
+    if (!hooks.halted) {
+        hooks.halted = [] { return false; };
     }
     if (!hooks.now) {
         hooks.now = [] { return ContextKeeper::Clock::now(); };
@@ -329,6 +347,44 @@ std::vector<std::string> ContextKeeper::make_devices() const {
 }
 
 ContextKeeper::Rung ContextKeeper::next_rung(size_t index, size_t slot, const GenerationFailure& failure, bool retry_available) const {
+    Rung next                  = next_rung_ignoring_health(index, slot, failure, retry_available);
+    GenerationFailure excluded = failure;
+    excluded.code              = SD_ERROR_BACKEND;
+    while (next.valid && !rung_excluded_device(next.index, next.slot).empty()) {
+        next = next_rung_ignoring_health(next.index, next.slot, excluded, false);
+    }
+    return next;
+}
+
+std::string ContextKeeper::slot_device(size_t slot) const {
+    if (slot > 0) {
+        return slot <= devices_.size() ? devices_[slot - 1] : std::string();
+    }
+    const std::string pinned = base_params_.backend.value_or("");
+    if (pinned.empty() || pinned.find_first_of("=&,") != std::string::npos) {
+        return std::string();
+    }
+    return lowercase(pinned) == "cpu" ? std::string("CPU") : pinned;
+}
+
+std::string ContextKeeper::rung_excluded_device(size_t index, size_t slot) const {
+    const sd_profile::Level level = ladder_[index];
+    const bool hands_work_to_cpu =
+        !accelerator_ || level == sd_profile::Level::LITE_CPU || level == sd_profile::Level::LITE_HYBRID;
+    if (hands_work_to_cpu && hooks_.device_excluded("CPU")) {
+        return "CPU";
+    }
+    const std::string device = slot_device(slot);
+    if (level != sd_profile::Level::LITE_CPU && !device.empty() && hooks_.device_excluded(device)) {
+        return device;
+    }
+    return std::string();
+}
+
+ContextKeeper::Rung ContextKeeper::next_rung_ignoring_health(size_t index,
+                                                             size_t slot,
+                                                             const GenerationFailure& failure,
+                                                             bool retry_available) const {
     Rung next;
     const size_t last = ladder_.size() - 1;
     if (failure.code != SD_ERROR_BACKEND) {
@@ -540,7 +596,15 @@ bool ContextKeeper::build_from(size_t index, size_t slot, GenerationFailure& fai
     } done{*this};
 
     while (index < ladder_.size()) {
-        if (try_build(index, slot, failure)) {
+        const std::string excluded = rung_excluded_device(index, slot);
+        if (!excluded.empty()) {
+            failure         = GenerationFailure();
+            failure.code    = SD_ERROR_BACKEND;
+            failure.message = rung_text(index, slot) + " needs " + excluded + ", which device health excludes";
+            LOG_WARN("%s: not loading it", failure.message.c_str());
+            // An excluded device is no passing failure: loading the same configuration again would not help.
+            retry_used = true;
+        } else if (try_build(index, slot, failure)) {
             return true;
         }
         if (only_this || !settings_.degradation || !failure_is_recoverable(failure.code)) {
@@ -692,6 +756,18 @@ void ContextKeeper::promote_if_due() {
     } else if (slot == 0) {
         target = index - 1;
     }
+    // No climb towards devices that device health excludes: the devices better than the one in use (all of them,
+    // from the cpu profile) or the one the climb would load on. The check comes back after the cooldown.
+    const size_t better      = from_cpu ? devices_.size() : (slot > 0 ? slot - 1 : 0);
+    bool better_all_excluded = better > 0;
+    for (size_t i = 0; i < better && better_all_excluded; ++i) {
+        better_all_excluded = hooks_.device_excluded(devices_[i]);
+    }
+    if (better_all_excluded || !rung_excluded_device(target, 0).empty()) {
+        std::lock_guard<std::mutex> state(state_mutex_);
+        next_promotion_ = hooks_.now() + std::chrono::seconds(cooldown_seconds_);
+        return;
+    }
     LOG_INFO("trying %s again", rung_text(target, 0).c_str());
     release_context();
     GenerationFailure failure;
@@ -728,6 +804,15 @@ bool ContextKeeper::cancel(CancelToken& token) {
     return true;
 }
 
+bool ContextKeeper::cancel_running() {
+    std::lock_guard<std::mutex> state(state_mutex_);
+    if (running_ctx_ == nullptr) {
+        return false;
+    }
+    hooks_.cancel_context(running_ctx_);
+    return true;
+}
+
 bool ContextKeeper::run(const Attempt& attempt, GenerationFailure& failure, const CancelToken* token) {
     std::lock_guard<std::mutex> lock(mutex_);
     failure = GenerationFailure();
@@ -753,12 +838,13 @@ bool ContextKeeper::run(const Attempt& attempt, GenerationFailure& failure, cons
     };
 
     auto wanted_stop = [&]() {
-        return token != nullptr && token->requested.load();
+        return (token != nullptr && token->requested.load()) || hooks_.halted();
     };
     auto stop = [&]() {
-        failure         = GenerationFailure();
-        failure.code    = SD_ERROR_CANCELLED;
-        failure.message = "the generation was cancelled";
+        const bool halted = hooks_.halted();
+        failure           = GenerationFailure();
+        failure.code      = SD_ERROR_CANCELLED;
+        failure.message   = halted ? "the server stopped all work" : "the generation was cancelled";
         std::lock_guard<std::mutex> state(state_mutex_);
         ++counters_.cancelled;
         return false;

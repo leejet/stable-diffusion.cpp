@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -53,6 +54,12 @@ namespace sd {
     bool layer_split_place(const std::vector<int64_t>& segment_bytes,
                            const std::vector<int64_t>& limits,
                            std::vector<int64_t>& bytes_by_device);
+    // The capacity of a device that reports no free memory and has no VRAM limit.
+    constexpr int64_t layer_split_unknown_capacity = std::numeric_limits<int64_t>::max() / 4;
+    // The capacities after the registry of device health (src/core/device_health.h): each device offers its share,
+    // given in split order, and an excluded one (share 0) nothing. What a device gives up goes to the others by the
+    // fill in use. A capacity that is not known stays unknown unless the device is excluded.
+    std::vector<int64_t> layer_split_apply_shares(const std::vector<int64_t>& capacities, const std::vector<double>& shares);
 
     std::string layer_split_backend_device_display_name(ggml_backend_t backend);
     int layer_split_tensor_block_index(const std::string& name);

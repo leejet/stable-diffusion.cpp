@@ -357,6 +357,19 @@ ArgOptions SDSvrParams::get_options() {
              model_dirs.push_back(argv_to_utf8(index, argv));
              return 1;
          }},
+        {"", "--guardian",
+         "on|off: stop all work, answering 503 until the cause ends, when a component is reported critical or device health excludes every GPU and the CPU (default: on)",
+         [this](int argc, const char** argv, int index) {
+             if (++index < argc) {
+                 const std::string value = argv[index];
+                 if (value == "on" || value == "off") {
+                     guardian = value == "on";
+                     return 1;
+                 }
+             }
+             LOG_ERROR("--guardian expects on or off");
+             return -1;
+         }},
     };
     add_log_options(options, log_level);
     return options;
@@ -421,6 +434,7 @@ std::string SDSvrParams::to_string() const {
         << "  cors_origins: \"" << cors_origins << "\",\n"
         << "  disable_degradation: " << (disable_degradation ? "true" : "false") << ",\n"
         << "  degradation_cooldown: " << degradation_cooldown << ",\n"
+        << "  guardian: " << (guardian ? "on" : "off") << ",\n"
         << "  dgl_dir: \"" << dgl_dir << "\",\n"
         << "}";
     return oss.str();

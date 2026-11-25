@@ -52,6 +52,9 @@ namespace sd::dgl {
         bool evict_idle_resource();
         void prune_expired_resources();
         void unload_models();
+        // A model is placed on the devices when it is loaded, so a change of device health (src/core/device_health.h)
+        // since the last run releases the loaded models: the next run places them again with the new shares.
+        void follow_device_health();
 
         sd::ParallelExecutor* tensor_executor() const { return model_execution_.tensor_executor.get(); }
         bool auto_fit() const { return auto_fit_; }
@@ -68,6 +71,7 @@ namespace sd::dgl {
         std::optional<Value> find_resource(const ResourceKey& identity, const std::string& revision, const std::string& lora_revision, uint64_t last_use);
         Value cache_resource(ResourceKey identity, std::string revision, std::string lora_revision, ModelLoader::Dependencies dependencies, Value value, uint64_t last_use);
         bool auto_fit_ = true;
+        uint64_t device_health_revision_;
         models::ModelExecutionOptions model_execution_;
         size_t conditioning_cache_size_;
         void set_model_execution_option(const std::string& key, const std::string& value);

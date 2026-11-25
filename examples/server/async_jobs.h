@@ -69,6 +69,8 @@ struct AsyncGenerationJob {
     // the request to the library (see JobCancellationMonitor), because the library forgets a stop that arrives
     // before a generation pass begins.
     CancelToken cancel;
+    // Set, with the manager's mutex held, when the guardian stopped the job: it ends with the code halted.
+    std::string halted_reason;
     mutable std::mutex progress_mutex;
     AsyncJobProgress progress;
     mutable std::mutex preview_mutex;
@@ -109,6 +111,10 @@ bool cancel_queued_job(AsyncJobManager& manager, AsyncGenerationJob& job);
 bool cancel_generating_job(ServerRuntime& runtime,
                            const std::shared_ptr<AsyncGenerationJob>& job,
                            std::chrono::milliseconds wait);
+// The guardian has halted the server: the job that is generating stops and ends with the code halted, a synchronous
+// request (A1111, OpenAI) is stopped too, and the queued jobs wait for the resume. Waits a few seconds at most. Call
+// it without holding manager.mutex.
+void stop_work_for_guardian(ServerRuntime& runtime, const std::string& reason);
 json make_async_job_json(const AsyncJobManager& manager, const AsyncGenerationJob& job);
 int64_t dgl_image_frame_count(const sd_tensor_t* tensor);
 bool parse_native_job_request(const json& body, ServerRuntime& runtime, AsyncGenerationJob& job, std::string& error_message);

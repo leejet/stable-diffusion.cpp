@@ -93,6 +93,11 @@ public:
         std::function<bool()> has_accelerator;
         // The devices of the machine, in the order the library lists them. Default: sd_get_device_info().
         std::function<std::vector<sd_device_info_t>()> list_devices;
+        // Whether device health excludes a device ("CPU" included). Default: sd_get_device_health().
+        std::function<bool(const std::string&)> device_excluded;
+        // Whether the guardian has halted the server. A run then stops as if its token had been requested: before
+        // it reaches the context, and instead of loading the model again after a failure. Default: never.
+        std::function<bool()> halted;
         std::function<Clock::time_point()> now;
         // Asks the library to stop the generation running on a context. Default: sd_cancel_generation(SD_CANCEL_ALL).
         std::function<void(sd_ctx_t*)> cancel_context;
@@ -172,6 +177,10 @@ public:
     // was told. The library forgets a stop request when a generation begins, so a caller that cannot tell
     // whether the generation has begun yet repeats the call until the job ends (see the cancel route).
     bool cancel(CancelToken& token);
+    // Tells the library to stop whatever generation runs on the context now, whoever started it: the guardian
+    // halting the server, for requests that have no job and no token it could reach. Returns whether something was
+    // running; like cancel(), a caller repeats it for a moment, because the library forgets an early stop.
+    bool cancel_running();
 
     // The settings the context in use was created with; for the upscale endpoint, which loads its own model.
     struct BackendChoice {
@@ -237,7 +246,15 @@ private:
     std::vector<std::string> make_devices() const;
     // Where to try next after failure at (index, slot); not valid when nothing is left. The same rung again is
     // offered once (retry_available) for a backend failure, then the other devices, then the lightest profile.
+    // Rungs that device health makes unusable are passed over as if their device had failed.
     Rung next_rung(size_t index, size_t slot, const GenerationFailure& failure, bool retry_available) const;
+    Rung next_rung_ignoring_health(size_t index, size_t slot, const GenerationFailure& failure, bool retry_available) const;
+    // The device a slot names: the alternative of slots 1, 2, ..., or for slot 0 the one device the host named; empty
+    // when the engine chooses.
+    std::string slot_device(size_t slot) const;
+    // The device that device health excludes and the rung would load on or hand work to ("CPU" included); empty
+    // when the rung can be used.
+    std::string rung_excluded_device(size_t index, size_t slot) const;
     std::string rung_text(size_t index, size_t slot) const;
 
     bool load_locked(GenerationFailure& failure);

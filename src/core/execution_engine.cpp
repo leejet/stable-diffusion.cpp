@@ -6,6 +6,7 @@
 #include <thread>
 #include <unordered_set>
 
+#include "core/device_health.h"
 #include "core/ggml_extend_backend.h"
 #include "core/ggml_tensor_utils.h"
 #include "core/last_error.h"
@@ -48,6 +49,9 @@ namespace sd {
         bool fits(const std::vector<DeviceMemoryRequest>& requests, const std::vector<ggml_tensor*>& params, bool allow_reclamation = false) const;
         bool execute_segment(ggml_cgraph* graph, int n_threads, const std::function<void()>& on_before_compute);
         bool execute_graph(ggml_cgraph* graph, int n_threads, bool no_return, const std::function<bool()>& read_outputs);
+        // The device of this run that device health excludes, if any: the main one, or one the layer split gave
+        // nodes to before it was excluded.
+        ggml_backend_t excluded_backend() const;
         bool is_multi_device() const { return !session_.extra_backends_.empty(); }
         size_t retained_runtime_buffer_bytes(ggml_backend_t backend) const { return session_.resident_bytes(backend); }
         void sync_runtime_residency() { engine_.sync_residency(session_); }
@@ -453,7 +457,26 @@ namespace sd {
         return true;
     }
 
+    ggml_backend_t GraphExecution::excluded_backend() const {
+        auto& health = sd::device_health();
+        if (health.excluded(session_.backend_)) {
+            return session_.backend_;
+        }
+        for (ggml_backend_t backend : session_.extra_backends_) {
+            if (!health.excluded(backend)) {
+                continue;
+            }
+            for (const auto& entry : session_.node_assignments_) {
+                if (entry.second == backend) {
+                    return backend;
+                }
+            }
+        }
+        return nullptr;
+    }
+
     bool GraphExecution::execute_segment(ggml_cgraph* graph, int n_threads, const std::function<void()>& on_before_compute) {
+        n_threads = sd::device_health().cpu_threads(n_threads);
         if (sd_backend_is_cpu(session_.backend_)) {
             sd_backend_cpu_set_n_threads(session_.backend_, n_threads);
         }
@@ -489,6 +512,7 @@ namespace sd {
             last_compute_status_ = status;
             LOG_ERROR_CODE(status == GGML_STATUS_ALLOC_FAILED ? SD_ERROR_OUT_OF_MEMORY : SD_ERROR_BACKEND,
                            "%s compute failed: %s", task_.description.c_str(), ggml_status_to_string(status));
+            sd::note_compute_status(session_.backend_, status);
             return false;
         }
         const std::string description = task_.description;
@@ -610,6 +634,13 @@ namespace sd {
                           index + 1, plan.segments.size(), segment.group_name.c_str(), phase);
                 return false;
             };
+            // A device excluded while the graph runs is refused at the next segment; the line says why on its own.
+            if (ggml_backend_t excluded = excluded_backend()) {
+                last_compute_status_ = GGML_STATUS_FAILED;
+                LOG_ERROR_CODE(SD_ERROR_BACKEND, "%s: %s is excluded by device health; the engine does not compute on it",
+                               task_.description.c_str(), sd::layer_split_backend_device_display_name(excluded).c_str());
+                return false;
+            }
             session_.cut_cache_.prune(segment.live_cut_names);
             bindings.reset(segment);
             if (!bindings.bind_cached_inputs(segment, task_.description.c_str())) {

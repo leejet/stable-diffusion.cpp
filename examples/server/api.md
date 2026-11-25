@@ -63,6 +63,8 @@ Current endpoints include:
 - `GET /sdcpp/v1/capabilities`
 - `GET /sdcpp/v1/health`
 - `GET /sdcpp/v1/resources`
+- `POST /sdcpp/v1/devices/{device}/pressure`
+- `POST /sdcpp/v1/guardian/resume`
 - `POST /sdcpp/v1/img_gen`
 - `GET /sdcpp/v1/jobs/{id}`
 - `POST /sdcpp/v1/jobs/{id}/cancel`
@@ -78,6 +80,7 @@ A generation that cannot be served is answered the same way by all three API fam
 | `503 Service Unavailable` | `out_of_memory` | The machine ran out of memory, even after the server tried the lighter configurations described below. Retry later, or send a smaller request. |
 | `503 Service Unavailable` | `unavailable` | The server has no usable model at this moment, for example because loading it again after a failure did not succeed yet. `cause` holds the reason. |
 | `503 Service Unavailable` | `busy` | The model was in use. |
+| `503 Service Unavailable` | `halted` | The guardian has stopped all work: a component is reported critical, or device health excludes every compute device (see [Device health and the guardian](#device-health-and-the-guardian)). A generation that was running when the server halted ends the same way. |
 | `400 Bad Request` | `invalid_argument` | The request cannot be generated as it is (for example a size the model cannot handle). Retrying it unchanged will not help. |
 | `500 Internal Server Error` | `model_file`, `backend`, `generation_failed` | A model file could not be read, a compute device failed, or the generation failed without a more specific reason. |
 
@@ -178,6 +181,51 @@ is running on another one, otherwise one profile up; if the attempt fails, the s
 wait doubles. From the CPU, after a device failure, the climb goes straight back to the profile the server had when the
 device failed and offers every device again, so the best one that works is found even if the preferred one does not;
 when the CPU was reached through memory failures, the climb is one profile up, as usual.
+
+### Device health and the guardian
+
+The engine keeps, for the whole process, a record of how each component is doing: every device the engine lists
+(`CUDA0`, `Vulkan1`, `CPU`, ...), the `RAM` and the `disk`. Each one is healthy (level 0), under strain (levels 1 to 3)
+or excluded (level 4).
+
+| Level | What the component offers |
+| --- | --- |
+| 0 | all of its capacity |
+| 1, 2, 3 | 85%, 70%, 55%: the planner gives it that share of its memory, the layer split that share of its capacity, and the CPU computes with 25% fewer threads per level (at least one) |
+| 4, excluded | nothing: the engine never computes on it, the planner gives it no module, the server does not load the model on it nor climb back to it, and an excluded CPU takes no work handed over from the GPUs. The RAM is never cut below the share of level 3; an excluded disk is not read during a generation, and a model that would need it fails with `out_of_memory` |
+
+What raises a level, one step at a time: a compute that fails on a device (not for lack of memory: the profiles deal
+with that), a backend that does not start, the memory guard that cannot bring the memory below its threshold (it
+counts for the device, or for the `RAM` when it guards the CPU), a read of the weights that fails (the `disk`). Events of
+one device less than 10 seconds apart count once. Outside watchers report too, with
+[`POST /sdcpp/v1/devices/{device}/pressure`](#post-sdcppv1devicesdevicepressure): such a signal holds its level for the time it
+lasts, and reaches the other listings of the same card (`CUDA0` and `Vulkan0` of one GPU), which a failure of one backend
+does not. A level comes down one step after each quiet period of 300 seconds, counted from the last event and from the
+end of the signals that held it; withdrawing a signal does not make the component healthy at once. When the record
+changes, the next generation places the model again with the new shares, which costs loading the weights again. The
+values are provisional.
+
+The guardian stops all the work of the server when the machine cannot take it: a component is reported `critical`, or
+every compute device is excluded (the GPUs and the CPU; the `RAM` and the `disk` do not count). While it is halted:
+
+- the generation in progress stops: a job ends `failed` with the code `halted`, a synchronous request is answered `503`
+  with the code `halted`; a generation that finishes before the stop reaches it keeps its result;
+- new generations, DGL scripts and model loads are refused with `503`, the code `halted` and a `Retry-After` header: the
+  time left to the critical signal, or until the first excluded device comes back, and never less than 10 seconds;
+- the queued jobs wait, and run after the resume;
+- the server does not load the model again, step down or climb back: a failure that comes with the halt is a stop;
+- [`GET /sdcpp/v1/health`](#get-sdcppv1health) answers `503` with `status: "halted"`, the reason and every component; polling
+  jobs, cancelling them, unloading the model and the reports still work.
+
+The server resumes by itself when the cause ends (the critical signal runs out or is withdrawn, an excluded device comes
+back after its quiet periods), or when an operator says the machine was checked with
+[`POST /sdcpp/v1/guardian/resume`](#post-sdcppv1guardianresume). `--guardian off` disables the guardian: device health still
+moves the work between devices, but the server never stops all work by itself.
+
+This is a layer of the software, inside the process it watches: a driver that hangs or a crash stop it with everything
+else, and lowering the work does not cool a device by itself. A stop that protects people or equipment belongs to
+independent, certified hardware, never to this server. A signal that is not repeated runs out, and the server resumes
+then: a watcher that stops reporting does not keep the server halted.
 
 ## Model management
 
@@ -1203,13 +1251,44 @@ Example response:
     "pending": 0,
     "waiting": 0,
     "max": 64
-  }
+  },
+  "guardian": {
+    "enabled": true,
+    "halted": false,
+    "reason": "",
+    "since": 0,
+    "retry_after_seconds": 0
+  },
+  "devices": [
+    {
+      "name": "CUDA0",
+      "level": 2,
+      "strain_levels": 3,
+      "share_percent": 70,
+      "excluded": false,
+      "critical": false,
+      "reason": "termico: GPU a 86 C, fascia attenzione, throttling termico",
+      "held_ms": 4200,
+      "next_step_ms": 0
+    },
+    {
+      "name": "CPU",
+      "level": 0,
+      "strain_levels": 3,
+      "share_percent": 100,
+      "excluded": false,
+      "critical": false,
+      "reason": "",
+      "held_ms": 0,
+      "next_step_ms": 0
+    }
+  ]
 }
 ```
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `status` | `string` | `ok`, `degraded` (running on a lighter profile than the one it was started with, or on another device than the first one), `recovering` (the model is being loaded), `unavailable` (no usable model at the moment), or `no_model` (no model is loaded: the server was started without one, or it was unloaded) |
+| `status` | `string` | `ok`, `degraded` (running on a lighter profile than the one it was started with, or on another device than the first one), `recovering` (the model is being loaded), `unavailable` (no usable model at the moment), `no_model` (no model is loaded: the server was started without one, or it was unloaded), or `halted` (the guardian has stopped all work; `guardian` says why) |
 | `model_loaded` | `boolean` | |
 | `profile` | `string \| null` | Profile in use: `max`, `balanced`, `lite`, `lite-disk`, `lite-hybrid` or `lite-cpu`; `null` without a model |
 | `base_profile` | `string` | Profile the server was started with |
@@ -1224,11 +1303,14 @@ Example response:
 | `uptime_seconds` | `integer` | |
 | `version` | `string` | |
 | `queue` | `object` | Jobs of the async API: `pending` (queued or generating), `waiting` (queued) and `max` (limit before `429`) |
+| `guardian` | `object` | `enabled` (`false` with `--guardian off`), `halted`, `reason` (empty when it is not halted), `since` (Unix time of the start of the halt; 0 when it is not halted) and `retry_after_seconds` (0 when it is not halted) |
+| `devices` | `array<object>` | The components of [device health](#device-health-and-the-guardian): `name`; `level` (0 healthy, 1 to `strain_levels` under strain, `strain_levels + 1` excluded); `strain_levels`; `share_percent`, what it offers of its capacity; `excluded`; `critical`; `reason`, the `source: reason` of the signal, or the event, that set the level (empty when it is healthy); `held_ms`, how long the signals that hold the level still last; `next_step_ms`, until the level comes down one step if nothing else happens |
 
 Typical status codes:
 
 - `200 OK`
-- `503 Service Unavailable` only when `status` is `unavailable`; the body is the same
+- `503 Service Unavailable` when `status` is `unavailable` or `halted`; the body is the same, and with `halted` a
+  `Retry-After` header says when to ask again
 
 #### `GET /sdcpp/v1/resources`
 
@@ -1261,6 +1343,52 @@ Example response:
 | `system_memory` | `object \| null` | RAM of the machine (`total_bytes`, `available_bytes`) and the memory used by the server process (`process_bytes`); `null` where the platform does not report it |
 | `devices` | `array<object>` | The compute devices, as listed by `--list-devices` |
 | `devices[].type` | `string` | `cpu`, `gpu`, `igpu`, `accel` or `unknown` |
+
+#### `POST /sdcpp/v1/devices/{device}/pressure`
+
+An outside watcher (a thermal monitor such as `termico.py osserva --segnala` of
+[`scripts/diagnostica_termica/`](../../scripts/diagnostica_termica/README.md), a supervisor, an operator) reports how a
+component is doing. `{device}` is a name that [`GET /sdcpp/v1/health`](#get-sdcppv1health) lists under `devices`, in any
+case. It needs the API key when one is set, and it answers while the server is halted, so that a watcher can withdraw
+its signal.
+
+Request body:
+
+```json
+{"level": 2, "reason": "GPU at 86 C with thermal throttling", "duration_seconds": 60, "source": "termico"}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `level` | `integer \| string` | `0` withdraws the signal of this source; `1` to `3` put the component under strain; `4` or `"excluded"` exclude it; `"critical"` excludes it and asks the guardian to stop all work while the signal lasts |
+| `reason` | `string` | Optional, one line. The health shows it as `source: reason` |
+| `duration_seconds` | `integer` | Optional, 1 to 86400, default 60. The signal ends by itself after this time, so a watcher repeats it while the condition lasts |
+| `source` | `string` | Optional, default `http`: 1 to 32 letters, digits, `.`, `_` or `-`. Each source holds one signal per component, and a new one replaces the old one; name it when more than one watcher reports |
+
+Other fields are refused. The answer is the component and the guardian, as the health shows them; when the report
+halts the server, the generation in progress is stopped at once.
+
+```json
+{
+  "device": {"name": "CUDA0", "level": 2, "strain_levels": 3, "share_percent": 70, "excluded": false, "critical": false,
+             "reason": "termico: GPU at 86 C with thermal throttling", "held_ms": 60000, "next_step_ms": 0},
+  "guardian": {"enabled": true, "halted": false, "reason": "", "since": 0, "retry_after_seconds": 0}
+}
+```
+
+Typical status codes:
+
+- `200 OK`
+- `400 Bad Request` with the code `invalid_report`: the body is not valid; `error` says why
+- `404 Not Found` with the code `unknown_device`: the server has no such component
+- `409 Conflict` with the code `report_refused`: the component holds the signals of 8 sources already
+
+#### `POST /sdcpp/v1/guardian/resume`
+
+An operator says the machine was checked: the critical signals end, the excluded components come back to the last level
+of strain (the signals that exclude are lowered to it), and the server resumes unless something else still holds the
+halt; the queued jobs run. It needs the API key when one is set, and answers `200` with `guardian` and `devices` as
+[`GET /sdcpp/v1/health`](#get-sdcppv1health) shows them. Without a halt it only lowers what excludes.
 
 #### `POST /sdcpp/v1/img_gen`
 

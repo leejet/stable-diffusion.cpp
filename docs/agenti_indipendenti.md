@@ -457,6 +457,31 @@ Con lo strumento di riferimento di [integrazione_progetti.md](./integrazione_pro
 sostituisce l'invio della richiesta e `segui_lavoro` il ciclo di attesa; il resto (preset, dimensioni dai `limits`,
 percorso del file) non cambia.
 
+**Insieme alla salute dei device del motore.** Il motore tiene da sé un registro della salute di ogni device e toglie
+lavoro, un gradino alla volta, a quello sotto sforzo ([Device health and the guardian](../examples/server/api.md#device-health-and-the-guardian)).
+Lo stesso osservatore glielo può dire: con `--segnala` manda a ogni campione la fascia della GPU come livello del suo
+device ([sezione 7.1 del README di termico](../scripts/diagnostica_termica/README.md#71-segnalare-la-fascia-al-motore---segnala)),
+e il guardiano continua a decidere dei propri lavori come sopra.
+
+```shell
+python scripts/diagnostica_termica/termico.py osserva --file-stato stato.json --motore http://127.0.0.1:1234 --segnala
+```
+
+Le due cose fanno lavori diversi. Il motore sposta il lavoro di **tutti** fra i device, in modo uguale per tutti; il
+guardiano decide se **il suo** lavoro può partire e lo ferma, senza toccare quello degli altri programmi (sezione
+[6](#6-giustizia-nessun-torto-né-alle-persone-né-agli-altri-programmi)). Per questo l'esempio non manda mai il
+segnale `critical`: quel segnale ferma il server intero, con i lavori di tutti, finché scade o finché qualcuno dice di
+aver controllato la macchina. È l'interruttore di chi gestisce la macchina, non di un agente:
+
+```shell
+curl -X POST http://127.0.0.1:1234/sdcpp/v1/devices/CUDA0/pressure -H "Content-Type: application/json" \
+     -d '{"level": "critical", "reason": "controllo del raffreddamento", "duration_seconds": 600, "source": "operatore"}'
+curl -X POST http://127.0.0.1:1234/sdcpp/v1/guardian/resume
+```
+
+Mentre il server è fermo, `avvia_lavoro` riceve `503` con `Retry-After` e aspetta, come per il `429`; un lavoro che
+era in corso finisce `failed` con il codice `halted`, e `segui_lavoro` lo restituisce così com'è.
+
 ## 10. Come collaudare un agente
 
 Si prova sul proprio PC senza scaldare niente: `termico.py` non cambia nulla nella GPU, e se si avvia con soglie più

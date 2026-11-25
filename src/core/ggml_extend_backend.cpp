@@ -1,4 +1,6 @@
 #include "core/ggml_extend_backend.h"
+
+#include "core/device_health.h"
 #include "core/ggml_extensions.h"
 
 #include <algorithm>
@@ -419,6 +421,14 @@ static bool backend_name_exists(const std::string& name) {
     return !sd_backend_resolve_name(name).empty();
 }
 
+static ggml_backend_t init_device_backend(ggml_backend_dev_t dev) {
+    ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
+    if (backend == nullptr) {
+        sd::note_backend_start_failure(dev);
+    }
+    return backend;
+}
+
 static ggml_backend_t init_named_backend(const std::string& name) {
     ggml_backend_load_all_once();
     LOG_VERBOSE("Initializing backend: %s", name.c_str());
@@ -427,18 +437,18 @@ static ggml_backend_t init_named_backend(const std::string& name) {
     }
 
     if (ggml_backend_dev_t dev = resolve_device_by_name(name)) {
-        return ggml_backend_dev_init(dev, nullptr);
+        return init_device_backend(dev);
     }
     if (ggml_backend_dev_t dev = resolve_first_device_by_registry_name(name)) {
-        return ggml_backend_dev_init(dev, nullptr);
+        return init_device_backend(dev);
     }
 
     std::string resolved = sd_backend_resolve_name(name);
     if (ggml_backend_dev_t dev = resolve_device_by_name(resolved)) {
-        return ggml_backend_dev_init(dev, nullptr);
+        return init_device_backend(dev);
     }
     if (ggml_backend_dev_t dev = resolve_first_device_by_registry_name(resolved)) {
-        return ggml_backend_dev_init(dev, nullptr);
+        return init_device_backend(dev);
     }
     if (resolved.empty()) {
         return nullptr;

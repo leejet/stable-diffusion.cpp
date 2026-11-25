@@ -284,6 +284,7 @@ namespace sd::dgl {
     Value run(const Graph& graph, RunState& state, Values inputs) {
         state.metadata = state.context.embed_metadata ? graph.source : "";
         state.context.prune_expired_resources();
+        state.context.follow_device_health();
         sd::ParallelScope tensor_scope(state.context.tensor_executor());
         RunPlan plan(graph, state);
         state.plan = &plan;

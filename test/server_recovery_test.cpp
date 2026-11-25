@@ -19,6 +19,7 @@
 #include <mutex>
 #include <new>
 #include <random>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -104,6 +105,10 @@ struct Env {
     bool accelerator      = true;
     // The devices the library lists besides the cpu; empty means that the engine's own choice is all there is.
     std::vector<sd_device_info_t> devices;
+    // The devices device health excludes, the CPU included.
+    std::set<std::string> excluded;
+    // The guardian has halted the server.
+    bool halted = false;
 
     // The contexts the keeper asked the library to stop, in order. on_cancel runs on the thread that called cancel().
     std::mutex cancel_mutex;
@@ -139,6 +144,8 @@ struct Env {
         hooks.read_failure    = [this] { return next_failure; };
         hooks.has_accelerator = [this] { return accelerator; };
         hooks.list_devices    = [this] { return devices; };
+        hooks.device_excluded = [this](const std::string& name) { return excluded.count(name) != 0; };
+        hooks.halted          = [this] { return halted; };
         hooks.now             = [this] { return now; };
         hooks.cancel_context  = [this](sd_ctx_t* ctx) {
             // Reading the memory of a context the keeper no longer owns is what the address sanitizer reports.
@@ -1012,6 +1019,25 @@ static void start_generation(ContextKeeper& keeper, Env& env, const CancelToken*
 }
 
 static void test_cancel() {
+    // The guardian stops a generation that has no token for it to reach (a synchronous A1111 or OpenAI request).
+    {
+        Env env;
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        CHECK(!keeper.cancel_running() && env.cancel_calls.empty(), "cancel_running() reaches nobody while nothing runs");
+
+        Generation gen;
+        env.on_cancel = [&gen](sd_ctx_t*) { gen.told_to_stop = true; };
+        start_generation(keeper, env, nullptr, gen);
+        CHECK(wait_for(gen.entered), "a generation without a token is running");
+        const bool told = keeper.cancel_running();
+        gen.thread.join();
+        CHECK(told && env.cancel_calls.size() == 1 && env.cancel_calls[0] == gen.ctx,
+              "cancel_running() tells the library to stop the context in use");
+        CHECK(!gen.ok && gen.failure.code == SD_ERROR_CANCELLED, "and the run reports a cancellation");
+        CHECK(!keeper.cancel_running() && env.cancel_calls.size() == 1, "once the run has ended, cancel_running() reaches nobody");
+    }
     // A job that is generating is stopped through its token.
     {
         Env env;
@@ -1341,6 +1367,157 @@ static Script runs_only_on(const std::string& device) {
     return [device](const ContextKeeper::ContextView& view) {
         return view.params != nullptr && view.params->backend == device ? ok_result : backend_failure();
     };
+}
+
+// Device health (src/core/device_health.h): the keeper never moves the model to a device it excludes, the CPU
+// included, and does not load the same configuration again on a device that has just been excluded.
+static void test_excluded_devices() {
+    {
+        Env env;
+        env.devices     = laptop_devices();
+        env.excluded    = {"Vulkan0"};
+        env.load_result = only_the_cpu_works;
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        CHECK(keeper.start(failure) && backends_of(env) == Names({"", "", "CUDA0", "Vulkan1", "cpu"}),
+              "device health: an excluded device is not tried");
+    }
+    {
+        Env env;
+        env.devices     = laptop_devices();
+        env.excluded    = {"CPU"};
+        env.load_result = only_the_cpu_works;
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        CHECK(!keeper.start(failure) && backends_of(env) == Names({"", "", "CUDA0", "Vulkan0", "Vulkan1"}),
+              "device health: with the CPU excluded, nothing falls back to it");
+    }
+    {
+        Env env;
+        env.devices  = laptop_devices();
+        env.excluded = {"CPU"};
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        Seen seen;
+        CHECK(!run_with(keeper, env, seen, [](const ContextKeeper::ContextView&) { return oom(); }, failure), "device health: a request that runs out of memory on every profile fails");
+        CHECK(!seen.levels.empty() && seen.levels.back() == Level::LITE_DISK,
+              "device health: the profiles that hand work to an excluded CPU are skipped");
+    }
+    {
+        Env env;
+        env.devices           = laptop_devices();
+        env.load_result       = [](const Load& load) { return load.backend == "Vulkan1" ? ok_result : backend_failure(); };
+        SDContextParams named = base_params();
+        named.backend         = "Vulkan0";
+        ContextKeeper keeper(named, Level::MAX, settings(), env.hooks());
+        env.excluded = {"Vulkan0"};
+        GenerationFailure failure;
+        CHECK(keeper.start(failure) && backends_of(env) == Names({"CUDA0", "Vulkan1"}),
+              "device health: the device the host named is not loaded while it is excluded, and the others follow");
+    }
+    {
+        Env env;
+        env.devices = laptop_devices();
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        Seen seen;
+        CHECK(run_with(keeper, env, seen, runs_only_on("Vulkan1"), failure), "a request served by the integrated GPU");
+        const size_t loads = env.loads.size();
+        env.excluded       = {"CUDA0", "Vulkan0"};
+        env.advance(10);
+        CHECK(run_with(keeper, env, seen, runs_only_on("Vulkan1"), failure) && env.loads.size() == loads,
+              "device health: the climb back does not leave a working device for an excluded one");
+    }
+    {
+        Env env;
+        env.devices           = laptop_devices();
+        SDContextParams named = base_params();
+        named.backend         = "Vulkan0";
+        ContextKeeper keeper(named, Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        CHECK(keeper.start(failure), "a model loaded on the device the host named");
+        env.excluded = {"Vulkan0"};
+        Seen seen;
+        CHECK(run_with(keeper, env, seen, runs_only_on("CUDA0"), failure),
+              "a request that fails there because the device has just been excluded is served by the next device");
+        CHECK(counter(keeper.health_json(), "retries") == 0, "device health: no retry is announced or counted for an excluded device");
+    }
+}
+
+// The guardian has halted the server (examples/server/guardian.h): a run stops as if its token had been requested,
+// whatever token it has, so that no work goes on, and loading the model again elsewhere is work too.
+static void test_halted() {
+    {
+        Env env;
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        env.halted = true;
+        Seen seen;
+        const bool ok     = run_with(keeper, env, seen, succeed, failure);
+        const json health = keeper.health_json();
+        CHECK(!ok && failure.code == SD_ERROR_CANCELLED && seen.levels.empty(),
+              "halted: a run generates nothing, even one without a token");
+        CHECK(failure.message.find("stopped all work") != std::string::npos, "halted: the run says that the server stopped all work");
+        CHECK(counter(health, "cancelled") == 1 && counter(health, "failed") == 0 && health["last_error"].is_null(),
+              "halted: the run counts as stopped, not as a failure");
+        env.halted = false;
+        CHECK(run_with(keeper, env, seen, succeed, failure) && seen.levels.size() == 1, "after the resume, runs generate again");
+    }
+    {
+        Env env;
+        env.devices = laptop_devices();
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        const size_t loads = env.loads.size();
+        Seen seen;
+        // The device the run computes on has just been reported critical: the engine refuses it and the server halts.
+        const Script halt_then_fail = [&](const ContextKeeper::ContextView&) {
+            env.halted   = true;
+            env.excluded = {"CUDA0", "Vulkan0"};
+            return backend_failure();
+        };
+        const bool ok     = run_with(keeper, env, seen, halt_then_fail, failure);
+        const json health = keeper.health_json();
+        CHECK(!ok && failure.code == SD_ERROR_CANCELLED && seen.levels.size() == 1, "halted: a run that fails as the server halts is stopped");
+        CHECK(env.loads.size() == loads && counter(health, "retries") == 0 && counter(health, "device_switches") == 0,
+              "halted: the model is not loaded again, neither in the same configuration nor on another device");
+        CHECK(counter(health, "failed") == 0 && counter(health, "cancelled") == 1 && health["status"] == "ok",
+              "halted: the run counts as stopped and the server stays where it was");
+    }
+    {
+        Env env;
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        Seen seen;
+        const Script halt_then_oom = [&](const ContextKeeper::ContextView&) {
+            env.halted = true;
+            return oom();
+        };
+        run_with(keeper, env, seen, halt_then_oom, failure);
+        CHECK(failure.code == SD_ERROR_CANCELLED && env.loads.size() == 1 && counter(keeper.health_json(), "step_downs") == 0,
+              "halted: running out of memory as the server halts does not make it step down");
+    }
+    {
+        Env env;
+        env.accelerator = false;
+        ContextKeeper keeper(base_params(), Level::MAX, settings(), env.hooks());
+        GenerationFailure failure;
+        keeper.start(failure);
+        Seen first;
+        run_with(keeper, env, first, [](const ContextKeeper::ContextView& view) { return view.level < Level::LITE ? oom() : ok_result; }, failure);
+        const size_t loads = env.loads.size();
+        env.advance(100);
+        env.halted = true;
+        Seen seen;
+        run_with(keeper, env, seen, succeed, failure);
+        CHECK(env.loads.size() == loads && counter(keeper.health_json(), "promotions") == 0,
+              "halted: the server does not climb back to a heavier profile");
+    }
 }
 
 // A device that fails is not the end of the GPUs: the same configuration is tried once more, then every other device,
@@ -1720,6 +1897,8 @@ int main() {
     test_start();
     test_step_down();
     test_devices();
+    test_excluded_devices();
+    test_halted();
     test_promotion();
     test_unavailable();
     test_reporting();

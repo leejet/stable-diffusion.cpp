@@ -14,6 +14,7 @@
 #include "common/log.h"
 #include "common/media_io.h"
 #include "common/resource_owners.hpp"
+#include "guardian.h"
 #include "model_catalog.h"
 
 class JobCancellationMonitor {
@@ -266,6 +267,34 @@ bool cancel_generating_job(ServerRuntime& runtime,
         if (std::chrono::steady_clock::now() >= deadline) {
             return false;
         }
+    }
+}
+
+void stop_work_for_guardian(ServerRuntime& runtime, const std::string& reason) {
+    std::shared_ptr<AsyncGenerationJob> running;
+    {
+        std::lock_guard<std::mutex> lock(runtime.async_job_manager->mutex);
+        for (const auto& entry : runtime.async_job_manager->jobs) {
+            if (entry.second->status == AsyncJobStatus::Generating) {
+                entry.second->halted_reason = reason;
+                running                     = entry.second;
+                break;
+            }
+        }
+    }
+    if (running != nullptr) {
+        cancel_generating_job(runtime, running, std::chrono::milliseconds(2000));
+    }
+    // A synchronous request has no job: whatever still runs on the context is stopped, again and again for a
+    // moment, because the library forgets a stop that arrives before a generation pass begins.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    bool told           = false;
+    while (runtime.keeper->cancel_running() && std::chrono::steady_clock::now() < deadline) {
+        if (!told) {
+            LOG_WARN("guardian: stopping the generation in progress");
+            told = true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 }
 
@@ -803,7 +832,16 @@ static void wait_for_job(ServerRuntime& runtime, std::unique_lock<std::mutex>& l
     auto& manager       = *runtime.async_job_manager;
     using Clock         = std::chrono::steady_clock;
     const auto disabled = Clock::time_point::max();
-    while (!manager.stop && manager.queue.empty()) {
+    while (!manager.stop) {
+        if (!manager.queue.empty()) {
+            // While the guardian has halted the server the queued jobs wait. Its state is read again every second,
+            // so the work resumes when the cause ends even without new requests.
+            if (runtime.guardian == nullptr || !runtime.guardian->evaluate().halted) {
+                return;
+            }
+            manager.cv.wait_for(lock, std::chrono::seconds(1));
+            continue;
+        }
         const auto deadline = std::min(manager.staging_deadline, manager.residency_deadline);
         if (deadline == disabled || manager.synchronous_jobs != 0) {
             manager.cv.wait(lock);
@@ -914,7 +952,20 @@ void async_job_worker(ServerRuntime& runtime) {
 
             job->completed_at = unix_timestamp_now_ms();
             finish_job_progress(*job);
-            if (job->cancel.requested.load()) {
+            // The guardian marks the job it stops. A cancellation that no client asked for is the keeper stopping the
+            // run for the halt before the mark reached the job. A job that finished anyway keeps its result.
+            const bool halted = !ok && (!job->halted_reason.empty() ||
+                                        (failure.code == SD_ERROR_CANCELLED && !job->cancel.requested.load()));
+            if (halted) {
+                std::string reason = job->halted_reason;
+                if (reason.empty() && runtime.guardian != nullptr) {
+                    reason = runtime.guardian->evaluate().reason;
+                }
+                job->status        = AsyncJobStatus::Failed;
+                job->error_code    = "halted";
+                job->error_message = "the server stopped all work" + (reason.empty() ? std::string() : ": " + reason);
+                LOG_WARN("job %s stopped by the guardian", job->id.c_str());
+            } else if (job->cancel.requested.load() && job->halted_reason.empty()) {
                 job->status        = AsyncJobStatus::Cancelled;
                 job->error_code    = "cancelled";
                 job->error_message = "job cancelled by client";

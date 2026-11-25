@@ -30,6 +30,7 @@
 #include "runtime/imatrix.h"
 #include "stable-diffusion.h"
 
+#include "core/device_health.h"
 #include "core/ggml_extend_backend.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -1333,6 +1334,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                     } else if (mmapped) {
                         if (!mmapped->copy_data(buf, n, tensor_storage.offset)) {
                             LOG_ERROR("read tensor data failed: '%s'", file_path.c_str());
+                            sd::note_disk_read_failure(file_path);
                             return false;
                         }
                     } else {
@@ -1345,6 +1347,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                             // A stream kept open for a long time can go bad (removable or
                             // network storage); try once more on a newly opened one.
                             LOG_WARN("read from '%s' failed; reopening the file and trying again", file_path.c_str());
+                            sd::note_disk_read_failure(file_path);
                             file.discard();
                             file = file_pool_.acquire(file_path, true);
                             if (!file || !read_from_file()) {

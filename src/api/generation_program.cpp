@@ -7,6 +7,7 @@
 
 #include "conditioning/prompt_input.h"
 #include "core/backend_fit.h"
+#include "core/device_health.h"
 #include "core/image_geometry.h"
 #include "model/vae/geometry.hpp"
 #include "name_conversion.h"
@@ -76,7 +77,7 @@ namespace sd::api {
             {settings.vae_path, "vae."},
         };
         std::string key = text(settings.multi_gpu) + "|" + options.split_mode_spec + "|" + text(settings.max_vram) + "|" +
-                          std::to_string(int(settings.wtype));
+                          std::to_string(int(settings.wtype)) + "|" + std::to_string(sd::device_health().revision());
         for (const auto& [path, prefix] : sources)
             key += "|" + text(path);
         static std::mutex mutex;
@@ -101,6 +102,9 @@ namespace sd::api {
             runtime_spec.clear();
             LOG_WARN("auto-fit: no multi-GPU plan for this model%s%s; the run plan picks one device", error.empty() ? "" : ": ", error.c_str());
         }
+        // The key changes with every change of device health, so old plans are dropped now and then.
+        if (plans.size() >= 64)
+            plans.clear();
         plans.emplace(key, runtime_spec);
         return runtime_spec;
     }

@@ -510,6 +510,26 @@ If the model does not fit at startup, the server starts on the first profile and
 the model cannot be loaded at all, or the address cannot be used, `sd-server` exits with a non-zero code and says why.
 See [Failures and recovery](api.md#failures-and-recovery) for the answers a client gets.
 
+## When a device is under strain
+
+The engine keeps a record of how each device, the RAM and the disk are doing, and gives a component under strain less
+work, one step at a time: 85%, 70%, 55% of its capacity; an excluded device is never computed on, and its work goes to the
+others. Compute failures raise the level by themselves; outside watchers report with
+`POST /sdcpp/v1/devices/{device}/pressure`, for example `termico.py osserva --segnala` of
+[`scripts/diagnostica_termica/`](../../scripts/diagnostica_termica/README.md), which sends the temperature band of an
+NVIDIA GPU.
+
+When a component is reported critical, or every compute device is excluded, the guardian stops all work: the
+generation in progress ends with the code `halted`, new requests get `503` with `Retry-After`, and the queued jobs wait.
+The server resumes by itself when the cause ends, or when an operator calls `POST /sdcpp/v1/guardian/resume`. See
+[Device health and the guardian](api.md#device-health-and-the-guardian).
+
+* `--guardian on|off` (default `on`): with `off` the server never stops all work by itself; device health still moves
+  the work between devices
+
+This is a layer of the software, not a safety system: a stop that protects people or equipment belongs to independent,
+certified hardware.
+
 ## Frontend development
 
 ### Build with frontend

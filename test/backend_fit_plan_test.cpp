@@ -619,6 +619,38 @@ int main() {
     const std::vector<Device> two_gpus = {make_gpu("CUDA0", "CUDA", 12), make_gpu("CUDA1", "CUDA", 12)};
 
     {
+        sd::DeviceHealth& health = sd::device_health();
+        health.set_component_lister([] {
+            return std::vector<sd::DeviceHealth::Component>{{"CUDA0", ""}, {"CUDA1", ""}, {"CPU", ""}, {"RAM", ""}, {"disk", ""}};
+        });
+        health.reset();
+        sd::DeviceHealth::Signal hot;
+        hot.source   = "test";
+        hot.level    = 3;
+        hot.reason   = "too hot";
+        hot.duration = std::chrono::seconds(600);
+        health.report("CUDA0", hot);
+        std::vector<Device> devices = two_gpus;
+        apply_device_health(devices);
+        CHECK(devices[0].budget_bytes == (int64_t)((double)two_gpus[0].budget_bytes * 0.55) &&
+                  devices[1].budget_bytes == two_gpus[1].budget_bytes,
+              "device health: a GPU under strain offers its share of its budget");
+        CHECK(select_main_device(devices) == 1, "device health: a GPU under strain is no longer the main device");
+        hot.level = 4;
+        health.report("CUDA0", hot);
+        devices = two_gpus;
+        apply_device_health(devices);
+        const Outcome out = run(make_components(6, 2, 0.3), devices, MultiGpuMode::ON);
+        bool on_excluded  = false;
+        for (const Runtime& runtime : out.runtimes) {
+            on_excluded = on_excluded || runtime.name.find("CUDA0") != std::string::npos;
+        }
+        CHECK(devices[0].budget_bytes == 0 && !on_excluded, "device health: an excluded GPU gets no module, even with --multi-gpu on");
+        health.set_component_lister(nullptr);
+        health.reset();
+    }
+
+    {
         const std::vector<Runtime> on_cuda0(3, Runtime{"CUDA0", {0}});
         const Plan fits = compute_plan(make_components(6, 2, 0.3), one_gpu, 0, on_cuda0);
         CHECK(resident(fits, 0) && resident(fits, 1) && resident(fits, 2), "unchanged planner: weights that fit stay on the GPU");

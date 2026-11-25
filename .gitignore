@@ -13,9 +13,12 @@ test/*
 !test/backend_fit_plan_test.cpp
 !test/memory_guard_engine_test.cpp
 !test/layer_split_fill_test.cpp
+!test/device_health_test.cpp
 !test/package_windows_cuda_vulkan_test.sh
 !test/server_recovery_test.cpp
 !test/server_cancel_e2e.py
+!test/server_guardian_test.cpp
+!test/server_guardian_e2e.py
 !test/termico_test.py
 !test/agenti_guardiano_test.py
 !test/fuzz_model_loader.py

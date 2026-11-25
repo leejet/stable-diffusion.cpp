@@ -7,6 +7,7 @@
 #include <iterator>
 #include <limits>
 
+#include "core/device_health.h"
 #include "core/ggml_graph_cut.h"
 #include "core/probe/backend_probe.h"
 #include "core/util.h"
@@ -19,6 +20,7 @@ namespace sd::dgl {
 
     Context::Context(bool keep_resources)
         : keep_resources(keep_resources),
+          device_health_revision_(sd::device_health().revision()),
           model_execution_{std::make_shared<sd::ParallelExecutor>(sd_get_num_physical_cores())},
           conditioning_cache_size_(4) {
         model_execution_.backend_probes       = std::make_shared<BackendProbeCache>();
@@ -61,6 +63,20 @@ namespace sd::dgl {
         }
         if (const auto unloaded = cached - resources.size(); unloaded != 0)
             LOG_VERBOSE("DGL unloaded %zu cached model components", unloaded);
+    }
+
+    void Context::follow_device_health() {
+        const auto revision = sd::device_health().revision();
+        if (revision == device_health_revision_)
+            return;
+        device_health_revision_ = revision;
+        const bool loaded       = std::any_of(resources.begin(), resources.end(), [](const auto& entry) {
+            return is_model_kind(entry.second.value.type().kind);
+        });
+        if (!loaded)
+            return;
+        LOG_INFO("device health changed: the loaded models are released and placed again for this run");
+        unload_models();
     }
 
     static size_t parse_max_ram(const std::string& value) {

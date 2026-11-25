@@ -25,6 +25,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 
 sys.dont_write_bytecode = True  # provare gli script non deve lasciare __pycache__ accanto a loro
 
@@ -182,15 +183,24 @@ class Gpu:
         self.imposta("t0", None)
 
 
+NOME_GPU_FINTA = "NVIDIA GeForce RTX 3060 Laptop GPU"
+
+
 # ---------------------------------------------------------------------------------------------------------
-# Motore finto: risponde come sd-server a /sdcpp/v1/health e /sdcpp/v1/resources, e ricorda ogni richiesta.
+# Motore finto: risponde come sd-server a /sdcpp/v1/health, /sdcpp/v1/resources e alle segnalazioni
+# (POST /sdcpp/v1/devices/{device}/pressure), e ricorda ogni richiesta.
 # ---------------------------------------------------------------------------------------------------------
 class MotoreFinto:
-    def __init__(self, chiave=None, stato="ok", profilo="max"):
+    DISPOSITIVI = ("CPU", "CUDA0", "Vulkan0", "RAM", "disk")
+
+    def __init__(self, chiave=None, stato="ok", profilo="max", descrizione_gpu="gpu", ritardo_segnali=0.0):
         self.chiave = chiave
         self.stato = stato
         self.profilo = profilo
+        self.descrizione_gpu = descrizione_gpu
+        self.ritardo_segnali = ritardo_segnali
         self.richieste = []
+        self.segnali = []  # (device, corpo) di ogni segnalazione accettata, in ordine
         self.avvio = time.time()
         motore = self
 
@@ -230,7 +240,9 @@ class MotoreFinto:
                                           "process_bytes": 3221225472},
                         "devices": [{"name": "CPU", "description": "cpu", "type": "cpu",
                                      "free_memory_bytes": 8000000000, "total_memory_bytes": 17179869184},
-                                    {"name": "CUDA0", "description": "gpu", "type": "gpu",
+                                    {"name": "CUDA0", "description": motore.descrizione_gpu, "type": "gpu",
+                                     "free_memory_bytes": 3758096384, "total_memory_bytes": 6442450944},
+                                    {"name": "Vulkan0", "description": motore.descrizione_gpu, "type": "gpu",
                                      "free_memory_bytes": 3758096384, "total_memory_bytes": 6442450944}]})
                 self.rispondi(404, {"error": "not found"})
 
@@ -238,7 +250,22 @@ class MotoreFinto:
                 motore.richieste.append((self.command, self.path))
                 self.rispondi(405, {"error": "method not allowed"})
 
-            do_POST = do_PUT = do_DELETE = do_PATCH = altro
+            def do_POST(self):
+                parti = self.path.split("/")
+                if len(parti) != 6 or parti[1:4] != ["sdcpp", "v1", "devices"] or parti[5] != "pressure":
+                    return self.altro()
+                motore.richieste.append(("POST", self.path))
+                if self.senza_diritto():
+                    return self.rispondi(401, {"error": "unauthorized"})
+                corpo = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"null")
+                time.sleep(motore.ritardo_segnali)
+                dispositivo = urllib.parse.unquote(parti[4])
+                if dispositivo not in MotoreFinto.DISPOSITIVI:
+                    return self.rispondi(404, {"error": "no device is named " + dispositivo, "code": "unknown_device"})
+                motore.segnali.append((dispositivo, corpo))
+                self.rispondi(200, {"device": {"name": dispositivo, "level": 0}, "guardian": {"enabled": True, "halted": False}})
+
+            do_PUT = do_DELETE = do_PATCH = altro
 
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Gestore)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -475,6 +502,38 @@ def prove_funzioni(tm):
     altra["gpu"] = {"nome": "Altra GPU", "driver": "2"}
     testo = "\n".join(tm.testo_confronto(tm.confronta_prove([prova_a, altra, prova_b], ["A", "B", "C"])))
     controlla("GPU o driver diversi" in testo and "differenza" not in testo, "testo_confronto: GPU diverse = avviso; tre prove = niente colonna di differenza")
+
+
+def prove_funzioni_segnala(tm):
+    print("\n-- funzioni di --segnala --")
+    L = tm.livello_segnale
+    controlla(L("normale", 0x1) == 0 and L("normale", None) == 0, "livello_segnale: fascia normale = nessun segnale (il bit 0x1 non è un motivo)")
+    controlla(L("normale", 0x20) == 1 and L("normale", 0x40) == 1,
+              "livello_segnale: il driver che rallenta la GPU per il caldo vale un gradino anche in fascia normale")
+    controlla(L("attenzione", 0x4) == 1 and L("attenzione", 0x20) == 2 and L("attenzione", 0x40) == 2,
+              "livello_segnale: attenzione = 1, con throttling termico = 2")
+    controlla(L("critica", 0x1) == 3 and L("critica", 0x20) == 3 and L("critica", 0x40) == 4,
+              "livello_segnale: critica = 3, con throttling termico hardware = escluso (4)")
+    controlla(L(None, 0x40) is None, "livello_segnale: temperatura illeggibile = nessuna segnalazione")
+    motivo = tm.motivo_segnale({"temp": 86.0, "mask": 0x20}, "attenzione")
+    controlla("86 C" in motivo and "attenzione" in motivo and "throttling termico" in motivo and "\n" not in motivo,
+              "motivo_segnale: temperatura, fascia e throttling in una riga (%s)" % motivo)
+
+    D = tm.dispositivo_del_motore
+    portatile = [{"name": "CPU", "description": "cpu", "type": "cpu"},
+                 {"name": "CUDA0", "description": NOME_GPU_FINTA, "type": "gpu"},
+                 {"name": "Vulkan0", "description": NOME_GPU_FINTA, "type": "gpu"},
+                 {"name": "Vulkan1", "description": "AMD Radeon(TM) Graphics", "type": "igpu"}]
+    controlla(D(portatile, NOME_GPU_FINTA) == "CUDA0",
+              "dispositivo_del_motore: la GPU si riconosce dal nome; vista da CUDA e da Vulkan va bene la prima (il motore passa il segnale all'altra)")
+    controlla(D(portatile[:1] + portatile[2:], NOME_GPU_FINTA.lower()) == "Vulkan0",
+              "dispositivo_del_motore: senza CUDA va bene Vulkan, e le maiuscole non contano")
+    controlla(D(portatile, "NVIDIA RTX A2000") is None, "dispositivo_del_motore: una GPU che il motore non vede = nessun device")
+    gemelle = [{"name": "CUDA0", "description": NOME_GPU_FINTA, "type": "gpu"}, {"name": "CUDA1", "description": NOME_GPU_FINTA, "type": "gpu"}]
+    controlla(D(gemelle, NOME_GPU_FINTA) is None, "dispositivo_del_motore: due schede uguali non si distinguono dal nome: il device va indicato")
+    controlla(D([], NOME_GPU_FINTA) is None and D(None, NOME_GPU_FINTA) is None, "dispositivo_del_motore: nessun elenco = nessun device")
+    controlla(tm.durata_segnale(1.0) == 5 and tm.durata_segnale(0.3) == 5 and tm.durata_segnale(4.0) == 12,
+              "durata_segnale: qualche campione, mai meno di 5 secondi")
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -750,6 +809,125 @@ def prove_osserva_guasti(gpu, base):
         controlla("chiave API mancante o errata" in r.stdout, "chiave API: se manca, il programma lo dice invece di tacere")
     finally:
         protetto.ferma()
+
+
+def osserva_con_passi(gpu, argomenti, passi, durata_passo, env=None, timeout=90):
+    """Lancia osserva e intanto cambia la GPU finta: passi è una lista di (temperatura, maschera esadecimale)."""
+    fermo = threading.Event()
+
+    def cambia():
+        for temp, mask in passi:
+            gpu.imposta("temp", temp)
+            gpu.imposta("mask", mask.zfill(16))
+            if fermo.wait(durata_passo):
+                return
+
+    temp, mask = passi[0]
+    gpu.imposta("temp", temp)
+    gpu.imposta("mask", mask.zfill(16))
+    gpu.riparti()
+    comando = [sys.executable, "-I", TERMICO, "osserva", "--nvidia-smi", gpu.file] + argomenti
+    p = subprocess.Popen(comando, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                         env=env or gpu.ambiente(), stdin=subprocess.DEVNULL)
+    cambiatore = threading.Thread(target=cambia, daemon=True)
+    cambiatore.start()
+    try:
+        uscita, errori_uscita = p.communicate(timeout=timeout)
+    finally:
+        fermo.set()
+        cambiatore.join(5)
+        gpu.imposta("mask", None)
+        gpu.imposta("temp", None)
+    return p.returncode, uscita, errori_uscita
+
+
+def livelli_di(segnali):
+    """I livelli ricevuti, senza ripetizioni di fila."""
+    livelli = []
+    for _, corpo in segnali:
+        if not livelli or livelli[-1] != corpo["level"]:
+            livelli.append(corpo["level"])
+    return livelli
+
+
+def prove_segnala(gpu, base):
+    print("\n-- osserva --segnala --")
+    r = lancia(gpu, con_gpu(gpu, ["osserva", "--segnala", "--durata", "1", "--uscita", os.path.join(base, "segnala-0")]))
+    controlla(r.returncode != 0 and "--motore" in r.stderr, "--segnala senza --motore viene rifiutato")
+
+    # Tutte le fasce, una dopo l'altra, e di nuovo normale. La GPU finta legge temperatura e maschera da due file:
+    # ogni passo cambia solo ciò che fra due passi vicini non dà un livello diverso a metà scrittura.
+    motore = MotoreFinto(descrizione_gpu=NOME_GPU_FINTA)
+    try:
+        passi = [(60, "1"), (82, "4"), (82, "20"), (88, "1"), (88, "40"), (88, "1"), (60, "1")]
+        codice, uscita, _ = osserva_con_passi(gpu, ["--segnala", "--motore", motore.url, "--ogni", "0.3", "--durata", "12",
+                                                    "--uscita", os.path.join(base, "segnala-1")], passi, 1.5)
+        segnali = list(motore.segnali)
+    finally:
+        motore.ferma()
+    livelli = livelli_di(segnali)
+    controlla(codice == 0 and livelli == [1, 2, 3, "excluded", 3, 0],
+              "--segnala: attenzione 1, con throttling termico 2, critica 3, con throttling hardware escluso, di nuovo 3, poi il ritiro (%s)" % livelli)
+    controlla(segnali and all(d == "CUDA0" for d, _ in segnali), "--segnala: il device si trova dal nome della GPU fra quelli del motore")
+    attivi = [corpo for _, corpo in segnali if corpo["level"] != 0]
+    controlla(attivi and all(corpo["source"] == "termico" and corpo["duration_seconds"] == 5 for corpo in attivi),
+              "--segnala: fonte termico, durata di qualche campione (5 s)")
+    controlla(sum(1 for corpo in attivi if corpo["level"] == 1) >= 2, "--segnala: il segnale si ripete a ogni campione finché la fascia resta")
+    doppio = next((corpo for corpo in attivi if corpo["level"] == 2), {})
+    controlla("82 C" in doppio.get("reason", "") and "throttling termico" in doppio.get("reason", ""),
+              "--segnala: il motivo dice temperatura e throttling (%s)" % doppio.get("reason"))
+    controlla(segnali and segnali[-1][1] == {"level": 0, "source": "termico"} and sum(1 for _, c in segnali if c["level"] == 0) == 1,
+              "--segnala: tornata normale, il segnale si ritira una volta sola")
+    controlla("CUDA0" in uscita and "segnal" in uscita.lower(), "--segnala: all'inizio dice a quale device del motore segnala")
+
+    # Device indicato, chiave API, ritiro alla fine.
+    protetto = MotoreFinto(chiave="k-77", descrizione_gpu=NOME_GPU_FINTA)
+    try:
+        codice, uscita, errori_uscita = osserva_con_passi(
+            gpu, ["--segnala", "Vulkan0", "--motore", protetto.url, "--chiave-api", "k-77", "--ogni", "0.3", "--durata", "3",
+                  "--uscita", os.path.join(base, "segnala-2")], [(82, "4")], 3)
+        segnali = list(protetto.segnali)
+    finally:
+        protetto.ferma()
+    controlla(codice == 0 and segnali and all(d == "Vulkan0" for d, _ in segnali) and livelli_di(segnali) == [1, 0],
+              "--segnala Vulkan0: si usa il device indicato, e alla fine il segnale si ritira (%s)" % livelli_di(segnali))
+    controlla("k-77" not in uscita + errori_uscita, "--segnala: la chiave API passa e non compare nell'uscita")
+
+    protetto = MotoreFinto(chiave="k-77", descrizione_gpu=NOME_GPU_FINTA)
+    try:
+        codice, uscita, _ = osserva_con_passi(gpu, ["--segnala", "--motore", protetto.url, "--ogni", "0.3", "--durata", "3",
+                                                    "--uscita", os.path.join(base, "segnala-3")], [(82, "4")], 3)
+    finally:
+        protetto.ferma()
+    controlla(codice == 0 and uscita.count("Segnalazione al motore rifiutata: chiave API mancante o errata") == 1,
+              "--segnala senza la chiave: il programma lo dice, una volta, e continua a misurare")
+
+    # Il motore non conosce la GPU, o il device indicato.
+    estraneo = MotoreFinto()
+    try:
+        codice, uscita, _ = osserva_con_passi(gpu, ["--segnala", "--motore", estraneo.url, "--ogni", "0.3", "--durata", "3",
+                                                    "--uscita", os.path.join(base, "segnala-4")], [(82, "4")], 3)
+        nessuno = list(estraneo.segnali)
+        codice_ignoto, uscita_ignoto, _ = osserva_con_passi(
+            gpu, ["--segnala", "Nessuno9", "--motore", estraneo.url, "--ogni", "0.3", "--durata", "3",
+                  "--uscita", os.path.join(base, "segnala-5")], [(82, "4")], 3)
+    finally:
+        estraneo.ferma()
+    controlla(codice == 0 and not nessuno and "--segnala NOME" in uscita and NOME_GPU_FINTA in uscita,
+              "--segnala: una GPU che il motore non elenca = nessun segnale, e il programma dice come indicarla")
+    controlla(codice_ignoto == 0 and uscita_ignoto.count("Nessuno9") >= 1 and uscita_ignoto.count("non conosce") == 1,
+              "--segnala Nessuno9: il motore non lo conosce, il programma lo dice una volta e continua")
+
+    # Un motore lento non rallenta le letture della GPU.
+    lento = MotoreFinto(descrizione_gpu=NOME_GPU_FINTA, ritardo_segnali=2.0)
+    cartella = os.path.join(base, "segnala-6")
+    try:
+        codice, _, _ = osserva_con_passi(gpu, ["--segnala", "--motore", lento.url, "--ogni", "0.3", "--durata", "4",
+                                               "--uscita", cartella], [(88, "1")], 4)
+    finally:
+        lento.ferma()
+    righe = leggi_csv(file_con(cartella, ".csv")[0])
+    controlla(codice == 0 and len(righe) >= 10, "--segnala con un motore lento: i campioni della GPU non rallentano (%d righe in 4 s)" % len(righe))
 
 
 def prove_segnali(gpu, base):
@@ -1065,6 +1243,7 @@ def prove_programma(base):
     prove_stato_motore(gpu, base)
     prove_osserva(gpu, base)
     prove_osserva_guasti(gpu, base)
+    prove_segnala(gpu, base)
     prove_segnali(gpu, base)
     prova_guidata(gpu, base)
     prove_confronto(gpu, base)
@@ -1077,6 +1256,7 @@ def main():
     args = parser.parse_args()
     tm = carica_modulo()
     prove_funzioni(tm)
+    prove_funzioni_segnala(tm)
     if not args.veloce:
         base = tempfile.mkdtemp(prefix="termico-test-")
         try:

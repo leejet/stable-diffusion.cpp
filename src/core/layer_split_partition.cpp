@@ -9,6 +9,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include "core/device_health.h"
 #include "core/util.h"
 
 namespace sd {
@@ -75,13 +76,10 @@ namespace sd {
         return backend_index == 0 ? primary_backend_vram_limit : 0;
     }
 
-    // Capacity of a device that reports no free memory and has no VRAM limit.
-    static constexpr int64_t graph_cut_layer_split_unknown_capacity = std::numeric_limits<int64_t>::max() / 4;
-
     static std::vector<int64_t> graph_cut_layer_split_backend_capacities(const std::vector<ggml_backend_t>& backends,
                                                                          const std::vector<size_t>& backend_vram_limits,
                                                                          size_t primary_backend_vram_limit) {
-        std::vector<int64_t> capacities(backends.size(), graph_cut_layer_split_unknown_capacity);
+        std::vector<int64_t> capacities(backends.size(), layer_split_unknown_capacity);
         constexpr int64_t compute_headroom_bytes = 2ll * 1024 * 1024 * 1024;
         for (size_t i = 0; i < backends.size(); i++) {
             ggml_backend_dev_t dev = ggml_backend_get_device(backends[i]);
@@ -130,7 +128,7 @@ namespace sd {
     static std::vector<int64_t> graph_cut_layer_split_proportional_limits(const std::vector<int64_t>& segment_bytes,
                                                                           const std::vector<int64_t>& capacities) {
         const bool capacities_known = std::all_of(capacities.begin(), capacities.end(), [](int64_t capacity) {
-            return capacity < graph_cut_layer_split_unknown_capacity;
+            return capacity < layer_split_unknown_capacity;
         });
         if (!capacities_known || !graph_cut_layer_split_fits(segment_bytes, capacities, 1.0)) {
             return capacities;
@@ -205,6 +203,19 @@ namespace sd {
             return capacities;
         }
         return graph_cut_layer_split_proportional_limits(segment_bytes, capacities);
+    }
+
+    std::vector<int64_t> layer_split_apply_shares(const std::vector<int64_t>& capacities, const std::vector<double>& shares) {
+        std::vector<int64_t> result = capacities;
+        for (size_t i = 0; i < result.size() && i < shares.size(); i++) {
+            const double share = std::min(std::max(shares[i], 0.0), 1.0);
+            if (share <= 0.0) {
+                result[i] = 0;
+            } else if (result[i] < layer_split_unknown_capacity) {
+                result[i] = (int64_t)((double)result[i] * share);
+            }
+        }
+        return result;
     }
 
     bool layer_split_place(const std::vector<int64_t>& segment_bytes,
@@ -292,6 +303,15 @@ namespace sd {
         const LayerSplitFill fill = resolve_layer_split_fill(layer_split_fill(), device_types);
         if (!reuse_assignments) {
             LOG_INFO("%s layer split fill: %s", desc, layer_split_fill_name(fill));
+            std::vector<double> shares;
+            for (ggml_backend_t backend : split_backends) {
+                shares.push_back(device_health().share(device_health_name(backend)));
+                if (shares.back() < 1.0) {
+                    LOG_INFO("%s layer split: %s offers %.0f%% of its capacity (device health)",
+                             desc, layer_split_backend_device_display_name(backend).c_str(), shares.back() * 100.0);
+                }
+            }
+            backend_capacities = layer_split_apply_shares(backend_capacities, shares);
         }
         // Move to the next device at the fill limit; the capacity stays the hard limit.
         const std::vector<int64_t> backend_limits = reuse_assignments

@@ -1,6 +1,7 @@
 #include "routes.h"
 
 #include "async_jobs.h"
+#include "guardian.h"
 #include "model_catalog.h"
 
 class SynchronousContextJob {
@@ -38,6 +39,9 @@ httplib::Server::Handler RuntimeRoutes::protect(httplib::Server::Handler handler
         const bool generation = req.path == "/sdapi/v1/txt2img" || req.path == "/sdapi/v1/img2img" ||
                                 req.path == "/v1/images/generations" || req.path == "/v1/images/edits";
         if (generation) {
+            if (refuse_while_halted(runtime->guardian, res)) {
+                return;
+            }
             SynchronousContextJob job(*runtime);
             std::lock_guard<std::mutex> lock(*runtime->sd_ctx_mutex);
             if (!runtime->keeper->has_model()) {
@@ -45,6 +49,10 @@ httplib::Server::Handler RuntimeRoutes::protect(httplib::Server::Handler handler
                 return;
             }
             handler(req, res);
+            // A generation that the guardian stopped is answered with the halt while it lasts.
+            if (res.status >= 400) {
+                refuse_while_halted(runtime->guardian, res);
+            }
         } else {
             handler(req, res);
         }
@@ -70,6 +78,10 @@ void RuntimeRoutes::post(const std::string& pattern, httplib::Server::Handler ha
 // Loads the model of a recipe ahead of the requests that use it, or unloads the current one. Generation jobs
 // pick their model themselves; these routes are for programs that want the model ready, or the memory back.
 static void change_model(ServerRuntime& runtime, const httplib::Request& req, httplib::Response& res, bool unload) {
+    // Unloading gives memory back, which a halted machine may need; loading is work.
+    if (!unload && refuse_while_halted(runtime.guardian, res)) {
+        return;
+    }
     auto& models = *runtime.models;
     {
         std::lock_guard<std::mutex> jobs_lock(runtime.async_job_manager->mutex);
