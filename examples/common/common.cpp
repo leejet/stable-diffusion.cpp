@@ -1157,6 +1157,16 @@ ArgOptions SDGenerationParams::get_options() {
          (int)',',
          &extra_tiling_args},
         {"",
+         "--save-latent",
+         "save the final packed AV latent to this .h3lat file after generation",
+         0,
+         &save_latent},
+        {"",
+         "--continue-latent",
+         ".h3lat from the previous part; its tail frames are pinned as never-denoised keyframes",
+         0,
+         &continue_latent},
+        {"",
          "--ref-image-args",
          "Key-value list to set up the way the reference images are processed (empty = auto-detect from model weigths)",
          (int)',',
@@ -1200,6 +1210,10 @@ ArgOptions SDGenerationParams::get_options() {
          "--video-frames",
          "video frames; unset uses the library default",
          &video_frames},
+        {"",
+         "--pin-frames",
+         "latent frames to pin from the continue latent (default: 7 ≈ 22 video frames)",
+         &pin_frames},
         {"",
          "--fps",
          "fps (default: 24)",
@@ -2885,6 +2899,9 @@ SDOptPtr SDGenerationParams::to_video_opt() {
     opt.set_int("seed", seed);
     opt.set_int("video_frames", video_frames);
     opt.set_int("fps", fps);
+    opt.set_string("save-latent", save_latent);
+    opt.set_string("continue-latent", continue_latent);
+    opt.set_int("pin-frames", pin_frames);
     opt.set_float("vace_strength", vace_strength);
     opt.set_bool("hires.enabled", hires_enabled);
     opt.set_string("hires.upscaler", resolved_hires_upscaler.empty() ? hires_upscaler : std::optional<std::string>(resolved_hires_upscaler));

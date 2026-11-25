@@ -872,6 +872,123 @@ namespace sd::pipeline {
             }
         }
 
+        // Director-style latent continuation: resume from the previous part's tail
+        // latent frames, pinned in-sequence via the per-frame denoise mask.
+        if (sd_version_is_minimax_h3(sd->version) &&
+            sd_vid_gen_params->continue_latent_path != nullptr &&
+            sd_vid_gen_params->continue_latent_path[0] != '\0') {
+            FILE* lf = fopen(sd_vid_gen_params->continue_latent_path, "rb");
+            if (lf == nullptr) {
+                LOG_ERROR("failed to open continue latent %s", sd_vid_gen_params->continue_latent_path);
+                return std::nullopt;
+            }
+            char magic[4];
+            int32_t lversion = 0;
+            int32_t ndim     = 0;
+            fread(magic, 1, 4, lf);
+            fread(&lversion, sizeof(int32_t), 1, lf);
+            fread(&ndim, sizeof(int32_t), 1, lf);
+            int64_t shape[8]  = {1, 1, 1, 1, 1, 1, 1, 1};
+            bool read_ok      = ndim > 0 && ndim <= 8 && fread(shape, sizeof(int64_t), ndim, lf) == (size_t)ndim;
+            size_t elem_count = 1;
+            if (read_ok) {
+                for (int i = 0; i < ndim; ++i) elem_count *= (size_t)shape[i];
+            }
+            std::vector<float> data;
+            if (read_ok) {
+                data.resize(elem_count);
+                read_ok = fread(data.data(), sizeof(float), elem_count, lf) == elem_count;
+            }
+            fclose(lf);
+            if (!read_ok || memcmp(magic, "43LT", 4) != 0 || ndim < 4) {
+                LOG_ERROR("invalid continue latent file %s", sd_vid_gen_params->continue_latent_path);
+                return std::nullopt;
+            }
+            sd::Tensor<float> prev_packed(std::vector<int64_t>(shape, shape + ndim), std::move(data));
+            int64_t c_video              = sd->get_latent_channel();
+            sd::Tensor<float> prev_video = sd::ops::slice(prev_packed, 3, 0, c_video);
+            int64_t t_prev               = prev_video.shape()[2];
+            int64_t h_latent             = std::min<int64_t>(sd_vid_gen_params->pin_frames, t_prev);
+            sd::Tensor<float> video_tail = sd::ops::slice(prev_video, 2, t_prev - h_latent, t_prev);
+
+            latents.init_latent = sd->generate_init_latent(request->width, request->height, request->frames, true);
+            const int64_t c_packed = latents.init_latent.shape()[3];
+            auto tail_shape        = latents.init_latent.shape();
+            tail_shape[2]          = h_latent;
+            sd::Tensor<float> tail_packed(std::vector<int64_t>(tail_shape.begin(), tail_shape.end()));
+            sd::ops::slice_assign(&tail_packed, 3, 0, c_video, video_tail);
+            sd::ops::slice_assign(&latents.init_latent, 2, 0, h_latent, tail_packed);
+            // v4: hard-pin the audio tail too. The per-step denoised restore
+            // (denoised*mask + init*(1-mask)) blends per element, so a
+            // full-width mask with zeros over the carried audio frames pins
+            // them exactly like the video rows. The pre-sampling mask pack
+            // returns a full-width mask unchanged, and the audio region of
+            // the packed latent is one flat channel in t-major order
+            // ({len,2,32,1} values copied contiguously after the video
+            // channels), so audio frame k sits at region-flat positions
+            // j with j % audio_length == k.
+            if (!latents.audio_latent.empty() && prev_packed.shape()[3] > c_video &&
+                latents.audio_length > 0) {
+                const int64_t spatial_cur = latents.init_latent.shape()[0] *
+                                            latents.init_latent.shape()[1] * latents.init_latent.shape()[2];
+                const int64_t spatial_prev = prev_packed.shape()[0] * prev_packed.shape()[1] * prev_packed.shape()[2];
+                const int64_t audio_numel  = latents.audio_length * 64;  // {len,2,32,1} flat, t-major
+                const int64_t available    = (prev_packed.shape()[3] - c_video) * spatial_prev;
+                const int64_t extra_ch     = (audio_numel + spatial_cur - 1) / spatial_cur;
+                if (available >= audio_numel && latents.init_latent.shape()[3] + extra_ch == prev_packed.shape()[3]) {
+                    // Pin the same wall-clock span as the video pin head:
+                    // h_latent latent steps cover 17*(h/5)+rem frames.
+                    static const int pin_remainder[5] = {0, 1, 5, 9, 13};
+                    const int64_t pin_video_frames = 17 * (h_latent / 5) + pin_remainder[h_latent % 5];
+                    const int64_t n_audio = std::max<int64_t>(
+                        1, (pin_video_frames * latents.audio_length + request->frames - 1) / request->frames);
+                    // (a) content: previous audio tail frames -> current audio head
+                    std::copy_n(prev_packed.data() + c_video * spatial_prev + (latents.audio_length - n_audio) * 64,
+                                static_cast<size_t>(n_audio) * 64,
+                                latents.audio_latent.data());
+                    // (b) full-width denoise mask: video rows as before; audio
+                    // channel zeros only over the carried frames
+                    auto mask_shape  = latents.init_latent.shape();
+                    mask_shape[3]   += extra_ch;
+                    sd::Tensor<float> full_mask = sd::Tensor<float>::ones(
+                        std::vector<int64_t>(mask_shape.begin(), mask_shape.end()));
+                    float* md = full_mask.data();
+                    for (int64_t c = 0; c < c_video; ++c) {
+                        for (int64_t t = 0; t < h_latent; ++t) {
+                            std::fill_n(md + c * spatial_cur + t * mask_shape[0] * mask_shape[1],
+                                        mask_shape[0] * mask_shape[1], 0.f);
+                        }
+                    }
+                    float* audio_md = md + c_video * spatial_cur;
+                    for (int64_t j = 0; j < spatial_cur; ++j) {
+                        if (j < audio_numel && (j % latents.audio_length) < n_audio) {
+                            audio_md[j] = 0.f;
+                        }
+                    }
+                    latents.denoise_mask = std::move(full_mask);
+                    LOG_INFO("latent continuation: pinned %lld/%lld audio tail frames",
+                             (long long)n_audio, (long long)latents.audio_length);
+                } else {
+                    LOG_WARN("latent continuation: audio tail not carried (available %lld < %lld or channel mismatch)",
+                             (long long)available, (long long)audio_numel);
+                    latents.denoise_mask = make_ltxav_video_denoise_mask(latents.init_latent, 1.f);
+                    sd::ops::slice_assign(&latents.denoise_mask, 2, 0, h_latent,
+                                          sd::full<float>({prev_video.shape()[0], prev_video.shape()[1], h_latent, 1, 1}, 0.f));
+                }
+            } else {
+                latents.denoise_mask = make_ltxav_video_denoise_mask(latents.init_latent, 1.f);
+                sd::ops::slice_assign(&latents.denoise_mask, 2, 0, h_latent,
+                                      sd::full<float>({prev_video.shape()[0], prev_video.shape()[1], h_latent, 1, 1}, 0.f));
+            }
+            // Pinned-frame keyframe conditioning is intentionally not applied:
+            // at larger resolutions the extra conditioning tokens can trip
+            // device-lost on some Vulkan drivers, and the init+mask restore
+            // already pins the frames exactly (video and audio).
+            LOG_INFO("latent continuation: pinned %lld/%lld latent frames from %s",
+                     (long long)h_latent, (long long)latents.init_latent.shape()[2],
+                     sd_vid_gen_params->continue_latent_path);
+        }
+
         if (sd_version_is_hunyuan_video(sd->version) &&
             (!start_image.empty() || !end_image.empty())) {
             LOG_INFO("Hunyuan Video IMG2VID");
@@ -2026,6 +2143,30 @@ namespace sd::pipeline {
             return false;
         }
         LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
+
+        if (sd_vid_gen_params->save_latent_path != nullptr && sd_vid_gen_params->save_latent_path[0] != '\0') {
+            FILE* lf = fopen(sd_vid_gen_params->save_latent_path, "wb");
+            if (lf == nullptr) {
+                LOG_WARN("failed to open %s for latent save", sd_vid_gen_params->save_latent_path);
+            } else {
+                int32_t magic0  = 0x544C3334;  // "4L3T" marker
+                int32_t version = 1;
+                int32_t ndim    = static_cast<int32_t>(final_latent.dim());
+                fwrite(&magic0, sizeof(int32_t), 1, lf);
+                fwrite(&version, sizeof(int32_t), 1, lf);
+                fwrite(&ndim, sizeof(int32_t), 1, lf);
+                for (int i = 0; i < ndim; ++i) {
+                    int64_t s = final_latent.shape()[i];
+                    fwrite(&s, sizeof(int64_t), 1, lf);
+                }
+                fwrite(final_latent.data(), sizeof(float), final_latent.numel(), lf);
+                fclose(lf);
+                LOG_INFO("latent saved to %s (%d dims, %lld elements)",
+                         sd_vid_gen_params->save_latent_path,
+                         ndim,
+                         (long long)final_latent.numel());
+            }
+        }
 
         if (latent_upscale_enabled) {
             if (sd->get_cancel_flag() == SD_CANCEL_ALL) {

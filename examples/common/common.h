@@ -255,6 +255,9 @@ struct SDGenerationParams {
     std::optional<int> video_frames;
     std::optional<int> fps;
     std::optional<float> vace_strength;
+    std::string save_latent;
+    std::string continue_latent;
+    std::optional<int> pin_frames;
     SDTilingParams vae_tiling_params;
     std::string extra_tiling_args;
 

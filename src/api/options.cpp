@@ -383,6 +383,9 @@ static void add_generation_specs(std::vector<ParamSpec>& specs) {
     vid.array("ref_videos", &sd::VideoConfig::ref_videos, &sd::VideoConfig::ref_videos_count);
     vid.number("vace_strength", &sd::VideoConfig::vace_strength, 0, std::numeric_limits<float>::max());
     vid.integer("video_frames", &sd::VideoConfig::video_frames, 1, INT32_MAX);
+    vid.string("save-latent", &sd::VideoConfig::save_latent_path);
+    vid.string("continue-latent", &sd::VideoConfig::continue_latent_path);
+    vid.integer("pin-frames", &sd::VideoConfig::pin_frames, 1, 17);
 
     preprocess.string("image_preprocess.rules", &sd::ImagePreprocessConfig::rules);
 

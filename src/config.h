@@ -240,6 +240,11 @@ namespace sd {
         bool circular_y{};
         sd::ImagePreprocessConfig image_preprocess{};
         const char* ref_image_args{};
+        // Latent continuation for H3 vid_gen: resume from the previous part's
+        // tail latent frames (pinned as never-denoised keyframes, Director-style).
+        const char* save_latent_path{};
+        const char* continue_latent_path{};
+        int pin_frames = 7;  // latent steps; 7 steps ≈ 22 video frames (Director's default head)
 
         VideoConfig();
     };
