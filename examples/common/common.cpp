@@ -12,7 +12,6 @@
 #include <regex>
 #include <sstream>
 #include <stdexcept>
-#include <string_view>
 #include <type_traits>
 
 #include <json.hpp>
@@ -245,13 +244,10 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
     bool invalid_arg = false;
     std::string arg;
 
-    auto matches_name = [](const auto& option, std::string_view name) {
-        return (!option.short_name.empty() && name == option.short_name) ||
-               (!option.long_name.empty() && name == option.long_name);
-    };
     auto match_and_apply = [&](auto& opts, auto&& apply_fn) -> bool {
         for (auto& option : opts) {
-            if (matches_name(option, arg)) {
+            if ((option.short_name.size() > 0 && arg == option.short_name) ||
+                (option.long_name.size() > 0 && arg == option.long_name)) {
                 apply_fn(option);
                 return true;
             }
@@ -259,24 +255,10 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
         return false;
     };
 
-    auto is_option = [&](std::string_view name) {
-        auto contains_name = [&](const auto& options) {
-            return std::any_of(options.begin(), options.end(), [&](const auto& option) {
-                return matches_name(option, name);
-            });
-        };
-        return std::any_of(options_list.begin(), options_list.end(), [&](const ArgOptions& options) {
-            return contains_name(options.string_options) || contains_name(options.int_options) ||
-                   contains_name(options.float_options) || contains_name(options.bool_options) ||
-                   contains_name(options.manual_options);
-        });
-    };
-
     bool valid = false;
     for (int i = 1; i < argc; i++) {
         arg            = argv[i];
         bool found_arg = false;
-        bool missing_value = false;
 
         for (auto& options : options_list) {
             if (match_and_apply(options.string_options, [&](auto& option) {
@@ -331,11 +313,6 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                 break;
 
             if (match_and_apply(options.manual_options, [&](auto& option) {
-                    if (option.requires_value &&
-                        (i + 1 >= argc || argv[i + 1][0] == '\0' || is_option(argv[i + 1]))) {
-                        missing_value = true;
-                        return;
-                    }
                     int ret = option.cb(argc, argv, i, valid);
                     if (ret < 0) {
                         invalid_arg = true;
@@ -347,10 +324,6 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                 break;
         }
 
-        if (missing_value) {
-            LOG_ERROR("error: missing value for argument \"%s\"", arg.c_str());
-            return false;
-        }
         if (invalid_arg) {
             if (!valid) {
                 LOG_ERROR("error: invalid parameter for argument \"%s\": \"%s\"",

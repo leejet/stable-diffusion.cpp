@@ -68,6 +68,7 @@ add_executable(${TARGET}
     ../common/media_io.cpp
     ../common/media_metadata.cpp
     main.cpp
+    server_access.cpp
     runtime.cpp
     model_catalog.cpp
     routes_models.cpp

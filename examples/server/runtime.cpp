@@ -7,7 +7,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <mutex>
 #include <regex>
 #include <sstream>
@@ -327,48 +326,8 @@ ArgOptions SDSvrParams::get_options() {
         return -1;
     };
 
-    // split_list adds the comma-separated entries of arg to out; a list
-    // without any entry (like ",") is an error, so a restriction can't
-    // silently turn into none.
-    auto split_list = [](const char* arg, std::vector<std::string>& out) {
-        std::stringstream ss(arg);
-        std::string item;
-        size_t added = 0;
-        while (std::getline(ss, item, ',')) {
-            if (!item.empty()) {
-                out.push_back(item);
-                added++;
-            }
-        }
-        return added > 0;
-    };
-
     options.manual_options = {
         {"-h", "--help", "show this help message and exit", on_help_arg},
-        {"", "--api-key", "API key clients must send (Authorization: Bearer KEY or X-Api-Key); comma-separated for several",
-         [this, split_list](int, const char** argv, int index) {
-             if (!split_list(argv[index + 1], api_keys)) {
-                 LOG_ERROR("error: --api-key needs at least one key");
-                 return -1;
-             }
-             return 1;
-         },
-         true},
-        {"", "--api-key-file", "file with API keys, one per line (keeps them off the command line)",
-         [this](int, const char** argv, int index) {
-             api_key_file = argv_to_utf8(index + 1, argv);
-             return 1;
-         },
-         true},
-        {"", "--cors-origins", "web origins allowed to read cross-origin responses, comma-separated (default: any)",
-         [this, split_list](int, const char** argv, int index) {
-             if (!split_list(argv[index + 1], cors_origins)) {
-                 LOG_ERROR("error: --cors-origins needs at least one origin");
-                 return -1;
-             }
-             return 1;
-         },
-         true},
         {"", "--weight-staging-ttl",
          "idle seconds before releasing GPU staging copies of RAM weights (-1 disabled, 0 immediate; default: -1)",
          [this](int argc, const char** argv, int index) {
@@ -424,30 +383,7 @@ bool SDSvrParams::validate() {
 }
 
 bool SDSvrParams::resolve_and_validate() {
-    if (!validate()) {
-        return false;
-    }
-    if (!api_key_file.empty()) {
-        std::ifstream file(fs::u8path(api_key_file));
-        if (!file) {
-            LOG_ERROR("error: can't read api_key_file: %s", api_key_file.c_str());
-            return false;
-        }
-        std::string line;
-        const size_t before = api_keys.size();
-        while (std::getline(file, line)) {
-            line.erase(line.find_last_not_of(" \t\r\n") + 1);
-            line.erase(0, line.find_first_not_of(" \t"));
-            if (!line.empty()) {
-                api_keys.push_back(line);
-            }
-        }
-        if (api_keys.size() == before) {
-            LOG_ERROR("error: api_key_file has no keys: %s", api_key_file.c_str());
-            return false;
-        }
-    }
-    return true;
+    return validate() && load_api_keys();
 }
 
 std::string SDSvrParams::to_string() const {

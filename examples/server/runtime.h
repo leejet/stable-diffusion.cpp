@@ -29,8 +29,6 @@ struct SDSvrParams {
     std::string serve_html_path;
     std::string dgl_dir = "dgl";
     std::vector<std::string> model_dirs;
-    // Access: keys clients must send, and the web origins that may call the
-    // server. Empty: no key needed, any origin (as before).
     std::vector<std::string> api_keys;
     std::string api_key_file;
     std::vector<std::string> cors_origins;
@@ -39,9 +37,13 @@ struct SDSvrParams {
     bool color               = false;
 
     ArgOptions get_options();
+    void add_access_options(ArgOptions& options, const std::vector<ArgOptions>& groups);
     bool validate();
     bool resolve_and_validate();
     std::string to_string() const;
+
+private:
+    bool load_api_keys();
 };
 
 struct LoraEntry {
