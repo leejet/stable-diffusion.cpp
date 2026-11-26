@@ -758,6 +758,8 @@ static std::string convert_diffusers_dit_to_original_flux3(std::string name) {
         {".attn.to_k.", ".k_proj."},
         {".attn.to_v.", ".v_proj."},
         {".attn.to_out.0.", ".attn_out."},
+        {".norm.query_norm.weight", ".norm.query_norm.scale"},
+        {".norm.key_norm.weight", ".norm.key_norm.scale"},
         {".ff.linear_in.", ".mlp_in."},
         {".ff.linear_out.", ".mlp_out."},
     };
