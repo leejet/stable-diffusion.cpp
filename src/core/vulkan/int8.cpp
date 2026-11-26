@@ -121,6 +121,12 @@ namespace sd_vulkan_i8 {
         const auto alignment = std::max<uint64_t>(128, d.info.buffer_alignment / sizeof(float));
         return max_bytes / op.k() / alignment * alignment;
     }
+    static bool is_unchunked_matmul(const Device& d, const ggml_tensor* mat) {
+        SDI8Operation op;
+        // SwiGLU and residual epilogues index full-width projections.
+        return sd_ggml_i8_describe(mat, &op) &&
+               (!op.codebook || w4a8_chunk_cols(d, op) == uint64_t(op.weight->ne[1]));
+    }
     static bool can_matmul(const Device& d, const ggml_tensor* dst) {
         SDI8Operation op;
         if (!sd_ggml_i8_describe(dst, &op) || !op.packed || !op.weight_scale || !bounded(d, dst))
@@ -353,7 +359,7 @@ namespace sd_vulkan_i8 {
         }
         const ggml_tensor* mat = node(graph, i);
         const ggml_tensor* glu = node(graph, i + 1);
-        return is_mat(mat) && can_matmul(device, mat) &&
+        return is_unchunked_matmul(device, mat) && can_matmul(device, mat) &&
                mat->view_src == nullptr && mat->src[3] == nullptr && mat->ne[0] % 256 == 0 &&
                glu->op == GGML_OP_GLU && ggml_get_glu_op(glu) == GGML_GLU_OP_SWIGLU &&
                param_i32(glu, 1) == 0 && glu->src[0] == mat && glu->src[1] == nullptr &&
@@ -376,7 +382,7 @@ namespace sd_vulkan_i8 {
         const ggml_tensor* scaled_mat = mul->src[0];
         const bool scaled             = scaled_mat->op == GGML_OP_SCALE;
         const ggml_tensor* mat        = scaled ? scaled_mat->src[0] : scaled_mat;
-        if (!is_mat(mat) || !can_matmul(device, mat) || mat->src[3] != nullptr ||
+        if (!is_unchunked_matmul(device, mat) || !can_matmul(device, mat) || mat->src[3] != nullptr ||
             (scaled && param_f32(scaled_mat, 1) != 0.0f)) {
             return 0;
         }
