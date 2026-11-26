@@ -464,7 +464,8 @@ SDVersion ModelLoader::get_sd_version() const {
 
     if (tensor_storage_map.count("model.diffusion_model.emb_in.image.weight") &&
         (tensor_storage_map.count("model.diffusion_model.txt_mode_blocks.0.q_proj.weight") ||
-         tensor_storage_map.count("model.diffusion_model.single_blocks.0.qkv.weight"))) {
+         tensor_storage_map.count("model.diffusion_model.single_blocks.0.qkv.weight") ||
+         tensor_storage_map.count("model.diffusion_model.single_transformer_blocks.0.qkv.weight"))) {
         return VERSION_FLUX3;
     }
 
