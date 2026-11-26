@@ -31,7 +31,7 @@ A supported configuration has this form:
 }
 ```
 
-The convrot group size must be a power of four and must divide the input feature dimension. The commonly used configuration is H256, with `convrot_groupsize` set to `256`.
+When `convrot` is enabled, `convrot_groupsize` defaults to `256` (H256). The group size must be a power of four no greater than `256` and must divide the input feature dimension.
 
 ## How INT8 convrot works
 

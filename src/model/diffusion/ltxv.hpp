@@ -555,26 +555,19 @@ namespace LTXV {
         int64_t a_dim;
         bool cross_attention_adaln;
 
-        void init_params(ggml_context* ctx,
-                         const String2TensorStorage& tensor_storage_map = {},
-                         const std::string prefix                       = "") override {
+        void init_params(ggml_context* ctx, const String2TensorStorage& = {}, const std::string = "") override {
+            // The tables determine the type of the modulation values applied to F32 activations.
             int64_t coeff                     = cross_attention_adaln ? 9 : 6;
-            ggml_type vw                      = get_type(prefix + "scale_shift_table", tensor_storage_map, GGML_TYPE_F32);
-            ggml_type aw                      = get_type(prefix + "audio_scale_shift_table", tensor_storage_map, GGML_TYPE_F32);
-            params["scale_shift_table"]       = ggml_new_tensor_2d(ctx, vw, v_dim, coeff);
-            params["audio_scale_shift_table"] = ggml_new_tensor_2d(ctx, aw, a_dim, coeff);
+            params["scale_shift_table"]       = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, v_dim, coeff);
+            params["audio_scale_shift_table"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, a_dim, coeff);
 
             if (cross_attention_adaln) {
-                ggml_type vpw                            = get_type(prefix + "prompt_scale_shift_table", tensor_storage_map, GGML_TYPE_F32);
-                ggml_type apw                            = get_type(prefix + "audio_prompt_scale_shift_table", tensor_storage_map, GGML_TYPE_F32);
-                params["prompt_scale_shift_table"]       = ggml_new_tensor_2d(ctx, vpw, v_dim, 2);
-                params["audio_prompt_scale_shift_table"] = ggml_new_tensor_2d(ctx, apw, a_dim, 2);
+                params["prompt_scale_shift_table"]       = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, v_dim, 2);
+                params["audio_prompt_scale_shift_table"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, a_dim, 2);
             }
 
-            ggml_type avw                            = get_type(prefix + "scale_shift_table_a2v_ca_audio", tensor_storage_map, GGML_TYPE_F32);
-            ggml_type vaw                            = get_type(prefix + "scale_shift_table_a2v_ca_video", tensor_storage_map, GGML_TYPE_F32);
-            params["scale_shift_table_a2v_ca_audio"] = ggml_new_tensor_2d(ctx, avw, a_dim, 5);
-            params["scale_shift_table_a2v_ca_video"] = ggml_new_tensor_2d(ctx, vaw, v_dim, 5);
+            params["scale_shift_table_a2v_ca_audio"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, a_dim, 5);
+            params["scale_shift_table_a2v_ca_video"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, v_dim, 5);
         }
 
         BasicAVTransformerBlock(int64_t v_dim,
@@ -768,17 +761,9 @@ namespace LTXV {
     struct LTXAVModelBlock : public GGMLBlock {
         LTXAVConfig config;
 
-        void init_params(ggml_context* ctx,
-                         const String2TensorStorage& tensor_storage_map = {},
-                         const std::string prefix                       = "") override {
-            params["scale_shift_table"]       = ggml_new_tensor_2d(ctx,
-                                                                   get_type(prefix + "scale_shift_table", tensor_storage_map, GGML_TYPE_F32),
-                                                                   config.hidden_size,
-                                                                   2);
-            params["audio_scale_shift_table"] = ggml_new_tensor_2d(ctx,
-                                                                   get_type(prefix + "audio_scale_shift_table", tensor_storage_map, GGML_TYPE_F32),
-                                                                   config.audio_hidden_size,
-                                                                   2);
+        void init_params(ggml_context* ctx, const String2TensorStorage& = {}, const std::string = "") override {
+            params["scale_shift_table"]       = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, config.hidden_size, 2);
+            params["audio_scale_shift_table"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, config.audio_hidden_size, 2);
             if (config.use_keyframes_abs_pos_embedding) {
                 // Added to f32 activations, and backends without BF16 support (e.g. Vulkan on RADV) can't add a BF16 tensor.
                 params["keyframes_abs_pos_embedding"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, config.hidden_size, 1);
