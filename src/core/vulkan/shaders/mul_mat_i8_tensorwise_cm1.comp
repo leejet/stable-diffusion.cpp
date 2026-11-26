@@ -23,6 +23,8 @@ layout(push_constant) uniform parameter {
     uint k;
     uint has_bias;
     uint row_offset;
+    layout(offset = 28) uint output_stride;
+    uint output_col;
 }
 p;
 
@@ -97,7 +99,7 @@ void main() {
                 if (p.has_bias != 0) {
                     value += data_b[output_index];
                 }
-                data_d[row * p.n + output_index] = value;
+                data_d[row * p.output_stride + p.output_col + output_index] = value;
             }
             controlBarrier(gl_ScopeSubgroup, gl_ScopeSubgroup,
                            gl_StorageSemanticsShared, gl_SemanticsAcquireRelease);

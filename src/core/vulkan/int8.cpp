@@ -113,6 +113,14 @@ namespace sd_vulkan_i8 {
         const auto* x = dst->src[0];
         return x->ne[0] <= UINT32_MAX && ggml_nrows(x) <= UINT32_MAX && d.info.max_group_invocations >= 256 && d.info.max_group_size[0] >= 256;
     }
+    static uint64_t w4a8_chunk_cols(const Device& d, const SDI8Operation& op) {
+        const auto max_bytes = std::min<uint64_t>(UINT32_MAX, d.info.max_buffer_range);
+        if (op.decoded_weight_bytes() <= max_bytes)
+            return op.weight->ne[1];
+        // Complete GEMM tiles also keep the packed weights, group scales, and channel vectors aligned.
+        const auto alignment = std::max<uint64_t>(128, d.info.buffer_alignment / sizeof(float));
+        return max_bytes / op.k() / alignment * alignment;
+    }
     static bool can_matmul(const Device& d, const ggml_tensor* dst) {
         SDI8Operation op;
         if (!sd_ggml_i8_describe(dst, &op) || !op.packed || !op.weight_scale || !bounded(d, dst))
@@ -120,8 +128,7 @@ namespace sd_vulkan_i8 {
         for (auto* t : {op.weight, op.input, op.weight_scale, op.bias})
             if (t && !bounded(d, t))
                 return false;
-        if (op.codebook && (!bounded(d, op.codebook) || !bounded(d, op.relative_scale) ||
-                            op.decoded_weight_bytes() > std::min<size_t>(UINT32_MAX, d.info.max_buffer_range)))
+        if (op.codebook && (!bounded(d, op.codebook) || !bounded(d, op.relative_scale) || !w4a8_chunk_cols(d, op)))
             return false;
         const uint64_t k = op.k(), cols = op.weight->ne[1], rows = ggml_nrows(dst);
         return k % 64 == 0 && k <= UINT32_MAX && ggml_nelements(dst) <= UINT32_MAX &&
@@ -477,9 +484,9 @@ namespace sd_vulkan_i8 {
     struct MatParameters {
         uint32_t n, rows, k, has_bias, row_offset;
         float output_scale;
-        uint32_t group_cols;
+        uint32_t group_cols, output_stride, output_col;
     };
-    static_assert(sizeof(QuantParameters) == 8 && sizeof(ModulateParameters) == 28 && sizeof(MatParameters) == 28, "INT8 push constant layout mismatch");
+    static_assert(sizeof(QuantParameters) == 8 && sizeof(ModulateParameters) == 28 && sizeof(MatParameters) == 36, "INT8 push constant layout mismatch");
     template <size_t N>
     static ggml_ext_vulkan_pipeline shader(const char* name, const uint32_t (&spirv)[N], uint32_t bindings, uint32_t constants) {
         return {name, spirv, sizeof(spirv), bindings, constants, nullptr, 0, 0, false};
@@ -651,64 +658,90 @@ namespace sd_vulkan_i8 {
         bool alias;
         if (!output_binding(e, d, output, inputs, dst, alias, concat ? nullptr : residual))
             return GGML_STATUS_FAILED;
-        ggml_ext_vulkan_binding weight = {op.weight};
-        if (op.codebook) {
-            const size_t bytes = op.decoded_weight_bytes();
-            weight             = {nullptr, e->workspace, 0, bytes};
-            if (alias)
-                dst.offset = GGML_PAD(bytes, d.info.buffer_alignment);
-            const ggml_ext_vulkan_binding decode_inputs[] = {{op.weight}, {op.codebook}, {op.relative_scale}, weight};
-            const uint32_t count                          = uint32_t(ggml_nelements(op.relative_scale));
-            const uint32_t groups[]                       = {std::min((count + 127) / 128, d.info.max_group_count[0]), 1, 1};
-            const auto pipeline                           = SD_VK_PIPELINE(decode_w4a8, 4, uint32_t);
-            const auto status                             = d.api->dispatch(e->backend, &pipeline, decode_inputs, &count, groups);
+        const uint32_t chunk_cols = op.codebook ? uint32_t(w4a8_chunk_cols(d, op)) : n;
+        if (!chunk_cols)
+            return GGML_STATUS_FAILED;
+        if (op.codebook && alias)
+            dst.offset = GGML_PAD(size_t(chunk_cols) * k, d.info.buffer_alignment);
+
+        const auto destination = concat ? range(dst, ggml_nbytes(concat->src[0]), ggml_nbytes(tail)) : dst;
+        const uint32_t output_stride = uint32_t(tail->ne[0]);
+        ggml_ext_vulkan_binding bindings[] = {{op.weight}, {op.input, nullptr, 0, scale_offset}, {op.weight_scale}, {op.input, nullptr, scale_offset, size_t(rows) * 4}, {op.bias ? op.bias : op.weight_scale}, destination, {up_mat ? up.weight : gate}, {up_mat ? up.weight_scale : residual}};
+        auto multiply_chunk = [&](uint32_t first, uint32_t cols) {
+            const uint32_t output_cols = glu ? uint32_t(glu->ne[0]) : cols;
+            auto dispatch = [&](ggml_ext_vulkan_pipeline pipeline, uint32_t tile_cols, uint32_t tile_rows,
+                                std::initializer_list<uint32_t> constants, uint32_t row_offset, uint32_t dispatch_rows) {
+                if (!dispatch_rows)
+                    return GGML_STATUS_SUCCESS;
+                MatParameters pc = {cols * (up_mat ? 2u : 1u), rows, k, op.bias ? 1u : 0u, row_offset, output_scale,
+                                    group_columns(output_cols, k, tile_cols, glu != nullptr), output_stride, first};
+                pipeline.constants      = constants.begin();
+                pipeline.constant_count = uint32_t(constants.size());
+                const uint32_t groups[] = {(output_cols + tile_cols - 1) / tile_cols, (dispatch_rows + tile_rows - 1) / tile_rows, 1};
+                return d.api->dispatch(e->backend, &pipeline, bindings, &pc, groups);
+            };
+            ggml_status status = GGML_STATUS_SUCCESS;
+            if (d.cm2) {
+                const bool large_k       = k % 4096 == 0 || (rows >= cols && k >= cols);
+                // The aligned store uses a row stride rounded down to 128 columns.
+                const bool aligned_output = cols % 128 == 0 && output_stride % 128 == 0;
+                const uint32_t full_rows = (glu || aligned_output) ? rows / 128 * 128 : 0;
+                auto pipeline            = residual ? SD_VK_PIPELINE(mul_mat_i8_residual_cm2, 8, MatParameters) : up_mat ? SD_VK_PIPELINE(mul_mat_i8_swiglu_split_cm2, 8, MatParameters)
+                                                                                                                         : SD_VK_PIPELINE(mul_mat_i8_tensorwise_cm2, 6, MatParameters);
+                const uint32_t tile_cols = glu ? 64 : 128;
+                const uint32_t full_k    = (glu || large_k) && k % 128 == 0 ? 128u : 64u;
+                status                   = dispatch(pipeline, tile_cols, 128, {128, 1, glu ? 1u : 0u, tile_cols, full_k}, 0, full_rows);
+                if (status == GGML_STATUS_SUCCESS) {
+                    const bool small         = d.cm2_small && (glu || aligned_output) && rows - full_rows <= 32;
+                    const uint32_t tail_cols = small || glu ? 64 : 128, tail_rows = small ? 32 : glu ? 128
+                                                                                                     : 64;
+                    const uint32_t tail_k = small && k % 256 == 0 ? 256u : 64u;
+                    status                = dispatch(pipeline, tail_cols, tail_rows, {tail_rows, small ? 2u : 0u, glu ? 1u : 0u, tail_cols, tail_k}, full_rows, rows - full_rows);
+                }
+            } else {
+                uint32_t coop_rows = 0;
+                if (d.cm_m && k % d.cm_k == 0 && cols % (4 * d.cm_n) == 0 &&
+                    cols / (4 * d.cm_n) <= d.info.max_group_count[0] && rows / (4 * d.cm_m) <= d.info.max_group_count[1]) {
+                    const uint32_t tile_rows        = 4 * d.cm_m;
+                    coop_rows                       = rows / tile_rows * tile_rows;
+                    auto pipeline                   = SD_VK_PIPELINE(mul_mat_i8_tensorwise_cm1, 6, MatParameters);
+                    pipeline.full_subgroups         = d.info.full_subgroups;
+                    pipeline.required_subgroup_size = d.info.subgroup_size_control ? d.info.subgroup_size : 0;
+                    status                          = dispatch(pipeline, 4 * d.cm_n, tile_rows, {d.info.subgroup_size, d.cm_m, d.cm_n, d.cm_k}, 0, coop_rows);
+                }
+                if (status == GGML_STATUS_SUCCESS)
+                    status = dispatch(SD_VK_PIPELINE(mul_mat_i8_tensorwise, 6, MatParameters), 64, 32, {}, coop_rows, rows - coop_rows);
+            }
+            return status;
+        };
+
+        for (uint32_t first = 0; first < n;) {
+            const uint32_t cols = std::min(chunk_cols, n - first);
+            if (op.codebook) {
+                const size_t packed_row = op.weight->nb[1], scale_row = op.relative_scale->nb[1];
+                bindings[0] = {nullptr, e->workspace, 0, size_t(cols) * k};
+                bindings[2] = range({op.weight_scale}, size_t(first) * sizeof(float), size_t(cols) * sizeof(float));
+                bindings[4] = op.bias ? range({op.bias}, size_t(first) * sizeof(float), size_t(cols) * sizeof(float)) : bindings[2];
+                const ggml_ext_vulkan_binding decode_inputs[] = {
+                    range({op.weight}, first * packed_row, cols * packed_row),
+                    {op.codebook},
+                    range({op.relative_scale}, first * scale_row, cols * scale_row),
+                    bindings[0],
+                };
+                const uint32_t groups_count = cols * (k / 16);
+                const uint32_t groups[] = {std::min((groups_count + 127) / 128, d.info.max_group_count[0]), 1, 1};
+                const auto pipeline = SD_VK_PIPELINE(decode_w4a8, 4, uint32_t);
+                const auto status = d.api->dispatch(e->backend, &pipeline, decode_inputs, &groups_count, groups);
+                if (status != GGML_STATUS_SUCCESS)
+                    return status;
+            }
+            const auto status = multiply_chunk(first, cols);
             if (status != GGML_STATUS_SUCCESS)
                 return status;
+            first += cols;
         }
-        auto destination                   = concat ? range(dst, ggml_nbytes(concat->src[0]), ggml_nbytes(tail)) : dst;
-        ggml_ext_vulkan_binding bindings[] = {weight, {op.input, nullptr, 0, scale_offset}, {op.weight_scale}, {op.input, nullptr, scale_offset, size_t(rows) * 4}, {op.bias ? op.bias : op.weight_scale}, destination, {up_mat ? up.weight : gate}, {up_mat ? up.weight_scale : residual}};
-        auto dispatch                      = [&](ggml_ext_vulkan_pipeline pipeline, uint32_t tile_cols, uint32_t tile_rows,
-                                                 std::initializer_list<uint32_t> constants, uint32_t row_offset, uint32_t dispatch_rows) {
-            if (!dispatch_rows)
-                return GGML_STATUS_SUCCESS;
-            const uint32_t cols     = glu ? uint32_t(glu->ne[0]) : n;
-            MatParameters pc        = {n * (up_mat ? 2u : 1u), rows, k, op.bias ? 1u : 0u, row_offset, output_scale, group_columns(cols, k, tile_cols, glu != nullptr)};
-            pipeline.constants      = constants.begin();
-            pipeline.constant_count = uint32_t(constants.size());
-            const uint32_t groups[] = {(cols + tile_cols - 1) / tile_cols, (dispatch_rows + tile_rows - 1) / tile_rows, 1};
-            return d.api->dispatch(e->backend, &pipeline, bindings, &pc, groups);
-        };
         ggml_status status = GGML_STATUS_SUCCESS;
-        if (d.cm2) {
-            const bool large_k       = k % 4096 == 0 || (rows >= n && k >= n);
-            const uint32_t full_rows = (glu || n % 128 == 0) ? rows / 128 * 128 : 0;
-            auto pipeline            = residual ? SD_VK_PIPELINE(mul_mat_i8_residual_cm2, 8, MatParameters) : up_mat ? SD_VK_PIPELINE(mul_mat_i8_swiglu_split_cm2, 8, MatParameters)
-                                                                                                                     : SD_VK_PIPELINE(mul_mat_i8_tensorwise_cm2, 6, MatParameters);
-            const uint32_t tile_cols = glu ? 64 : 128;
-            const uint32_t full_k    = (glu || large_k) && k % 128 == 0 ? 128u : 64u;
-            status                   = dispatch(pipeline, tile_cols, 128, {128, 1, glu ? 1u : 0u, tile_cols, full_k}, 0, full_rows);
-            if (status == GGML_STATUS_SUCCESS) {
-                const bool small         = d.cm2_small && (glu || n % 128 == 0) && rows - full_rows <= 32;
-                const uint32_t tail_cols = small || glu ? 64 : 128, tail_rows = small ? 32 : glu ? 128
-                                                                                                 : 64;
-                const uint32_t tail_k = small && k % 256 == 0 ? 256u : 64u;
-                status                = dispatch(pipeline, tail_cols, tail_rows, {tail_rows, small ? 2u : 0u, glu ? 1u : 0u, tail_cols, tail_k}, full_rows, rows - full_rows);
-            }
-        } else {
-            uint32_t coop_rows = 0;
-            if (d.cm_m && k % d.cm_k == 0 && n % (4 * d.cm_n) == 0 &&
-                n / (4 * d.cm_n) <= d.info.max_group_count[0] && rows / (4 * d.cm_m) <= d.info.max_group_count[1]) {
-                const uint32_t tile_rows        = 4 * d.cm_m;
-                coop_rows                       = rows / tile_rows * tile_rows;
-                auto pipeline                   = SD_VK_PIPELINE(mul_mat_i8_tensorwise_cm1, 6, MatParameters);
-                pipeline.full_subgroups         = d.info.full_subgroups;
-                pipeline.required_subgroup_size = d.info.subgroup_size_control ? d.info.subgroup_size : 0;
-                status                          = dispatch(pipeline, 4 * d.cm_n, tile_rows, {d.info.subgroup_size, d.cm_m, d.cm_n, d.cm_k}, 0, coop_rows);
-            }
-            if (status == GGML_STATUS_SUCCESS)
-                status = dispatch(SD_VK_PIPELINE(mul_mat_i8_tensorwise, 6, MatParameters), 64, 32, {}, coop_rows, rows - coop_rows);
-        }
-        if (status == GGML_STATUS_SUCCESS && concat && ggml_nbytes(concat->src[0])) {
+        if (concat && ggml_nbytes(concat->src[0])) {
             ggml_ext_vulkan_binding src = {concat->src[0]}, prefix = range(dst, 0, ggml_nbytes(concat->src[0]));
             status = d.api->copy(e->backend, &src, &prefix);
         }
@@ -872,7 +905,7 @@ namespace sd_vulkan_i8 {
             Device d;
             if (!device_info(ggml_backend_get_device(backend), d))
                 return GGML_STATUS_FAILED;
-            *bytes += GGML_PAD(op.decoded_weight_bytes(), d.info.buffer_alignment);
+            *bytes += GGML_PAD(w4a8_chunk_cols(d, op) * op.k(), d.info.buffer_alignment);
         }
         return GGML_STATUS_SUCCESS;
     }

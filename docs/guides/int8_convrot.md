@@ -145,11 +145,13 @@ directly into the corresponding output columns. CPU, CUDA/HIP/MUSA, Vulkan,
 and Metal provide weight decoders. The checkpoint's packed weights stay in
 their original layout.
 
-Vulkan decodes the entire W4A8 projection into a single storage-buffer binding.
-If the decoded INT8 weights exceed the device's `maxStorageBufferRange`, the
-scheduler runs that projection on the CPU. An `8192 × 24576` projection, for
-example, needs 192 MiB after decoding and falls back to CPU on a device with a
-128 MiB storage-buffer range.
+If the decoded W4A8 weights exceed the Vulkan device's `maxStorageBufferRange`,
+the linear operation decodes slices of output channels into shared workspace
+and writes each GEMM result directly to the corresponding output columns. An
+`8192 × 24576` projection needs 192 MiB after decoding and can run on a device
+with a 128 MiB storage-buffer range. The packed weights, activations, scales,
+and FP32 output must still fit their respective bindings. Projections that
+exceed those limits fall back to CPU.
 
 W4A4 uses packed-weight kernels. Eligible CUDA SM80+ shapes can use CUTLASS mixed
 S8 x S4 GEMM. Vulkan uses cooperative matrices where supported and requires a
