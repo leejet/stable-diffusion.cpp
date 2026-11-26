@@ -212,21 +212,11 @@ ggml_tensor* ggml_ext_mul_mat_i8_tensorwise(GGMLRunnerContext* runner_ctx,
                                             ggml_tensor* weight_scale,
                                             ggml_tensor* bias,
                                             int group_size,
-                                            ggml_tensor* input_scale = nullptr);
+                                            ggml_tensor* input_scale    = nullptr,
+                                            ggml_tensor* codebook       = nullptr,
+                                            ggml_tensor* relative_scale = nullptr);
 
 ggml_tensor* ggml_ext_quantize_i8_convrot(GGMLRunnerContext* runner_ctx, ggml_tensor* input, int group_size);
-
-// Packed I8 [K/2, N], low nibble first. W4A8 uses a 16-entry F32 codebook
-// and F8_E4M3 [K/16, N] relative scales. F32 inputs get an explicit quantize node.
-ggml_tensor* ggml_ext_mul_mat_w4_convrot(GGMLRunnerContext* runner_ctx,
-                                         ggml_tensor* weight,
-                                         ggml_tensor* input,
-                                         ggml_tensor* weight_scale,
-                                         ggml_tensor* s_channel,
-                                         ggml_tensor* s_rel,
-                                         ggml_tensor* bias,
-                                         SDW4Kind kind,
-                                         int group_size);
 
 // Q/K: contiguous F32 [D, tokens, heads, batch], V: contiguous F16 in the same layout.
 // Output: F32 [D, query heads, query tokens, batch]. CUDA-only, unmasked inference.
@@ -292,12 +282,11 @@ ggml_tensor* ggml_ext_linear_w4_convrot(GGMLRunnerContext* runner_ctx,
                                         ggml_tensor* x,
                                         ggml_tensor* w,
                                         ggml_tensor* ws,
-                                        ggml_tensor* sc,
-                                        ggml_tensor* sr,
                                         ggml_tensor* bias,
-                                        SDW4Kind kind,
                                         int group,
-                                        float scale = 1.f);
+                                        float scale,
+                                        ggml_tensor* codebook = nullptr,
+                                        ggml_tensor* s_rel    = nullptr);
 #endif
 
 ggml_tensor* ggml_ext_conv_2d_grouped(GGMLRunnerContext* runner_ctx,

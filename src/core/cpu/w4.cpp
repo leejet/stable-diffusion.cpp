@@ -15,42 +15,23 @@ namespace sd_cpu {
         auto& e         = *static_cast<W4Execution*>(data);
         const auto& op  = e.op;
         const int64_t k = op.input->ne[0], n = op.weight->ne[1];
-        const auto* w       = static_cast<const uint8_t*>(op.weight->data);
-        const auto* x       = static_cast<const int8_t*>(op.input->data);
-        const auto* xs      = reinterpret_cast<const float*>(x + k * ((e.rows + 3) / 4 * 4));
-        const auto* ws      = static_cast<const float*>(op.weight_scale->data);
-        const auto* bias    = op.bias ? static_cast<const float*>(op.bias->data) : nullptr;
-        const auto* sc      = op.s_channel ? static_cast<const float*>(op.s_channel->data) : nullptr;
-        const auto* sr      = op.s_rel ? static_cast<const uint8_t*>(op.s_rel->data) : nullptr;
-        const auto to_float = ggml_get_type_traits(GGML_TYPE_F8_E4M3)->to_float;
+        const auto* w    = static_cast<const uint8_t*>(op.weight->data);
+        const auto* x    = static_cast<const int8_t*>(op.input->data);
+        const auto* xs   = reinterpret_cast<const float*>(x + k * ((e.rows + 3) / 4 * 4));
+        const auto* ws   = static_cast<const float*>(op.weight_scale->data);
+        const auto* bias = op.bias ? static_cast<const float*>(op.bias->data) : nullptr;
         for (int64_t index = ith; index < n * e.rows; index += nth) {
             const int64_t row = index / n, col = index % n;
             const auto* packed = w + col * (k / 2);
-            float value;
-            if (op.kind == SDW4Kind::W4A4) {
-                uint32_t sum = 0;
-                for (int64_t i = 0; i < k; ++i) {
-                    const int nibble = (packed[i / 2] >> (4 * (i % 2))) & 15;
-                    sum += uint32_t(((nibble ^ 8) - 8) * int32_t(x[row * k + i]));
-                }
-                int32_t signed_sum;
-                std::memcpy(&signed_sum, &sum, sizeof(sum));
-                value = float(signed_sum) * xs[row] * ws[col];
-            } else {
-                float sum = 0.f;
-                for (int64_t g = 0; g < k / 16; ++g) {
-                    float relative;
-                    to_float(sr + col * (k / 16) + g, &relative, 1);
-                    const float scale = sc[col] * relative;
-                    for (int j = 0; j < 16; ++j) {
-                        const int64_t i = g * 16 + j;
-                        const int code  = (packed[i / 2] >> (4 * (i % 2))) & 15;
-                        sum += (ws[code] * scale) * float(x[row * k + i]);
-                    }
-                }
-                value = sum * xs[row];
+            uint32_t sum       = 0;
+            for (int64_t i = 0; i < k; ++i) {
+                const int nibble = (packed[i / 2] >> (4 * (i % 2))) & 15;
+                sum += uint32_t(((nibble ^ 8) - 8) * int32_t(x[row * k + i]));
             }
-            e.output[index] = value + (bias ? bias[col] : 0.f);
+            int32_t signed_sum;
+            std::memcpy(&signed_sum, &sum, sizeof(sum));
+            const float value = float(signed_sum) * xs[row] * ws[col];
+            e.output[index]   = value + (bias ? bias[col] : 0.f);
         }
     }
 

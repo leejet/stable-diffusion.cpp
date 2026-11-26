@@ -11,6 +11,8 @@ layout(push_constant) uniform parameter {
     uint k;
     uint has_bias;
     uint row_offset;
+    layout(offset = 28) uint output_stride;
+    uint output_col;
 }
 p;
 
@@ -33,42 +35,54 @@ layout(binding = 5, std430) writeonly buffer D {
     float data_d[];
 };
 
-shared int weights[16 * 8];
-shared int activations[16 * 8];
+shared int weights[64][8];
+shared int activations[32][8];
 
 void main() {
-    const uint output_index = gl_WorkGroupID.x * 16 + gl_LocalInvocationID.x;
-    const uint row          = p.row_offset + gl_WorkGroupID.y * 16 + gl_LocalInvocationID.y;
-    const uint lx           = gl_LocalInvocationID.x;
-    const uint ly           = gl_LocalInvocationID.y;
-    const uint k_packed     = p.k / 4;
-    int sum                 = 0;
+    const uint col_base  = gl_WorkGroupID.x * 64;
+    const uint row_base  = p.row_offset + gl_WorkGroupID.y * 32;
+    const uint lx        = gl_LocalInvocationID.x;
+    const uint ly        = gl_LocalInvocationID.y;
+    const uint load_row  = gl_LocalInvocationIndex / 8;
+    const uint load_word = gl_LocalInvocationIndex % 8;
+    const uint k_packed  = p.k / 4;
+    int sum[2][4];
+    [[unroll]] for (uint r = 0; r < 2; ++r)
+        [[unroll]]
+        for (uint c = 0; c < 4; ++c)
+            sum[r][c] = 0;
 
     for (uint k_base = 0; k_base < k_packed; k_base += 8) {
-        if (ly < 8) {
-            weights[lx * 8 + ly] = output_index < p.n
-                                       ? data_w[output_index * k_packed + k_base + ly]
-                                       : 0;
-        }
-        if (lx < 8) {
-            activations[ly * 8 + lx] = row < p.rows
-                                           ? data_a[row * k_packed + k_base + lx]
-                                           : 0;
+        const uint word                  = k_base + load_word;
+        const uint row                   = row_base + load_row;
+        activations[load_row][load_word] = row < p.rows ? data_a[row * k_packed + word] : 0;
+        [[unroll]] for (uint j = 0; j < 2; ++j) {
+            const uint offset          = load_row + j * 32;
+            const uint col             = col_base + offset;
+            weights[offset][load_word] = col < p.n ? data_w[col * k_packed + word] : 0;
         }
         barrier();
 
-        [[unroll]]
-        for (uint i = 0; i < 8; ++i) {
-            sum += dotPacked4x8EXT(weights[lx * 8 + i], activations[ly * 8 + i]);
+        [[unroll]] for (uint i = 0; i < 8; ++i) {
+            [[unroll]] for (uint r = 0; r < 2; ++r) {
+                const int act = activations[ly + 16 * r][i];
+                [[unroll]] for (uint c = 0; c < 4; ++c)
+                    sum[r][c] += dotPacked4x8EXT(weights[lx + 16 * c][i], act);
+            }
         }
         barrier();
     }
 
-    if (output_index < p.n && row < p.rows) {
-        float value = float(sum) * data_as[row] * data_ws[output_index];
-        if (p.has_bias != 0) {
-            value += data_b[output_index];
+    [[unroll]] for (uint r = 0; r < 2; ++r) {
+        const uint row = row_base + ly + 16 * r;
+        [[unroll]] for (uint c = 0; c < 4; ++c) {
+            const uint col = col_base + lx + 16 * c;
+            if (col < p.n && row < p.rows) {
+                float value = float(sum[r][c]) * data_as[row] * data_ws[col];
+                if (p.has_bias != 0)
+                    value += data_b[col];
+                data_d[row * p.output_stride + p.output_col + col] = value;
+            }
         }
-        data_d[row * p.n + output_index] = value;
     }
 }

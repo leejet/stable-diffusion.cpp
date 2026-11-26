@@ -17,6 +17,7 @@ namespace sd_metal {
         id<MTLComputePipelineState> quantize     = nil;
         id<MTLComputePipelineState> multiply     = nil;
         id<MTLComputePipelineState> multiply_mpp = nil;
+        id<MTLComputePipelineState> decode_w4a8  = nil;
         id<MTLComputePipelineState> lora_stats   = nil;
         id<MTLComputePipelineState> lora_summary = nil;
         id<MTLComputePipelineState> lora_quant   = nil;
@@ -28,6 +29,7 @@ namespace sd_metal {
             [quantize release];
             [multiply release];
             [multiply_mpp release];
+            [decode_w4a8 release];
             [lora_stats release];
             [lora_summary release];
             [lora_quant release];
@@ -78,10 +80,15 @@ namespace sd_metal {
         return node->ne[0] <= INT_MAX && ggml_nrows(node) <= INT_MAX;
     }
 
-    static bool supports_i8(ggml_backend_dev_t, const ggml_tensor* node, void*) {
+    static bool supports_i8(ggml_backend_dev_t, const ggml_tensor* node, void* user_data) {
         SDI8Operation op;
-        return sd_ggml_i8_describe(node, &op) && dimensions(node) && dimensions(op.weight) &&
-               uint64_t(op.weight->ne[0]) * ggml_nrows(node) <= UINT32_MAX;
+        if (!sd_ggml_i8_describe(node, &op) || !dimensions(node) || op.k() > INT_MAX ||
+            uint64_t(op.k()) * ggml_nrows(node) > UINT32_MAX)
+            return false;
+        const auto decode = static_cast<Kernels*>(user_data)->decode_w4a8;
+        return !op.codebook || (decode.maxTotalThreadsPerThreadgroup >= 128 &&
+                                op.decoded_weight_bytes() <= UINT32_MAX &&
+                                op.decoded_weight_bytes() <= decode.device.maxBufferLength);
     }
 
     static bool supports_convrot(ggml_backend_dev_t, const ggml_tensor* node, void*) {
@@ -111,6 +118,8 @@ namespace sd_metal {
             return GGML_STATUS_FAILED;
         }
         *bytes = aligned(sd_ggml_modulate_workspace_size(node));
+        if (linear)
+            *bytes += aligned(op.decoded_weight_bytes());
         if (input->type == GGML_TYPE_F32) {
             if (group > 1)
                 *bytes += aligned(ggml_nbytes(input));
@@ -194,6 +203,25 @@ namespace sd_metal {
         if (e.linear) {
             if (!bind_tensor(kernels, e.op.weight, w))
                 return GGML_STATUS_FAILED;
+            if (e.op.codebook) {
+                ggml_ext_metal_buffer codebook, scales, decoded;
+                if (!bind_tensor(kernels, e.op.codebook, codebook) ||
+                    !bind_tensor(kernels, e.op.relative_scale, scales) ||
+                    !scratch(e.op.decoded_weight_bytes(), decoded))
+                    return GGML_STATUS_FAILED;
+                const auto groups                    = uint32_t(ggml_nelements(e.op.relative_scale));
+                id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+                [encoder setComputePipelineState:kernels->decode_w4a8];
+                set_buffer(encoder, w, 0);
+                set_buffer(encoder, codebook, 1);
+                set_buffer(encoder, scales, 2);
+                set_buffer(encoder, decoded, 3);
+                [encoder setBytes:&groups length:sizeof(groups) atIndex:4];
+                [encoder dispatchThreadgroups:MTLSizeMake((groups + 127) / 128, 1, 1)
+                        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+                [encoder endEncoding];
+                w = decoded;
+            }
             ws = bias = xs;
             if (e.op.weight_scale && !bind_tensor(kernels, e.op.weight_scale, ws))
                 return GGML_STATUS_FAILED;
@@ -327,6 +355,7 @@ void sd_ggml_register_metal_i8(ggml_backend_dev_t device) {
         kernels->rotate       = pipeline(@"sd_i8_rotate");
         kernels->quantize     = pipeline(@"sd_i8_quantize");
         kernels->multiply     = pipeline(@"sd_i8_multiply");
+        kernels->decode_w4a8  = pipeline(@"sd_i8_decode_w4a8");
         kernels->lora_stats   = pipeline(@"sd_i8_lora_stats");
         kernels->lora_summary = pipeline(@"sd_i8_lora_summary");
         kernels->lora_quant   = pipeline(@"sd_i8_lora_quantize");

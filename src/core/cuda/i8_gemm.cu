@@ -294,7 +294,7 @@ namespace sd_i8_cutlass {
     };
     struct Plan {
         DeviceInfo device;
-        int64_t rows, n, k;
+        int64_t rows, n, k, output_stride;
         SDI8GemmActivation activation;
         bool packed_w4;
         bool split;
@@ -308,11 +308,11 @@ namespace sd_i8_cutlass {
         typename Types::Epilogue::Arguments epilogue;
         if constexpr (Types::kBias) {
             // A negative zero default preserves signed-zero outputs.
-            epilogue = {{scales, {bias, -0.f, {}}, {}}, {out, {p.n, cute::_1{}, p.rows * p.n}}};
+            epilogue = {{scales, {bias, -0.f, {}}, {}}, {out, {p.output_stride, cute::_1{}, p.rows * p.output_stride}}};
         } else if constexpr (Types::kGated) {
             epilogue = {scales, {{out, {p.n, cute::_1{}, p.rows * p.n}}, p.activation == SDI8GemmActivation::Situ}};
         } else {
-            epilogue = {scales, {out, {p.n, cute::_1{}, p.rows * p.n}}};
+            epilogue = {scales, {out, {p.output_stride, cute::_1{}, p.rows * p.output_stride}}};
         }
         return {cutlass::gemm::GemmUniversalMode::kGemm, {int(p.rows), int(p.n), int(p.k)}, 1, epilogue, x, reinterpret_cast<const typename Types::Weight*>(w), nullptr, nullptr, p.rows * p.k, p.n * p.k, 0, 0, p.k, p.k, 0, 0};
     }
@@ -415,23 +415,25 @@ namespace sd_i8_cutlass {
     }
 }
 struct SDI8CudaGemmPlan : sd_i8_cutlass::Plan {};
-static SDI8CudaGemmPlan* prepare_gemm(ggml_backend_dev_t device, int64_t rows, int64_t n, int64_t k, SDI8GemmActivation activation, size_t* workspace, bool packed_w4, bool split) {
+static SDI8CudaGemmPlan* prepare_gemm(ggml_backend_dev_t device, int64_t rows, int64_t n, int64_t k, SDI8GemmActivation activation, size_t* workspace, bool packed_w4, bool split, int64_t output_stride) {
 #ifdef SD_CUDA_FORCE_CUBLAS
     return nullptr;
 #else
     const auto info  = sd_i8_cutlass::device_info(device);
     const bool gated = activation != SDI8GemmActivation::None;
     if ((packed_w4 && (gated || k > INT_MAX / 1024)) || info.major < 8 || rows < (sd_i8_cutlass::small_rows_enabled(rows, n, k) ? 1 : 128) ||
-        rows > INT_MAX || n < 1 || n > INT_MAX || k < 1 || k > INT_MAX || k % 64 || n % (gated ? 256 : 128))
+        rows > INT_MAX || n < 1 || n > INT_MAX || k < 1 || k > INT_MAX || k % 64 || n % (gated ? 256 : 128) ||
+        output_stride < n || output_stride > INT_MAX || output_stride % 4)
         return nullptr;
-    auto* p       = new SDI8CudaGemmPlan;
-    p->device     = info;
-    p->rows       = rows;
-    p->n          = n;
-    p->k          = k;
-    p->activation = activation;
-    p->packed_w4  = packed_w4;
-    p->split      = split;
+    auto* p          = new SDI8CudaGemmPlan;
+    p->device        = info;
+    p->rows          = rows;
+    p->n             = n;
+    p->output_stride = output_stride;
+    p->k             = k;
+    p->activation    = activation;
+    p->packed_w4     = packed_w4;
+    p->split         = split;
     if (!sd_i8_cutlass::configure(*p)) {
         delete p;
         return nullptr;
@@ -441,12 +443,15 @@ static SDI8CudaGemmPlan* prepare_gemm(ggml_backend_dev_t device, int64_t rows, i
 #endif
 }
 SDI8CudaGemmPlan* sd_cuda_i8_gemm_prepare(ggml_backend_dev_t device, int64_t rows, int64_t n, int64_t k, SDI8GemmActivation activation, size_t* workspace, bool packed_w4) {
-    return prepare_gemm(device, rows, n, k, activation, workspace, packed_w4, false);
+    return prepare_gemm(device, rows, n, k, activation, workspace, packed_w4, false, n);
+}
+SDI8CudaGemmPlan* sd_cuda_i8_gemm_prepare_strided(ggml_backend_dev_t device, int64_t rows, int64_t n, int64_t k, int64_t output_stride, size_t* workspace) {
+    return prepare_gemm(device, rows, n, k, SDI8GemmActivation::None, workspace, false, false, output_stride);
 }
 SDI8CudaGemmPlan* sd_cuda_i8_gemm_prepare_split(ggml_backend_dev_t device, int64_t rows, int64_t n, int64_t k, size_t* workspace) {
     if (n > INT_MAX / 2 || k > INT_MAX / 16384)
         return nullptr;
-    return prepare_gemm(device, rows, 2 * n, k, SDI8GemmActivation::Swiglu, workspace, false, true);
+    return prepare_gemm(device, rows, 2 * n, k, SDI8GemmActivation::Swiglu, workspace, false, true, 2 * n);
 }
 ggml_status sd_cuda_i8_gemm_execute(SDI8CudaGemmPlan* plan, const int8_t* x, const int8_t* w, const float* xs, const float* ws, float* out, void* scratch, cudaStream_t stream, const float* bias) {
     if (bias && (plan->activation != SDI8GemmActivation::None || plan->packed_w4))

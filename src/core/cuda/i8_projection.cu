@@ -190,7 +190,7 @@ static bool aligned(const ggml_tensor* tensor) {
 
 static bool projection_supports(ggml_backend_dev_t device, const ggml_tensor* mat, const ggml_tensor* view) {
     SDI8Operation op;
-    if (!sd_ggml_i8_describe(mat, &op) || !op.packed || !op.weight_scale || op.bias)
+    if (!sd_ggml_i8_describe(mat, &op) || op.codebook || !op.packed || !op.weight_scale || op.bias)
         return false;
     const auto* w  = op.weight;
     const auto* x  = op.input;
@@ -221,13 +221,16 @@ bool sd_cuda_i8_rope_supports(ggml_backend_dev_t device, const ggml_tensor* mat,
 
 template <class Out, bool RMS = true>
 static cudaError_t projection_launch(cudaStream_t stream, const ggml_tensor* mat, const ggml_tensor* view, const ggml_tensor* norm, const ggml_tensor* mul, const ggml_tensor* rope, void* output, float scale, int64_t prefix_tokens) {
-    using P        = ProjectionKernel<Out, RMS>;
-    using Gemm     = typename P::Gemm;
-    const int rows = int(ggml_nrows(mat)), n = int(mat->ne[0]), k = int(mat->src[0]->ne[0]);
-    const auto* x  = static_cast<const int8_t*>(mat->src[1]->data);
-    const auto* w  = static_cast<const int8_t*>(mat->src[0]->data);
+    using P    = ProjectionKernel<Out, RMS>;
+    using Gemm = typename P::Gemm;
+    SDI8Operation op;
+    if (!sd_ggml_i8_describe(mat, &op))
+        return cudaErrorInvalidValue;
+    const int rows = int(ggml_nrows(mat)), n = int(mat->ne[0]), k = int(op.weight->ne[0]);
+    const auto* x  = static_cast<const int8_t*>(op.input->data);
+    const auto* w  = static_cast<const int8_t*>(op.weight->data);
     const auto* xs = reinterpret_cast<const float*>(x + int64_t(k) * ((int64_t(rows) + 3) / 4 * 4));
-    const auto* ws = static_cast<const float*>(mat->src[2]->data);
+    const auto* ws = static_cast<const float*>(op.weight_scale->data);
     const auto* nw = RMS ? static_cast<const float*>(mul->src[1]->data) : nullptr;
     const auto* pe = RMS ? static_cast<const float*>(rope->src[1]->data) : nullptr;
     // The visitor forms FP32 addresses even when its only writes target the FP16 output.

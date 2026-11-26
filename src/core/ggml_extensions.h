@@ -27,7 +27,8 @@ struct SDI8Attributes {
 enum SDI8Flags { SD_I8_PACKED       = 1,
                  SD_I8_INPUT_SCALE  = 2,
                  SD_I8_WEIGHT_SCALE = 4,
-                 SD_I8_BIAS         = 8 };
+                 SD_I8_BIAS         = 8,
+                 SD_I8_WEIGHT_W4    = 16 };
 
 struct SDI8Operation {
     const ggml_tensor* weight;
@@ -37,6 +38,11 @@ struct SDI8Operation {
     const ggml_tensor* bias;
     int group_size;
     bool packed;
+    const ggml_tensor* codebook;
+    const ggml_tensor* relative_scale;
+
+    int64_t k() const { return input->ne[0]; }
+    size_t decoded_weight_bytes() const { return codebook ? size_t(k()) * weight->ne[1] : 0; }
 };
 
 bool sd_ggml_valid_convrot_group(int group);
@@ -74,12 +80,8 @@ struct SDI8LoRAMerge {
 ggml_ext_op_t sd_ggml_i8_lora_merge_op();
 bool sd_ggml_i8_lora_merge_describe(const ggml_tensor* node, SDI8LoRAMerge* op);
 
-enum class SDW4Kind : int32_t { W4A4 = 1,
-                                W4A8 = 2 };
-
 struct SDW4Attributes {
     int64_t shape[3];
-    SDW4Kind kind;
     int32_t has_bias;
 };
 
@@ -87,10 +89,7 @@ struct SDW4Operation {
     const ggml_tensor* weight;
     const ggml_tensor* input;
     const ggml_tensor* weight_scale;
-    const ggml_tensor* s_channel;
-    const ggml_tensor* s_rel;
     const ggml_tensor* bias;
-    SDW4Kind kind;
 };
 
 ggml_ext_op_t sd_ggml_w4_op();

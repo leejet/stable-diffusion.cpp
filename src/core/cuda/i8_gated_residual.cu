@@ -332,7 +332,7 @@ namespace sd_i8_gated {
             const bool scaled    = producer->op == GGML_OP_SCALE;
             const auto* mat      = scaled ? producer->src[0] : producer;
             SDI8Operation op;
-            if (!sd_ggml_i8_describe(mat, &op) || op.input->type != GGML_TYPE_I8 || !op.weight_scale || op.bias)
+            if (!sd_ggml_i8_describe(mat, &op) || op.codebook || op.input->type != GGML_TYPE_I8 || !op.weight_scale || op.bias)
                 continue;
             int scale_index = -1;
             for (int j = i - 1; j >= 0 && j >= i - 64; --j) {
@@ -362,7 +362,7 @@ namespace sd_i8_gated {
         for (int i = 0; i < std::min(available, 5); ++i)
             nodes[i] = ggml_graph_node(const_cast<ggml_cgraph*>(graph), first + i);
         SDI8Operation mat;
-        if (!sd_ggml_i8_describe(nodes[0], &mat) || mat.input->type != GGML_TYPE_I8 || !mat.weight_scale || mat.bias)
+        if (!sd_ggml_i8_describe(nodes[0], &mat) || mat.codebook || mat.input->type != GGML_TYPE_I8 || !mat.weight_scale || mat.bias)
             return 0;
         const int64_t rows = ggml_nrows(nodes[0]), n = nodes[0]->ne[0], k = mat.weight->ne[0];
         if (rows < (small_rows_enabled(rows, n, k) ? 1 : 128) || rows > INT_MAX || n > INT_MAX || k > INT_MAX || n % 128 || k % 64 ||

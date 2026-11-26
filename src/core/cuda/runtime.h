@@ -20,6 +20,23 @@
 #endif
 
 namespace SD_CUDA_NAMESPACE {
+    static __device__ __forceinline__ int32_t cuda_dot_i8x4(int32_t a, int32_t b, int32_t acc) {
+#if defined(SD_CUDA_VENDOR_HIP) && (defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1102__) || defined(__gfx1103__) || defined(__gfx1150__) || defined(__gfx1151__) || defined(__gfx1200__) || defined(__gfx1201__))
+        return __builtin_amdgcn_sudot4(true, a, true, b, acc, false);
+#elif defined(SD_CUDA_VENDOR_HIP) && (defined(__gfx1030__) || defined(__gfx1031__) || defined(__gfx1032__) || defined(__gfx1033__) || defined(__gfx1034__) || defined(__gfx1035__) || defined(__gfx1036__) || defined(__gfx906__) || defined(__gfx908__) || defined(__gfx90a__) || defined(__gfx942__))
+        return __builtin_amdgcn_sdot4(a, b, acc, false);
+#elif defined(SD_CUDA_VENDOR_MUSA) || (!defined(SD_CUDA_VENDOR_HIP) && __CUDA_ARCH__ >= 610)
+        return __dp4a(a, b, acc);
+#else
+        uint32_t sum   = uint32_t(acc);
+        const auto* av = reinterpret_cast<const int8_t*>(&a);
+        const auto* bv = reinterpret_cast<const int8_t*>(&b);
+        for (int i = 0; i < 4; ++i)
+            sum += uint32_t(int(av[i]) * int(bv[i]));
+        return int32_t(sum);
+#endif
+    }
+
 #if defined(SD_CUDA_VENDOR_HIP)
     using CUDAError                          = hipError_t;
     using CUDAStream                         = hipStream_t;

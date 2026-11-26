@@ -60,8 +60,6 @@ if(SD_HIPBLAS)
     set_source_files_properties(${SD_CUDA_SOURCES} PROPERTIES COMPILE_OPTIONS "-ffast-math")
     # LoRA merging must detect NaNs and infinities before requantization.
     set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/i8_lora_merge_hip.cu" PROPERTIES COMPILE_OPTIONS "-fno-fast-math")
-    # W4A8 WMMA uses the wave64 fragment layout on both GFX11 and GFX12.
-    set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/w4_hip.cu" APPEND PROPERTY COMPILE_OPTIONS "-mwavefrontsize64")
     target_link_libraries(${SD_CUDA_TARGET} PRIVATE hip::host roc::hipblas)
     target_link_libraries(${SD_LIB} PRIVATE hip::host roc::hipblas)
     find_package(hipblaslt CONFIG QUIET)
