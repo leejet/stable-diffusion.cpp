@@ -2068,22 +2068,27 @@ struct LLMEmbedder : public Conditioner {
                                                weight_manager);
         if (sd_version_is_minimax_h3(version)) {
             const bool has_ph3_connector      = tensor_storage_map.count(std::string(PH3ImageTextConnectorRunner::prefix) + ".proj.weight") != 0;
-            const bool has_clipproj_connector = tensor_storage_map.count(std::string(ClipProjConnectorRunner::prefix) + ".W") != 0;
+            const bool has_clipproj_connector = tensor_storage_map.count(std::string(ClipProjConnectorRunner::prefix) + ".mean_in") != 0;
             if (has_ph3_connector) {
                 if (llm->config.num_layers != 36 || llm->config.hidden_size != 2560) {
                     throw std::runtime_error("The P-H3-Image text connector requires the Qwen3-VL-4B text encoder");
                 }
                 ph3_connector = std::make_shared<PH3ImageTextConnectorRunner>(backend, tensor_storage_map, weight_manager);
             } else if (has_clipproj_connector) {
-                clipproj_connector = std::make_shared<ClipProjConnectorRunner>(backend, llm->config.hidden_size, tensor_storage_map, weight_manager);
+                clipproj_connector = std::make_shared<ClipProjConnectorRunner>(backend, llm->config.hidden_size, 5120, tensor_storage_map, weight_manager);
             } else if (llm->config.hidden_size == 2560) {
                 throw std::runtime_error(
-                    sd_format("%s with Qwen3-VL-4B requires the P-H3-Image text connector; "
+                    sd_format("%s with Qwen3-VL-4B requires a text connector; pass the P-H3-Image text connector "
+                              "or a ClipProj projection with --embeddings-connectors, or use the MiniMax-H3 Qwen3-VL-32B text encoder",
+                              sd_version_name(version)));
+            } else if (llm->config.hidden_size == 4096) {
+                throw std::runtime_error(
+                    sd_format("%s with Qwen3-VL-8B requires a ClipProj text connector; "
                               "pass it with --embeddings-connectors or use the MiniMax-H3 Qwen3-VL-32B text encoder",
                               sd_version_name(version)));
             } else if (llm->config.hidden_size != 5120 || (llm->config.num_layers != 50 && llm->config.num_layers != 64)) {
                 throw std::runtime_error(
-                    sd_format("%s requires the MiniMax-H3 Qwen3-VL-32B text encoder or Qwen3-VL-4B with the P-H3-Image text connector",
+                    sd_format("%s requires the MiniMax-H3 Qwen3-VL-32B text encoder or Qwen3-VL-4B with the P-H3-Image (or a ClipProj) text connector, or Qwen3-VL-8B with a ClipProj projection",
                               sd_version_name(version)));
             }
         }
@@ -2662,6 +2667,7 @@ struct LLMEmbedder : public Conditioner {
             prompt                           = system_prefix("");
             prompt_template_encode_start_idx = 0;
             // The final tap is normalized; LLMRunner exposes it at num_layers + 1.
+            // clipproj taps out at layer 24 in all versions so far, so it should be fine to hardcode it there
             out_layers        = ph3_connector ? std::set<int>{13, 19, 25, 31, 37} : std::set<int>{clipproj_connector ? 24 : 50};
             prompt_attn_range = {0, 0};
 
