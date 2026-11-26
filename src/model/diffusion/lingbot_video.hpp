@@ -466,7 +466,7 @@ namespace LingBotVideo {
                              ggml_tensor* temb6,
                              ggml_tensor* pe,
                              ggml_tensor* attention_mask = nullptr) {
-            // x: [N, tokens, hidden_size], temb6: [N, tokens, 6 * hidden_size]
+            // x: [N, tokens, hidden_size], temb6: [N, 1, 6 * hidden_size]
             auto norm1          = std::dynamic_pointer_cast<RMSNorm>(blocks["norm1"]);
             auto attn           = std::dynamic_pointer_cast<LingBotVideoAttention>(blocks["attn"]);
             auto norm_post_attn = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_post_attn"]);
@@ -488,12 +488,12 @@ namespace LingBotVideo {
             auto attn_in  = Flux::modulate(ctx, norm1->forward(ctx, x), shift_msa, scale_msa, true);
             auto attn_out = attn->forward(ctx, attn_in, pe, attention_mask);
             attn_out      = norm_post_attn->forward(ctx, attn_out);
-            x             = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, gate_msa, attn_out));
+            x             = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, attn_out, gate_msa));
 
             auto ffn_in  = Flux::modulate(ctx, norm2->forward(ctx, x), shift_mlp, scale_mlp, true);
             auto ffn_out = ffn->forward(ctx, ffn_in);
             ffn_out      = norm_post_ffn->forward(ctx, ffn_out);
-            x            = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, gate_mlp, ffn_out));
+            x            = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, ffn_out, gate_mlp));
             return x;
         }
     };
@@ -568,11 +568,10 @@ namespace LingBotVideo {
                                                              10000,
                                                              1.0f);
             auto t_emb         = time_embedder->forward(ctx, timestep_proj);
-            auto temb_template = ggml_new_tensor_3d(ctx->ggml_ctx, t_emb->type, t_emb->ne[0], hidden_states->ne[1], t_emb->ne[1]);
-            auto temb_tokens   = ggml_repeat(ctx->ggml_ctx,
-                                             ggml_reshape_3d(ctx->ggml_ctx, t_emb, t_emb->ne[0], 1, t_emb->ne[1]),
-                                             temb_template);
+            auto temb_tokens   = ggml_reshape_3d(ctx->ggml_ctx, t_emb, t_emb->ne[0], 1, t_emb->ne[1]);
             auto temb6         = time_modulation->forward(ctx, ggml_silu(ctx->ggml_ctx, temb_tokens));
+            // Keep timestep embedding ops out of the first RMSNorm fusion pattern.
+            ctx->expand_graph(temb6);
 
             sd::ggml_graph_cut::mark_graph_cut(hidden_states, "lingbot_video.prelude", "hidden_states");
 
@@ -664,7 +663,7 @@ namespace LingBotVideo {
                 return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
             }));
 
-            auto runner_ctx  = get_context();
+            auto runner_ctx  = get_context(gf);
             ggml_tensor* out = lingbot_video.forward(&runner_ctx, x, timesteps, context, pe);
             ggml_build_forward_expand(gf, out);
             return gf;
