@@ -178,3 +178,9 @@ To use the new Qwen Image Edit 2511 mode, `--model-args qwen_image_zero_cond_t=t
 ```
 
 <img alt="qwen_image_edit_2509" src="../../assets/qwen/qwen_image_edit_2511.png" />
+
+## Notes and limitations
+
+The vision encoder uses a target area of `384 × 384` pixels for each reference
+image, preserving its aspect ratio up to the encoder's patch alignment. VAE
+reference latents use a separate resize based on the output size.

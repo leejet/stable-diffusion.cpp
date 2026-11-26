@@ -2931,6 +2931,13 @@ struct LLMEmbedder : public Conditioner {
                     int h_bar         = static_cast<int>(std::round(static_cast<double>(height) / factor) * factor);
                     int w_bar         = static_cast<int>(std::round(static_cast<double>(width) / factor) * factor);
 
+                    if (version == VERSION_QWEN_IMAGE) {
+                        constexpr double target_area = 384.0 * 384.0;
+                        const double scale           = std::sqrt(target_area / (static_cast<double>(width) * height));
+                        h_bar                        = std::max(factor, static_cast<int>(std::round(height * scale / factor)) * factor);
+                        w_bar                        = std::max(factor, static_cast<int>(std::round(width * scale / factor)) * factor);
+                    }
+
                     LOG_VERBOSE("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
 
                     auto resized_image = clip_preprocess(image, w_bar, h_bar);
