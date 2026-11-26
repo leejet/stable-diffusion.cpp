@@ -13,6 +13,7 @@ namespace sd_cpu {
         SDI8Operation op;
         int64_t rows;
         int8_t* quant;
+        int8_t* decoded;
         float* scales;
         float* output;
     };
@@ -36,11 +37,30 @@ namespace sd_cpu {
                 visit([&](int64_t i, float value) { dst[i] = static_cast<int8_t>(std::max(-127L, std::min(127L, std::lrintf(value * inverse)))); });
         }
     }
+    static void decode_w4a8(ggml_tensor*, int ith, int nth, void* data) {
+        const auto& e        = *static_cast<I8Execution*>(data);
+        const auto* packed   = static_cast<const uint8_t*>(e.op.weight->data);
+        const auto* codebook = static_cast<const float*>(e.op.codebook->data);
+        const auto* scales   = static_cast<const uint8_t*>(e.op.relative_scale->data);
+        auto* decoded        = e.decoded;
+        const auto to_float  = ggml_get_type_traits(GGML_TYPE_F8_E4M3)->to_float;
+        const int64_t groups = ggml_nelements(e.op.relative_scale);
+        for (int64_t g = ith; g < groups; g += nth) {
+            float relative;
+            to_float(scales + g, &relative, 1);
+            for (int i = 0; i < 16; ++i) {
+                const int code      = (packed[g * 8 + i / 2] >> (4 * (i % 2))) & 15;
+                const float value   = codebook[code] * relative;
+                decoded[g * 16 + i] = std::isnan(value) ? 0 : int8_t(std::clamp(std::nearbyint(value), -127.f, 127.f));
+            }
+        }
+    }
+
     static void multiply(ggml_tensor*, int ith, int nth, void* data) {
         auto& e         = *static_cast<I8Execution*>(data);
         const auto& op  = e.op;
-        const int64_t k = op.weight->ne[0], n = op.weight->ne[1];
-        const auto* w    = static_cast<const int8_t*>(op.weight->data);
+        const int64_t k = op.k(), n = op.weight->ne[1];
+        const auto* w    = e.decoded ? e.decoded : static_cast<const int8_t*>(op.weight->data);
         const auto* ws   = op.weight_scale ? static_cast<const float*>(op.weight_scale->data) : nullptr;
         const auto* bias = op.bias ? static_cast<const float*>(op.bias->data) : nullptr;
         for (int64_t index = ith; index < e.rows * n; index += nth) {
@@ -79,7 +99,7 @@ namespace sd_cpu {
         SDI8Operation op;
         if (!sd_ggml_i8_describe(nodes[0], &op))
             return GGML_STATUS_FAILED;
-        *bytes = quant_workspace(nodes[0], op) + ggml_nbytes(nodes[0]);
+        *bytes = quant_workspace(nodes[0], op) + ggml_nbytes(nodes[0]) + op.decoded_weight_bytes();
         return GGML_STATUS_SUCCESS;
     }
     static ggml_status convrot_prepare(ggml_backend_t, ggml_tensor* const* nodes, int, void**, size_t* bytes, void*) {
@@ -110,6 +130,12 @@ namespace sd_cpu {
         } else {
             e.quant  = static_cast<int8_t*>(e.op.input->data);
             e.scales = e.op.packed ? reinterpret_cast<float*>(e.quant + e.op.input->ne[0] * ((e.rows + 3) / 4 * 4)) : static_cast<float*>(e.op.input_scale->data);
+        }
+        if (e.op.codebook) {
+            e.decoded   = reinterpret_cast<int8_t*>(scratch + quant_size + ggml_nbytes(dst));
+            auto status = run(context->backend, dst, decode_w4a8, &e);
+            if (status != GGML_STATUS_SUCCESS)
+                return status;
         }
         bool alias = false;
         for (auto* input : dst->src)

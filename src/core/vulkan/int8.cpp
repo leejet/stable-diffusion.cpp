@@ -5,6 +5,7 @@
 #include <cstring>
 #include <vector>
 #include "core/ggml_extensions.h"
+#include "decode_w4a8.h"
 #include "ggml-ext-vulkan.h"
 #include "i8_lora_merge.h"
 #include "modulate_convrot.h"
@@ -16,8 +17,6 @@
 #include "mul_mat_w4a4_convrot.h"
 #include "mul_mat_w4a4_convrot_cm2.h"
 #include "mul_mat_w4a4_convrot_decode_cm2.h"
-#include "mul_mat_w4a8_convrot.h"
-#include "mul_mat_w4a8_convrot_cm2.h"
 #include "quantize_i8_convrot.h"
 #include "quantize_i8_convrot_h64.h"
 #include "quantize_i8_convrot_register.h"
@@ -31,14 +30,12 @@ namespace sd_vulkan_i8 {
     // Keep these budgets in sync with the cooperative matrix shader tile layouts.
     static constexpr uint32_t w4a4_shared       = 2 * (64 + 64) * (64 / 4 + 4) * 4;
     static constexpr uint32_t w4a4_large_shared = 2 * (64 + 128) * (64 / 4 + 4) * 4;
-    static constexpr uint32_t w4a8_shared       = (64 * (64 / 2 + 4) + 64 * (64 / 16) + 64 * (64 / 4 + 4) + 256 + 256 + 16 + 1) * 4;
-    static constexpr uint32_t w4a8_large_shared = (64 * (64 / 2 + 4) + 64 * (64 / 16) + 128 * (64 / 4 + 4) + 256 + 256 + 16 + 1) * 4;
     struct Device {
         const ggml_ext_vulkan_api* api;
         ggml_ext_vulkan_device_info info;
         ggml_ext_vulkan_compute_info compute;
         bool subgroup, cm2, cm2_small;
-        bool w4a4_cm2, w4a8_cm2;
+        bool w4a4_cm2;
         uint32_t cm_m, cm_n, cm_k;
     };
     static bool device_info(ggml_backend_dev_t dev, Device& d) {
@@ -68,7 +65,6 @@ namespace sd_vulkan_i8 {
             }
             if (prop.flexible && prop.workgroup_scope && prop.invocations == 256 && d.info.max_group_size[0] >= 256 && 64 % prop.m == 0 && 64 % prop.n == 0) {
                 d.w4a4_cm2 |= d.compute.shared_memory >= w4a4_shared && 64 % prop.k == 0 && sizeof(sd_vulkan_shaders::mul_mat_w4a4_convrot_cm2) > 4;
-                d.w4a8_cm2 |= d.compute.shared_memory >= w4a8_shared && 32 % prop.k == 0 && sizeof(sd_vulkan_shaders::mul_mat_w4a8_convrot_cm2) > 4;
             }
         }
         return d.info.integer_dot_product && sizeof(sd_vulkan_shaders::mul_mat_i8_tensorwise) > 4;
@@ -119,22 +115,26 @@ namespace sd_vulkan_i8 {
     }
     static bool can_matmul(const Device& d, const ggml_tensor* dst) {
         SDI8Operation op;
-        if (!sd_ggml_i8_describe(dst, &op) || !op.packed || op.group_size != 256 || !op.weight_scale || !bounded(d, dst))
+        if (!sd_ggml_i8_describe(dst, &op) || !op.packed || !op.weight_scale || !bounded(d, dst))
             return false;
         for (auto* t : {op.weight, op.input, op.weight_scale, op.bias})
             if (t && !bounded(d, t))
                 return false;
-        const uint64_t cols = op.weight->ne[1], rows = ggml_nrows(dst);
-        return op.weight->ne[0] % 256 == 0 && op.weight->ne[0] <= UINT32_MAX && cols <= UINT32_MAX && rows <= UINT32_MAX &&
-               (cols + 15) / 16 <= d.info.max_group_count[0] && (rows + 15) / 16 <= d.info.max_group_count[1] &&
+        if (op.codebook && (!bounded(d, op.codebook) || !bounded(d, op.relative_scale) ||
+                            op.decoded_weight_bytes() > std::min<size_t>(UINT32_MAX, d.info.max_buffer_range)))
+            return false;
+        const uint64_t k = op.k(), cols = op.weight->ne[1], rows = ggml_nrows(dst);
+        return k % 64 == 0 && k <= UINT32_MAX && ggml_nelements(dst) <= UINT32_MAX &&
+               (k * ((rows + 3) / 4 * 4)) % d.info.buffer_alignment == 0 &&
+               (cols + 63) / 64 <= d.info.max_group_count[0] && (rows + 31) / 32 <= d.info.max_group_count[1] &&
                d.info.max_group_invocations >= 256 && d.info.max_group_size[0] >= 16 && d.info.max_group_size[1] >= 16;
     }
     static bool w4_supports(ggml_backend_dev_t dev, const ggml_tensor* dst, void*) {
         Device d;
         SDW4Operation op;
         if (!device_info(dev, d) || !sd_ggml_w4_describe(dst, &op) || !bounded(d, dst) ||
-            sizeof(sd_vulkan_shaders::mul_mat_w4a4_convrot) <= 4 || sizeof(sd_vulkan_shaders::mul_mat_w4a8_convrot) <= 4 ||
-            d.compute.shared_memory < (op.kind == SDW4Kind::W4A8 ? 16452u : 13312u) || d.info.max_push_constants < 16)
+            sizeof(sd_vulkan_shaders::mul_mat_w4a4_convrot) <= 4 ||
+            d.compute.shared_memory < 13312 || d.info.max_push_constants < 16)
             return false;
         for (auto* t : dst->src)
             if (t && (!bounded(d, t) || ggml_nbytes(t) > UINT32_MAX))
@@ -310,7 +310,9 @@ namespace sd_vulkan_i8 {
         }
         const ggml_tensor* gate = glu->src[0];
         const ggml_tensor* up   = glu->src[1];
-        if (gate == up || gate->src[1] != up->src[1] || !ggml_are_same_shape(gate, up)) {
+        SDI8Operation gate_op, up_op;
+        if (gate == up || !sd_ggml_i8_describe(gate, &gate_op) || !sd_ggml_i8_describe(up, &up_op) ||
+            gate_op.codebook || up_op.codebook || gate_op.input != up_op.input || !ggml_are_same_shape(gate, up)) {
             return false;
         }
         for (auto mat : {gate, up}) {
@@ -628,9 +630,13 @@ namespace sd_vulkan_i8 {
         SDI8Operation op, up;
         if (!sd_ggml_i8_describe(mat, &op) || (up_mat && !sd_ggml_i8_describe(up_mat, &up)))
             return GGML_STATUS_FAILED;
-        const uint32_t k = uint32_t(op.weight->ne[0]), n = uint32_t(op.weight->ne[1]), rows = uint32_t(ggml_nrows(mat));
+        const uint32_t k = uint32_t(op.k()), n = uint32_t(op.weight->ne[1]), rows = uint32_t(ggml_nrows(mat));
         const size_t scale_offset                   = size_t(k) * ((uint64_t(rows) + 3) / 4 * 4);
         std::vector<ggml_ext_vulkan_binding> inputs = {{op.weight}, {op.input}, {op.weight_scale}, {op.bias ? op.bias : op.weight_scale}};
+        if (op.codebook) {
+            inputs.push_back({op.codebook});
+            inputs.push_back({op.relative_scale});
+        }
         if (gate) {
             inputs.push_back({gate});
             inputs.push_back({residual});
@@ -645,8 +651,22 @@ namespace sd_vulkan_i8 {
         bool alias;
         if (!output_binding(e, d, output, inputs, dst, alias, concat ? nullptr : residual))
             return GGML_STATUS_FAILED;
+        ggml_ext_vulkan_binding weight = {op.weight};
+        if (op.codebook) {
+            const size_t bytes = op.decoded_weight_bytes();
+            weight             = {nullptr, e->workspace, 0, bytes};
+            if (alias)
+                dst.offset = GGML_PAD(bytes, d.info.buffer_alignment);
+            const ggml_ext_vulkan_binding decode_inputs[] = {{op.weight}, {op.codebook}, {op.relative_scale}, weight};
+            const uint32_t count                          = uint32_t(ggml_nelements(op.relative_scale));
+            const uint32_t groups[]                       = {std::min((count + 127) / 128, d.info.max_group_count[0]), 1, 1};
+            const auto pipeline                           = SD_VK_PIPELINE(decode_w4a8, 4, uint32_t);
+            const auto status                             = d.api->dispatch(e->backend, &pipeline, decode_inputs, &count, groups);
+            if (status != GGML_STATUS_SUCCESS)
+                return status;
+        }
         auto destination                   = concat ? range(dst, ggml_nbytes(concat->src[0]), ggml_nbytes(tail)) : dst;
-        ggml_ext_vulkan_binding bindings[] = {{op.weight}, {op.input, nullptr, 0, scale_offset}, {op.weight_scale}, {op.input, nullptr, scale_offset, size_t(rows) * 4}, {op.bias ? op.bias : op.weight_scale}, destination, {up_mat ? up.weight : gate}, {up_mat ? up.weight_scale : residual}};
+        ggml_ext_vulkan_binding bindings[] = {weight, {op.input, nullptr, 0, scale_offset}, {op.weight_scale}, {op.input, nullptr, scale_offset, size_t(rows) * 4}, {op.bias ? op.bias : op.weight_scale}, destination, {up_mat ? up.weight : gate}, {up_mat ? up.weight_scale : residual}};
         auto dispatch                      = [&](ggml_ext_vulkan_pipeline pipeline, uint32_t tile_cols, uint32_t tile_rows,
                                                  std::initializer_list<uint32_t> constants, uint32_t row_offset, uint32_t dispatch_rows) {
             if (!dispatch_rows)
@@ -665,16 +685,19 @@ namespace sd_vulkan_i8 {
             auto pipeline            = residual ? SD_VK_PIPELINE(mul_mat_i8_residual_cm2, 8, MatParameters) : up_mat ? SD_VK_PIPELINE(mul_mat_i8_swiglu_split_cm2, 8, MatParameters)
                                                                                                                      : SD_VK_PIPELINE(mul_mat_i8_tensorwise_cm2, 6, MatParameters);
             const uint32_t tile_cols = glu ? 64 : 128;
-            status                   = dispatch(pipeline, tile_cols, 128, {128, 1, glu ? 1u : 0u, tile_cols, glu || large_k ? 128u : 64u}, 0, full_rows);
+            const uint32_t full_k    = (glu || large_k) && k % 128 == 0 ? 128u : 64u;
+            status                   = dispatch(pipeline, tile_cols, 128, {128, 1, glu ? 1u : 0u, tile_cols, full_k}, 0, full_rows);
             if (status == GGML_STATUS_SUCCESS) {
                 const bool small         = d.cm2_small && (glu || n % 128 == 0) && rows - full_rows <= 32;
                 const uint32_t tail_cols = small || glu ? 64 : 128, tail_rows = small ? 32 : glu ? 128
                                                                                                  : 64;
-                status = dispatch(pipeline, tail_cols, tail_rows, {tail_rows, small ? 2u : 0u, glu ? 1u : 0u, tail_cols, small ? 256u : 64u}, full_rows, rows - full_rows);
+                const uint32_t tail_k = small && k % 256 == 0 ? 256u : 64u;
+                status                = dispatch(pipeline, tail_cols, tail_rows, {tail_rows, small ? 2u : 0u, glu ? 1u : 0u, tail_cols, tail_k}, full_rows, rows - full_rows);
             }
         } else {
             uint32_t coop_rows = 0;
-            if (d.cm_m && k % d.cm_k == 0 && n % (4 * d.cm_n) == 0) {
+            if (d.cm_m && k % d.cm_k == 0 && n % (4 * d.cm_n) == 0 &&
+                n / (4 * d.cm_n) <= d.info.max_group_count[0] && rows / (4 * d.cm_m) <= d.info.max_group_count[1]) {
                 const uint32_t tile_rows        = 4 * d.cm_m;
                 coop_rows                       = rows / tile_rows * tile_rows;
                 auto pipeline                   = SD_VK_PIPELINE(mul_mat_i8_tensorwise_cm1, 6, MatParameters);
@@ -683,7 +706,7 @@ namespace sd_vulkan_i8 {
                 status                          = dispatch(pipeline, 4 * d.cm_n, tile_rows, {d.info.subgroup_size, d.cm_m, d.cm_n, d.cm_k}, 0, coop_rows);
             }
             if (status == GGML_STATUS_SUCCESS)
-                status = dispatch(SD_VK_PIPELINE(mul_mat_i8_tensorwise, 6, MatParameters), 16, 16, {}, coop_rows, rows - coop_rows);
+                status = dispatch(SD_VK_PIPELINE(mul_mat_i8_tensorwise, 6, MatParameters), 64, 32, {}, coop_rows, rows - coop_rows);
         }
         if (status == GGML_STATUS_SUCCESS && concat && ggml_nbytes(concat->src[0])) {
             ggml_ext_vulkan_binding src = {concat->src[0]}, prefix = range(dst, 0, ggml_nbytes(concat->src[0]));
@@ -699,10 +722,6 @@ namespace sd_vulkan_i8 {
         const size_t scale_offset                     = size_t(k) * ((uint64_t(rows) + 3) / 4 * 4);
         const ggml_ext_vulkan_binding xs              = {op.input, nullptr, scale_offset, size_t(rows) * 4};
         std::vector<ggml_ext_vulkan_binding> bindings = {{op.weight}, {op.input, nullptr, 0, scale_offset}, {op.weight_scale}};
-        if (op.kind == SDW4Kind::W4A8) {
-            bindings.push_back({op.s_channel});
-            bindings.push_back({op.s_rel});
-        }
         bindings.push_back(xs);
         bindings.push_back({op.bias ? op.bias : op.weight_scale});
         ggml_ext_vulkan_binding dst;
@@ -714,17 +733,15 @@ namespace sd_vulkan_i8 {
             uint32_t n, rows, k, bias;
         };
         const Parameters pc = {n, rows, k, op.bias ? 1u : 0u};
-        auto pipeline       = op.kind == SDW4Kind::W4A4 ? SD_VK_PIPELINE(mul_mat_w4a4_convrot, 6, Parameters) : SD_VK_PIPELINE(mul_mat_w4a8_convrot, 8, Parameters);
+        auto pipeline       = SD_VK_PIPELINE(mul_mat_w4a4_convrot, 6, Parameters);
         uint32_t tile_cols = 64, tile_rows = 32;
-        const bool large_w4a4      = op.kind == SDW4Kind::W4A4 && rows >= 512 && d.compute.shared_memory >= w4a4_large_shared;
-        const bool large_w4a8      = op.kind == SDW4Kind::W4A8 && rows >= 512 && d.compute.shared_memory >= w4a8_large_shared;
-        const bool decode_w4a4     = op.kind == SDW4Kind::W4A4 && d.w4a4_cm2 && k % 256 == 0 && n % 64 == 0 && rows >= 128 &&
+        const bool large_w4a4      = rows >= 512 && d.compute.shared_memory >= w4a4_large_shared;
+        const bool decode_w4a4     = d.w4a4_cm2 && k % 256 == 0 && n % 64 == 0 && rows >= 128 &&
                                      aligned(op.weight, 16) && sizeof(sd_vulkan_shaders::mul_mat_w4a4_convrot_decode_cm2) > 4;
-        const uint32_t constants[] = {64, large_w4a4 || large_w4a8 ? 128u : 64u, 64};
+        const uint32_t constants[] = {64, large_w4a4 ? 128u : 64u, 64};
         const char* force_dp4a     = std::getenv("GGML_VK_W4_FORCE_DP4A");
-        if (!(force_dp4a && std::atoi(force_dp4a)) && aligned(op.input, 16) &&
-            (op.kind == SDW4Kind::W4A4 ? d.w4a4_cm2 : d.w4a8_cm2 && aligned(op.weight, 8))) {
-            pipeline = op.kind == SDW4Kind::W4A4 ? SD_VK_PIPELINE(mul_mat_w4a4_convrot_cm2, 6, Parameters) : SD_VK_PIPELINE(mul_mat_w4a8_convrot_cm2, 8, Parameters);
+        if (!(force_dp4a && std::atoi(force_dp4a)) && aligned(op.input, 16) && d.w4a4_cm2) {
+            pipeline = SD_VK_PIPELINE(mul_mat_w4a4_convrot_cm2, 6, Parameters);
             if (decode_w4a4) {
                 struct DecodeParameters {
                     uint32_t n, rows, k, bias, row_offset;
@@ -834,7 +851,7 @@ namespace sd_vulkan_i8 {
         const auto src = reinterpret_cast<uintptr_t>(input->data) + offset;
         return dst < src + size && src < dst + ggml_nbytes(output);
     }
-    static ggml_status prepare(ggml_backend_t, ggml_tensor* const* nodes, int count, void**, size_t* bytes, void*) {
+    static ggml_status prepare(ggml_backend_t backend, ggml_tensor* const* nodes, int count, void**, size_t* bytes, void*) {
         const auto* output = nodes[count - 1];
         // Fresh outputs cannot alias external inputs except the residual's elementwise reuse.
         const bool fresh = !output->data && !output->view_src &&
@@ -849,6 +866,13 @@ namespace sd_vulkan_i8 {
                         alias |= may_alias(output, src);
             if (!alias)
                 *bytes = 0;
+        }
+        SDI8Operation op;
+        if (sd_ggml_i8_describe(nodes[0], &op) && op.codebook) {
+            Device d;
+            if (!device_info(ggml_backend_get_device(backend), d))
+                return GGML_STATUS_FAILED;
+            *bytes += GGML_PAD(op.decoded_weight_bytes(), d.info.buffer_alignment);
         }
         return GGML_STATUS_SUCCESS;
     }

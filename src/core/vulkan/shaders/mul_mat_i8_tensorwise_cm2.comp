@@ -94,7 +94,7 @@ int32_t dequantize_swiglu(const in uint row, const in uint col, const in int32_t
 }
 
 void main() {
-    const uint k_size                                                   = p.k & ~255u;
+    const uint k_size                                                   = p.k & ~63u;
     tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> a_layout = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
     tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> w_layout = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
     tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> d_layout = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);

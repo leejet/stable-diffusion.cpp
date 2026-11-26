@@ -449,19 +449,91 @@ namespace SD_CUDA_NAMESPACE {
             }
             return (reinterpret_cast<uintptr_t>(tensor->data) + offset) % alignment == 0;
         }
+        static __global__ void mul_mat_i8_dot(const int* weights, const int* activations, int* output, int64_t words, int64_t n, int64_t rows) {
+            constexpr int tile  = 32;
+            constexpr int slice = 8;
+            __shared__ int w_tile[tile][slice];
+            __shared__ int x_tile[tile][slice];
+            const int lx = threadIdx.x, ly = threadIdx.y;
+            const int lane     = ly * 16 + lx;
+            const int load_row = lane / slice, load_word = lane % slice;
+            for (int64_t row = int64_t(blockIdx.y) * tile; row < rows; row += int64_t(gridDim.y) * tile) {
+                for (int64_t col = int64_t(blockIdx.x) * tile; col < n; col += int64_t(gridDim.x) * tile) {
+                    int sum[2][2] = {};
+                    for (int64_t k = 0; k < words; k += slice) {
+                        const int64_t word          = k + load_word;
+                        w_tile[load_row][load_word] = col + load_row < n && word < words ? weights[(col + load_row) * words + word] : 0;
+                        x_tile[load_row][load_word] = row + load_row < rows && word < words ? activations[(row + load_row) * words + word] : 0;
+                        __syncthreads();
+#pragma unroll
+                        for (int i = 0; i < slice; ++i) {
+                            sum[0][0] = cuda_dot_i8x4(w_tile[lx][i], x_tile[ly][i], sum[0][0]);
+                            sum[0][1] = cuda_dot_i8x4(w_tile[lx + 16][i], x_tile[ly][i], sum[0][1]);
+                            sum[1][0] = cuda_dot_i8x4(w_tile[lx][i], x_tile[ly + 16][i], sum[1][0]);
+                            sum[1][1] = cuda_dot_i8x4(w_tile[lx + 16][i], x_tile[ly + 16][i], sum[1][1]);
+                        }
+                        __syncthreads();
+                    }
+                    for (int j = 0; j < 2; ++j) {
+                        const int64_t r = row + ly + 16 * j;
+                        for (int i = 0; i < 2; ++i) {
+                            const int64_t c = col + lx + 16 * i;
+                            if (r < rows && c < n)
+                                output[r * n + c] = sum[j][i];
+                        }
+                    }
+                }
+            }
+        }
+
+        static __global__ void decode_w4a8(const uint8_t* packed, const float* codebook, const uint8_t* scales, int8_t* decoded, int64_t groups) {
+            const int64_t stride = int64_t(blockDim.x) * gridDim.x;
+            for (int64_t g = int64_t(blockDim.x) * blockIdx.x + threadIdx.x; g < groups; g += stride) {
+                const uint8_t bits = scales[g];
+                const int exponent = (bits >> 3) & 15, mantissa = bits & 7;
+                const float magnitude = exponent == 0 ? float(mantissa) * (1.f / 512.f)
+                                                      : __int_as_float(((exponent + 120) << 23) | (mantissa << 20));
+                const float relative  = bits & 128 ? -magnitude : magnitude;
+#pragma unroll
+                for (int i = 0; i < 8; ++i) {
+                    const uint8_t byte = packed[g * 8 + i];
+#pragma unroll
+                    for (int j = 0; j < 2; ++j) {
+                        const float value           = codebook[(byte >> (4 * j)) & 15] * relative;
+                        const bool invalid          = (bits & 127) == 127 || (__float_as_uint(value) & 0x7fffffff) > 0x7f800000;
+                        decoded[g * 16 + 2 * i + j] = invalid ? 0 : int8_t(__float2int_rn(fminf(127.f, fmaxf(-127.f, value))));
+                    }
+                }
+            }
+        }
+
+        static CUDAError decode_w4a8_weights(const SDI8Operation& op, int8_t* decoded, int64_t first, int64_t cols, CUDAStream stream) {
+            const int64_t groups_per_col = op.k() / 16;
+            const int64_t groups         = cols * groups_per_col;
+            const auto blocks            = unsigned(std::min<int64_t>((groups + 127) / 128, 65535));
+            decode_w4a8<<<blocks, 128, 0, stream>>>(
+                static_cast<const uint8_t*>(op.weight->data) + first * (op.k() / 2),
+                static_cast<const float*>(op.codebook->data),
+                static_cast<const uint8_t*>(op.relative_scale->data) + first * groups_per_col, decoded, groups);
+            return cuda_last_error();
+        }
+
+        static bool blas_supported(ggml_backend_dev_t device, const ggml_ext_gpu_device_info& info, int64_t n) {
+            return info.int8_blas && n % 4 == 0 &&
+                   ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(device), "ggml_ext_gpu_blas_v1");
+        }
+
         static bool supports(ggml_backend_dev_t device, const ggml_tensor* node, void*) {
             SDI8Operation op;
             if (!sd_ggml_i8_describe(node, &op) || !aligned(node))
                 return false;
-            const int64_t k = op.weight->ne[0], n = op.weight->ne[1], rows = ggml_nrows(node);
-            if (k > INT_MAX || n > INT_MAX || rows > INT_MAX - 3 || k % 4 || n % 4 || (op.input->type == GGML_TYPE_F32 && op.group_size && (op.group_size != 256 || rows > INT_MAX / (k / 256))))
+            const int64_t k = op.k(), n = op.weight->ne[1], rows = ggml_nrows(node);
+            if (k > INT_MAX || n > INT_MAX || rows > INT_MAX - 3 || k % 4 || (op.input->type == GGML_TYPE_F32 && op.group_size && (op.group_size != 256 || rows > INT_MAX / (k / 256))))
                 return false;
             for (auto* input : node->src)
                 if (!aligned(input))
                     return false;
-            const auto info = cuda_device_info(device);
-            return info.int8_blas &&
-                   ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(device), "ggml_ext_gpu_blas_v1");
+            return cuda_device_info(device).device >= 0;
         }
         template <bool Quantize>
         static __global__ void convrot_h64(const float* src, int8_t* dst, float* partial, const float* scales, int64_t k) {
@@ -524,8 +596,14 @@ namespace SD_CUDA_NAMESPACE {
             return disabled;
         }
 #ifdef SD_CUDA_I8_CUTLASS
+        static int64_t w4a8_chunk_cols(int64_t k) {
+            constexpr int64_t decoded_bytes = 16 * 1024 * 1024;
+            constexpr int64_t alignment     = 256;
+            return std::max(alignment, decoded_bytes / k / alignment * alignment);
+        }
+
         static bool cutlass_compatible(const SDI8Operation& op, const ggml_tensor* dst) {
-            return op.weight_scale && op.weight->ne[0] <= INT_MAX / 16384 && aligned(op.bias, 16) &&
+            return op.weight_scale && op.k() <= INT_MAX / 16384 && aligned(op.bias, 16) &&
                    aligned(op.weight, 16) && aligned(op.weight_scale, 16) && aligned(dst, 16) &&
                    (op.input->type == GGML_TYPE_F32 || (aligned(op.input, 16) && aligned(op.input_scale, 16)));
         }
@@ -537,7 +615,7 @@ namespace SD_CUDA_NAMESPACE {
 
 #if defined(SD_CUDA_VENDOR_HIP)
         static bool match_gated_residual(const ggml_tensor* mat, const ggml_tensor* mul, const ggml_tensor* add, const SDI8Operation& op) {
-            if (mul->op != GGML_OP_MUL || mul->src[0] != mat || add->op != GGML_OP_ADD || !aligned(op.weight_scale, 16))
+            if (mat->ne[0] % 4 || mul->op != GGML_OP_MUL || mul->src[0] != mat || add->op != GGML_OP_ADD || !aligned(op.weight_scale, 16))
                 return false;
             const auto* gate     = mul->src[1];
             const auto* residual = residual_input(mul, add);
@@ -584,6 +662,10 @@ namespace SD_CUDA_NAMESPACE {
             SDI8Operation op;
             if (!supports(device, mat, nullptr) || !sd_ggml_i8_describe(mat, &op) || !op.weight_scale || op.bias)
                 return 0;
+#ifdef SD_CUDA_I8_CUTLASS
+            if (op.codebook && mat->ne[0] > w4a8_chunk_cols(op.k()))
+                return 0;
+#endif
             const auto* next = ggml_graph_node(g, first + 1);
 #if defined(SD_CUDA_VENDOR_HIP)
             if (first + 2 < ggml_graph_n_nodes(g) && match_gated_residual(mat, next, ggml_graph_node(g, first + 2), op))
@@ -603,7 +685,7 @@ namespace SD_CUDA_NAMESPACE {
 #ifdef SD_CUDA_I8_CUTLASS
                 if (!next->data && !next->buffer && !next->view_src && cutlass_compatible(op, next)) {
                     size_t workspace     = 0;
-                    auto* gemm           = sd_cuda_i8_gemm_prepare(device, ggml_nrows(mat), mat->ne[0], op.weight->ne[0], SDI8GemmActivation::Situ, &workspace);
+                    auto* gemm           = sd_cuda_i8_gemm_prepare(device, ggml_nrows(mat), mat->ne[0], op.k(), SDI8GemmActivation::Situ, &workspace);
                     const bool supported = gemm != nullptr;
                     sd_cuda_i8_gemm_free(gemm);
                     return supported ? 2 : 0;
@@ -623,7 +705,7 @@ namespace SD_CUDA_NAMESPACE {
 #ifdef SD_CUDA_I8_CUTLASS
                     if (!next->data && !next->buffer && !next->view_src && cutlass_compatible(op, next)) {
                         size_t workspace          = 0;
-                        auto* gemm                = sd_cuda_i8_gemm_prepare(device, ggml_nrows(mat), mat->ne[0], op.weight->ne[0], SDI8GemmActivation::Swiglu, &workspace);
+                        auto* gemm                = sd_cuda_i8_gemm_prepare(device, ggml_nrows(mat), mat->ne[0], op.k(), SDI8GemmActivation::Swiglu, &workspace);
                         const bool fused_epilogue = gemm != nullptr;
                         sd_cuda_i8_gemm_free(gemm);
                         // ConvRot is a separate launch either way. Keep its input in the
@@ -642,11 +724,38 @@ namespace SD_CUDA_NAMESPACE {
             Kind kind;
             int group;
             int64_t k, n, rows, padded;
-            size_t quant, scales, accum, partial, output, gemm_offset;
+            size_t quant, scales, decoded_weight, accum, partial, output, gemm_offset;
             SDI8CudaGemmPlan* gemm = nullptr;
-            bool fused_activation  = false;
-            bool situ              = false;
+#ifdef SD_CUDA_I8_CUTLASS
+            SDI8CudaGemmPlan* tail_gemm = nullptr;
+#endif
+            int64_t chunk_cols    = 0;
+            bool use_blas         = false;
+            bool fused_activation = false;
+            bool situ             = false;
         };
+#ifdef SD_CUDA_I8_CUTLASS
+        static void prepare_w4a8_chunks(ggml_backend_dev_t device, Plan& p, size_t& workspace) {
+            const int64_t cols = w4a8_chunk_cols(p.k);
+            if (p.n <= cols || p.n % 128)
+                return;
+            size_t chunk_bytes = 0, tail_bytes = 0;
+            auto* gemm = sd_cuda_i8_gemm_prepare_strided(device, p.rows, cols, p.k, p.n, &chunk_bytes);
+            if (!gemm)
+                return;
+            const int64_t tail_cols = p.n % cols;
+            if (tail_cols) {
+                p.tail_gemm = sd_cuda_i8_gemm_prepare_strided(device, p.rows, tail_cols, p.k, p.n, &tail_bytes);
+                if (!p.tail_gemm) {
+                    sd_cuda_i8_gemm_free(gemm);
+                    return;
+                }
+            }
+            p.gemm       = gemm;
+            p.chunk_cols = cols;
+            workspace    = std::max(chunk_bytes, tail_bytes);
+        }
+#endif
         static size_t reserve(size_t& total, size_t bytes) {
             const size_t offset = total;
             total += (bytes + 255) / 256 * 256;
@@ -664,7 +773,7 @@ namespace SD_CUDA_NAMESPACE {
                                            : count == 1                ? MAT
                                            : dst->op == GGML_OP_CONCAT ? CONCAT
                                                                        : GATED;
-            p->k           = mat ? op.weight->ne[0] : dst->ne[0];
+            p->k           = mat ? op.k() : dst->ne[0];
             p->n           = mat ? nodes[0]->ne[0] : 0;
             p->rows        = mat ? ggml_nrows(nodes[0]) : ggml_nrows(dst->src[0]);
             p->padded      = (p->rows + 3) / 4 * 4;
@@ -674,13 +783,16 @@ namespace SD_CUDA_NAMESPACE {
                 sd_ggml_convrot_describe(dst, &p->group);
             size_t total = 0;
             if (mat) {
-                p->quant  = reserve(total, op.input->type == GGML_TYPE_F32 || (!op.packed && p->rows != p->padded) ? size_t(p->k) * p->padded : 0);
-                p->scales = reserve(total, op.input->type == GGML_TYPE_F32 ? size_t(p->rows) * sizeof(float) : 0);
+                p->use_blas = blas_supported(device, p->device, p->n);
+                p->quant    = reserve(total, op.input->type == GGML_TYPE_F32 || (!op.packed && p->rows != p->padded) ? size_t(p->k) * p->padded : 0);
+                p->scales   = reserve(total, op.input->type == GGML_TYPE_F32 ? size_t(p->rows) * sizeof(float) : 0);
 #ifdef SD_CUDA_I8_CUTLASS
                 size_t gemm_bytes = 0;
                 // Retain cuBLAS when I32 accumulation can overflow.
-                if (cutlass_compatible(op, dst) && (!op.bias || p->kind == MAT) &&
+                if (p->use_blas && cutlass_compatible(op, dst) && (!op.bias || p->kind == MAT) &&
                     (p->kind != CONCAT || ggml_nbytes(dst->src[0]) % 16 == 0)) {
+                    if (op.codebook && p->kind == MAT)
+                        prepare_w4a8_chunks(device, *p, gemm_bytes);
                     if (p->kind == GATED || p->kind == SWIGLU_QUANTIZE) {
                         const auto activation = p->situ ? SDI8GemmActivation::Situ : SDI8GemmActivation::Swiglu;
                         p->gemm               = sd_cuda_i8_gemm_prepare(device, p->rows, p->n, p->k, activation, &gemm_bytes);
@@ -691,6 +803,7 @@ namespace SD_CUDA_NAMESPACE {
                 }
                 p->gemm_offset = reserve(total, gemm_bytes);
 #endif
+                p->decoded_weight       = reserve(total, p->chunk_cols ? size_t(p->chunk_cols) * p->k : op.decoded_weight_bytes());
                 const bool intermediate = !p->gemm || p->kind == SWIGLU_QUANTIZE || (p->kind == GATED && !p->fused_activation);
                 p->accum                = reserve(total, intermediate ? size_t(p->fused_activation ? p->n / 2 : p->n) * p->padded * sizeof(float) : 0);
             }
@@ -708,8 +821,10 @@ namespace SD_CUDA_NAMESPACE {
         static void destroy(void* state, void*) {
             auto* p = static_cast<Plan*>(state);
 #ifdef SD_CUDA_I8_CUTLASS
-            if (p)
+            if (p) {
                 sd_cuda_i8_gemm_free(p->gemm);
+                sd_cuda_i8_gemm_free(p->tail_gemm);
+            }
 #endif
             delete p;
         }
@@ -731,7 +846,7 @@ namespace SD_CUDA_NAMESPACE {
                 if (mat->view_src || !supports(device, mat, nullptr) || !ggml_are_same_shape(mat, glu))
                     return false;
             if (!sd_ggml_i8_describe(glu->src[0], &gate) || !sd_ggml_i8_describe(glu->src[1], &up) ||
-                gate.input != up.input || gate.input_scale != up.input_scale || gate.packed != up.packed ||
+                gate.codebook || up.codebook || gate.input != up.input || gate.input_scale != up.input_scale || gate.packed != up.packed ||
                 gate.input->type != GGML_TYPE_I8 || gate.bias || up.bias || !gate.weight_scale || !up.weight_scale ||
                 !ggml_are_same_shape(gate.weight, up.weight))
                 return false;
@@ -909,7 +1024,6 @@ namespace SD_CUDA_NAMESPACE {
         }
         static ggml_status execute(const ggml_ext_execution_context* execution, ggml_tensor* const* nodes, int count, void* state, void*) {
             const auto& p = *static_cast<const Plan*>(state);
-            auto reg      = ggml_backend_dev_backend_reg(ggml_backend_get_device(execution->backend));
             ggml_ext_gpu_context context;
             if (!cuda_context(execution->backend, &context) || context.device != p.device.device)
                 return GGML_STATUS_FAILED;
@@ -967,6 +1081,13 @@ namespace SD_CUDA_NAMESPACE {
                 }
                 if (error != cuda_success || cuda_last_error() != cuda_success)
                     return GGML_STATUS_FAILED;
+                const auto* weight = static_cast<const int8_t*>(op.weight->data);
+                if (op.codebook && !p.chunk_cols) {
+                    auto* decoded = reinterpret_cast<int8_t*>(scratch_at(p.decoded_weight));
+                    if (decode_w4a8_weights(op, decoded, 0, p.n, stream) != cuda_success)
+                        return GGML_STATUS_FAILED;
+                    weight = decoded;
+                }
                 const auto* ws          = op.weight_scale ? static_cast<const float*>(op.weight_scale->data) : nullptr;
                 const auto* bias        = op.bias ? static_cast<const float*>(op.bias->data) : nullptr;
                 const size_t prefix     = p.kind == CONCAT ? ggml_nbytes(dst->src[0]) : 0;
@@ -974,23 +1095,42 @@ namespace SD_CUDA_NAMESPACE {
                 auto* accum             = reinterpret_cast<int32_t*>(scratch_at(p.accum));
                 const bool intermediate = p.kind == SWIGLU_QUANTIZE || (p.kind == GATED && !p.fused_activation);
 #ifdef SD_CUDA_I8_CUTLASS
-                if (p.gemm) {
-                    auto status = sd_cuda_i8_gemm_execute(p.gemm, quant, static_cast<const int8_t*>(op.weight->data), scales, ws,
+                if (p.chunk_cols) {
+                    auto* decoded = reinterpret_cast<int8_t*>(scratch_at(p.decoded_weight));
+                    // A weight slice can stay in L2 across activation tiles.
+                    for (int64_t first = 0; first < p.n; first += p.chunk_cols) {
+                        const int64_t cols = std::min(p.chunk_cols, p.n - first);
+                        if (decode_w4a8_weights(op, decoded, first, cols, stream) != cuda_success)
+                            return GGML_STATUS_FAILED;
+                        auto* gemm  = cols == p.chunk_cols ? p.gemm : p.tail_gemm;
+                        auto status = sd_cuda_i8_gemm_execute(gemm, quant, decoded, scales, ws + first, gemm_output + first,
+                                                              scratch_at(p.gemm_offset), stream, bias ? bias + first : nullptr);
+                        if (status != GGML_STATUS_SUCCESS)
+                            return status;
+                    }
+                } else if (p.gemm) {
+                    auto status = sd_cuda_i8_gemm_execute(p.gemm, quant, weight, scales, ws,
                                                           intermediate ? reinterpret_cast<float*>(accum) : gemm_output, scratch_at(p.gemm_offset), stream, bias);
                     if (status != GGML_STATUS_SUCCESS)
                         return status;
                 } else
 #endif
-                {
+                    if (!p.use_blas) {
+                    const dim3 grid(unsigned(std::min<int64_t>((p.n + 31) / 32, 65535)), unsigned(std::min<int64_t>((p.rows + 31) / 32, 65535)));
+                    mul_mat_i8_dot<<<grid, dim3(16, 16), 0, stream>>>(reinterpret_cast<const int*>(weight),
+                                                                      reinterpret_cast<const int*>(quant), accum, p.k / 4, p.n, p.rows);
+                    if (cuda_last_error() != cuda_success)
+                        return GGML_STATUS_FAILED;
+                }
+#if !defined(SD_CUDA_VENDOR_MUSA)
+                else {
+                    auto reg        = ggml_backend_dev_backend_reg(ggml_backend_get_device(execution->backend));
                     auto blas_query = reinterpret_cast<ggml_ext_gpu_blas_fn>(ggml_backend_reg_get_proc_address(reg, "ggml_ext_gpu_blas_v1"));
                     auto handle     = blas_query ? blas_query(execution->backend) : nullptr;
                     if (!handle)
                         return GGML_STATUS_FAILED;
-#if defined(SD_CUDA_VENDOR_MUSA)
-                    return GGML_STATUS_FAILED;
-#else
 #if defined(SD_CUDA_VENDOR_HIP)
-                    const HipI8Gemm gemm{int(p.n), int(p.padded), int(p.k), op.weight->data, quant, accum,
+                    const HipI8Gemm gemm{int(p.n), int(p.padded), int(p.k), weight, quant, accum,
                                          static_cast<hipblasHandle_t>(handle), stream};
 #ifdef SD_HIP_I8_LT
                     if (!hip_i8_gemm_lt(context.device, gemm) && gemm.run_hipblas() != HIPBLAS_STATUS_SUCCESS)
@@ -1001,13 +1141,13 @@ namespace SD_CUDA_NAMESPACE {
                     const int32_t alpha = 1, beta = 0;
                     const auto status = cublasGemmEx(static_cast<cublasHandle_t>(handle), CUBLAS_OP_T, CUBLAS_OP_N,
                                                      int(p.n), int(p.padded), int(p.k), &alpha,
-                                                     op.weight->data, CUDA_R_8I, int(p.k), quant, CUDA_R_8I, int(p.k),
+                                                     weight, CUDA_R_8I, int(p.k), quant, CUDA_R_8I, int(p.k),
                                                      &beta, accum, CUDA_R_32I, int(p.n), CUBLAS_COMPUTE_32I, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
                     if (status != CUBLAS_STATUS_SUCCESS)
 #endif
                         return GGML_STATUS_FAILED;
-#endif
                 }
+#endif
                 const auto* values = reinterpret_cast<const float*>(accum);
                 if (p.kind == SWIGLU_QUANTIZE) {
                     if (p.fused_activation)
@@ -1037,7 +1177,7 @@ namespace SD_CUDA_NAMESPACE {
                             reinterpret_cast<float4*>(gemm_output), p.n / 4, p.rows);
                     } else
 #endif
-                        if ((reinterpret_cast<uintptr_t>(ws) | reinterpret_cast<uintptr_t>(bias) | reinterpret_cast<uintptr_t>(gemm_output)) % 16 == 0) {
+                        if (p.n % 4 == 0 && (reinterpret_cast<uintptr_t>(ws) | reinterpret_cast<uintptr_t>(bias) | reinterpret_cast<uintptr_t>(gemm_output)) % 16 == 0) {
                         dequantize_i32_rows_vec4_cuda<<<dim3(unsigned((p.n + 1023) / 1024), gy, gz), 256, 0, stream>>>(
                             reinterpret_cast<const int4*>(accum), scales, reinterpret_cast<const float4*>(ws), reinterpret_cast<const float4*>(bias), reinterpret_cast<float4*>(gemm_output), p.n / 4, p.rows);
                     } else {
@@ -1066,7 +1206,8 @@ namespace SD_CUDA_NAMESPACE {
             ggml_tensor* nodes[] = {ggml_graph_node(g, first), ggml_graph_node(g, first + 1), ggml_graph_node(g, first + 2), ggml_graph_node(g, first + 3)};
             SDI8Operation gate, up;
             int group;
-            if (!split_describe(device, nodes, gate, up) || !gate.packed ||
+            if (!blas_supported(device, cuda_device_info(device), nodes[2]->ne[0]) ||
+                !split_describe(device, nodes, gate, up) || !gate.packed ||
                 nodes[3]->src[0] != nodes[2] || !sd_ggml_convrot_describe(nodes[3], &group) || group != 256 ||
                 !convrot_supports(device, nodes[3], nullptr) ||
                 size_t(nodes[2]->ne[0]) * sizeof(float) + 128 <= cuda_device_info(device).shared_memory)

@@ -164,6 +164,26 @@ kernel void sd_i8_lora_quantize(device const char* weight [[buffer(0)]],
     }
 }
 
+kernel void sd_i8_decode_w4a8(device const uchar* packed [[buffer(0)]],
+                              device const float* codebook [[buffer(1)]],
+                              device const uchar* scales [[buffer(2)]],
+                              device char* decoded [[buffer(3)]],
+                              constant uint& groups [[buffer(4)]],
+                              uint group [[thread_position_in_grid]]) {
+    if (group >= groups)
+        return;
+    const uint bits     = scales[group];
+    const uint exponent = (bits >> 3) & 15, mantissa = bits & 7;
+    const float magnitude = exponent == 0 ? float(mantissa) * (1.f / 512.f)
+                                          : as_type<float>(((exponent + 120) << 23) | (mantissa << 20));
+    const float relative  = bits & 128 ? -magnitude : magnitude;
+    for (uint i = 0; i < 16; ++i) {
+        const uint code         = (packed[group * 8 + i / 2] >> (4 * (i % 2))) & 15;
+        const float value       = codebook[code] * relative;
+        decoded[group * 16 + i] = (bits & 127) == 127 || isnan(value) ? 0 : char(rint(clamp(value, -127.f, 127.f)));
+    }
+}
+
 struct MatParams {
     uint k;
     uint n;

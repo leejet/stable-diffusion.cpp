@@ -57,7 +57,7 @@ struct ClipProjConnector : public UnaryBlock {
     ClipProjConnector(int64_t input_dim = 2560, int64_t output_dim = 5120, const String2TensorStorage& tensor_storage_map = {}) : input_dim(input_dim), output_dim(output_dim) {
         config_from_weights(tensor_storage_map);
         if (has_mlp) {
-            if(mlp_hidden <= 0){
+            if (mlp_hidden <= 0) {
                 throw std::runtime_error("Cannot find hidden size for ClipProj mlp");
             }
             blocks["mlp"] = std::shared_ptr<GGMLBlock>(new MLP(input_dim, mlp_hidden, output_dim));
@@ -93,8 +93,8 @@ struct ClipProjConnector : public UnaryBlock {
             auto x_mlp = mlp->forward(ctx, x_std);
             x          = has_linear ? ggml_add_inplace(ctx->ggml_ctx, x, x_mlp) : x_mlp;
         }
-        x         = ggml_add(ctx->ggml_ctx, ggml_mul(ctx->ggml_ctx, x, params["std_out"]), params["mean_out"]);
-        if(has_sink){
+        x = ggml_add(ctx->ggml_ctx, ggml_mul(ctx->ggml_ctx, x, params["std_out"]), params["mean_out"]);
+        if (has_sink) {
             auto sink = ggml_repeat(ctx->ggml_ctx, params["sink_out"], ggml_ext_slice(ctx, x, 1, 0, 1));
             if (x->ne[1] == 1) {
                 return sink;

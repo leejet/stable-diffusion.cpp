@@ -109,15 +109,13 @@ and backend `graph_plan_*` interfaces do not dispatch these extensions.
 
 ## Backend services
 
-Packed ComfyUI INT4 linear layers use `sd.linear_w4_convrot.v1`, built by
-`ggml_ext_mul_mat_w4_convrot`. The operator consumes byte-packed I8 weights and the
-explicit output of `sd.quantize_i8_convrot.v1`; F32 callers get a quantization
-node during graph construction. Logical output dimensions are stored in the
-operator attributes, so backend copies of the packed activation do not need to
-retain the producer's op marker. W4A4 uses row scales; W4A8 additionally exposes
-the codebook, channel scales, and FP8 relative scales as tensor dependencies.
-CPU, CUDA/HIP/MUSA, and Vulkan register kernels through the same extension API
-as INT8. No ggml submodule changes are required.
+ComfyUI W4A4 linear layers use `sd.linear_w4_convrot.v1`. W4A8 uses the same
+`sd.linear_i8.v1` node as W8A8 with packed weights, a codebook, and FP8 relative
+scales. The backend decodes that projection's weights into scheduler workspace
+before running the shared INT8 GEMM with its channel scales. Both formats consume the explicit output of
+`sd.quantize_i8_convrot.v1`. Logical output dimensions are stored in the linear
+operator attributes so backend copies of the packed activation can be used
+directly.
 
 Services are discovered through `ggml_backend_reg_get_proc_address`:
 
@@ -286,7 +284,7 @@ backend paths have been removed. CPU, CUDA/HIP/MUSA, and Vulkan register kernels
 and fusion rules through the extension interfaces.
 
 For already quantized activations, `ggml_ext_mul_mat_i8_tensorwise` accepts ordinary
-I8 weight and activation tensors. Its optional final `input_scale` parameter is a
+I8 weight and activation tensors. Its optional `input_scale` parameter is a
 separate F32 tensor with one value per activation row. Weight scales have one
 value per output channel; weight scales and bias can be null. Existing calls
 omit `input_scale` and retain their original argument order. It computes `float(int32_dot(W, X)) * X_scale * W_scale + bias`, in that

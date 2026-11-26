@@ -1,0 +1,39 @@
+#version 450
+
+layout(local_size_x = 128) in;
+layout(push_constant) uniform Parameters {
+    uint groups;
+}
+p;
+layout(binding = 0, std430) readonly buffer Packed {
+    uint packed[];
+};
+layout(binding = 1, std430) readonly buffer Codebook {
+    float codebook[];
+};
+layout(binding = 2, std430) readonly buffer Scales {
+    uint scales[];
+};
+layout(binding = 3, std430) writeonly buffer Decoded {
+    uint decoded[];
+};
+
+void main() {
+    for (uint group = gl_GlobalInvocationID.x; group < p.groups; group += gl_NumWorkGroups.x * gl_WorkGroupSize.x) {
+        const uint bits       = (scales[group / 4] >> (8 * (group % 4))) & 255u;
+        const uint exponent   = (bits >> 3) & 15u;
+        const uint mantissa   = bits & 7u;
+        const float magnitude = exponent == 0 ? float(mantissa) / 512.0 : uintBitsToFloat(((exponent + 120) << 23) | (mantissa << 20));
+        const float relative  = (bits & 128u) != 0 ? -magnitude : magnitude;
+        for (uint i = 0; i < 4; ++i) {
+            const uint codes = packed[group * 2 + i / 2] >> (16 * (i % 2));
+            uint word        = 0;
+            for (uint j = 0; j < 4; ++j) {
+                const float value = codebook[(codes >> (4 * j)) & 15u] * relative;
+                const int q       = (bits & 127u) == 127u || isnan(value) ? 0 : int(roundEven(clamp(value, -127.0, 127.0)));
+                word |= (uint(q) & 255u) << (8 * j);
+            }
+            decoded[group * 4 + i] = word;
+        }
+    }
+}

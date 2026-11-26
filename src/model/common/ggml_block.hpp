@@ -262,10 +262,10 @@ public:
 #ifndef SD_USE_UPSTREAM_GGML
             if (w4_convrot_kind) {
                 out = ggml_ext_linear_w4_convrot(ctx, x, w,
-                                                 w4_convrot_kind == 2 ? params["weight_codebook"] : weight_scale,
-                                                 w4_convrot_kind == 2 ? params["weight_s_channel"] : nullptr,
-                                                 w4_convrot_kind == 2 ? params["weight_s_rel"] : nullptr,
-                                                 b, static_cast<SDW4Kind>(w4_convrot_kind), int8_convrot ? int8_convrot_group_size : 0, scale);
+                                                 w4_convrot_kind == 2 ? params["weight_s_channel"] : weight_scale,
+                                                 b, int8_convrot ? int8_convrot_group_size : 0, scale,
+                                                 w4_convrot_kind == 2 ? params["weight_codebook"] : nullptr,
+                                                 w4_convrot_kind == 2 ? params["weight_s_rel"] : nullptr);
             } else
 #endif
                 out = ggml_ext_linear_i8_tensorwise(ctx,
