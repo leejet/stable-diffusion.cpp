@@ -137,13 +137,19 @@ Both formats imply convrot rotation even without a `convrot` flag; missing
 Both formats reuse the convrot activation cache when the input scale is `1` and
 produce F32 outputs with optional bias.
 
-W4A8 multiplies the codebook value by the group's relative scale, rounds to nearest even, 
+W4A8 multiplies the codebook value by the group's relative scale, rounds to nearest even,
 and clamps to `[-127, 127]`. The linear operation decodes weights into temporary workspace,
 then runs the same INT8 GEMM as W8A8 with `weight_s_channel` as the per-output
 scale. Eligible large CUDA projections decode slices and write GEMM results
 directly into the corresponding output columns. CPU, CUDA/HIP/MUSA, Vulkan,
 and Metal provide weight decoders. The checkpoint's packed weights stay in
 their original layout.
+
+Vulkan decodes the entire W4A8 projection into a single storage-buffer binding.
+If the decoded INT8 weights exceed the device's `maxStorageBufferRange`, the
+scheduler runs that projection on the CPU. An `8192 × 24576` projection, for
+example, needs 192 MiB after decoding and falls back to CPU on a device with a
+128 MiB storage-buffer range.
 
 W4A4 uses packed-weight kernels. Eligible CUDA SM80+ shapes can use CUTLASS mixed
 S8 x S4 GEMM. Vulkan uses cooperative matrices where supported and requires a
