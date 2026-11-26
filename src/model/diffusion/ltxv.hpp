@@ -780,10 +780,8 @@ namespace LTXV {
                                                                    config.audio_hidden_size,
                                                                    2);
             if (config.use_keyframes_abs_pos_embedding) {
-                params["keyframes_abs_pos_embedding"] = ggml_new_tensor_2d(ctx,
-                                                                           get_type(prefix + "keyframes_abs_pos_embedding", tensor_storage_map, GGML_TYPE_F32),
-                                                                           config.hidden_size,
-                                                                           1);
+                // Added to f32 activations, and backends without BF16 support (e.g. Vulkan on RADV) can't add a BF16 tensor.
+                params["keyframes_abs_pos_embedding"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, config.hidden_size, 1);
             }
         }
 
