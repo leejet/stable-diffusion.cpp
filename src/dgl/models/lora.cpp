@@ -19,7 +19,9 @@ namespace sd::dgl::models {
         const auto& tensors  = loader.get_tensor_storage_map();
         const bool quantized = std::any_of(tensors.begin(), tensors.end(), [](const auto& entry) {
             const auto& tensor = entry.second;
-            return tensor.w4_convrot_kind ||
+            // Merging into fp8 weights needs a CPY to fp8, which Vulkan cannot run.
+            const ggml_type type = tensor.expected_type < GGML_TYPE_COUNT ? tensor.expected_type : tensor.type;
+            return tensor.w4_convrot_kind || type == GGML_TYPE_F8_E4M3 || type == GGML_TYPE_F8_E5M2 ||
                    (!tensor.is_int8_tensorwise &&
                     (ggml_is_quantized(tensor.type) ||
                      (tensor.expected_type < GGML_TYPE_COUNT && ggml_is_quantized(tensor.expected_type))));
