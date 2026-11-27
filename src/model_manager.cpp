@@ -793,9 +793,9 @@ bool ModelManager::stage_tensors_to_compute_backend(const std::vector<TensorStat
             }
 #endif
             if (retain_weights_ && !ggml_backend_buft_is_host(staging_buft) &&
-                std::any_of(chunk.begin(), chunk.end(), [](const auto* state) {
-                    return needs_lora_staging(*state) && state->params_backend == state->compute_backend;
-                })) {
+                (max_vram_.bytes_for_backend(compute_backend) > 0 || std::any_of(chunk.begin(), chunk.end(), [](const auto* state) {
+                     return needs_lora_staging(*state) && state->params_backend == state->compute_backend;
+                 }))) {
                 std::vector<ggml_tensor*> protected_params;
                 for (auto* state : states)
                     protected_params.push_back(state->tensor);
@@ -1419,6 +1419,7 @@ bool ModelManager::alloc_params_buffers(const std::vector<TensorState*>& states,
                 return true;
             }
 
+            std::unique_ptr<ggml_backend_buffer, decltype(&ggml_backend_buffer_free)> cached_buffer(nullptr, ggml_backend_buffer_free);
             if (retain_weights_ && !ggml_backend_buft_is_host(params_buft)) {
                 const auto* state      = chunk.front();
                 auto backend           = state->residency_mode == ResidencyMode::Disk ? state->compute_backend : state->params_backend;
@@ -1427,19 +1428,24 @@ bool ModelManager::alloc_params_buffers(const std::vector<TensorState*>& states,
                 const auto devices     = placement == placements.end()
                                              ? std::vector<std::pair<ggml_backend_t, size_t>>{{backend, 0}}
                                              : placement->second;
+                if (placement == placements.end() && backend != nullptr &&
+                    ggml_backend_get_default_buffer_type(backend) == params_buft) {
+                    cached_buffer.reset(sd_backend_try_alloc_buffer_from_cache(params_buft, chunk_size));
+                }
+                const size_t reused_bytes = cached_buffer ? chunk_size : 0;
                 for (const auto& [device, limit] : devices) {
                     if (device && !execution_engine()->ensure_capacity(
-                                      *this, {device, 0, chunk_size, 0, limit}, {}, {}, protected_params)) {
+                                      *this, {device, 0, chunk_size, 0, limit, reused_bytes}, {}, {}, protected_params)) {
                         LOG_ERROR("model manager cannot fit params buffer on %s", ggml_backend_name(device));
                         return false;
                     }
                 }
 #ifdef _WIN32
-                if (sd_backend_is(backend, "CUDA") && !ensure_host_capacity(0, required_states, false, chunk_size))
+                if (sd_backend_is(backend, "CUDA") && !ensure_host_capacity(0, required_states, false, chunk_size - reused_bytes))
                     return false;
 #endif
             }
-            ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(params_buft, chunk_size);
+            ggml_backend_buffer_t buffer = cached_buffer ? cached_buffer.release() : ggml_backend_buft_alloc_buffer(params_buft, chunk_size);
             if (buffer == nullptr) {
                 LOG_ERROR("model manager alloc params backend buffer failed, size = %.2fMB",
                           chunk_size / (1024.0 * 1024.0));
@@ -2342,6 +2348,7 @@ WeightResidencyInfo ModelManager::inspect_compute_backend_params(
     ggml_backend_t prefetch_compute_backend = nullptr;
     bool has_missing_params                 = false;
     bool prefetch_candidate                 = true;
+    bool single_prefetch_buffer             = true;
     for (TensorState* state : states) {
         if (state == nullptr || should_ignore(*state) ||
             (state->sources.empty() && is_optional_missing_tensor(state->name))) {
@@ -2355,6 +2362,9 @@ WeightResidencyInfo ModelManager::inspect_compute_backend_params(
             continue;
         }
         has_missing_params = true;
+        if (state->usage_op == GGML_OP_CUSTOM || has_lora_int8_pair(*state)) {
+            single_prefetch_buffer = false;
+        }
         if (split_buffer_type_for(*state) != nullptr) {
             prefetch_candidate = false;
         }
@@ -2376,6 +2386,13 @@ WeightResidencyInfo ModelManager::inspect_compute_backend_params(
             ggml_backend_dev_props props{};
             ggml_backend_dev_get_props(device, &props);
             info.async_prefetch_supported = props.caps.async;
+        }
+        if (info.async_prefetch_supported && single_prefetch_buffer && info.missing_bytes > 0 &&
+            (sd_backend_is(prefetch_compute_backend, "CUDA") || sd_backend_is(prefetch_compute_backend, "ROCm"))) {
+            auto buft = ggml_backend_get_default_buffer_type(prefetch_compute_backend);
+            if (info.missing_bytes <= std::min(MAX_RESIDENCY_BLOCK_BYTES, ggml_backend_buft_get_max_size(buft))) {
+                info.single_prefetch_buffer_type = buft;
+            }
         }
     }
     return info;
@@ -2415,8 +2432,8 @@ std::map<ggml_backend_t, size_t> ModelManager::split_devices_for(const std::vect
 ModelManager::CapacityCheck ModelManager::check_capacity(
     const DeviceMemoryRequest& request,
     const std::vector<TensorState*>& states,
-    bool log_details,
-    bool allow_reclamation) const {
+    DeviceMemoryCheck check,
+    bool log_details) const {
     CapacityCheck result;
     if (request.compute_backend == nullptr || sd_backend_is_cpu(request.compute_backend)) {
         return result;
@@ -2431,11 +2448,15 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
         safety_margin = 1024ULL * 1024ULL * 1024ULL;
     }
 #endif
-    result.required_device_bytes = add(add(request.pending_allocation_bytes, missing), safety_margin);
-    result.required_budget_bytes = add(request.runtime_peak_bytes(), missing);
+    const size_t prefetch_reused_bytes = request.prefetch_buffer && request.prefetch_buffer->buffer ? request.prefetch_buffer->bytes : 0;
+    const size_t reused_bytes          = add(request.reused_buffer_bytes, prefetch_reused_bytes);
+    const size_t pending_bytes         = add(request.pending_allocation_bytes, missing);
+    result.required_device_bytes       = add(pending_bytes - std::min(pending_bytes, reused_bytes), safety_margin);
+    result.required_budget_bytes       = add(request.runtime_peak_bytes(), missing);
 
+    const bool allow_reclamation = check == DeviceMemoryCheck::Reclaimable;
     std::vector<ggml_tensor*> protected_params;
-    if (allow_reclamation) {
+    if (allow_reclamation && retain_weights_) {
         protected_params.reserve(states.size());
         for (const auto* state : states)
             protected_params.push_back(state->tensor);
@@ -2444,12 +2465,10 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
         auto device = ggml_backend_get_device(backend);
         if (device == nullptr)
             return;
-        size_t free_bytes = 0, total_bytes = 0;
-        ggml_backend_dev_memory(device, &free_bytes, &total_bytes);
         const size_t weights_resident = compute_backend_resident_bytes(backend);
         const size_t other_runtime    = other_runtime_resident_bytes(request.owner_id, backend);
         size_t reclaimable            = 0;
-        if (allow_reclamation) {
+        if (allow_reclamation && retain_weights_) {
             for (const auto& block : evictable_compute_backend_blocks(backend, protected_params))
                 reclaimable += std::min(block.bytes, weights_resident - reclaimable);
         }
@@ -2460,16 +2479,54 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
             if (shared_limit > 0)
                 limit = limit == 0 ? shared_limit : std::min(limit, shared_limit);
         }
+
+        size_t free_bytes = 0, total_bytes = 0, cached_bytes = 0;
+        const bool has_cache_accounting = sd_backend_get_buffer_cache_memory(device, free_bytes, total_bytes, cached_bytes);
+        if (check == DeviceMemoryCheck::TrimBufferCache) {
+            if (has_cache_accounting) {
+                const size_t in_use = add(resident, request.runtime_resident_bytes);
+                const size_t peak   = add(resident, result.required_budget_bytes);
+                // If trimming alone cannot admit a prefetch, an evicted weight buffer may satisfy it without growing the pool.
+                const bool wait_for_eviction = request.prefetch_buffer && !request.prefetch_buffer->buffer &&
+                                               limit > 0 && peak > limit && add(in_use, cached_bytes) <= limit;
+                size_t cache_limit           = limit == 0 ? SIZE_MAX : limit - std::min(limit, wait_for_eviction ? in_use : peak);
+                if (!wait_for_eviction && total_bytes > 0 && free_bytes < result.required_device_bytes) {
+                    const size_t shortfall = result.required_device_bytes - free_bytes;
+                    cache_limit            = std::min(cache_limit, cached_bytes - std::min(cached_bytes, shortfall));
+                }
+                sd_backend_set_buffer_cache_limit(device, cache_limit);
+                if (cached_bytes > cache_limit) {
+                    const size_t previous_cached_bytes = cached_bytes;
+                    sd_backend_get_buffer_cache_memory(device, free_bytes, total_bytes, cached_bytes);
+                    // Virtual CUDA devices may regain only a fraction of the bytes released.
+                    if (cached_bytes > 0 && free_bytes < result.required_device_bytes) {
+                        sd_backend_set_buffer_cache_limit(device, 0);
+                        sd_backend_get_buffer_cache_memory(device, free_bytes, total_bytes, cached_bytes);
+                    }
+                    LOG_DEBUG("model manager trimmed the idle buffer pool on %s from %.2f MiB to %.2f MiB",
+                              ggml_backend_name(backend), previous_cached_bytes / (1024.0 * 1024.0), cached_bytes / (1024.0 * 1024.0));
+                }
+            } else if (limit > 0) {
+                // An older backend may expose reuse without exposing the retained bytes.
+                sd_backend_set_buffer_cache_enabled(backend, false);
+                ggml_backend_dev_memory(device, &free_bytes, &total_bytes);
+            }
+        } else if (allow_reclamation && cached_bytes > 0) {
+            ggml_backend_dev_memory(device, &free_bytes, &total_bytes);
+            cached_bytes = 0;
+        }
+
+        const size_t committed = add(resident, cached_bytes);
         if (limit > 0) {
-            result.requires_reclamation |= resident > limit;
-            result.available_budget_bytes = std::min(result.available_budget_bytes, resident < limit ? limit - resident : 0);
+            result.requires_reclamation |= committed > limit;
+            result.available_budget_bytes = std::min(result.available_budget_bytes, limit - std::min(limit, committed));
         }
         if (log_details) {
-            LOG_WARN("model manager memory on %s: reported free %.2f MB / total %.2f MB, tracked weights %.2f MB / other runtime %.2f MB / current runtime %.2f MB",
+            LOG_WARN("model manager memory on %s: reported free %.2f MiB / total %.2f MiB, tracked weights %.2f MiB / other runtime %.2f MiB / current runtime %.2f MiB / idle buffer pool %.2f MiB",
                      ggml_backend_name(backend),
                      free_bytes / (1024.0 * 1024.0), total_bytes / (1024.0 * 1024.0),
                      weights_resident / (1024.0 * 1024.0), other_runtime / (1024.0 * 1024.0),
-                     request.runtime_resident_bytes / (1024.0 * 1024.0));
+                     request.runtime_resident_bytes / (1024.0 * 1024.0), cached_bytes / (1024.0 * 1024.0));
         }
         if (free_bytes == 0 && total_bytes == 0)
             return;
@@ -2486,14 +2543,22 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
         }
         free_bytes = add(free_bytes, reclaimable);
         if (total_bytes > 0) {
-            const size_t used = add(resident, request.runtime_resident_bytes);
+            const size_t used = add(committed, add(request.runtime_resident_bytes, reused_bytes));
             free_bytes        = std::min(free_bytes, used < total_bytes ? total_bytes - used : 0);
         }
         result.available_device_bytes = std::min(result.available_device_bytes, free_bytes);
     };
-    account_device(request.compute_backend, request.max_backend_bytes);
     // GGML exposes only the split buffer's total size, so charge it on each participant.
-    for (const auto& [backend, limit] : split_devices_for(states))
+    auto devices         = split_devices_for(states);
+    auto primary         = devices.find(request.compute_backend);
+    size_t primary_limit = request.max_backend_bytes;
+    if (primary != devices.end()) {
+        if (primary->second > 0)
+            primary_limit = primary_limit == 0 ? primary->second : std::min(primary_limit, primary->second);
+        devices.erase(primary);
+    }
+    account_device(request.compute_backend, primary_limit);
+    for (const auto& [backend, limit] : devices)
         account_device(backend, limit);
     return result;
 }
@@ -2501,6 +2566,7 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
 DeviceMemoryCapacity ModelManager::inspect_compute_backend_capacity(
     const DeviceMemoryRequest& request,
     const std::vector<ggml_tensor*>& params,
+    DeviceMemoryCheck check,
     bool log_details) const {
     std::vector<TensorState*> states;
     if (request.compute_backend == nullptr || !resolve_required_tensor_states(params, states, request.compute_backend)) {
@@ -2508,7 +2574,7 @@ DeviceMemoryCapacity ModelManager::inspect_compute_backend_capacity(
         result.valid = false;
         return result;
     }
-    return check_capacity(request, states, log_details);
+    return check_capacity(request, states, check, log_details);
 }
 
 std::vector<WeightResidencyBlock> ModelManager::evictable_compute_backend_blocks(
@@ -2600,7 +2666,7 @@ std::vector<WeightResidencyBlock> ModelManager::evictable_compute_backend_blocks
     return result;
 }
 
-bool ModelManager::evict_compute_backend_block(const WeightResidencyBlock& block) {
+bool ModelManager::evict_compute_backend_block(const WeightResidencyBlock& block, PrefetchBuffer* prefetch_buffer) {
     const auto candidates = evictable_compute_backend_blocks(block.backend, {});
     const auto found      = std::find_if(candidates.begin(), candidates.end(), [&](const auto& candidate) {
         return candidate.buffer == block.buffer && candidate.tensors == block.tensors &&
@@ -2613,6 +2679,12 @@ bool ModelManager::evict_compute_backend_block(const WeightResidencyBlock& block
         if ((*it)->buffer == block.buffer) {
             LOG_DEBUG("model manager evicted %.2f MiB of staged weights on %s",
                       block.bytes / (1024.0 * 1024.0), ggml_backend_name(block.backend));
+            if (prefetch_buffer != nullptr && !prefetch_buffer->buffer &&
+                prefetch_buffer->bytes == block.bytes && prefetch_buffer->type == ggml_backend_buffer_get_type(block.buffer)) {
+                // The old weights are unpinned. Hand the allocation to the next upload before it can enter the idle pool.
+                prefetch_buffer->buffer.reset((*it)->buffer);
+                (*it)->buffer = nullptr;
+            }
             free_compute_staging_block(**it);
             compute_staging_blocks_.erase(it);
             return true;
@@ -2640,13 +2712,14 @@ bool ModelManager::evict_compute_backend_block(const WeightResidencyBlock& block
 bool ModelManager::fits_compute_backend_capacity(
     const DeviceMemoryRequest& request,
     const std::vector<ggml_tensor*>& required_params,
-    bool allow_reclamation) const {
+    DeviceMemoryCheck check) const {
     std::vector<TensorState*> states;
     if (!resolve_required_tensor_states(required_params, states, request.compute_backend)) {
         return false;
     }
-    return check_capacity(request, states).fits() ||
-           (retain_weights_ && allow_reclamation && check_capacity(request, states, false, true).fits());
+    return check == DeviceMemoryCheck::Reclaimable
+               ? check_capacity(request, states, DeviceMemoryCheck::Inspect).fits() || check_capacity(request, states, check).fits()
+               : check_capacity(request, states, check).fits();
 }
 
 bool ModelManager::ensure_compute_backend_capacity(

@@ -45,7 +45,7 @@ namespace sd {
         bool assign_graph_cut_layer_split_backends(ggml_cgraph* graph);
         ComputeWorkspace::Measurement measure(ggml_cgraph* graph, const std::unordered_set<const ggml_tensor*>* external_outputs = nullptr);
         std::vector<DeviceMemoryRequest> memory_requests(const std::vector<BackendBufferSize>& sizes, size_t pending_cache_bytes) const;
-        bool fits(const std::vector<DeviceMemoryRequest>& requests, const std::vector<ggml_tensor*>& params, bool allow_reclamation = false) const;
+        bool fits(const std::vector<DeviceMemoryRequest>& requests, const std::vector<ggml_tensor*>& params, DeviceMemoryCheck check) const;
         bool execute_segment(ggml_cgraph* graph, int n_threads, const std::function<void()>& on_before_compute);
         bool execute_graph(ggml_cgraph* graph, int n_threads, bool no_return, const std::function<bool()>& read_outputs);
         bool is_multi_device() const { return !session_.extra_backends_.empty(); }
@@ -440,13 +440,13 @@ namespace sd {
 
     bool GraphExecution::fits(const std::vector<DeviceMemoryRequest>& requests,
                               const std::vector<ggml_tensor*>& params,
-                              bool allow_reclamation) const {
+                              DeviceMemoryCheck check) const {
         auto manager = manager_;
         if (manager == nullptr) {
             return params.empty();
         }
         for (const auto& request : requests) {
-            if (!manager->fits_compute_backend_capacity(request, params, allow_reclamation)) {
+            if (!manager->fits_compute_backend_capacity(request, params, check)) {
                 return false;
             }
         }
@@ -542,7 +542,7 @@ namespace sd {
                                   session_.segmented_compute_ &&
                                   cached_plan.valid && cached_plan.has_cuts && cached_plan.segments.size() > 1;
         // An empty workspace request is a lower bound on the full graph's memory demand.
-        bool segmented = can_segment && !fits(memory_requests({{session_.backend_, 0}}, 0), params, true);
+        bool segmented = can_segment && !fits(memory_requests({{session_.backend_, 0}}, 0), params, DeviceMemoryCheck::Reclaimable);
         ComputeWorkspace::Measurement full_measurement;
         if (!segmented) {
             full_measurement = measure(graph);
@@ -557,7 +557,7 @@ namespace sd {
                 for (auto& request : requests) {
                     request.pending_allocation_bytes = add_bytes(request.pending_allocation_bytes, planning_headroom);
                 }
-                segmented = !fits(requests, params, true);
+                segmented = !fits(requests, params, DeviceMemoryCheck::Reclaimable);
             }
         }
         ggml_graph_cut::Plan monolithic_plan;
@@ -611,7 +611,7 @@ namespace sd {
                 }
                 return false;
             };
-            session_.cut_cache_.prune(segment.live_cut_names);
+            auto unused_cut_outputs = session_.cut_cache_.prune(segment.live_cut_names);
             bindings.reset(segment);
             if (!bindings.bind_cached_inputs(segment, task_.description.c_str())) {
                 return fail_segment("input binding");
@@ -646,6 +646,9 @@ namespace sd {
                     }
                 }
             }
+            // Transfer storage from consumed cuts before releasing it to the bounded pool.
+            session_.cut_cache_.bind_outputs(cache_outputs, &unused_cut_outputs);
+            unused_cut_outputs.clear();
             auto measurement = segmented ? measure(segment_graph, &cache_outputs) : full_measurement;
             if (!session_.workspace_.prepare(measurement)) {
                 last_compute_status_ = GGML_STATUS_ALLOC_FAILED;
@@ -656,7 +659,7 @@ namespace sd {
             auto ensure_capacity   = [&]() {
                 sync_runtime_residency();
                 auto requests = memory_requests(measurement.buffers, new_cache_bytes);
-                if (fits(requests, weights.params(index))) {
+                if (fits(requests, weights.params(index), DeviceMemoryCheck::TrimBufferCache)) {
                     return true;
                 }
                 if (session_.workspace_.release_excess(measurement)) {
@@ -745,8 +748,10 @@ namespace sd {
                 last_compute_status_ = GGML_STATUS_FAILED;
                 return fail_segment("workspace synchronization");
             }
-            // Final outputs and their callbacks may still be views of consumed cuts.
-            session_.cut_cache_.prune(segment.future_cut_names);
+            // Final outputs and callbacks can still refer to cuts until this point.
+            if (last) {
+                session_.cut_cache_.prune(segment.future_cut_names);
+            }
         }
         if (segments_changed || peak_compute_bytes != session_.logged_compute_bytes_) {
             for (const auto& entry : peak_compute_bytes) {
@@ -888,7 +893,11 @@ namespace sd {
         const std::vector<ggml_tensor*>& protected_params,
         std::string* device_memory_error) {
         GGML_ASSERT(&manager == manager_);
-        auto capacity      = [&]() { return manager.inspect_compute_backend_capacity(request, required_params); };
+        auto* prefetch_buffer = request.prefetch_buffer;
+        if (prefetch_buffer != nullptr && !prefetch_buffer->buffer) {
+            prefetch_buffer->buffer.reset(sd_backend_try_alloc_buffer_from_cache(prefetch_buffer->type, prefetch_buffer->bytes));
+        }
+        auto capacity      = [&]() { return manager.inspect_compute_backend_capacity(request, required_params, DeviceMemoryCheck::TrimBufferCache); };
         const auto initial = capacity();
         if (!initial.valid) {
             return false;
@@ -947,7 +956,7 @@ namespace sd {
             return lhs.last_use_epoch < rhs.last_use_epoch;
         });
         for (const auto& block : candidates) {
-            if (manager.evict_compute_backend_block(block) && capacity().fits(true)) {
+            if (manager.evict_compute_backend_block(block, prefetch_buffer) && capacity().fits(true)) {
                 return true;
             }
         }
@@ -971,7 +980,7 @@ namespace sd {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             } while (std::chrono::steady_clock::now() < deadline);
         }
-        available               = manager.inspect_compute_backend_capacity(request, required_params, true);
+        available               = manager.inspect_compute_backend_capacity(request, required_params, DeviceMemoryCheck::Inspect, true);
         const auto device_bytes = available.available_device_bytes == SIZE_MAX
                                       ? std::string("unknown")
                                       : sd_format("%.2f MB", available.available_device_bytes / (1024.0 * 1024.0));

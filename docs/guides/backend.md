@@ -51,11 +51,13 @@ sd-cli -m model.safetensors -p "a cat" --backend diffusion=cuda0,vae=vulkan0 --m
 ```
 
 
-The value is a shared per-device budget for managed weights and registered
-runner compute/cache buffers. Live free memory can lower the effective limit
-for each graph run. Driver contexts and allocations made outside the managed
-model runners are not part of this accounting, so it is not a hard physical
-VRAM cap.
+The value is a shared per-device budget for managed weights, registered runner
+compute and cache buffers, and idle buffers retained for reuse by ggml. The
+runner trims the idle pool to make room for allocations. If a prefetch already
+requires weight eviction, it can reuse a matching weight buffer directly.
+Live free memory and a safety reserve also constrain allocations. Device-wide
+VRAM usage can include driver contexts, unregistered backend scratch allocations,
+and other processes.
 
 Module names are case-insensitive. Hyphens and underscores in module names are ignored, so `clip_vision`, `clip-vision`, and `clipvision` are equivalent.
 

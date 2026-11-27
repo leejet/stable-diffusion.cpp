@@ -166,7 +166,7 @@ private:
     void invalidate_sources(const std::unordered_set<TensorState*>& states);
 
     ggml_backend_t prefetch_backend_for(ggml_backend_t compute_backend);
-    bool populate_prefetch_block(PrefetchBlock& block);
+    bool populate_prefetch_block(PrefetchBlock& block, PrefetchBuffer* prefetch_buffer);
     void synchronize_prefetch_block(PrefetchBlock& block);
     void free_prefetch_block(PrefetchBlock& block);
     void protect_prefetched_states(std::unordered_set<TensorState*>& states) const;
@@ -207,8 +207,8 @@ private:
     using CapacityCheck = DeviceMemoryCapacity;
     CapacityCheck check_capacity(const DeviceMemoryRequest& request,
                                  const std::vector<TensorState*>& states,
-                                 bool log_details       = false,
-                                 bool allow_reclamation = false) const;
+                                 DeviceMemoryCheck check,
+                                 bool log_details = false) const;
 
     ggml_backend_buffer_type_t params_buffer_type_for(const TensorState& state) const;
     ggml_backend_buffer_type_t split_buffer_type_for(const TensorState& state) const;
@@ -367,7 +367,7 @@ public:
     void remove_runtime_owner(uintptr_t owner_id) override;
     bool fits_compute_backend_capacity(const DeviceMemoryRequest& request,
                                        const std::vector<ggml_tensor*>& required_params,
-                                       bool allow_reclamation) const override;
+                                       DeviceMemoryCheck check) const override;
     bool segmented_compute_enabled() const override { return !default_resource_.segmented_compute_disabled_; }
     bool prefetch_enabled() const override { return !default_resource_.prefetch_disabled_; }
     void release_compute_backend_params(const std::vector<ggml_tensor*>& tensors) override;
@@ -386,17 +386,19 @@ public:
     DeviceMemoryCapacity inspect_compute_backend_capacity(
         const DeviceMemoryRequest& request,
         const std::vector<ggml_tensor*>& params,
-        bool log_details = false) const override;
+        DeviceMemoryCheck check = DeviceMemoryCheck::Inspect,
+        bool log_details        = false) const override;
     std::vector<WeightResidencyBlock> evictable_compute_backend_blocks(
         ggml_backend_t backend,
         const std::vector<ggml_tensor*>& protected_params) const override;
-    bool evict_compute_backend_block(const WeightResidencyBlock& block) override;
+    bool evict_compute_backend_block(const WeightResidencyBlock& block, PrefetchBuffer* prefetch_buffer = nullptr) override;
     WeightPrefetchResult prefetch_params(
         uintptr_t owner_id,
         const std::vector<ggml_tensor*>& tensors) override;
     WeightPrefetchResult prepare_prefetch_params(
         uintptr_t owner_id,
-        const std::vector<ggml_tensor*>& tensors) override;
+        const std::vector<ggml_tensor*>& tensors,
+        PrefetchBuffer* prefetch_buffer = nullptr) override;
     void submit_prefetched_params(uintptr_t owner_id) override;
     bool activate_prefetched_params(uintptr_t owner_id,
                                     const std::vector<ggml_tensor*>& tensors) override;
@@ -482,8 +484,8 @@ public:
     size_t context_vram_limit(ggml_backend_t backend) const override { return manager_->max_vram_bytes(backend); }
     void register_runtime_owner(uintptr_t owner) override { manager_->register_runtime_owner(owner); }
     void remove_runtime_owner(uintptr_t owner) override { manager_->remove_runtime_owner(owner); }
-    bool fits_compute_backend_capacity(const DeviceMemoryRequest& request, const std::vector<ggml_tensor*>& params, bool allow_reclamation) const override {
-        return manager_->fits_compute_backend_capacity(request, params, allow_reclamation);
+    bool fits_compute_backend_capacity(const DeviceMemoryRequest& request, const std::vector<ggml_tensor*>& params, DeviceMemoryCheck check) const override {
+        return manager_->fits_compute_backend_capacity(request, params, check);
     }
     bool assign_compute_backend(const std::vector<ggml_tensor*>& tensors, ggml_backend_t backend) override {
         return manager_->assign_compute_backend(tensors, backend);
@@ -514,22 +516,23 @@ public:
     }
     DeviceMemoryCapacity inspect_compute_backend_capacity(const DeviceMemoryRequest& request,
                                                           const std::vector<ggml_tensor*>& params,
+                                                          DeviceMemoryCheck check,
                                                           bool log_details) const override {
-        return manager_->inspect_compute_backend_capacity(request, params, log_details);
+        return manager_->inspect_compute_backend_capacity(request, params, check, log_details);
     }
     std::vector<WeightResidencyBlock> evictable_compute_backend_blocks(
         ggml_backend_t backend,
         const std::vector<ggml_tensor*>& protected_params) const override {
         return manager_->evictable_compute_backend_blocks(backend, protected_params);
     }
-    bool evict_compute_backend_block(const WeightResidencyBlock& block) override {
-        return manager_->evict_compute_backend_block(block);
+    bool evict_compute_backend_block(const WeightResidencyBlock& block, PrefetchBuffer* prefetch_buffer) override {
+        return manager_->evict_compute_backend_block(block, prefetch_buffer);
     }
     WeightPrefetchResult prefetch_params(uintptr_t owner, const std::vector<ggml_tensor*>& tensors) override {
         return manager_->prefetch_params(owner, tensors);
     }
-    WeightPrefetchResult prepare_prefetch_params(uintptr_t owner, const std::vector<ggml_tensor*>& tensors) override {
-        return manager_->prepare_prefetch_params(owner, tensors);
+    WeightPrefetchResult prepare_prefetch_params(uintptr_t owner, const std::vector<ggml_tensor*>& tensors, PrefetchBuffer* prefetch_buffer) override {
+        return manager_->prepare_prefetch_params(owner, tensors, prefetch_buffer);
     }
     void submit_prefetched_params(uintptr_t owner) override { manager_->submit_prefetched_params(owner); }
     bool activate_prefetched_params(uintptr_t owner, const std::vector<ggml_tensor*>& tensors) override {
