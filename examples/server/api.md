@@ -859,6 +859,7 @@ Top-level fields:
 | `upscalers` | `array<object>` | Available highres upscalers, built-in and model-backed |
 | `preview_modes` | `array<string>` | Available preview modes, e.g. `["none", "proj", "tae", "vae"]` |
 | `media_view` | `boolean` | Whether the media view endpoint is enabled |
+| `media_output` | `object`, optional | Configured output directory spellings in `paths` for matching DGL paths in the editor. `case_insensitive` is `true` on Windows. Omitted for the default directory or when media view is disabled. |
 | `limits` | `object` | Shared queue and size limits |
 
 `model`
@@ -1832,10 +1833,12 @@ Example cancelled job:
 ## Media view
 
 `GET /sdcpp/v1/view?root=assets&path=reference.png` serves an image or video
-over the configured listener. `root` selects `input`, `output`, or `assets`
-in the server's working directory. `path` is a slash-separated relative path
-within that directory. Supported formats are PNG, JPEG, GIF, WebP, WebM, MP4,
-and AVI. The endpoint supports HTTP byte ranges and sends `Cache-Control: no-store`.
+over the configured listener. `root` selects `input` or `assets` in the
+server's working directory, or `output` for the directory selected by
+`--output-dir` (`output/` in the working directory by default). `path` is a
+slash-separated relative path within the selected directory. Supported formats
+are PNG, JPEG, GIF, WebP, WebM, MP4, and AVI. The endpoint supports HTTP byte
+ranges and sends `Cache-Control: no-store`.
 
 The server returns `403` when access is denied or the server was started with
 `--no-media-view`. Unavailable paths, links, and unsupported files return
@@ -1861,7 +1864,8 @@ from the runtime.
 
 Scripts share the component cache and execution settings used for generation.
 Model reads are restricted to the configured model directories. Script writes
-are restricted to output/ in the server's working directory.
+are restricted to `--output-dir`, which defaults to `output/` in the server's
+working directory.
 
 Cancellation returns the current job status with HTTP 200. A queued job
 becomes `cancelled` immediately. A running job sets the `cancel_requested`
