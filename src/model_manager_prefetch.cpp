@@ -5,6 +5,7 @@
 
 #include "core/ggml_extend_backend.h"
 #include "core/util.h"
+#include "ggml-alloc.h"
 
 ggml_backend_t ModelManager::prefetch_backend_for(ggml_backend_t compute_backend) {
     auto existing = prefetch_backends_.find(compute_backend);
@@ -58,7 +59,7 @@ void ModelManager::free_prefetch_block(PrefetchBlock& block) {
     block.staging_blocks.clear();
 }
 
-bool ModelManager::populate_prefetch_block(PrefetchBlock& block) {
+bool ModelManager::populate_prefetch_block(PrefetchBlock& block, PrefetchBuffer* prefetch_buffer) {
     if (block.states.empty() || block.compute_backend == nullptr) {
         return false;
     }
@@ -83,24 +84,30 @@ bool ModelManager::populate_prefetch_block(PrefetchBlock& block) {
         return false;
     }
     const size_t alignment = ggml_backend_buft_get_alignment(buffer_type);
-    bool host_capacity     = ggml_backend_buft_is_host(buffer_type);
+    const bool host_buffer = ggml_backend_buft_is_host(buffer_type);
+    bool host_capacity     = host_buffer;
 #ifdef _WIN32
     host_capacity |= sd_backend_is(block.compute_backend, "CUDA");
 #endif
-    if (retain_weights_ && host_capacity) {
+    size_t backend_limit = ggml_backend_buft_get_max_size(buffer_type);
+    if (!host_buffer &&
+        (backend_limit == 0 || backend_limit > MAX_RESIDENCY_BLOCK_BYTES)) {
+        backend_limit = MAX_RESIDENCY_BLOCK_BYTES;
+    }
+    const bool reuse_buffer = prefetch_buffer != nullptr && prefetch_buffer->buffer;
+    if (reuse_buffer || (retain_weights_ && host_capacity)) {
         size_t bytes = 0;
         for (const auto* state : block.states) {
             const auto padded = GGML_PAD(ggml_backend_buft_get_alloc_size(buffer_type, state->tensor), alignment);
             bytes += std::min(padded, SIZE_MAX - bytes);
         }
-        const bool host = ggml_backend_buft_is_host(buffer_type);
-        if (!ensure_host_capacity(host ? bytes : 0, block.states, host, host ? 0 : bytes))
+        if (reuse_buffer && (prefetch_buffer->type != buffer_type || prefetch_buffer->bytes != bytes || bytes > backend_limit)) {
             return false;
-    }
-    size_t backend_limit = ggml_backend_buft_get_max_size(buffer_type);
-    if (!ggml_backend_buft_is_host(buffer_type) &&
-        (backend_limit == 0 || backend_limit > MAX_RESIDENCY_BLOCK_BYTES)) {
-        backend_limit = MAX_RESIDENCY_BLOCK_BYTES;
+        }
+        if (retain_weights_ && host_capacity &&
+            !ensure_host_capacity(host_buffer ? bytes : 0, block.states, host_buffer, host_buffer || reuse_buffer ? 0 : bytes)) {
+            return false;
+        }
     }
 
     auto allocate_chunk = [&](const std::vector<TensorState*>& chunk) -> bool {
@@ -132,8 +139,20 @@ bool ModelManager::populate_prefetch_block(PrefetchBlock& block) {
             }
             staging_block->staged_tensors.push_back({state, staging_tensor});
         }
-        staging_block->buffer =
-            ggml_backend_alloc_ctx_tensors_from_buft(staging_ctx, buffer_type);
+        if (reuse_buffer) {
+            auto allocator = ggml_tallocr_new(prefetch_buffer->buffer.get());
+            for (const auto& pair : staging_block->staged_tensors) {
+                if (ggml_tallocr_alloc(&allocator, pair.second) != GGML_STATUS_SUCCESS) {
+                    ggml_free(staging_ctx);
+                    return false;
+                }
+            }
+            staging_block->buffer = prefetch_buffer->buffer.release();
+            LOG_DEBUG("model manager reused %.2f MiB of staging storage for prefetch on %s",
+                      prefetch_buffer->bytes / (1024.0 * 1024.0), ggml_backend_name(block.compute_backend));
+        } else {
+            staging_block->buffer = ggml_backend_alloc_ctx_tensors_from_buft(staging_ctx, buffer_type);
+        }
         if (staging_block->buffer == nullptr) {
             ggml_free(staging_ctx);
             staging_block->staging_ctx = nullptr;
@@ -226,7 +245,8 @@ WeightPrefetchResult ModelManager::prefetch_params(
 
 WeightPrefetchResult ModelManager::prepare_prefetch_params(
     uintptr_t owner_id,
-    const std::vector<ggml_tensor*>& tensors) {
+    const std::vector<ggml_tensor*>& tensors,
+    PrefetchBuffer* prefetch_buffer) {
     if (tensors.empty()) {
         return WeightPrefetchResult::AlreadyResident;
     }
@@ -293,7 +313,7 @@ WeightPrefetchResult ModelManager::prepare_prefetch_params(
     auto block             = std::make_unique<PrefetchBlock>();
     block->states          = std::move(states);
     block->compute_backend = compute_backend;
-    if (!populate_prefetch_block(*block)) {
+    if (!populate_prefetch_block(*block, prefetch_buffer)) {
         free_prefetch_block(*block);
         return WeightPrefetchResult::Failed;
     }

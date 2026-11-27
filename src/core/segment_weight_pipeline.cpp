@@ -167,9 +167,11 @@ namespace sd {
             return;
         }
 
+        PrefetchBuffer prefetch_buffer{residency.single_prefetch_buffer_type, residency.missing_bytes};
         DeviceMemoryRequest backend_request        = request;
         backend_request.compute_backend            = compute_backend_;
         backend_request.owner_id                   = owner_id_;
+        backend_request.prefetch_buffer            = prefetch_buffer.type != nullptr ? &prefetch_buffer : nullptr;
         std::vector<ggml_tensor*> protected_params = segment_params_[segment_index];
         protected_params.insert(protected_params.end(), params.begin(), params.end());
         if (!manager->ensure_compute_backend_capacity(backend_request,
@@ -179,7 +181,7 @@ namespace sd {
             disable();
             return;
         }
-        switch (manager->prepare_prefetch_params(owner_id_, params)) {
+        switch (manager->prepare_prefetch_params(owner_id_, params, backend_request.prefetch_buffer)) {
             case WeightPrefetchResult::Scheduled:
                 queued_params_  = std::move(params);
                 queued_segment_ = next_segment;

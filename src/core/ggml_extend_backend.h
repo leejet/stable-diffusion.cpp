@@ -104,6 +104,9 @@ ggml_backend_t sd_backend_cpu_init();
 bool sd_backend_cpu_set_n_threads(ggml_backend_t backend_cpu, int n_threads);
 void sd_backend_set_buffer_cache_enabled(ggml_backend_t backend, bool enabled);
 void sd_backend_clear_buffer_cache(ggml_backend_t backend);
+bool sd_backend_get_buffer_cache_memory(ggml_backend_dev_t device, size_t& free_bytes, size_t& total_bytes, size_t& cached_bytes);
+void sd_backend_set_buffer_cache_limit(ggml_backend_dev_t device, size_t bytes);
+ggml_backend_buffer_t sd_backend_try_alloc_buffer_from_cache(ggml_backend_buffer_type_t buft, size_t bytes);
 
 std::string sd_backend_resolve_name(const std::string& name);
 bool sd_parse_backend_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error);

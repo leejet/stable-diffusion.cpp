@@ -4,8 +4,10 @@
 #include <iterator>
 #include <unordered_set>
 
+#include "core/ggml_extend_backend.h"
 #include "core/ggml_graph_cut.h"
 #include "core/util.h"
+#include "ggml-alloc.h"
 
 namespace sd {
     static std::unordered_set<const ggml_tensor*> cache_graph_tensors(ggml_cgraph* graph) {
@@ -24,7 +26,7 @@ namespace sd {
         ggml_free(context);
     }
 
-    std::unique_ptr<CachedTensor> CachedTensor::allocate(ggml_backend_t backend, const std::string& name, ggml_tensor* source) {
+    std::unique_ptr<CachedTensor> CachedTensor::allocate(ggml_backend_t backend, const std::string& name, ggml_tensor* source, bool reuse_only) {
         auto entry     = std::make_unique<CachedTensor>();
         entry->context = ggml_init({2 * ggml_tensor_overhead(), nullptr, true});
         if (entry->context == nullptr) {
@@ -34,7 +36,23 @@ namespace sd {
         // Cut views are rebound with their original strides and offsets.
         std::copy(std::begin(source->nb), std::end(source->nb), std::begin(entry->tensor->nb));
         ggml_set_name(entry->tensor, name.c_str());
-        entry->buffer = ggml_backend_alloc_ctx_tensors(entry->context, backend);
+        if (reuse_only) {
+            auto buft = ggml_backend_get_default_buffer_type(backend);
+            if (buft == nullptr) {
+                return nullptr;
+            }
+            const auto bytes = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, entry->tensor), ggml_backend_buft_get_alignment(buft));
+            entry->buffer    = sd_backend_try_alloc_buffer_from_cache(buft, bytes);
+            if (entry->buffer == nullptr) {
+                return nullptr;
+            }
+            auto allocator = ggml_tallocr_new(entry->buffer);
+            if (ggml_tallocr_alloc(&allocator, entry->tensor) != GGML_STATUS_SUCCESS) {
+                return nullptr;
+            }
+        } else {
+            entry->buffer = ggml_backend_alloc_ctx_tensors(entry->context, backend);
+        }
         if (entry->buffer == nullptr) {
             return nullptr;
         }
@@ -168,11 +186,33 @@ namespace sd {
                ggml_is_contiguous(tensor) && ggml_backend_supports_op(backend, tensor);
     }
 
-    bool GraphCutTensorCache::bind_outputs(const std::unordered_set<const ggml_tensor*>& outputs) {
+    bool GraphCutTensorCache::bind_outputs(const std::unordered_set<const ggml_tensor*>& outputs, CachedTensors* unused_outputs) {
         for (const ggml_tensor* output : outputs) {
-            auto tensor = const_cast<ggml_tensor*>(output);
-            auto entry  = CachedTensor::allocate(backend_, tensor->name, tensor);
+            auto tensor       = const_cast<ggml_tensor*>(output);
+            const auto cached = get(tensor->name);
+            if (cached != nullptr && tensor->buffer == cached->buffer && tensor->data == cached->data) {
+                continue;
+            }
+            std::unique_ptr<CachedTensor> entry;
+            if (unused_outputs != nullptr) {
+                auto match = std::find_if(unused_outputs->begin(), unused_outputs->end(), [&](const auto& item) {
+                    const auto* previous = item.second->tensor;
+                    return tensor->type == previous->type && ggml_are_same_shape(tensor, previous) &&
+                           std::equal(std::begin(tensor->nb), std::end(tensor->nb), std::begin(previous->nb));
+                });
+                if (match != unused_outputs->end()) {
+                    entry = std::move(match->second);
+                    unused_outputs->erase(match);
+                    ggml_set_name(entry->tensor, tensor->name);
+                }
+            }
             if (entry == nullptr) {
+                entry = CachedTensor::allocate(backend_, tensor->name, tensor, unused_outputs != nullptr);
+            }
+            if (entry == nullptr) {
+                if (unused_outputs != nullptr) {
+                    continue;
+                }
                 return false;
             }
             tensor->buffer         = entry->tensor->buffer;
@@ -211,10 +251,15 @@ namespace sd {
         return total_size;
     }
 
-    void GraphCutTensorCache::prune(const std::unordered_set<std::string>& keep_names) {
+    CachedTensors GraphCutTensorCache::prune(const std::unordered_set<std::string>& keep_names) {
+        CachedTensors unused_outputs;
         for (auto it = tensors_.begin(); it != tensors_.end();) {
-            it = keep_names.count(it->first) ? std::next(it) : tensors_.erase(it);
+            auto current = it++;
+            if (!keep_names.count(current->first)) {
+                unused_outputs.insert(tensors_.extract(current));
+            }
         }
+        return unused_outputs;
     }
 
     ggml_status GraphCutTensorCache::capture(ggml_cgraph* graph,

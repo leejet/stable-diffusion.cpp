@@ -649,6 +649,39 @@ void sd_backend_clear_buffer_cache(ggml_backend_t backend) {
     }
 }
 
+bool sd_backend_get_buffer_cache_memory(ggml_backend_dev_t device, size_t& free_bytes, size_t& total_bytes, size_t& cached_bytes) {
+    auto reg                   = ggml_backend_dev_backend_reg(device);
+    using GetBufferCacheMemory = void (*)(ggml_backend_dev_t, size_t*, size_t*, size_t*);
+    auto fn                    = reinterpret_cast<GetBufferCacheMemory>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_get_buffer_cache_memory"));
+    if (fn == nullptr) {
+        ggml_backend_dev_memory(device, &free_bytes, &total_bytes);
+        cached_bytes = 0;
+        return false;
+    }
+    fn(device, &free_bytes, &total_bytes, &cached_bytes);
+    return true;
+}
+
+void sd_backend_set_buffer_cache_limit(ggml_backend_dev_t device, size_t bytes) {
+    auto reg                  = ggml_backend_dev_backend_reg(device);
+    using SetBufferCacheLimit = void (*)(ggml_backend_dev_t, size_t);
+    auto fn                   = reinterpret_cast<SetBufferCacheLimit>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_buffer_cache_limit"));
+    if (fn != nullptr) {
+        fn(device, bytes);
+    }
+}
+
+ggml_backend_buffer_t sd_backend_try_alloc_buffer_from_cache(ggml_backend_buffer_type_t buft, size_t bytes) {
+    auto device = ggml_backend_buft_get_device(buft);
+    if (device == nullptr) {
+        return nullptr;
+    }
+    auto reg                      = ggml_backend_dev_backend_reg(device);
+    using TryAllocBufferFromCache = ggml_backend_buffer_t (*)(ggml_backend_buffer_type_t, size_t);
+    auto fn                       = reinterpret_cast<TryAllocBufferFromCache>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_try_alloc_buffer_from_cache"));
+    return fn != nullptr ? fn(buft, bytes) : nullptr;
+}
+
 const char* sd_get_system_info() {
     static std::string cache_info = []() -> std::string {
         ggml_backend_load_all_once();
