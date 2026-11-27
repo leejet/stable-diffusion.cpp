@@ -708,17 +708,17 @@ namespace sd_vulkan_i8 {
         if (op.codebook && alias)
             dst.offset = GGML_PAD(size_t(chunk_cols) * k, d.info.buffer_alignment);
 
-        const auto destination = concat ? range(dst, ggml_nbytes(concat->src[0]), ggml_nbytes(tail)) : dst;
-        const uint32_t output_stride = uint32_t(tail->ne[0]);
+        const auto destination             = concat ? range(dst, ggml_nbytes(concat->src[0]), ggml_nbytes(tail)) : dst;
+        const uint32_t output_stride       = uint32_t(tail->ne[0]);
         ggml_ext_vulkan_binding bindings[] = {{op.weight}, {op.input, nullptr, 0, scale_offset}, {op.weight_scale}, {op.input, nullptr, scale_offset, size_t(rows) * 4}, {op.bias ? op.bias : op.weight_scale}, destination, {up_mat ? up.weight : gate}, {up_mat ? up.weight_scale : residual}};
-        auto multiply_chunk = [&](uint32_t first, uint32_t cols) {
+        auto multiply_chunk                = [&](uint32_t first, uint32_t cols) {
             const uint32_t output_cols = glu ? uint32_t(glu->ne[0]) : cols;
-            auto dispatch = [&](ggml_ext_vulkan_pipeline pipeline, uint32_t tile_cols, uint32_t tile_rows,
-                                std::initializer_list<uint32_t> constants, uint32_t row_offset, uint32_t dispatch_rows) {
+            auto dispatch              = [&](ggml_ext_vulkan_pipeline pipeline, uint32_t tile_cols, uint32_t tile_rows,
+                                             std::initializer_list<uint32_t> constants, uint32_t row_offset, uint32_t dispatch_rows) {
                 if (!dispatch_rows)
                     return GGML_STATUS_SUCCESS;
-                MatParameters pc = {cols * (up_mat ? 2u : 1u), rows, k, op.bias ? 1u : 0u, row_offset, output_scale,
-                                    group_columns(output_cols, k, tile_cols, glu != nullptr), output_stride, first};
+                MatParameters pc        = {cols * (up_mat ? 2u : 1u), rows, k, op.bias ? 1u : 0u, row_offset, output_scale,
+                                           group_columns(output_cols, k, tile_cols, glu != nullptr), output_stride, first};
                 pipeline.constants      = constants.begin();
                 pipeline.constant_count = uint32_t(constants.size());
                 const uint32_t groups[] = {(output_cols + tile_cols - 1) / tile_cols, (dispatch_rows + tile_rows - 1) / tile_rows, 1};
@@ -726,15 +726,15 @@ namespace sd_vulkan_i8 {
             };
             ggml_status status = GGML_STATUS_SUCCESS;
             if (d.cm2) {
-                const bool large_k       = k % 4096 == 0 || (rows >= cols && k >= cols);
+                const bool large_k = k % 4096 == 0 || (rows >= cols && k >= cols);
                 // The aligned store uses a row stride rounded down to 128 columns.
                 const bool aligned_output = cols % 128 == 0 && output_stride % 128 == 0;
-                const uint32_t full_rows = (glu || aligned_output) ? rows / 128 * 128 : 0;
-                auto pipeline            = residual ? SD_VK_PIPELINE(mul_mat_i8_residual_cm2, 8, MatParameters) : up_mat ? SD_VK_PIPELINE(mul_mat_i8_swiglu_split_cm2, 8, MatParameters)
-                                                                                                                         : SD_VK_PIPELINE(mul_mat_i8_tensorwise_cm2, 6, MatParameters);
-                const uint32_t tile_cols = glu ? 64 : 128;
-                const uint32_t full_k    = (glu || large_k) && k % 128 == 0 ? 128u : 64u;
-                status                   = dispatch(pipeline, tile_cols, 128, {128, 1, glu ? 1u : 0u, tile_cols, full_k}, 0, full_rows);
+                const uint32_t full_rows  = (glu || aligned_output) ? rows / 128 * 128 : 0;
+                auto pipeline             = residual ? SD_VK_PIPELINE(mul_mat_i8_residual_cm2, 8, MatParameters) : up_mat ? SD_VK_PIPELINE(mul_mat_i8_swiglu_split_cm2, 8, MatParameters)
+                                                                                                                          : SD_VK_PIPELINE(mul_mat_i8_tensorwise_cm2, 6, MatParameters);
+                const uint32_t tile_cols  = glu ? 64 : 128;
+                const uint32_t full_k     = (glu || large_k) && k % 128 == 0 ? 128u : 64u;
+                status                    = dispatch(pipeline, tile_cols, 128, {128, 1, glu ? 1u : 0u, tile_cols, full_k}, 0, full_rows);
                 if (status == GGML_STATUS_SUCCESS) {
                     const bool small         = d.cm2_small && (glu || aligned_output) && rows - full_rows <= 32;
                     const uint32_t tail_cols = small || glu ? 64 : 128, tail_rows = small ? 32 : glu ? 128
@@ -763,9 +763,9 @@ namespace sd_vulkan_i8 {
             const uint32_t cols = std::min(chunk_cols, n - first);
             if (op.codebook) {
                 const size_t packed_row = op.weight->nb[1], scale_row = op.relative_scale->nb[1];
-                bindings[0] = {nullptr, e->workspace, 0, size_t(cols) * k};
-                bindings[2] = range({op.weight_scale}, size_t(first) * sizeof(float), size_t(cols) * sizeof(float));
-                bindings[4] = op.bias ? range({op.bias}, size_t(first) * sizeof(float), size_t(cols) * sizeof(float)) : bindings[2];
+                bindings[0]                                   = {nullptr, e->workspace, 0, size_t(cols) * k};
+                bindings[2]                                   = range({op.weight_scale}, size_t(first) * sizeof(float), size_t(cols) * sizeof(float));
+                bindings[4]                                   = op.bias ? range({op.bias}, size_t(first) * sizeof(float), size_t(cols) * sizeof(float)) : bindings[2];
                 const ggml_ext_vulkan_binding decode_inputs[] = {
                     range({op.weight}, first * packed_row, cols * packed_row),
                     {op.codebook},
@@ -773,9 +773,9 @@ namespace sd_vulkan_i8 {
                     bindings[0],
                 };
                 const uint32_t groups_count = cols * (k / 16);
-                const uint32_t groups[] = {std::min((groups_count + 127) / 128, d.info.max_group_count[0]), 1, 1};
-                const auto pipeline = SD_VK_PIPELINE(decode_w4a8, 4, uint32_t);
-                const auto status = d.api->dispatch(e->backend, &pipeline, decode_inputs, &groups_count, groups);
+                const uint32_t groups[]     = {std::min((groups_count + 127) / 128, d.info.max_group_count[0]), 1, 1};
+                const auto pipeline         = SD_VK_PIPELINE(decode_w4a8, 4, uint32_t);
+                const auto status           = d.api->dispatch(e->backend, &pipeline, decode_inputs, &groups_count, groups);
                 if (status != GGML_STATUS_SUCCESS)
                     return status;
             }

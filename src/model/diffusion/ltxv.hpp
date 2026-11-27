@@ -3,6 +3,8 @@
 
 #include <cinttypes>
 #include <fstream>
+#include <functional>
+#include <optional>
 #include <tuple>
 
 #include "core/pe_cache.h"
@@ -968,8 +970,53 @@ namespace LTXV {
                     ->forward(ctx, ggml_ext_scale(ctx, av_ca_audio_timestep, av_ca_factor))
                     .first;
 
-            sd::ggml_graph_cut::mark_graph_cut(vx, "ltxav.prelude", "vx");
-            sd::ggml_graph_cut::mark_graph_cut(ax, "ltxav.prelude", "ax");
+            auto mark_prelude = [](ggml_tensor* tensor, const char* name) {
+                sd::ggml_graph_cut::mark_graph_cut(tensor, "ltxav.prelude", name);
+            };
+            mark_prelude(vx, "vx");
+            mark_prelude(ax, "ax");
+
+            // Otherwise each offloaded transformer segment uploads the same prompt inputs.
+            const auto device = ctx->backend ? ggml_backend_get_device(ctx->backend) : nullptr;
+            if (device && ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                v_context = ggml_cont(ctx->ggml_ctx, v_context);
+                mark_prelude(v_context, "v_context");
+                mark_prelude(a_context, "a_context");
+            }
+
+            // Per-token timestep projections can be too large to keep live across
+            // the whole graph under the offload budget.
+            auto retain_timestep = [&](ggml_tensor* value, const char* name) {
+                if (value != nullptr && value->ne[1] == 1) {
+                    mark_prelude(value, name);
+                }
+            };
+            retain_timestep(v_timestep_mod, "v_timestep_mod");
+            retain_timestep(a_timestep_mod, "a_timestep_mod");
+            retain_timestep(v_embedded_time, "v_embedded_time");
+            retain_timestep(a_embedded_time, "a_embedded_time");
+            retain_timestep(v_prompt_timestep_mod, "v_prompt_timestep_mod");
+            retain_timestep(a_prompt_timestep_mod, "a_prompt_timestep_mod");
+            retain_timestep(av_ca_video_scale_shift_timestep, "v_cross_scale_shift");
+            retain_timestep(av_ca_a2v_gate_noise_timestep, "v_cross_gate");
+            retain_timestep(av_ca_audio_scale_shift_timestep, "a_cross_scale_shift");
+            retain_timestep(av_ca_v2a_gate_noise_timestep, "a_cross_gate");
+
+            // Graph cuts retain computed tensors. Materialize the shared RoPE inputs once
+            // so later segments can consume them without repeatedly uploading them.
+            auto retain_rope = [&](ggml_tensor* pe, const char* name) {
+                if (pe != nullptr && pe->buffer == nullptr) {
+                    if (pe->op == GGML_OP_NONE) {
+                        pe = ggml_dup(ctx->ggml_ctx, pe);
+                    }
+                    mark_prelude(pe, name);
+                }
+                return pe;
+            };
+            v_pe       = retain_rope(v_pe, "v_pe");
+            a_pe       = retain_rope(a_pe, "a_pe");
+            v_cross_pe = retain_rope(v_cross_pe, "v_cross_pe");
+            a_cross_pe = retain_rope(a_cross_pe, "a_cross_pe");
 
             for (int i = 0; i < config.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<BasicAVTransformerBlock>(blocks["transformer_blocks." + std::to_string(i)]);
@@ -1017,6 +1064,8 @@ namespace LTXV {
 
     struct LTXAVRunner : public DiffusionModelRunner {
         sd::PECache pe_cache_;
+        std::optional<sd::PECacheKey> device_pe_key_;
+        bool device_pe_cache_enabled_ = true;
         LTXAVConfig config;
         LTXAVModelBlock model;
         sd::Tensor<float> vx_input_cache;
@@ -1100,6 +1149,22 @@ namespace LTXV {
             return ggml_concat(ctx, vx, ax, 3);
         }
 
+        ggml_tensor* make_video_rope_input(const sd::PECacheKey& key,
+                                           const std::function<sd::Tensor<float>()>& build,
+                                           bool cache_on_device) {
+            if (cache_on_device) {
+                if (auto* cached = get_cache_tensor_by_name(key.name())) {
+                    return cached;
+                }
+            }
+            auto* input = make_input(pe_cache_.get_or_create(key, build));
+            if (cache_on_device) {
+                input = ggml_dup(compute_ctx, input);
+                cache(key.name(), input);
+            }
+            return input;
+        }
+
         ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor,
                                  const sd::Tensor<float>& timesteps_tensor,
                                  const sd::Tensor<float>& context_tensor         = {},
@@ -1145,31 +1210,44 @@ namespace LTXV {
             video_pe_key.add(config.num_attention_heads).add(config.attention_head_dim).add(config.positional_embedding_max_pos);
             video_pe_key.add(std::get<0>(config.vae_scale_factors)).add(std::get<1>(config.vae_scale_factors));
             video_pe_key.add(std::get<2>(config.vae_scale_factors));
-            auto video_pe = make_input(pe_cache_.get_or_create(video_pe_key, [&]() {
-                std::vector<float> video_pe_vec;
-                if (has_video_positions) {
-                    GGML_ASSERT(video_positions_tensor.shape()[2] == video_token_count);
-                    video_pe_vec = build_video_rope_matrix_from_positions(video_positions_tensor,
-                                                                          static_cast<int>(config.hidden_size),
-                                                                          static_cast<int>(config.num_attention_heads),
-                                                                          config.positional_embedding_theta,
-                                                                          config.positional_embedding_max_pos,
-                                                                          config.use_middle_indices_grid);
-                } else {
-                    video_pe_vec = build_video_rope_matrix(vx->ne[0],
-                                                           vx->ne[1],
-                                                           vx->ne[2],
-                                                           static_cast<int>(config.hidden_size),
-                                                           static_cast<int>(config.num_attention_heads),
-                                                           video_frame_rate,
-                                                           config.positional_embedding_theta,
-                                                           config.positional_embedding_max_pos,
-                                                           config.vae_scale_factors,
-                                                           config.causal_temporal_positioning,
-                                                           config.use_middle_indices_grid);
-                }
-                return sd::Tensor<float>({2, 2, config.attention_head_dim / 2, video_token_count * config.num_attention_heads}, std::move(video_pe_vec));
-            }));
+            constexpr int64_t minimum_cached_video_elements = 4 * 1024 * 1024;
+            const bool cache_video_rope                     = device_pe_cache_enabled_ && sd_backend_is_cuda_family(runtime_backend) &&
+                                                              video_token_count * config.hidden_size >= minimum_cached_video_elements;
+            // Both video RoPE inputs depend on the same geometry, frame rate and positions.
+            if (device_pe_key_ && !(*device_pe_key_ == video_pe_key)) {
+                free_cache_ctx_and_buffer();
+                device_pe_key_.reset();
+            }
+            if (cache_video_rope && !device_pe_key_) {
+                device_pe_key_ = video_pe_key;
+            }
+            auto video_pe = make_video_rope_input(
+                video_pe_key, [&]() {
+                    std::vector<float> video_pe_vec;
+                    if (has_video_positions) {
+                        GGML_ASSERT(video_positions_tensor.shape()[2] == video_token_count);
+                        video_pe_vec = build_video_rope_matrix_from_positions(video_positions_tensor,
+                                                                              static_cast<int>(config.hidden_size),
+                                                                              static_cast<int>(config.num_attention_heads),
+                                                                              config.positional_embedding_theta,
+                                                                              config.positional_embedding_max_pos,
+                                                                              config.use_middle_indices_grid);
+                    } else {
+                        video_pe_vec = build_video_rope_matrix(vx->ne[0],
+                                                               vx->ne[1],
+                                                               vx->ne[2],
+                                                               static_cast<int>(config.hidden_size),
+                                                               static_cast<int>(config.num_attention_heads),
+                                                               video_frame_rate,
+                                                               config.positional_embedding_theta,
+                                                               config.positional_embedding_max_pos,
+                                                               config.vae_scale_factors,
+                                                               config.causal_temporal_positioning,
+                                                               config.use_middle_indices_grid);
+                    }
+                    return sd::Tensor<float>({2, 2, config.attention_head_dim / 2, video_token_count * config.num_attention_heads}, std::move(video_pe_vec));
+                },
+                cache_video_rope);
 
             ggml_tensor* audio_pe       = nullptr;
             ggml_tensor* video_cross_pe = nullptr;
@@ -1196,30 +1274,32 @@ namespace LTXV {
                 video_cross_pe_key.add(config.use_middle_indices_grid).add(config.audio_cross_attention_dim);
                 video_cross_pe_key.add(config.audio_num_attention_heads).add(config.audio_attention_head_dim);
                 video_cross_pe_key.add(temporal_max_pos).add(std::get<0>(config.vae_scale_factors));
-                video_cross_pe = make_input(pe_cache_.get_or_create(video_cross_pe_key, [&]() {
-                    std::vector<float> video_cross_pe_vec;
-                    if (has_video_positions) {
-                        video_cross_pe_vec = build_video_temporal_rope_matrix_from_positions(video_positions_tensor,
-                                                                                             static_cast<int>(config.audio_cross_attention_dim),
-                                                                                             static_cast<int>(config.audio_num_attention_heads),
-                                                                                             config.positional_embedding_theta,
-                                                                                             temporal_max_pos,
-                                                                                             true);
-                    } else {
-                        video_cross_pe_vec = build_video_temporal_rope_matrix(vx->ne[0],
-                                                                              vx->ne[1],
-                                                                              vx->ne[2],
-                                                                              static_cast<int>(config.audio_cross_attention_dim),
-                                                                              static_cast<int>(config.audio_num_attention_heads),
-                                                                              video_frame_rate,
-                                                                              config.positional_embedding_theta,
-                                                                              temporal_max_pos,
-                                                                              std::get<0>(config.vae_scale_factors),
-                                                                              config.causal_temporal_positioning,
-                                                                              true);
-                    }
-                    return sd::Tensor<float>({2, 2, config.audio_attention_head_dim / 2, video_token_count * config.audio_num_attention_heads}, std::move(video_cross_pe_vec));
-                }));
+                video_cross_pe = make_video_rope_input(
+                    video_cross_pe_key, [&]() {
+                        std::vector<float> video_cross_pe_vec;
+                        if (has_video_positions) {
+                            video_cross_pe_vec = build_video_temporal_rope_matrix_from_positions(video_positions_tensor,
+                                                                                                 static_cast<int>(config.audio_cross_attention_dim),
+                                                                                                 static_cast<int>(config.audio_num_attention_heads),
+                                                                                                 config.positional_embedding_theta,
+                                                                                                 temporal_max_pos,
+                                                                                                 true);
+                        } else {
+                            video_cross_pe_vec = build_video_temporal_rope_matrix(vx->ne[0],
+                                                                                  vx->ne[1],
+                                                                                  vx->ne[2],
+                                                                                  static_cast<int>(config.audio_cross_attention_dim),
+                                                                                  static_cast<int>(config.audio_num_attention_heads),
+                                                                                  video_frame_rate,
+                                                                                  config.positional_embedding_theta,
+                                                                                  temporal_max_pos,
+                                                                                  std::get<0>(config.vae_scale_factors),
+                                                                                  config.causal_temporal_positioning,
+                                                                                  true);
+                        }
+                        return sd::Tensor<float>({2, 2, config.audio_attention_head_dim / 2, video_token_count * config.audio_num_attention_heads}, std::move(video_cross_pe_vec));
+                    },
+                    cache_video_rope);
 
                 sd::PECacheKey audio_cross_pe_key("ltxav_audio_cross_pe");
                 audio_cross_pe_key.add(ax->ne[1]).add(config.audio_cross_attention_dim).add(config.audio_num_attention_heads);
@@ -1267,6 +1347,12 @@ namespace LTXV {
                 return build_graph(x, timesteps, context, audio_x, audio_timesteps, audio_length, frame_rate, video_positions, audio_context);
             };
             auto out = restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
+            if (out.empty() && device_pe_key_ && last_compute_status() == GGML_STATUS_ALLOC_FAILED) {
+                free_cache_ctx_and_buffer();
+                device_pe_key_.reset();
+                device_pe_cache_enabled_ = false;
+                out                      = restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
+            }
             return out;
         }
 

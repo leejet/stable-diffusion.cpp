@@ -29,8 +29,10 @@ namespace SD_CUDA_NAMESPACE {
                     NORM,
                     MOD,
                     RMS_MOD,
+                    RMS_MOD_VEC,
                     SWIGLU,
                     SITU,
+                    GELU,
                     SILU,
                     SIGMOID };
         struct Operation {
@@ -46,6 +48,18 @@ namespace SD_CUDA_NAMESPACE {
         };
         static bool fused_group(int group) {
             return group == 256 || group == 1;
+        }
+
+        static bool vector_rms_input(const ggml_tensor* input, int64_t width) {
+            if (width != 1024 && width != 2048 && width != 4096) {
+                return false;
+            }
+            size_t offset = 0;
+            while (!input->data && input->view_src) {
+                offset += input->view_offs;
+                input = input->view_src;
+            }
+            return (reinterpret_cast<uintptr_t>(input->data) + offset) % 16 == 0;
         }
 
         static bool describe(ggml_tensor* const* nodes, int count, Operation& op) {
@@ -77,14 +91,20 @@ namespace SD_CUDA_NAMESPACE {
                 op.shift      = first->src[2];
                 if (!vector(op.modulation, op.k) || (op.shift && !vector(op.shift, op.k)))
                     return false;
-            } else if (count == 4 && first->op == GGML_OP_RMS_NORM && nodes[1]->op == GGML_OP_MUL && nodes[1]->src[0] == first &&
-                       sd_ggml_modulate_describe(nodes[2]) && nodes[2]->src[0] == nodes[1] && value == nodes[2]) {
-                op.kind       = RMS_MOD;
-                op.weight     = nodes[1]->src[1];
-                op.modulation = nodes[2]->src[1];
-                op.shift      = nodes[2]->src[2];
+            } else if (first->op == GGML_OP_RMS_NORM && value == nodes[count - 2] && sd_ggml_modulate_describe(value)) {
+                if (count == 3 && value->src[0] == first && vector_rms_input(op.input, op.k)) {
+                    op.kind = RMS_MOD_VEC;
+                } else if (count == 4 && nodes[1]->op == GGML_OP_MUL && nodes[1]->src[0] == first &&
+                           value->src[0] == nodes[1] && op.k >= 1024 && vector(nodes[1]->src[1], op.k)) {
+                    op.kind   = RMS_MOD;
+                    op.weight = nodes[1]->src[1];
+                } else {
+                    return false;
+                }
+                op.modulation = value->src[1];
+                op.shift      = value->src[2];
                 op.eps        = param_f32(first, 0);
-                if (op.k < 1024 || !vector(op.weight, op.k) || !vector(op.modulation, op.k) || (op.shift && !vector(op.shift, op.k)))
+                if (!vector(op.modulation, op.k) || (op.shift && !vector(op.shift, op.k)))
                     return false;
             } else if (count == 2 && first->op == GGML_OP_GLU && value == first) {
                 const auto glu = ggml_get_glu_op(first);
@@ -101,6 +121,8 @@ namespace SD_CUDA_NAMESPACE {
                     else
                         op.up_offset = op.k;
                 }
+            } else if (count == 2 && first->op == GGML_OP_UNARY && ggml_get_unary_op(first) == GGML_UNARY_OP_GELU && value == first) {
+                op.kind = GELU;
             } else if (count == 3 && first->op == GGML_OP_UNARY && nodes[1]->op == GGML_OP_MUL && value == nodes[1] &&
                        (nodes[1]->src[0] == first || nodes[1]->src[1] == first)) {
                 auto unary = ggml_get_unary_op(first);
@@ -124,17 +146,20 @@ namespace SD_CUDA_NAMESPACE {
             return true;
         }
         static bool supported(const Operation& op, const ggml_ext_gpu_device_info& device) {
-            const size_t extra = op.kind == NORM ? 384 : op.kind == RMS_MOD ? 256
-                                                                            : 128;
+            const size_t extra = op.kind == NORM ? 384 : op.kind == RMS_MOD || op.kind == RMS_MOD_VEC ? 256
+                                                                                                      : 128;
             return device.device >= 0 && size_t(op.k) * sizeof(float) + extra <= device.shared_memory;
         }
         static int match(ggml_backend_dev_t device, const ggml_cgraph* graph, int first, void*) {
             if (fusion_disabled())
                 return 0;
-            auto* g             = const_cast<ggml_cgraph*>(graph);
-            const int available = ggml_graph_n_nodes(g) - first;
-            const auto* node    = ggml_graph_node(g, first);
-            const int count     = node->op == GGML_OP_RMS_NORM ? 4 : node->op == GGML_OP_NORM || node->op == GGML_OP_UNARY ? 3
+            auto* g               = const_cast<ggml_cgraph*>(graph);
+            const int available   = ggml_graph_n_nodes(g) - first;
+            const auto* node      = ggml_graph_node(g, first);
+            const bool unary_mul  = node->op == GGML_OP_UNARY && ggml_get_unary_op(node) != GGML_UNARY_OP_GELU;
+            const bool affine_rms = node->op == GGML_OP_RMS_NORM && available >= 2 &&
+                                    ggml_graph_node(g, first + 1)->op == GGML_OP_MUL;
+            const int count       = affine_rms ? 4 : node->op == GGML_OP_RMS_NORM || node->op == GGML_OP_NORM || unary_mul ? 3
                                                                                                                            : 2;
             if (available < count)
                 return 0;
@@ -163,6 +188,11 @@ namespace SD_CUDA_NAMESPACE {
                         chain[2] = value;
                         chain[3] = quant;
                         count    = 4;
+                    } else if (weight->op == GGML_OP_RMS_NORM && vector_rms_input(weight->src[0], value->ne[0])) {
+                        chain[0] = weight;
+                        chain[1] = value;
+                        chain[2] = quant;
+                        count    = 3;
                     } else {
                         chain[0] = value;
                         chain[1] = quant;
@@ -227,37 +257,37 @@ namespace SD_CUDA_NAMESPACE {
             const auto x = reinterpret_cast<uintptr_t>(a->data), y = reinterpret_cast<uintptr_t>(b->data);
             return x <= y ? y - x < ggml_nbytes(a) : x - y < ggml_nbytes(b);
         }
-        template <bool Rotate, bool Swiglu, bool Normalize, bool Scaled, bool Sigmoid, bool RMS, bool Modulate, bool Situ>
+        template <bool Rotate, bool Swiglu, bool Normalize, bool Scaled, bool Sigmoid, bool RMS, bool Modulate, bool Situ, bool Gelu, bool RMSVec>
         static CUDAError launch_quantize(Plan& p, const Operation& op, int8_t* output, CUDAStream stream) {
-            constexpr bool warp = Scaled || RMS || Modulate;
+            constexpr bool warp = Scaled || RMS || Modulate || Gelu;
             constexpr int extra = Normalize ? 384 : RMS ? 256
                                                         : 128;
             if (!p.configured) {
-                auto status = cuda_set_shared_memory(quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS, Modulate, Situ, Rotate>,
+                auto status = cuda_set_shared_memory(quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS, Modulate, Situ, Gelu, RMSVec, Rotate>,
                                                      int(p.device.shared_memory - extra));
                 if (status != cuda_success)
                     return status;
                 p.configured = true;
             }
-            const int threads    = Normalize ? 1024 : RMS                                                       ? (op.k <= 1024 ? 128 : op.k <= 6144 ? 256
-                                                                                                                                    : op.k <= 8192   ? 512
-                                                                                                                                                     : 1024)
-                                                  : (Situ ? op.k >= 8192 : Swiglu && !Sigmoid && op.k >= 16384) ? 512
-                                                                                                                : 256;
+            const int threads    = Normalize ? 1024 : RMS                                                                   ? (op.k <= 1024 ? 128 : op.k <= 6144 ? 256
+                                                                                                                                                : op.k <= 8192   ? 512
+                                                                                                                                                                 : 1024)
+                                                  : (Situ ? op.k >= 8192 : (Gelu || (Swiglu && !Sigmoid)) && op.k >= 16384) ? 512
+                                                                                                                            : 256;
             const int64_t padded = (op.rows + 3) / 4 * 4;
             auto data            = [](const ggml_tensor* t) { return t ? static_cast<const float*>(t->data) : nullptr; };
-            quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS, Modulate, Situ, Rotate><<<unsigned(op.rows), threads, size_t(op.k) * sizeof(float), stream>>>(
+            quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS, Modulate, Situ, Gelu, RMSVec, Rotate><<<unsigned(op.rows), threads, size_t(op.k) * sizeof(float), stream>>>(
                 data(op.input) + op.gate_offset, output, reinterpret_cast<float*>(output + op.k * padded), op.k, op.rows, op.k,
                 op.up ? data(op.up) + op.up_offset : nullptr, op.stride, op.up_stride, nullptr, nullptr, data(op.modulation), op.eps, op.scale, op.bias, data(op.weight), data(op.shift));
             return cuda_last_error();
         }
-        template <bool Swiglu = false, bool Normalize = false, bool Scaled = false, bool Sigmoid = false, bool RMS = false, bool Modulate = false, bool Situ = false>
+        template <bool Swiglu = false, bool Normalize = false, bool Scaled = false, bool Sigmoid = false, bool RMS = false, bool Modulate = false, bool Situ = false, bool Gelu = false, bool RMSVec = false>
         static CUDAError launch(Plan& p, const Operation& op, int8_t* output, CUDAStream stream) {
-            if constexpr (Swiglu || RMS || Modulate) {
+            if constexpr (Swiglu || RMS || Modulate || Gelu) {
                 if (op.group == 1)
-                    return launch_quantize<false, Swiglu, Normalize, Scaled, Sigmoid, RMS, Modulate, Situ>(p, op, output, stream);
+                    return launch_quantize<false, Swiglu, Normalize, Scaled, Sigmoid, RMS, Modulate, Situ, Gelu, RMSVec>(p, op, output, stream);
             }
-            return launch_quantize<true, Swiglu, Normalize, Scaled, Sigmoid, RMS, Modulate, Situ>(p, op, output, stream);
+            return launch_quantize<true, Swiglu, Normalize, Scaled, Sigmoid, RMS, Modulate, Situ, Gelu, RMSVec>(p, op, output, stream);
         }
         static ggml_status execute(const ggml_ext_execution_context* execution, ggml_tensor* const* nodes, int count, void* state, void*) {
             auto& plan     = *static_cast<Plan*>(state);
@@ -285,6 +315,9 @@ namespace SD_CUDA_NAMESPACE {
                 case RMS_MOD:
                     error = launch<false, false, false, false, true>(plan, op, output, stream);
                     break;
+                case RMS_MOD_VEC:
+                    error = launch<false, false, false, false, true, false, false, false, true>(plan, op, output, stream);
+                    break;
                 case MOD:
                     error = launch<false, false, false, false, false, true>(plan, op, output, stream);
                     break;
@@ -294,6 +327,9 @@ namespace SD_CUDA_NAMESPACE {
                     break;
                 case SITU:
                     error = launch<true, false, false, false, false, false, true>(plan, op, output, stream);
+                    break;
+                case GELU:
+                    error = launch<false, false, false, false, false, false, false, true>(plan, op, output, stream);
                     break;
                 case SIGMOID:
                     error = launch<true, false, false, true>(plan, op, output, stream);

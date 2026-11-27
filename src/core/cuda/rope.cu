@@ -12,8 +12,9 @@ namespace SD_CUDA_NAMESPACE {
             v = __fadd_rn(v, cuda_shuffle_xor(v, mask));
         return v;
     }
-    template <int D, bool interleaved, typename T, bool affine = true>
-    static __global__ void rms_norm_mul_rope_apply_fused(
+
+    template <int D, bool interleaved, typename T, bool affine = true, int HiddenDim = 0>
+    static __global__ __launch_bounds__(HiddenDim ? HiddenDim / 4 : 128) void rms_norm_mul_rope_apply_fused(
         const float* x,
         const float* weight,
         const float* pe,
@@ -27,56 +28,81 @@ namespace SD_CUDA_NAMESPACE {
         int rot_half,
         float eps,
         float output_scale) {
-        const int lane    = threadIdx.x;
-        const int64_t row = int64_t(blockIdx.x) * blockDim.y + threadIdx.y;
-        if (row >= rows) {
+        const int lane           = threadIdx.x;
+        const int64_t head_count = HiddenDim > 0 ? HiddenDim / D : heads;
+        int64_t first            = int64_t(blockIdx.x) * blockDim.y + threadIdx.y;
+        int64_t end              = first + 1;
+        float scale              = 1.0f;
+        if constexpr (HiddenDim > 0) {
+            constexpr int threads = HiddenDim / 4;
+            constexpr int warps   = threads / 32;
+            __shared__ float warp_sums[warps];
+            const int tid  = threadIdx.y * 32 + lane;
+            const float4 v = reinterpret_cast<const float4*>(x)[int64_t(blockIdx.x) * threads + tid];
+            // Match the vectorized whole-row RMSNorm reduction before splitting the heads.
+            const float sum = sd_warp_sum(v.x * v.x + v.y * v.y + v.z * v.z + v.w * v.w);
+            if (lane == 0) {
+                warp_sums[threadIdx.y] = sum;
+            }
+            __syncthreads();
+            scale = rsqrtf(sd_warp_sum(lane < warps ? warp_sums[lane] : 0.f) / HiddenDim + eps);
+            first = int64_t(blockIdx.x) * head_count + threadIdx.y;
+            end   = (int64_t(blockIdx.x) + 1) * head_count;
+        } else if (first >= rows) {
             return;
         }
-        const int64_t head  = row % heads;
-        const int64_t token = (row / heads) % tokens;
-        const int64_t batch = row / (heads * tokens);
-        const float* x_row  = x + head * nb1 + token * nb2 + batch * nb3;
-        float v[D / 32], sums[8] = {};
+        for (int64_t row = first; row < end; row += HiddenDim > 0 ? HiddenDim / 128 : 1) {
+            const int64_t head      = row % head_count;
+            const int64_t token     = HiddenDim > 0 ? int64_t(blockIdx.x) : (row / heads) % tokens;
+            const int64_t batch     = HiddenDim > 0 ? 0 : row / (heads * tokens);
+            const float* x_row      = x + head * nb1 + token * nb2 + batch * nb3;
+            const float* weight_row = HiddenDim > 0 ? weight + head * D : weight;
+            const int64_t position  = HiddenDim > 0 ? row : token;
+            const int64_t out_row   = HiddenDim > 0 && std::is_same<T, float>::value ? row : (batch * heads + head) * tokens + token;
+            T* out                  = dst + out_row * D;
+            float v[D / 32], sums[8] = {};
 #pragma unroll
-        for (int j = 0; j < D / 32; ++j) {
-            v[j]    = x_row[j * 32 + lane];
-            sums[j] = sd_warp_sum(__fmul_rn(v[j], v[j]));
-        }
-        // Preserve the 256-thread RMSNorm kernel's reduction tree, including inactive warps.
-        const float sum = __fadd_rn(
-            __fadd_rn(__fadd_rn(sums[0], sums[4]), __fadd_rn(sums[2], sums[6])),
-            __fadd_rn(__fadd_rn(sums[1], sums[5]), __fadd_rn(sums[3], sums[7])));
-        const float scale = rsqrtf(sum / float(D) + eps);
-        T* out            = dst + ((batch * heads + head) * tokens + token) * D;
-#pragma unroll
-        for (int j = 0; j < D / 32; ++j) {
-            const int col     = j * 32 + lane;
-            const float value = affine ? __fmul_rn(__fmul_rn(scale, v[j]), weight[col]) : __fmul_rn(scale, v[j]);
-            float rotated     = value;
-            if constexpr (interleaved) {
-                const float other = cuda_shuffle_xor(value, 1, 32);
-                if (col < 2 * rot_half) {
-                    const float* m      = pe + 4 * (token * rot_half + col / 2);
-                    const float4 matrix = make_float4(m[0], m[1], m[2], m[3]);
-                    rotated             = lane % 2 == 0
-                                              ? __fadd_rn(__fmul_rn(value, matrix.x), __fmul_rn(other, matrix.y))
-                                              : __fadd_rn(__fmul_rn(other, matrix.z), __fmul_rn(value, matrix.w));
+            for (int j = 0; j < D / 32; ++j) {
+                v[j] = x_row[j * 32 + lane];
+                if constexpr (HiddenDim == 0) {
+                    sums[j] = sd_warp_sum(__fmul_rn(v[j], v[j]));
                 }
-            } else {
-                if (col < 2 * rot_half) {
+            }
+            if constexpr (HiddenDim == 0) {
+                // Preserve the 256-thread RMSNorm kernel's reduction tree, including inactive warps.
+                const float sum = __fadd_rn(
+                    __fadd_rn(__fadd_rn(sums[0], sums[4]), __fadd_rn(sums[2], sums[6])),
+                    __fadd_rn(__fadd_rn(sums[1], sums[5]), __fadd_rn(sums[3], sums[7])));
+                scale = rsqrtf(sum / float(D) + eps);
+            }
+#pragma unroll
+            for (int j = 0; j < D / 32; ++j) {
+                const int col     = j * 32 + lane;
+                const float value = affine ? __fmul_rn(__fmul_rn(scale, v[j]), weight_row[col]) : __fmul_rn(scale, v[j]);
+                float rotated     = value;
+                if constexpr (interleaved) {
+                    const float other = cuda_shuffle_xor(value, 1, 32);
+                    if (col < 2 * rot_half) {
+                        const float* m      = pe + 4 * (position * rot_half + col / 2);
+                        const float4 matrix = make_float4(m[0], m[1], m[2], m[3]);
+                        rotated             = lane % 2 == 0
+                                                  ? __fadd_rn(__fmul_rn(value, matrix.x), __fmul_rn(other, matrix.y))
+                                                  : __fadd_rn(__fmul_rn(other, matrix.z), __fmul_rn(value, matrix.w));
+                    }
+                } else if (col < 2 * rot_half) {
                     const int partner   = col < rot_half ? col + rot_half : col - rot_half;
-                    const float other   = affine ? __fmul_rn(__fmul_rn(scale, x_row[partner]), weight[partner]) : __fmul_rn(scale, x_row[partner]);
-                    const float* m      = pe + 4 * (token * rot_half + col % rot_half);
+                    const float other   = affine ? __fmul_rn(__fmul_rn(scale, x_row[partner]), weight_row[partner]) : __fmul_rn(scale, x_row[partner]);
+                    const float* m      = pe + 4 * (position * rot_half + col % rot_half);
                     const float4 matrix = make_float4(m[0], m[1], m[2], m[3]);
                     rotated             = col < rot_half
                                               ? __fsub_rn(__fmul_rn(value, matrix.x), __fmul_rn(other, matrix.z))
                                               : __fadd_rn(__fmul_rn(other, matrix.z), __fmul_rn(value, matrix.x));
                 }
-            }
-            if constexpr (std::is_same<T, half>::value) {
-                out[col] = __float2half_rn(__fmul_rn(rotated, output_scale));
-            } else {
-                out[col] = rotated;
+                if constexpr (std::is_same<T, half>::value) {
+                    out[col] = __float2half_rn(__fmul_rn(rotated, output_scale));
+                } else {
+                    out[col] = rotated;
+                }
             }
         }
     }
@@ -165,7 +191,7 @@ namespace SD_CUDA_NAMESPACE {
 
     bool rope_fusion_supports(const ggml_tensor* norm, const ggml_tensor* mul, const ggml_tensor* rope) {
         if (norm->op != GGML_OP_RMS_NORM || mul->op != GGML_OP_MUL || !rope_is_node(rope) ||
-            mul->src[0] != norm || rope->src[0] != mul || !rope_supports(nullptr, rope, nullptr))
+            mul->src[0] != norm || rope->src[0] != mul || !rope_supports(nullptr, rope, nullptr) || rope->src[1]->ne[1] != 2)
             return false;
         const auto* x      = norm->src[0];
         const auto* weight = mul->src[1];
@@ -188,8 +214,110 @@ namespace SD_CUDA_NAMESPACE {
         return x && x->type == GGML_TYPE_F32 && x->ne[0] == 64 &&
                x->nb[0] == sizeof(float) && x->nb[1] % sizeof(float) == 0 &&
                x->nb[2] % sizeof(float) == 0 && x->nb[3] % sizeof(float) == 0 &&
-               ggml_are_same_shape(x, norm) && ggml_is_contiguous(pe) &&
+               ggml_are_same_shape(x, norm) && ggml_is_contiguous(pe) && pe->ne[1] == 2 &&
                ggml_nrows(x) > 0 && (ggml_nrows(x) + 3) / 4 <= INT_MAX;
+    }
+
+    static bool hidden_rope_aligned(const ggml_tensor* tensor) {
+        size_t offset = 0;
+        while (!tensor->data && tensor->view_src) {
+            offset += tensor->view_offs;
+            tensor = tensor->view_src;
+        }
+        return (reinterpret_cast<uintptr_t>(tensor->data) + offset) % 16 == 0;
+    }
+
+    bool hidden_rope_fusion_supports(const ggml_tensor* norm, const ggml_tensor* mul, const ggml_tensor* reshape, const ggml_tensor* rope) {
+        if (!norm || !mul || !reshape || !rope_is_node(rope) || norm->op != GGML_OP_RMS_NORM ||
+            mul->op != GGML_OP_MUL || mul->src[0] != norm || reshape->op != GGML_OP_RESHAPE ||
+            reshape->src[0] != mul || rope->src[0] != reshape || !rope_supports(nullptr, rope, nullptr)) {
+            return false;
+        }
+        const auto* x      = norm->src[0];
+        const auto* weight = mul->src[1];
+        const auto* pe     = rope->src[1];
+        return x && weight && weight != norm && x->type == GGML_TYPE_F32 && norm->type == GGML_TYPE_F32 &&
+               weight->type == GGML_TYPE_F32 && ggml_nelements(weight) == x->ne[0] && weight->ne[0] == x->ne[0] &&
+               (x->ne[0] == 2048 || x->ne[0] == 4096) && ggml_nrows(x) <= INT_MAX &&
+               ggml_are_same_shape(x, norm) && ggml_are_same_shape(x, mul) &&
+               reshape->ne[1] == 1 && reshape->ne[3] == 1 &&
+               (reshape->ne[0] == 64 || reshape->ne[0] == 128) &&
+               pe->ne[2] == reshape->ne[0] / 2 && ggml_is_contiguous(pe) &&
+               ggml_is_contiguous(reshape) && ggml_is_contiguous(x) && ggml_is_contiguous(weight) &&
+               hidden_rope_aligned(x) && hidden_rope_aligned(weight) &&
+               pe->view_offs % 16 == 0 && reinterpret_cast<uintptr_t>(pe->data) % 16 == 0;
+    }
+
+    template <int HiddenDim, int HeadDim, typename T>
+    static void hidden_rope_launch(CUDAStream stream, ggml_tensor* const* nodes, T* output, float scale) {
+        const auto* x       = nodes[0]->src[0];
+        const auto* weight  = nodes[1]->src[1];
+        const auto* pe      = nodes[3]->src[1];
+        const auto tokens   = ggml_nrows(x);
+        constexpr int heads = HiddenDim / HeadDim;
+        auto kernel         = rope_interleaved(nodes[3])
+                                  ? rms_norm_mul_rope_apply_fused<HeadDim, true, T, true, HiddenDim>
+                                  : rms_norm_mul_rope_apply_fused<HeadDim, false, T, true, HiddenDim>;
+        kernel<<<static_cast<unsigned>(tokens), dim3(32, HiddenDim / 128), 0, stream>>>(
+            static_cast<const float*>(x->data), static_cast<const float*>(weight->data), static_cast<const float*>(pe->data), output,
+            heads, tokens, tokens * heads, HeadDim, HiddenDim, 0, HeadDim / 2, param_f32(nodes[0], 0), scale);
+    }
+
+    template <typename T>
+    static CUDAError hidden_rope_launch(CUDAStream stream, ggml_tensor* const* nodes, T* output, float scale) {
+        const auto dim      = nodes[0]->ne[0];
+        const auto head_dim = nodes[3]->ne[0];
+        if (dim == 4096 && head_dim == 128) {
+            hidden_rope_launch<4096, 128>(stream, nodes, output, scale);
+        } else if (dim == 4096) {
+            hidden_rope_launch<4096, 64>(stream, nodes, output, scale);
+        } else if (head_dim == 128) {
+            hidden_rope_launch<2048, 128>(stream, nodes, output, scale);
+        } else {
+            hidden_rope_launch<2048, 64>(stream, nodes, output, scale);
+        }
+        return cuda_last_error();
+    }
+
+    CUDAError hidden_rope_launch(CUDAStream stream, ggml_tensor* const* nodes, void* output, bool fp16, float scale) {
+        return fp16 ? hidden_rope_launch(stream, nodes, static_cast<half*>(output), scale)
+                    : hidden_rope_launch(stream, nodes, static_cast<float*>(output), scale);
+    }
+
+    bool hidden_rope_view_of(const ggml_tensor* view, const ggml_tensor* source) {
+        return view && source && view->src[0] == source && view->view_offs == 0 &&
+               ggml_nelements(view) == ggml_nelements(source) &&
+               (view->op == GGML_OP_RESHAPE || view->op == GGML_OP_VIEW || view->op == GGML_OP_PERMUTE);
+    }
+
+    bool hidden_rope_head_major(const ggml_tensor* view, const ggml_tensor* norm, const ggml_tensor* rope) {
+        const auto head_dim = rope->ne[0];
+        const auto width    = norm->ne[0];
+        return view->ne[0] == head_dim && view->ne[1] == ggml_nrows(norm) &&
+               view->ne[2] == width / head_dim && view->ne[3] == 1 &&
+               view->nb[0] == sizeof(float) && view->nb[1] == width * sizeof(float) &&
+               view->nb[2] == head_dim * sizeof(float);
+    }
+
+    static int hidden_rope_cast_count(ggml_cgraph* graph, int first) {
+        const auto* norm = ggml_graph_node(graph, first);
+        const auto* rope = ggml_graph_node(graph, first + 3);
+        const auto* prev = rope;
+        for (int i = first + 4; i < ggml_graph_n_nodes(graph) && i < first + 12; ++i) {
+            const auto* node = ggml_graph_node(graph, i);
+            if (node->src[0] != prev)
+                break;
+            if (node->op == GGML_OP_CPY && node->type == GGML_TYPE_F16 && ggml_is_contiguous(node) &&
+                ggml_are_same_shape(node, prev)) {
+                if (hidden_rope_head_major(prev, norm, rope))
+                    return i - first + 1;
+                break;
+            }
+            if (!hidden_rope_view_of(node, prev))
+                break;
+            prev = node;
+        }
+        return 4;
     }
 
     template <typename T, bool Interleaved>
@@ -234,6 +362,11 @@ namespace SD_CUDA_NAMESPACE {
         if (disabled)
             return 0;
         auto* g = const_cast<ggml_cgraph*>(graph);
+        if (first + 3 < ggml_graph_n_nodes(g) &&
+            hidden_rope_fusion_supports(ggml_graph_node(g, first), ggml_graph_node(g, first + 1),
+                                        ggml_graph_node(g, first + 2), ggml_graph_node(g, first + 3))) {
+            return hidden_rope_cast_count(g, first);
+        }
         if (first + 1 < ggml_graph_n_nodes(g) &&
             rope_non_affine_fusion_supports(ggml_graph_node(g, first), ggml_graph_node(g, first + 1)))
             return 2;
@@ -270,6 +403,19 @@ namespace SD_CUDA_NAMESPACE {
         for (int i = 2; i + 1 < total; ++i) {
             const auto* mul  = ggml_graph_node(graph, i);
             const auto* rope = ggml_graph_node(graph, i + 1);
+            if (mul->op == GGML_OP_RESHAPE && mul->src[0] &&
+                hidden_rope_fusion_supports(mul->src[0]->src[0], mul->src[0], mul, rope)) {
+                const auto* affine = mul->src[0];
+                for (int j = i - 1; j > 0 && j >= i - 64; --j) {
+                    if (ggml_graph_node(graph, j) == affine && ggml_graph_node(graph, j - 1) == affine->src[0]) {
+                        if (j + 1 < i) {
+                            ggml_ext_graph_delay(graph, j - 1, 2, i);
+                        }
+                        break;
+                    }
+                }
+                continue;
+            }
             if (rope_non_affine_fusion_supports(rope->src[0], rope)) {
                 for (int j = i; j >= 0 && j >= i - 64; --j) {
                     if (ggml_graph_node(graph, j) == rope->src[0]) {
@@ -322,14 +468,18 @@ namespace SD_CUDA_NAMESPACE {
         ggml_ext_gpu_context context;
         if (!cuda_context(execution->backend, &context))
             return GGML_STATUS_FAILED;
-        auto stream      = static_cast<CUDAStream>(context.stream);
-        const auto* rope = nodes[count <= 2 ? count - 1 : 2];
-        const auto* x    = count == 1 ? rope->src[0] : nodes[0]->src[0];
-        auto* dst        = nodes[count - 1];
-        const bool alias = overlaps(dst, x) || overlaps(dst, rope->src[1]) || (count > 2 && overlaps(dst, nodes[1]->src[1]));
-        void* output     = alias ? ggml_backend_buffer_get_base(execution->workspace) : dst->data;
+        auto stream       = static_cast<CUDAStream>(context.stream);
+        const bool hidden = count >= 4 && rope_is_node(nodes[3]);
+        const auto* rope  = nodes[hidden ? 3 : count <= 2 ? count - 1
+                                                          : 2];
+        const auto* x     = count == 1 ? rope->src[0] : nodes[0]->src[0];
+        auto* dst         = nodes[count - 1];
+        const bool alias  = overlaps(dst, x) || overlaps(dst, rope->src[1]) || (count > 2 && overlaps(dst, nodes[1]->src[1]));
+        void* output      = alias ? ggml_backend_buffer_get_base(execution->workspace) : dst->data;
         CUDAError error;
-        if (count == 2) {
+        if (hidden) {
+            error = hidden_rope_launch(stream, nodes, output, dst->type == GGML_TYPE_F16, 1.f);
+        } else if (count == 2) {
             const auto* pe     = rope->src[1];
             const int64_t rows = ggml_nrows(x);
             rms_norm_mul_rope_apply_fused<64, false, float, false><<<static_cast<unsigned int>((rows + 3) / 4), dim3(32, 4), 0, stream>>>(

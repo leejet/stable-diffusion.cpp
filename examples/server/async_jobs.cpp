@@ -711,8 +711,12 @@ namespace {
 }
 
 void configure_server_file_access(ServerModels& models, const SDSvrParams& params, const SDContextParams& config) {
-    auto& policy                 = models.file_access;
-    policy                       = {get_model_roots(params), fs::weakly_canonical(fs::current_path()) / "output", {}, {}};
+    auto& policy = models.file_access;
+    const fs::path output_root =
+        params.output_dir.empty()
+            ? fs::weakly_canonical(fs::current_path()) / "output"
+            : fs::weakly_canonical(fs::absolute(fs::u8path(params.output_dir)));
+    policy                       = {get_model_roots(params), output_root, {}, {}};
     models.workspace_file_access = policy;
     for (const auto* directory : {&config.lora_model_dir, &config.hires_upscalers_dir})
         if (!directory->empty())

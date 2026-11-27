@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
@@ -355,6 +356,16 @@ bool sd_backend_is(ggml_backend_t backend, const std::string& name) {
     }
     std::string dev_name = ggml_backend_dev_name(dev);
     return lower_copy(dev_name).find(lower_copy(name)) != std::string::npos;
+}
+
+bool sd_backend_is_cuda_family(ggml_backend_t backend) {
+    const auto dev = backend != nullptr ? ggml_backend_get_device(backend) : nullptr;
+    const auto reg = dev != nullptr ? ggml_backend_dev_backend_reg(dev) : nullptr;
+    if (reg == nullptr) {
+        return false;
+    }
+    const char* name = ggml_backend_reg_name(reg);
+    return std::strcmp(name, "CUDA") == 0 || std::strcmp(name, "ROCm") == 0 || std::strcmp(name, "MUSA") == 0;
 }
 
 static std::string get_default_backend_name() {
