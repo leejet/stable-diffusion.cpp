@@ -218,6 +218,15 @@ namespace SD_CUDA_NAMESPACE {
                ggml_nrows(x) > 0 && (ggml_nrows(x) + 3) / 4 <= INT_MAX;
     }
 
+    static bool hidden_rope_aligned(const ggml_tensor* tensor) {
+        size_t offset = 0;
+        while (!tensor->data && tensor->view_src) {
+            offset += tensor->view_offs;
+            tensor = tensor->view_src;
+        }
+        return (reinterpret_cast<uintptr_t>(tensor->data) + offset) % 16 == 0;
+    }
+
     bool hidden_rope_fusion_supports(const ggml_tensor* norm, const ggml_tensor* mul, const ggml_tensor* reshape, const ggml_tensor* rope) {
         if (!norm || !mul || !reshape || !rope_is_node(rope) || norm->op != GGML_OP_RMS_NORM ||
             mul->op != GGML_OP_MUL || mul->src[0] != norm || reshape->op != GGML_OP_RESHAPE ||
@@ -235,7 +244,7 @@ namespace SD_CUDA_NAMESPACE {
                (reshape->ne[0] == 64 || reshape->ne[0] == 128) &&
                pe->ne[2] == reshape->ne[0] / 2 && ggml_is_contiguous(pe) &&
                ggml_is_contiguous(reshape) && ggml_is_contiguous(x) && ggml_is_contiguous(weight) &&
-               x->view_offs % 16 == 0 && weight->view_offs % 16 == 0 &&
+               hidden_rope_aligned(x) && hidden_rope_aligned(weight) &&
                pe->view_offs % 16 == 0 && reinterpret_cast<uintptr_t>(pe->data) % 16 == 0;
     }
 
