@@ -16,8 +16,6 @@ For faster encoding, decoding, or previews, see [TAEQI2.1](taesd.md#qwen-image-2
 
 ## Usage
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
-
 ### Web UI
 
 Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
@@ -34,7 +32,47 @@ Slot IDs correspond to CLI component options: `diffusion_model` uses
 `--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
 Select optional components when required by your checkpoint or task.
 
-### CLI
+### DGL
+
+| Example | Description |
+| --- | --- |
+| [Text to image](../dgl/qwen_image_2.1/qwen-image-2-1-txt2img.dgl) | Generate an image from a prompt. |
+| [Image editing](../dgl/qwen_image_2.1/qwen-image-2-1-edit.dgl) | Edit a reference image; inputs are aligned automatically. |
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\qwen_image_2.1\qwen-image-2-1-txt2img.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/qwen_image_2.1/qwen-image-2-1-txt2img.dgl
+```
+
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+The [editing script](../dgl/qwen_image_2.1/qwen-image-2-1-edit.dgl) loads the reference
+at its original size. `vae_encode` and `encode_prompt` each align their input
+to multiples of 32, as required by the mapping between vision image slots and
+reference latent tokens. The VAE still compresses by a factor of 16.
+Already aligned inputs skip resizing. `latent_shape` creates a compatible output
+canvas from the reference dimensions, without imposing a fixed resolution.
+Use `tensor::interpolate` or `tensor::crop` first to choose a different size.
+See [DGL media dimensions](../dgl.md#media-dimensions) for rounding and video rules.
+
+### Legacy CLI
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 Use image dimensions divisible by 32. The resolution-dependent flow schedule is selected automatically.
 
@@ -199,3 +237,12 @@ Disable caching with `--model-args qwen_image_2_1_prefix_cache=false`. Numerical
 results can differ slightly because caching changes computation sizes. See the
 [prefix cache developer notes](../development/qwen_image_prefix_cache.md) for
 storage compatibility and implementation details.
+
+### DGL system instructions
+
+`encode_prompt` uses the model's default system message when `system` is omitted.
+`system="your instruction"` replaces its body; `system=""` removes the whole
+system segment and adjusts the output crop accordingly. User/assistant formatting
+and reference-image handling remain model-defined. `raw=true` accepts the complete
+tokenizer input without adding template segments or cropping a template prefix.
+Do not combine it with `system` or image bindings. See [DGL prompt formatting](../dgl.md#independent-generation-components).

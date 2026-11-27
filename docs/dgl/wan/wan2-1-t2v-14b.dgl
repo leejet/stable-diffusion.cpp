@@ -1,0 +1,45 @@
+# version: 0.0.0
+# docs/models/wan.md — Wan2.1 T2V 14B
+
+var {
+    model_path = "../models/diffusion_models/wan2.1-t2v-14b-Q8_0.gguf"
+    text_path = "../models/text_encoders/umt5-xxl-encoder-Q8_0.gguf"
+    vae_path = "../models/vae/wan_2.1_vae.safetensors"
+
+    output_path = "output.avi"
+
+    prompt = "a lovely cat"
+    negative_prompt = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+
+    seed = 42
+    rng_type = "cuda"
+    width = 832
+    height = 480
+    frames = 33
+    fps = 16
+
+    steps = 20
+    cfg_scale = 6.0
+    method = "euler"
+    scheduler = "discrete"
+}
+
+fn main() {
+    model = load_dit(model_path, family = "wan2", params_backend = "cpu")
+    text = load_text_encoder(text_path, family = "wan2", params_backend = "cpu", t5_path = text_path)
+    vae = load_vae(vae_path, family = "wan2", params_backend = "cpu")
+
+    base = tensor::zeros(latent_shape(vae, width = width, height = height, frames = frames))
+    positive = encode_prompt(text, prompt, width = width, height = height)
+    negative = encode_prompt(text, negative_prompt, width = width, height = height)
+    pos = predictor(model, positive)
+    neg = predictor(model, negative)
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler, flow_shift = 3.0)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    output_frames = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    video::save(output_path, {frames = output_frames, fps_num = fps, fps_den = 1}, audio = {})
+    return {video = {frames = output_frames, fps_num = fps, fps_den = 1}, latent = latent, audio = {}}
+}

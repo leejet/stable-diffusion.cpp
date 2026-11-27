@@ -38,9 +38,9 @@ a new combination of model + backend + hardware:
 
 | Run                                          | Expected hash relation             |
 |----------------------------------------------|------------------------------------|
-| A: no `--pulid-*` flags                      | baseline                           |
-| B: PuLID flags, `--pulid-id-weight 0.0`      | **byte-identical to A**            |
-| C: PuLID flags, `--pulid-id-weight 1.0`      | **different from A,B**, preserves source identity |
+| A: DGL condition without `pulid::apply` | baseline |
+| B: same script with `pulid::apply(..., strength = 0)` | **byte-identical to A** |
+| C: same script with `pulid::apply(..., strength = 1)` | **different from A,B**, preserves source identity |
 
 If A and C differ but A and B differ too, the injection is allocating
 or computing something even at zero weight -- likely a bug.

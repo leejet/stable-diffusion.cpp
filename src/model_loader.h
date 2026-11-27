@@ -45,13 +45,17 @@ public:
     enum class FileScope { Catalog,
                            Isolated };
 
-private:
     struct FileStamp {
         std::string path;
         uintmax_t size = 0;
         std::filesystem::file_time_type modified;
+        bool exists = true;
     };
 
+    using Dependencies = std::vector<FileStamp>;
+    static bool read_file_stamp(const std::string& path, FileStamp& stamp, bool allow_missing = false);
+
+private:
     struct FileRecord {
         FileId id         = 0;
         uint64_t revision = 0;
@@ -71,7 +75,7 @@ private:
     std::vector<FileStamp> parsed_dependencies_;
     std::map<std::string, std::set<std::string>> parsed_tensor_names_;
 
-    static bool read_file_stamp(const std::string& path, FileStamp& stamp);
+    bool inspect_optional_file(const std::string& path, bool& exists);
     static bool file_unchanged(const FileStamp& stamp);
     bool parse_file(const std::string& path, const std::string& prefix);
     bool add_file_impl(const std::string& path, const std::string& prefix, FileId* id, bool force, FileScope scope);
@@ -102,8 +106,12 @@ public:
     ModelLoader();
 
     bool add_file(const std::string& path, const std::string& prefix = "", FileId* id = nullptr, bool force = false, FileScope scope = FileScope::Catalog);
+    bool set_file_prefix(FileId id, const std::string& prefix);
+    Dependencies dependencies(bool include_isolated = true) const;
+    static bool dependencies_changed(const Dependencies& dependencies, bool& changed);
     bool del_file(FileId id);
     uint64_t file_revision(FileId id) const;
+    bool same_weight_file(FileId id, size_t index, const ModelLoader& other, FileId other_id, size_t other_index) const;
     std::string file_path(FileId id) const;
     std::map<std::string, std::string> file_metadata(FileId id) const;
     String2TensorStorage file_tensors(FileId id) const;
@@ -115,7 +123,7 @@ public:
     uint64_t revision() const { return revision_; }
     FileVersions file_versions(const std::vector<std::string>& prefixes = {}) const;
     bool init_from_file(const std::string& file_path, const std::string& prefix = "");
-    void convert_tensors_name();
+    void convert_tensors_name(SDVersion version = VERSION_COUNT);
     bool init_from_file_and_convert_name(const std::string& file_path,
                                          const std::string& prefix = "",
                                          SDVersion version         = VERSION_COUNT);

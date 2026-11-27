@@ -35,8 +35,9 @@ typedef struct sd_ctx_t sd_ctx_t;
 typedef struct sd_result sd_result_t;
 typedef struct sd_opt sd_opt_t;
 typedef struct sd_upscaler sd_upscaler_t;
-typedef struct sd_vid_upscaler sd_vid_upscaler_t;
-typedef struct sd_adetailer sd_adetailer_t;
+typedef struct sd_dgl_ctx_t sd_dgl_ctx_t;
+typedef struct sd_dgl_result_t sd_dgl_result_t;
+typedef struct sd_dgl_value_t sd_dgl_value_t;
 
 // Status and diagnostics
 
@@ -57,6 +58,51 @@ typedef enum {
 // Thread-local diagnostic, cleared by successful status/accessor calls.
 // Valid until the next API call; free functions and tensor retain preserve it.
 SD_API const char* sd_get_last_error(void);
+
+// Generation metadata
+
+// Returns inferred image parameters and infotext as UTF-8 JSON, or {} when no
+// image parameters can be inferred. Does not execute source or read files.
+// Borrowed until the next call to this function on the same thread.
+// Returns NULL on failure; see sd_get_last_error().
+SD_API const char* sd_get_generation_metadata(const char* source);
+
+typedef enum {
+    SD_METADATA_READ_JSON       = 1u << 0,
+    SD_METADATA_READ_RAW        = 1u << 1,
+    SD_METADATA_READ_BRIEF      = 1u << 2,
+    SD_METADATA_READ_STRUCTURAL = 1u << 3,
+} sd_metadata_read_flags_t;
+
+// Reads container metadata without loading a model. Flags may be ORed together;
+// zero selects the default text report. Returns NULL on failure.
+// Borrowed until the next call to this function on the same thread.
+SD_API const char* sd_read_metadata(const char* path, uint32_t flags);
+
+typedef enum {
+    SD_METADATA_PNG,
+    SD_METADATA_JPEG,
+    SD_METADATA_XMP,
+    SD_METADATA_AVI,
+} sd_metadata_format_t;
+
+// Builds PNG iTXt chunks, JPEG COM segments, UTF-8 XMP or an AVI INFO chunk.
+// PNG/JPEG/XMP contain the DGL source and inferred infotext; AVI stores source.
+// Does not write files. Borrowed bytes remain valid until the next call to this
+// function on the same thread. Empty source succeeds with NULL, 0.
+// Output pointers are required and cleared on failure.
+SD_API sd_status_t sd_get_metadata_chunk(const char* source, sd_metadata_format_t format, const void** data_out, size_t* size_out);
+
+// File access for generation and DGL contexts
+
+typedef enum {
+    SD_DGL_FILE_READ,
+    SD_DGL_FILE_READ_MODEL,
+    SD_DGL_FILE_WRITE,
+} sd_dgl_file_access_t;
+
+// Return false to reject the access. The UTF-8 path is valid only during the callback.
+typedef bool (*sd_dgl_file_access_cb_t)(const char* path, sd_dgl_file_access_t access, void* userdata);
 
 // Tensors and media
 
@@ -97,6 +143,10 @@ SD_API int64_t sd_tensor_dim(const sd_tensor_t* tensor, size_t axis);
 SD_API size_t sd_tensor_byte_size(const sd_tensor_t* tensor);
 SD_API const void* sd_tensor_data(const sd_tensor_t* tensor);
 
+// Saves a NumPy .npy file. NumPy shape is the reverse of sd_tensor shape.
+// Failures use sd_get_last_error().
+SD_API bool sd_tensor_save(const sd_tensor_t* tensor, const char* path);
+
 // Options
 
 typedef struct {
@@ -115,10 +165,6 @@ typedef sd_opt_t sd_img_gen_opt_t;
 typedef sd_opt_t sd_vid_gen_opt_t;
 typedef sd_opt_t sd_upscaler_opt_t;
 typedef sd_opt_t sd_upscale_opt_t;
-typedef sd_opt_t sd_vid_upscaler_opt_t;
-typedef sd_opt_t sd_vid_upscale_opt_t;
-typedef sd_opt_t sd_adetailer_opt_t;
-typedef sd_opt_t sd_adetail_opt_t;
 
 // Parameter keys and types are documented in docs/guides/c_api.md.
 // Setters replace values atomically; a failed setter preserves the previous value.
@@ -131,10 +177,6 @@ SD_API sd_img_gen_opt_t* sd_img_gen_opt_create(void);
 SD_API sd_vid_gen_opt_t* sd_vid_gen_opt_create(void);
 SD_API sd_upscaler_opt_t* sd_upscaler_opt_create(void);
 SD_API sd_upscale_opt_t* sd_upscale_opt_create(void);
-SD_API sd_vid_upscaler_opt_t* sd_vid_upscaler_opt_create(void);
-SD_API sd_vid_upscale_opt_t* sd_vid_upscale_opt_create(void);
-SD_API sd_adetailer_opt_t* sd_adetailer_opt_create(void);
-SD_API sd_adetail_opt_t* sd_adetail_opt_create(void);
 SD_API void sd_opt_free(sd_opt_t* params);
 
 SD_API sd_status_t sd_opt_set_bool(sd_opt_t* params, const char* key, bool value);
@@ -168,6 +210,16 @@ SD_API sd_status_t sd_opt_unset(sd_opt_t* params, const char* key);
 // its own configuration; params may be freed immediately after the call returns.
 SD_API sd_status_t sd_ctx_create(const sd_ctx_opt_t* params, sd_ctx_t** ctx_out);
 SD_API void sd_ctx_free(sd_ctx_t* ctx);
+// Borrows the context used for generation, or returns NULL if ctx is NULL.
+// It shares component caches and can run scripts between generation calls.
+// Its lifetime is tied to ctx. Do not pass it to sd_dgl_ctx_free().
+SD_API sd_dgl_ctx_t* sd_ctx_get_dgl_ctx(sd_ctx_t* ctx);
+// Copies the new model configuration into an idle context. The execution
+// settings, callbacks, and DGL component cache belong to the existing context.
+// Returns SD_STATUS_BUSY during generation, DGL execution, or a model probe.
+SD_API sd_status_t sd_ctx_set_model_options(sd_ctx_t* ctx, const sd_ctx_opt_t* params);
+// Applies to generated programs and model probing. Register or clear while idle.
+SD_API sd_status_t sd_ctx_set_file_access_callback(sd_ctx_t* ctx, sd_dgl_file_access_cb_t callback, void* userdata);
 
 SD_API sd_status_t sd_generate_image(sd_ctx_t* ctx, const sd_img_gen_opt_t* params, sd_result_t** result_out);
 SD_API sd_status_t sd_generate_video(sd_ctx_t* ctx, const sd_vid_gen_opt_t* params, sd_result_t** result_out);
@@ -175,12 +227,7 @@ SD_API sd_status_t sd_generate_video(sd_ctx_t* ctx, const sd_vid_gen_opt_t* para
 SD_API bool sd_ctx_supports_image_generation(const sd_ctx_t* sd_ctx);
 SD_API bool sd_ctx_supports_video_generation(const sd_ctx_t* sd_ctx);
 
-// ControlNet hot-swap APIs are not safe to call while generation is in flight.
-SD_API bool sd_ctx_load_control_net(sd_ctx_t* sd_ctx, const char* path);
-SD_API bool sd_ctx_unload_control_net(sd_ctx_t* sd_ctx);
-SD_API bool sd_ctx_has_control_net(const sd_ctx_t* sd_ctx);
-
-// Requires a loaded context; returns a static string owned by the library, or "Unknown".
+// Probes model metadata lazily; returns a static string, or "Unknown" on error.
 SD_API const char* sd_get_model_version_name(const sd_ctx_t* sd_ctx);
 
 enum sd_cancel_mode_t {
@@ -202,6 +249,10 @@ typedef enum {
     SD_RESULT_VIDEO   = 2,
 } sd_result_kind_t;
 
+// Probes the candidate model before replacing the current configuration.
+// Accepts SD_RESULT_IMAGE or SD_RESULT_VIDEO and preserves the current model on failure.
+SD_API sd_status_t sd_ctx_set_model_options_for_generation(sd_ctx_t* ctx, const sd_ctx_opt_t* params, sd_result_kind_t kind);
+
 // Results own all outputs independently of ctx and params. Views are read-only and
 // borrowed until sd_result_free(). Retain a tensor to keep its data independently.
 // Media descriptors contain metadata and borrowed immutable tensor handles.
@@ -212,7 +263,8 @@ SD_API const sd_tensor_t* sd_result_get_image(const sd_result_t* result, size_t 
 // Materializes contiguous U8 [C,W,H,T] storage on first access.
 SD_API const sd_video_t* sd_result_get_video(const sd_result_t* result);
 
-// Image metadata is per image; video metadata is shared by all frame indices.
+// Returns the exact UTF-8 DGL program used for inference. Image programs are per image;
+// video programs are shared by all frame indices. Host inputs must be supplied again to replay.
 SD_API const char* sd_result_get_generation_info(const sd_result_t* result, size_t index);
 SD_API const sd_audio_t* sd_result_get_audio(const sd_result_t* result);
 SD_API int sd_result_get_fps(const sd_result_t* result);
@@ -296,35 +348,122 @@ SD_API int sd_upscaler_get_scale(const sd_upscaler_t* upscaler);
 // Reads model metadata only; returns 0 if it is not a recognized RGB upscaler.
 SD_API int sd_upscaler_probe_scale(const char* model_path);
 
-// Video upscaling
+// DGL (Diffusion Graph Language)
 
-SD_API sd_status_t sd_vid_upscaler_create(const sd_vid_upscaler_opt_t* opt, sd_vid_upscaler_t** out);
-SD_API void sd_vid_upscaler_free(sd_vid_upscaler_t* upscaler);
-SD_API sd_status_t sd_upscale_video(
-    sd_vid_upscaler_t* upscaler,
-    const sd_vid_upscale_opt_t* opt,
-    sd_result_t** out);
+SD_API const char* sd_dgl_builtin_catalog(void);
 
-// ADetailer
+// A context shares loaded components across scripts and runs one script at a time.
+// Keep the context alive until all calls using it return.
+SD_API sd_dgl_ctx_t* sd_dgl_ctx_create(void);
+// Creates a context that releases models after their last use in each run.
+SD_API sd_dgl_ctx_t* sd_dgl_ctx_create_once(void);
+SD_API void sd_dgl_ctx_free(sd_dgl_ctx_t* ctx);
+// Sets options on an idle context: max_vram, max_ram, conditioning_cache_size, batched_cfg,
+// n_threads, auto_fit, enable_mmap, eager_load, disable_prefetch, disable_segmented_compute,
+// embed_metadata (default on; controls generation metadata in DGL image/video saves),
+// console_progress (default off; keeps built-in progress output alongside callbacks).
+// Threading, placement and weight-loading options invalidate cached models when changed.
+SD_API bool sd_dgl_ctx_set(sd_dgl_ctx_t* ctx, const char* key, const char* value);
 
-SD_API sd_status_t sd_adetailer_create(const sd_adetailer_opt_t* opt, sd_adetailer_t** out);
-SD_API void sd_adetailer_free(sd_adetailer_t* adetailer);
-SD_API sd_status_t sd_adetail(
-    sd_adetailer_t* adetailer,
-    sd_ctx_t* ctx,
-    const sd_adetail_opt_t* opt,
-    sd_result_t** out);
+// Releases idle GPU staging buffers that have RAM originals.
+// Clears idle buffer caches on supported backends.
+// Returns SD_STATUS_BUSY during DGL execution or generation.
+SD_API sd_status_t sd_dgl_ctx_release_staging(sd_dgl_ctx_t* ctx);
+// Unloads cached model components and clears idle buffer caches on supported backends.
+// The context keeps its settings and callbacks.
+// Subsequent requests reload components as needed. Returns SD_STATUS_BUSY during execution.
+SD_API sd_status_t sd_dgl_ctx_unload_models(sd_dgl_ctx_t* ctx);
 
-// Image preprocessing
+// Optional per-context callback. A null callback restores unrestricted file access.
+SD_API bool sd_dgl_ctx_set_file_access_callback(sd_dgl_ctx_t* ctx, sd_dgl_file_access_cb_t callback, void* userdata);
 
-SD_API sd_status_t sd_preprocess_canny(
-    const sd_tensor_t* image,
-    float high_threshold,
-    float low_threshold,
-    float weak,
-    float strong,
-    bool inverse,
-    sd_tensor_t** image_out);
+// Callbacks run synchronously on the executing thread. Set or clear while idle.
+// Pass counts start at 1 in each run. Data supplied by the library is borrowed
+// until the callback returns. Callbacks may request cancellation and must not throw.
+typedef void (*sd_dgl_preview_cb_t)(
+    const sd_preview_info_t* info,
+    int step,
+    int frame_count,
+    const sd_tensor_t* const* frames,
+    bool is_noisy,
+    void* userdata);
+SD_API sd_status_t sd_dgl_ctx_set_progress_callback(sd_dgl_ctx_t* ctx, sd_generation_progress_cb_t callback, void* userdata);
+// Modes: none, proj, tae, vae. Pass NULL as callback to clear.
+// Sampling uses projection previews by default. Positive intervals count
+// completed logical steps; supply preview(decoder=...) for tae or vae decoding.
+SD_API sd_status_t sd_dgl_ctx_set_preview_callback(
+    sd_dgl_ctx_t* ctx,
+    sd_dgl_preview_cb_t callback,
+    const char* mode,
+    int interval,
+    bool denoised,
+    bool noisy,
+    void* userdata);
+
+typedef struct {
+    const char* name;
+    const sd_tensor_t* tensor;
+} sd_dgl_tensor_input_t;
+
+// Checks syntax and types without creating a context or loading models.
+// Set allow_tensor_inputs to accept named tensor parameters in fn main(name, ...).
+SD_API sd_status_t sd_dgl_check(const char* source, bool allow_tensor_inputs);
+
+// Compiles source once per call, binds inputs and executes in the required context.
+// Supply every declared tensor parameter exactly once, or NULL, 0 for no inputs.
+// The run retains tensors as needed; result tensors can share their storage.
+// On failure, *result_out is NULL. Compare the return value with SD_STATUS_OK.
+SD_API sd_status_t sd_dgl_run(
+    sd_dgl_ctx_t* ctx,
+    const char* source,
+    const sd_dgl_tensor_input_t* inputs,
+    size_t input_count,
+    sd_dgl_result_t** result_out);
+// Thread-safe. Requests cooperative cancellation of the current run only,
+// including during compilation; it is checked before execution begins.
+// An idle context accepts the request without queuing it for the next run.
+SD_API sd_status_t sd_dgl_ctx_cancel(sd_dgl_ctx_t* ctx);
+// Alias for sd_get_last_error().
+SD_API const char* sd_dgl_error(void);
+
+SD_API void sd_dgl_result_free(sd_dgl_result_t* result);
+
+typedef enum {
+    SD_DGL_VALUE_INVALID = 0,
+    SD_DGL_VALUE_BOOL,
+    SD_DGL_VALUE_INT,
+    SD_DGL_VALUE_NUMBER,
+    SD_DGL_VALUE_STRING,
+    SD_DGL_VALUE_TENSOR,
+    SD_DGL_VALUE_LIST,
+    SD_DGL_VALUE_DICT,
+    SD_DGL_VALUE_OPAQUE = 11,
+    SD_DGL_VALUE_VOID = 12,
+    SD_DGL_VALUE_BYTES = 13,
+} sd_dgl_value_kind_t;
+
+// Structured values, names and tensor handles are borrowed from the result.
+// Retain tensors to use them after the result is freed.
+SD_API const sd_dgl_value_t* sd_dgl_result_root(const sd_dgl_result_t* result);
+SD_API sd_dgl_value_kind_t sd_dgl_value_kind(const sd_dgl_value_t* value);
+SD_API size_t sd_dgl_value_count(const sd_dgl_value_t* value);
+SD_API const sd_dgl_value_t* sd_dgl_value_at(const sd_dgl_value_t* value, size_t index);
+SD_API const char* sd_dgl_value_name(const sd_dgl_value_t* value);
+SD_API const sd_dgl_value_t* sd_dgl_value_field(const sd_dgl_value_t* value, const char* name);
+SD_API sd_status_t sd_dgl_value_get_bool(const sd_dgl_value_t* value, bool* out);
+SD_API sd_status_t sd_dgl_value_get_int(const sd_dgl_value_t* value, int64_t* out);
+SD_API sd_status_t sd_dgl_value_get_number(const sd_dgl_value_t* value, double* out);
+SD_API sd_status_t sd_dgl_value_get_string(const sd_dgl_value_t* value, const char** out, size_t* size);
+// Borrowed immutable bytes, valid until the result is freed. No NUL terminator.
+SD_API sd_status_t sd_dgl_value_get_bytes(const sd_dgl_value_t* value, const void** out, size_t* size);
+SD_API const sd_tensor_t* sd_dgl_value_tensor(const sd_dgl_value_t* value);
+
+// Flat tensor convenience access. Scalar values are materialized as tensors on demand.
+SD_API const char* sd_dgl_result_type(const sd_dgl_result_t* result);
+SD_API size_t sd_dgl_result_count(const sd_dgl_result_t* result);
+SD_API const char* sd_dgl_result_name(const sd_dgl_result_t* result, size_t index);
+// Borrowed read-only tensor. Use sd_tensor_retain() to keep it past result free.
+SD_API const sd_tensor_t* sd_dgl_result_tensor(const sd_dgl_result_t* result, const char* name);
 
 // Weight types and model conversion
 

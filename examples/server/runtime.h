@@ -24,16 +24,27 @@ struct SDSvrParams {
     int listen_port           = 1234;
     int max_pending_jobs      = 64;
     int completed_ttl_seconds = 600;
+    int weight_staging_ttl    = -1;
+    int weight_residency_ttl  = -1;
     std::string serve_html_path;
+    std::string dgl_dir = "dgl";
+    bool media_view = true;
     std::vector<std::string> model_dirs;
+    std::vector<std::string> api_keys;
+    std::string api_key_file;
+    std::vector<std::string> cors_origins;
     bool normal_exit         = false;
     sd_log_level_t log_level = SD_LOG_INFO;
     bool color               = false;
 
     ArgOptions get_options();
+    void add_access_options(ArgOptions& options, const std::vector<ArgOptions>& groups);
     bool validate();
     bool resolve_and_validate();
     std::string to_string() const;
+
+private:
+    bool load_api_keys();
 };
 
 struct LoraEntry {
@@ -50,7 +61,6 @@ struct UpscalerEntry {
     std::string fullpath;
     std::string model_name;
     int scale                = 4;
-    int image_upscale_factor = 0;
     uintmax_t file_size      = 0;
     std::filesystem::file_time_type last_modified;
 };
@@ -124,6 +134,7 @@ struct VidGenJobRequest {
 };
 
 std::string base64_encode(const std::vector<uint8_t>& bytes);
+std::string base64_encode(const void* bytes, size_t size);
 std::string normalize_output_format(std::string output_format);
 std::vector<std::string> supported_img_output_formats(bool allow_webp = true);
 std::vector<std::string> supported_vid_output_formats();
@@ -138,11 +149,11 @@ bool assign_output_options(VidGenJobRequest& request,
                            std::string& error_message);
 std::string video_mime_type(const std::string& output_format);
 bool runtime_supports_generation_mode(const ServerRuntime& runtime, SDMode mode);
+bool has_current_model(const ServerRuntime& runtime);
+void configure_server_file_access(ServerModels& models, const SDSvrParams& params, const SDContextParams& config);
+bool generate_server_images(sd_ctx_t* ctx, ImgGenJobRequest& request, SDImageVec& results, std::string& error_message);
 std::string unsupported_generation_mode_error(SDMode mode);
 void refresh_lora_cache(ServerRuntime& rt);
 std::string get_lora_full_path(ServerRuntime& rt, const std::string& path);
 void refresh_upscaler_cache(ServerRuntime& rt);
 int64_t unix_timestamp_now_ms();
-bool apply_server_adetailer(ServerRuntime& runtime,
-                            ImgGenJobRequest& request,
-                            SDImageVec& results);

@@ -12,8 +12,6 @@ Qwen Image Edit supports reference-image editing with the original, 2509, and 25
 
 ## Usage
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
-
 ### Web UI
 
 Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
@@ -31,7 +29,39 @@ Slot IDs correspond to CLI component options: `diffusion_model` uses
 `--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
 Select optional components when required by your checkpoint or task.
 
-### CLI
+### DGL
+
+| Example | Description |
+| --- | --- |
+| [Qwen Image Edit](../dgl/qwen_image_edit/qwen-image-edit.dgl) | Edit a reference image. |
+| [Qwen Image Edit 2509](../dgl/qwen_image_edit/qwen-image-edit-2509.dgl) | Use the 2509 checkpoint. |
+| [Qwen Image Edit 2511](../dgl/qwen_image_edit/qwen-image-edit-2511.dgl) | Use the 2511 checkpoint. |
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\qwen_image_edit\qwen-image-edit.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/qwen_image_edit/qwen-image-edit.dgl
+```
+
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+### Legacy CLI
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 #### Qwen Image Edit
 
@@ -148,3 +178,9 @@ To use the new Qwen Image Edit 2511 mode, `--model-args qwen_image_zero_cond_t=t
 ```
 
 <img alt="qwen_image_edit_2509" src="../../assets/qwen/qwen_image_edit_2511.png" />
+
+## Notes and limitations
+
+The vision encoder uses a target area of `384 × 384` pixels for each reference
+image, preserving its aspect ratio up to the encoder's patch alignment. VAE
+reference latents use a separate resize based on the output size.

@@ -27,7 +27,7 @@ namespace sd {
         };
         std::array<CachedMeasurement, 2> measurement_cache_;
 
-        ggml_backend_sched_t make_scheduler(size_t graph_size);
+        ggml_backend_sched_t make_scheduler(size_t graph_size, const std::function<bool(size_t)>& ensure_host_memory);
         bool release_scheduler();
 
     public:
@@ -45,12 +45,13 @@ namespace sd {
         void set_extra_backends(const std::vector<ggml_backend_t>& backends);
         bool prepare(const Measurement& measurement);
         bool release_excess(const Measurement& measurement);
-        bool allocate(ggml_cgraph* graph, const Measurement& measurement, const AssignNodes& assign_nodes);
+        bool allocate(ggml_cgraph* graph, const Measurement& measurement, const AssignNodes& assign_nodes, const std::function<bool(size_t)>& ensure_host_memory = {});
         Measurement measure(
             ggml_cgraph* graph,
             const std::function<ggml_backend_t(const ggml_tensor*)>& external_backend,
             const AssignNodes& assign_nodes,
-            bool cache_measurement = false);
+            bool cache_measurement                                = false,
+            const std::function<bool(size_t)>& ensure_host_memory = {});
         void synchronize() const;
         bool segment_end() noexcept;
         bool release();

@@ -132,8 +132,9 @@ To add a model:
 1. Add its identity to `SDVersion` without renumbering existing values.
 2. Implement the network and `*Config::detect_from_weights` following the
    conventions above, or reuse an existing runner.
-3. Add a definition in its integration file, including its component
-   factory, traits, geometry, and sampling policy.
+3. Add a definition in its integration file with its display name, stable
+   lowercase DGL family ID, component factory, traits, geometry, and sampling
+   policy. Use underscores between words in the ID.
 4. Add the family's explicit registration in `src/model_registry.cpp`. For a new
    variant of a registered family, add its definition to that family's list.
 5. Add version detection signatures and any required weight-name mappings in
@@ -175,6 +176,15 @@ and the output runners. Backend checks, optional IP-Adapter setup, scale
 overrides, and tokenizer usage validation remain in the common builder. A
 factory returns failure if any required additional backend cannot initialize.
 
+`Context::params` contains `ModelBuildParams`, limited to model construction.
+The native pipeline extracts these values from its `ContextConfig` at the
+builder boundary. DGL uses its own typed `ModelLoadParams` for common loader
+options and separate DiT, text encoder and VAE parameters for specialized
+options. It does not store or convert through `ContextConfig`. Threading,
+file mapping, caching and memory budgets belong to the DGL execution context.
+The placement cache takes `PlacementOptions` rather than an entry point's
+context configuration.
+
 LLM architecture selection, tokenizer requirements, prompt preparation, and
 encoding remain centralized in `src/conditioning/conditioner.hpp`. Integration
 factories instantiate the conditioner with the model version; models requiring
@@ -204,28 +214,35 @@ the values that differ from the struct defaults. `prediction_from_weights` and
 `flow_shift_from_weights` preserve checkpoint-dependent defaults during automatic
 prediction selection; `probe_v_prediction` enables SD2's runtime v-prediction
 probe. Explicit prediction settings take precedence over automatic selection.
+In DGL the override belongs to `predictor`, rather than a model loader. A
+resolved `Denoising` configuration supplies prediction scalings, time mapping
+and noise conventions without changing the model's resource identity. Model
+flow-shift defaults are resolved independently of an explicit prediction override.
 MOSS's default unconditional skip layer stays
 in the diffusion engine, with active unconditional SLG taking precedence.
 
 The resolved `prediction_t` selects the denoiser directly. Flux3, MiniMax H3 AV,
 and Ming-Image use `FLUX3_FLOW_PRED`, `H3_AV_FLOW_PRED`, and
 `MING_IMAGE_FLOW_PRED`; their CLI overrides are `flux3_flow`, `h3_av_flow`, and
-`ming_image_flow`. Explicit `sd3_flow` always selects `DiscreteFlowDenoiser`,
+`ming_image_flow`. Explicit `flow` always selects `DiscreteFlowDenoiser`,
 and `flux_flow` always selects `FluxFlowDenoiser`, regardless of model version.
 Automatic selection retains each model's default implementation. New prediction
 values are appended before `PREDICTION_COUNT`, preserving existing valid values;
 clients using the automatic-selection sentinel must rebuild with the new header.
 
 `ModelGeometry` declares `diffusion_down_factor`, `latent_channels`, and
-`image_channels`. `ref_image_preset` defaults to `"default"`; set it only for models
-that need another reference-image preset.
+`image_channels`. Reference-image workflow defaults belong to API program
+generation and its DGL templates. Model definitions do not select shared
+reference presets. C++ prepares reference sizes, buckets and crop coordinates;
+templates express the pixel transformations and encoding calls. The rendered
+program explicitly supplies prompt media and predictor reference latents.
 
-The common pipeline executes these policies; specialized video, multimodal,
-cache, and extension algorithms remain in their existing runtime components.
-Model-specific diffusion extra parameters are assembled in the diffusion engine.
-Video frame conversion and alignment also remain in the diffusion engine.
-`get_vae_scale_factor()` retains PiD's pixel-space special case and otherwise
-uses the VAE's scale factor.
+DGL executes the resulting program. Diffusion models consume reference latents,
+`ref_index_mode` and `force_ref_timestep_zero`; a separate enable flag is not
+needed. Text encoders retain their native patch alignment, normalization and
+model-specific image processing. These model operations do not receive API
+resizing or routing policies. Specialized video, multimodal, cache and extension
+algorithms remain in their typed model and runtime components.
 
 Validate migrations against the previous implementation using synthetic metadata,
 name conversions, prompt preparation, default/override selection, and focused

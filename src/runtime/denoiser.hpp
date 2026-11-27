@@ -1385,10 +1385,14 @@ struct MingImageFlowDenoiser : DiscreteFlowDenoiser {
         return time_snr_shift(std::isfinite(shift) ? shift : resolution_shift, (t + 1.f) / 1000.f);
     }
 
-    std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler, SDVersion version, const char* extra_sample_args = nullptr) override {
+    void set_sequence_length(int image_seq_len) {
         const float tokens = static_cast<float>(image_seq_len) / 4.f;
         const float mu     = tokens >= 4096.f ? 1.35f : 0.5f + (tokens - 256.f) * (1.15f - 0.5f) / (4096.f - 256.f);
         resolution_shift   = std::exp(mu);
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler, SDVersion version, const char* extra_sample_args = nullptr) override {
+        set_sequence_length(image_seq_len);
         if (scheduler != DISCRETE_SCHEDULER) {
             return DiscreteFlowDenoiser::get_sigmas(n, image_seq_len, scheduler, version, extra_sample_args);
         }
@@ -1398,11 +1402,11 @@ struct MingImageFlowDenoiser : DiscreteFlowDenoiser {
         const float factor = std::isfinite(shift) ? shift : resolution_shift;
         std::vector<float> sigmas;
         sigmas.reserve(n + 1);
+        // The upstream grid includes zero. Sample n positive points before appending the single terminal zero.
         for (uint32_t i = 0; i < n; ++i) {
-            const float t = n == 1 ? 1.f : 1.f - static_cast<float>(i) / static_cast<float>(n - 1);
+            const float t = 1.f - static_cast<float>(i) / static_cast<float>(n);
             sigmas.push_back(time_snr_shift(factor, t));
         }
-        // Upstream sets sigma_min to zero before linspace, then appends the terminal zero.
         sigmas.push_back(0.f);
         return sigmas;
     }

@@ -15,6 +15,7 @@ namespace Flux3 {
         int depth           = 5;
         int single_depth    = 28;
         bool flow_map       = false;
+        bool fused_qkv      = false;
 
         static Flux3Config detect_from_weights(const String2TensorStorage& tensors, const std::string& prefix) {
             Flux3Config config;
@@ -33,6 +34,8 @@ namespace Flux3 {
                     config.channels = tensor.logical_ne0();
                 } else if (key == "single_blocks.0.mlp_out.weight") {
                     config.mlp_dim = tensor.logical_ne0();
+                } else if (key == "single_blocks.0.qkv.weight") {
+                    config.fused_qkv = true;
                 } else if (key == "ref_time_in.in_layer.weight") {
                     config.flow_map = true;
                 }
@@ -62,15 +65,21 @@ namespace Flux3 {
 
     struct Block : public GGMLBlock {
         int heads;
+        bool fused_qkv;
 
         Block(const Flux3Config& config)
-            : heads(config.heads) {
-            for (const auto* name : {"q_proj", "k_proj", "v_proj", "attn_out"}) {
-                blocks[name] = std::make_shared<Linear>(config.hidden_size, config.hidden_size, false);
+            : heads(config.heads), fused_qkv(config.fused_qkv) {
+            if (fused_qkv) {
+                blocks["qkv"] = std::make_shared<Linear>(config.hidden_size, 3 * config.hidden_size, false);
+            } else {
+                for (const auto* name : {"q_proj", "k_proj", "v_proj"}) {
+                    blocks[name] = std::make_shared<Linear>(config.hidden_size, config.hidden_size, false);
+                }
             }
-            blocks["mlp_in"]  = std::make_shared<Linear>(config.hidden_size, 2 * config.mlp_dim, false);
-            blocks["mlp_out"] = std::make_shared<Linear>(config.mlp_dim, config.hidden_size, false);
-            blocks["norm"]    = std::make_shared<Flux::QKNorm>(config.hidden_size / heads);
+            blocks["attn_out"] = std::make_shared<Linear>(config.hidden_size, config.hidden_size, false);
+            blocks["mlp_in"]   = std::make_shared<Linear>(config.hidden_size, 2 * config.mlp_dim, false);
+            blocks["mlp_out"]  = std::make_shared<Linear>(config.mlp_dim, config.hidden_size, false);
+            blocks["norm"]     = std::make_shared<Flux::QKNorm>(config.hidden_size / heads);
         }
 
         ggml_tensor* linear(GGMLRunnerContext* ctx, const std::string& name, ggml_tensor* x) {
@@ -87,13 +96,28 @@ namespace Flux3 {
                 x_mod     = x_mod ? ggml_concat(gc, x_mod, part, 1) : part;
                 offset += lengths[i];
             }
-            auto split = [&](ggml_tensor* v) {
-                return ggml_reshape_4d(gc, v, x->ne[0] / heads, heads, x->ne[1], x->ne[2]);
-            };
+            const int64_t head_dim = x->ne[0] / heads;
+            ggml_tensor *q, *k, *v;
+            if (fused_qkv) {
+                auto qkv    = linear(ctx, "qkv", x_mod);
+                auto select = [&](int i) {
+                    return ggml_view_4d(gc, qkv, head_dim, heads, qkv->ne[1], qkv->ne[2],
+                                        head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * x->ne[0] * qkv->nb[0]);
+                };
+                q = select(0);
+                k = select(1);
+                v = select(2);
+            } else {
+                auto reshape = [&](ggml_tensor* projected) {
+                    return ggml_reshape_4d(gc, projected, head_dim, heads, projected->ne[1], projected->ne[2]);
+                };
+                q = reshape(linear(ctx, "q_proj", x_mod));
+                k = reshape(linear(ctx, "k_proj", x_mod));
+                v = reshape(linear(ctx, "v_proj", x_mod));
+            }
             auto norm        = std::dynamic_pointer_cast<Flux::QKNorm>(blocks["norm"]);
-            auto q           = norm->query_norm(ctx, split(linear(ctx, "q_proj", x_mod)));
-            auto k           = norm->key_norm(ctx, split(linear(ctx, "k_proj", x_mod)));
-            auto v           = split(linear(ctx, "v_proj", x_mod));
+            q                = norm->query_norm(ctx, q);
+            k                = norm->key_norm(ctx, k);
             auto attn        = Rope::attention(ctx, q, k, v, pe, nullptr);
             auto mlp         = ggml_ext_silu_act(ctx, linear(ctx, "mlp_in", x_mod));
             auto update      = ggml_add(gc, linear(ctx, "attn_out", attn), linear(ctx, "mlp_out", mlp));
@@ -207,7 +231,7 @@ namespace Flux3 {
         }
 
         sd::Tensor<float> compute(int n_threads, const DiffusionParams& params) override {
-            if (params.ref_latents && params.ref_image_params.pass_to_dit && params.ref_latents->size() > 10) {
+            if (params.ref_latents && params.ref_latents->size() > 10) {
                 LOG_ERROR("FLUX.3 supports at most 10 reference images");
                 return {};
             }
@@ -222,7 +246,7 @@ namespace Flux3 {
                 GGML_ASSERT(x->ne[3] == 1 && text->ne[2] == 1);
                 std::vector<ggml_tensor*> refs;
                 ggml_tensor* references = nullptr;
-                if (params.ref_latents && params.ref_image_params.pass_to_dit) {
+                if (params.ref_latents) {
                     for (const auto& ref : *params.ref_latents) {
                         auto r = make_input(ref);
                         refs.push_back(r);

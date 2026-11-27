@@ -592,14 +592,17 @@ static void print_progress_line(int step, int steps, const std::string& speed_te
     fflush(stdout);  // for linux
 }
 
-static int show_eta      = -1;  // -1 - estimate duration, 0 - hide, 1 - show
-static float passed_time = 0.f;
-
 void pretty_progress(int step, int steps, float time) {
     if (sd_progress_cb) {
         sd_progress_cb(step, steps, time, sd_progress_cb_data);
         return;
     }
+    pretty_console_progress(step, steps, time);
+}
+
+void pretty_console_progress(int step, int steps, float time) {
+    static thread_local int show_eta      = -1;  // -1 - estimate duration, 0 - hide, 1 - show
+    static thread_local float passed_time = 0.f;
     if (step == 0) {
         show_eta    = -1;  // reinitialize for batch generations
         passed_time = 0.f;
@@ -624,8 +627,37 @@ void pretty_progress(int step, int steps, float time) {
     print_progress_line(step, steps, sd_format("%.2f%s", speed, unit), '=', true, remainder_text);
 }
 
+static thread_local void (*byte_progress_callback)(int, int, void*) = nullptr;
+static thread_local void* byte_progress_data                        = nullptr;
+static thread_local bool byte_progress_console                      = false;
+
+sd::ByteProgressConsoleScope::ByteProgressConsoleScope(bool enabled)
+    : previous_(byte_progress_console) {
+    byte_progress_console = enabled;
+}
+
+sd::ByteProgressConsoleScope::~ByteProgressConsoleScope() {
+    byte_progress_console = previous_;
+}
+
+sd::ByteProgressScope::ByteProgressScope(Callback callback, void* data)
+    : previous_callback_(byte_progress_callback), previous_data_(byte_progress_data) {
+    byte_progress_callback = callback;
+    byte_progress_data     = data;
+}
+
+sd::ByteProgressScope::~ByteProgressScope() {
+    byte_progress_callback = previous_callback_;
+    byte_progress_data     = previous_data_;
+}
+
 void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds) {
-    if (sd_progress_cb) {
+    if (byte_progress_callback) {
+        byte_progress_callback(step, steps, byte_progress_data);
+        if (!byte_progress_console)
+            return;
+    }
+    if (!byte_progress_console && sd_progress_cb) {
         float time = elapsed_seconds / (step + 1e-6f);
         sd_progress_cb(step, steps, time, sd_progress_cb_data);
         return;

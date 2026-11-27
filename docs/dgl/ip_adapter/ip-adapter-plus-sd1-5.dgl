@@ -1,0 +1,49 @@
+# version: 0.0.0
+# docs/models/ip_adapter.md — Plus variants
+
+var {
+    weights = "../models/checkpoints/sd_v1.5.safetensors"
+    vision_encoder_path = "../models/clip_vision/clip_vision_h.safetensors"
+    ip_adapter_path = "../models/ipadapter/ip-adapter-plus_sd15.safetensors"
+
+    input_path = "../inputs/reference.png"
+    output_path = "output.png"
+
+    prompt = "a woman, best quality"
+    negative_prompt = "lowres, bad anatomy"
+
+    seed = 42
+    width = 512
+    height = 512
+
+    steps = 30
+    cfg_scale = 7.0
+    method = "dpm++2m"
+    scheduler = "karras"
+}
+
+fn main() {
+    unet = load_unet(weights)
+    text = load_text_encoder(weights)
+    vae = load_vae(weights)
+    vision = load_vision_encoder(vision_encoder_path)
+    adapter = ip_adapter::load(ip_adapter_path, family = "sd1")
+    reference = image::load(input_path)
+    embedding = encode_vision(vision, reference)
+    positive_image = ip_adapter::project(adapter, embedding)
+    negative_embedding = encode_vision(vision, reference, zero_input = true)
+    negative_image = ip_adapter::project(adapter, negative_embedding)
+    positive = ip_adapter::apply(encode_prompt(text, prompt, width = width, height = height), adapter, positive_image, strength = 0.8)
+    negative = ip_adapter::apply(encode_prompt(text, negative_prompt, width = width, height = height), adapter, negative_image, strength = 0.8)
+    pos = predictor(unet, positive, prediction = "eps")
+    neg = predictor(unet, negative, prediction = "eps")
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, scheduler = scheduler, steps = steps)
+    rng = make_rng("cuda", seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    image = vae_decode(vae, unet_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return { image = image, latent = latent, image_tokens = positive_image }
+}

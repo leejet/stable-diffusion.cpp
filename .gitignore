@@ -2,7 +2,11 @@ build*/
 cmake-build-*/
 test/
 tests/
+/dgl/*
+!/dgl/.gitkeep
 logs/
+input/
+output/
 .vscode/
 .idea/
 .cache/

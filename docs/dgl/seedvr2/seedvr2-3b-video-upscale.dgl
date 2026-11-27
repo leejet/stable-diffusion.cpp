@@ -1,0 +1,65 @@
+# version: 0.0.0
+# docs/models/seedvr2.md — Upscale a video
+
+var {
+    dit_path = "../models/diffusion_models/seedvr2_3b_int8_convrot.safetensors"
+    vae_path = "../models/vae/seedvr2_ema_vae_fp16.safetensors"
+
+    input_path = "frames"
+    output_path = "restored.avi"
+
+    seed = 42
+    fps = 24
+    window_size = 1
+    factor = 2
+}
+
+fn prepare_seedvr2_frames(frames, width, height, count) {
+    aligned_width = math::ceil_div(width, 16) * 16
+    aligned_height = math::ceil_div(height, 16) * 16
+    padded_count = math::ceil_div(count - 1, 4) * 4 + 1
+    planar = tensor::permute(tensor::cast(frames, "f32"), axes = [1, 2, 3, 0])
+    pixels = tensor::div(planar, 255.0)
+    scaled = tensor::clamp(tensor::interpolate(pixels, [width, height], mode = "bicubic"), min = 0, max = 1)
+    padded = tensor::pad(scaled, [0, aligned_width - width, 0, aligned_height - height])
+    tail = tensor::full([padded_count - count], count - 1, dtype = "i64")
+    indices = tensor::concat([tensor::arange(0, count), tail], axis = 0)
+    extended = tensor::index_select(padded, axis = 2, indices = indices)
+    return tensor::reshape(extended, [aligned_width, aligned_height, padded_count, 3, 1])
+}
+
+fn upscale_window(frames, dit, vae, embedding, factor, rng) {
+    shape = tensor::shape(frames)
+    width = shape[1] * factor
+    height = shape[2] * factor
+    count = shape[3]
+    pixels = prepare_seedvr2_frames(frames, width, height, count)
+    encoded = vae_encode(vae, pixels, rng = rng, posterior = "mode")
+    condition_latent = vae_to_dit_latents(vae, encoded)
+    encoded_shape = tensor::shape(encoded)
+    mask_shape = [encoded_shape[0], encoded_shape[1], encoded_shape[2], 1, encoded_shape[4]]
+    mask = tensor::full(mask_shape, 1)
+    condition = { crossattn = embedding, concat = tensor::concat([condition_latent, mask], axis = 3) }
+    noise = tensor::randn_like(condition_latent, rng = rng)
+    sigmas = tensor::vector([1.0, 0.0])
+    sampling_predictor = predictor(dit, condition)
+    latent = sample(noise, sigmas, predict = sampling_predictor, method = "euler", rng = rng)
+    decoded = vae_decode(vae, dit_to_vae_latents(vae, latent), dtype = "f32")
+    cropped = tensor::crop(decoded, axes = [0, 1, 2], start = [0, 0, 0], size = [width, height, count])
+    planar = tensor::reshape(cropped, [width, height, count, 3])
+    output = tensor::cast(tensor::mul(tensor::permute(planar, axes = [3, 0, 1, 2]), 255.0), "u8")
+    return output
+}
+
+fn main() {
+    dit = load_dit(dit_path)
+    vae = load_vae(vae_path)
+    clip = video::load(input_path, fps_num = fps)
+    rng = make_rng("cuda", seed = seed)
+    embedding = seedvr2::positive_embedding(dit)
+    windows = video::split_windows(clip.video.frames, size = window_size)
+    upscaled = map(windows, process = upscale_window, dit = dit, vae = vae, embedding = embedding, factor = factor, rng = rng)
+    output = video::join_windows(upscaled)
+    video::save(output_path, {frames = output, fps_num = clip.video.fps_num, fps_den = clip.video.fps_den}, audio = clip.audio)
+    return output
+}

@@ -4,8 +4,22 @@
 #include <climits>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <stdexcept>
+
+#include "core/file_access.h"
+#include "model_io/npy_io.h"
+
+bool sd_tensor_save(const sd_tensor_t* tensor, const char* path) {
+    return sd::api::call([&] {
+               if (!tensor || !path || !*path)
+                   return sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "tensor and path are required");
+               sd::require_file_access(path, SD_DGL_FILE_WRITE);
+               sd::npy::write(std::filesystem::u8path(path), tensor->type, tensor->shape(), tensor->data(), tensor->bytes);
+               return SD_STATUS_OK;
+           }) == SD_STATUS_OK;
+}
 
 static size_t element_size(sd_tensor_type_t type) {
     switch (type) {
@@ -61,7 +75,10 @@ static sd_tensor_t::Storage allocate_storage(sd_tensor_type_t type, std::vector<
 }
 
 sd_tensor_t::sd_tensor_t(sd_tensor_type_t type, std::vector<int64_t> shape)
-    : type(type), shape(std::move(shape)), bytes(sd::api::tensor_byte_size(type, this->shape)), storage_(allocate_storage(type, this->shape, bytes)) {}
+    : shape_(std::move(shape)),
+      type(type),
+      bytes(sd::api::tensor_byte_size(type, shape_)),
+      storage_(allocate_storage(type, shape_, bytes)) {}
 
 static std::vector<int64_t> validated_shape(sd_tensor_type_t type, std::vector<int64_t> shape, const void* data, size_t size) {
     if (size != sd::api::tensor_byte_size(type, shape) || (size && !data))
@@ -86,7 +103,7 @@ sd::api::TensorRef sd::api::own_tensor(sd_tensor_type_t type, std::vector<int64_
 }
 
 sd::Image sd::api::image_view(const sd_tensor_t& tensor) {
-    const auto& s = tensor.shape;
+    const auto& s = tensor.shape();
     if (tensor.type != SD_TENSOR_U8 || s.size() != 3 || s[0] < 1 || s[0] > 4 ||
         s[1] <= 0 || s[2] <= 0 || s[1] > INT32_MAX || s[2] > INT32_MAX || !tensor.data())
         throw std::invalid_argument("image requires U8 [channels,width,height], channels in [1,4], and positive dimensions");
@@ -97,13 +114,14 @@ sd::Audio sd::api::audio_view(const sd_audio_t& audio) {
     if (!audio.data || audio.sample_rate == 0)
         throw std::invalid_argument("audio requires samples and a positive sample rate");
     const auto& t = *audio.data;
-    if (t.type != SD_TENSOR_F32 || t.shape.size() != 2 || t.shape[0] <= 0 || t.shape[0] > UINT32_MAX || t.shape[1] <= 0 || !t.data())
+    const auto& s = t.shape();
+    if (t.type != SD_TENSOR_F32 || s.size() != 2 || s[0] <= 0 || s[0] > UINT32_MAX || s[1] <= 0 || !t.data())
         throw std::invalid_argument("audio requires F32 [channels,samples] with positive dimensions");
-    return {audio.sample_rate, uint32_t(t.shape[0]), uint64_t(t.shape[1]), const_cast<float*>(static_cast<const float*>(t.data()))};
+    return {audio.sample_rate, uint32_t(s[0]), uint64_t(s[1]), const_cast<float*>(static_cast<const float*>(t.data()))};
 }
 
 std::vector<sd::Image> sd::api::video_frames(const sd_tensor_t& tensor) {
-    const auto& s = tensor.shape;
+    const auto& s = tensor.shape();
     if (tensor.type != SD_TENSOR_U8 || s.size() != 4 || s[0] < 1 || s[0] > 4 || s[1] <= 0 || s[2] <= 0 || s[3] <= 0 ||
         s[1] > INT32_MAX || s[2] > INT32_MAX || s[3] > INT32_MAX || !tensor.data())
         throw std::invalid_argument("video requires U8 [channels,width,height,frames] with positive dimensions");
@@ -172,7 +190,7 @@ sd_tensor_type_t sd_tensor_type(const sd_tensor_t* tensor) {
     return valid_tensor(tensor) ? tensor->type : 0;
 }
 size_t sd_tensor_rank(const sd_tensor_t* tensor) {
-    return valid_tensor(tensor) ? tensor->shape.size() : 0;
+    return valid_tensor(tensor) ? tensor->shape().size() : 0;
 }
 size_t sd_tensor_byte_size(const sd_tensor_t* tensor) {
     return valid_tensor(tensor) ? tensor->bytes : 0;
@@ -183,9 +201,9 @@ const void* sd_tensor_data(const sd_tensor_t* tensor) {
 int64_t sd_tensor_dim(const sd_tensor_t* tensor, size_t axis) {
     if (!valid_tensor(tensor))
         return 0;
-    if (axis >= tensor->shape.size()) {
+    if (axis >= tensor->shape().size()) {
         sd::api::error(SD_STATUS_OUT_OF_RANGE, nullptr, "invalid tensor axis");
         return 0;
     }
-    return tensor->shape[axis];
+    return tensor->shape()[axis];
 }

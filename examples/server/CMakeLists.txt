@@ -64,11 +64,11 @@ endif()
 
 add_executable(${TARGET}
     ../common/common.cpp
-    ../common/generation_metadata.cpp
     ../common/log.cpp
     ../common/media_io.cpp
     ../common/media_metadata.cpp
     main.cpp
+    server_access.cpp
     runtime.cpp
     model_catalog.cpp
     routes_models.cpp
@@ -77,6 +77,8 @@ add_executable(${TARGET}
     routes_openai.cpp
     routes_sdapi.cpp
     routes_sdcpp.cpp
+    routes_dgl.cpp
+    routes_media.cpp
 )
 if(APPLE)
     sd_set_macos_rpaths(${TARGET})

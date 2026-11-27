@@ -2,6 +2,7 @@
 #define __SD_MODEL_DIFFUSION_RELAY_VSR_HPP__
 
 #include "model/common/vsr.hpp"
+#include "model/diffusion/model.hpp"
 
 namespace RelayVSR {
 
@@ -85,19 +86,20 @@ namespace RelayVSR {
             blocks["norm_k"] = std::make_shared<RMSNorm>(dim_, 1e-6f);
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* context, ggml_tensor* query_rope, ggml_tensor* key_rope, const VSR::LocalAttention* local, const std::string& cache_name) {
-            auto to_q      = std::dynamic_pointer_cast<Linear>(blocks["to_q"]);
-            auto to_k      = std::dynamic_pointer_cast<Linear>(blocks["to_k"]);
-            auto to_v      = std::dynamic_pointer_cast<Linear>(blocks["to_v"]);
-            auto to_out_0  = std::dynamic_pointer_cast<Linear>(blocks["to_out.0"]);
-            auto norm_q    = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_q"]);
-            auto norm_k    = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_k"]);
-            auto c         = ctx->ggml_ctx;
-            auto q         = norm_q->forward(ctx, to_q->forward(ctx, x));
-            auto past_k    = ctx->get_cache_tensor(cache_name + ".key");
-            auto past_v    = ctx->get_cache_tensor(cache_name + ".value");
-            ggml_tensor* k = nullptr;
-            ggml_tensor* v = nullptr;
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* context, ggml_tensor* query_rope, ggml_tensor* key_rope, const VSR::LocalAttention* local, const std::string& cut_group, const std::string& attention_name) {
+            auto to_q             = std::dynamic_pointer_cast<Linear>(blocks["to_q"]);
+            auto to_k             = std::dynamic_pointer_cast<Linear>(blocks["to_k"]);
+            auto to_v             = std::dynamic_pointer_cast<Linear>(blocks["to_v"]);
+            auto to_out_0         = std::dynamic_pointer_cast<Linear>(blocks["to_out.0"]);
+            auto norm_q           = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_q"]);
+            auto norm_k           = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_k"]);
+            auto c                = ctx->ggml_ctx;
+            auto q                = norm_q->forward(ctx, to_q->forward(ctx, x));
+            const auto cache_name = cut_group + "." + attention_name;
+            auto past_k           = ctx->get_cache_tensor(cache_name + ".key");
+            auto past_v           = ctx->get_cache_tensor(cache_name + ".value");
+            ggml_tensor* k        = nullptr;
+            ggml_tensor* v        = nullptr;
             if (context && past_k) {
                 k = past_k;
                 v = past_v;
@@ -108,15 +110,21 @@ namespace RelayVSR {
                     k = ggml_concat(c, past_k, k, 1);
                     v = ggml_concat(c, past_v, v, 1);
                 }
-                auto retained = [&](ggml_tensor* value) {
-                    if (context || value->ne[1] <= x->ne[1] * 3)
-                        return value;
+                auto persist = [&](ggml_tensor* value, const char* name) {
                     // The next attention window adds its current frame to these three previous frames.
                     const int64_t keep = x->ne[1] * 3;
-                    return ggml_cont(c, ggml_view_2d(c, value, value->ne[0], keep, value->nb[1], (value->ne[1] - keep) * value->nb[1]));
+                    if (!context && value->ne[1] > keep) {
+                        value = ggml_view_2d(c, value, value->ne[0], keep, value->nb[1], (value->ne[1] - keep) * value->nb[1]);
+                    }
+                    if (value->view_src != nullptr || !ggml_is_contiguous(value)) {
+                        value = ggml_cont(c, value);
+                    }
+                    // Keep the cache output with its producing block so the final segment does not recompute it.
+                    sd::ggml_graph_cut::mark_graph_cut(value, cut_group, attention_name + "." + name);
+                    ctx->cache_tensor(cache_name + "." + name, value);
                 };
-                ctx->cache_tensor(cache_name + ".key", retained(k));
-                ctx->cache_tensor(cache_name + ".value", retained(v));
+                persist(k, "key");
+                persist(v, "value");
             }
             ggml_tensor* out;
             if (local) {
@@ -149,7 +157,7 @@ namespace RelayVSR {
             blocks["ffn.net.2"]      = std::make_shared<Linear>(config.ffn_dim, dim_);
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* text, ggml_tensor* timestep_proj, ggml_tensor* qpe, ggml_tensor* kpe, const VSR::LocalAttention& local, const std::string& name) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* text, ggml_tensor* timestep_proj, ggml_tensor* qpe, ggml_tensor* kpe, const VSR::LocalAttention& local, const std::string& cut_group) {
             auto norm1          = std::dynamic_pointer_cast<LayerNorm>(blocks["norm1"]);
             auto norm2          = std::dynamic_pointer_cast<LayerNorm>(blocks["norm2"]);
             auto norm3          = std::dynamic_pointer_cast<LayerNorm>(blocks["norm3"]);
@@ -160,9 +168,9 @@ namespace RelayVSR {
             auto pieces         = ggml_ext_chunk(ctx, modulation, 6, 1);
             auto attn1          = std::dynamic_pointer_cast<WanAttention>(blocks["attn1"]);
             auto attn2          = std::dynamic_pointer_cast<WanAttention>(blocks["attn2"]);
-            auto y              = attn1->forward(ctx, ggml_ext_modulate(ctx, norm1->forward(ctx, x), pieces[0], pieces[1]), nullptr, qpe, kpe, &local, name + ".attn1");
+            auto y              = attn1->forward(ctx, ggml_ext_modulate(ctx, norm1->forward(ctx, x), pieces[0], pieces[1]), nullptr, qpe, kpe, &local, cut_group, "attn1");
             x                   = ggml_add(c, x, ggml_mul(c, y, pieces[2]));
-            x                   = ggml_add(c, x, attn2->forward(ctx, norm2->forward(ctx, x), text, nullptr, nullptr, nullptr, name + ".attn2"));
+            x                   = ggml_add(c, x, attn2->forward(ctx, norm2->forward(ctx, x), text, nullptr, nullptr, nullptr, cut_group, "attn2"));
             y                   = ggml_ext_modulate(ctx, norm3->forward(ctx, x), pieces[3], pieces[4]);
             y                   = ffn_net_0_proj->forward(ctx, y);
             y                   = ffn_net_2->forward(ctx, ggml_ext_gelu(ctx, y));
@@ -194,7 +202,7 @@ namespace RelayVSR {
             blocks["proj_out"] = std::make_shared<Linear>(config.dim, config.in_channels * 4);
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* latent, ggml_tensor* lq, ggml_tensor* timestep, ggml_tensor* qpe, ggml_tensor* kpe, const VSR::LocalAttention& local) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* latent, ggml_tensor* lq, ggml_tensor* timestep, ggml_tensor* qpe, ggml_tensor* kpe, const VSR::LocalAttention& local, ggml_tensor* prompt) {
             auto patch_embedding                           = std::dynamic_pointer_cast<Conv3d>(blocks["patch_embedding"]);
             auto condition_embedder_time_embedder_linear_1 = std::dynamic_pointer_cast<Linear>(blocks["condition_embedder.time_embedder.linear_1"]);
             auto condition_embedder_time_embedder_linear_2 = std::dynamic_pointer_cast<Linear>(blocks["condition_embedder.time_embedder.linear_2"]);
@@ -212,12 +220,13 @@ namespace RelayVSR {
             e         = condition_embedder_time_embedder_linear_2->forward(ctx, ggml_silu(c, e));
             auto e0   = condition_embedder_time_proj->forward(ctx, ggml_silu(c, e));
             e0        = ggml_reshape_3d(c, e0, config_.dim, 6, 1);
-            auto text = condition_embedder_text_embedder_linear_1->forward(ctx, params["prompt_embeds"]);
+            auto text = condition_embedder_text_embedder_linear_1->forward(ctx, prompt ? prompt : params["prompt_embeds"]);
             text      = condition_embedder_text_embedder_linear_2->forward(ctx, ggml_ext_gelu(ctx, text));
             for (int i = 0; i < config_.num_layers; ++i) {
-                auto name = "blocks." + std::to_string(i);
-                x         = std::dynamic_pointer_cast<WanTransformerBlock>(blocks[name])->forward(ctx, x, text, e0, qpe, kpe, local, name);
-                sd::ggml_graph_cut::mark_graph_cut(x, "relayvsr." + name, "hidden");
+                const auto name      = "blocks." + std::to_string(i);
+                const auto cut_group = "relayvsr." + name;
+                x                    = std::dynamic_pointer_cast<WanTransformerBlock>(blocks[name])->forward(ctx, x, text, e0, qpe, kpe, local, cut_group);
+                sd::ggml_graph_cut::mark_graph_cut(x, cut_group, "hidden");
             }
             e               = ggml_reshape_3d(c, e, config_.dim, 1, 1);
             auto modulation = ggml_add(c, params["scale_shift_table"], e);
@@ -230,7 +239,7 @@ namespace RelayVSR {
         }
     };
 
-    struct WanVSRRunner : GGMLRunner {
+    struct WanVSRRunner : DiffusionModelRunner {
         WanVSRConfig config;
         WanTransformer3DModel model;
         VSR::GraphInputs inputs;
@@ -239,17 +248,24 @@ namespace RelayVSR {
         int frame = 0;
 
         WanVSRRunner(ggml_backend_t backend, const String2TensorStorage& weights, int scale, std::shared_ptr<DeviceResidencyManager> manager)
-            : GGMLRunner(backend, manager), config(WanVSRConfig::detect_from_weights(weights, "wan", scale)), model(config), timestep({256}) {
+            : DiffusionModelRunner(backend, "wan", manager), config(WanVSRConfig::detect_from_weights(weights, "wan", scale)), model(config), timestep(time_embedding(1000.f)) {
             model.init(params_ctx, weights, "wan");
+        }
+
+        static sd::Tensor<float> time_embedding(float time) {
+            sd::Tensor<float> embedding({256});
             for (int i = 0; i < 128; ++i) {
-                double angle             = 1000.0 * std::pow(10000.0, -double(i) / 128);
-                timestep.data()[i]       = float(std::cos(angle));
-                timestep.data()[i + 128] = float(std::sin(angle));
+                double angle              = double(time) * std::pow(10000.0, -double(i) / 128);
+                embedding.data()[i]       = float(std::cos(angle));
+                embedding.data()[i + 128] = float(std::sin(angle));
             }
+            return embedding;
         }
 
         std::string get_desc() override { return "RelayVSR Wan"; }
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) { model.get_param_tensors(tensors, "wan"); }
+        using DiffusionModelRunner::get_param_tensors;
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override { model.get_param_tensors(tensors, prefix); }
+        sd::Tensor<float> compute(int n_threads, const DiffusionParams& params) override;
         void reset() {
             runner_end();
             free_cache_ctx_and_buffer();
@@ -258,7 +274,7 @@ namespace RelayVSR {
             frame = 0;
         }
 
-        sd::Tensor<float> compute(int n_threads, const sd::Tensor<float>& noise, const sd::Tensor<float>& lq) {
+        sd::Tensor<float> predict_frame(int n_threads, const sd::Tensor<float>& noise, const sd::Tensor<float>& lq, const sd::Tensor<float>& time, const sd::Tensor<float>* prompt = nullptr) {
             int width = int(noise.shape()[0]) / 2, height = int(noise.shape()[1]) / 2;
             int count = std::min(frame + 1, 4);
             if (!attention.count(count))
@@ -274,7 +290,7 @@ namespace RelayVSR {
                     times.push_back(i - origin);
                 auto qpe = inputs.rope(&ctx, width, height, {frame - origin}, {44, 42, 42});
                 auto kpe = inputs.rope(&ctx, width, height, times, {44, 42, 42});
-                auto out = model.forward(&ctx, make_input(noise), make_input(lq), make_input(timestep), qpe, kpe, *attention[count]);
+                auto out = model.forward(&ctx, make_input(noise), make_input(lq), make_input(time), qpe, kpe, *attention[count], prompt ? make_input(*prompt) : nullptr);
                 ggml_build_forward_expand(gf, out);
                 return gf;
             };
@@ -282,6 +298,13 @@ namespace RelayVSR {
             if (prediction.empty())
                 return {};
             ++frame;
+            return prediction;
+        }
+
+        sd::Tensor<float> compute(int n_threads, const sd::Tensor<float>& noise, const sd::Tensor<float>& lq) {
+            auto prediction = predict_frame(n_threads, noise, lq, timestep);
+            if (prediction.empty())
+                return {};
             for (int64_t i = 0; i < prediction.numel(); ++i)
                 prediction.data()[i] = noise.data()[i] - prediction.data()[i];
             return prediction;

@@ -10,6 +10,12 @@ for guide structure, examples, and index updates.
 
 ## Example conventions
 
+Standalone [DGL versions of the documentation examples](../dgl/README.md)
+are grouped by model under `docs/dgl/`. Edit each script's
+`var` block and run it with `sd-cli -M dgl --script FILE.dgl`. Features currently
+available only through DGL are marked in their guides; use the server's DGL
+editor for those workflows rather than a native recipe.
+
 Run the executable examples from the CMake build directory, for example after
 `cd build` from the repository root. Each guide gives both command forms:
 
@@ -73,7 +79,7 @@ variant; a VAE or TAE selection must match that model.
 - [SenseNova U1.5](sensenova_u1.md)
 - [Stable Diffusion 1.x, 2.x, and SDXL, including Turbo variants](sd.md)
 - [Stable Diffusion 3 / 3.5](sd3.md)
-- [Z-Image](z_image.md)
+- [Z-Image](z_image.md), including [DGL ControlNet](z_image.md#controlnet)
 - [Z-Image L2P](z_image_l2p.md)
 
 ## Image editing

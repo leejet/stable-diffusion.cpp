@@ -310,9 +310,13 @@ protected:
     bool xtra_dim  = false;
     bool enable_ip = false;
     bool has_ip    = false;
+    std::string layer_name;
 
     void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
         GGMLBlock::init_params(ctx, tensor_storage_map, prefix);
+        if (enable_ip && !prefix.empty()) {
+            layer_name = prefix.substr(0, prefix.size() - 1);
+        }
         if (enable_ip &&
             tensor_storage_map.find(prefix + "to_k_ip.weight") != tensor_storage_map.end()) {
             has_ip            = true;
@@ -383,6 +387,9 @@ public:
             auto v_ip    = to_v_ip->forward(ctx, ctx->ip_context);
             auto x_ip    = ggml_ext_attention_ext(ctx, q, k_ip, v_ip, n_head, nullptr, false, ctx->flash_attn_enabled);
             x            = ggml_add(ctx->ggml_ctx, x, ggml_scale(ctx->ggml_ctx, x_ip, ctx->ip_scale));
+        }
+        if (enable_ip && ctx->attn2_processor) {
+            x = ctx->attn2_processor->apply(*ctx, layer_name, q, x, n_head);
         }
 
         x = to_out_0->forward(ctx, x);  // [N, n_token, query_dim]

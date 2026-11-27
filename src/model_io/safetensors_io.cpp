@@ -140,12 +140,15 @@ static bool read_comfy_quant_config(std::ifstream& file,
         const nlohmann::json json = nlohmann::json::parse(data.data(), data.data() + size);
         config.format             = json.value("format", "");
         config.convrot            = json.value("convrot", false);
-        config.group_size         = json.value("convrot_groupsize", 0);
-        config.weight_group_size  = json.value("group_size", 0);
         if (config.format == "convrot_w4a4" || config.format == "asym_w4a8_int8") {
             // Packed W4 formats imply rotation, including exports without the INT8 convrot flag.
-            config.convrot    = true;
-            config.group_size = json.value("convrot_groupsize", 256);
+            config.convrot = true;
+        }
+        config.group_size        = json.value("convrot_groupsize", config.convrot ? 256 : 0);
+        config.weight_group_size = json.value("group_size", 0);
+        if (config.format == "asym_w4a8_int8") {
+            // ComfyUI defaults the W4A8 weight group size to 16 when the key is missing.
+            config.weight_group_size = json.value("group_size", 16);
         }
     } catch (const std::exception&) {
         set_error(error, "parsing ComfyUI quantization metadata tensor failed: '" + tensor_name + "'");

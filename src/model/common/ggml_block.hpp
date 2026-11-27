@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -23,6 +24,17 @@ protected:
     typedef std::unordered_map<std::string, std::shared_ptr<GGMLBlock>> GGMLBlockMap;
     GGMLBlockMap blocks;
     ParameterMap params;
+
+    static int64_t weight_scale_elements(const TensorStorage& storage, int64_t features, const std::string& name) {
+        const auto elements = storage.nelements();
+        if (elements != 1 && elements != features) {
+            throw std::runtime_error("unsupported weight scale for '" + name + "': [" +
+                                     std::to_string(storage.ne[0]) + ", " + std::to_string(storage.ne[1]) + ", " +
+                                     std::to_string(storage.ne[2]) + ", " + std::to_string(storage.ne[3]) +
+                                     "], expected a scalar or " + std::to_string(features) + " output scales");
+        }
+        return elements;
+    }
 
     ggml_type get_type(const std::string& name, const String2TensorStorage& tensor_storage_map, ggml_type default_type) {
         ggml_type wtype = default_type;
@@ -178,10 +190,9 @@ protected:
         const bool is_int8_tensorwise = weight_storage != tensor_storage_map.end() && weight_storage->second.is_int8_tensorwise;
         auto weight_scale_storage     = tensor_storage_map.find(prefix + "weight_scale");
         if (weight_scale_storage != tensor_storage_map.end()) {
-            const int64_t scale_nelements = weight_scale_storage->second.nelements();
-            GGML_ASSERT(scale_nelements == 1 || scale_nelements == out_features);
-            params["weight_scale"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, scale_nelements);
-            has_weight_scale       = true;
+            const int64_t scale_nelements = weight_scale_elements(weight_scale_storage->second, out_features, prefix + "weight_scale");
+            params["weight_scale"]        = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, scale_nelements);
+            has_weight_scale              = true;
         }
         if (w4_convrot_kind == 2) {
             params["weight_codebook"]  = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 16);
@@ -251,10 +262,10 @@ public:
 #ifndef SD_USE_UPSTREAM_GGML
             if (w4_convrot_kind) {
                 out = ggml_ext_linear_w4_convrot(ctx, x, w,
-                                                 w4_convrot_kind == 2 ? params["weight_codebook"] : weight_scale,
-                                                 w4_convrot_kind == 2 ? params["weight_s_channel"] : nullptr,
-                                                 w4_convrot_kind == 2 ? params["weight_s_rel"] : nullptr,
-                                                 b, static_cast<SDW4Kind>(w4_convrot_kind), int8_convrot ? int8_convrot_group_size : 0, scale);
+                                                 w4_convrot_kind == 2 ? params["weight_s_channel"] : weight_scale,
+                                                 b, int8_convrot ? int8_convrot_group_size : 0, scale,
+                                                 w4_convrot_kind == 2 ? params["weight_codebook"] : nullptr,
+                                                 w4_convrot_kind == 2 ? params["weight_s_rel"] : nullptr);
             } else
 #endif
                 out = ggml_ext_linear_i8_tensorwise(ctx,
@@ -340,9 +351,8 @@ protected:
             GGML_ASSERT(wtype == GGML_TYPE_I8);
             auto scale_storage = tensor_storage_map.find(prefix + "weight_scale");
             GGML_ASSERT(scale_storage != tensor_storage_map.end());
-            const int64_t scale_nelements = scale_storage->second.nelements();
-            GGML_ASSERT(scale_nelements == 1 || scale_nelements == num_embeddings);
-            params["weight_scale"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, scale_nelements);
+            const int64_t scale_nelements = weight_scale_elements(scale_storage->second, num_embeddings, prefix + "weight_scale");
+            params["weight_scale"]        = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, scale_nelements);
             if (weight_storage->second.int8_convrot) {
                 int8_convrot_group_size = weight_storage->second.int8_convrot_group_size;
                 int remainder           = int8_convrot_group_size;
@@ -478,8 +488,9 @@ public:
     }
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
-        ggml_tensor* w = params["weight"];
-        ggml_tensor* b = nullptr;
+        const float scale = ctx->conv_scale > 0.f ? ctx->conv_scale : this->scale;
+        ggml_tensor* w    = params["weight"];
+        ggml_tensor* b    = nullptr;
         if (bias) {
             b = params["bias"];
         }
@@ -565,8 +576,9 @@ public:
     }
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
-        ggml_tensor* w = params["weight"];
-        ggml_tensor* b = nullptr;
+        const float scale = ctx->conv_scale > 0.f ? ctx->conv_scale : this->scale;
+        ggml_tensor* w    = params["weight"];
+        ggml_tensor* b    = nullptr;
         if (bias) {
             b = params["bias"];
         }

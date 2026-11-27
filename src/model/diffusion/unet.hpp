@@ -528,11 +528,12 @@ public:
                          ggml_tensor* x,
                          ggml_tensor* timesteps,
                          ggml_tensor* context,
-                         ggml_tensor* c_concat              = nullptr,
-                         ggml_tensor* y                     = nullptr,
-                         int num_video_frames               = -1,
-                         std::vector<ggml_tensor*> controls = {},
-                         float control_strength             = 0.f) {
+                         ggml_tensor* c_concat                     = nullptr,
+                         ggml_tensor* y                            = nullptr,
+                         int num_video_frames                      = -1,
+                         std::vector<ggml_tensor*> controls        = {},
+                         float control_strength                    = 0.f,
+                         const UNetBlockProcessor* block_processor = nullptr) {
         // x: [N, in_channels, h, w] or [N, in_channels/2, h, w]
         // timesteps: [N,]
         // context: [N, max_position, hidden_size] or [1, max_position, hidden_size]. for example, [N, 77, 768]
@@ -603,7 +604,7 @@ public:
         ggml_set_name(h, "bench-start");
         hs.push_back(h);
 
-        auto motion_root        = config.enable_animatediff && num_video_frames > 1
+        auto motion_root        = !block_processor && config.enable_animatediff && num_video_frames > 1
                                       ? std::dynamic_pointer_cast<AnimateDiff::AnimateDiffModel>(blocks["motion_module"])
                                       : nullptr;
         auto apply_motion_input = [&](int input_block_idx, ggml_tensor* h_in) -> ggml_tensor* {
@@ -653,6 +654,8 @@ public:
                     h                = attention_layer_forward(name, ctx, h, context, num_video_frames);  // [N, mult*model_channels, h, w]
                 }
                 h = apply_motion_input(input_block_idx, h);
+                if (block_processor && num_video_frames > 1)
+                    h = block_processor->apply(*ctx, UNetBlockStage::Down, int(i), j, h, num_video_frames);
                 sd::ggml_graph_cut::mark_graph_cut(h, "unet.input_blocks." + std::to_string(input_block_idx), "h");
                 hs.push_back(h);
             }
@@ -681,6 +684,8 @@ public:
                 h = resblock_forward("middle_block.2", ctx, h, emb, num_video_frames);             // [N, 4*model_channels, h/8, w/8]
             }
             h = apply_motion_mid(h);
+            if (block_processor && num_video_frames > 1)
+                h = block_processor->apply(*ctx, UNetBlockStage::Middle, 0, 0, h, num_video_frames);
         }
         sd::ggml_graph_cut::mark_graph_cut(h, "unet.middle_block", "h");
         if (controls.size() > 0) {
@@ -720,6 +725,8 @@ public:
                 }
 
                 h = apply_motion_output(output_block_idx, h);
+                if (block_processor && num_video_frames > 1)
+                    h = block_processor->apply(*ctx, UNetBlockStage::Up, int(len_mults) - 1 - i, j, h, num_video_frames);
 
                 if (i > 0 && j == num_res_blocks) {
                     if (tiny_unet) {
@@ -769,6 +776,8 @@ struct UNetModelRunner : public DiffusionModelRunner {
         return "unet";
     }
 
+    ggml_backend_t compute_backend() const { return runtime_backend; }
+
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
         unet.get_param_tensors(tensors, prefix);
     }
@@ -782,8 +791,10 @@ struct UNetModelRunner : public DiffusionModelRunner {
                              const std::vector<sd::Tensor<float>>& controls_tensor = {},
                              float control_strength                                = 0.f,
                              const sd::Tensor<float>& ip_context_tensor            = {},
-                             float ip_scale                                        = 1.f) {
-        ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE);
+                             float ip_scale                                        = 1.f,
+                             const AttentionProcessor* attn2_processor             = nullptr,
+                             const UNetBlockProcessor* block_processor             = nullptr) {
+        ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE + (block_processor ? block_processor->extra_graph_size() : 0));
 
         ggml_tensor* x          = make_input(x_tensor);
         ggml_tensor* timesteps  = make_input(timesteps_tensor);
@@ -801,9 +812,10 @@ struct UNetModelRunner : public DiffusionModelRunner {
             num_video_frames = static_cast<int>(x->ne[3]);
         }
 
-        auto runner_ctx       = get_context();
-        runner_ctx.ip_context = ip_context;
-        runner_ctx.ip_scale   = ip_scale;
+        auto runner_ctx            = get_context();
+        runner_ctx.ip_context      = ip_context;
+        runner_ctx.ip_scale        = ip_scale;
+        runner_ctx.attn2_processor = attn2_processor;
 
         ggml_tensor* out = unet.forward(&runner_ctx,
                                         x,
@@ -813,7 +825,8 @@ struct UNetModelRunner : public DiffusionModelRunner {
                                         y,
                                         num_video_frames,
                                         controls,
-                                        control_strength);
+                                        control_strength,
+                                        block_processor);
 
         ggml_build_forward_expand(gf, out);
 
@@ -830,14 +843,17 @@ struct UNetModelRunner : public DiffusionModelRunner {
                               const std::vector<sd::Tensor<float>>& controls = {},
                               float control_strength                         = 0.f,
                               const sd::Tensor<float>& ip_context            = {},
-                              float ip_scale                                 = 1.f) {
+                              float ip_scale                                 = 1.f,
+                              const AttentionProcessor* attn2_processor      = nullptr,
+                              const UNetBlockProcessor* block_processor      = nullptr) {
         // x: [N, in_channels, h, w]
         // timesteps: [N, ]
         // context: [N, max_position, hidden_size]([N, 77, 768]) or [1, max_position, hidden_size]
         // c_concat: [N, in_channels, h, w] or [1, in_channels, h, w]
         // y: [N, adm_in_channels] or [1, adm_in_channels]
         auto get_graph = [&]() -> ggml_cgraph* {
-            return build_graph(x, timesteps, context, c_concat, y, num_video_frames, controls, control_strength, ip_context, ip_scale);
+            return build_graph(x, timesteps, context, c_concat, y, num_video_frames, controls,
+                               control_strength, ip_context, ip_scale, attn2_processor, block_processor);
         };
 
         return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
@@ -859,7 +875,9 @@ struct UNetModelRunner : public DiffusionModelRunner {
                        extra->controls ? *extra->controls : empty_controls,
                        extra->control_strength,
                        extra->ip_context ? *extra->ip_context : sd::Tensor<float>{},
-                       extra->ip_scale);
+                       extra->ip_scale,
+                       extra->attn2_processor,
+                       extra->block_processor);
     }
 
     void test() {

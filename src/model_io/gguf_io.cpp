@@ -167,6 +167,9 @@ bool GGUFStreamingWriter::write_metadata(const std::string& file_path,
         return false;
     }
 
+    gguf_set_val_str(gguf_ctx_, "converter.name", "stable-diffusion.cpp");
+    gguf_set_val_str(gguf_ctx_, "converter.url", "https://github.com/leejet/stable-diffusion.cpp");
+
     for (const TensorWritePlan& plan : tensors) {
         ggml_tensor* tensor = ggml_new_tensor(meta_ctx_, plan.type, plan.n_dims, plan.ne);
         if (tensor == nullptr) {

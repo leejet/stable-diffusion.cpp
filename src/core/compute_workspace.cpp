@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <limits>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
@@ -25,7 +26,13 @@ namespace sd {
         }
     }
 
-    ggml_backend_sched_t ComputeWorkspace::make_scheduler(size_t graph_size) {
+    ggml_backend_sched_t ComputeWorkspace::make_scheduler(size_t graph_size, const std::function<bool(size_t)>& ensure_host_memory) {
+        // Round up ggml's 30 split inputs and two tensor copies per graph node.
+        const auto per_node    = 64 * ggml_tensor_overhead();
+        const auto graph_bytes = ggml_graph_overhead_custom(graph_size, false);
+        if (graph_size > (std::numeric_limits<size_t>::max() - graph_bytes) / per_node ||
+            (ensure_host_memory && !ensure_host_memory(graph_size * per_node + graph_bytes)))
+            return nullptr;
         std::vector<ggml_backend_t> backends{backend_};
         backends.insert(backends.end(), extra_backends_.begin(), extra_backends_.end());
         if (!sd_backend_is_cpu(backend_)) {
@@ -69,17 +76,26 @@ namespace sd {
                release_scheduler();
     }
 
-    bool ComputeWorkspace::allocate(ggml_cgraph* graph, const Measurement& measurement, const AssignNodes& assign_nodes) {
+    bool ComputeWorkspace::allocate(ggml_cgraph* graph, const Measurement& measurement, const AssignNodes& assign_nodes, const std::function<bool(size_t)>& ensure_host_memory) {
         GGML_ASSERT(!active_);
         const size_t capacity = static_cast<size_t>(ggml_graph_n_nodes(graph) + ggml_graph_n_leafs(graph)) + 8;
         if (scheduler_ == nullptr || capacity > scheduler_capacity_) {
             release_scheduler();
-            scheduler_          = make_scheduler(capacity);
+            scheduler_          = make_scheduler(capacity, ensure_host_memory);
             scheduler_capacity_ = capacity;
         }
         if (scheduler_ == nullptr) {
             return false;
         }
+        size_t host_bytes = 0;
+        for (const auto& size : measurement.buffers) {
+            if (sd_backend_is_cpu(size.backend)) {
+                const auto pending = size.bytes - std::min(size.bytes, bytes(size.backend));
+                host_bytes += std::min(pending, SIZE_MAX - host_bytes);
+            }
+        }
+        if (ensure_host_memory && !ensure_host_memory(host_bytes))
+            return false;
         ggml_backend_sched_reset(scheduler_);
         assign_nodes(scheduler_, graph);
         // Scheduler allocation rewrites sources. Split the execution graph only once.
@@ -99,7 +115,8 @@ namespace sd {
         ggml_cgraph* graph,
         const std::function<ggml_backend_t(const ggml_tensor*)>& external_backend,
         const AssignNodes& assign_nodes,
-        bool cache_measurement) {
+        bool cache_measurement,
+        const std::function<bool(size_t)>& ensure_host_memory) {
         std::vector<const ggml_tensor*> tensors;
         std::unordered_set<const ggml_tensor*> seen;
         auto visit = [&](const ggml_tensor* tensor) {
@@ -224,7 +241,7 @@ namespace sd {
         };
         GGML_ASSERT(ggml_graph_cpy_mapped(graph, copy_graph, map_tensor, &copies));
         Measurement result;
-        auto scheduler = make_scheduler(graph_size);
+        auto scheduler = make_scheduler(graph_size, ensure_host_memory);
         if (scheduler != nullptr) {
             assign_nodes(scheduler, copy_graph);
             std::vector<size_t> sizes(extra_backends_.size() + 2);
@@ -285,7 +302,22 @@ namespace sd {
         if (active_) {
             return false;
         }
-        ggml_backend_sched_free(scheduler_);
+        if (scheduler_ != nullptr) {
+            const int n_backends = ggml_backend_sched_get_n_backends(scheduler_);
+            for (int i = 0; i < n_backends; ++i) {
+                auto backend      = ggml_backend_sched_get_backend(scheduler_, i);
+                const size_t size = bytes(backend);
+                if (size == 0) {
+                    continue;
+                }
+                auto buft = ggml_backend_sched_get_buffer_type(scheduler_, backend);
+                LOG_VERBOSE("free compute buffer: %.2f MB(%s) on %s",
+                            size / (1024.0 * 1024.0),
+                            ggml_backend_buft_is_host(buft) ? "RAM" : "VRAM",
+                            ggml_backend_name(backend));
+            }
+            ggml_backend_sched_free(scheduler_);
+        }
         scheduler_          = nullptr;
         scheduler_capacity_ = 0;
         peak_scheduler_bytes_.clear();

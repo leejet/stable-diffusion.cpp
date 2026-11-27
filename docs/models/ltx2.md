@@ -58,8 +58,6 @@ To run the text encoder quantized, convert it once with sd-cli:
 
 ## Usage
 
-CLI examples use the [shared path and shell conventions](README.md#example-conventions).
-
 ### Web UI
 
 Follow the [Web UI guide](../../examples/server/README.md#web-ui) to start the
@@ -77,7 +75,63 @@ Slot IDs correspond to CLI component options: `diffusion_model` uses
 `--diffusion-model`, `llm` uses `--llm`, and `model` uses `-m` / `--model`.
 Select optional components when required by your checkpoint or task.
 
-### CLI
+### DGL
+
+#### LTX-2.3
+
+| Example | Description |
+| --- | --- |
+| [Text to video](../dgl/ltx2/ltx-2-3-dev-txt2video.dgl) | LTX-2.3 dev with audio. |
+| [Image to video](../dgl/ltx2/ltx-2-3-dev-img2video.dgl) | Condition the initial frame. |
+| [First/last-frame conditioning](../dgl/ltx2/ltx-2-3-dev-first-last-frame.dgl) | Set both endpoint images. |
+| [Spatial latent upscaling](../dgl/ltx2/ltx-2-3-spatial-upscale.dgl) | Refine a low-resolution draft with a learned upscaler. |
+
+#### LTX-2.5
+
+| Example | Description |
+| --- | --- |
+| [Text to video](../dgl/ltx2/ltx-2-5-dev-txt2video.dgl) | LTX-2.5 dev with audio. |
+| [Image to video](../dgl/ltx2/ltx-2-5-dev-img2video.dgl) | Condition the initial frame. |
+| [Spatial latent upscaling](../dgl/ltx2/ltx-2-5-spatial-upscale.dgl) | Refine a low-resolution draft with a learned upscaler. |
+
+#### Run a script
+
+Edit paths, prompts and settings in the script's `var` block, then run from
+the build directory. Paths inside the script resolve from the working directory.
+
+**Windows (PowerShell)**
+
+```powershell
+.\bin\Release\sd-cli.exe -M dgl --script ..\docs\dgl\ltx2\ltx-2-3-dev-txt2video.dgl
+```
+
+**Linux/macOS**
+
+```sh
+./bin/sd-cli -M dgl --script ../docs/dgl/ltx2/ltx-2-3-dev-txt2video.dgl
+```
+
+Choose another script from the table to run a different task. Add `--check`
+to validate syntax and types without loading weights. See the
+[shared run instructions](../dgl/README.md#run-an-example) for build paths
+and the server's file-access rules.
+
+#### Latent upscaling
+
+`load_latent_upscaler` loads the spatial or temporal checkpoint as an
+independent resource. Convert the video part of the draft diffusion latent
+with `dit_to_vae_latents`, run `upscale_latent`, then convert back
+with `vae_to_dit_latents` before the refine pass. The checkpoint
+determines the scale and which axis to upscale. Repack the audio in the
+script when the refine pass uses both video and audio latents.
+See the [Video Hires example](../dgl/ltx2/ltx-2-3-spatial-upscale.dgl).
+The CLI/C API render the same stages for `--hires`. LTX-2.3 temporal
+upscaling also adjusts the output frame count and audio latent duration;
+spatial or temporal refinement re-encodes supplied keyframes at the output size.
+
+### Legacy CLI
+
+CLI examples use the [shared path and shell conventions](README.md#example-conventions).
 
 #### LTX-2.3 dev T2V
 
@@ -463,8 +517,16 @@ pass its name without path or extension to `--hires-upscaler`.
 
 ## Notes and limitations
 
+For DGL, pass the separate LTX-2.3 connector file to `load_text_encoder` with
+`connectors_path`. Set `projection_path` to the diffusion checkpoint when it
+contains additional static conditioning weights, including LTX-2.5 connectors.
+The CLI/C API and DGL share this text conditioner. Connector computation
+runs during prompt encoding. The text encoder caches the final video and audio conditions;
+`load_dit` only loads the diffusion network. See the
+[LTX DGL example](../dgl/ltx2/ltx-2-3-dev-txt2video.dgl).
+
 Not implemented:
 
 - The diffusion video decoder (`ltx-2.5-video-vae-bf16.safetensors`). Use the conv VAE.
-- The temporal latent upscaler and the duration head (`--auto-duration`); pass
+- The duration head (`--auto-duration`); pass
   `--video-frames` explicitly.

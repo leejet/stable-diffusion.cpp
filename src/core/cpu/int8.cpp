@@ -5,28 +5,15 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace sd_cpu {
 
-    static void transform(float* values, int group) {
-        const float scale = 1.f / std::sqrt(float(group));
-        for (int i = 0; i < group; ++i)
-            values[i] *= scale;
-        for (int stride = 1; stride < group; stride *= 4)
-            for (int base = 0; base < group; base += 4 * stride)
-                for (int j = 0; j < stride; ++j) {
-                    const int i   = base + j;
-                    const float a = values[i], b = values[i + stride], c = values[i + 2 * stride], d = values[i + 3 * stride];
-                    values[i]              = a + b + c - d;
-                    values[i + stride]     = a + b - c + d;
-                    values[i + 2 * stride] = a - b + c + d;
-                    values[i + 3 * stride] = -a + b + c + d;
-                }
-    }
     struct I8Execution {
         SDI8Operation op;
         int64_t rows;
         int8_t* quant;
+        int8_t* decoded;
         float* scales;
         float* output;
     };
@@ -40,7 +27,7 @@ namespace sd_cpu {
             int8_t* dst      = e.quant + row * k;
             float amax       = 0.f, values[256];
             auto visit       = [&](auto fn) { if (!group) { for (int64_t i = 0; i < k; ++i) fn(i, src[i]); }
-            else for (int64_t base = 0; base < k; base += group) { std::memcpy(values, src + base, group * sizeof(float)); transform(values, group); for (int j = 0; j < group; ++j) fn(base + j, values[j]); } };
+            else for (int64_t base = 0; base < k; base += group) { std::memcpy(values, src + base, group * sizeof(float)); sd_ggml_rotate_convrot(values, group, group); for (int j = 0; j < group; ++j) fn(base + j, values[j]); } };
             visit([&](int64_t, float value) { amax = std::max(amax, std::fabs(value)); });
             const float scale = amax / 127.f, inverse = scale == 0.f ? 0.f : 1.f / scale;
             e.scales[row] = scale;
@@ -50,11 +37,30 @@ namespace sd_cpu {
                 visit([&](int64_t i, float value) { dst[i] = static_cast<int8_t>(std::max(-127L, std::min(127L, std::lrintf(value * inverse)))); });
         }
     }
+    static void decode_w4a8(ggml_tensor*, int ith, int nth, void* data) {
+        const auto& e        = *static_cast<I8Execution*>(data);
+        const auto* packed   = static_cast<const uint8_t*>(e.op.weight->data);
+        const auto* codebook = static_cast<const float*>(e.op.codebook->data);
+        const auto* scales   = static_cast<const uint8_t*>(e.op.relative_scale->data);
+        auto* decoded        = e.decoded;
+        const auto to_float  = ggml_get_type_traits(GGML_TYPE_F8_E4M3)->to_float;
+        const int64_t groups = ggml_nelements(e.op.relative_scale);
+        for (int64_t g = ith; g < groups; g += nth) {
+            float relative;
+            to_float(scales + g, &relative, 1);
+            for (int i = 0; i < 16; ++i) {
+                const int code      = (packed[g * 8 + i / 2] >> (4 * (i % 2))) & 15;
+                const float value   = codebook[code] * relative;
+                decoded[g * 16 + i] = std::isnan(value) ? 0 : int8_t(std::clamp(std::nearbyint(value), -127.f, 127.f));
+            }
+        }
+    }
+
     static void multiply(ggml_tensor*, int ith, int nth, void* data) {
         auto& e         = *static_cast<I8Execution*>(data);
         const auto& op  = e.op;
-        const int64_t k = op.weight->ne[0], n = op.weight->ne[1];
-        const auto* w    = static_cast<const int8_t*>(op.weight->data);
+        const int64_t k = op.k(), n = op.weight->ne[1];
+        const auto* w    = e.decoded ? e.decoded : static_cast<const int8_t*>(op.weight->data);
         const auto* ws   = op.weight_scale ? static_cast<const float*>(op.weight_scale->data) : nullptr;
         const auto* bias = op.bias ? static_cast<const float*>(op.bias->data) : nullptr;
         for (int64_t index = ith; index < e.rows * n; index += nth) {
@@ -93,7 +99,7 @@ namespace sd_cpu {
         SDI8Operation op;
         if (!sd_ggml_i8_describe(nodes[0], &op))
             return GGML_STATUS_FAILED;
-        *bytes = quant_workspace(nodes[0], op) + ggml_nbytes(nodes[0]);
+        *bytes = quant_workspace(nodes[0], op) + ggml_nbytes(nodes[0]) + op.decoded_weight_bytes();
         return GGML_STATUS_SUCCESS;
     }
     static ggml_status convrot_prepare(ggml_backend_t, ggml_tensor* const* nodes, int, void**, size_t* bytes, void*) {
@@ -124,6 +130,12 @@ namespace sd_cpu {
         } else {
             e.quant  = static_cast<int8_t*>(e.op.input->data);
             e.scales = e.op.packed ? reinterpret_cast<float*>(e.quant + e.op.input->ne[0] * ((e.rows + 3) / 4 * 4)) : static_cast<float*>(e.op.input_scale->data);
+        }
+        if (e.op.codebook) {
+            e.decoded   = reinterpret_cast<int8_t*>(scratch + quant_size + ggml_nbytes(dst));
+            auto status = run(context->backend, dst, decode_w4a8, &e);
+            if (status != GGML_STATUS_SUCCESS)
+                return status;
         }
         bool alias = false;
         for (auto* input : dst->src)
@@ -156,6 +168,96 @@ namespace sd_cpu {
         }
         return status;
     }
+    struct LoRAMergeExecution {
+        SDI8LoRAMerge op;
+        float* merged;
+        SDI8LoRARowStats* stats;
+        float* scales;
+        int8_t* output;
+    };
+    static void merge_lora_rows(ggml_tensor*, int ith, int nth, void* data) {
+        auto& e          = *static_cast<LoRAMergeExecution*>(data);
+        const int64_t k  = e.op.weight->ne[0];
+        const auto* base = static_cast<const int8_t*>(e.op.weight->data);
+        const auto* old  = static_cast<const float*>(e.op.scale->data);
+        const auto* diff = static_cast<const float*>(e.op.diff->data);
+        for (int64_t row = ith; row < e.op.weight->ne[1]; row += nth) {
+            const int64_t offset = row * k;
+            float* values        = e.merged + offset;
+            std::memcpy(values, diff + offset, k * sizeof(float));
+            const bool changed = std::any_of(values, values + k, [](float value) { return value != 0.f; });
+            sd_ggml_rotate_convrot(values, k, e.op.group);
+            const float scale = old[e.op.scalar_scale() ? 0 : row];
+            float maximum     = 0.f;
+            for (int64_t i = 0; i < k; ++i) {
+                const float value = values[i] + base[offset + i] * scale;
+                values[i]         = value;
+                maximum           = std::max(maximum, std::isfinite(value) ? std::fabs(value) : std::numeric_limits<float>::infinity());
+            }
+            e.stats[row] = {maximum, changed};
+        }
+    }
+    static void quantize_lora_rows(ggml_tensor*, int ith, int nth, void* data) {
+        auto& e          = *static_cast<LoRAMergeExecution*>(data);
+        const int64_t k  = e.op.weight->ne[0];
+        const auto* base = static_cast<const int8_t*>(e.op.weight->data);
+        const auto* old  = static_cast<const float*>(e.op.scale->data);
+        for (int64_t row = ith; row < e.op.weight->ne[1]; row += nth) {
+            const int64_t offset = row * k;
+            if (!e.op.scalar_scale() && !e.stats[row].changed) {
+                e.scales[row] = old[row];
+                std::memcpy(e.output + offset, base + offset, k);
+                continue;
+            }
+            const float scale = e.op.scalar_scale() ? e.scales[0] : e.stats[row].maximum / 127.f;
+            if (!e.op.scalar_scale())
+                e.scales[row] = scale;
+            for (int64_t i = offset; i < offset + k; ++i)
+                e.output[i] = scale == 0.f ? 0 : static_cast<int8_t>(std::clamp(std::nearbyint(e.merged[i] / scale), -127.f, 127.f));
+        }
+    }
+    static ggml_status lora_prepare(ggml_backend_t, ggml_tensor* const* nodes, int, void**, size_t* bytes, void*) {
+        SDI8LoRAMerge op;
+        if (!sd_ggml_i8_lora_merge_describe(nodes[0], &op))
+            return GGML_STATUS_FAILED;
+        *bytes = op.workspace_size();
+        return GGML_STATUS_SUCCESS;
+    }
+    static ggml_status lora_execute(const ggml_ext_execution_context* context, ggml_tensor* const* nodes, int, void*, void*) {
+        auto* dst = nodes[0];
+        SDI8LoRAMerge op;
+        const auto run = parallel(context->backend);
+        if (!run || !sd_ggml_i8_lora_merge_describe(dst, &op))
+            return GGML_STATUS_FAILED;
+        auto* scratch = static_cast<char*>(ggml_backend_buffer_get_base(context->workspace));
+        auto* packed  = static_cast<char*>(dst->data);
+        auto* flags   = reinterpret_cast<uint32_t*>(packed);
+        LoRAMergeExecution e{
+            op, reinterpret_cast<float*>(scratch), reinterpret_cast<SDI8LoRARowStats*>(scratch + ggml_nbytes(op.diff)),
+            reinterpret_cast<float*>(packed + op.scale_offset()), reinterpret_cast<int8_t*>(packed + op.weight_offset())};
+        auto status = run(context->backend, dst, merge_lora_rows, &e);
+        if (status != GGML_STATUS_SUCCESS)
+            return status;
+        *flags        = 0;
+        float maximum = 0.f;
+        for (int64_t row = 0; row < op.weight->ne[1]; ++row) {
+            const auto& stats = e.stats[row];
+            if (stats.changed)
+                *flags |= SD_I8_LORA_CHANGED;
+            if (stats.changed || op.scalar_scale())
+                maximum = std::max(maximum, stats.maximum);
+        }
+        if (*flags && !std::isfinite(maximum))
+            *flags |= SD_I8_LORA_NONFINITE;
+        if (*flags != SD_I8_LORA_CHANGED) {
+            std::memcpy(e.output, op.weight->data, ggml_nbytes(op.weight));
+            std::memcpy(e.scales, op.scale->data, ggml_nbytes(op.scale));
+            return GGML_STATUS_SUCCESS;
+        }
+        if (op.scalar_scale())
+            e.scales[0] = maximum / 127.f;
+        return run(context->backend, dst, quantize_lora_rows, &e);
+    }
     void register_i8(ggml_backend_dev_t device) {
         ggml_ext_kernel_desc d = {};
         d.abi_version          = GGML_EXT_ABI_VERSION;
@@ -174,6 +276,15 @@ namespace sd_cpu {
         d.supports  = convrot_supports;
         d.prepare   = convrot_prepare;
         d.execute   = convrot_execute;
+        GGML_ASSERT(ggml_ext_register_kernel(device, &d));
+        d.name      = "sd.i8_lora_merge.cpu.v1";
+        d.custom_op = sd_ggml_i8_lora_merge_op();
+        d.supports  = [](ggml_backend_dev_t, const ggml_tensor* node, void*) {
+            SDI8LoRAMerge op;
+            return sd_ggml_i8_lora_merge_describe(node, &op);
+        };
+        d.prepare = lora_prepare;
+        d.execute = lora_execute;
         GGML_ASSERT(ggml_ext_register_kernel(device, &d));
     }
 

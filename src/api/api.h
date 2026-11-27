@@ -2,14 +2,20 @@
 #define SD_INTERNAL_API_H
 
 #include <exception>
+#include <memory>
 #include <new>
 
+#include "dgl/diagnostic.h"
 #include "stable-diffusion.h"
 
-class StableDiffusionGGML;
+namespace sd::api {
+    struct GenerationContext;
+}
 
 struct sd_ctx_t {
-    StableDiffusionGGML* sd = nullptr;
+    std::unique_ptr<sd::api::GenerationContext> engine;
+    sd_ctx_t();
+    ~sd_ctx_t();
 };
 
 namespace sd::api {
@@ -21,6 +27,8 @@ namespace sd::api {
         clear_error();
         try {
             return function();
+        } catch (const sd::dgl::Error& exception) {
+            return error(exception.status, nullptr, exception.what());
         } catch (const std::bad_alloc&) {
             return error(SD_STATUS_OUT_OF_MEMORY, nullptr, "out of memory");
         } catch (const std::exception& exception) {

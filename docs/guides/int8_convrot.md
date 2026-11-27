@@ -1,5 +1,9 @@
 # INT8 Convrot Safetensors
 
+DGL versions of the generation examples are linked below. Edit each script's
+`var` block and follow the [DGL run instructions](../dgl/README.md).
+
+
 sd.cpp can load and execute ComfyUI `int8_tensorwise` safetensors with `convrot` metadata directly. The stored INT8 weights are not converted to another weight type at load time.
 
 This uses sd.cpp's INT8 tensorwise/convrot operators through the patched GGML
@@ -27,7 +31,7 @@ A supported configuration has this form:
 }
 ```
 
-The convrot group size must be a power of four and must divide the input feature dimension. The commonly used configuration is H256, with `convrot_groupsize` set to `256`.
+When `convrot` is enabled, `convrot_groupsize` defaults to `256` (H256). The group size must be a power of four no greater than `256` and must divide the input feature dimension.
 
 ## How INT8 convrot works
 
@@ -94,14 +98,24 @@ The packed runtime activation tensor contains the I8 activation rows and their f
 
 - CPU provides the portable regular Hadamard, activation quantization, INT8 matrix multiplication, and scale restoration implementations.
 - Metal supports INT8 tensorwise and convrot on Apple silicon (Apple GPU family 7 or newer). It keeps weights in INT8 and rotates and quantizes activations on the GPU. On macOS/iOS 26 or newer, it probes Metal TensorOps `matmul2d` with INT8 inputs and INT32 cooperative results. It combines 1024-product partial sums using wrapping integer addition to preserve exact accumulation on older GPUs, then applies scales and bias in registers. Older systems or unavailable TensorOps pipelines use SIMD-group matrix multiplication: INT8 tiles are converted to FP16, and FP32 partial sums cover at most 256 products before being combined as integers, preserving the I32 accumulation contract. Convrot groups 1, 4, 16, 64, and 256 are supported. These kernels require the patched GGML Metal extension services and are enabled by `SD_METAL=ON`.
-- NVIDIA CUDA devices with compute capability 7.5 or newer use the native accelerated path. For H256, CUDA fuses the rotation, row-wise maximum reduction, and activation quantization. Eligible shapes use the CUTLASS INT8 implementation when enabled. For linear layers, it restores scales and adds any aligned bias before writing the result; other supported shapes use cuBLAS for I8 x I8 to I32 GEMM and a CUDA kernel for scale restoration and bias addition.
-- AMD HIP devices in the CDNA, RDNA3 (including RDNA3.5), and RDNA4 families use the same INT8/H256 kernels with hipBLAS for I8 x I8 to I32 GEMM. Other AMD architectures fall back to CPU for INT8 matrix multiplication.
-- MUSA shares the CUDA-style H256 activation kernels. INT8 GEMM falls back to CPU because the MUSA backend does not advertise INT8 BLAS support.
-- Vulkan provides H256 activation quantization and INT8 matrix multiplication when the build and device support accelerated packed INT8 dot products. Unsupported configurations and GPU backends without these kernels use the backend scheduler to fall back to CPU.
+- CUDA uses CUTLASS for eligible shapes when enabled, and cuBLAS for other eligible shapes on Turing and newer. HIP uses hipBLAS or hipBLASLt on supported targets, including RDNA2, RDNA3, RDNA3.5, RDNA4 (`gfx120x`), and CDNA.
+- CUDA, HIP, and MUSA share a tiled INT8 dot-product fallback. It handles devices without INT8 BLAS and projections whose output width is not divisible by four. It uses packed byte-dot instructions where available.
+- Vulkan supports H64 and H256 activation quantization and packed-activation INT8 matrix multiplication with input widths divisible by 64. It requires integer dot product support and uses cooperative matrices when available. Unsupported configurations use the scheduler's CPU fallback.
 
-LoRA adapters are applied at runtime without modifying the INT8 weights. The INT8 convrot path computes the base linear output, while LoRA, LoHa, LoKr, and raw weight-difference adapters compute their output corrections from the original, unrotated activation and add them to the base output. `--lora-apply-mode auto` selects this path for models containing INT8 tensorwise weights. If `immediately` is requested, sd.cpp falls back to runtime application because merging an adapter would require dequantizing and rotating its weight update, then recalculating the per-row scales and requantizing the result.
+`--lora-apply-mode auto` selects immediate merging for INT8 tensorwise models
+on the compute backend without row splitting. Use `--lora-apply-mode at_runtime`
+to compute each adapter's correction from the original activation and add it to
+the INT8 linear output.
 
-The shared CUDA/HIP/MUSA convrot activation paths support H64 and H256. Vulkan also supports H64 activation quantization; its INT8 matrix multiplication path currently requires H256.
+Immediate mode merges an adapter into INT8 tensorwise weights on first use.
+For convrot weights, sd.cpp rotates the adapter update before adding it to the
+dequantized weights. It then recalculates the weight
+scales and requantizes the result to INT8. The merge runs on the selected
+backend when it supports the operation, with ggml's usual CPU fallback. The
+additional quantization step can change the output compared with runtime
+application.
+
+The shared CUDA/HIP/MUSA convrot activation paths support H64 and H256.
 
 ## Packed INT4 convrot
 
@@ -115,49 +129,35 @@ converted to GGUF Q4 blocks at load time.
   the format name does not select a native INT4 activation kernel.
 - `asym_w4a8_int8`: 4-bit indices into `weight_codebook` (16 F32 values), F32
   `weight_s_channel`, and F8_E4M3 `weight_s_rel` per 16 input features. The
-  metadata must specify `group_size: 16`. CPU evaluates the floating-point
-  codebook; GPU kernels requantize it to INT8 with `amax / 127`, introducing a
-  small additional rounding error.
+  weight group size must be 16 and defaults to 16 when omitted.
 
 Both formats imply convrot rotation even without a `convrot` flag; missing
 `convrot_groupsize` defaults to 256.
 
 Both formats reuse the convrot activation cache when the input scale is `1` and
-produce F32 outputs with optional bias. CPU provides a portable implementation.
-CUDA/HIP/MUSA use shared packed-weight kernels without requiring INT8 BLAS.
-With CUTLASS enabled, NVIDIA
-SM80 and newer devices use mixed-input S8 x S4 GEMM for eligible W4A4 shapes,
-reusing the INT8 scale epilogue without expanding the full weight tensor. W4A8
-uses CUTLASS integer MMA per 16-value group with FP32 scale restoration.
-Other CUDA shapes and builds retain the packed byte-dot path. Set
-`GGML_CUDA_W4_FORCE_DP4A=1` to compare against that path. Supported AMD targets
-use packed byte-dot instructions, with portable byte arithmetic for other targets.
-Vulkan requires integer dot product support and at least 13312 bytes of shared
-memory for W4A4 or 16452 bytes for W4A8. GPU W4 kernels require the logical input
-width to be divisible by 64; H64 and H256 are supported. When supported by the
-compiler and device, Vulkan uses NV cooperative matrix integer GEMM. W4A4
-decodes packed weights directly into cooperative matrices for aligned input
-and output widths. Complete activation tiles and the final partial tile use
-separate shader specializations. Other W4A4 shapes use double-buffered weight
-and activation tiles (20480 bytes of shared memory, or 30720 for larger tiles).
-W4A8 stages both weights and activations in shared memory in K=64 tiles,
-reusing them for each 16-value group's integer
-MMA and FP32 scale restoration. FP8 scales use a shared lookup table, and
-expanding projections visit activation tiles in groups of weight panels for
-cache reuse. Adjacent groups share a K=32 activation fragment, with
-complementary zero padding in the weights to preserve each group's scale.
-This path uses 17476 bytes of shared memory, or 22596 for larger tiles.
-Both paths use 256-thread workgroups and keep the model's
-weights packed; neither expands a full layer in device memory. Other Vulkan
-devices retain the packed dot-product path; set `GGML_VK_W4_FORCE_DP4A=1` to compare
-against it. FP32 accumulation order can differ between these paths.
-Other shapes use CPU fallback. HIP W4A8 selects wave64 WMMA by the active
-compilation target's intrinsic support, preferring the GFX12 fragment layout
-over the GFX11 layout.
-There is no GPU architecture allowlist: newer targets supporting either
-intrinsic automatically use its matching layout. Selection happens per device
-image, including multi-architecture builds; targets supporting neither intrinsic
-retain the integer-dot fallback. W4A4 retains integer dot products on HIP.
+produce F32 outputs with optional bias.
+
+W4A8 multiplies the codebook value by the group's relative scale, rounds to nearest even,
+and clamps to `[-127, 127]`. The linear operation decodes weights into temporary workspace,
+then runs the same INT8 GEMM as W8A8 with `weight_s_channel` as the per-output
+scale. Eligible large CUDA projections decode slices and write GEMM results
+directly into the corresponding output columns. CPU, CUDA/HIP/MUSA, Vulkan,
+and Metal provide weight decoders. The checkpoint's packed weights stay in
+their original layout.
+
+If the decoded W4A8 weights exceed the Vulkan device's `maxStorageBufferRange`,
+the linear operation decodes slices of output channels into shared workspace
+and writes each GEMM result directly to the corresponding output columns. An
+`8192 × 24576` projection needs 192 MiB after decoding and can run on a device
+with a 128 MiB storage-buffer range. The packed weights, activations, scales,
+and FP32 output must still fit their respective bindings. Projections that
+exceed those limits fall back to CPU.
+
+W4A4 uses packed-weight kernels. Eligible CUDA SM80+ shapes can use CUTLASS mixed
+S8 x S4 GEMM. Vulkan uses cooperative matrices where supported and requires a
+logical input width divisible by 64. Use `GGML_CUDA_W4_FORCE_DP4A=1` or
+`GGML_VK_W4_FORCE_DP4A=1` to select packed byte dots for W4A4 on the corresponding
+backend.
 
 LoRA application remains at runtime, using the original unrotated activations
 and logical weight dimensions. Packed weights and their codebook/scale tensors

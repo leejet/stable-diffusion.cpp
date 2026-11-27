@@ -1,11 +1,32 @@
 #include "core/ggml_extensions.h"
 
+#include <cmath>
+
+void sd_ggml_rotate_convrot(float* values, int64_t width, int group) {
+    if (group <= 1)
+        return;
+    const float scale = 1.f / std::sqrt(static_cast<float>(group));
+    for (int64_t i = 0; i < width; ++i)
+        values[i] *= scale;
+    for (int stride = 1; stride < group; stride *= 4) {
+        for (int64_t base = 0; base < width; base += 4 * stride) {
+            for (int j = 0; j < stride; ++j) {
+                const int64_t i = base + j;
+                const float a = values[i], b = values[i + stride], c = values[i + 2 * stride], d = values[i + 3 * stride];
+                values[i]              = a + b + c - d;
+                values[i + stride]     = a + b - c + d;
+                values[i + 2 * stride] = a - b + c + d;
+                values[i + 3 * stride] = -a + b + c + d;
+            }
+        }
+    }
+}
+
 #ifndef SD_USE_UPSTREAM_GGML
 #include "core/cpu/registration.h"
 #include "ggml-ext.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstring>
 #include <mutex>
 #include <unordered_set>
@@ -156,8 +177,8 @@ static bool i8_shape(const SDI8Operation& op, const int64_t* shape) {
     const auto* w = op.weight;
     const auto* x = op.input;
     if (!w || !x || w->type != GGML_TYPE_I8 || w->ne[2] != 1 || w->ne[3] != 1 ||
-        !ggml_is_contiguous(w) || !ggml_is_contiguous(x) || x->ne[0] != w->ne[0] ||
-        (op.group_size != 0 && (!sd_ggml_valid_convrot_group(op.group_size) || w->ne[0] % op.group_size)))
+        !ggml_is_contiguous(w) || !ggml_is_contiguous(x) ||
+        (op.group_size != 0 && (!sd_ggml_valid_convrot_group(op.group_size) || op.k() % op.group_size)))
         return false;
     int64_t rows = 1;
     for (int i = 0; i < 3; ++i) {
@@ -165,11 +186,21 @@ static bool i8_shape(const SDI8Operation& op, const int64_t* shape) {
             return false;
         rows *= shape[i];
     }
-    const int64_t k = w->ne[0], n = w->ne[1];
+    const int64_t k = op.k(), n = w->ne[1];
     int64_t height;
     if (n <= 0 || n > (i8_size_limit - 4) / 4 || k <= 0 || k > i8_size_limit - 4 - n * 4 ||
         rows > (i8_size_limit - 3) / (k + 4 + n * 4) || !packed_height(k, rows, &height))
         return false;
+    if (op.codebook) {
+        const auto* scales = op.relative_scale;
+        if (k % 16 || w->ne[0] != k / 2 || k > i8_size_limit / n || !op.weight_scale ||
+            !scale_matches(op.codebook, 16) || scales->type != GGML_TYPE_F8_E4M3 ||
+            !ggml_is_contiguous(scales) || ggml_n_dims(scales) > 2 ||
+            scales->ne[0] != k / 16 || scales->ne[1] != n)
+            return false;
+    } else if (w->ne[0] != k) {
+        return false;
+    }
     if (op.packed) {
         if (x->type != GGML_TYPE_I8 || !sd_ggml_valid_convrot_group(op.group_size) || op.input_scale ||
             x->ne[1] != height || x->ne[2] != 1 || x->ne[3] != 1)
@@ -186,21 +217,34 @@ static bool i8_shape(const SDI8Operation& op, const int64_t* shape) {
     return scale_matches(op.input_scale, rows) && scale_matches(op.weight_scale, w->ne[1]) && scale_matches(op.bias, w->ne[1]);
 }
 
-static bool i8_infer(ggml_tensor* const* inputs, int count, const void* attributes, ggml_ext_tensor_desc* output) {
-    SDI8Attributes attr;
-    std::memcpy(&attr, attributes, sizeof(attr));
-    if (count < 2 || (attr.flags & ~15))
+static constexpr int i8_flags = SD_I8_PACKED | SD_I8_INPUT_SCALE | SD_I8_WEIGHT_SCALE | SD_I8_BIAS | SD_I8_WEIGHT_W4;
+
+static bool i8_operands(ggml_tensor* const* inputs, int count, const SDI8Attributes& attr, SDI8Operation* op) {
+    if (count < 2 || (attr.flags & ~i8_flags))
         return false;
-    SDI8Operation op = {inputs[0], inputs[1], nullptr, nullptr, nullptr, attr.group_size, (attr.flags & SD_I8_PACKED) != 0};
-    int index        = 2;
-    for (auto entry : {std::make_pair(SD_I8_INPUT_SCALE, &op.input_scale), std::make_pair(SD_I8_WEIGHT_SCALE, &op.weight_scale), std::make_pair(SD_I8_BIAS, &op.bias)}) {
+    *op       = {inputs[0], inputs[1], nullptr, nullptr, nullptr, attr.group_size, (attr.flags & SD_I8_PACKED) != 0, nullptr, nullptr};
+    int index = 2;
+    for (auto entry : {std::make_pair(SD_I8_INPUT_SCALE, &op->input_scale), std::make_pair(SD_I8_WEIGHT_SCALE, &op->weight_scale), std::make_pair(SD_I8_BIAS, &op->bias)}) {
         if (attr.flags & entry.first) {
-            if (index >= count)
+            if (index >= count || !inputs[index])
                 return false;
             *entry.second = inputs[index++];
         }
     }
-    if (index != count || !i8_shape(op, attr.shape))
+    if (attr.flags & SD_I8_WEIGHT_W4) {
+        if (count - index != 2 || !inputs[index] || !inputs[index + 1])
+            return false;
+        op->codebook       = inputs[index++];
+        op->relative_scale = inputs[index++];
+    }
+    return index == count && i8_shape(*op, attr.shape);
+}
+
+static bool i8_infer(ggml_tensor* const* inputs, int count, const void* attributes, ggml_ext_tensor_desc* output) {
+    SDI8Attributes attr;
+    std::memcpy(&attr, attributes, sizeof(attr));
+    SDI8Operation op;
+    if (!i8_operands(inputs, count, attr, &op))
         return false;
     output->type  = GGML_TYPE_F32;
     output->ne[0] = op.weight->ne[1];
@@ -235,28 +279,16 @@ ggml_ext_op_t sd_ggml_convrot_op() {
 }
 
 bool sd_ggml_i8_describe(const ggml_tensor* node, SDI8Operation* op) {
-    if (!node || node->type != GGML_TYPE_F32 || !ggml_is_contiguous(node))
+    if (!node || node->type != GGML_TYPE_F32 || !ggml_is_contiguous(node) || ggml_ext_op_get(node) != sd_ggml_i8_op())
         return false;
-    *op = {node->src[0], node->src[1], nullptr, nullptr, nullptr, 0, false};
-    if (ggml_ext_op_get(node) == sd_ggml_i8_op()) {
-        SDI8Attributes attr;
-        std::memcpy(&attr, ggml_ext_op_attributes(node), sizeof(attr));
-        if (attr.flags & ~15 || std::memcmp(attr.shape, node->ne + 1, sizeof(attr.shape)))
-            return false;
-        op->group_size = attr.group_size;
-        op->packed     = (attr.flags & SD_I8_PACKED) != 0;
-        int index      = 2;
-        if (attr.flags & SD_I8_INPUT_SCALE)
-            op->input_scale = node->src[index++];
-        if (attr.flags & SD_I8_WEIGHT_SCALE)
-            op->weight_scale = node->src[index++];
-        if (attr.flags & SD_I8_BIAS)
-            op->bias = node->src[index++];
-        if (((attr.flags & SD_I8_INPUT_SCALE) && !op->input_scale) || ((attr.flags & SD_I8_WEIGHT_SCALE) && !op->weight_scale) || ((attr.flags & SD_I8_BIAS) && !op->bias))
-            return false;
-    } else
+    SDI8Attributes attr;
+    std::memcpy(&attr, ggml_ext_op_attributes(node), sizeof(attr));
+    if (std::memcmp(attr.shape, node->ne + 1, sizeof(attr.shape)))
         return false;
-    return i8_shape(*op, node->ne + 1) && node->ne[0] == op->weight->ne[1];
+    int count = 0;
+    while (count < GGML_MAX_SRC && node->src[count])
+        ++count;
+    return i8_operands(node->src, count, attr, op) && node->ne[0] == op->weight->ne[1];
 }
 
 bool sd_ggml_convrot_describe(const ggml_tensor* node, int* group) {
@@ -270,14 +302,60 @@ bool sd_ggml_convrot_describe(const ggml_tensor* node, int* group) {
     return convrot_infer(node->src, 1, group, &output) && output.type == node->type && !std::memcmp(output.ne, node->ne, sizeof(output.ne));
 }
 
+static bool i8_lora_merge_infer(ggml_tensor* const* inputs, int count, const void* attributes, ggml_ext_tensor_desc* output) {
+    if (count != 3)
+        return false;
+    int32_t group;
+    std::memcpy(&group, attributes, sizeof(group));
+    const auto* weight = inputs[0];
+    const auto* scale  = inputs[1];
+    const auto* diff   = inputs[2];
+    const int64_t k = weight->ne[0], rows = weight->ne[1];
+    if (weight->type != GGML_TYPE_I8 || weight->ne[2] != 1 || weight->ne[3] != 1 ||
+        k <= 0 || rows <= 0 || k > (i8_size_limit / rows - int64_t(sizeof(SDI8LoRARowStats))) / int64_t(sizeof(float)) ||
+        diff->type != GGML_TYPE_F32 || !ggml_are_same_shape(weight, diff) ||
+        scale->type != GGML_TYPE_F32 || (ggml_nelements(scale) != 1 && ggml_nelements(scale) != rows) ||
+        !ggml_is_contiguous(weight) || !ggml_is_contiguous(diff) || !ggml_is_contiguous(scale) ||
+        (group != 0 && (!sd_ggml_valid_convrot_group(group) || k % group != 0)))
+        return false;
+
+    const SDI8LoRAMerge op = {weight, scale, diff, group};
+    const size_t bytes     = op.weight_offset() + ggml_nbytes(weight);
+    output->type           = GGML_TYPE_I8;
+    output->ne[0]          = GGML_PAD(bytes, sizeof(uint32_t));
+    output->ne[1] = output->ne[2] = output->ne[3] = 1;
+    return true;
+}
+
+ggml_ext_op_t sd_ggml_i8_lora_merge_op() {
+    static const auto op = [] {
+        const ggml_ext_op_desc desc = {GGML_EXT_ABI_VERSION, "sd.i8_lora_merge.v1", sizeof(int32_t), i8_lora_merge_infer};
+        auto result                 = ggml_ext_register_op(&desc);
+        GGML_ASSERT(result);
+        return result;
+    }();
+    return op;
+}
+
+bool sd_ggml_i8_lora_merge_describe(const ggml_tensor* node, SDI8LoRAMerge* op) {
+    if (!node || ggml_ext_op_get(node) != sd_ggml_i8_lora_merge_op())
+        return false;
+    const void* attributes = ggml_ext_op_attributes(node);
+    ggml_ext_tensor_desc output;
+    if (!i8_lora_merge_infer(node->src, 3, attributes, &output) || output.type != node->type ||
+        std::memcmp(output.ne, node->ne, sizeof(output.ne)) != 0 || !ggml_is_contiguous(node))
+        return false;
+    *op = {node->src[0], node->src[1], node->src[2], 0};
+    std::memcpy(&op->group, attributes, sizeof(op->group));
+    return true;
+}
+
 static bool w4_infer(ggml_tensor* const* inputs, int count, const void* attributes, ggml_ext_tensor_desc* out) {
     if (!attributes || count < 3)
         return false;
     SDW4Attributes attr;
     std::memcpy(&attr, attributes, sizeof(attr));
-    const bool codebook = attr.kind == SDW4Kind::W4A8;
-    if ((!codebook && attr.kind != SDW4Kind::W4A4) || (attr.has_bias != 0 && attr.has_bias != 1) ||
-        count != (codebook ? 5 : 3) + attr.has_bias)
+    if ((attr.has_bias != 0 && attr.has_bias != 1) || count != 3 + attr.has_bias)
         return false;
     for (int i = 0; i < count; ++i)
         if (!inputs[i] || !ggml_is_contiguous(inputs[i]))
@@ -297,11 +375,8 @@ static bool w4_infer(ggml_tensor* const* inputs, int count, const void* attribut
     int64_t height;
     if (!packed_height(k, rows, &height) || n > i8_size_limit / 4 / rows ||
         x->type != GGML_TYPE_I8 || x->ne[0] != k || x->ne[1] != height || x->ne[2] != 1 || x->ne[3] != 1 ||
-        !scale_matches(inputs[2], codebook ? 16 : n) ||
+        !scale_matches(inputs[2], n) ||
         (attr.has_bias && !scale_matches(inputs[count - 1], n)))
-        return false;
-    if (codebook && (k % 16 || !scale_matches(inputs[3], n) || inputs[4]->type != GGML_TYPE_F8_E4M3 ||
-                     inputs[4]->ne[0] != k / 16 || inputs[4]->ne[1] != n || inputs[4]->ne[2] != 1 || inputs[4]->ne[3] != 1))
         return false;
     out->type  = GGML_TYPE_F32;
     out->ne[0] = n;
@@ -324,14 +399,12 @@ bool sd_ggml_w4_describe(const ggml_tensor* node, SDW4Operation* op) {
         return false;
     SDW4Attributes attr;
     std::memcpy(&attr, ggml_ext_op_attributes(node), sizeof(attr));
-    const bool codebook = attr.kind == SDW4Kind::W4A8;
-    const int count     = (codebook ? 5 : 3) + (attr.has_bias != 0);
+    const int count = 3 + (attr.has_bias != 0);
     ggml_ext_tensor_desc out;
     if (!w4_infer(node->src, count, &attr, &out) || node->type != out.type ||
         std::memcmp(node->ne, out.ne, sizeof(out.ne)))
         return false;
-    *op = {node->src[0], node->src[1], node->src[2], codebook ? node->src[3] : nullptr,
-           codebook ? node->src[4] : nullptr, attr.has_bias ? node->src[count - 1] : nullptr, attr.kind};
+    *op = {node->src[0], node->src[1], node->src[2], attr.has_bias ? node->src[3] : nullptr};
     return true;
 }
 

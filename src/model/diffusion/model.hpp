@@ -10,61 +10,14 @@
 #include "model/common/rope_circular.hpp"
 #include "model_manager.h"
 
-enum class RefImageResizeMode {
-    NONE,
-    LONGEST_SIDE,
-    AREA,
-};
+enum class UNetBlockStage { Down,
+                            Middle,
+                            Up };
 
-enum class RefImageSizeMode {
-    MATCH,
-    MAX,
-};
-
-struct RefImageParams {
-    bool pass_to_vlm                   = false;
-    bool pass_to_dit                   = true;
-    Rope::RefIndexMode ref_index_mode  = Rope::RefIndexMode::FIXED;
-    bool force_ref_timestep_zero       = false;
-    bool resize_before_vae             = true;
-    int vae_input_max_pixels           = -1;
-    RefImageResizeMode vlm_resize_mode = RefImageResizeMode::AREA;
-    int vlm_min_size                   = -1;
-    int vlm_max_size                   = -1;
-    bool resize_vae_to_target          = false;
-    bool resize_single_ref_to_target   = false;
-    bool vae_size_buckets              = false;
-    bool vae_center_crop               = false;
-    bool vlm_use_vae_input             = false;
-    RefImageSizeMode ref_image_size    = RefImageSizeMode::MATCH;
-};
-
-const std::unordered_map<std::string, RefImageParams> REF_IMAGE_PRESETS = {
-    {"fibo2", [] {
-         RefImageParams params;
-         params.pass_to_vlm                 = true;
-         params.ref_index_mode              = Rope::RefIndexMode::INCREASE;
-         params.vlm_resize_mode             = RefImageResizeMode::LONGEST_SIDE;
-         params.vlm_max_size                = 768;
-         params.resize_single_ref_to_target = true;
-         params.vae_size_buckets            = true;
-         params.vae_center_crop             = true;
-         params.vlm_use_vae_input           = true;
-         return params;
-     }()},
-    {"flux_kontext", {false, true, Rope::RefIndexMode::FIXED, false, true, -1, RefImageResizeMode::NONE, -1, -1}},
-    {"longcat", {true, true, Rope::RefIndexMode::FIXED, false, true, -1, RefImageResizeMode::AREA, -1, -1}},
-    {"flux2", {false, true, Rope::RefIndexMode::INCREASE, false, true, -1, RefImageResizeMode::NONE, -1, -1}},
-    {"qwen", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, RefImageResizeMode::AREA, -1, -1}},
-    {"qwen_layered", {true, true, Rope::RefIndexMode::DECREASE, false, true, -1, RefImageResizeMode::AREA, -1, -1}},
-    {"mage_flow", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, RefImageResizeMode::LONGEST_SIDE, -1, 384, true}},
-    {"z_image_omni", {true, true, Rope::RefIndexMode::FIXED, false, true, -1, RefImageResizeMode::AREA, -1, -1}},
-    {"krea2_ostris_edit", {true, true, Rope::RefIndexMode::INCREASE, true, true, -1, RefImageResizeMode::AREA, -1, -1}},
-    {"krea2_edit", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, RefImageResizeMode::LONGEST_SIDE, 768, 768}},
-    // pass_to_vlm routes the reference image to the conditioner, which is where LLaDA-Image's
-    // SigVQ encoder lives; it does its own half-resolution resize.
-    {"llada_image", {true, true, Rope::RefIndexMode::FIXED, true, true, -1, RefImageResizeMode::NONE, -1, -1, true}},
-    {"cosmos_reference", {false, true, Rope::RefIndexMode::INCREASE, false, false, -1, RefImageResizeMode::NONE, -1, -1}},
+struct UNetBlockProcessor {
+    virtual ~UNetBlockProcessor()                                                                                                             = default;
+    virtual ggml_tensor* apply(GGMLRunnerContext& ctx, UNetBlockStage stage, int level, int block, ggml_tensor* activation, int frames) const = 0;
+    virtual size_t extra_graph_size() const                                                                                                   = 0;
 };
 
 struct UNetDiffusionExtra {
@@ -73,17 +26,27 @@ struct UNetDiffusionExtra {
     float control_strength                         = 0.f;
     const sd::Tensor<float>* ip_context            = nullptr;
     float ip_scale                                 = 1.f;
+    const AttentionProcessor* attn2_processor      = nullptr;
+    const UNetBlockProcessor* block_processor      = nullptr;
 };
 
 struct SkipLayerDiffusionExtra {
     const std::vector<int>* skip_layers = nullptr;
 };
 
+struct FluxImageBlockProcessor {
+    virtual ~FluxImageBlockProcessor()                                                                          = default;
+    virtual bool applies(bool single_stream, int block) const                                                   = 0;
+    virtual ggml_tensor* apply(GGMLRunnerContext& ctx, bool single_stream, int block, ggml_tensor* image) const = 0;
+    virtual size_t extra_graph_size() const                                                                     = 0;
+};
+
 struct FluxDiffusionExtra {
-    const sd::Tensor<float>* guidance   = nullptr;
-    const std::vector<int>* skip_layers = nullptr;
-    const sd::Tensor<float>* pulid_id   = nullptr;
-    float pulid_id_weight               = 1.0f;
+    const sd::Tensor<float>* guidance              = nullptr;
+    const std::vector<int>* skip_layers            = nullptr;
+    const sd::Tensor<float>* pulid_id              = nullptr;
+    float pulid_id_weight                          = 1.0f;
+    const FluxImageBlockProcessor* image_processor = nullptr;
 };
 
 struct Flux3DiffusionExtra {
@@ -122,6 +85,7 @@ struct LTXAVDiffusionExtra {
     int audio_length                         = 0;
     float frame_rate                         = 24.f;
     const sd::Tensor<float>* video_positions = nullptr;
+    const sd::Tensor<float>* audio_context   = nullptr;
 };
 
 enum class MiniMaxH3ReferenceKind : int32_t {
@@ -172,9 +136,20 @@ struct MingImageDiffusionExtra {
     const sd::Tensor<float>* direct_context = nullptr;
 };
 
+namespace ZImage {
+    struct ControlNetRunner;
+}
+
+struct ZImageControlInput {
+    const ZImage::ControlNetRunner* runner;
+    const sd::Tensor<float>* latent;
+    float strength;
+};
+
 struct ZImageDiffusionExtra {
-    const sd::Tensor<float>* control_latent = nullptr;
-    float strength                          = 1.f;
+    const sd::Tensor<float>* control_latent         = nullptr;
+    float strength                                  = 1.f;
+    const std::vector<ZImageControlInput>* controls = nullptr;
 };
 
 using DiffusionExtraParams = std::variant<std::monostate,
@@ -202,7 +177,9 @@ struct DiffusionParams {
     const sd::Tensor<float>* c_concat                 = nullptr;
     const sd::Tensor<float>* y                        = nullptr;
     const std::vector<sd::Tensor<float>>* ref_latents = nullptr;
-    RefImageParams ref_image_params                   = {false, false, Rope::RefIndexMode::FIXED, false};
+    Rope::RefIndexMode ref_index_mode                 = Rope::RefIndexMode::FIXED;
+    Rope::RefRoPEAnchor ref_rope_anchor               = Rope::RefRoPEAnchor::MODEL_DEFAULT;
+    bool force_ref_timestep_zero                      = false;
     DiffusionExtraParams extra                        = std::monostate{};
 };
 

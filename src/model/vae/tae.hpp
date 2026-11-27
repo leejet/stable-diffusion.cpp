@@ -321,8 +321,7 @@ public:
     }
 };
 
-ggml_tensor*
-patchify(GGMLRunnerContext* runner_ctx, ggml_tensor* x, int64_t patch_size, int64_t b = 1) {
+inline ggml_tensor* patchify(GGMLRunnerContext* runner_ctx, ggml_tensor* x, int64_t patch_size, int64_t b = 1) {
     auto ctx = runner_ctx->ggml_ctx;
     // x: [f, b*c, h*q, w*r]
     // return: [f, b*c*r*q, h, w]
@@ -349,7 +348,7 @@ patchify(GGMLRunnerContext* runner_ctx, ggml_tensor* x, int64_t patch_size, int6
     return x;
 }
 
-ggml_tensor* unpatchify(GGMLRunnerContext* runner_ctx, ggml_tensor* x, int64_t patch_size, int64_t b = 1) {
+inline ggml_tensor* unpatchify(GGMLRunnerContext* runner_ctx, ggml_tensor* x, int64_t patch_size, int64_t b = 1) {
     auto ctx = runner_ctx->ggml_ctx;
     // x: [f, b*c*r*q, h, w]
     // return: [f, b*c, h*q, w*r]
@@ -779,7 +778,7 @@ struct TinyImageAutoEncoder : public VAE {
         taesd.get_param_tensors(tensors, weight_prefix);
     }
 
-    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) override {
+    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng, VAEPosterior, bool) override {
         SD_UNUSED(rng);
         return vae_output;
     }
@@ -863,7 +862,7 @@ struct TinyVideoAutoEncoder : public VAE {
         taehv.get_param_tensors(tensors, weight_prefix);
     }
 
-    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) override {
+    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng, VAEPosterior, bool) override {
         SD_UNUSED(rng);
         return vae_output;
     }
