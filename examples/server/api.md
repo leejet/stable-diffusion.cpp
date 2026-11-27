@@ -180,14 +180,14 @@ Default-enabled features are `img2img`, `mask_image`, `lora`, `vae_tiling`,
 | `clip_skip` | CLIP Skip |
 | `img2img`, `mask_image` | Image initialization/strength and masks |
 | `ref_images` | Reference image inputs |
-| `ref_videos` | Reference videos as frame arrays |
+| `ref_videos` | Reference videos as frame arrays or video files |
 | `ref_audios` | Standalone reference audio; runtime requires an Audio VAE or Audio Encoder |
 | `ref_video_audios` | Soundtracks paired with reference videos; runtime requires an Audio VAE |
 | `controlnet` | Control image and ControlNet strength |
 | `control_image` | Control image without a separate ControlNet (FLUX Canny/Depth) |
 | `ip_adapter` | IP-Adapter image and strength |
 | `init_image`, `end_image` | Video start/end frames |
-| `control_frames`, `vace` | Video control frames and VACE strength |
+| `control_frames`, `vace` | Video control frames or `control_video`, and VACE strength |
 | `high_noise` | High-noise pass, MoE boundary and high-noise LoRAs |
 | `lora`, `vae_tiling` | LoRA overrides and VAE tiling |
 | `cache`, `cache_unet`, `cache_dit` | Cache panel and architecture-specific algorithms |
@@ -1435,7 +1435,7 @@ Compared with `img_gen`, the `vid_gen` request body:
 - `vid_gen` is a single video sequence job, so `batch_count` is not part of the request schema
 - `mask_image`, `control_image`, `control_strength`, `ip_adapter_image`, `ip_adapter_strength`, and `embed_image_metadata` are not part of the request schema
 - `ref_images` is accepted for MiniMax-H3 Ref2VA conditioning; other video model families currently ignore it
-- `vid_gen` adds `end_image`, `control_frames`, `high_noise_sample_params`, `video_frames`, `fps`, `moe_boundary`, and `vace_strength`
+- `vid_gen` adds `end_image`, `control_frames`, `control_video`, `high_noise_sample_params`, `video_frames`, `fps`, `moe_boundary`, and `vace_strength`
 
 Example:
 
@@ -1561,6 +1561,19 @@ Frame ordering rules:
 - `control_frames[]` order is the conditioning frame order
 - `control_frames[]` is preserved in request order
 
+### Video File Inputs
+
+`control_video` and each item of `ref_videos` can be a video file instead of
+frames: a raw base64 string or a data URL such as `data:video/webm;base64,...`.
+The server reads the same formats as `video::load`: AVI with RGB or MJPEG
+frames, animated WebP, and WebM whose VP8 frames are all keyframes.
+
+- `control_video` is sampled at `fps` (default 16) and keeps at most
+  `video_frames` frames. It replaces `control_frames`.
+- A `ref_videos` file is sampled at 24 fps. Its PCM soundtrack is used when
+  `ref_video_audios` has no entry at the same index.
+- A file that cannot be decoded fails the request.
+
 If omitted or null:
 
 - single-image fields clear the corresponding image tensor
@@ -1594,6 +1607,8 @@ Image and frame fields:
 | `end_image` | `string \| null` |
 | `ref_images` | `array<string>` |
 | `control_frames` | `array<string>` |
+| `control_video` | `string \| null` |
+| `ref_videos` | `array<array<string> \| string>` |
 
 LoRA fields:
 

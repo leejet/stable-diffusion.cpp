@@ -290,6 +290,7 @@ struct SDGenerationParams {
     std::map<std::string, SDImageOwner> prompt_images;
     std::vector<std::vector<SDImageOwner>> ref_videos;
     std::vector<SDAudioOwner> ref_video_audios;
+    std::vector<SDAudioOwner> ref_video_file_audios;
     std::vector<SDAudioOwner> ref_audios;
     SDImageOwner mask_image;
     SDImageOwner control_image;
