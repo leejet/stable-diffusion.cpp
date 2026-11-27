@@ -222,20 +222,21 @@ ggml_tensor* ggml_ext_linear(GGMLRunnerContext* runner_ctx,
              sd_backend_is(runner_ctx->backend, "ROCm") ||
              sd_backend_is(runner_ctx->backend, "MUSA") ||
              sd_backend_is(runner_ctx->backend, "Vulkan"))) {
-            auto* quantized = ggml_ext_quantize_i8_convrot(runner_ctx, input, 1);
+            constexpr int group = 256;
+            auto* quantized     = ggml_ext_quantize_i8_convrot(runner_ctx, input, group);
             if (quantized && ggml_backend_supports_op(runner_ctx->backend, quantized)) {
                 // Make the conversion depend on the activation so decoded weights only live near their GEMM.
                 ggml_tensor* inputs[] = {w, quantized};
                 auto* converted       = ggml_ext_op_create(ctx, sd_ggml_requantize_q8_op(), inputs, 2, nullptr);
                 if (converted && ggml_backend_supports_op(runner_ctx->backend, converted)) {
                     const int64_t k = w->ne[0], n = w->ne[1];
-                    auto* weight    = ggml_view_2d(ctx, converted, k, n, k, 0);
-                    auto* scales    = ggml_view_1d(ctx, converted, n * sizeof(float), k * n);
+                    auto* weight = ggml_view_2d(ctx, converted, k, n, k, 0);
+                    auto* scales = ggml_view_1d(ctx, converted, n * sizeof(float), k * n);
                     // The output stores float scales after the dense INT8 matrix.
-                    scales->type    = GGML_TYPE_F32;
-                    scales->ne[0]   = n;
-                    scales->nb[0]   = sizeof(float);
-                    auto* result    = ggml_ext_mul_mat_i8_tensorwise(runner_ctx, weight, quantized, scales, nullptr, 1);
+                    scales->type  = GGML_TYPE_F32;
+                    scales->ne[0] = n;
+                    scales->nb[0] = sizeof(float);
+                    auto* result  = ggml_ext_mul_mat_i8_tensorwise(runner_ctx, weight, quantized, scales, nullptr, group);
                     if (result && ggml_backend_supports_op(runner_ctx->backend, result))
                         return result;
                 }
@@ -253,7 +254,7 @@ ggml_tensor* ggml_ext_linear(GGMLRunnerContext* runner_ctx,
         int64_t ne3 = x->ne[3];
         x           = ggml_reshape_2d(ctx, x, x->ne[0], x->ne[1] * x->ne[2] * x->ne[3]);
         x           = mul_mat(x);
-        x = ggml_reshape_4d(ctx, x, x->ne[0], x->ne[1] / ne2 / ne3, ne2, ne3);
+        x           = ggml_reshape_4d(ctx, x, x->ne[0], x->ne[1] / ne2 / ne3, ne2, ne3);
     } else {
         x = mul_mat(x);
     }

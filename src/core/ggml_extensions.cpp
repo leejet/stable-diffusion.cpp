@@ -258,7 +258,9 @@ static bool requantize_q8_infer(ggml_tensor* const* inputs, int count, const voi
     const auto* weight = inputs[0];
     const int64_t k = weight->ne[0], n = weight->ne[1];
     constexpr int64_t scale_bytes = sizeof(float);
-    if (weight->ne[2] != 1 || weight->ne[3] != 1 || !ggml_is_contiguous(weight) ||
+    int group;
+    if (!sd_ggml_convrot_describe(inputs[1], &group) || group != 256 || k % group ||
+        weight->ne[2] != 1 || weight->ne[3] != 1 || !ggml_is_contiguous(weight) ||
         k <= 0 || k > i8_size_limit - scale_bytes || n <= 0 || inputs[1]->ne[0] != k || n > i8_size_limit / (k + scale_bytes))
         return false;
     output->type  = GGML_TYPE_I8;
@@ -291,7 +293,7 @@ ggml_ext_op_t sd_ggml_i8_op() {
 ggml_ext_op_t sd_ggml_requantize_q8_op() {
     static const auto op = [] {
         const ggml_ext_op_desc desc = {GGML_EXT_ABI_VERSION, "sd.requantize_q8.v1", 0, requantize_q8_infer};
-        const auto result          = ggml_ext_register_op(&desc);
+        const auto result           = ggml_ext_register_op(&desc);
         GGML_ASSERT(result);
         return result;
     }();

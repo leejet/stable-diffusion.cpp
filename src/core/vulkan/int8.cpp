@@ -24,6 +24,7 @@
 #include "quantize_i8_rowwise.h"
 #include "quantize_i8_rowwise_subgroup.h"
 #include "requantize_q8.h"
+#include "requantize_q8_register.h"
 #include "requantize_q8_subgroup.h"
 #include "rms_modulate_convrot.h"
 #include "sigmoid_quantize_i8_convrot_6144.h"
@@ -547,20 +548,29 @@ namespace sd_vulkan_i8 {
         return status;
     }
     static ggml_status pack_rows(const ggml_ext_execution_context* e, const Device& d, const ggml_tensor* output) {
-        const auto* input         = output->src[0];
-        const bool q8             = input->type == GGML_TYPE_Q8_0;
-        const uint32_t words      = uint32_t(input->ne[0] / 4);
-        const uint32_t rows       = uint32_t(ggml_nrows(input));
-        const PackParameters pc  = {words, rows, words * (q8 ? rows : GGML_PAD(rows, 4))};
+        const auto* input       = output->src[0];
+        const bool q8           = input->type == GGML_TYPE_Q8_0;
+        const uint32_t words    = uint32_t(input->ne[0] / 4);
+        const uint32_t rows     = uint32_t(ggml_nrows(input));
+        const PackParameters pc = {words, rows, words * (q8 ? rows : GGML_PAD(rows, 4))};
         ggml_ext_vulkan_binding dst;
         bool alias;
         if (!output_binding(e, d, output, {{input}}, dst, alias))
             return GGML_STATUS_FAILED;
         const ggml_ext_vulkan_binding bindings[] = {{input}, dst};
         const uint32_t groups[]                  = {std::min(rows, d.info.max_group_count[0]), 1, 1};
-        auto pipeline = q8 ? SD_VK_PIPELINE(requantize_q8, 2, PackParameters) : SD_VK_PIPELINE(quantize_i8_rowwise, 2, PackParameters);
+        auto pipeline                            = q8 ? SD_VK_PIPELINE(requantize_q8, 2, PackParameters) : SD_VK_PIPELINE(quantize_i8_rowwise, 2, PackParameters);
+        constexpr uint32_t words_per_round       = 8 * 64;
+        const uint32_t cached_groups             = words <= 2 * words_per_round ? 2 : words <= 4 * words_per_round ? 4
+                                                                                                                   : 8;
         if (d.subgroup && (!q8 || d.info.float16)) {
-            pipeline = q8 ? SD_VK_PIPELINE(requantize_q8_subgroup, 2, PackParameters) : SD_VK_PIPELINE(quantize_i8_rowwise_subgroup, 2, PackParameters);
+            if (q8 && words <= cached_groups * words_per_round && d.info.max_group_size[0] >= 256) {
+                pipeline                = SD_VK_PIPELINE(requantize_q8_register, 2, PackParameters);
+                pipeline.constants      = &cached_groups;
+                pipeline.constant_count = 1;
+            } else {
+                pipeline = q8 ? SD_VK_PIPELINE(requantize_q8_subgroup, 2, PackParameters) : SD_VK_PIPELINE(quantize_i8_rowwise_subgroup, 2, PackParameters);
+            }
             pipeline.full_subgroups         = d.info.full_subgroups;
             pipeline.required_subgroup_size = d.info.subgroup_size_control ? 32 : 0;
         }
@@ -619,9 +629,9 @@ namespace sd_vulkan_i8 {
             status                     = d.api->dispatch(e->backend, &pipeline, bindings.data(), &pc, groups);
         } else {
             ggml_ext_vulkan_binding bindings[] = {{x}, packed, scales, {up}};
-            auto pipeline  = group == 64 ? SD_VK_PIPELINE(quantize_i8_convrot_h64, 3, QuantParameters) : SD_VK_PIPELINE(quantize_i8_convrot, 3, QuantParameters);
-            bool subgroup  = group == 256 && d.subgroup && k >= 1024;
-            uint32_t width = k;
+            auto pipeline                      = group == 64 ? SD_VK_PIPELINE(quantize_i8_convrot_h64, 3, QuantParameters) : SD_VK_PIPELINE(quantize_i8_convrot, 3, QuantParameters);
+            bool subgroup                      = group == 256 && d.subgroup && k >= 1024;
+            uint32_t width                     = k;
             if (subgroup) {
                 pipeline = SD_VK_PIPELINE(quantize_i8_convrot_subgroup, 3, QuantParameters);
                 if (!up && ((uint64_t(k) + 2047) / 2048) * 8 <= 64) {
@@ -861,11 +871,12 @@ namespace sd_vulkan_i8 {
     }
     static bool requantize_supports(ggml_backend_dev_t dev, const ggml_tensor* n, void*) {
         Device d;
-        const auto k = n->src[0]->ne[0];
-        // An even number of Q8_0 blocks per row keeps their uint32 loads in bounds.
-        return k % 64 == 0 && k <= INT_MAX / 16384 &&
+        const auto k                       = n->src[0]->ne[0];
+        constexpr uint32_t rotation_bytes  = 2 * 128 * 4 * sizeof(float);
+        constexpr uint32_t reduction_bytes = 128 * sizeof(float);
+        return k % 256 == 0 && k <= INT_MAX / 16384 &&
                ggml_blck_size(GGML_TYPE_Q8_0) == 32 && ggml_type_size(GGML_TYPE_Q8_0) == 34 &&
-               device_info(dev, d) && can_pack_rows(d, n);
+               device_info(dev, d) && d.compute.shared_memory >= rotation_bytes + reduction_bytes && can_pack_rows(d, n);
     }
     static bool quant1_supports(ggml_backend_dev_t dev, const ggml_tensor* n, void*) {
         Device d;

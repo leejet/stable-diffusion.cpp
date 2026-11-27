@@ -181,15 +181,17 @@ paths. Module names and aliases are shared with [backend selection](backend.md).
 Module assignments override the default regardless of their order. Within
 the same string, the last value for a module or the default wins.
 
-Vulkan requires integer dot products, a projection input width divisible by
-64, and supported storage buffer sizes and alignment. The C API option is
+Runtime conversion uses H256 for weights and activations. Eligible linear
+layers have an input width divisible by 256. Vulkan also requires integer
+dot products and compatible storage buffer sizes and alignment. The C API option is
 `linear_type`. In DGL, set the mode on a model loader, for example
 `load_dit(path, linear_type = "i8")`. To override loader settings by module,
 use `sd_dgl_ctx_set(ctx, "linear_type", "dit=i8")` or pass
 `--linear-type dit=i8` when running the script from the CLI.
 
-At runtime, sd.cpp requantizes the Q8_0 weights to INT8 with one scale per
-output channel and quantizes activations with one scale per input row. The
+At runtime, sd.cpp dequantizes the Q8_0 blocks, rotates the weights, and
+requantizes them to INT8 with one scale per output channel. It applies the
+same rotation to the activations before quantizing each input row. The
 converted matrix uses temporary GPU memory and feeds the standard INT8 kernels
 and their fusions. The checkpoint file stays in its original format.
 Requantization changes numerical results, and conversion overhead depends on

@@ -79,7 +79,7 @@ struct GGMLRunnerContext {
     ggml_cgraph* graph                                               = nullptr;
     bool flash_attn_enabled                                          = false;
     bool sage_attn_enabled                                           = false;
-    bool requantize_to_i8                                             = false;
+    bool requantize_to_i8                                            = false;
     float linear_scale                                               = 0.f;
     float conv_scale                                                 = 0.f;
     float attn_scale                                                 = 0.f;

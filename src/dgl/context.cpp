@@ -213,9 +213,9 @@ namespace sd::dgl {
             if (!mode.empty())
                 args.insert_or_assign("linear_type", Value::literal(mode));
         }
-        auto prepared                 = operation.prepare(args);
-        key["params"]                 = std::move(prepared.key);
-        auto revision                 = std::move(prepared.revision);
+        auto prepared = operation.prepare(args);
+        key["params"] = std::move(prepared.key);
+        auto revision = std::move(prepared.revision);
         ResourceKey identity{key.dump(), {}};
         auto argument_revision = revision.dump();
         const auto last_use    = ++resource_epoch;
