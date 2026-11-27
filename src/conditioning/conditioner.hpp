@@ -592,11 +592,16 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             bool needs_placeholder    = known && has_attention_syntax;
             if (has_weight && std::fabs(weight - 1.0f) > 1e-6f) {
                 if (has_attention_syntax) {
-                    LOG_WARN("embedding '%s' contains attention syntax, ignoring weight %s", trigger.c_str(), raw_weight.c_str());
                     if (needs_placeholder) {
-                        make_placeholder(replacement);
-                        placeholder_map.emplace_back(replacement, trigger);
+                        // Wrap the placeholder so parse_prompt_attention applies
+                        // the weight to it; the placeholder is restored to the
+                        // trigger afterwards, keeping the weight.
+                        std::string placeholder;
+                        make_placeholder(placeholder);
+                        placeholder_map.emplace_back(placeholder, trigger);
+                        replacement = "(" + placeholder + ":" + formatted_weight + ")";
                     } else {
+                        LOG_WARN("embedding '%s' contains attention syntax, ignoring weight %s", trigger.c_str(), raw_weight.c_str());
                         replacement = trigger;
                     }
                 } else {
