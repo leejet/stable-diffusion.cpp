@@ -1,7 +1,9 @@
 #ifndef __SD_DGL_OPS_VIDEO_H__
 #define __SD_DGL_OPS_VIDEO_H__
 
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include "dgl/ops/audio.h"
 #include "dgl/tensor.h"
 
@@ -24,11 +26,24 @@ namespace sd::dgl::ops {
         std::string metadata;
     };
 
+    class VideoSource {
+        std::ifstream file_;
+        const uint8_t* data_ = nullptr;
+        uint64_t size_       = 0;
+
+    public:
+        explicit VideoSource(const std::filesystem::path& path);
+        VideoSource(const void* data, size_t size);
+        uint64_t size() const { return size_; }
+        bool read(uint64_t offset, uint64_t size, uint8_t* out);
+    };
+
     void validate_video_frames(const sd_tensor_t& frames);
     sd::Image video_frame_view(const sd_tensor_t& frames, size_t index);
     VideoReadResult load_frame_directory(const std::filesystem::path& path, size_t max_frames, int64_t fps_num, int64_t fps_den);
     VideoReadResult load_video(const std::filesystem::path& path, size_t max_frames, int64_t fps_num, int64_t fps_den, bool include_audio);
-    VideoReadResult load_avi(const std::filesystem::path& path, size_t max_frames, int64_t fps_num, int64_t fps_den, bool include_audio);
+    VideoReadResult load_video(VideoSource& source, size_t max_frames, int64_t fps_num, int64_t fps_den, bool include_audio);
+    VideoReadResult load_avi(VideoSource& source, size_t max_frames, int64_t fps_num, int64_t fps_den, bool include_audio);
     void save_video(const sd_tensor_t& frames, const std::filesystem::path& path, const VideoSaveOptions& options);
     std::vector<uint8_t> encode_avi(const sd_tensor_t& frames, const VideoSaveOptions& options);
 }
