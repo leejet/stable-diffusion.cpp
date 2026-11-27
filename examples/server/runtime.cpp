@@ -304,7 +304,7 @@ ArgOptions SDSvrParams::get_options() {
         {"-l", "--listen-ip", "server listen ip (default: 127.0.0.1)", 0, &listen_ip},
         {"", "--serve-html-path", "path to HTML file to serve at root (optional)", 0, &serve_html_path},
         {"", "--dgl-dir", "Web UI script directory (default: dgl)", 0, &dgl_dir},
-        {"", "--output-dir", "directory generated files may be written to (default: <working directory>/output)", 0,
+        {"", "--output-dir", "directory for DGL writes and output previews (default: <working directory>/output)", 0,
          &output_dir},
     };
 

@@ -15,6 +15,8 @@
 #endif
 
 namespace media_view {
+    namespace fs = std::filesystem;
+
 #ifdef _WIN32
     class FileHandle {
         HANDLE handle_;
@@ -34,17 +36,17 @@ namespace media_view {
         HANDLE get() const { return handle_; }
     };
 
-    static FileHandle working_directory() {
-        return FileHandle(CreateFileW(L".", FILE_TRAVERSE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+    static FileHandle open_directory(const fs::path& path) {
+        return FileHandle(CreateFileW(path.c_str(), FILE_TRAVERSE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
                                       OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
     }
 
-    static FileHandle open_child(const FileHandle& parent, const std::string& part, bool directory) {
+    static FileHandle open_child(const FileHandle& parent, const fs::path& part, bool directory) {
         static const auto open_file = reinterpret_cast<decltype(&NtOpenFile)>(
             GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtOpenFile"));
         if (!open_file)
             return FileHandle();
-        auto name        = std::filesystem::u8path(part).native();
+        auto name        = part.native();
         const auto bytes = static_cast<USHORT>(name.size() * sizeof(wchar_t));
         UNICODE_STRING relative{bytes, bytes, name.data()};
         OBJECT_ATTRIBUTES object;
@@ -99,11 +101,11 @@ namespace media_view {
         int get() const { return fd_; }
     };
 
-    static FileHandle working_directory() {
-        return FileHandle(open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+    static FileHandle open_directory(const fs::path& path) {
+        return FileHandle(open(path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
     }
 
-    static FileHandle open_child(const FileHandle& parent, const std::string& part, bool directory) {
+    static FileHandle open_child(const FileHandle& parent, const fs::path& part, bool directory) {
         const auto flags = O_RDONLY | O_NOFOLLOW | O_CLOEXEC | (directory ? O_DIRECTORY : O_NONBLOCK);
         return FileHandle(openat(parent.get(), part.c_str(), flags));
     }
@@ -130,20 +132,39 @@ namespace media_view {
                std::none_of(part.begin(), part.end(), [](unsigned char c) { return c < 32 || c == 127; });
     }
 
-    static FileHandle open_media(const std::string& root, std::string_view path) {
-        if (root != "input" && root != "output" && root != "assets")
-            return FileHandle();
-        const auto cwd = working_directory();
-        if (!cwd)
-            return FileHandle();
-        auto parent = open_child(cwd, root, true);
+    static FileHandle open_output_root(const fs::path& path) {
+        auto root           = path.root_path();
+        const auto relative = path.relative_path();
+        auto part           = relative.begin();
+#ifdef _WIN32
+        // A UNC path needs the share name before it can be opened as a directory.
+        if (path.root_name().native().compare(0, 2, L"\\\\") == 0 && part != relative.end()) {
+            root /= *part;
+            ++part;
+        }
+#endif
+        auto directory = open_directory(root);
+        for (; directory && part != relative.end(); ++part)
+            directory = open_child(directory, *part, true);
+        return directory;
+    }
+
+    static FileHandle open_media(const fs::path& output_root, const std::string& root, std::string_view path) {
+        FileHandle parent;
+        if (root == "output") {
+            parent = open_output_root(output_root);
+        } else if (root == "input" || root == "assets") {
+            const auto cwd = open_directory(".");
+            if (cwd)
+                parent = open_child(cwd, root, true);
+        }
         while (parent) {
             const auto slash = path.find('/');
             const auto part  = path.substr(0, slash);
             if (!valid_component(part))
                 break;
             const bool directory = slash != std::string_view::npos;
-            auto child           = open_child(parent, std::string(part), directory);
+            auto child           = open_child(parent, fs::u8path(part), directory);
             if (!directory)
                 return child;
             parent = std::move(child);
@@ -230,8 +251,11 @@ namespace media_view {
         return nullptr;
     }
 
-    static bool set_media_content(const std::string& root, const std::string& path, httplib::Response& res) {
-        auto file = open_media(root, path);
+    static bool set_media_content(const fs::path& output_root,
+                                  const std::string& root,
+                                  const std::string& path,
+                                  httplib::Response& res) {
+        auto file = open_media(output_root, root, path);
         if (!file)
             return false;
         const auto size = file_size(file);
@@ -256,8 +280,8 @@ namespace media_view {
     }
 }
 
-void register_media_view_endpoint(httplib::Server& svr, const SDSvrParams& params) {
-    svr.Get("/sdcpp/v1/view", [enabled = params.media_view](const httplib::Request& req, httplib::Response& res) {
+void register_media_view_endpoint(httplib::Server& svr, bool enabled, const std::filesystem::path& output_root) {
+    svr.Get("/sdcpp/v1/view", [enabled, output_root](const httplib::Request& req, httplib::Response& res) {
         res.set_header("Cache-Control", "no-store");
         res.set_header("X-Content-Type-Options", "nosniff");
         if (!enabled) {
@@ -266,7 +290,7 @@ void register_media_view_endpoint(httplib::Server& svr, const SDSvrParams& param
         }
         try {
             if (req.get_param_value_count("root") == 1 && req.get_param_value_count("path") == 1 &&
-                media_view::set_media_content(req.get_param_value("root"), req.get_param_value("path"), res))
+                media_view::set_media_content(output_root, req.get_param_value("root"), req.get_param_value("path"), res))
                 return;
         } catch (const std::system_error&) {
             // Invalid path encodings are treated like unavailable files.
